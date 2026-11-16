@@ -17,7 +17,11 @@ export { isPushDeliveryConfigured };
  * when APP_URL is set; otherwise path-only, and sendPush resolves it against its own APP_URL.
  */
 export function sessionDeepLink(sessionId: string): string {
-  const path = `/notebooks/${encodeURIComponent(sessionId)}`;
+  return appPathDeepLink(`/notebooks/${encodeURIComponent(sessionId)}`);
+}
+
+/** An app-relative path (e.g. a Studio page) as a deep link, resolved the same way as sessionDeepLink. */
+export function appPathDeepLink(path: string): string {
   const base = (process.env.APP_URL ?? '').replace(/\/+$/, '');
   return base ? `${base}${path}` : path;
 }
@@ -89,4 +93,12 @@ export async function hasLiveConnection(
 /** First `max` characters with an ellipsis, for titles and bodies built from user-named things. */
 export function truncateForPush(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 3).trimEnd()}...`;
+}
+
+const GENERATION_PUSH_BODY_MAX_CHARS = 160;
+
+/** The body of a generation_ready push: the prompt, whitespace collapsed and truncated, else the fallback text. */
+export function generationPushBody(prompt: string | undefined, fallback: string): string {
+  const collapsed = prompt?.replace(/\s+/g, ' ').trim();
+  return collapsed ? truncateForPush(collapsed, GENERATION_PUSH_BODY_MAX_CHARS) : fallback;
 }

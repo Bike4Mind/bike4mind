@@ -533,12 +533,10 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     const successQuery = authSuccessRedirectQuery(redirectTo);
     const signupFragment = isNewUser ? '&firstSignupSession=1' : '';
 
-    // An Okta IdP record is bound to its org's email domain (checked above), so that IdP owns
-    // MFA. The unbound SST-secret fallback has no such binding and is challenged like a
-    // consumer social sign-in.
-    const secondFactor: SecondFactorOutcome = idp
-      ? { kind: 'satisfied', trustedDevice: null }
-      : await resolveSecondFactor(req, user, { origin: { strategy: AuthStrategy.Okta, createdVia: 'okta' } });
+    const secondFactor: SecondFactorOutcome = await resolveSecondFactor(req, user, {
+      origin: { strategy: AuthStrategy.Okta, createdVia: 'okta' },
+      enterpriseIdp: !!idp,
+    });
     if (secondFactor.kind !== 'satisfied') {
       const handoff = mfaHandoffFragment({
         mfaToken: secondFactor.mfaToken,

@@ -9,14 +9,14 @@ import OrganizationSettingsSection from './OrganizationSettingsSection';
 const currentUser = vi.fn();
 const transfer = vi.hoisted(() => vi.fn());
 const navigate = vi.hoisted(() => vi.fn());
+const updateOrg = vi.hoisted(() => vi.fn());
 const members = vi.hoisted(() => ({
   list: [] as { id: string; name: string; email?: string; isBanned?: boolean }[],
   loaded: true,
 }));
 
 vi.mock('@client/app/hooks/data/organizations', () => ({
-  useDeleteOrganization: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useUpdateOrganization: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useUpdateOrganization: () => ({ mutateAsync: updateOrg, isPending: false }),
   useTransferOrganizationOwnership: () => ({ mutateAsync: transfer, isPending: false }),
 }));
 
@@ -24,15 +24,23 @@ vi.mock('@client/app/hooks/data/user', () => ({
   useGetOrganizationUsers: () => (members.loaded ? { data: members.list, isSuccess: true } : { isSuccess: false }),
 }));
 
-vi.mock('@client/app/hooks/useConfirmation', () => ({
-  useConfirmationModal: { setState: vi.fn() },
+vi.mock('./OrganizationGeneralSection', () => ({ default: () => null }));
+vi.mock('./DeleteOrganizationDialog', () => ({
+  default: (props: { open: boolean; canOpenBilling: boolean; onDeleted: () => void; onOpenBilling: () => void }) =>
+    props.open ? (
+      <div data-testid="delete-dialog-stub" data-can-open-billing={String(props.canOpenBilling)}>
+        <button data-testid="delete-dialog-stub-deleted" onClick={props.onDeleted} />
+        <button data-testid="delete-dialog-stub-billing" onClick={props.onOpenBilling} />
+      </div>
+    ) : null,
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: currentUser() }),
 }));
 
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate, useBlocker: () => ({ status: 'idle' }) }));
+vi.mock('./OrganizationExportSection', () => ({ default: () => <div data-testid="organization-export-section" /> }));
 
 const OWNER_ID = 'owner1';
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -53,23 +61,47 @@ const renderAs = (user: Partial<IUserDocument> | null, organization: IOrganizati
 
 /**
  * The Danger Zone mirrors the server gate in organizationService/delete.ts (billing owner or
- * platform admin). The rest of this tab is open to anyone with org update/share, so these pin that
+ * platform admin). The rest of this tab is open to anyone with org update, or a current manager, so these pin that
  * a member who can reach the tab is not shown a Delete button whose call would 403.
  */
 describe('OrganizationSettingsSection - Danger Zone visibility', () => {
-  it('shows Delete Organization to the billing owner', () => {
+  it('shows exports only to the owner, never to a platform admin or member', () => {
+    const owner = renderAs({ id: OWNER_ID });
+    expect(screen.getByTestId('organization-export-section')).toBeTruthy();
+    owner.unmount();
+    const admin = renderAs({ id: 'platform1', isAdmin: true });
+    expect(screen.queryByTestId('organization-export-section')).toBeNull();
+    admin.unmount();
+    renderAs({ id: 'member1' });
+    expect(screen.queryByTestId('organization-export-section')).toBeNull();
+  });
+  it('exposes policy controls to read-only managers while keeping generic profile writes disabled', () => {
+    updateOrg.mockClear();
+    renderAs({ id: 'manager', isAdmin: false }, {
+      ...org,
+      adminUserIds: ['manager'],
+      users: [{ userId: 'manager', permissions: ['read'] }],
+    } as IOrganizationDocument);
+    expect(screen.getByTestId('organization-sharing-save-btn')).not.toBeDisabled();
+    expect(screen.getByTestId('organization-settings-system-prompt-input')).toBeDisabled();
+    // A disabled prompt cannot be edited, so the save bar never appears for it.
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    expect(updateOrg).not.toHaveBeenCalled();
+  });
+
+  it('shows Delete Team to the billing owner', () => {
     renderAs({ id: OWNER_ID, isAdmin: false });
 
     expect(screen.getByTestId('organization-settings-delete-btn')).toBeTruthy();
   });
 
-  it('shows Delete Organization to a platform admin', () => {
+  it('shows Delete Team to a platform admin', () => {
     renderAs({ id: 'platform1', isAdmin: true });
 
     expect(screen.getByTestId('organization-settings-delete-btn')).toBeTruthy();
   });
 
-  it('hides Delete Organization from a member who can otherwise manage the org', () => {
+  it('hides Delete Team from a member who can otherwise manage the org', () => {
     renderAs({ id: 'member1', isAdmin: false });
 
     expect(screen.queryByTestId('organization-settings-delete-btn')).toBeNull();
@@ -77,7 +109,7 @@ describe('OrganizationSettingsSection - Danger Zone visibility', () => {
     expect(screen.getByText('Team System Prompt')).toBeTruthy();
   });
 
-  it('hides Delete Organization when there is no resolved user', () => {
+  it('hides Delete Team when there is no resolved user', () => {
     renderAs(null);
 
     expect(screen.queryByTestId('organization-settings-delete-btn')).toBeNull();
@@ -160,7 +192,12 @@ describe('OrganizationSettingsSection - Transfer ownership', () => {
     fireEvent.click(screen.getByTestId('transfer-ownership-confirm-btn'));
 
     await waitFor(() => expect(transfer).toHaveBeenCalledWith({ organizationId: 'org1', newOwnerId: 'admin1' }));
-    await waitFor(() => expect(navigate).toHaveBeenCalledWith(expect.objectContaining({ search: { tab: 'members' } })));
+    // The transfer has committed, so the leave guard for an unsaved prompt must not intercept this.
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith(
+        expect.objectContaining({ search: { tab: 'members' }, ignoreBlocker: true })
+      )
+    );
   });
 
   it('keeps the dialog open when the transfer fails', async () => {
@@ -174,5 +211,81 @@ describe('OrganizationSettingsSection - Transfer ownership', () => {
     await waitFor(() => expect(transfer).toHaveBeenCalled());
     expect(navigate).not.toHaveBeenCalled();
     expect(screen.getByTestId('transfer-ownership-modal')).toBeTruthy();
+  });
+});
+
+describe('OrganizationSettingsSection - system prompt save bar', () => {
+  beforeEach(() => updateOrg.mockReset().mockResolvedValue({}));
+
+  const promptInput = () => screen.getByTestId('organization-settings-system-prompt-input') as HTMLTextAreaElement;
+
+  it('shows the save bar only once the prompt differs from the stored one, and saves it', () => {
+    renderAs({ id: OWNER_ID });
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+
+    fireEvent.change(promptInput(), { target: { value: 'Lunar elevators only.' } });
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+
+    expect(updateOrg).toHaveBeenCalledWith({ orgId: 'org1', data: { systemPrompt: 'Lunar elevators only.' } });
+  });
+
+  it('restores the stored prompt on Discard', () => {
+    renderAs({ id: OWNER_ID });
+    fireEvent.change(promptInput(), { target: { value: 'Draft' } });
+
+    fireEvent.click(screen.getByTestId('admin-save-discard-btn'));
+
+    expect(promptInput().value).toBe('');
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    expect(updateOrg).not.toHaveBeenCalled();
+  });
+});
+
+describe('OrganizationSettingsSection - delete', () => {
+  it('leaves past the unsaved-prompt guard once the team is deleted', async () => {
+    navigate.mockReset();
+    renderAs({ id: OWNER_ID, isAdmin: false });
+    fireEvent.change(screen.getByTestId('organization-settings-system-prompt-input'), {
+      target: { value: 'An edit that was never saved.' },
+    });
+    expect(screen.getByTestId('admin-save-bar')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('organization-settings-delete-btn'));
+    fireEvent.click(screen.getByTestId('delete-dialog-stub-deleted'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/organizations', replace: true, ignoreBlocker: true });
+    expect(screen.queryByTestId('delete-dialog-stub')).toBeNull();
+  });
+});
+
+describe('OrganizationSettingsSection - Delete flow', () => {
+  beforeEach(() => navigate.mockClear());
+
+  it('opens the delete dialog instead of a generic confirmation', () => {
+    renderAs({ id: OWNER_ID, isAdmin: false });
+    expect(screen.queryByTestId('delete-dialog-stub')).toBeNull();
+    fireEvent.click(screen.getByTestId('organization-settings-delete-btn'));
+    expect(screen.getByTestId('delete-dialog-stub').getAttribute('data-can-open-billing')).toBe('true');
+  });
+
+  it('does not offer Billing to a platform admin, whom the Billing tab refuses', () => {
+    renderAs({ id: 'admin9', isAdmin: true });
+    fireEvent.click(screen.getByTestId('organization-settings-delete-btn'));
+    expect(screen.getByTestId('delete-dialog-stub').getAttribute('data-can-open-billing')).toBe('false');
+  });
+
+  it('replaces the deleted team page with the teams list', () => {
+    renderAs({ id: OWNER_ID, isAdmin: false });
+    fireEvent.click(screen.getByTestId('organization-settings-delete-btn'));
+    fireEvent.click(screen.getByTestId('delete-dialog-stub-deleted'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/organizations', replace: true, ignoreBlocker: true });
+    expect(screen.queryByTestId('delete-dialog-stub')).toBeNull();
+  });
+
+  it('closes the dialog and opens the Billing tab when asked', () => {
+    renderAs({ id: OWNER_ID, isAdmin: false });
+    fireEvent.click(screen.getByTestId('organization-settings-delete-btn'));
+    fireEvent.click(screen.getByTestId('delete-dialog-stub-billing'));
+    expect(navigate).toHaveBeenCalledWith(expect.objectContaining({ search: { tab: 'billing' } }));
+    expect(screen.queryByTestId('delete-dialog-stub')).toBeNull();
   });
 });

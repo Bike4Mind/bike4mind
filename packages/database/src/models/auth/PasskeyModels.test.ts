@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { PasskeyChallengeModel, passkeyChallengeRepository, PASSKEY_CHALLENGE_TTL_MS } from './PasskeyChallengeModel';
-import { passkeyCredentialRepository } from './PasskeyCredentialModel';
+import { PasskeyCredentialModel, passkeyCredentialRepository } from './PasskeyCredentialModel';
 import { setupMongoTest } from '../../__test__/utils';
 
 setupMongoTest();
@@ -70,6 +70,16 @@ describe('passkeyCredentialRepository', () => {
     await makePasskey('user-b');
     expect(await passkeyCredentialRepository.removeAllForUser('user-a')).toBe(2);
     expect(await passkeyCredentialRepository.countByUser('user-b')).toBe(1);
+  });
+
+  it('limits removeAllForUser to credentials older than createdBefore', async () => {
+    const old = await makePasskey('user-c');
+    await PasskeyCredentialModel.updateOne({ _id: old.id }, { $set: { createdAt: new Date(Date.now() - 60_000) } });
+    const cutoff = new Date(Date.now() - 30_000);
+    await makePasskey('user-c');
+    expect(await passkeyCredentialRepository.removeAllForUser('user-c', { createdBefore: cutoff })).toBe(1);
+    expect(await passkeyCredentialRepository.findByCredentialId('user-c', old.credentialId)).toBeNull();
+    expect(await passkeyCredentialRepository.countByUser('user-c')).toBe(1);
   });
 
   it('returns false for a malformed id instead of throwing a cast error', async () => {

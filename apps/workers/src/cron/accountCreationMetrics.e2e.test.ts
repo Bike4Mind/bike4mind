@@ -60,14 +60,14 @@ describe('account creation census', () => {
     const { since, until } = accountCreationWindow(event.time);
     const queries = accountCreationQueries(since, until);
     expect(queries.signups).toEqual({
-      isSynthetic: { $ne: true },
+      $or: [{ isSynthetic: { $ne: true } }, { isPersona: true }],
       isSystem: { $ne: true },
       createdAt: { $gte: since, $lt: until },
     });
     expect(queries.keys[0]).toEqual({ $match: { createdAt: { $gte: since, $lt: until } } });
     expect(queries.keys).toContainEqual({
       $match: {
-        'owner.isSynthetic': { $ne: true },
+        $or: [{ 'owner.isSynthetic': { $ne: true } }, { 'owner.isPersona': true }],
         'owner.isSystem': { $ne: true },
         'owner.createdAt': { $type: 'date' },
         $expr: {
@@ -113,7 +113,7 @@ describe('account creation census', () => {
     await expect(handler(event)).rejects.toThrow('metrics unavailable');
   });
 
-  it('executes the age boundary against MongoDB, excluding missing, future, system and synthetic owners', async () => {
+  it('executes the age boundary against MongoDB, excluding missing, future, system and synthetic owners but counting personas', async () => {
     const server = await createMongoServer();
     const connection = await mongoose.createConnection(server.getUri()).asPromise();
     try {
@@ -124,6 +124,7 @@ describe('account creation census', () => {
         { _id: new mongoose.Types.ObjectId(), createdAt: new Date(mintedAt.getTime() - 86_400_000) },
         { _id: new mongoose.Types.ObjectId(), createdAt: new Date(mintedAt.getTime() + 1) },
         { _id: new mongoose.Types.ObjectId(), createdAt: mintedAt, isSynthetic: true },
+        { _id: new mongoose.Types.ObjectId(), createdAt: mintedAt, isSynthetic: true, isPersona: true },
         { _id: new mongoose.Types.ObjectId(), createdAt: mintedAt, isSystem: true },
         { _id: new mongoose.Types.ObjectId() },
         { _id: new mongoose.Types.ObjectId(), createdAt: mintedAt },
@@ -139,8 +140,8 @@ describe('account creation census', () => {
         ]);
       const { since, until } = accountCreationWindow(event.time);
       const queries = accountCreationQueries(since, until);
-      expect(await db.collection('keys').aggregate(queries.keys).toArray()).toEqual([{ count: 2 }]);
-      expect(await db.collection('users').countDocuments(queries.signups)).toBe(2);
+      expect(await db.collection('keys').aggregate(queries.keys).toArray()).toEqual([{ count: 3 }]);
+      expect(await db.collection('users').countDocuments(queries.signups)).toBe(3);
     } finally {
       await connection.close();
       await server.stop();

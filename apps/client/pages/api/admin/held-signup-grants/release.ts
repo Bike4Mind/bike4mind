@@ -10,6 +10,7 @@ import {
   denySelfAdminAction,
   isSelfOrImpersonator,
   loadCreditGrantPolicy,
+  parseAdminActionReason,
   recordAdminActionFromRequest,
 } from '@bike4mind/server-utils/utils/adminAudit';
 import { buildHeldGrantAdapters, heldGrantBatches } from '@bike4mind/server-utils/credits/heldSignupGrantAdapters';
@@ -48,6 +49,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
         );
         return res.status(200).json(preview);
       }
+      const reason = parseAdminActionReason((req.body as { reason?: unknown }).reason);
       const result = await userService.bulkReleaseHeldGrants(
         { actorId: req.user.id, userIds },
         { ...buildHeldGrantAdapters(req.logger), batches: heldGrantBatches }
@@ -62,6 +64,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
               action: 'user.credits.adjusted',
               target: { kind: 'user', id: row.userId, displayName: row.userId },
               summary: 'released held signup grant',
+              reason,
               details: { credits: row.credits, source: 'held_grant_release', batchId: result.batchId },
             },
             { creditGrantPolicy: () => (policy ??= loadCreditGrantPolicy()) }

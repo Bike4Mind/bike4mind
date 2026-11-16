@@ -1,12 +1,5 @@
-import React from 'react';
-import { Box, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
-import PeopleIcon from '@mui/icons-material/People';
-import InsightsIcon from '@mui/icons-material/Insights';
-import PriceChangeIcon from '@mui/icons-material/PriceChange';
-import BusinessIcon from '@mui/icons-material/Business';
-import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
-import HistoryIcon from '@mui/icons-material/History';
-import ApiIcon from '@mui/icons-material/Api';
+import React, { useEffect } from 'react';
+import { Stack, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
 import { MarginDashboard } from './components/MarginDashboard';
 import { ModelPricingCatalog } from './components/ModelPricingCatalog';
 import { UsageDashboard } from './components/UsageDashboard';
@@ -18,63 +11,74 @@ import { UserCreditsManager } from './components/UserCreditsManager';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useCreditAnalysisStore, type CreditAnalysisTab } from './store';
 import { AdminPageHeader } from '../shared';
+import { ADMIN_REGION_GAP, adminTabStrip } from '../shared/adminStyles';
+import { useNavigate, useSearch } from '@tanstack/react-router';
+import { CreditEconomy } from './components/CreditEconomy';
 
 export const CreditAnalyticsTab: React.FC = () => {
   // Held in the store rather than locally so another admin tab can land the
   // operator on a specific inner tab (Model Lifecycle -> Model Pricing).
   const activeTab = useCreditAnalysisStore(state => state.activeTab);
   const setActiveTab = useCreditAnalysisStore(state => state.setActiveTab);
+  const search = useSearch({ strict: false });
+  const navigate = useNavigate();
+  const pricingModelId = useCreditAnalysisStore(state => state.pricingModelId);
+  const selectedTab = pricingModelId ? 'pricing' : search.creditView === 'economy' ? 'economy' : activeTab;
+  useEffect(() => {
+    if (pricingModelId && search.creditView === 'economy') {
+      void navigate({ to: '/admin', replace: true, search: previous => ({ ...previous, creditView: undefined }) });
+    }
+  }, [pricingModelId, search.creditView, navigate]);
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      <AdminPageHeader title="Credits" description="Balances, pricing, margins and credit usage across the platform." />
-      <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as CreditAnalysisTab)} sx={{ mb: 2 }}>
-        <TabList sx={{ overflowX: { xs: 'auto', sm: 'visible' }, minWidth: { xs: 'max-content', sm: 'auto' } }}>
-          <Tab value="users">
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <PeopleIcon sx={{ fontSize: '18px' }} />
-              <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>User Credits</Box>
-            </Box>
+    <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }}>
+      <AdminPageHeader
+        title="Credits"
+        description="Balances, pricing, margins and credit usage across the platform."
+        actions={<ContextHelpButton helpId="admin/credit-analytics" tooltipText="Credit analytics help" />}
+      />
+      <Tabs
+        value={selectedTab}
+        onChange={(_, value) => {
+          setActiveTab(value as CreditAnalysisTab);
+          void navigate({
+            to: '/admin',
+            replace: true,
+            search: previous => ({ ...previous, creditView: value === 'economy' ? 'economy' : undefined }),
+          });
+        }}
+        sx={{ minWidth: 0, gap: ADMIN_REGION_GAP }}
+      >
+        <TabList sx={adminTabStrip}>
+          <Tab value="economy" data-testid="credit-analysis-economy-tab">
+            Economy
+          </Tab>
+          <Tab value="users" data-testid="credit-analysis-users-tab">
+            User credits
           </Tab>
           <Tab value="pricing" data-testid="credit-analysis-pricing-tab">
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <PriceChangeIcon sx={{ fontSize: '18px' }} />
-              <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Model Pricing</Box>
-            </Box>
+            Model pricing
           </Tab>
           <Tab value="margins" data-testid="credit-analysis-margins-tab">
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <InsightsIcon sx={{ fontSize: '18px' }} />
-              <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Margins</Box>
-            </Box>
+            Margins
           </Tab>
           <Tab value="org-usage" data-testid="credit-analysis-org-usage-tab">
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <BusinessIcon sx={{ fontSize: '18px' }} />
-              <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Org Usage</Box>
-            </Box>
+            Org usage
           </Tab>
           <Tab value="api-usage" data-testid="credit-analysis-api-usage-tab">
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <ApiIcon sx={{ fontSize: '18px' }} />
-              <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>API Usage</Box>
-            </Box>
+            API usage
           </Tab>
           <Tab value="ledger" data-testid="credit-analysis-ledger-tab">
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <ReceiptLongIcon sx={{ fontSize: '18px' }} />
-              <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Ledger</Box>
-            </Box>
+            Ledger
           </Tab>
           <Tab value="adjustments" data-testid="credit-analysis-adjustments-tab">
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <HistoryIcon sx={{ fontSize: '18px' }} />
-              <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Adjustments</Box>
-            </Box>
+            Adjustments
           </Tab>
-          <ContextHelpButton helpId="admin/credit-analytics" tooltipText="Credit Analytics Help" />
         </TabList>
 
+        <TabPanel value="economy" sx={{ p: 0 }}>
+          <CreditEconomy />
+        </TabPanel>
         <TabPanel value="users" sx={{ p: 0 }}>
           <UserCreditsManager />
         </TabPanel>
@@ -103,7 +107,7 @@ export const CreditAnalyticsTab: React.FC = () => {
           <CreditAdjustmentsLog />
         </TabPanel>
       </Tabs>
-    </Box>
+    </Stack>
   );
 };
 

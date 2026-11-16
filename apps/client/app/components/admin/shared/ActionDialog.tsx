@@ -30,6 +30,7 @@ export type ActionDialogProps = {
   reasonPresets: readonly string[];
   /** False while the endpoint has no reason field; see ReasonPicker's `audited`. */
   reasonAudited?: boolean;
+  reasonRequired?: boolean;
   /** Repeats the consequence where it helps: "Set balance to 0". */
   confirmLabel: string;
   /**
@@ -90,6 +91,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
   children,
   reasonPresets,
   reasonAudited = true,
+  reasonRequired = true,
   confirmLabel,
   onConfirm,
   tone = 'neutral',
@@ -111,7 +113,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
   const typedMatches = !typedConfirm || typedValue.trim() === typedConfirm.expected;
   const hint =
     blockedReason ??
-    (!isAdminReasonComplete(reason) ? ADMIN_REASON_HINT : null) ??
+    (reasonRequired && !isAdminReasonComplete(reason) ? ADMIN_REASON_HINT : null) ??
     (!typedMatches && typedConfirm ? `Type the ${typedConfirm.noun} exactly to confirm.` : null);
   const busy = pending || submitting;
 
@@ -143,13 +145,15 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
           </Typography>
         )}
         {children}
-        <ReasonPicker
-          presets={reasonPresets}
-          value={reason}
-          onChange={setReason}
-          audited={reasonAudited}
-          data-testid={testIds.reason ?? `${testId}-reason-input`}
-        />
+        {reasonRequired && (
+          <ReasonPicker
+            presets={reasonPresets}
+            value={reason}
+            onChange={setReason}
+            audited={reasonAudited}
+            data-testid={testIds.reason ?? `${testId}-reason-input`}
+          />
+        )}
         {typedConfirm && (
           <FormControl required>
             {/* One inline span: FormLabel is a flex row, which drops bare space text nodes around the code and

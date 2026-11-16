@@ -1,8 +1,8 @@
 import { mkdtemp, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Readable } from 'node:stream';
-import { describe, expect, it } from 'vitest';
+import { PassThrough, Readable } from 'node:stream';
+import { describe, expect, it, vi } from 'vitest';
 import { isSupportedMediaType, MAX_MEDIA_BYTES, MediaStore, parseMediaUrl } from './MediaStore';
 
 async function store(): Promise<{ store: MediaStore; base: string }> {
@@ -117,6 +117,71 @@ describe('MediaStore.saveStream', () => {
         'Cannot display'
       );
     }
+    expect(await readdir(base)).toEqual([]);
+  });
+});
+
+describe('MediaStore.saveForContent', () => {
+  it('does not recreate deleted media when a pending file read finishes later', async () => {
+    const { store: media, base } = await store();
+    await media.forgetSession(SESSION);
+    await expect(
+      media.saveForContent(SESSION, Buffer.from('source'), Buffer.from('fitted'), 'image/png')
+    ).rejects.toThrow(/deleted/);
+    expect(await readdir(base)).toEqual([]);
+  });
+
+  it('stops an in-flight stream before removing the session folder', async () => {
+    const { store: media, base } = await store();
+    const source = new PassThrough();
+    const saving = media.saveStream(SESSION, source, 'video/mp4', 1024);
+    const rejected = expect(saving).rejects.toThrow(/aborted/);
+    source.write(Buffer.from('partial'));
+    await vi.waitUntil(async () => (await readdir(base)).includes(SESSION));
+    await media.forgetSession(SESSION);
+    await rejected;
+    expect(source.destroyed).toBe(true);
+    expect(await readdir(base)).toEqual([]);
+  });
+
+  it('can delete immediately after a stream save begins', async () => {
+    const { store: media, base } = await store();
+    const source = new PassThrough();
+    const saving = media.saveStream(SESSION, source, 'video/mp4', 1024);
+    const rejected = expect(saving).rejects.toThrow(/aborted/);
+    await media.forgetSession(SESSION);
+    await rejected;
+    expect(source.destroyed).toBe(true);
+    expect(await readdir(base)).toEqual([]);
+  });
+
+  it('keeps one copy per source content and serves it like any other', async () => {
+    const { store: media, base } = await store();
+    const source = Buffer.from('original screenshot');
+    const first = await media.saveForContent(SESSION, source, Buffer.from('fitted'), 'image/png');
+    const again = await media.saveForContent(SESSION, Buffer.from(source), Buffer.from('fitted'), 'image/png');
+
+    expect(again).toEqual(first);
+    expect(await readdir(join(base, SESSION))).toEqual([first.name]);
+    expect((await media.read(SESSION, first.name))?.bytes.toString()).toBe('fitted');
+  });
+
+  it('stores changed content under a new name and leaves the old copy alone', async () => {
+    const { store: media } = await store();
+    const before = await media.saveForContent(SESSION, Buffer.from('v1'), Buffer.from('fitted v1'), 'image/png');
+    const after = await media.saveForContent(SESSION, Buffer.from('v2'), Buffer.from('fitted v2'), 'image/jpeg');
+
+    expect(after.url).not.toBe(before.url);
+    expect(after.mimeType).toBe('image/jpeg');
+    expect((await media.read(SESSION, before.name))?.bytes.toString()).toBe('fitted v1');
+    expect((await media.read(SESSION, after.name))?.bytes.toString()).toBe('fitted v2');
+  });
+
+  it('refuses a type it would not serve and writes nothing', async () => {
+    const { store: media, base } = await store();
+    await expect(media.saveForContent(SESSION, Buffer.from('x'), Buffer.from('x'), 'text/html')).rejects.toThrow(
+      'Cannot display'
+    );
     expect(await readdir(base)).toEqual([]);
   });
 });

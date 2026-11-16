@@ -213,6 +213,7 @@ export const WafLogsInsightsSection = ({
                     {
                       id: 'uri',
                       label: 'URI',
+                      wrap: true,
                       render: item => <Typography sx={{ overflowWrap: 'anywhere' }}>{item.uri}</Typography>,
                     },
                     {

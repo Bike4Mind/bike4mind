@@ -8,7 +8,7 @@ import {
 } from '@client/app/utils/analyticsCohorts';
 import type { AnalyticsSignupsMode } from '@client/app/utils/analyticsOverview';
 import { daysBetween, mondayOf } from './analyticsOverview';
-import { formatDay, shiftDay } from './analyticsRollup';
+import { formatDay, shiftDay } from '@bike4mind/server-utils/analytics/analyticsRollup';
 
 const QUERY_DEADLINE_MS = 30_000;
 

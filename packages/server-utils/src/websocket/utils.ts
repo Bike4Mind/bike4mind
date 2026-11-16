@@ -20,6 +20,9 @@ import { isConnectionLostError } from '@bike4mind/db-core';
 import { ServiceUnavailableError } from '../utils/errors';
 import { AUTH_UNAVAILABLE_RETRY_AFTER_SECONDS } from '../auth/apiKeyAuthFailure';
 import { ACCOUNT_DELETION_PENDING_MESSAGE } from '../auth/deletionPendingGate';
+import { registerOrgAlertObserver } from '../organizations/registerOrgAlertObserver';
+
+registerOrgAlertObserver();
 
 // sendToClient may be called multiple times in a single request,
 // so we cache the ApiGatewayManagementApiClient

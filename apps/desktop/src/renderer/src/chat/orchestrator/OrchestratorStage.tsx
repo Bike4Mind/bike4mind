@@ -146,11 +146,11 @@ export function OrchestratorStage({
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [hasSelection, settled]);
 
-  const rosterSummary = summarizeRoster(agents);
-  const { total, counts } = rosterSummary;
   // The parent waiting on an approval counts too, as it does on the app badge.
+  const rosterSummary = summarizeRoster(agents, parent);
+  const { total, counts } = rosterSummary;
+  const needsYou = counts['needs-you'];
   const parentNeedsYou = parent.status === 'needs-action';
-  const needsYou = counts['needs-you'] + (parentNeedsYou ? 1 : 0);
   const firstNeedsYou = agents.find(agent => agent.state === 'needs-you');
   const firstFailed = agents.find(agent => agent.state === 'failed');
   const needsYouPill = needsYou > 0 && (firstNeedsYou !== undefined || onParentFocus !== undefined);
@@ -162,7 +162,8 @@ export function OrchestratorStage({
       : [
           `${total} ${total === 1 ? 'agent' : 'agents'}`,
           counts.working > 0 && `${counts.working} working`,
-          needsYou > 0 && !needsYouPill && `${needsYou} need you`,
+          // The ambient line has no pill (its card names only one agent), so it carries the count.
+          needsYou > 0 && (settled || !needsYouPill) && `${needsYou} need you`,
           counts.done > 0 && `${counts.done} done`,
           formatRosterCost(rosterSummary),
         ]

@@ -16,6 +16,8 @@ export interface RegistrationInviteRepository {
   claimUnused: (inviteId: string, usedAt: Date) => Promise<boolean>;
   /** Reopens a code claimed at `usedAt` that no account has redeemed yet, restoring its prior status. */
   releaseClaim: (inviteId: string, usedAt: Date, status: RegInviteStatusType) => Promise<void>;
+  /** Sets status open unless the stored status is used (closed by an admin). */
+  reopenUnlessClosed: (inviteId: string) => Promise<void>;
 }
 
 export interface ResolvedRegistrationInvite {
@@ -26,7 +28,7 @@ export interface ResolvedRegistrationInvite {
 }
 
 /**
- * Looks up a registration invite code and enforces expiry, single use and the email binding.
+ * Looks up a registration invite code and enforces expiry, single use, admin closure and the email binding.
  * Returns null for a missing, empty or whitespace-only code; throws BadRequestError for a code
  * that cannot be redeemed by `normalizedEmail` (already lower-cased and trimmed).
  */
@@ -45,6 +47,11 @@ export async function resolveRegistrationInvite(
     throw new BadRequestError('Invite code has expired');
   }
   if (invite.used && !isUnlimited) throw new BadRequestError('Invite code already used');
+  // An admin closes a code by setting it used (/api/reg-invites/update). An unlimited code keeps
+  // `used` from older redemptions, so only its status says it was closed.
+  if (invite.status === RegInviteStatusType.used) {
+    throw new BadRequestError(isUnlimited ? 'This invite code has been disabled' : 'Invite code already used');
+  }
 
   // An invite issued to a specific inbox is redeemable only by that inbox, so a leaked or
   // forwarded referral code cannot move its grant to another account. Admin bulk codes carry
@@ -76,7 +83,7 @@ export async function claimRegistrationInvite(
 export async function redeemRegistrationInvite(
   { invite, isUnlimited }: Pick<ResolvedRegistrationInvite, 'invite' | 'isUnlimited'>,
   userId: string,
-  registrationInvites: Pick<RegistrationInviteRepository, 'update'>
+  registrationInvites: Pick<RegistrationInviteRepository, 'update' | 'reopenUnlessClosed'>
 ): Promise<void> {
   const usedAt = new Date();
   invite.usageHistory = [...(invite.usageHistory ?? []), { userId, usedAt }];
@@ -84,11 +91,11 @@ export async function redeemRegistrationInvite(
   if (isUnlimited) {
     delete invite.used;
     delete invite.usedbyId;
-    invite.status = RegInviteStatusType.open;
     await registrationInvites.update(
-      { id: invite.id, usageHistory: invite.usageHistory, status: invite.status },
+      { id: invite.id, usageHistory: invite.usageHistory },
       { unset: ['used', 'usedbyId'] }
     );
+    await registrationInvites.reopenUnlessClosed(invite.id);
     return;
   }
 

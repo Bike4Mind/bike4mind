@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { MFA_SETUP_SIGNED_OUT_TOAST } from '@client/app/utils/mfaSetupCopy';
 import { useNavigate, useRouter } from '@tanstack/react-router';
 import { applyRedirect } from '@client/app/utils/authRedirect';
 import {
@@ -142,9 +143,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       // code."). Restart cleanly from the email step.
       handleBackToEmail();
       if (mode === 'setup') {
-        toast.info(
-          'Multi-factor authentication setup is required by your administrator. Please complete the setup to continue.'
-        );
+        toast.info(MFA_SETUP_SIGNED_OUT_TOAST);
       } else {
         toast.error('Multi-factor authentication is required to sign in. Please enter your code to continue.');
       }

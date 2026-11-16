@@ -6,7 +6,6 @@ import { getThemeConfig } from '@client/app/utils/themes';
 
 const h = vi.hoisted(() => ({
   navigate: vi.fn(),
-  setFilesOpen: vi.fn(),
   studioFeatures: {} as Record<string, boolean>,
 }));
 
@@ -15,9 +14,9 @@ vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: vi.fn()
 vi.mock('../useStudioFeature', () => ({
   useStudioFeature: (feature: string) => h.studioFeatures[feature] ?? false,
 }));
-vi.mock('@client/app/components/Files/fileBrowserStore', () => ({
-  useFileBrowser: (select: (state: { setOpen: (open: boolean) => void }) => unknown) =>
-    select({ setOpen: h.setFilesOpen }),
+// The Library's own browser is covered by StudioLibrary.test.tsx; this pins only that the page mounts it.
+vi.mock('@client/app/components/Files/StudioLibrary', () => ({
+  StudioLibrary: () => <div data-testid="studio-library" />,
 }));
 
 import StudioLibraryPage from './StudioLibraryPage';
@@ -55,10 +54,9 @@ describe('Studio Productions', () => {
 });
 
 describe('Studio Library', () => {
-  it('points to Files for now', () => {
+  it('mounts the Studio Library under the Library area', () => {
     render(<StudioLibraryPage />, { wrapper: TestWrapper });
     expect(screen.getByTestId('studio-area-library')).toHaveAttribute('aria-selected', 'true');
-    fireEvent.click(screen.getByTestId('studio-library-open-files-btn'));
-    expect(h.setFilesOpen).toHaveBeenCalledWith(true);
+    expect(screen.getByTestId('studio-library-page')).toContainElement(screen.getByTestId('studio-library'));
   });
 });

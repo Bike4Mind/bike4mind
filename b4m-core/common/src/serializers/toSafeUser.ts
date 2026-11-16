@@ -46,6 +46,8 @@ export const USER_SECRET_FIELDS = [
   'pendingEmailSentAt',
   'pendingEmailExpires',
   'pendingNotionOAuthNonce',
+  'personaLoginCodeHash',
+  'personaLoginCodeExpiresAt',
   'securityQuestions',
   'loginRecords',
   'signupMeta',
@@ -65,6 +67,7 @@ export const USER_SECRET_FIELDS = [
   'stripeCustomerId',
   // Server-side lease against an export racing account cleanup; never client state.
   'accountDataExportLease',
+  'accountFilePurge',
   // The provider-facing end-user id: admin lookup only, never client state.
   'providerEndUserId',
 ] as const;
@@ -199,7 +202,12 @@ export function redactUserSecretsForSelf(
 
   // MFA -> keep enrollment status, drop the secret + backup codes.
   if (user.mfa) {
-    u.mfa = { totpEnabled: user.mfa.totpEnabled, setupAt: user.mfa.setupAt, lastUsedAt: user.mfa.lastUsedAt };
+    u.mfa = {
+      totpEnabled: user.mfa.totpEnabled,
+      passkeyEnabled: user.mfa.passkeyEnabled,
+      setupAt: user.mfa.setupAt,
+      lastUsedAt: user.mfa.lastUsedAt,
+    };
   }
   // Google Drive -> keep only the expiry as a "connected" signal.
   if (user.googleDrive) {

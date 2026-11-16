@@ -119,16 +119,25 @@ export function kimiReasoningParams(model: string, input: KimiReasoningInput): R
 }
 
 /**
+ * Moonshot documents the sampling group as modifiable on the moonshot-v1 family
+ * only. Keyed on that family rather than on NO_TEMPERATURE_MODELS so a Kimi id
+ * that model discovery adds to the catalog (and this build has never heard of)
+ * omits the group too: losing a knob is recoverable, a 400 on every turn is not.
+ */
+function acceptsSamplingParams(model: string): boolean {
+  return model.startsWith('moonshot-v1-') && !NO_TEMPERATURE_MODELS.has(model);
+}
+
+/**
  * Sampling parameters for one model. Moonshot pins temperature (1.0) and top_p
  * (0.95) on every current Kimi and documents them as unmodifiable, so they are
  * omitted rather than sent-and-ignored; NO_TEMPERATURE_MODELS is the shared set
- * the catalog's temperatureMode also lands on.
+ * the client's sampling controls read for the ids this build ships.
  *
  * The penalties and `n` ride the same gate. Moonshot documents the whole sampling
  * group as fixed on these ids, B4M sends penalties on essentially every turn, and
  * an unmodifiable parameter here is a 400 rather than a silently ignored field -
- * so the conservative reading is the safe one. Only the moonshot-v1 family, which
- * this build does not ship, accepts any of them.
+ * so the conservative reading is the safe one.
  */
 export function kimiSamplingParams(
   model: string,
@@ -140,7 +149,7 @@ export function kimiSamplingParams(
     n?: number;
   }
 ): Record<string, unknown> {
-  if (NO_TEMPERATURE_MODELS.has(model)) return {};
+  if (!acceptsSamplingParams(model)) return {};
   const params: Record<string, unknown> = {};
   if (input.temperature !== undefined) params.temperature = input.temperature;
   if (input.topP !== undefined) params.top_p = input.topP;

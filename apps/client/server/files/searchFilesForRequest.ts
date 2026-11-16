@@ -11,7 +11,7 @@ import {
   favoriteRepository,
 } from '@bike4mind/database';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { fileContentUrl } from '@server/files/browserFileSigner';
+import { fileContentUrl } from '@bike4mind/server-utils/files/browserFileSigner';
 import type { Request } from 'express';
 
 /**

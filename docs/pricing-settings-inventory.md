@@ -71,7 +71,7 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | `blockedEmailDomains` | Admin Settings > User Management > Credits System | `isAdminBlockedEmailDomain` inside `shouldBlockDisposableEmail` (`b4m-core/services/src/userService/disposableEmail.ts`), so the same readers as `blockDisposableEmails`. Entries are normalized and validated on save in `apps/client/pages/api/settings/update.ts`. | no. Stops free-credit farming from domains the disposable list misses. | Signup and starter credits |
 | `syntheticUserEmailDomains` | Admin Settings > User Management > Credits System | Funnel analytics (`apps/client/server/analytics/funnel.ts`), and the reserved `persona-` username check (`b4m-core/services/src/userService/reservedUsername.ts`), which lets a verified email on one of these domains choose that prefix. | no. Flags test accounts. | Signup and starter credits |
 | `pricePerCredit` | Growth and Pricing > Credits and pricing | The per-credit Stripe purchase (`handlePerCreditTransaction` in `apps/client/lib/credits/utils.ts`, reached from `/api/stripe/start-payment`), the floor check on save (`apps/client/pages/api/settings/update.ts`) and `PaymentButton.tsx`. | yes, but only on the per-credit purchase path. No UI offers it today (every `PaymentButton` is a credit pack), and credit packs ignore this key. | Credit pricing and conversion |
-| `enforceCredits` | Growth and Pricing > Credits and pricing | 62 files. The credit gates on every billed path: chat completion and reservation (`apps/client/server/billing/reserveRequestCredits.ts`, `creditPreflight.ts`), image, music, video and generation jobs, voice sessions, embeddings, the agent executor in `apps/workers`, and `areCreditsEnforced` in `b4m-core/services/src/billing/isOperationalBillingEnabled.ts`; plus the credit UI (balance chip, composer, billing and credits modals). Default is off on self-host (`B4M_SELF_HOST`). | yes. Off means usage is not deducted from balances. | Credit pricing and conversion |
+| `enforceCredits` | Growth and Pricing > Credits and pricing | 62 files. The credit gates on every billed path: chat completion and reservation (`packages/server-utils/src/billing/reserveRequestCredits.ts`, `creditPreflight.ts`), image, music, video and generation jobs, voice sessions, embeddings, the agent executor in `apps/workers`, and `areCreditsEnforced` in `b4m-core/services/src/billing/isOperationalBillingEnabled.ts`; plus the credit UI (balance chip, composer, billing and credits modals). Default is off on self-host (`B4M_SELF_HOST`). | yes. Off means usage is not deducted from balances. | Credit pricing and conversion |
 | `billOperationalUsage` | Growth and Pricing > Credits and pricing | `isOperationalBillingEnabled` and `recordOperationalUsage` (`b4m-core/services/src/billing/`), used by session preflight and lake semantic search. Lake research runs (`apps/workers/src/dataLakes/runLakeResearch.ts`) do not read it: they bill credits through `forceCreditBilling` whatever this key is set to. | yes. On also debits credits for background model and embedding spend (naming, summarization, tagging, KB search). | Credit pricing and conversion |
 | `HardwareComputeCreditsPerUsd` | Admin Settings > Features > Experimental | No reader in this repository. Its default is `CREDITS_PER_USD_COST` from `b4m-core/common/src/pricing.ts`. | yes. Credits charged per $1 of compute hardware cost. | Credit pricing and conversion |
 | `SimulatorComputeCreditsPerRound` | Admin Settings > Features > Experimental | No reader in this repository. | yes. Credits charged per simulator round. | Credit pricing and conversion |
@@ -264,13 +264,13 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`, `settingHomes.ts`) a
 - `apps/client/pages/api/v1/voice/sessions/index.ts`
 - `apps/client/server/adminAssistant/tools/getSetting.ts`
 - `apps/client/server/agents/authoring/generateAgentAvatar.ts`
-- `apps/client/server/billing/billedWebTools.ts`
+- `packages/server-utils/src/billing/billedWebTools.ts`
 - `packages/server-utils/src/billing/freeTierDailyCapGate.ts`
-- `apps/client/server/billing/meterPlatformCompletion.ts`
-- `apps/client/server/billing/reserveRequestCredits.ts`
+- `packages/server-utils/src/billing/meterPlatformCompletion.ts`
+- `packages/server-utils/src/billing/reserveRequestCredits.ts`
 - `apps/client/server/chatCompletion/external/embedRoute.ts`
-- `apps/client/server/decisions/runDecision.ts`
-- `apps/client/server/generationJobs/wiring.ts`
+- `packages/server-utils/src/decisions/runDecision.ts`
+- `packages/server-utils/src/generationJobs/wiring.ts`
 - `apps/client/server/utils/callerModelList.ts`
 - `apps/client/server/utils/creditPreflight.ts`
 - `packages/server-utils/src/utils/userRateTier.ts`

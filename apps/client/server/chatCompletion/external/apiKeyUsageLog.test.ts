@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import type { Request, Response } from 'express';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
-import type { ApiKeyInfo } from '@server/cli/auth';
+import type { ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
 
 const mockLogUsage = vi.hoisted(() => vi.fn());
 const mockBeginUsage = vi.hoisted(() => vi.fn());

@@ -1,4 +1,10 @@
-import { FeedbackModel, FeedbackTextModel, withTransaction } from '@bike4mind/database';
+import {
+  FeedbackModel,
+  FeedbackTextModel,
+  FeedbackNoteModel,
+  FeedbackAiModel,
+  withTransaction,
+} from '@bike4mind/database';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -25,7 +31,7 @@ const handler = baseApi().delete(
       throw new NotFoundError('Ability not found');
     }
 
-    const feedback = await withTransaction(async () => {
+    const feedback = await withTransaction(async session => {
       const current = isValidObjectId(id) ? await FeedbackModel.findById(id) : null;
       if (!current || !req.ability!.can('delete', current)) throw new NotFoundError('Feedback not found');
 
@@ -34,6 +40,8 @@ const handler = baseApi().delete(
       const reason = isOwnReport && reasonValue === undefined ? null : parseAdminActionReason(reasonValue);
       const { deletedCount } = await FeedbackModel.deleteOne({ _id: id });
       if (deletedCount !== 1) throw new NotFoundError('Feedback not found');
+      await FeedbackNoteModel.deleteMany({ feedbackId: id.toLowerCase() });
+      await FeedbackAiModel.deleteMany({ feedbackId: id.toLowerCase() }, { session });
 
       if (reason !== null) {
         await recordAdminActionFromRequest(req, {

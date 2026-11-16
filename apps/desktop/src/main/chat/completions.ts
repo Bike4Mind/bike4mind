@@ -1,8 +1,14 @@
+import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import type { Readable } from 'node:stream';
 import { createParser } from 'eventsource-parser';
 import { isAxiosError, type AxiosInstance, type AxiosResponse } from 'axios';
-import { isToolChangeMessage, type PromptCacheTtl, type ReasoningEffort } from '@bike4mind/common';
+import {
+  isToolChangeMessage,
+  type CompletionRunAttribution,
+  type PromptCacheTtl,
+  type ReasoningEffort,
+} from '@bike4mind/common';
 import type { ChatModelOption, ChatRole } from '@shared/chat';
 import type { GenerationSettings } from '@shared/generation';
 import { devLog } from '../devlog/DevLogSink';
@@ -127,6 +133,12 @@ export interface CompletionRequest {
    * conversation's turn, such as naming a session.
    */
   sessionId?: string;
+  /**
+   * Groups the request's spend under an orchestration run the server issued. Absent outside an
+   * orchestrated session. A run the server does not recognise fails the request with
+   * RunNotFoundError; see withRunFallback.
+   */
+  run?: CompletionRunAttribution;
   /** Set when the tools were left out because the model's fixed context cannot hold them: Desktop's prompt plus tools. */
   toolPromptTokens?: number;
   /** Set when the tools were left out because the listed model reports no tool support. */
@@ -210,6 +222,7 @@ async function streamOnce(
         messages: request.messages.map(({ continuesTurn: _continuesTurn, ...message }) => message),
         ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
         ...(request.sessionId ? { sessionId: request.sessionId } : {}),
+        ...(request.run ? { run: request.run } : {}),
         // The tool loop on this endpoint belongs to the CALLER: the model emits tool_use and
         // this client executes it locally, then sends the result back as another turn.
         options: {
@@ -230,11 +243,20 @@ async function streamOnce(
           ...(request.cacheTtl ? { cacheTtl: request.cacheTtl } : {}),
         },
       },
-      { responseType: 'stream', signal, timeout: COMPLETION_HEADER_TIMEOUT_MS }
+      {
+        responseType: 'stream',
+        signal,
+        timeout: COMPLETION_HEADER_TIMEOUT_MS,
+        // Fresh per HTTP request, never reused: the server keys the request's ledger charge on it,
+        // so a resend under the same id would read as the same charge.
+        headers: { 'X-Request-ID': randomUUID() },
+      }
     );
   } catch (err) {
     if (signal?.aborted || (isAxiosError(err) && err.code === 'ERR_CANCELED')) return;
-    throw toRequestError(err, await readErrorBody(err));
+    const body = await readErrorBody(err);
+    if (isRunNotFound(err, body)) throw new RunNotFoundError(body?.message);
+    throw toRequestError(err, body?.message);
   }
 
   releaseRequestTimeout(response);
@@ -403,6 +425,38 @@ function readSseStream(
   });
 }
 
+/** The server did not recognise the request's `run`: deleted, or issued to another account. */
+export class RunNotFoundError extends Error {
+  readonly errorCode = 'run_not_found';
+  constructor(message?: string) {
+    super(message || 'The server does not recognise this orchestration run.');
+    this.name = 'RunNotFoundError';
+  }
+}
+
+function isRunNotFound(error: unknown, body: ErrorBody | undefined): boolean {
+  return isAxiosError(error) && error.response?.status === 404 && body?.errorCode === 'run_not_found';
+}
+
+/**
+ * Send `request` with `run`, and once more without it if the server refuses the run, so a stale
+ * or foreign run id costs the turn nothing. `onRejected` runs before the resend, to forget the id.
+ * Safe to resend: a refused run fails before the provider is called, so nothing was billed.
+ */
+export async function withRunFallback<T>(
+  run: CompletionRunAttribution | undefined,
+  send: (run: CompletionRunAttribution | undefined) => Promise<T>,
+  onRejected: (error: RunNotFoundError) => void | Promise<void>
+): Promise<T> {
+  try {
+    return await send(run);
+  } catch (err) {
+    if (!run || !(err instanceof RunNotFoundError)) throw err;
+    await onRejected(err);
+    return send(undefined);
+  }
+}
+
 /**
  * Turn a pre-stream failure into a message worth showing. The HTML case is not hypothetical:
  * a proxy or WAF sitting in front of the completions service answers with an error page, and
@@ -443,10 +497,22 @@ function toRequestError(error: unknown, body?: string): Error {
  * it a 400 is only ever "status 400" - and the one thing a caller most needs to tell apart, a
  * context window that has run out, is only distinguishable from what the provider wrote.
  */
-async function readErrorBody(error: unknown): Promise<string | undefined> {
+async function readErrorBody(error: unknown): Promise<ErrorBody | undefined> {
+  const text = await readErrorText(error);
+  if (!text) return undefined;
+  return { message: messageOf(text), errorCode: errorCodeOf(text) };
+}
+
+interface ErrorBody {
+  message?: string;
+  /** The envelope's machine-readable classifier, when it carries one. */
+  errorCode?: string;
+}
+
+async function readErrorText(error: unknown): Promise<string | undefined> {
   if (!isAxiosError(error)) return undefined;
   const data = error.response?.data;
-  if (typeof data === 'string') return messageOf(data.slice(0, ERROR_BODY_LIMIT).trim());
+  if (typeof data === 'string') return data.slice(0, ERROR_BODY_LIMIT).trim();
   if (!data || typeof (data as Readable).on !== 'function') return undefined;
 
   try {
@@ -457,7 +523,17 @@ async function readErrorBody(error: unknown): Promise<string | undefined> {
       size += chunk.length;
       if (size >= ERROR_BODY_LIMIT) break;
     }
-    return messageOf(Buffer.concat(chunks).toString('utf8').slice(0, ERROR_BODY_LIMIT).trim());
+    return Buffer.concat(chunks).toString('utf8').slice(0, ERROR_BODY_LIMIT).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+function errorCodeOf(text: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || !('errorCode' in parsed)) return undefined;
+    return typeof parsed.errorCode === 'string' ? parsed.errorCode : undefined;
   } catch {
     return undefined;
   }

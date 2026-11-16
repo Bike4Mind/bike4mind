@@ -1,8 +1,8 @@
 import { ApiKeyScope, MODERATION_PAGE_READ } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { adminUsersSummary } from '@server/admin/usersList/listAdminUsers';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { adminUsersSummary } from '@bike4mind/server-utils/admin/usersList/listAdminUsers';
 
 /** Account totals for the users list header and its built-in view tabs. */
 const handler = adminApi({

@@ -165,7 +165,50 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     temperature: { type: Number, min: 0, max: 2 },
     maxTokens: { type: Number, min: 1, max: 200000 },
     maxCreditsPerMember: { type: Number, required: false },
+    serviceAccountUserId: { type: String, required: false },
     redactPushContent: { type: Boolean, default: false },
+    budgetAlerts: {
+      type: new Schema(
+        {
+          enabled: { type: Boolean, default: false },
+          monthlyBudgetCredits: { type: Number, default: null },
+          percentThresholds: { type: [Number], default: [] },
+          lowBalanceCredits: { type: Number, default: null },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
+    sharingPolicy: {
+      type: new Schema(
+        {
+          allowPublicLinks: { type: Boolean, required: true },
+          allowExternalSharing: { type: Boolean, required: true },
+          allowedDomains: { type: [String], default: [] },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+    mfaPolicy: {
+      type: new Schema(
+        { required: { type: Boolean, default: false }, graceEndsAt: { type: Date, default: null } },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+    retentionPolicy: {
+      type: new Schema(
+        {
+          chats: { type: Number, min: 1, max: 36500, default: null },
+          files: { type: Number, min: 1, max: 36500, default: null },
+          media: { type: Number, min: 1, max: 36500, default: null },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+    retentionVersion: { type: Number, default: 0 },
   },
   {
     virtuals: true,
@@ -189,6 +232,8 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
 OrganizationSchema.path('signupGrantUnlockCount', { type: Number, min: 0, select: false });
 // Same, for organization invite bonuses: bounded by seats in apps/client/server/credits/orgInviteBonus.ts.
 OrganizationSchema.path('signupInviteBonusCount', { type: Number, min: 0, select: false });
+OrganizationSchema.path('retentionSweepRevision', { type: Number, select: false });
+OrganizationSchema.path('retentionLastSweptAt', { type: Date, select: false });
 
 OrganizationSchema.virtual('logo', {
   ref: 'AppFile',
@@ -215,6 +260,10 @@ OrganizationSchema.index({ stripeCustomerId: 1 }, { name: 'organization_stripeCu
 // membership question collscanned. The owner arm rides the existing { userId: 1 } index.
 OrganizationSchema.index({ 'users.userId': 1 });
 OrganizationSchema.index({ adminUserIds: 1 });
+OrganizationSchema.index(
+  { personal: 1, retentionLastSweptAt: 1, _id: 1 },
+  { name: 'retention_opted_in_sweep', partialFilterExpression: { retentionVersion: { $gt: 0 } } }
+);
 
 export const Organization =
   (mongoose.models.Organization as IOrganizationModel) ??
@@ -270,7 +319,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     const counterFilter = expected === 0 ? { $in: [0, null] } : expected;
     const res = await this.organizationModel.updateOne(
       { _id: organizationId, currentStorageSize: counterFilter },
-      { $set: { currentStorageSize: next } }
+      { $set: { currentStorageSize: Math.max(0, next) } }
     );
     return res.matchedCount === 1;
   }
@@ -394,17 +443,23 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    *
    * The `$expr` capacity guard (`$size users + 1 < seats`: owner + members must leave room for one
    * more, the same owner-inclusive accounting `addMember`/`validateSeatChange` use, #1423) is
-   * evaluated inside the atomic match, so the fit check can't race the write.
+   * evaluated inside the atomic match, so the fit check can't race the write. Organization invite
+   * accept (sharingService/accept.ts) also joins through here; a share-link accept passes
+   * `reservedSeats` so seats promised to outstanding named invites stay free.
    * Returns the PRE-image ({ new: false }); null means already a member, org gone, OR at capacity -
    * the caller re-reads to tell those apart.
    */
-  async addMemberIfUnderCeiling(organizationId: string, member: IUserShare): Promise<IOrganizationDocument | null> {
+  async addMemberIfUnderCeiling(
+    organizationId: string,
+    member: IUserShare,
+    reservedSeats = 0
+  ): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOneAndUpdate(
       {
         _id: organizationId,
         deletedAt: null,
         'users.userId': { $ne: member.userId },
-        $expr: { $lt: [{ $add: [{ $size: '$users' }, 1] }, '$seats'] },
+        $expr: { $lt: [{ $add: [{ $size: '$users' }, 1, Math.max(0, reservedSeats)] }, '$seats'] },
       },
       [
         {
@@ -694,6 +749,20 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
         $or: [{ userId }, { 'users.userId': userId }],
       },
       { $set: { 'userDetails.$.maxCredits': maxCredits } }
+    );
+    return result.matchedCount > 0;
+  }
+
+  /**
+   * Stamps `updatedAt` on a live org and resolves false when it is soft-deleted or missing. Run inside
+   * a transaction, the write conflicts with a concurrent org delete (which writes `deletedAt`), so the
+   * two serialize: whichever commits second retries and sees the other's outcome.
+   */
+  async touchIfLive(organizationId: string): Promise<boolean> {
+    const result = await this.organizationModel.updateOne(
+      { _id: organizationId, deletedAt: null },
+      { $set: { updatedAt: new Date() } },
+      { timestamps: false }
     );
     return result.matchedCount > 0;
   }

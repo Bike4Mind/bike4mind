@@ -1,6 +1,6 @@
 // @vitest-environment node
-import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+import { createModelAdmission } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createModelAdmission: vi.fn(async () => ({
     assert: vi.fn(async (_modelId: string) => {}),
     admits: vi.fn(async (_modelId: string) => true),

@@ -1,12 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import type { AdminSubscriptionDetail } from '@client/app/utils/adminSubscriptionDetail';
 import {
   adminSubscriptionDetailKey,
   useAdminSubscriptionCancel,
   useAdminSubscriptionResume,
+  useAdminSubscriptionHistory,
 } from './adminSubscriptionDetail';
 
 const apiPost = vi.fn();
@@ -82,5 +83,70 @@ describe.each([
       await expect(result.current.mutateAsync(body)).rejects.toThrow('changed');
     });
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: adminSubscriptionDetailKey(ID) }));
+  });
+});
+
+describe('subscription history query wiring', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    focusManager.setFocused(undefined);
+  });
+
+  it('uses the history route, caches remounts for five minutes, ignores focus and refreshes on subscription invalidation', async () => {
+    apiGet.mockReset().mockResolvedValue({ data: { creditCycles: [], seatChanges: null } });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const Wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const first = renderHook(() => useAdminSubscriptionHistory(ID), { wrapper: Wrapper });
+    await waitFor(() => expect(first.result.current.isSuccess).toBe(true));
+    expect(apiGet).toHaveBeenCalledExactlyOnceWith(`/api/admin/subscriptions/${ID}/history`);
+    first.unmount();
+    clock.mockReturnValue(1_800_000_240_000);
+    const second = renderHook(() => useAdminSubscriptionHistory(ID), { wrapper: Wrapper });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(apiGet).toHaveBeenCalledTimes(1);
+    clock.mockReturnValue(1_800_000_360_000);
+    await act(async () => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    expect(apiGet).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'subscriptions'] });
+    });
+    expect(apiGet).toHaveBeenCalledTimes(2);
+    second.unmount();
+    clock.mockReturnValue(1_800_000_720_000);
+    const expired = renderHook(() => useAdminSubscriptionHistory(ID), { wrapper: Wrapper });
+    await waitFor(() => expect(apiGet).toHaveBeenCalledTimes(3));
+    expired.unmount();
+    queryClient.clear();
+  });
+
+  it('isolates subscription ids and does not request invalid ids', async () => {
+    apiGet.mockReset().mockResolvedValue({ data: { creditCycles: [], seatChanges: null } });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const Wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const view = renderHook(({ id }) => useAdminSubscriptionHistory(id), {
+      wrapper: Wrapper,
+      initialProps: { id: ID },
+    });
+    await waitFor(() => expect(view.result.current.isSuccess).toBe(true));
+    view.rerender({ id: 'b'.repeat(24) });
+    await waitFor(() => expect(apiGet).toHaveBeenCalledTimes(2));
+    expect(apiGet).toHaveBeenLastCalledWith(`/api/admin/subscriptions/${'b'.repeat(24)}/history`);
+    view.rerender({ id: 'not-an-id' });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(apiGet).toHaveBeenCalledTimes(2);
+    view.unmount();
+    queryClient.clear();
   });
 });

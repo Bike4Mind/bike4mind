@@ -1,5 +1,5 @@
 import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
-import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 import { z } from 'zod';
@@ -11,7 +11,7 @@ import { WebClient, type Block, type KnownBlock } from '@slack/web-api';
 import { User, Quest, Session, connectDB, sessionRepository } from '@bike4mind/database';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { SlackDevWorkspace } from '@bike4mind/database/infra';
-import { createSession } from '@server/managers/sessionManager';
+import { createSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { Logger } from '@bike4mind/observability';
 import { withRequestLogger } from '@server/middlewares/requestLogger';
 import { NextApiRequest, NextApiResponse } from 'next';

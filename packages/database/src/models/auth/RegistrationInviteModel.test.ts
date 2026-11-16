@@ -45,12 +45,20 @@ describe('RegistrationInviteRepository.usageByGrantPackage', () => {
     expect(usage.has('other')).toBe(false);
   });
 
-  it('counts a waiting code as active, since redemption does not check status', async () => {
+  it('counts a waiting code as active, since redemption refuses only a used status', async () => {
     await invite({ grantPackageId: 'a', status: RegInviteStatusType.waiting, expiresAt: day(1) });
 
     const usage = await registrationInviteRepository.usageByGrantPackage(['a'], NOW);
 
     expect(usage.get('a')).toEqual({ codes: 1, activeCodes: 1, nextExpiry: day(1) });
+  });
+
+  it('does not count an unlimited code an admin set to used, since redemption refuses it', async () => {
+    await invite({ grantPackageId: 'a', status: RegInviteStatusType.used, unlimitedUse: true, expiresAt: day(1) });
+
+    const usage = await registrationInviteRepository.usageByGrantPackage(['a'], NOW);
+
+    expect(usage.get('a')).toEqual({ codes: 1, activeCodes: 0, nextExpiry: null });
   });
 
   it('counts a code expiring at exactly now as active, matching the redemption check', async () => {
@@ -72,5 +80,46 @@ describe('RegistrationInviteRepository.usageByGrantPackage', () => {
   it('returns an empty map for no ids', async () => {
     await invite({ grantPackageId: 'a' });
     expect((await registrationInviteRepository.usageByGrantPackage([], NOW)).size).toBe(0);
+  });
+});
+
+describe('RegistrationInviteRepository.listByGrantPackage', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await RegistrationInvite.deleteMany({});
+  });
+
+  it('returns only the package codes, newest first, and flags when more exist than the limit', async () => {
+    for (const code of ['OLD', 'MID', 'NEW']) await invite({ grantPackageId: 'a', code });
+    await invite({ grantPackageId: 'other', code: 'ELSEWHERE' });
+    await invite({ code: 'UNLINKED' });
+
+    const all = await registrationInviteRepository.listByGrantPackage('a', 5);
+    expect(all.data.map(row => row.code)).toEqual(['NEW', 'MID', 'OLD']);
+    expect(all.truncated).toBe(false);
+
+    const capped = await registrationInviteRepository.listByGrantPackage('a', 2);
+    expect(capped.data.map(row => row.code)).toEqual(['NEW', 'MID']);
+    expect(capped.truncated).toBe(true);
+  });
+
+  it('returns an empty page for a package with no codes', async () => {
+    expect(await registrationInviteRepository.listByGrantPackage('none', 50)).toEqual({ data: [], truncated: false });
+  });
+});
+
+describe('RegistrationInviteRepository.reopenUnlessClosed', () => {
+  setupMongoTest();
+
+  it('reopens a waiting code but leaves a code an admin closed as used', async () => {
+    const waiting = await invite({ status: RegInviteStatusType.waiting, unlimitedUse: true });
+    const closed = await invite({ status: RegInviteStatusType.used, unlimitedUse: true });
+
+    await registrationInviteRepository.reopenUnlessClosed(String(waiting._id));
+    await registrationInviteRepository.reopenUnlessClosed(String(closed._id));
+
+    expect((await RegistrationInvite.findById(waiting._id).lean())?.status).toBe(RegInviteStatusType.open);
+    expect((await RegistrationInvite.findById(closed._id).lean())?.status).toBe(RegInviteStatusType.used);
   });
 });

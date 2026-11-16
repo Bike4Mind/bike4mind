@@ -25,11 +25,6 @@ on:
     branches: [main]
   push:
     branches: [main]
-  # Reports on the merge queue too, so this can become a required check (see
-  # semantic-pr-title.yml). A merge group was already checked as a PR, so the
-  # job is skipped there (passing, and taking no runner slot).
-  merge_group:
-    branches: [main]
 
 permissions:
   contents: read
@@ -45,9 +40,7 @@ jobs:
     name: Restricted terms
     # Public repo only: the check exists to keep terms out of public logs and
     # history, and the secret is set here alone.
-    if: >-
-      github.repository == (vars.OPEN_CORE_REPO || 'Bike4Mind/bike4mind') &&
-      github.event_name != 'merge_group'
+    if: github.repository == (vars.OPEN_CORE_REPO || 'Bike4Mind/bike4mind')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

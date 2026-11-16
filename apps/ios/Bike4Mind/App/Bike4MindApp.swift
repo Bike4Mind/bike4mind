@@ -38,9 +38,15 @@ struct Bike4MindApp: App {
     WindowGroup {
       RootView()
         .tint(Tokens.Palette.brand)
+        .font(Tokens.Typography.body)
         .environment(auth)
         .environment(services)
         .onOpenURL { services.events.handle(url: $0) }
+        #if DEBUG
+          .task {
+            if FixtureServices.isEnabled, let link = FixtureServices.initialLink { services.events.handle(url: link) }
+          }
+        #endif
         .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
           guard let url = activity.webpageURL else { return }
           services.events.handle(url: url)

@@ -88,7 +88,9 @@ vi.mock('@bike4mind/services', () => ({
     },
   }),
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: () => async () => ({}) }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  createRequestCompletionMeter: () => async () => ({}),
+}));
 
 import reviseHandler from '../revise';
 import restoreHandler from '../restore';

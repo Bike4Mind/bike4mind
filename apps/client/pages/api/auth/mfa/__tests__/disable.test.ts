@@ -31,7 +31,12 @@ vi.mock('@bike4mind/database', () => ({
   passkeyCredentialRepository: { removeAllForUser: mocks.removeAllForUser },
 }));
 vi.mock('@bike4mind/services', () => ({
-  mfaService: { userCanDisableMFA: mocks.userCanDisableMFA, disableMFA: mocks.disableMFA },
+  mfaService: {
+    userHasMFAConfigured: (user: { mfa?: { totpEnabled?: boolean; passkeyEnabled?: boolean } }) =>
+      !!user?.mfa?.totpEnabled || !!user?.mfa?.passkeyEnabled,
+    userCanDisableMFA: mocks.userCanDisableMFA,
+    disableMFA: mocks.disableMFA,
+  },
   userService: { revokeUserSessions: mocks.revokeUserSessions },
 }));
 

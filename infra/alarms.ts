@@ -19,6 +19,7 @@ import {
   signupDomainHoldTriageCron,
   spendMonitor,
   voiceHoldSweepCron,
+  personaExpirySweepCron,
 } from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { reauthConnectionRoute, subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
@@ -29,7 +30,6 @@ import {
   heartbeatRoute,
   voiceSendTranscriptRoute,
   voiceEndedRoute,
-  cliCompletionRoute,
   cliToolRoute,
   keepCommandRequestRoute,
   keepCommandResponseRoute,
@@ -824,7 +824,6 @@ if (isMonitoredStage) {
     { key: 'heartbeat', metricName: 'HeartbeatRouteOutOfMemory', route: heartbeatRoute },
     { key: 'voice-send-transcript', metricName: 'VoiceSendTranscriptOutOfMemory', route: voiceSendTranscriptRoute },
     { key: 'voice-ended', metricName: 'VoiceEndedOutOfMemory', route: voiceEndedRoute },
-    { key: 'cli-completion', metricName: 'CliCompletionOutOfMemory', route: cliCompletionRoute },
     { key: 'cli-tool', metricName: 'CliToolOutOfMemory', route: cliToolRoute },
     { key: 'keep-command-request', metricName: 'KeepCommandRequestOutOfMemory', route: keepCommandRequestRoute },
     { key: 'keep-command-response', metricName: 'KeepCommandResponseOutOfMemory', route: keepCommandResponseRoute },
@@ -1982,6 +1981,28 @@ if (isMonitoredStage) {
       alarmActions: [dlqAlarmTopic.arn],
       tags: {
         Application: 'Voice',
+        Severity: 'High',
+      },
+    });
+  }
+
+  // Personas outlive their expiry if this sweep stops running, so any error pages.
+  if (personaExpirySweepCron) {
+    new aws.cloudwatch.MetricAlarm('personaExpirySweepLambdaErrors', {
+      name: `${$app.name}-${$app.stage}-persona-expiry-sweep-lambda-errors`,
+      alarmDescription: 'The test persona expiry sweep Lambda is erroring (timeout, OOM or crash)',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 3600,
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: personaExpirySweepCron.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'Auth',
         Severity: 'High',
       },
     });

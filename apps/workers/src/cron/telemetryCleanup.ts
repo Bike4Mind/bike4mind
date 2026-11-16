@@ -1,7 +1,7 @@
 import { Context } from 'aws-lambda';
 import { Logger } from '@bike4mind/observability';
 import { randomUUID } from 'crypto';
-import { connectDB, Quest } from '@bike4mind/database';
+import { connectDB, Quest, scrubLegacyFeedbackNotes } from '@bike4mind/database';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 
@@ -46,6 +46,9 @@ export async function runTelemetryCleanup(options: { logger?: Logger; batchSize?
   // Process in batches to avoid MongoDB write lock contention on large datasets
   const batchSize = options.batchSize ?? 5000;
   if (!Number.isInteger(batchSize) || batchSize < 1) throw new Error('Invalid telemetry cleanup batch size');
+  const notes = await scrubLegacyFeedbackNotes({ limit: 500 });
+  logger.log(`[TelemetryCleanup] Legacy feedback notes: ${notes.migrated} migrated, ${notes.retired} retired`);
+
   let totalModified = 0;
   let batchCount = 0;
 

@@ -11,6 +11,7 @@ import { publicVideoModel } from './media/__fixtures__/videoModels';
 import { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
+import { ApprovalGate } from './tools/ApprovalGate';
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -27,7 +28,7 @@ describe('ChatService generation tools', () => {
   let axiosGet: ReturnType<typeof vi.fn>;
   let axiosPost: ReturnType<typeof vi.fn>;
 
-  async function build(options: { media: boolean; roots: string[] }): Promise<void> {
+  async function build(options: { media: boolean; roots: string[]; approvals?: ApprovalGate }): Promise<void> {
     const store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-media-sessions-')), 'test-model');
     // Bound per test: a previous service replying late must not push into this test's events.
     const emitted: ChatStreamEvent[] = [];
@@ -57,6 +58,7 @@ describe('ChatService generation tools', () => {
     service = new ChatService({
       store,
       access: { list: async () => options.roots } as unknown as AccessStore,
+      ...(options.approvals ? { approvals: options.approvals } : {}),
       logger,
       // The image tool resolves its model through this, so it has to be real here.
       models: new ModelCatalog({ logger, getApiClient, getEnvironmentUrl: () => 'http://localhost:3000' }, {
@@ -96,6 +98,7 @@ describe('ChatService generation tools', () => {
       'web_fetch',
       'ask_user',
       'request_directory',
+      'loop',
     ]);
   });
 
@@ -119,7 +122,7 @@ describe('ChatService generation tools', () => {
     await service.send(id, 'hi');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
 
-    expect(declaredTools()).toEqual(['web_search', 'web_fetch', 'ask_user', 'request_directory']);
+    expect(declaredTools()).toEqual(['web_search', 'web_fetch', 'ask_user', 'request_directory', 'loop']);
   });
 
   it('tells the model the output goes to the user and that it costs them', async () => {
@@ -178,4 +181,36 @@ describe('ChatService generation tools', () => {
     expect(persisted?.toolCalls?.[0].media?.[0].url).toMatch(/^b4m-media:\/\//);
     expect((await service.getSession(id))?.remoteSessionId).toBe('nb1');
   }, 20_000);
+
+  it('asks about an image in ask mode like any other tool, answerable away from the app', async () => {
+    const approvals = new ApprovalGate();
+    await build({ media: true, roots: [], approvals });
+    apiGet.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.includes('/api/models')
+          ? { models: [{ id: 'gpt-image-1-mini', type: 'image' }] }
+          : { cdnUrl: '/api/app-files/serve' }
+      )
+    );
+    const { id } = await service.createSession();
+    await service.setApprovalMode(id, 'ask');
+    await service.send(id, 'draw me a bicycle');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    streams[0].write(
+      frame({
+        type: 'tool_use',
+        tools: [{ id: 'call_1', name: 'generate_image', arguments: JSON.stringify({ prompt: 'a bicycle' }) }],
+      })
+    );
+    streams[0].write(frame('[DONE]'));
+
+    const card = await vi.waitUntil(
+      () => events.find(event => event.type === 'tool-start' && event.call.status === 'awaiting-approval'),
+      { timeout: 3000, interval: 5 }
+    );
+    const call = card.type === 'tool-start' ? card.call : undefined;
+    expect(call?.name).toBe('generate_image');
+    expect(call?.approvalInAppOnly).toBeUndefined();
+    if (call?.approvalId) approvals.resolve(call.approvalId, { decision: 'deny' });
+  });
 });

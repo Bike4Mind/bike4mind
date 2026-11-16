@@ -67,7 +67,9 @@ vi.mock('@bike4mind/server-utils/utils/pushNotifications', () => ({
   truncateForPush: (text: string) => text,
 }));
 
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: h.createCompletionMeter }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  createCompletionMeter: h.createCompletionMeter,
+}));
 
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(() => ({ __mock: 'filesStorage' })),

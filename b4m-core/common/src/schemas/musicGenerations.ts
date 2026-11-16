@@ -143,6 +143,19 @@ export const PublicMusicModelSchema = z.object({
   object: z.literal('music_model'),
   display_name: z.string(),
   provider: z.string(),
+  // Optional so a client still parses a server from before these fields.
+  provider_label: z
+    .string()
+    .optional()
+    .describe(
+      'The provider as shown to people (`Google`, `ElevenLabs`), where `provider` is the id. Display text. Always sent by current servers.'
+    ),
+  blurb: z
+    .string()
+    .optional()
+    .describe(
+      'How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Always sent by current servers.'
+    ),
   vocals: z.enum(['optional', 'never']).describe('`never`: instrumental only.'),
   lyrics: z
     .object({ max_chars: z.number(), max_line_chars: z.number().nullable() })

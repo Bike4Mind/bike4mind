@@ -4,15 +4,15 @@ import { Resource } from 'sst';
 import { connectDB } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { sweepAbuseAssessments } from '@server/security/abuseAssessment/abuseAssessment';
-import { linkedAccountGroupEvidence } from '@server/security/abuseAssessment/linkedAccountEvidence';
+import { sweepAbuseAssessments } from '@bike4mind/server-utils/security/abuseAssessment/abuseAssessment';
+import { linkedAccountGroupEvidence } from '@bike4mind/server-utils/security/abuseAssessment/linkedAccountEvidence';
 import { applyAutoContainment, liveAutoContainmentDeps } from '@workers/security/autoContainment/executor';
 
 /** Stop starting new assessments this long before the Lambda timeout. */
 const STOP_MARGIN_MS = 60_000;
 
 /**
- * Hourly assessments of unreviewed shadow detections (apps/client/server/security/abuseAssessment),
+ * Hourly assessments of unreviewed shadow detections (packages/server-utils/src/security/abuseAssessment),
  * each judgment handed to automated containment (security/autoContainment, autoContainmentConfig).
  * A no-op unless abuseAssessmentEnabled, the sweep, a rollout percent and a model are all configured.
  */

@@ -99,6 +99,7 @@ export const AuditEventTable = <T extends AuditEntry = AuditEntry>({
     {
       id: 'summary',
       label: 'Summary',
+      wrap: true,
       render: entry => (
         <Stack spacing={0.5}>
           <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
@@ -147,6 +148,7 @@ export const AuditEventTable = <T extends AuditEntry = AuditEntry>({
     {
       id: 'reason',
       label: 'Reason',
+      wrap: true,
       // Reasons can run to a paragraph; the row shows two lines and the drawer shows the rest.
       render: entry => (
         <Typography

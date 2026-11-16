@@ -32,6 +32,7 @@ import {
   ModelBackend,
   isSupportedEmbeddingModel,
   insufficientCreditsError,
+  readableGroupIds,
   usdToCredits,
   type IOrganizationDocument,
   type IUserDocument,
@@ -49,6 +50,7 @@ import { activePlanResolver } from '@bike4mind/server-utils/entitlements/activeS
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
+import { notifyOrgEvent } from '@bike4mind/services/organizationService/orgEventObserver';
 
 /**
  * The semantic-search core shared by POST /api/data-lakes/semantic-search (the product UI and the
@@ -393,6 +395,12 @@ export async function runLakeSemanticSearch(
     // Cap before pool, mirroring deductCreditsWithOrgSupport: a capped member must be
     // rejected even when the org pool is flush.
     if (billingOrg && creditService.isMemberCreditCapExceeded(billingOrg, req.user.id, requiredCredits)) {
+      await notifyOrgEvent({
+        type: 'member_cap_check',
+        organizationId: billingOrg.id,
+        userId: req.user.id,
+        refused: true,
+      });
       throw insufficientCreditsError(
         'Your organization member credit limit has been reached for semantic search. Contact your organization administrator.'
       );
@@ -418,7 +426,7 @@ export async function runLakeSemanticSearch(
   const search = await dataLakeService.semanticDataLakeSearch(
     {
       userId: req.user.id,
-      userGroups: req.user.groups ?? [],
+      userGroups: readableGroupIds(req.user),
       query,
       tags,
       topK,

@@ -121,11 +121,18 @@ const SUGGESTION = {
   suggestedAt: new Date('2026-07-20T00:00:00Z'),
 };
 
-function call(options: { method: 'GET' | 'POST'; isAdmin?: boolean; query?: object; body?: object }) {
+function call(options: {
+  method: 'GET' | 'POST';
+  isAdmin?: boolean;
+  adminPermissions?: string[];
+  query?: object;
+  body?: object;
+}) {
   const { req, res } = createMocks({ method: options.method, query: options.query ?? {}, body: options.body });
-  (req as unknown as { user: { isAdmin: boolean; id: string } }).user = {
+  (req as unknown as { user: { isAdmin: boolean; id: string; adminPermissions?: string[] } }).user = {
     isAdmin: options.isAdmin ?? true,
     id: 'admin-1',
+    ...(options.adminPermissions ? { adminPermissions: options.adminPermissions } : {}),
   };
   return { req, res, run: () => (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res) };
 }
@@ -167,6 +174,22 @@ describe('GET /api/admin/model-deprecation-status', () => {
     expect(body.expiringOrExpired).toEqual([]);
     expect(body.queue).toEqual([
       { modelId: 'gpt-sunset', suggestion: expect.objectContaining({ replacedBy: 'gpt-live' }) },
+    ]);
+  });
+
+  it('tags queue items with the backend and, for absence, the miss count the accept note cites', async () => {
+    mockPendingSuggestions.mockResolvedValue([
+      { modelId: 'gpt-live', missCount: 0, suggestion: SUGGESTION },
+      { modelId: 'ghost-model', missCount: 5, suggestion: { ...SUGGESTION, source: 'absence' } },
+    ]);
+    const { res, run } = call({ method: 'GET' });
+    await run();
+
+    expect(res._getJSONData().queue).toEqual([
+      // Live list first: the merged model carries its backend.
+      { modelId: 'gpt-live', backend: 'openai', suggestion: expect.any(Object) },
+      // Unknown to both lists: no backend key at all, so the client falls back to the id.
+      { modelId: 'ghost-model', missCount: 5, suggestion: expect.objectContaining({ source: 'absence' }) },
     ]);
   });
 
@@ -247,6 +270,17 @@ describe('POST /api/admin/model-deprecation-status', () => {
   it('rejects non-admin users', async () => {
     const { run } = call({ method: 'POST', isAdmin: false, body: { modelId: 'gpt-sunset', action: 'dismiss' } });
     await expect(run()).rejects.toThrow(/missing permission/i);
+    expect(mockResolveSuggestion).not.toHaveBeenCalled();
+  });
+
+  it('refuses a delegate holding settings:manage', async () => {
+    const { run } = call({
+      method: 'POST',
+      isAdmin: false,
+      adminPermissions: ['settings:manage'],
+      body: { modelId: 'gpt-sunset', action: 'dismiss' },
+    });
+    await expect(run()).rejects.toMatchObject({ statusCode: 403 });
     expect(mockResolveSuggestion).not.toHaveBeenCalled();
   });
 
@@ -604,6 +638,17 @@ describe('POST /api/admin/model-deprecation-status admin audit', () => {
       action: 'settings.model_lifecycle.suggestion_resolved',
       target: { kind: 'settings', id: 'gpt-sunset' },
       details: { resolution: 'dismiss' },
+    });
+  });
+
+  it('keeps a dismiss note in the audit entry when one is given', async () => {
+    await call({
+      method: 'POST',
+      body: { modelId: 'gpt-sunset', action: 'dismiss', note: '  duplicate of an accepted signal ' },
+    }).run();
+
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      details: { resolution: 'dismiss', note: 'duplicate of an accepted signal' },
     });
   });
 

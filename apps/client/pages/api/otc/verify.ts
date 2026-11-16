@@ -66,7 +66,7 @@ import { readVisitId } from '@server/analytics/visitSession';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import * as z from 'zod';
-import { selfUserResponseSchema } from '@bike4mind/common';
+import { selfUserResponseSchema, signupDomainGrantRefusalNotice } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { recordAdminActionForActor, systemAuditActor } from '@bike4mind/server-utils/utils/adminAudit';
 
@@ -99,7 +99,11 @@ const otcVerifyCredentialsSchema = z.object({
 
 // Existing-user login spreads the self-view user at the top level next to the access token.
 const otcLoginResponseSchema = selfUserResponseSchema.extend({ accessToken: z.string() });
-const otcRegistrationResponseSchema = z.object({ user: selfUserResponseSchema, accessToken: z.string() });
+const otcRegistrationResponseSchema = z.object({
+  user: selfUserResponseSchema,
+  accessToken: z.string(),
+  signupGrantNotice: z.string().optional(),
+});
 
 // Re-read at verify so turning the kill switch off also stops codes issued before the change. A failed
 // read keeps applying, matching what send stored.
@@ -692,6 +696,23 @@ const handler = baseApi({ auth: false })
     });
     await emitFunnelEvent({ user: funnelUser, event: 'signup_completed', metadata: { method: 'otc' }, visitId });
 
+    // Domain grants may have just joined an MFA-required organization. Resolve only after
+    // those memberships commit, before minting any full session or refresh cookie.
+    const secondFactor = await resolveSecondFactor(req, newUser, {
+      origin: { strategy: 'otc', createdVia: 'otc-registration' },
+    });
+    if (secondFactor.kind === 'challenge') {
+      return res.status(200).json({
+        mfaRequired: true,
+        passkeyAvailable: secondFactor.passkeyAvailable,
+        userId: newUser.id,
+        accessToken: secondFactor.mfaToken,
+      });
+    }
+    if (secondFactor.kind === 'enroll') {
+      return res.status(200).json({ mfaSetupRequired: true, userId: newUser.id, accessToken: secondFactor.mfaToken });
+    }
+
     const registrationSession = await issueSessionForRequest(req, newUser.id, {
       createdVia: 'otc-registration',
       tokenVersion: newUser.tokenVersion ?? 0,
@@ -701,6 +722,9 @@ const handler = baseApi({ auth: false })
     return respond(res, otcRegistrationResponseSchema, {
       user: redactUserSecretsForSelf(newUser),
       accessToken: registrationSession.accessToken,
+      ...(domainGrant.packageRefusal && {
+        signupGrantNotice: signupDomainGrantRefusalNotice(domainGrant.packageRefusal),
+      }),
     });
   });
 

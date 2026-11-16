@@ -26,7 +26,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
-import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { assertDataLakeTagWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import {
   checkStorageLimitForOwner,
   getSettingsMap,

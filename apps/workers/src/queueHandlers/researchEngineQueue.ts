@@ -28,7 +28,7 @@ import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils'
 import { Logger } from '@bike4mind/observability';
 import { researchTaskJobs } from '@bike4mind/server-utils/utils/researchTasks';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
-import { assertOwnerCanAfford, createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { assertOwnerCanAfford, createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { isTerminalCreditRefusal, type IUserDocument } from '@bike4mind/common';
 import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
 

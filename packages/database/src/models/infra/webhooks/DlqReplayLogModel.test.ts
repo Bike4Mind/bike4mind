@@ -5,6 +5,46 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../__test__/crea
 import DlqReplayLogModel, { dlqReplayLogRepository } from './DlqReplayLogModel';
 
 describe('DlqReplayLogRepository.findRecent', () => {
+  it('pages beyond 200 records with tied timestamps, filters and literal reason search', async () => {
+    const createdAt = new Date();
+    await DlqReplayLogModel.create(
+      Array.from({ length: 225 }, (_, index) => ({
+        queueLabel: 'paged',
+        messageId: `entity-${index}`,
+        messageBody: 'SECRET',
+        sourceQueue: 'Paged',
+        status: 'discarded',
+        operation: 'discard',
+        reason: 'Obsolete [job]',
+        replayedBy: 'admin-1',
+        createdAt,
+      }))
+    );
+    const ids: string[] = [];
+    let before: { createdAt: Date; id: string } | undefined;
+    for (;;) {
+      const rows = await dlqReplayLogRepository.findRecent({
+        queueLabel: 'paged',
+        status: 'discarded',
+        search: '[job]',
+        startDate: createdAt,
+        endDate: createdAt,
+        limit: 50,
+        before,
+        includeBody: false,
+      });
+      if (!rows.length) break;
+      expect(rows.every(row => row.reason === 'Obsolete [job]' && !('messageBody' in row))).toBe(true);
+      ids.push(...rows.map(row => String(row.id)));
+      const last = rows.at(-1)!;
+      before = { createdAt: last.createdAt, id: String(last.id) };
+    }
+    expect(ids).toHaveLength(225);
+    expect(new Set(ids).size).toBe(225);
+    expect(ids).toEqual([...ids].sort().reverse());
+    expect(await dlqReplayLogRepository.findRecent({ search: ids[0], includeBody: false })).toHaveLength(1);
+    expect(await dlqReplayLogRepository.findRecent({ search: 'entity-224', includeBody: false })).toHaveLength(1);
+  });
   let mongoServer: MongoMemoryServer;
 
   beforeAll(async () => {
@@ -92,6 +132,25 @@ describe('DlqReplayLogRepository.findRecent', () => {
     expect(await dlqReplayLogRepository.countAttempts(base.messageId)).toBe(0);
     await DlqReplayLogModel.create(Array.from({ length: 3 }, () => base));
     expect(await dlqReplayLogRepository.countAttempts(base.messageId)).toBe(3);
+  });
+
+  it('counts attempts for many messages at once, the same way countAttempts does', async () => {
+    const base = {
+      queueLabel: 'quest-export',
+      messageBody: 'retained',
+      sourceQueue: 'Quest Export',
+      replayedBy: 'admin-1',
+    };
+    await DlqReplayLogModel.create([
+      { ...base, messageId: 'batch-a', status: 'success' },
+      { ...base, messageId: 'batch-a', status: 'failed' },
+      { ...base, messageId: 'batch-a', status: 'skipped' },
+      { ...base, messageId: 'batch-b', status: 'failed', operation: 'discard' },
+      { ...base, messageId: 'batch-other', status: 'success' },
+    ]);
+    const counts = await dlqReplayLogRepository.countAttemptsByMessage(['batch-a', 'batch-b', 'batch-none']);
+    expect(Object.fromEntries(counts)).toEqual({ 'batch-a': 2, 'batch-b': 0, 'batch-none': 0 });
+    expect(counts.get('batch-a')).toBe(await dlqReplayLogRepository.countAttempts('batch-a'));
   });
 
   it.each(['discarded', 'failed'] as const)(

@@ -77,7 +77,7 @@ const handler = baseApi()
       patExpiresAt: patExpiresAt ? new Date(patExpiresAt) : undefined,
     });
 
-    logPatRotated({
+    await logPatRotated({
       connectionId: connection.id,
       organizationId: orgId,
       actorUserId: user.id,

@@ -9,14 +9,14 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import { userService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { assessShadowDetection } from '@server/security/abuseAssessment/abuseAssessment';
-import { linkedAccountGroupEvidence } from '@server/security/abuseAssessment/linkedAccountEvidence';
+import { assessShadowDetection } from '@bike4mind/server-utils/security/abuseAssessment/abuseAssessment';
+import { linkedAccountGroupEvidence } from '@bike4mind/server-utils/security/abuseAssessment/linkedAccountEvidence';
 import {
   evaluateDeviceLinks,
   liveDeviceLinkReaders,
   type DeviceLinkConfig,
   type DeviceLinkReaders,
-} from '@server/security/autoContainment/deviceLinkEvaluation';
+} from '@bike4mind/server-utils/security/autoContainment/deviceLinkEvaluation';
 import { applyAutoContainment, liveAutoContainmentDeps, loadAutoContainmentConfig } from './executor';
 
 /**

@@ -169,6 +169,7 @@ jobs:
           # too, but read the warning in infra/web.ts before setting it: a value that is not a
           # registrable suffix of your serving host makes the browser reject the GA cookie
           # outright, which is WORSE than leaving it unset.
+          ADMIN_MORNING_BRIEF_ENVIRONMENTS: ${{ vars.ADMIN_MORNING_BRIEF_ENVIRONMENTS }}
           SUBSCRIBER_FANOUT_IMAGE: ${{ vars.SUBSCRIBER_FANOUT_IMAGE }}
           GA_MEASUREMENT_ID: ${{ vars.GA_MEASUREMENT_ID }}
           REDDIT_PIXEL_ID: ${{ vars.REDDIT_PIXEL_ID }}
@@ -215,6 +216,7 @@ jobs:
           # too, but read the warning in infra/web.ts before setting it: a value that is not a
           # registrable suffix of your serving host makes the browser reject the GA cookie
           # outright, which is WORSE than leaving it unset.
+          ADMIN_MORNING_BRIEF_ENVIRONMENTS: ${{ vars.ADMIN_MORNING_BRIEF_ENVIRONMENTS }}
           SUBSCRIBER_FANOUT_IMAGE: ${{ vars.SUBSCRIBER_FANOUT_IMAGE }}
           GA_MEASUREMENT_ID: ${{ vars.GA_MEASUREMENT_ID }}
           REDDIT_PIXEL_ID: ${{ vars.REDDIT_PIXEL_ID }}

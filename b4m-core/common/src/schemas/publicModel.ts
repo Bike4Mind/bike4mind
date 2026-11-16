@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { supportsAssistantPrefill, supportsToolChanges, supportsToolSearch } from '../claudeToolCapabilities';
+import { imageModelProfile } from '../image/profiles';
 import { ModelBackend, type ModelInfo } from '../models';
 import { getTextModelCreditsPer1M } from '../pricing';
 import type { ReasoningEffort } from '../types/common';
@@ -92,6 +93,20 @@ export const PublicModelSchema = z.object({
   type: z.enum(['text', 'image', 'speech-to-text', 'video']),
   backend: z.enum(ModelBackend).describe('The provider that serves the model.'),
   description: z.string().nullable(),
+  blurb: z
+    .string()
+    .nullable()
+    .describe(
+      'How Studio introduces the model on its card: one line on what it is best at. Display text; may change. ' +
+        'Set on catalog image models; null otherwise.'
+    ),
+  provider_label: z
+    .string()
+    .nullable()
+    .describe(
+      'The provider as shown to people (`OpenAI`, `Black Forest Labs`), where `backend` is the id. Display text. ' +
+        'Set on catalog image models; null otherwise.'
+    ),
   context_window: z.number().int().describe('Input context, in tokens.'),
   max_output_tokens: z.number().int(),
   supports_streaming: z.boolean(),
@@ -222,12 +237,15 @@ export interface PublicModelReasoning {
 }
 
 export function toPublicModel(model: ModelInfo, reasoning: PublicModelReasoning): PublicModel {
+  const profile = imageModelProfile(model.id);
   return {
     id: model.id,
     name: model.name,
     type: model.type,
     backend: model.backend,
     description: model.description ?? null,
+    blurb: profile?.blurb ?? null,
+    provider_label: profile?.providerLabel ?? null,
     context_window: model.contextWindow,
     max_output_tokens: model.max_tokens,
     supports_streaming: model.can_stream ?? false,

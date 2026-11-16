@@ -1109,13 +1109,13 @@ docker compose -f compose.selfhost.yaml -f compose.caddy.yaml logs -f caddy
 **Optional: expose the completions API / CLI publicly.** By default only the web app is reachable; the low-level `/api/ai/v1/completions` endpoint (served by the `chatcompletion` container) stays internal. If you want the CLI or a third-party API client to reach your stack from outside, add this route **inside** the existing site block in `selfhost/caddy/Caddyfile`, before the catch-all `handle { reverse_proxy app:3000 }` (the commented sample at the bottom of the file), and change `CHAT_COMPLETION_PUBLIC_URL` to `https://chat.example.com` in `.env.selfhost`:
 
 ```caddyfile
-@completions path /api/ai/v1/completions /api/ai/v1/ws-completions
+@completions path /api/ai/v1/completions
 handle @completions {
 	reverse_proxy chatcompletion:8080
 }
 ```
 
-It must be a `handle` block, like the `/ws` route: a bare `reverse_proxy @completions` loses to the catch-all `handle`, and the paths 404 from the app. Caddy reads the file only at startup, so recreate it afterwards (along with `app`, which reads `.env.selfhost`): `docker compose -f compose.selfhost.yaml -f compose.caddy.yaml --env-file .env.selfhost --profile proxy up -d --force-recreate caddy app`.
+It must be a `handle` block, like the `/ws` route: a bare `reverse_proxy @completions` loses to the catch-all `handle`, and the path 404s from the app. Caddy reads the file only at startup, so recreate it afterwards (along with `app`, which reads `.env.selfhost`): `docker compose -f compose.selfhost.yaml -f compose.caddy.yaml --env-file .env.selfhost --profile proxy up -d --force-recreate caddy app`.
 
 **Running on a non-standard port (80/443 already in use).** The standard 80/443 above is recommended whenever it is available - it gets an auto-renewing trusted cert with no browser warning. If another service already owns 80/443 on this host (or your router forwards them elsewhere), you can run Caddy on a spare port instead, with a cert tradeoff: Let's Encrypt's HTTP-01 and TLS-ALPN-01 challenges only answer on the standard 80/443 of the domain's IP, so on a spare port you cannot get an auto cert that way.
 
@@ -1379,6 +1379,10 @@ Docker-independent verification: `VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/
 `ACCOUNT_DATA_EXPORT_QUEUE` and `ACCOUNT_DATA_EXPORT_QUEUE_DLQ` enable the self-service "download your data" export offered in Settings. The worker writes a zip under the FabFile bucket's `exports/` prefix, so the same one-day MinIO lifecycle rule that expires notebook exports removes it, and emails the user a link to `APP_URL/account-data-export/<id>`. That page asks the API for a five-minute download link and refuses exports older than 24 hours. Without the queue variables the request endpoint answers 500 and nothing is queued; outgoing email must be configured for the link to arrive.
 
 The consumer uses the same redrive admission, one-at-a-time receive, 900-second visibility renewal and ten-minute cooperative budget as quest exports. The worker reads the generated-images bucket as well as the FabFile bucket, copying images generated in notebooks under `images/`. It stops building notebooks once two thirds of the time before the last five minutes is used, and file bytes, generated images and artifacts five minutes before it ends, listing what is left in `notebooks/index.json`, `files/index.json` and `artifacts/index.json` as omitted, so a very large account can receive a partial export. A redelivery after the upload only re-sends the email.
+
+### Admin data subject erasure
+
+`ACCOUNT_ERASURE_QUEUE` and `ACCOUNT_ERASURE_QUEUE_DLQ` enable the admin data subject erasure, which runs the account purge for one user at once instead of waiting for the daily account deletion sweep. The consumer uses the same redrive admission, one-at-a-time receive and visibility renewal as account data exports.
 
 ## Kubernetes evaluation package
 

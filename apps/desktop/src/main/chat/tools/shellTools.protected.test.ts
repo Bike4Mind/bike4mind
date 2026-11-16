@@ -7,6 +7,7 @@ import { permissionProtectedLocations } from '../protectedLocations';
 import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '../permissions/rules';
 import { resolveSubject } from '../permissions/resolveSubject';
 import { permissionSubject } from '../permissions/subject';
+import { runsCheckedInFull } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import type { ToolContext } from './types';
 
@@ -194,8 +195,9 @@ describe('shell commands that reach a protected location', () => {
       permissionSubject({ name: 'bash_execute', input: { command } }, prompt, context)
     ).catch(() => null);
     return {
-      auto: !prompt.askInAuto && (prompt.always?.directories ?? []).length === 0,
-      full: !prompt.askInFull,
+      // Like `runsCheckedInFull`: a listed git form after a ref change runs unchecked in both modes.
+      auto: !prompt.askInAuto && !prompt.unchecked && (prompt.always?.directories ?? []).length === 0,
+      full: runsCheckedInFull(prompt),
       allowed: subject !== null && rules.evaluate(subject).decision === 'allow',
     };
   };
@@ -210,19 +212,23 @@ describe('shell commands that reach a protected location', () => {
       );
     });
 
-    it.each([
-      "grep -r '' ~/.claude",
-      'rg . ~/.claude',
-      'ls -R ~/.claude',
-      'cat ~/.claude/*',
-      'du -a ~/.claude',
-      'tree ~/.claude',
-      "grep -r '' ~/.config",
-    ])('asks in auto mode before %s, a read of a protected folder', async command => {
-      const verdict = await judge(command, 'H');
-      expect(verdict.auto).toBe(false);
-      expect(verdict.allowed).toBe(false);
-    });
+    it.each(["grep -r '' ~/.claude", 'rg . ~/.claude', 'cat ~/.claude/*', "grep -r '' ~/.config"])(
+      'asks in auto mode before %s, which reads the files of a protected folder',
+      async command => {
+        const verdict = await judge(command, 'H');
+        expect(verdict.auto).toBe(false);
+        expect(verdict.allowed).toBe(false);
+      }
+    );
+
+    it.each(['ls -R ~/.claude', 'du -a ~/.claude', 'tree ~/.claude'])(
+      'runs %s in auto mode, which lists only the names in a protected folder',
+      async command => {
+        const verdict = await judge(command, 'H');
+        expect(verdict.auto).toBe(true);
+        expect(verdict.allowed).toBe(false);
+      }
+    );
   });
 
   describe('an operand the scan cannot read', () => {
@@ -235,6 +241,31 @@ describe('shell commands that reach a protected location', () => {
       'IFS=,; v=.cl,aude; cp -r payload/. $v',
     ])('asks in every mode before %s', async command => {
       expect(await judge(command, 'P')).toEqual(refusedEverywhere);
+    });
+
+    it('asks about an opaque write even when its words do not name the settings', async () => {
+      const prompt = await shellApproval(
+        'bash_execute',
+        { command: 'cp evil.json "$(printf .cl%sude a)"/settings.json', cwd: proj },
+        { roots: [proj], workingDirectory: proj, signal: new AbortController().signal, protectedPaths: [userData] }
+      );
+      expect({ askInAuto: prompt.askInAuto, askInFull: prompt.askInFull, unchecked: prompt.unchecked }).toEqual({
+        askInAuto: true,
+        askInFull: true,
+        unchecked: true,
+      });
+    });
+
+    it('asks in auto and full access before an unchecked write whose words name the settings', async () => {
+      const prompt = await shellApproval(
+        'bash_execute',
+        { command: 'D=.claude; cp evil.json "$D/settings.json"', cwd: proj },
+        { roots: [proj], workingDirectory: proj, signal: new AbortController().signal, protectedPaths: [userData] }
+      );
+      expect({ askInAuto: prompt.askInAuto, askInFull: prompt.askInFull }).toEqual({
+        askInAuto: true,
+        askInFull: true,
+      });
     });
 
     it('asks before a brace list too long to read', async () => {

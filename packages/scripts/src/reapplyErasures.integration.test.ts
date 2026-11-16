@@ -46,7 +46,9 @@ vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', 
 vi.mock('@bike4mind/server-utils/skillMarket/market', () => ({ withdrawAuthorListings: vi.fn() }));
 vi.mock('@bike4mind/server-utils/auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: vi.fn() }));
 vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({ emitBillingEvent: effects.billingEvent }));
-vi.mock('@server/users/accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: effects.email }));
+vi.mock('@bike4mind/server-utils/users/accountDeletionEmail', () => ({
+  sendAccountDeletionCompleteEmail: effects.email,
+}));
 vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', () => ({
   cancelAccountSubscriptions: effects.cancel,
   readAccountSubscriptionCustomerIds: vi.fn(async () => []),
@@ -54,7 +56,7 @@ vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', () => ({
   NO_SUBSCRIPTIONS_CANCELED: { canceled: [], failed: [] },
 }));
 
-import { hardDeleteUser } from '@server/services/hardDeleteUser';
+import { hardDeleteUser } from '@bike4mind/server-utils/services/hardDeleteUser';
 import { erasureIdHash } from '@bike4mind/server-utils/privacy/erasureHash';
 import {
   backfillErasureRecords,

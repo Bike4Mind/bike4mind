@@ -1,9 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Dropdown, IconButton, Menu, MenuButton, MenuItem, Stack } from '@mui/joy';
+import { Alert, Button, MenuItem, Stack } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import DownloadIcon from '@mui/icons-material/Download';
 import HistoryIcon from '@mui/icons-material/History';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { toast } from 'sonner';
 import { useSignupAnomaly } from '@client/app/hooks/data/admin';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
@@ -43,6 +42,7 @@ import { useOpenUserProfile } from './Profile/useOpenUserProfile';
 import { CLEARED_FILTER_PARAMS, countActiveFilters } from './usersTabSearch';
 import { useUsersParams, useUsersTab, useUsersTabUrlSync } from './useUsersTabParams';
 import RecentActivityView from './Views/RecentActivityView';
+import { RowActionsMenu } from '../shared/RowActionsMenu';
 
 const NO_SELECTION: AdminSelection = { mode: 'explicit', ids: [] };
 
@@ -58,32 +58,17 @@ const copyToClipboard = async (value: string, what: string) => {
 function UserRowActions({ row, onOpen }: { row: AdminUsersListRow; onOpen: () => void }) {
   const { email } = row;
   return (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: {
-            size: 'sm',
-            variant: 'plain',
-            'aria-label': `Actions for ${row.name || row.email}`,
-            sx: { ...adminFocus, color: 'admin.inkMuted' },
-          },
-        }}
-        data-testid={`admin-users-row-actions-${row.id}`}
-        // The row opens the profile on click; the menu must not.
-        onClick={event => event.stopPropagation()}
-        onKeyDown={event => event.stopPropagation()}
-      >
-        <MoreHorizIcon sx={{ fontSize: 18 }} />
-      </MenuButton>
-      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }} onClick={event => event.stopPropagation()}>
-        <MenuItem onClick={onOpen} data-testid={`admin-users-row-open-${row.id}`}>
-          Open profile
-        </MenuItem>
-        <MenuItem onClick={() => copyToClipboard(row.id, 'User ID')}>Copy user ID</MenuItem>
-        {email && <MenuItem onClick={() => copyToClipboard(email, 'Email')}>Copy email</MenuItem>}
-      </Menu>
-    </Dropdown>
+    <RowActionsMenu
+      testId={`admin-users-row-actions-${row.id}`}
+      ariaLabel={`Actions for ${row.name || row.email}`}
+      stopRowClick
+    >
+      <MenuItem onClick={onOpen} data-testid={`admin-users-row-open-${row.id}`}>
+        Open profile
+      </MenuItem>
+      <MenuItem onClick={() => copyToClipboard(row.id, 'User ID')}>Copy user ID</MenuItem>
+      {email && <MenuItem onClick={() => copyToClipboard(email, 'Email')}>Copy email</MenuItem>}
+    </RowActionsMenu>
   );
 }
 
@@ -213,7 +198,7 @@ const UsersTab: React.FC = () => {
     : undefined;
 
   return (
-    <Stack gap={2} sx={{ width: '100%', minWidth: 0, px: { xs: 2, sm: 3 }, py: 2.5 }} data-testid="admin-users-tab">
+    <Stack gap={2} sx={{ width: '100%', minWidth: 0 }} data-testid="admin-users-tab">
       <AdminPageHeader
         title="Users"
         description={description}

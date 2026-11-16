@@ -366,7 +366,8 @@ export type ShellReach = Pick<
   'script' | 'paths' | 'globFolders' | 'dotlessGlobFolders' | 'writes' | 'writtenTrees'
 >;
 
-const namesRuleFile = (path: string): boolean => NAMES_RULE_FILE.test(caseFolded(path));
+/** Whether a path, or shell text, names `.claude` or the permission rules file anywhere. */
+export const namesRuleFile = (path: string): boolean => NAMES_RULE_FILE.test(caseFolded(path));
 
 /** Whether `tree` holds a `.claude` entry; one that cannot be looked at counts as holding it. */
 function holdsSettings(tree: string): boolean {

@@ -83,7 +83,7 @@ vi.mock('@server/middlewares/requestLogger', async orig => {
   };
 });
 // Real fetch unless a test queues its own result, so the SSRF-refusal tests still reach the real guard.
-vi.mock('@server/billing/billedWebTools', async orig => {
+vi.mock('@bike4mind/server-utils/billing/billedWebTools', async orig => {
   const actual = await orig<Record<string, unknown>>();
   return {
     ...actual,
@@ -94,7 +94,7 @@ vi.mock('@server/billing/billedWebTools', async orig => {
   };
 });
 // Billing has its own suite (billing.test.ts); here every call is free so the posture checks stay in focus.
-vi.mock('@server/billing/reserveRequestCredits', () => ({
+vi.mock('@bike4mind/server-utils/billing/reserveRequestCredits', () => ({
   reserveRequestCredits: async () => ({
     ownerId: 'user-1',
     ownerType: 'user',

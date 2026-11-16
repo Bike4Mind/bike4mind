@@ -50,7 +50,10 @@ vi.mock('@bike4mind/database', () => ({
   passkeyChallengeRepository: {},
   userRepository: {},
 }));
-vi.mock('@bike4mind/services', () => ({ mfaService: {} }));
+// passkey/register-options' skip predicate asks whether the user already has a factor. Report none,
+// so the predicate falls through to the fresh-sign-in check (false here: the session has no
+// interactive origin) and the gate runs, like every other route in this table.
+vi.mock('@bike4mind/services', () => ({ mfaService: { userHasMFAConfigured: () => false } }));
 
 import regenerateBackupCodes from '@pages/api/auth/mfa/regenerate-backup-codes';
 import mfaSetup from '@pages/api/auth/mfa/setup';

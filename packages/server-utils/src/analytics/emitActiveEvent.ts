@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { z } from 'zod';
 import {
   OVERWATCH_ANALYTICS_SCHEMA_VERSION,
   OVERWATCH_ANONYMOUS_USER_ID,
@@ -172,6 +173,70 @@ export async function emitPageViewEvent(opts: PageViewEmitOptions): Promise<void
   });
 }
 
+const productIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
+// These marks have the same meaning for every product. A product-owned schema cannot redefine them.
+const sharedProductMetadataFields = {
+  userType: z.enum(['subscriber', 'free']).optional(),
+  lane: z.literal('synthetic').optional(),
+  internal: z.literal(true).optional(),
+  userAction: z.literal(false).optional(),
+};
+
+/** Field validators owned by a product. Each validator must return a flat metadata value. */
+export type ProductEventMetadataFields = Readonly<Record<string, z.ZodType<string | number | boolean | undefined>>>;
+
+const productMetadataSchema = z.object({
+  ...sharedProductMetadataFields,
+  method: z.enum(['otc', 'google', 'facebook', 'github', 'apple', 'okta', 'saml', 'admin', 'link']).optional(),
+  hopId: z
+    .string()
+    .regex(/^[0-9a-f]{32}$/)
+    .optional(),
+  srcProductId: productIdSchema.optional(),
+  src: productIdSchema.optional(),
+  dest: productIdSchema.optional(),
+  verified: z.literal(true).optional(),
+  touch: z.enum(['first', 'last', 'both']).optional(),
+  attribution: z.literal('self-reported').optional(),
+  amount: z.number().finite().nonnegative().optional(),
+  source: z.literal('signup').optional(),
+  feature: z.literal('chat').optional(),
+  secondsSinceSignup: z.number().int().nonnegative().optional(),
+  kind: z.enum(['subscription', 'credits']).optional(),
+  value: z.number().finite().nonnegative().optional(),
+  currency: z
+    .string()
+    .regex(/^[A-Z]{3}$/)
+    .optional(),
+  billingReason: z
+    .enum([
+      'subscription_create',
+      'subscription_cycle',
+      'subscription_update',
+      'subscription',
+      'manual',
+      'upcoming',
+      'subscription_threshold',
+      'quote_accept',
+      'automatic_pending_invoice_item_invoice',
+    ])
+    .optional(),
+  periodEnd: z.iso.datetime({ offset: false }).optional(),
+  reason: z.enum(['cancellation_requested', 'payment_disputed', 'payment_failed', 'unknown']).optional(),
+  plan: z.enum(['Professional', 'Team', 'LibreOncology', 'unknown']).optional(),
+  interval: z.enum(['monthly', 'yearly']).optional(),
+  daysSubscribed: z.number().int().nonnegative().optional(),
+  attempt: z.number().int().nonnegative().optional(),
+  initiatedBy: z.enum(['admin', 'self']).optional(),
+  wasSubscriber: z.boolean().optional(),
+  daysSinceSignup: z.number().int().nonnegative().optional(),
+  fromPlan: z.enum(['Professional', 'Team', 'LibreOncology', 'unknown']).optional(),
+  toPlan: z.enum(['Professional', 'Team', 'LibreOncology', 'unknown']).optional(),
+  fromInterval: z.enum(['monthly', 'yearly']).optional(),
+  toInterval: z.enum(['monthly', 'yearly']).optional(),
+  direction: z.enum(['upgrade', 'downgrade', 'same_tier', 'unknown']).optional(),
+});
+
 export interface ProductEventOptions {
   /** The Overwatch product the event is counted under. Needs a key in OVERWATCH_PRODUCT_INGEST_KEYS. */
   productId: string;
@@ -186,8 +251,15 @@ export interface ProductEventOptions {
   userType?: 'subscriber' | 'free';
   referrer?: string;
   utm?: OverwatchUtm;
-  /** Flat and small: the ingest schema caps metadata at 1KB. */
+  /** Known categorical and numeric fields only; unknown or invalid fields are not emitted. */
   metadata?: Record<string, string | number | boolean>;
+  /**
+   * Product-owned Zod field validators, defined beside that product's event builders. When supplied,
+   * these replace the host's field vocabulary; shared user/lane marks remain host-validated.
+   * Unknown and invalid fields are omitted individually, so one bad value never drops valid fields.
+   * Field validators are synchronous and return flat values; object-level refinements do not apply.
+   */
+  metadataFields?: ProductEventMetadataFields;
   /**
    * A caller-chosen UUID for an event that may be sent more than once for one occurrence (a
    * retried webhook). The receiver de-duplicates on eventId. Random when omitted.
@@ -204,7 +276,33 @@ export interface ProductEventOptions {
  */
 export async function emitProductEvent(opts: ProductEventOptions): Promise<void> {
   if (!isAnalyticsConfigured(opts.productId)) return;
-  const metadata = { ...opts.metadata, ...(opts.userType !== undefined && { userType: opts.userType }) };
+  const candidateMetadata = { ...opts.metadata, ...(opts.userType !== undefined && { userType: opts.userType }) };
+  const entries: [string, string | number | boolean][] = [];
+  const shape: ProductEventMetadataFields = opts.metadataFields
+    ? { ...opts.metadataFields, ...sharedProductMetadataFields }
+    : productMetadataSchema.shape;
+  const dropped = Object.keys(candidateMetadata).filter(key => !Object.hasOwn(shape, key));
+  for (const [key, schema] of Object.entries(shape)) {
+    const value = candidateMetadata[key as keyof typeof candidateMetadata];
+    if (value === undefined) continue;
+    try {
+      const parsed = schema.safeParse(value);
+      if (parsed.success && parsed.data !== undefined) entries.push([key, parsed.data]);
+      else dropped.push(key);
+    } catch {
+      // Product refinements can throw (including an accidental async refinement). Keep telemetry
+      // best-effort and diagnose the rejected field through the same value-free warning below.
+      dropped.push(key);
+    }
+  }
+  if (dropped.length > 0) {
+    Logger.warn('[b4m-analytics] product event metadata fields dropped', {
+      event: opts.event,
+      productId: opts.productId,
+      keys: dropped,
+    });
+  }
+  const metadata = Object.fromEntries(entries);
   return postEvent(
     {
       userId: opts.userId ? pseudonymizeUserId(opts.userId) : OVERWATCH_ANONYMOUS_USER_ID,

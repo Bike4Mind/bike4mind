@@ -21,6 +21,7 @@ import {
 import { ADMIN_REGION_GAP, adminTabStrip } from '../shared/adminStyles';
 import { EVENTS_SEARCH_KEYS, EVENTS_VIEW_BY_USER } from './eventsTabSearch';
 import { UserActivityView } from './UserActivity';
+import { AdoptionView } from './AdoptionView';
 
 /** Both views share the page header; the events view adds its Refresh action. */
 const EventMetricsHeader: React.FC<{ actions?: ReactNode }> = ({ actions }) => (
@@ -157,19 +158,25 @@ const EventMetricsPanel: React.FC<{ viewSwitch: ReactNode }> = ({ viewSwitch }) 
 };
 
 const VIEW_OPTIONS = [
+  { value: 'adoption', label: 'Adoption' },
   { value: 'events', label: 'Events' },
   { value: EVENTS_VIEW_BY_USER, label: 'By user' },
 ] as const;
 
 const EventMetricsTab: React.FC = () => {
   const [state, update] = useAdminListUrlState(EVENTS_SEARCH_KEYS);
-  const view = state.filters.view === EVENTS_VIEW_BY_USER ? EVENTS_VIEW_BY_USER : 'events';
+  const view =
+    state.filters.view === EVENTS_VIEW_BY_USER
+      ? EVENTS_VIEW_BY_USER
+      : state.filters.view === 'adoption'
+        ? 'adoption'
+        : 'events';
 
   const viewSwitch = (
     <SegmentedControl
       options={VIEW_OPTIONS}
       value={view}
-      onChange={next => update({ filters: { view: next === 'events' ? '' : next } })}
+      onChange={next => update({ filters: { ...state.filters, view: next === 'events' ? '' : next } })}
       aria-label="Events view"
       data-testid="event-metrics-view"
     />
@@ -180,7 +187,7 @@ const EventMetricsTab: React.FC = () => {
     <Stack gap={ADMIN_REGION_GAP}>
       <EventMetricsHeader />
       {viewSwitch}
-      <UserActivityView />
+      {view === 'adoption' ? <AdoptionView /> : <UserActivityView />}
     </Stack>
   );
 };

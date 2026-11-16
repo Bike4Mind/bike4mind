@@ -18,7 +18,7 @@ const mockAuditCreate = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/auth', () => ({ UserApiKeyAuditLog: { create: mockAuditCreate } }));
 
 const mockVerifyEmbedApiKey = vi.hoisted(() => vi.fn());
-vi.mock('@server/cli/auth', () => ({ verifyEmbedApiKey: mockVerifyEmbedApiKey }));
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({ verifyEmbedApiKey: mockVerifyEmbedApiKey }));
 
 const mockResolveIdentifiedEmbedUser = vi.hoisted(() => vi.fn());
 vi.mock('@server/embed/identifiedEmbedUser', async () => {

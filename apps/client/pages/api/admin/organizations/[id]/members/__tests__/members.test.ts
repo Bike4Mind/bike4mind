@@ -53,6 +53,7 @@ vi.mock('@server/middlewares/adminApi', async importOriginal => {
 vi.mock('@bike4mind/database', () => ({
   organizationRepository: { findById: mocks.findById, update: mocks.update },
   userRepository: {},
+  userApiKeyRepository: {},
   groupRepository: {},
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
@@ -99,11 +100,11 @@ const call = async (
   key: string,
   method: string,
   body: unknown,
-  { isAdmin = true, permissions = [] as string[], userId = USER } = {}
+  { isAdmin = true, permissions = [] as string[], userId = USER, impersonatedBy = undefined as string | undefined } = {}
 ) => {
   const { req, res } = createMocks({ method: method as 'POST', body, query: { id: ORG, userId } });
   const request = Object.assign(req, {
-    user: { id: 'admin1', username: 'admin', isAdmin, adminPermissions: permissions },
+    user: { id: 'admin1', username: 'admin', isAdmin, adminPermissions: permissions, impersonatedBy },
     logger: { info: vi.fn(), error: vi.fn() },
   }) as unknown as Request;
   mocks.guards[key](request, res as unknown as Response, () => {});
@@ -116,12 +117,29 @@ beforeEach(() => {
   mocks.txRuns = 0;
   mocks.findById.mockResolvedValue(buildOrg());
   mocks.addMember.mockResolvedValue({ user: { id: USER, email: 'ada@example.com', level: 'PaidUser' } });
-  mocks.revokeAccess.mockImplementation(async () => buildOrg({ users: [] }));
+  mocks.revokeAccess.mockImplementation(async () => ({
+    organization: buildOrg({ users: [] }),
+    revokedOrgBilledApiKeyIds: ['key-1'],
+  }));
   mocks.audit.mockResolvedValue({});
   mocks.keptShares.mockResolvedValue(0);
 });
 
 describe('admin org membership routes', () => {
+  it.each([
+    ['POST', 'POST', { userId: USER, reason: 'Membership update' }],
+    ['DELETE,PATCH', 'DELETE', { reason: 'Membership update' }],
+  ] as const)('attributes %s membership events to the real admin', async (key, method, body) => {
+    if (method === 'POST') mocks.findById.mockResolvedValue(buildOrg({ users: [] }));
+    await call(key, method, body, { impersonatedBy: 'real-admin' });
+    expect(mocks.logEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'admin1', metadata: expect.objectContaining({ userId: USER }) }),
+      expect.objectContaining({ organizationAuditActorUserId: 'real-admin' }),
+      expect.anything(),
+      ORG
+    );
+  });
+
   it('declares first-party JWT-only authentication behind users:moderate', () => {
     expect(mocks.options.POST).toMatchObject({ auth: 'jwtOnly' });
     expect(mocks.options['DELETE,PATCH']).toMatchObject({ auth: 'jwtOnly' });
@@ -263,7 +281,7 @@ describe('DELETE /api/admin/organizations/[id]/members/[userId]', () => {
         target: expect.objectContaining({ kind: 'user', id: USER }),
         organizationId: ORG,
         reason: 'Left the team',
-        details: { organizationName: 'Acme', role: 'manager' },
+        details: { organizationName: 'Acme', role: 'manager', revokedOrgBilledKeys: 1 },
       })
     );
     expect(mocks.keptShares).toHaveBeenCalledWith(USER, expect.objectContaining({ id: ORG }), expect.anything());

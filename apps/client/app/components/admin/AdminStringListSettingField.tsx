@@ -4,7 +4,7 @@ import type { SettingKey } from '@bike4mind/common';
 import SaveIcon from '@mui/icons-material/Save';
 import { Button, FormControl, FormHelperText, FormLabel, Grid, Textarea, Tooltip } from '@mui/joy';
 import { useSettingsDraft } from './SettingsDraftProvider';
-import { SettingsSection } from './shared/SettingsSection';
+import { SettingFieldRow } from './shared/SettingFieldRow';
 import { useRef } from 'react';
 import { useAdminSaveShortcut } from './shared/adminKeyboard';
 
@@ -35,7 +35,6 @@ const fromText = (text: string) =>
 const AdminStringListSettingField = ({
   setting,
   storedValue,
-  index,
 }: {
   setting: { key: SettingKey; name: string; description: string };
   storedValue: unknown;
@@ -64,10 +63,7 @@ const AdminStringListSettingField = ({
     );
 
   return (
-    <SettingsSection
-      variant="outlined"
-      sx={{ width: '100%', mb: 1, bgcolor: index % 2 ? 'background.level1' : 'background.level2', p: 2 }}
-    >
+    <SettingFieldRow data-testid={`admin-setting-${setting.key}-row`}>
       <Grid
         ref={draft.staged ? null : saveRef}
         data-admin-settings-editor
@@ -112,7 +108,7 @@ const AdminStringListSettingField = ({
           </Grid>
         )}
       </Grid>
-    </SettingsSection>
+    </SettingFieldRow>
   );
 };
 

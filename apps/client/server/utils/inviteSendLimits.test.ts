@@ -13,6 +13,7 @@ import { reserveInviteSendBudget } from './inviteSendLimits';
 const HOUR_MS = 60 * 60 * 1000;
 const RECIPIENT_KEY = 'rate-limit:u1:invite-recipients';
 const TYPED_KEY = 'rate-limit:u1:project-invite-typed-address';
+const ORG_BULK_TYPED_KEY = 'rate-limit:u1:org-bulk-typed-address';
 const MIXED_RECIPIENTS = ['a@example.com', '507f1f77bcf86cd799439034', 'b@example.com'];
 
 const inWindow = () => ({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
@@ -36,6 +37,35 @@ describe('reserveInviteSendBudget', () => {
 
     expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledOnce();
     expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledWith(RECIPIENT_KEY, 3, 200, HOUR_MS);
+  });
+
+  it('charges the org-bulk typed-address bucket instead of the default one when asked', async () => {
+    await reserveInviteSendBudget('u1', MIXED_RECIPIENTS, {
+      chargeTypedAddresses: true,
+      typedAddressBucket: 'orgBulk',
+    });
+
+    expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledTimes(2);
+    expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledWith(RECIPIENT_KEY, 3, 200, HOUR_MS);
+    expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledWith(ORG_BULK_TYPED_KEY, 2, 100, HOUR_MS);
+    expect(tryAddWithinLimitFixedWindow).not.toHaveBeenCalledWith(
+      TYPED_KEY,
+      expect.anything(),
+      expect.anything(),
+      HOUR_MS
+    );
+  });
+
+  it('gives the recipient charge back when the org-bulk typed addresses do not fit', async () => {
+    tryAddWithinLimitFixedWindow
+      .mockResolvedValueOnce(inWindow())
+      .mockResolvedValueOnce({ success: false, count: 99, expiresAt: new Date() });
+
+    await expect(
+      reserveInviteSendBudget('u1', MIXED_RECIPIENTS, { chargeTypedAddresses: true, typedAddressBucket: 'orgBulk' })
+    ).rejects.toThrow(/Too many email invitations/);
+    expect(decrementCounter).toHaveBeenCalledTimes(3);
+    expect(decrementCounter).toHaveBeenCalledWith(RECIPIENT_KEY);
   });
 
   it('skips the cache for a request with no recipients', async () => {

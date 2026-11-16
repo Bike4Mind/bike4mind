@@ -78,6 +78,8 @@ actor FakeAPI: B4MAPI {
   func sendChatMessage(_ request: ChatSendRequest) async throws -> ChatSendReceipt {
     sentMessages.append(request)
     if holdingSends { await withCheckedContinuation { heldSends.append($0) } }
+    // A real request fails when its task is cancelled; the fake does too, so a cancelled send is visible.
+    if Task.isCancelled { throw APIError.offline }
     return try sendResult.get()
   }
 

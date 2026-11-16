@@ -79,6 +79,7 @@ const CONSUMER_LOGS_REGISTRY = [
 
 type QueueRow = {
   label: string;
+  deployed?: boolean;
   approximateMessageCount: number;
   logGroups: string[] | null;
   logsUrl: string | null;
@@ -128,7 +129,7 @@ describe('GET /api/admin/dlq/queues consumer logs', () => {
     expect(queues.find(q => q.label === 'image-edit')).toMatchObject({ logGroups: null, logsUrl: null });
   });
 
-  it('falls back to -1 for a queue whose DLQ URL is missing, without failing the list', async () => {
+  it('marks a queue with no DLQ URL on this stage as not deployed, without failing the list', async () => {
     h.getDlqUrl.mockImplementation((label: string) => {
       if (label === 'image-edit') throw new Error('Missing DLQ URL for label: image-edit');
       return `https://sqs.example/${label}-dlq`;
@@ -136,8 +137,11 @@ describe('GET /api/admin/dlq/queues consumer logs', () => {
 
     const { queues } = await list();
 
-    expect(queues.find(q => q.label === 'image-edit')!.approximateMessageCount).toBe(-1);
-    expect(queues.find(q => q.label === 'webhook-delivery')!.approximateMessageCount).toBe(3);
+    expect(queues.find(q => q.label === 'image-edit')).toMatchObject({ deployed: false, approximateMessageCount: -1 });
+    expect(h.getQueueAttributes).not.toHaveBeenCalledWith(expect.stringContaining('image-edit'));
+    const webhook = queues.find(q => q.label === 'webhook-delivery')!;
+    expect(webhook.approximateMessageCount).toBe(3);
+    expect(webhook.deployed).toBeUndefined();
   });
 
   it('keeps the log fields when the queue attributes fail', async () => {
@@ -147,6 +151,8 @@ describe('GET /api/admin/dlq/queues consumer logs', () => {
 
     const webhook = queues.find(q => q.label === 'webhook-delivery')!;
     expect(webhook.approximateMessageCount).toBe(-1);
+    // A failed read on a queue that exists is not "not deployed": it must still block the all-clear.
+    expect(webhook.deployed).toBeUndefined();
     expect(webhook.logGroups).toEqual(['/aws/lambda/app-stage-WebhookConsumer']);
     expect(webhook.logsUrl).toEqual(expect.any(String));
   });

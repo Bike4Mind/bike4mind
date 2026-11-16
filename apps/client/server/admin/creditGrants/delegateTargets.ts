@@ -27,7 +27,10 @@ export async function assertDelegateCanCreditUsers(actor: Actor, userIds: string
   if (userIds.some(userId => isSelfOrImpersonator(actor, userId))) {
     throw new ForbiddenError(`You cannot ${verb} your own account`);
   }
-  const users = await userRepository.find({ _id: { $in: userIds } }, { isAdmin: 1, adminPermissions: 1 });
+  const users = await userRepository.find(
+    { _id: { $in: userIds } },
+    { isAdmin: 1, adminPermissions: 1, adminRoleIds: 1 }
+  );
   for (const user of users) assertCanActOnAdminTarget(actor, user, verb);
 }
 

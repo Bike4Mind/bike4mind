@@ -47,6 +47,32 @@ describe('the Settings screen', () => {
     }
   });
 
+  it('groups each General setting once under a named section', () => {
+    const groups = html.split(/data-testid="settings-group-[^"]+"/).slice(1);
+    expect(groups).toHaveLength(5);
+    expect(html).not.toContain('data-testid="settings-group-other"');
+    const expected = [
+      ['appearance', 'orchestrator-sound', 'menu-bar', 'nested-sessions'],
+      ['prompt-suggestions', 'worktree-default', 'autofix-attempts', 'orchestration-policy'],
+      ['local-context', 'token-rate', 'curated-list'],
+      ['local-history', 'local-data-export'],
+      ['server', 'updates'],
+    ];
+    expected.forEach((entries, index) => {
+      for (const id of entries) {
+        expect(groups[index]).toContain(`data-entry="${id}"`);
+        expect(html.split(`data-entry="${id}"`)).toHaveLength(2);
+        expect(html).toContain(`aria-labelledby="settings-label-${id}"`);
+      }
+    });
+  });
+
+  it('keeps advanced worker settings behind an expandable disclosure', () => {
+    expect(html).toContain('<details');
+    expect(html).toContain('data-testid="settings-worker-models-details"');
+    expect(html).toContain('data-testid="orchestration-settings"');
+  });
+
   it('gives Permissions and Import a page each', () => {
     const permissions = page('permissions');
     expect(permissions).toContain('data-entry="permissions"');
@@ -95,6 +121,11 @@ describe('the Settings screen', () => {
 
   it('offers the suggested next prompt preference', () => {
     expect(html).toContain('data-testid="settings-suggestions-switch"');
+  });
+
+  it('offers the auto-fix attempts setting', () => {
+    expect(html).toContain('data-entry="autofix-attempts"');
+    expect(html).toContain('data-testid="settings-autofix-attempts-select"');
   });
 
   it('offers the worktree-by-default preference', () => {

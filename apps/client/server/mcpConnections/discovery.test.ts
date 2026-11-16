@@ -78,7 +78,7 @@ vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   },
 }));
 const invokeMock = vi.hoisted(() => vi.fn());
-vi.mock('./invokeRemoteMcp', () => ({ invokeRemoteMcp: invokeMock }));
+vi.mock('@bike4mind/server-utils/mcpConnections/invokeRemoteMcp', () => ({ invokeRemoteMcp: invokeMock }));
 
 const { discoverConnectionTools, DISCOVERY_MAX_ATTEMPTS } = await import('./discovery');
 

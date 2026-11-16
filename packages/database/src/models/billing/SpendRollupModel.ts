@@ -9,6 +9,7 @@ import {
   SPEND_BUCKET_MS,
   SPEND_ROLLUP_SCOPE_TYPES,
   SpendRollupScopeType,
+  SpendOwnerModelActivity,
   SpendSeriesPoint,
   SpendSourceTotal,
 } from '@bike4mind/common';
@@ -262,6 +263,46 @@ export class SpendRollupRepository extends BaseRepository<ISpendRollupDocument> 
         credits: row.credits,
       })),
     ];
+  }
+
+  async ownerModelActivity(
+    from: Date,
+    to: Date,
+    scopes: Array<{ scopeType: SpendRollupScopeType; scopeId: string }>
+  ): Promise<SpendOwnerModelActivity[]> {
+    const owners = scopes.filter((scope): scope is { scopeType: OwnerScopeType; scopeId: string } =>
+      (OWNER_SCOPE_TYPES as readonly string[]).includes(scope.scopeType)
+    );
+    if (owners.length === 0) return [];
+
+    const rows = await CreditTransaction.aggregate<{
+      _id: { ownerType: OwnerScopeType; ownerId: string; model: string };
+      credits: number;
+      calls: number;
+    }>([
+      {
+        $match: {
+          ...ledgerUsageMatch(from, to),
+          model: { $type: 'string' },
+          $or: owners.map(o => ({ ownerType: o.scopeType, ownerId: o.scopeId })),
+        },
+      },
+      {
+        $group: {
+          _id: { ownerType: '$ownerType', ownerId: '$ownerId', model: '$model' },
+          credits: { $sum: { $abs: '$credits' } },
+          calls: { $sum: 1 },
+        },
+      },
+    ]).option({ maxTimeMS: 2000 });
+
+    return rows.map(({ _id, credits, calls }) => ({
+      scopeType: _id.ownerType,
+      scopeId: _id.ownerId,
+      model: _id.model,
+      credits,
+      calls,
+    }));
   }
 
   private async aggregateLedger(from: Date, to: Date) {

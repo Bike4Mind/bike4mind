@@ -1,5 +1,5 @@
 import { IUserDocument, IUserRepository } from '@bike4mind/common';
-import { userCanDisableMFA } from './utils';
+import { userCanDisableMFA, userHasMFAConfigured } from './utils';
 
 export interface DisableMFARequest {
   user: IUserDocument;
@@ -19,7 +19,7 @@ export async function disableMFA(
   { user, enforceMFA }: DisableMFARequest,
   userRepository: Pick<IUserRepository, 'update'>
 ): Promise<DisableMFAResponse> {
-  if (!user.mfa || !user.mfa.totpEnabled) {
+  if (!userHasMFAConfigured(user)) {
     throw new Error('MFA is not enabled for this user.');
   }
 

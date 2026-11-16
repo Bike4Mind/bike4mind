@@ -35,8 +35,12 @@ vi.mock('@client/app/hooks/data/useModelInfo', () => ({
   useModelInfo: () => ({ data: models, isPending: false, isLoading: false, isFetching: false, error: null }),
 }));
 vi.mock('@client/app/hooks/data/llmModelConfig', () => ({
-  useLLMModelConfigurationsWithDefaults: () => ({ data: models, isLoading: false }),
-  useSaveLLMModelConfigurations: () => ({ mutate: vi.fn(), isPending: false }),
+  useLLMModelConfigurationsWithDefaults: () => ({
+    data: models.map(model => ({ ...model, accessEntry: null })),
+    isLoading: false,
+    refetch: vi.fn(),
+  }),
+  useSaveLLMModelConfigurations: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetUsers: () => ({ data: { users: [] }, isLoading: false }),

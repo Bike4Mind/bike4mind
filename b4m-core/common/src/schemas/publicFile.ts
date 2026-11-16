@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { PaginationQuerySchema, paginatedResponseSchema } from './pagination';
 import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '../constants/chunking';
 import { FAB_FILE_TYPE_FILTERS } from '../types/entities/FabFileTypes';
+import { GENERATED_ASSET_GENERATORS, GENERATED_ASSET_LINEAGE_ROLES } from '../generatedAsset';
 
 /**
  * Public wire schemas for the `/api/v1/files` endpoints: start an upload, list, read one file back
@@ -174,3 +175,56 @@ export const BulkDeleteFilesResponseSchema = z.object({
 });
 
 export type BulkDeleteFilesResponse = z.infer<typeof BulkDeleteFilesResponseSchema>;
+
+/**
+ * One file on a generated file's trail. An ancestor the caller cannot read is `redacted: true` with every other
+ * field `null`: only its id and position are revealed, never its metadata or its own inputs.
+ */
+export const FileLineageNodeSchema = z.object({
+  file_id: z.string(),
+  /** 0 for the requested file, n for an n-th generation ancestor, -1 for a file made from it. */
+  depth: z.number().int(),
+  redacted: z.boolean(),
+  file_name: z.string().nullable(),
+  mime_type: z.string().nullable(),
+  /** `null` for a file that was not generated (an upload used as a reference, say). */
+  generator: z.enum(GENERATED_ASSET_GENERATORS).nullable(),
+  model_id: z.string().nullable(),
+  prompt: z.string().nullable(),
+  /** Short-lived signed URL; `null` while the file is not downloadable. */
+  download_url: z.string().nullable(),
+  /** ISO 8601. */
+  created_at: z.string().nullable(),
+  /** The stored generation request, to restore a generation's settings. `null` when none was stored. */
+  request: z.record(z.string(), z.unknown()).nullable(),
+});
+
+export type FileLineageNode = z.infer<typeof FileLineageNodeSchema>;
+
+/** `child_id` was made from `parent_id`, with the parent acting in `role`. */
+export const FileLineageEdgeSchema = z.object({
+  parent_id: z.string(),
+  child_id: z.string(),
+  /**
+   * How the parent was used. A plain string, not an enum, so a role added later is not a breaking change:
+   * clients treat an unknown value as a generic "made from".
+   */
+  role: z
+    .string()
+    .describe(
+      `How the parent was used. Known values: ${GENERATED_ASSET_LINEAGE_ROLES.join(', ')}. Treat others as generic.`
+    ),
+});
+
+export const FileLineageResponseSchema = z.object({
+  file_id: z.string(),
+  /** The requested file first, then its ancestors by ascending depth. */
+  ancestors: z.array(FileLineageNodeSchema),
+  /** Readable files made directly from the requested file, newest first. */
+  children: z.array(FileLineageNodeSchema),
+  edges: z.array(FileLineageEdgeSchema),
+  /** True when the depth or size cap cut the ancestor walk short. */
+  truncated: z.boolean(),
+});
+
+export type FileLineageResponse = z.infer<typeof FileLineageResponseSchema>;

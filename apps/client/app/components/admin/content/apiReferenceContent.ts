@@ -92,6 +92,8 @@ every scope involved. Containment is checked literally: \`admin:*\` is not treat
 superset of other scopes, so an \`admin:*\`-scoped key still can't mint or rotate a key
 holding scopes it doesn't literally list.
 
+Keys minted for a connected app reach only routes that declare their scopes.
+
 ### Rate Limits
 
 | Limit | Default |
@@ -130,19 +132,24 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 - Artifacts: \`/api/v1/artifacts\` (list, create), \`/api/v1/artifacts/{id}\` (get, update, delete),
   \`/api/v1/artifacts/{id}/versions[/{version}]\` (list, create, get), \`/api/v1/artifacts/search\`,
   \`/api/v1/artifacts/types\`
-- Agents: \`/api/v1/agents\`, \`/api/v1/agents/{id}\`
+- Agents (custom personas; \`agents:read\` or \`agents:write\` to read, \`agents:write\` for the rest): \`/api/v1/agents\`,
+  \`/api/v1/agents/{id}\`, \`/api/v1/agents/from-context\`, \`/api/v1/agents/{id}/transfer-credits\`,
+  and the authoring assistants \`/api/v1/agents/{id}/generate-avatar\`, \`generate-description\`,
+  \`generate-system-prompt\` and \`enhance-field\`
 - Projects: \`/api/v1/projects\`, \`/api/v1/projects/{id}\`, \`/api/v1/projects/{id}/files[/{file_id}]\`,
   \`/api/v1/projects/{id}/sessions[/{session_id}]\`, \`/api/v1/projects/{id}/members/{user_id}\`,
   \`/api/v1/projects/{id}/invites\`, \`/api/v1/projects/{id}/system-prompts[/{file_id}]\`
 - Files and data lakes: \`/api/v1/files[?search=]\` (list, upload), \`/api/v1/files/{id}\` (get, update,
-  delete), \`/api/v1/files/{id}/chunk\`, \`/api/v1/files/search\`, \`/api/v1/files/by-ids\`,
+  delete), \`/api/v1/files/{id}/chunk\`, \`/api/v1/files/search\`, \`/api/v1/files/by-ids\`, \`/api/v1/files/{id}/lineage\`,
   \`/api/v1/files/bulk-delete\`, \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
 - Generation: \`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-*\`,
   \`/api/v1/music-*\`, \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/sound-effects\`,
   \`/api/ai/music\` (deprecated, sunset 2027-01-15; use \`/api/v1/music-generations\`)
 - Transcription: \`/api/v1/transcriptions/uploads\`, \`/api/v1/transcriptions\`
-- Completions, embeddings, text refinement and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`, \`/api/v1/embedding-models\`,
-  \`/api/v1/text-refinements\`
+- Completions, embeddings, text refinement and tools: \`/api/ai/v1/*\`, \`/api/v1/completion-runs\`,
+  \`/api/v1/embeddings\`, \`/api/v1/embedding-models\`, \`/api/v1/text-refinements\`
+- Web tools (search, page fetch, weather): \`/api/v1/tools/web-search\`, \`/api/v1/tools/web-fetch\`,
+  \`/api/v1/tools/weather\`
 - Decisions (typed questions answered with probabilities): \`/api/v1/decisions\`, \`/api/v1/decision-models\`
 - Account and models: \`/api/v1/me\`, \`/api/v1/client-config\`, \`/api/v1/credits\`, \`/api/v1/models\`
 - Skills (create and update from a SKILL.md): \`/api/v1/skills\`, \`/api/v1/skills/mine\`, \`/api/v1/skills/{id}\`
@@ -158,74 +165,6 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 
 Image, video, music and chat work is asynchronous; the Async jobs section of the
 [generated API docs](/api/v1/docs) says what to poll for each kind of job and when it is terminal.
-
----
-
-## Endpoints not yet migrated
-
-The sections below are still hand-written. Each row was checked against its route file, but
-treat the handler as authoritative.
-
-
----
-
-### Agents
-
-Custom AI agents with configurable personas, system prompts, and tool access.
-
-**Required API-key scope:** \`agents:read\` (or \`agents:write\`) to list and read,
-\`agents:write\` to create, update, delete, and run the authoring assistants.
-
-#### List, Get, Create, Update, Delete, and Author Agents
-
-\`\`\`
-GET    /api/v1/agents
-GET    /api/v1/agents/[id]
-POST   /api/v1/agents
-PATCH  /api/v1/agents/[id]
-DELETE /api/v1/agents/[id]
-POST   /api/v1/agents/[id]/generate-avatar
-POST   /api/v1/agents/[id]/generate-description
-POST   /api/v1/agents/[id]/generate-system-prompt
-POST   /api/v1/agents/[id]/enhance-field
-\`\`\`
-
-> **These endpoints are generated from their contracts.** The full request/response
-> reference lives in the [generated API docs](/api/v1/docs) under \`listAgents\`,
-> \`getAgent\`, \`createAgent\`, \`updateAgent\`, \`deleteAgent\`, \`generateAgentAvatar\`,
-> \`generateAgentDescription\`, \`generateAgentSystemPrompt\`, and \`enhanceAgentField\`.
-
-#### List Agents (existing app route)
-
-\`GET /api/agents\` is paginated and accepts \`query\`, \`page\`, \`limit\`, \`orderBy\` (\`createdAt\`,
-\`updatedAt\`, or \`name\`) and \`orderDirection\`.
-
-#### Agent Endpoints Summary
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/v1/agents | List agents (cursor-paginated) |
-| POST | /api/v1/agents | Create an agent |
-| GET | /api/v1/agents/[id] | Get agent details |
-| PATCH | /api/v1/agents/[id] | Update an agent |
-| DELETE | /api/v1/agents/[id] | Delete an agent |
-| GET | /api/agents | List agents (page-based pagination) |
-| POST | /api/agents | Create an agent |
-| GET | /api/agents/[id] | Get agent details |
-| PUT | /api/agents/[id] | Update agent |
-| DELETE | /api/agents/[id] | Delete agent |
-| POST | /api/agents/[id]/transfer-credits | Transfer credits to agent |
-| POST | /api/agents/create-from-context | Create agent from conversation context |
-
----
-
-### Tools
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/tools/web-search | Web search |
-| POST | /api/tools/web-fetch | Fetch web page content |
-| POST | /api/tools/weather | Get weather data |
 
 ---
 

@@ -140,6 +140,105 @@ afterEach(async () => {
   await QuestMasterPlan.collection.deleteMany({});
 });
 
+describe('QuestMasterPlanRepository constrained writers', () => {
+  it.each(['description', 'resolution'] as const)('rejects oversized blocker %s without writing', async field => {
+    const id = await seed();
+    await expect(
+      repo.addBlocker(id, OWNER, { id: 'b2', description: 'valid', createdAt: new Date(), [field]: 'x'.repeat(2001) })
+    ).rejects.toThrow(mongoose.Error.ValidationError);
+    expect((await raw(id))!.blockers).toHaveLength(1);
+  });
+
+  it('rejects an oversized positional resolution without resolving the blocker', async () => {
+    const id = await seed();
+    await expect(repo.resolveBlocker(id, OWNER, 'b1', 'x'.repeat(2001))).rejects.toThrow(
+      mongoose.Error.ValidationError
+    );
+    const blocker = (await raw(id))!.blockers[0];
+    expect(blocker.resolution).toBeUndefined();
+    expect(blocker.resolvedAt).toBeUndefined();
+  });
+
+  it.each([
+    ['description', 2000],
+    ['rationale', 5000],
+  ] as const)('rejects oversized decision %s without writing', async (field, limit) => {
+    const id = await seed();
+    await expect(
+      repo.addDecision(id, OWNER, {
+        id: 'd1',
+        description: 'valid',
+        rationale: 'valid',
+        madeBy: OWNER,
+        madeAt: new Date(),
+        [field]: 'x'.repeat(limit + 1),
+      })
+    ).rejects.toThrow(mongoose.Error.ValidationError);
+    expect((await raw(id))!.decisions ?? []).toHaveLength(0);
+  });
+
+  it.each(['summary', 'nextSteps', 'pendingDecisions', 'blockers'] as const)(
+    'rejects oversized handoff %s without writing',
+    async field => {
+      const id = await seed();
+      const value = 'x'.repeat(field === 'summary' ? 5001 : 1001);
+      await expect(
+        repo.updateHandoff(id, OWNER, {
+          summary: 'valid',
+          nextSteps: [],
+          pendingDecisions: [],
+          blockers: [],
+          lastUpdatedBy: OWNER,
+          updatedAt: new Date(),
+          [field]: field === 'summary' ? value : [value],
+        })
+      ).rejects.toThrow(mongoose.Error.ValidationError);
+      expect((await raw(id))!.handoff).toBeUndefined();
+    }
+  );
+
+  it('retains blocker and decision caps when pushing valid elements', async () => {
+    const id = await seed();
+    await QuestMasterPlan.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      {
+        $set: {
+          blockers: Array.from({ length: 100 }, (_, i) => ({
+            id: `b${i}`,
+            description: 'valid',
+            createdAt: new Date(),
+          })),
+          decisions: Array.from({ length: 200 }, (_, i) => ({
+            id: `d${i}`,
+            description: 'valid',
+            rationale: 'valid',
+            madeBy: OWNER,
+            madeAt: new Date(),
+          })),
+        },
+      }
+    );
+    await repo.addBlocker(id, OWNER, {
+      id: 'last',
+      description: 'x'.repeat(2000),
+      resolution: 'x'.repeat(2000),
+      createdAt: new Date(),
+    });
+    await repo.addDecision(id, OWNER, {
+      id: 'last',
+      description: 'x'.repeat(2000),
+      rationale: 'x'.repeat(5000),
+      madeBy: OWNER,
+      madeAt: new Date(),
+    });
+    const doc = (await raw(id))!;
+    expect(doc.blockers).toHaveLength(100);
+    expect(doc.blockers[99].id).toBe('last');
+    expect(doc.decisions).toHaveLength(200);
+    expect(doc.decisions[199].id).toBe('last');
+  });
+});
+
 describe('QuestMasterPlanRepository write-time access re-check', () => {
   describe.each(writers)('%s', (_name, write, applied) => {
     it.each([

@@ -9,8 +9,9 @@ import { getThemeConfig } from '@client/app/utils/themes';
 vi.mock('@tanstack/react-router', async () => (await import('../__tests__/fakeAdminRouter')).fakeRouterModule);
 
 const apiGet = vi.hoisted(() => vi.fn());
+const apiPost = vi.hoisted(() => vi.fn());
 const openProfile = vi.hoisted(() => vi.fn());
-vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: apiGet } }));
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: apiGet, post: apiPost } }));
 vi.mock('@client/app/hooks/data/user', () => ({ useGetUserTags: () => ({ data: [] }) }));
 vi.mock('@client/app/utils/organizationAPICalls', () => ({ useGetAllOrganizations: () => ({ data: [] }) }));
 vi.mock('./ComplianceModal', () => ({ default: () => null }));
@@ -98,6 +99,8 @@ beforeEach(() => {
   apiGet.mockReset();
   openProfile.mockReset();
   apiGet.mockImplementation(async (url: string) => ({ data: respond(url) }));
+  apiPost.mockReset();
+  apiPost.mockImplementation(async (url: string) => ({ data: respond(url) }));
   act(() => {
     useUsersTab.setState({ params: { ...DEFAULT_USERS_PARAMS } });
     fakeAdminRouter.reset({ tab: 'users' });
@@ -105,6 +108,18 @@ beforeEach(() => {
 });
 
 describe('UsersTab', () => {
+  it("posts the page's ids for signup verdicts in the request body, not the URL", async () => {
+    renderTab();
+
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith(
+        '/api/admin/users/signup-verdicts',
+        expect.objectContaining({ asOf: '2026-10-27T12:00:00.000Z', ids: ['u1', 'u2'] })
+      )
+    );
+    expect(apiGet).not.toHaveBeenCalledWith('/api/admin/users/signup-verdicts', expect.anything());
+  });
+
   it('clears a stored search at once, without writing the old term back while the debounce settles', async () => {
     apiGet.mockImplementation(async (url: string) => ({
       data: url === '/api/admin/users' ? { users: [], totalUsers: 0, page: 1, totalPages: 0 } : respond(url),

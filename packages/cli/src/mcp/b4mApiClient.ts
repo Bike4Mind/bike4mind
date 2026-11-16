@@ -700,13 +700,20 @@ export class B4mApiClient {
    * an empty list when the key is not found or cannot be told apart from another, so a caller that cannot be
    * identified is never treated as scoped. Stored prefixes differ in length (older keys keep a shorter one),
    * and the list can include other keys, so the longest matching prefix wins and a tie at that length is refused.
+   * Also undefined when the key may not list keys (403: the list needs `api-keys:manage`), since that says
+   * nothing about the key's other scopes; the route the caller is about to use still enforces its own.
    */
   async getOwnKeyScopes(): Promise<string[] | undefined> {
     const apiKey = this.apiKey;
     if (!apiKey) return undefined;
-    const keys = keyScopeListSchema.parse(
-      await this.client.get<unknown>('/api/user-api-keys', { timeout: SOLVER_CATALOG_TIMEOUT_MS })
-    );
+    let response: unknown;
+    try {
+      response = await this.client.get<unknown>('/api/user-api-keys', { timeout: SOLVER_CATALOG_TIMEOUT_MS });
+    } catch (error) {
+      if (httpFailure(error)?.status === 403) return undefined;
+      throw error;
+    }
+    const keys = keyScopeListSchema.parse(response);
     const matches = keys.filter(k => k.status === 'active' && !!k.keyPrefix && apiKey.startsWith(k.keyPrefix));
     const longest = matches.reduce((length, key) => Math.max(length, key.keyPrefix?.length ?? 0), 0);
     const best = matches.filter(k => k.keyPrefix?.length === longest);

@@ -1,6 +1,6 @@
 import { assertLakePlanAllowed } from '@server/entitlements/lakePlanGate';
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import {
   dataLakeAccessGrantRepository,

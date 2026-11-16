@@ -365,6 +365,33 @@ export class CorruptedFileError extends HTTPError {
   }
 }
 
+/** User-facing; persisted as `FabFile.error` and shown in chat notices. */
+export const PASSWORD_PROTECTED_PDF_MESSAGE =
+  'This PDF is password-protected. Remove the password and upload it again.';
+
+/**
+ * A PDF that cannot be opened without a password. An expected user outcome, not a fault: callers
+ * record the message on the file, log at warn and do not retry.
+ */
+export class PasswordProtectedFileError extends HTTPError {
+  constructor() {
+    super(HttpStatus.UnprocessableEntity, PASSWORD_PROTECTED_PDF_MESSAGE);
+    this.name = 'PasswordProtectedFileError';
+  }
+}
+
+/**
+ * Matches pdf.js's `PasswordException` (unpdf surfaces it unwrapped) and the mapped
+ * `PasswordProtectedFileError`, by name rather than message text. pdf.js's `code` (a
+ * PasswordResponses value) is not used: it is not unique across pdf.js exceptions.
+ */
+export function isPasswordProtectedPdfError(err: unknown): boolean {
+  if (err instanceof PasswordProtectedFileError) return true;
+  if (!err || typeof err !== 'object') return false;
+  const { name } = err as { name?: unknown };
+  return name === 'PasswordException' || name === 'PasswordProtectedFileError';
+}
+
 /**
  * Thrown by `chunkFabfile`'s guarded-write ownership check (#1802): the run's claim stamp no longer
  * matches `FabFile.chunkClaimedAt`, meaning a stale-claim takeover already reassigned this file to a

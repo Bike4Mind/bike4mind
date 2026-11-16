@@ -700,3 +700,22 @@ describe('UserSettingsContext - model-list revision wiring', () => {
     expect(mockStopWatching).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('UserSettingsContext - model access revision wiring', () => {
+  it('refreshes the actual picker query for a non-admin subscription write', () => {
+    resetStores();
+    vi.mocked(useSubscribeCollection).mockClear();
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, 'invalidateQueries').mockResolvedValue(undefined);
+    client.setQueryData(['llm-model-configurations'], { configurations: [], revision: 'access-1' });
+    const { unmount } = renderHook(() => useUserSettings(), { wrapper: makeWrapper(client) });
+    const call = vi.mocked(useSubscribeCollection).mock.calls.find(([collection]) => collection === 'adminsettings');
+    const callback = call?.[2] as unknown as (type: string, data: Record<string, unknown>) => void;
+    act(() => callback('update', { settingName: 'modelAccessRevision', settingValue: 'access-2' }));
+    expect(invalidate).toHaveBeenCalledWith(
+      { queryKey: ['llm-model-configurations'], refetchType: 'all' },
+      { throwOnError: true }
+    );
+    unmount();
+  });
+});

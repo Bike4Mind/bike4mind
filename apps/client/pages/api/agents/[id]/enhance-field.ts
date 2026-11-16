@@ -8,7 +8,7 @@ import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAl
 import { agentRepository } from '@bike4mind/database';
 import { NotFoundError, ForbiddenError, BadRequestError } from '@bike4mind/utils';
 import { enhanceAgentField } from '@server/agents/authoring/enhanceAgentField';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { HTTPError, isTerminalCreditRefusal } from '@bike4mind/common';
 
 interface EnhanceFieldRequest {

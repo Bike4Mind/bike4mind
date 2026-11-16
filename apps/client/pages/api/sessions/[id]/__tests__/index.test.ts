@@ -113,7 +113,7 @@ vi.mock('@bike4mind/database', async orig => {
   };
 });
 
-vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/attachmentLakeAccess', () => ({
   createAttachmentLakeAccess: (...a: unknown[]) => mockCreateLakeAccess(...a),
 }));
 

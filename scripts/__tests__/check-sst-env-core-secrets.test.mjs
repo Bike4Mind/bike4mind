@@ -44,6 +44,33 @@ describe('sst-env core secret guard', () => {
     expect(run(true).status).toBe(0);
   });
 
+  it('handles a large tracked index while still rejecting nested secret declarations', () => {
+    write('packages/example/sst-env.d.ts', declaration('CORE_TOKEN'));
+    git('add', '.');
+    const blob = execFileSync('git', ['hash-object', '-w', '--stdin'], {
+      cwd: directory,
+      encoding: 'utf8',
+      input: '',
+    }).trim();
+    const entries = Array.from(
+      { length: 12_000 },
+      (_, index) => `100644 ${blob}\tgenerated/${'nested-directory/'.repeat(8)}${index}.ts\n`
+    ).join('');
+    execFileSync('git', ['update-index', '--index-info'], { cwd: directory, input: entries });
+    const allFiles = execFileSync('git', ['ls-files'], { cwd: directory, maxBuffer: 4 * 1024 * 1024 });
+    expect(allFiles.byteLength).toBeGreaterThan(1024 * 1024);
+    expect(run().status).toBe(0);
+    expect(run(true).status).toBe(0);
+    write('packages/example/sst-env.d.ts', declaration('UNDECLARED_TOKEN'));
+    git('add', 'packages/example/sst-env.d.ts');
+    for (const staged of [false, true]) {
+      const result = run(staged);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('packages/example/sst-env.d.ts: UNDECLARED_TOKEN');
+      expect(result.stderr).not.toContain('ENOBUFS');
+    }
+  });
+
   it('rejects a contributed secret name', () => {
     write('sst-env.d.ts', declaration('OVERLAY_PRIVATE_TOKEN'));
     const result = run();

@@ -121,7 +121,7 @@ describe('AdminGrowthPricingTab', () => {
     expect(tab).toHaveStyle({ maxWidth: '1280px' });
   });
 
-  it('renders each group as a section with no Card around it, leaving only the row cards', () => {
+  it('renders flat field rows inside each section', () => {
     renderTab();
 
     const tab = screen.getByTestId('admin-growth-pricing-tab');
@@ -135,9 +135,10 @@ describe('AdminGrowthPricingTab', () => {
       expect(section.tagName).toBe('SECTION');
       expect(section.closest('.MuiCard-root')).toBeNull();
     }
-    // The editor rows still draw their own card (AdminSettingInputField); none may sit in another card.
-    for (const card of tab.querySelectorAll('.MuiCard-root')) {
-      expect(card.parentElement?.closest('.MuiCard-root')).toBeNull();
+    for (const key of ALL_KEYS) {
+      const row = within(tab).getByTestId(`admin-setting-${key}-row`);
+      expect(row).toHaveAttribute('data-admin-setting-row');
+      expect(within(row).getByTestId(`admin-growth-pricing-current-${key}`)).toBeInTheDocument();
     }
     for (const section of GROWTH_PRICING_SECTIONS) {
       expect(

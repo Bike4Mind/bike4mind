@@ -3,7 +3,7 @@
  *
  * OpenAI-shaped request and success bodies (see schemas/embeddingsApi.ts); B4M error envelope.
  * Billing follows the paid media routes: the local-tokenizer cost is RESERVED before the provider
- * call, refunded if it fails, and settled on success (server/billing/reserveRequestCredits.ts).
+ * call, refunded if it fails, and settled on success (packages/server-utils/src/billing/reserveRequestCredits.ts).
  * Settlement rounds the sub-credit cost stochastically, like the operational embedding meter
  * (recordOperationalUsage), so a stream of tiny requests pays its true cost in expectation rather
  * than a one-credit floor each.
@@ -33,7 +33,7 @@ import {
   getSettingsValue,
   type ITokenizer,
 } from '@bike4mind/utils';
-import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
+import { reserveRequestCredits } from '@bike4mind/server-utils/billing/reserveRequestCredits';
 import { encodeEmbeddingBase64 } from '@server/embeddings/embedTexts';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';

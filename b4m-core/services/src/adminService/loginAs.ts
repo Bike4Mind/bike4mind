@@ -4,6 +4,7 @@ import {
   assertCanActOnAdminTarget,
   hasAdminPermission,
   missingAdminPermissionMessage,
+  type ResolveAdminRoles,
 } from '@bike4mind/common';
 import { NotFoundError, ForbiddenError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
@@ -25,6 +26,8 @@ type LoginAsAdapters = {
   notify: {
     send: (targetUser: IUserDocument) => Promise<void>;
   };
+  /** Resolves the admin's role permissions on the fresh record below. */
+  resolveAdminRoles?: ResolveAdminRoles;
 };
 
 export const loginAs = async (adminUser: IUserDocument, parameters: LoginAsParameters, adapters: LoginAsAdapters) => {
@@ -35,17 +38,19 @@ export const loginAs = async (adminUser: IUserDocument, parameters: LoginAsParam
     throw new ForbiddenError(missingAdminPermissionMessage('users:impersonate'));
   }
 
-  // MFA is required for loginAs - compromised admin account must not enable free impersonation
-  if (!adminUser.mfa?.totpEnabled) {
-    throw new ForbiddenError('MFA must be enabled to use loginAs');
+  // MFA is required for loginAs - compromised admin account must not enable free impersonation.
+  // Authenticator app specifically: the code is verified below as a TOTP, so a passkey cannot serve.
+  if (!mfaService.userHasTotpConfigured(adminUser)) {
+    throw new ForbiddenError('An authenticator app must be enabled to use loginAs');
   }
 
   // Get fresh admin user data (incl. select:false MFA secrets) for the MFA verification below;
   // req.user is a decoded JWT and never carries totpSecret/backupCodes.
-  const freshAdmin = await db.users.findByIdWithMfaSecrets(adminUser.id);
-  if (!freshAdmin) {
+  const storedAdmin = await db.users.findByIdWithMfaSecrets(adminUser.id);
+  if (!storedAdmin) {
     throw new NotFoundError('Admin user not found');
   }
+  const freshAdmin = adapters.resolveAdminRoles ? await adapters.resolveAdminRoles(storedAdmin) : storedAdmin;
 
   // Re-verify on the fresh record - JWT may be stale if privileges were revoked
   if (!hasAdminPermission(freshAdmin, 'users:impersonate')) {

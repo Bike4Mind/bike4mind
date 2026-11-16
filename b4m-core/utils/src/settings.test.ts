@@ -7,7 +7,13 @@ import {
   shutdownSettingsCache,
   loadTeamPlanSettings,
 } from './settings';
-import { KNOWLEDGE_BASE_RETRIEVAL_PROMPT, WEB_SEARCH_FRESHNESS_PROMPT, settingsMap } from '@bike4mind/common';
+import {
+  KNOWLEDGE_BASE_RETRIEVAL_PROMPT,
+  WEB_SEARCH_FRESHNESS_PROMPT,
+  settingsMap,
+  supportedChatModels,
+  DECISION_MODEL_IDS,
+} from '@bike4mind/common';
 import { AdminSettingsCache } from './cache/AdminSettingsCache';
 import { Logger } from '@bike4mind/observability';
 
@@ -274,6 +280,32 @@ describe('loadTeamPlanSettings', () => {
       minSeats: 25,
       maxSeats: 25,
       creditsPerSeat: 80000,
+    });
+  });
+});
+
+describe('getSettingsValue - stored admin AI engine compatibility', () => {
+  it('keeps master/budget/other-feature controls from a legacy feedback config', () => {
+    const decisionModels = new Set<string>(DECISION_MODEL_IDS);
+    const legacyModel = supportedChatModels.options.find(model => !decisionModels.has(model));
+    if (!legacyModel) throw new Error('Expected a legacy chat-only model fixture');
+    const config = getSettingsValue('adminAiConfig', {
+      adminAiConfig: JSON.stringify({
+        enabled: true,
+        monthlyCapUsd: 20,
+        features: {
+          feedbackTriage: { mode: 'shadow', model: legacyModel, dailyBudgetUsd: 3 },
+          dlqTriage: { mode: 'shadow', model: legacyModel },
+        },
+      }),
+    });
+    expect(config).toMatchObject({
+      enabled: true,
+      monthlyCapUsd: 20,
+      features: {
+        feedbackTriage: { mode: 'shadow', model: null, dailyBudgetUsd: 3 },
+        dlqTriage: { mode: 'shadow', model: legacyModel },
+      },
     });
   });
 });

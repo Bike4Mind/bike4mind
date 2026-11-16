@@ -31,6 +31,8 @@ import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/
 import {
   isChunkClaimLostError,
   isMediaOnlyMimeType,
+  isPasswordProtectedPdfError,
+  PASSWORD_PROTECTED_PDF_MESSAGE,
   isSupportedEmbeddingModel,
   isSupportedFabFileMimeType,
   NotFoundError,
@@ -1086,6 +1088,23 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         return null;
       }
 
+      // A locked PDF is the user's to fix and no retry can open it: fail the file now with a message
+      // that says how, and acknowledge the delivery instead of retrying toward the DLQ.
+      if (isPasswordProtectedPdfError(err)) {
+        logger.warn(`FabFile ${fabFileId}: PDF is password-protected - marking it failed without retry`);
+        await accountFileFailure({
+          event,
+          logger,
+          fabFileId,
+          batchId: fabFile.batchId,
+          userId,
+          action: 'Chunking',
+          errorMessage: PASSWORD_PROTECTED_PDF_MESSAGE,
+          terminal: true,
+        });
+        return null;
+      }
+
       // chunkFabfile can throw on a genuinely bad file (e.g. a corrupt PDF). Without the
       // accounting below, the file would sit at chunkCount:0 with no error - visually identical
       // to a silently-dropped record.
@@ -1101,9 +1120,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       throw err;
     });
 
-    // The claim was lost to a successor mid-run (see the catch above) - that successor owns
-    // finishing this file (notifications, batch progress, vectorize dispatch), so this delivery
-    // stops here rather than acting on a stale/absent chunk result.
+    // The catch above settled this delivery without chunks: the claim was lost to a successor that
+    // owns finishing the file, the file was removed, or it was failed terminally. Either way this
+    // delivery stops here rather than acting on a stale/absent chunk result.
     if (fabFileChunks === null) {
       return;
     }

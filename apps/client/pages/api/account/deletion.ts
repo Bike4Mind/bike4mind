@@ -3,12 +3,17 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { stepUpGate } from '@server/auth/stepUp';
 import { userRepository } from '@bike4mind/database';
-import { cancelAccountDeletion, findOwnedOrganizations, requestAccountDeletion } from '@server/users/accountDeletion';
+import {
+  cancelAccountDeletion,
+  findAccountDeletionOrganizations,
+  requestAccountDeletion,
+} from '@server/users/accountDeletion';
 
 /**
- * Self-serve account deletion. GET reads the pending deletion and the organizations blocking a
- * request; POST schedules it (step-up required); DELETE cancels it. GET and DELETE stay reachable
- * while the account is frozen (see deletionPendingGate in @bike4mind/server-utils).
+ * Self-serve account deletion. GET reads the pending deletion, the organizations blocking a
+ * request and the sole-owned ones the purge will delete; POST schedules it (step-up required);
+ * DELETE cancels it. GET and DELETE stay reachable while the account is frozen (see
+ * deletionPendingGate in @bike4mind/server-utils).
  */
 const handler = baseApi({ auth: 'jwtOnly', allowedMethods: ['GET', 'POST', 'DELETE'] })
   .use(csrfProtection())
@@ -16,8 +21,8 @@ const handler = baseApi({ auth: 'jwtOnly', allowedMethods: ['GET', 'POST', 'DELE
   .get(
     asyncHandler(async (req, res) => {
       const user = await userRepository.findById(req.user.id);
-      const ownedOrganizations = await findOwnedOrganizations(req.user.id);
-      res.json({ deletion: user?.deletion ?? null, ownedOrganizations });
+      const organizations = await findAccountDeletionOrganizations(req.user.id);
+      res.json({ deletion: user?.deletion ?? null, ...organizations });
     })
   )
   .post(

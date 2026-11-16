@@ -27,7 +27,6 @@ import AdminSubscriptions from './Subscriptions';
 import AdminRevenue from './Revenue';
 import OrganizationsTab from './OrganizationsTab';
 import CreditAnalyticsTab from './CreditAnalysis';
-import SecretsRotationTab from './SecretsRotationTab';
 import InviteCenter from './InviteCenter';
 import { ModelLogsTab } from './ModelLogsTab';
 import IdentityProvidersTab from './IdentityProvidersTab';
@@ -53,6 +52,7 @@ import { adminPageFrame } from './shared/adminStyles';
 export { AdminTab } from './adminSidebarConfig';
 
 const AdminDashboardTab = dynamic(() => import('./AdminDashboardTab'), { ssr: false });
+const AiOperationsTab = dynamic(() => import('./AiOperationsTab'), { ssr: false });
 
 const AdminLiveOpsTriageMultiConfigTab = dynamic(() => import('./AdminLiveOpsTriageMultiConfigTab'), {
   ssr: false,
@@ -65,7 +65,6 @@ const ApprovalsTab = dynamic(() => import('./Approvals'), { ssr: false });
 // their pages lands; each leaves this list in the change that drops its own outer padding, and no new
 // tab joins it (DESIGN_GUIDE section 3, "Page frame").
 const SELF_FRAMED_ATTR = 'data-admin-self-framed';
-const selfFramed = { [SELF_FRAMED_ATTR]: '' };
 
 const MigrateUsersTab = dynamic(() => import('./MigrateUsersTab'), { ssr: false });
 const AgentOpsTab = dynamic(() => import('./AgentOpsTab'), { ssr: false });
@@ -96,6 +95,7 @@ const RetrievalRateTab = dynamic(() => import('./RetrievalRateTab'), { ssr: fals
 const RateLimitsTab = dynamic(() => import('./RateLimits'), { ssr: false });
 const DlqReplayTab = dynamic(() => import('./DlqReplayTab'), { ssr: false });
 const ApiKeyScopePreflightTab = dynamic(() => import('./ApiKeyScopePreflightTab'), { ssr: false });
+const LegacyApiKeysTab = dynamic(() => import('./LegacyApiKeysTab'), { ssr: false });
 const TutorialsTab = dynamic(() => import('./TutorialsTab'), { ssr: false });
 const IntegrationHealthTab = dynamic(() => import('./IntegrationHealth'), { ssr: false });
 const IntegrationDemandTab = dynamic(() => import('./IntegrationDemandTab'), { ssr: false });
@@ -167,16 +167,17 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           sx={{
             flex: 1,
             minHeight: 0,
-            '& [role="tabpanel"]': { height: '100%', overflow: 'auto' },
-            [`& [role="tabpanel"]:not([${SELF_FRAMED_ATTR}])`]: adminPageFrame,
+            '& > [role="tabpanel"]': { height: '100%', overflow: 'auto' },
+            [`& > [role="tabpanel"]:not([${SELF_FRAMED_ATTR}])`]: adminPageFrame,
           }}
         >
           <TabPanel value={AdminTab.Dashboard}>
             {activeTab === AdminTab.Dashboard && <AdminDashboardTab onNavigate={setActiveTab} />}
           </TabPanel>
-          <TabPanel value={AdminTab.Users} {...selfFramed}>
-            {activeTab === AdminTab.Users && <UsersTab />}
+          <TabPanel value={AdminTab.AiOperations}>
+            {activeTab === AdminTab.AiOperations && <AiOperationsTab />}
           </TabPanel>
+          <TabPanel value={AdminTab.Users}>{activeTab === AdminTab.Users && <UsersTab />}</TabPanel>
           <TabPanel value={AdminTab.EmailVerification}>
             {activeTab === AdminTab.EmailVerification && <EmailVerificationTab />}
           </TabPanel>
@@ -186,7 +187,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.PreferenceArena}>
             {activeTab === AdminTab.PreferenceArena && <PreferenceArenaTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.AdminSettings} {...selfFramed}>
+          <TabPanel value={AdminTab.AdminSettings}>
             {activeTab === AdminTab.AdminSettings && <AdminSettingsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.WorldTime}>{activeTab === AdminTab.WorldTime && <WorldTimeTab />}</TabPanel>
@@ -248,11 +249,8 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.Organizations}>
             {activeTab === AdminTab.Organizations && <OrganizationsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.CreditAnalytics} {...selfFramed}>
+          <TabPanel value={AdminTab.CreditAnalytics}>
             {activeTab === AdminTab.CreditAnalytics && <CreditAnalyticsTab />}
-          </TabPanel>
-          <TabPanel value={AdminTab.SecretsRotation}>
-            {activeTab === AdminTab.SecretsRotation && <SecretsRotationTab />}
           </TabPanel>
           <TabPanel value={AdminTab.SystemSecrets}>
             {activeTab === AdminTab.SystemSecrets && <SystemSecretsTab />}
@@ -302,11 +300,11 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.VoiceSettings}>
             {activeTab === AdminTab.VoiceSettings && <VoiceSettingsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.SecurityDashboard} {...selfFramed}>
+          <TabPanel value={AdminTab.SecurityDashboard}>
             {activeTab === AdminTab.SecurityDashboard && <SecurityDashboard />}
           </TabPanel>
           <TabPanel value={AdminTab.Team}>{activeTab === AdminTab.Team && <Team />}</TabPanel>
-          <TabPanel value={AdminTab.SystemHealth} {...selfFramed}>
+          <TabPanel value={AdminTab.SystemHealth}>
             {activeTab === AdminTab.SystemHealth && <AdminSystemHealthTab />}
           </TabPanel>
           <TabPanel value={AdminTab.SlackWorkspaces}>
@@ -322,9 +320,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.WebhookAuditLogs}>
             {activeTab === AdminTab.WebhookAuditLogs && <WebhookAuditLogsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.AuditLog} {...selfFramed}>
-            {activeTab === AdminTab.AuditLog && <AuditLogTab />}
-          </TabPanel>
+          <TabPanel value={AdminTab.AuditLog}>{activeTab === AdminTab.AuditLog && <AuditLogTab />}</TabPanel>
           <TabPanel value={AdminTab.Approvals}>{activeTab === AdminTab.Approvals && <ApprovalsTab />}</TabPanel>
           <TabPanel value={AdminTab.Tutorials}>{activeTab === AdminTab.Tutorials && <TutorialsTab />}</TabPanel>
           <TabPanel value={AdminTab.GitHubConnection}>
@@ -337,6 +333,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.DlqReplay}>{activeTab === AdminTab.DlqReplay && <DlqReplayTab />}</TabPanel>
           <TabPanel value={AdminTab.ApiKeyScopePreflight}>
             {activeTab === AdminTab.ApiKeyScopePreflight && <ApiKeyScopePreflightTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.LegacyApiKeys}>
+            {activeTab === AdminTab.LegacyApiKeys && <LegacyApiKeysTab />}
           </TabPanel>
           <TabPanel value={AdminTab.IntegrationHealth}>
             {activeTab === AdminTab.IntegrationHealth && <IntegrationHealthTab />}

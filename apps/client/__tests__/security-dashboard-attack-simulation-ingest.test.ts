@@ -10,6 +10,7 @@ const mockBulkUpsertByFingerprint = vi.hoisted(() =>
   })
 );
 const mockMarkMissingAsResolved = vi.hoisted(() => vi.fn().mockResolvedValue(0));
+const mockFindActiveByStage = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockFindByRunId = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 const mockCompleteRun = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockCreateRun = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 'run-1' }));
@@ -19,6 +20,7 @@ vi.mock('@bike4mind/database', () => ({
   securityFindingRepository: {
     bulkUpsertByFingerprint: mockBulkUpsertByFingerprint,
     markMissingAsResolved: mockMarkMissingAsResolved,
+    findActiveByStage: mockFindActiveByStage,
   },
   securityFindingRunRepository: {
     findByRunId: mockFindByRunId,
@@ -85,6 +87,17 @@ describe('attack-simulation-ingest API', () => {
     sourceProbe: 'otcSendFlood',
   };
 
+  const persistedSample = {
+    id: 'f1',
+    severity: 'P1',
+    fingerprint: sampleFinding.fingerprint,
+    title: sampleFinding.title,
+    endpoint: sampleFinding.endpoint,
+    details: sampleFinding.details,
+    reproduction: sampleFinding.reproduction,
+  };
+  const persistedSampleBulk = { findings: [persistedSample], newCount: 1, persistingCount: 0 };
+
   const createMockReqRes = (overrides: Partial<Request> = {}) => {
     const req = {
       url: '/api/admin/security-dashboard/attack-simulation-ingest',
@@ -127,6 +140,7 @@ describe('attack-simulation-ingest API', () => {
       persistingCount: 0,
     });
     mockMarkMissingAsResolved.mockResolvedValue(0);
+    mockFindActiveByStage.mockResolvedValue([{ fingerprint: sampleFinding.fingerprint }]);
     mockFindByRunId.mockResolvedValue(null);
   });
 
@@ -416,6 +430,53 @@ describe('attack-simulation-ingest API', () => {
     expect(res.status).toHaveBeenCalledWith(201);
   });
 
+  it('lists active findings this run did not report as unverifiedFindingIds', async () => {
+    mockBulkUpsertByFingerprint.mockResolvedValueOnce(persistedSampleBulk);
+    mockFindActiveByStage.mockResolvedValueOnce([
+      { fingerprint: sampleFinding.fingerprint },
+      { fingerprint: 'authz::GET /api/admin::not-rechecked' },
+      { fingerprint: 'misc::GET /::also-not-rechecked' },
+    ]);
+    const { req, res } = createMockReqRes();
+
+    await handler(req, res);
+
+    expect(mockFindActiveByStage).toHaveBeenCalledWith('dev');
+    expect(mockMarkMissingAsResolved.mock.invocationCallOrder[0]).toBeLessThan(
+      mockFindActiveByStage.mock.invocationCallOrder[0]
+    );
+    const [sentCommand] = mockSqsSend.mock.calls[0];
+    const body = JSON.parse((sentCommand as { MessageBody: string }).MessageBody);
+    expect(body.unverifiedFindingIds).toEqual([
+      'authz::GET /api/admin::not-rechecked',
+      'misc::GET /::also-not-rechecked',
+    ]);
+    expect(body.findings.map((f: { id: string }) => f.id)).toEqual([sampleFinding.fingerprint]);
+    expect(res.status).toHaveBeenCalledWith(201);
+  });
+
+  it('publishes an empty unverifiedFindingIds when every active finding was reported this run', async () => {
+    mockBulkUpsertByFingerprint.mockResolvedValueOnce(persistedSampleBulk);
+    const { req, res } = createMockReqRes();
+
+    await handler(req, res);
+
+    const [sentCommand] = mockSqsSend.mock.calls[0];
+    const body = JSON.parse((sentCommand as { MessageBody: string }).MessageBody);
+    expect(body.unverifiedFindingIds).toEqual([]);
+  });
+
+  it('skips the SQS publish and still returns 201 when the active findings lookup fails', async () => {
+    mockBulkUpsertByFingerprint.mockResolvedValueOnce(persistedSampleBulk);
+    mockFindActiveByStage.mockRejectedValueOnce(new Error('mongo down'));
+    const { req, res } = createMockReqRes();
+
+    await handler(req, res);
+
+    expect(mockSqsSend).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(201);
+  });
+
   it('returns 201 even when SQS publish fails (non-fatal)', async () => {
     mockSqsSend.mockRejectedValueOnce(new Error('SQS unavailable'));
     const { req, res } = createMockReqRes();
@@ -434,6 +495,7 @@ describe('attack-simulation-ingest API', () => {
     await handler(req, res);
 
     expect(mockSqsSend).not.toHaveBeenCalled();
+    expect(mockFindActiveByStage).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(201);
   });
 

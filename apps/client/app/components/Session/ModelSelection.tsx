@@ -41,18 +41,21 @@ import { useBillingView } from '@client/app/components/subscription/BillingDeepL
 import LockedModelsSection from './LockedModelsSection';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
 import FilterAltIcon from '@mui/icons-material/FilterAlt';
-import { ModelName, ModelInfo, ModelBackend, SpeechToTextModels, isModelDeprecated } from '@bike4mind/common';
+import {
+  ModelName,
+  ModelInfo,
+  ModelBackend,
+  SpeechToTextModels,
+  SELF_HOSTED_PICKER_GROUP,
+  isModelDeprecated,
+  pickerProviderGroup,
+} from '@bike4mind/common';
 import SearchIcon from '@mui/icons-material/Search';
 import { sortModelsForPicker } from '@client/app/utils/modelRanking';
 import { useTheme } from '@mui/joy';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
-import {
-  getModelPriceTier,
-  isOpenAIModel,
-  getModelSpeedFromStats,
-  isNewModel,
-} from '@client/app/utils/aiSettingsUtils';
+import { getModelPriceTier, getModelSpeedFromStats, isNewModel } from '@client/app/utils/aiSettingsUtils';
 import MetadataChip from './AISettings/MetaDataChips';
 import {
   BEDROCK_BADGE_BG,
@@ -169,76 +172,12 @@ interface ModelSelectionProps {
   stickyHeader?: React.ReactNode;
 }
 
-// Section label for models running on the operator's own hardware (self-host).
-export const SELF_HOSTED_BACKEND = 'Local / Self-Hosted';
+export const SELF_HOSTED_BACKEND = SELF_HOSTED_PICKER_GROUP;
 
-// Function to determine backend from model name/ID. Exported for grouping tests.
-export const getModelBackend = (model: ModelInfo): string => {
-  // Self-host: Ollama (text) and the local Stable-Diffusion backend (image) both
-  // run on the operator's hardware, so group them in a dedicated "Local /
-  // Self-Hosted" section rather than "Other". In the hosted product the same
-  // Ollama backend is remote, so this only applies when the bundle was built with
-  // B4M_SELF_HOST (inlined by next.config.mjs) - which is also the only context a
-  // local image model is enumerated in.
-  if (
-    (model.backend === ModelBackend.Ollama || model.backend === ModelBackend.LocalImage) &&
-    process.env.B4M_SELF_HOST === 'true'
-  ) {
-    return SELF_HOSTED_BACKEND;
-  }
-
-  const modelName = model.name.toLowerCase();
-  const modelId = model.id.toLowerCase();
-
-  // OpenAI models
-  if (isOpenAIModel(modelName)) {
-    return 'OpenAI';
-  }
-
-  // Anthropic models
-  if (modelName.includes('claude') || modelId.includes('claude')) {
-    return 'Anthropic';
-  }
-
-  // Google models
-  if (modelName.includes('gemini') || modelName.includes('bard') || modelId.includes('gemini')) {
-    return 'Google';
-  }
-
-  // Meta models
-  if (modelName.includes('llama') || modelId.includes('llama')) {
-    return 'Meta';
-  }
-
-  // xAI models
-  if (modelName.includes('grok') || modelId.includes('grok')) {
-    return 'xAI';
-  }
-
-  // Flux/BFL models
-  if (modelName.includes('flux') || modelId.includes('flux')) {
-    return 'Black Forest Labs';
-  }
-
-  // Moonshot models. Matches the Bedrock-served ids (moonshot./moonshotai.) too,
-  // so the direct and Bedrock copies group together under one maker.
-  if (modelName.includes('kimi') || modelId.includes('kimi') || modelId.startsWith('moonshot')) {
-    return 'Moonshot';
-  }
-
-  // DeepSeek models: first-party (deepseek-flash, deepseek-v4-pro) and the
-  // Bedrock-served rows (us.deepseek.r1-v1:0, deepseek.v3-v1:0) all contain
-  // "deepseek" in id/name. The Ollama-hosted deepseek-r1:latest also does, so it
-  // is excluded by backend here rather than by string, and is caught by the
-  // self-host branch above (or has no vendor grouping to speak of if a hosted
-  // deployment ever surfaced a remote Ollama model).
-  if (model.backend !== ModelBackend.Ollama && (modelName.includes('deepseek') || modelId.includes('deepseek'))) {
-    return 'DeepSeek';
-  }
-
-  // Default to "Other" if no match found
-  return 'Other';
-};
+// Section a model is filed under. Exported for grouping tests. B4M_SELF_HOST is read here because
+// next.config.mjs inlines it into this bundle.
+export const getModelBackend = (model: ModelInfo): string =>
+  pickerProviderGroup(model, process.env.B4M_SELF_HOST === 'true');
 
 // Display order of the provider sections. Anything absent sorts alphabetically after these.
 // Exported for the ordering test - the next provider added here gets a signal if it's forgotten.

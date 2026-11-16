@@ -46,6 +46,7 @@ vi.mock('@bike4mind/database', () => ({
     update: (...args: unknown[]) => mockUpdateInvite(...args),
     claimUnused: (...args: unknown[]) => mockClaimInvite(...args),
     releaseClaim: (...args: unknown[]) => mockReleaseInviteClaim(...args),
+    reopenUnlessClosed: async () => undefined,
   },
   creditTransactionRepository: {},
   creditLotRepository: {},

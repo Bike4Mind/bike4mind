@@ -16,7 +16,7 @@ export const createSessionContract = defineEndpoint({
     '(`name`, `lastUsedModel`, `temperature`, `autoNamePlaceholder`); any other field is a 403. ' +
     'Unknown body fields are ignored. Naming a data lake with `dataLakeId` (ids come from ' +
     "`GET /api/v1/data-lakes`) seeds the session with that lake's retrieval defaults and turns on " +
-    'forced retrieval.',
+    'forced retrieval. Set `organizationId` to create in an organization you belong to; this binding cannot be changed later.',
   tags: ['Sessions'],
   auth: 'apiKeyOrJwt',
   // ai:chat is deliberately not OR'd in: create can attach the session to a project, which shares

@@ -14,9 +14,11 @@ const { rateLimitOptions } = vi.hoisted(() => ({ rateLimitOptions: [] as unknown
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => (rateLimitOptions.push(options), () => undefined),
 }));
-vi.mock('@server/admin/usersBulk/adapters', () => ({ usersBulkUndoDeps: () => ({ deps: true }) }));
+vi.mock('@bike4mind/server-utils/admin/usersBulk/adapters', () => ({ usersBulkUndoDeps: () => ({ deps: true }) }));
 const mockUndo = vi.fn();
-vi.mock('@server/admin/usersBulk/undo', () => ({ undoAdminUsersBulk: (...a: unknown[]) => mockUndo(...a) }));
+vi.mock('@bike4mind/server-utils/admin/usersBulk/undo', () => ({
+  undoAdminUsersBulk: (...a: unknown[]) => mockUndo(...a),
+}));
 
 const UNDO_RESULT = {
   restored: 2,
@@ -81,29 +83,40 @@ describe('POST /api/admin/users/bulk/undo', () => {
   describe('re-checks the batch action at undo time', () => {
     const authorizeAs = async (user: Record<string, unknown>) => {
       await call({ batchId: BATCH_ID }, user);
-      return mockUndo.mock.calls[0][3] as (record: { action: string; blockedDomains?: string[] }) => void;
+      return mockUndo.mock.calls[0][3] as (record: {
+        action: string;
+        blockedDomains?: string[];
+        users: { tagAdded?: string }[];
+      }) => void;
     };
 
     it('refuses a delegate who no longer holds the permission the batch needed', async () => {
       const authorize = await authorizeAs(delegate('keys:revoke'));
-      expect(() => authorize({ action: 'suspend' })).toThrow('Missing permission: users:moderate');
+      expect(() => authorize({ action: 'suspend', users: [] })).toThrow('Missing permission: users:moderate');
     });
 
     it('admits a delegate who still holds it', async () => {
       const authorize = await authorizeAs(delegate('users:moderate'));
-      expect(() => authorize({ action: 'suspend' })).not.toThrow();
+      expect(() => authorize({ action: 'suspend', users: [] })).not.toThrow();
     });
 
     it('requires settings ability when undo would unblock a domain', async () => {
       const authorize = await authorizeAs(delegate('users:moderate', 'keys:revoke', 'credits:adjust'));
-      expect(() => authorize({ action: 'contain', blockedDomains: ['abuse.example'] })).toThrow(
+      expect(() => authorize({ action: 'contain', blockedDomains: ['abuse.example'], users: [] })).toThrow(
         'Unblocking email domains needs permission to edit admin settings.'
+      );
+    });
+
+    it('refuses a delegate undoing a batch that added a managed tag', async () => {
+      const authorize = await authorizeAs(delegate('settings:manage'));
+      expect(() => authorize({ action: 'addTag', users: [{ tagAdded: 'Developer' }] })).toThrow(
+        'Only full administrators can assign managed tags'
       );
     });
 
     it('refuses an unknown recorded action', async () => {
       const authorize = await authorizeAs(ADMIN);
-      expect(() => authorize({ action: 'bogus' })).toThrow('This bulk action cannot be undone here.');
+      expect(() => authorize({ action: 'bogus', users: [] })).toThrow('This bulk action cannot be undone here.');
     });
   });
 });

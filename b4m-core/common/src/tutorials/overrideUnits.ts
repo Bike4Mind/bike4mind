@@ -68,6 +68,8 @@ export const OVERRIDE_BUNDLE_FORMAT = 'tutorial-overrides/1';
 export const MODULE_BUNDLE_FORMAT = 'tutorial-module/1';
 export const OverrideBundleSchema = z.object({
   format: z.literal(OVERRIDE_BUNDLE_FORMAT),
+  /** The package that exported it; a bundle without one predates the field. */
+  owner: z.string().min(1).optional(),
   moduleId: z.string(),
   version: z.number().int().min(1),
   revision: z.number().int().min(0),

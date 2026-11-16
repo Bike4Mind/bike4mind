@@ -34,6 +34,24 @@ class MacReleasePolicyTest(unittest.TestCase):
             with self.subTest(version=version), self.assertRaises(ValueError):
                 signing_mode(version, 'true', '')
 
+    def test_self_signed_opt_in_ranks_between_developer_id_and_ad_hoc(self):
+        self.assertEqual(signing_mode('0.6.0', '', '', selfsigned='true'), 'selfsigned')
+        self.assertEqual(signing_mode('0.6.0', '', 'true', selfsigned='true'), 'selfsigned')
+        self.assertEqual(signing_mode('0.6.0', 'false', 'false', selfsigned='true'), 'selfsigned')
+        self.assertEqual(signing_mode('0.6.0', 'true', 'true', selfsigned='true'), 'signed')
+        self.assertEqual(signing_mode('0.6.0', '', 'true', selfsigned='false'), 'adhoc')
+        self.assertEqual(signing_mode('0.6.0-pr.12.3', '', '', True, 'true'), 'adhoc')
+
+    def test_self_signed_opt_in_denies_invalid_values_and_major_versions(self):
+        for value in ('TRUE', 'yes', ' true', '1'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                signing_mode('0.6.0', '', 'true', selfsigned=value)
+        for version in ('1.0.0', '0.06.0', '0.6'):
+            for adhoc in ('', 'true'):
+                with self.subTest(version=version, adhoc=adhoc), self.assertRaises(ValueError):
+                    signing_mode(version, '', adhoc, selfsigned='true')
+        self.assertEqual(signing_mode('1.0.0', 'true', '', selfsigned='true'), 'signed')
+
     def test_cli_denies_configuration_drift_before_emitting_mode(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'output'
@@ -47,3 +65,9 @@ class MacReleasePolicyTest(unittest.TestCase):
             env['EXPECTED_MAC_MODE'] = 'adhoc'
             subprocess.run([sys.executable, script], env=env, check=True, capture_output=True)
             self.assertEqual(output.read_text(), 'mode=adhoc\n')
+            env['SELFSIGNED_BETA'] = 'true'
+            result = subprocess.run([sys.executable, script], env=env, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            env['EXPECTED_MAC_MODE'] = 'selfsigned'
+            subprocess.run([sys.executable, script], env=env, check=True, capture_output=True)
+            self.assertEqual(output.read_text(), 'mode=adhoc\nmode=selfsigned\n')

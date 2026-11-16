@@ -6,7 +6,7 @@ import type {
   IChoiceEndToolUse,
 } from '@bike4mind/llm-adapters';
 
-type ServerBackend = ICompletionBackend; // ServerLlmBackend | WebSocketLlmBackend
+type ServerBackend = ICompletionBackend; // ServerLlmBackend
 
 /** A local backend (Ollama, or one saved model server) and the models it serves. */
 export interface LlmRoute {

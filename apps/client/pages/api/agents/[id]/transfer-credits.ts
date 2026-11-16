@@ -1,93 +1,25 @@
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
-import { assertAgentAccess } from '@server/agents/assertAgentAccess';
-import { agentRepository, userRepository, creditTransactionRepository, withTransaction } from '@bike4mind/database';
-import { NotFoundError, BadRequestError } from '@bike4mind/utils';
-import { CreditHolderType } from '@bike4mind/common';
-import { creditService } from '@bike4mind/services';
+import { transferCreditsToAgent } from '@server/agents/transferCreditsToAgent';
+import { BadRequestError } from '@bike4mind/utils';
 
 const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<Request<{}, {}, { amount: number }>>(
   async (req, res) => {
     const { id } = req.query;
     const { amount } = req.body;
 
-    // Validate input
     if (!amount || amount <= 0) {
       throw new BadRequestError('Invalid transfer amount. Amount must be greater than 0.');
     }
 
-    // Use transaction for atomicity
-    await withTransaction(async () => {
-      // Get the agent
-      const agent = await agentRepository.findById(id as string);
-      assertAgentAccess(agent, req.user!.id, 'own', "You don't have permission to transfer credits to this agent");
+    const result = await transferCreditsToAgent(id as string, req.user!.id, amount);
 
-      // Get the user
-      const user = await userRepository.findById(req.user!.id);
-      if (!user) {
-        throw new NotFoundError('User not found');
-      }
-
-      // Check if user has enough credits
-      const userCredits = user.currentCredits || 0;
-      if (userCredits < amount) {
-        throw new BadRequestError(`Insufficient credits. Your current balance: ${userCredits.toLocaleString()}`);
-      }
-
-      // Deduct credits from user (with transaction record)
-      const updatedUser = await creditService.subtractCredits(
-        {
-          type: 'transfer_credit',
-          ownerId: req.user!.id,
-          ownerType: CreditHolderType.User,
-          credits: amount,
-          description: `Transfer credits to agent "${agent.name}"`,
-          recipientId: id as string,
-          recipientType: CreditHolderType.Agent,
-        },
-        {
-          db: {
-            creditTransactions: creditTransactionRepository,
-          },
-          creditHolderMethods: userRepository,
-        }
-      );
-
-      if (!updatedUser) {
-        throw new Error('Failed to update user credits');
-      }
-
-      // Add credits to agent (with transaction record)
-      const updatedAgent = await creditService.addCredits(
-        {
-          type: 'received_credit',
-          ownerId: id as string,
-          ownerType: CreditHolderType.Agent,
-          credits: amount,
-          description: `Received credits from user`,
-          senderId: req.user!.id,
-          senderType: CreditHolderType.User,
-        },
-        {
-          db: {
-            creditTransactions: creditTransactionRepository,
-          },
-          creditHolderMethods: agentRepository,
-        }
-      );
-
-      if (!updatedAgent) {
-        throw new Error('Failed to update agent credits');
-      }
-
-      // Return success with updated balances
-      return res.json({
-        success: true,
-        message: `Successfully transferred ${amount.toLocaleString()} credits to agent "${agent.name}"`,
-        userCredits: updatedUser.currentCredits,
-        agentCredits: updatedAgent.currentCredits,
-      });
+    return res.json({
+      success: true,
+      message: `Successfully transferred ${amount.toLocaleString()} credits to agent "${result.agentName}"`,
+      userCredits: result.userCredits,
+      agentCredits: result.agentCredits,
     });
   }
 );

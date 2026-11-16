@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { registrableDomain } from './registrableDomain';
+import { isPublicSuffixEntry, registrableDomain, trustedEntryCoversHost } from './registrableDomain';
 
 describe('registrableDomain', () => {
   it('reduces a subdomain to its eTLD+1', () => {
@@ -51,5 +51,34 @@ describe('registrableDomain', () => {
       expect(registrableDomain('co.uk', { allowPrivateDomains: true })).toBeNull();
       expect(registrableDomain('acme.com', { allowPrivateDomains: true })).toBe('acme.com');
     });
+  });
+});
+
+describe('isPublicSuffixEntry', () => {
+  it('is true for ICANN and private-section suffixes', () => {
+    expect(isPublicSuffixEntry('com')).toBe(true);
+    expect(isPublicSuffixEntry('co.uk')).toBe(true);
+    expect(isPublicSuffixEntry('github.io')).toBe(true);
+  });
+
+  it('is false for an owned domain and anything below a private suffix', () => {
+    expect(isPublicSuffixEntry('example.com')).toBe(false);
+    expect(isPublicSuffixEntry('docs.example.github.io')).toBe(false);
+  });
+});
+
+describe('trustedEntryCoversHost', () => {
+  it('is false for an entry above the registrable domain', () => {
+    expect(trustedEntryCoversHost('amazonaws.com', 'x.s3.amazonaws.com')).toBe(false);
+    expect(trustedEntryCoversHost('github.io', 'a.github.io')).toBe(false);
+  });
+
+  it('is true for the registrable domain or a name below it', () => {
+    expect(trustedEntryCoversHost('example.com', 'docs.example.com')).toBe(true);
+    expect(trustedEntryCoversHost('docs.example.com', 'docs.example.com')).toBe(true);
+  });
+
+  it('is false for an unusable host', () => {
+    expect(trustedEntryCoversHost('example.com', '')).toBe(false);
   });
 });

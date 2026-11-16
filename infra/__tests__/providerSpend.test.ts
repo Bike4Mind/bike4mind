@@ -115,6 +115,25 @@ describe('provider-reported spend alarms', () => {
     await expect(load()).rejects.toThrow(new RegExp(`${name} must be`));
   });
 
+  it.each(['anthropic', 'openai'])('warns when the poller skips %s for a missing admin key', async provider => {
+    await load();
+    expect(resources.alarm).toHaveBeenCalledWith(`providerUsagePollSkipped-${provider}`, {
+      name: `test-app-production-provider-usage-poll-skipped-${provider}`,
+      alarmDescription: expect.any(String),
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'ProviderUsagePollSkipped',
+      namespace: 'test-app/production/LLMSpend',
+      dimensions: { Provider: provider },
+      period: 3600,
+      statistic: 'Sum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+  });
+
   it('warns on any poller Lambda error in the hour', async () => {
     await load();
     expect(resources.alarm).toHaveBeenCalledWith('providerUsagePollErrors', {
@@ -164,7 +183,7 @@ describe('provider spend dashboard', () => {
 describe('provider spend stage gating', () => {
   it.each(['dev', 'production'])('creates resources on %s', async stage => {
     await load(stage);
-    expect(resources.alarm).toHaveBeenCalledTimes(3);
+    expect(resources.alarm).toHaveBeenCalledTimes(5);
     expect(resources.dashboard).toHaveBeenCalledTimes(1);
   });
 
@@ -174,12 +193,17 @@ describe('provider spend stage gating', () => {
     expect(resources.dashboard).not.toHaveBeenCalled();
   });
 
-  it('skips the poller alarm on a monitored preview, where the cron does not exist', async () => {
+  it('skips poller alarms on a monitored preview, where the cron does not exist', async () => {
     vi.stubEnv('ENABLE_MONITORING', 'true');
     resources.cron = undefined;
     await load('preview');
     expect(callFor(resources.alarm, 'providerUsagePollErrors')).toBeUndefined();
+    expect(callFor(resources.alarm, 'providerUsagePollSkipped-anthropic')).toBeUndefined();
+    expect(callFor(resources.alarm, 'providerUsagePollSkipped-openai')).toBeUndefined();
     expect(resources.alarm).toHaveBeenCalledTimes(2);
+    expect(callFor(resources.alarm, 'providerReportedSpendHourly-anthropic')).toBeDefined();
+    expect(callFor(resources.alarm, 'providerReportedSpendHourly-openai')).toBeDefined();
+    expect(resources.dashboard).toHaveBeenCalledTimes(1);
   });
 
   it('declares the env vars in the deploy contract and exports the module', () => {

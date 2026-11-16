@@ -2,6 +2,7 @@ import { BrowserWindow } from 'electron';
 
 const agentBrowserWindows = new WeakSet<BrowserWindow>();
 const developerWindows = new WeakSet<BrowserWindow>();
+const companionWindows = new WeakSet<BrowserWindow>();
 
 /** The agent's hidden browser windows are not app windows: see {@link appWindows}. */
 export function markAgentBrowserWindow(window: BrowserWindow): void {
@@ -14,13 +15,23 @@ export function markDeveloperWindow(window: BrowserWindow): void {
 }
 
 /**
+ * The floating mini Tavern (main/watch) is not an app window either. It has its own narrow preload
+ * and is fed by the watch service, so it gets no app broadcasts. It also must not count as "the app
+ * is open": while it is the only window, the dock badge and notifications stay with main, and
+ * reopening from the dock still builds a real window.
+ */
+export function markCompanionWindow(window: BrowserWindow): void {
+  companionWindows.add(window);
+}
+
+/**
  * The windows the user sees. `BrowserWindow.getAllWindows()` also returns the agent's hidden
  * browsers and the developer log window, none of which must receive app IPC, keep "reopen from
  * the dock" from firing, or keep the app alive after its last real window closes.
  */
 export function appWindows(): BrowserWindow[] {
   return BrowserWindow.getAllWindows().filter(
-    window => !agentBrowserWindows.has(window) && !developerWindows.has(window)
+    window => !agentBrowserWindows.has(window) && !developerWindows.has(window) && !companionWindows.has(window)
   );
 }
 

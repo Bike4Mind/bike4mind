@@ -3,50 +3,70 @@ import { ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, type ModelInfo } from '@bike4mind/c
 import { buildReActAgentRuntimeConfig, runReasoningShortfall } from './agentExecutor.reActAgentConfig';
 
 describe('buildReActAgentRuntimeConfig', () => {
+  const thinker = { can_think: true };
+  const nonThinker = { can_think: false };
+
   it('returns an empty object when no knobs are set (preserves ReActAgent defaults)', () => {
-    expect(buildReActAgentRuntimeConfig({})).toEqual({});
+    expect(buildReActAgentRuntimeConfig({}, thinker)).toEqual({});
   });
 
   it('forwards temperature only when defined (0 is a valid setting and must pass through)', () => {
-    expect(buildReActAgentRuntimeConfig({ temperature: 0.5 })).toEqual({ temperature: 0.5 });
-    expect(buildReActAgentRuntimeConfig({ temperature: 0 })).toEqual({ temperature: 0 });
-    expect(buildReActAgentRuntimeConfig({})).not.toHaveProperty('temperature');
+    expect(buildReActAgentRuntimeConfig({ temperature: 0.5 }, thinker)).toEqual({ temperature: 0.5 });
+    expect(buildReActAgentRuntimeConfig({ temperature: 0 }, thinker)).toEqual({ temperature: 0 });
+    expect(buildReActAgentRuntimeConfig({}, thinker)).not.toHaveProperty('temperature');
   });
 
   it('forwards maxTokens only when defined', () => {
-    expect(buildReActAgentRuntimeConfig({ maxTokens: 2048 })).toEqual({ maxTokens: 2048 });
-    expect(buildReActAgentRuntimeConfig({})).not.toHaveProperty('maxTokens');
+    expect(buildReActAgentRuntimeConfig({ maxTokens: 2048 }, thinker)).toEqual({ maxTokens: 2048 });
+    expect(buildReActAgentRuntimeConfig({}, thinker)).not.toHaveProperty('maxTokens');
   });
 
-  it('does NOT spread thinking when enabled is false (guards the structuredClone regression)', () => {
-    // The headline bug: the client LLM store ships `{ enabled: false, budget_tokens: 16000 }`
-    // as a baseline on every dispatch. If that survives into the ReActAgent ctor and
-    // gets stored on the checkpoint, `toCheckpoint()`'s `structuredClone()` can fail
-    // ("Cannot transfer object of unsupported type") for some model permutations.
-    const result = buildReActAgentRuntimeConfig({ thinking: { enabled: false, budget_tokens: 16000 } });
-    expect(result).not.toHaveProperty('thinking');
+  it('forwards thinking when enabled is false, as a fresh plain object (backend off switch)', () => {
+    const input = { enabled: false, budget_tokens: 16000 };
+    const result = buildReActAgentRuntimeConfig({ thinking: input }, thinker);
+    expect(result.thinking).toEqual({ enabled: false, budget_tokens: 16000 });
+    expect(result.thinking).not.toBe(input);
+  });
+
+  it('defaults budget_tokens to 16000 when thinking is off and none was sent', () => {
+    const result = buildReActAgentRuntimeConfig({ thinking: { enabled: false } }, thinker);
+    expect(result.thinking).toEqual({ enabled: false, budget_tokens: 16000 });
   });
 
   it('does NOT spread thinking when the object is omitted entirely', () => {
-    expect(buildReActAgentRuntimeConfig({})).not.toHaveProperty('thinking');
+    expect(buildReActAgentRuntimeConfig({}, thinker)).not.toHaveProperty('thinking');
   });
 
   it('spreads thinking when enabled is true, defaulting budget_tokens to 16000', () => {
-    const result = buildReActAgentRuntimeConfig({ thinking: { enabled: true } });
+    const result = buildReActAgentRuntimeConfig({ thinking: { enabled: true } }, thinker);
     expect(result.thinking).toEqual({ enabled: true, budget_tokens: 16000 });
   });
 
   it('preserves a caller-supplied budget_tokens when thinking is enabled', () => {
-    const result = buildReActAgentRuntimeConfig({ thinking: { enabled: true, budget_tokens: 8000 } });
+    const result = buildReActAgentRuntimeConfig({ thinking: { enabled: true, budget_tokens: 8000 } }, thinker);
     expect(result.thinking).toEqual({ enabled: true, budget_tokens: 8000 });
   });
 
+  it('omits thinking for a model that cannot think, whether the toggle is on or off', () => {
+    expect(
+      buildReActAgentRuntimeConfig({ thinking: { enabled: false, budget_tokens: 16000 } }, nonThinker)
+    ).not.toHaveProperty('thinking');
+    expect(buildReActAgentRuntimeConfig({ thinking: { enabled: true } }, nonThinker)).not.toHaveProperty('thinking');
+  });
+
+  it('omits thinking when the model is unknown', () => {
+    expect(buildReActAgentRuntimeConfig({ thinking: { enabled: false } }, undefined)).not.toHaveProperty('thinking');
+  });
+
   it('combines all three knobs correctly when set together', () => {
-    const result = buildReActAgentRuntimeConfig({
-      temperature: 0.7,
-      maxTokens: 4096,
-      thinking: { enabled: true, budget_tokens: 12000 },
-    });
+    const result = buildReActAgentRuntimeConfig(
+      {
+        temperature: 0.7,
+        maxTokens: 4096,
+        thinking: { enabled: true, budget_tokens: 12000 },
+      },
+      thinker
+    );
     expect(result).toEqual({
       temperature: 0.7,
       maxTokens: 4096,

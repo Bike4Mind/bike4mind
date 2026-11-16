@@ -1,10 +1,13 @@
-import { CREDITS_PER_USD_COST, FIXED_TEMPERATURE_MODELS, ModelInfo, pricingTierForTokens } from '@bike4mind/common';
+import {
+  CREDITS_PER_USD_COST,
+  FIXED_TEMPERATURE_MODELS,
+  ModelInfo,
+  isOpenAIModelName,
+  pricingTierForTokens,
+} from '@bike4mind/common';
 import dayjs from 'dayjs';
 
-export const isOpenAIModel = (modelName: string): boolean => {
-  const lowerName = modelName.toLowerCase();
-  return ['gpt', 'o1', 'o3', 'o4'].some(pattern => lowerName.includes(pattern));
-};
+export const isOpenAIModel = isOpenAIModelName;
 
 // Metadata Chip Types
 export type ChipVariant = 'default' | 'blue' | 'green' | 'yellow' | 'red' | 'purple' | 'blue-filled';

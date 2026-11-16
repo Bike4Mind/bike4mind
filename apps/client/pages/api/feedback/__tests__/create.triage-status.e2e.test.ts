@@ -90,10 +90,29 @@ async function submit(body: { type?: string; content: string; tags?: string[] })
   }
   expect(res._getStatusCode()).toBe(201);
   const saved = await FeedbackModel.findById(JSON.parse(res._getData())._id).lean();
+  if (body.type === FeedbackType.THUMBS_UP && saved!.status === FeedbackStatus.Closed) {
+    expect(saved!.resolution).toBe('no_action_needed');
+    expect(await FeedbackModel.countDocuments({ status: FeedbackStatus.Closed, resolution: 'no_action_needed' })).toBe(
+      1
+    );
+  } else {
+    expect(saved!.resolution).toBeUndefined();
+  }
   return saved!.status;
 }
 
 describe('POST /api/feedback - initial triage status', () => {
+  it('leaves historical unresolved reports unchanged when a new thumbs-up is created', async () => {
+    const historical = await FeedbackModel.create({
+      userId: 'Unknown',
+      username: 'earlier',
+      type: FeedbackType.THUMBS_UP,
+      status: FeedbackStatus.Closed,
+    });
+    await submit({ type: FeedbackType.THUMBS_UP, content: '' });
+    expect((await FeedbackModel.findById(historical.id).lean())?.resolution).toBeUndefined();
+  });
+
   it('stores a thumbs-up with no comment as Closed, so it stays out of the New queue', async () => {
     expect(await submit({ type: FeedbackType.THUMBS_UP, content: '   ' })).toBe(FeedbackStatus.Closed);
     expect(await countNewFeedback()).toBe(0);
@@ -130,5 +149,20 @@ describe('POST /api/feedback - initial triage status', () => {
       tags: [WAITLIST_FEEDBACK_TAG, 'marketing'],
     });
     expect(status).toBe(FeedbackStatus.Closed);
+  });
+});
+
+// The list's has-comment filter is an equality on contentStored, so this pins what it partitions on:
+// whether text was submitted, not hasFeedbackComment().
+describe('POST /api/feedback - contentStored', () => {
+  it('counts the legacy placeholder as stored text and blank content as none', async () => {
+    await submit({ type: FeedbackType.THUMBS_DOWN, content: NO_FEEDBACK_DETAILS_PLACEHOLDER });
+    await submit({ type: FeedbackType.THUMBS_DOWN, content: '   ' });
+    await submit({ type: FeedbackType.THUMBS_DOWN, content: 'It broke' });
+
+    const rows = await FeedbackModel.find().sort({ _id: 1 }).select({ contentStored: 1 }).lean();
+    expect(rows.map(row => row.contentStored)).toEqual([true, false, true]);
+    expect(await FeedbackModel.countDocuments({ contentStored: true })).toBe(2);
+    expect(await FeedbackModel.countDocuments({ contentStored: false })).toBe(1);
   });
 });

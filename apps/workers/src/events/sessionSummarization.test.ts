@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   fabFileStore: [] as Record<string, unknown>[],
   quests: [{ _id: 'q1', prompt: 'hello', reply: 'world' }] as Record<string, unknown>[],
   modelMessages: vi.fn(),
+  modelChunks: [['A summary of the session.']] as (string | null)[][],
   findOne: vi.fn(),
   updateFabFile: vi.fn(),
   createFabFile: vi.fn(),
@@ -109,10 +110,11 @@ vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
           _modelId: string,
           _messages: unknown,
           _options: unknown,
-          onChunk: (chunk: (string | null)[]) => Promise<void>
+          onChunk: (chunk: (string | null)[], completionInfo?: Record<string, unknown>) => Promise<void>
         ) => {
           h.modelMessages(_messages);
-          await onChunk(['A summary of the session.']);
+          for (const chunk of h.modelChunks) await onChunk(chunk);
+          await onChunk([], { stopReason: 'end_turn', outputTokens: 0 });
         },
       },
     }),
@@ -141,6 +143,7 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), u
 
 beforeEach(() => {
   h.quests = [{ _id: 'q1', prompt: 'hello', reply: 'world' }];
+  h.modelChunks = [['A summary of the session.']];
   h.payerCanFund.mockResolvedValue(true);
 });
 
@@ -771,5 +774,55 @@ describe('sessionSummarization stopped turns', () => {
     expect(h.session.summary).toBe('Existing summary');
     expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
     expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+});
+
+// A completed model call can carry no text (a declined input, an empty reply). That is an outcome
+// of the input, not a fault: throwing makes the async invoke retry it and then park it in the
+// session-enrichment DLQ, which pages as an unhandled failure.
+describe('sessionSummarization when the model returns no text', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.assertLakeAdmission.mockReset();
+    h.fabFileStore.length = 0;
+    h.session = { id: SESSION_ID, _id: SESSION_ID, userId: OWNER, name: 'Notebook', tags: [] };
+    h.findOne.mockResolvedValue(null);
+    h.createFabFile.mockResolvedValue({ filePath: 'summary.txt', mimeType: 'text/plain' });
+  });
+
+  it.each([
+    ['no chunks at all', []],
+    ['only empty and null parts', [[''], [null], ['   ']]],
+  ])('resolves with a warning and writes nothing for %s', async (_label, chunks) => {
+    h.modelChunks = chunks as (string | null)[][];
+
+    await expect(run({ callTagging: true })).resolves.toBeUndefined();
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('no summary text'),
+      expect.objectContaining({ stopReason: 'end_turn', outputTokens: 0 })
+    );
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(h.sessionUpdateWithUpdateAccess).not.toHaveBeenCalled();
+    expect(h.sessionUpdate).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(h.publishTag).not.toHaveBeenCalled();
+  });
+
+  it('keeps the previous summary on the session object', async () => {
+    h.session = { ...h.session, summary: 'Earlier summary.' };
+    h.modelChunks = [];
+
+    await run();
+
+    expect(h.session.summary).toBe('Earlier summary.');
+  });
+
+  it('still records the usage of the completed call', async () => {
+    h.modelChunks = [];
+
+    await run();
+
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledTimes(1);
   });
 });

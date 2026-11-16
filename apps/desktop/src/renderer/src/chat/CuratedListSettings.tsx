@@ -67,12 +67,6 @@ export function CuratedListSettings({
 }) {
   return (
     <Stack spacing={1.25}>
-      {settings?.available && (
-        <Typography level="body-xs" textColor="text.tertiary">
-          Desktop checks online for an updated list when you open Models, at most every 6 hours. No models are
-          downloaded automatically.
-        </Typography>
-      )}
       {error && (
         <Stack spacing={0.5}>
           <Typography level="body-xs" color="danger" role="alert">

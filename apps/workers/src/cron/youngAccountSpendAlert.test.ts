@@ -63,6 +63,7 @@ const summary = (totalCredits: number, accountCount: number) => ({
       accountCreatedAt: createdAt,
       stripeCustomerId: 'cus_a',
       email: 'a@example.com',
+      currentCredits: 0,
     },
   ],
 });
@@ -118,8 +119,16 @@ describe('young-account spend message', () => {
         accountCreatedAt: createdAt,
         stripeCustomerId: 'cus_a',
         email: 'a@example.com',
+        currentCredits: 0,
       },
-      { userId: 'user-b', creditsSpent: 345, accountCreatedAt: createdAt, stripeCustomerId: null, email: null },
+      {
+        userId: 'user-b',
+        creditsSpent: 345,
+        accountCreatedAt: createdAt,
+        stripeCustomerId: null,
+        email: null,
+        currentCredits: 0,
+      },
     ],
   };
   const thresholds = { credits: 5000, accounts: 25 };
@@ -207,6 +216,7 @@ describe('young-account spend message size', () => {
       accountCreatedAt: createdAt,
       stripeCustomerId: `cus_${index}`,
       email: `${'e'.repeat(300)}@example.com`,
+      currentCredits: 0,
     }));
     const message = buildYoungAccountSpendMessage(
       { totalCredits: 9000, accountCount: 10, topSpenders },
@@ -231,6 +241,7 @@ describe('young-account spend message size', () => {
       accountCreatedAt: createdAt,
       stripeCustomerId: null,
       email: `${'e'.repeat(64)}@example.com`,
+      currentCredits: 0,
     }));
     const text = JSON.stringify(
       buildYoungAccountSpendMessage(

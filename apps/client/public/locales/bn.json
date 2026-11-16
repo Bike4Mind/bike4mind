@@ -102,7 +102,9 @@
     "no_subscription": "কোন সাবস্ক্রিপশন নেই",
     "x_members": "{{count}} সদস্য",
     "x_credits": "{{count}} ক্রেডিট",
-    "owner": "মালিক"
+    "roles": {
+      "owner": "মালিক"
+    }
   },
   "session": {
     "typeYourMessage": "এখানে আপনার বার্তা টাইপ করুন",

@@ -1,4 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({
+  recordOrganizationAuditEvent: vi.fn(),
+  recordOrganizationAuditEventSafe: vi.fn(),
+}));
 vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
   requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
 }));
@@ -56,6 +60,7 @@ describe('auth middleware: mfaPending allowlist', () => {
     '/api/logout',
     '/api/auth/mfa/verify-setup',
     '/api/auth/mfa/cancel-setup',
+    '/api/auth/mfa/enrollment-abandoned',
     '/api/auth/mfa/status',
     '/api/auth/mfa/passkey/authenticate-options',
     '/api/settings/fetch',

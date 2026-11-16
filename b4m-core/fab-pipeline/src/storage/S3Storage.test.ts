@@ -224,7 +224,7 @@ describe('S3Storage permanent deletion', () => {
       }
       return {};
     });
-    await storage.deletePermanently('files/a');
+    await expect(storage.deletePermanentlyWithCount('files/a')).resolves.toBe(4);
     const deletes = send.mock.calls
       .map(([command]) => command)
       .filter(command => command instanceof DeleteObjectsCommand);
@@ -236,6 +236,13 @@ describe('S3Storage permanent deletion', () => {
       { Key: 'files/a', VersionId: 'marker' },
     ]);
     expect(send.mock.calls.some(([command]) => command instanceof DeleteObjectCommand)).toBe(false);
+  });
+
+  it('reports zero when no exact object version or marker was observed', async () => {
+    const { storage, send } = setup();
+    send.mockResolvedValue({});
+    await expect(storage.deletePermanentlyWithCount('files/a')).resolves.toBe(0);
+    expect(send.mock.calls.some(([command]) => command instanceof DeleteObjectsCommand)).toBe(false);
   });
 
   it('drains successive version pages under the entity prefix', async () => {

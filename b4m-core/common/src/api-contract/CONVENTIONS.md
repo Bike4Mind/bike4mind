@@ -177,6 +177,7 @@ re-deciding per endpoint:
 | Generated payload exceeds the platform ceiling, raw-bytes response | `303` | - (`Location` is a signed URL for the payload) |
 | Generated payload exceeds the platform ceiling and could not be offloaded | `413` | - |
 | Referenced resource does not exist | `404` | - |
+| A completion's `run` does not exist or was minted by another user or billing owner (indistinguishable on purpose) | `404` | `run_not_found` (mint one with `POST /api/v1/completion-runs`) |
 | Malformed path/query resource id | `404` | - |
 | Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
 | Free-tier account calls a model that needs a paid plan (admin-set free-tier allowlist) | `403` | `model_requires_subscription` (upgrade, or choose a free-tier model from `GET /api/v1/models`) |

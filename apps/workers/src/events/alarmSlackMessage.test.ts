@@ -672,7 +672,34 @@ describe('lookupCatalog', () => {
       { appUrl: 'https://app.example.com' }
     );
     expect(header(message)).toBe(':warning: Production warning: Background job failed: release notes');
-    expect(buttons(message).map(b => b.label)).toContain('DLQ replay');
+    expect(buttons(message)).toContainEqual({
+      label: 'DLQ replay',
+      url: 'https://app.example.com/admin?tab=dlq-replay&dlqQueue=release-notes',
+    });
+  });
+
+  it('links an age alarm to its own queue too', () => {
+    const message = formatAlarmSlackMessage(
+      { ...burst, AlarmName: 'bike4mind-production-dlq-fab-file-chunk-age' },
+      'production',
+      { appUrl: 'https://app.example.com' }
+    );
+    expect(buttons(message)).toContainEqual({
+      label: 'DLQ replay',
+      url: 'https://app.example.com/admin?tab=dlq-replay&dlqQueue=fab-file-chunk',
+    });
+  });
+
+  it('keeps the unfiltered replay link on catalog entries without a queue', () => {
+    const message = formatAlarmSlackMessage(
+      { ...burst, AlarmName: 'bike4mind-production-account-creation-metrics-failed' },
+      'production',
+      { appUrl: 'https://app.example.com' }
+    );
+    expect(buttons(message)).toContainEqual({
+      label: 'DLQ replay',
+      url: 'https://app.example.com/admin?tab=dlq-replay',
+    });
   });
 
   it('handles hand-shaped cap-exceeded messages with no Trigger', () => {

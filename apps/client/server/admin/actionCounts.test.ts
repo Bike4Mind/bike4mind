@@ -12,7 +12,6 @@ const m = vi.hoisted(() => ({
   countReported: vi.fn(),
   countAdminResolvable: vi.fn(),
   countPendingSuggestions: vi.fn(),
-  countOverdue: vi.fn(),
   countFailed: vi.fn(),
   countNewFeedback: vi.fn(),
   getQueueAttributes: vi.fn(),
@@ -33,19 +32,21 @@ vi.mock('@bike4mind/database', () => ({
   modelDiscoveryStateRepository: { countPendingSuggestions: m.countPendingSuggestions },
   sreErrorTrackingRepository: { countFailed: m.countFailed },
   countNewFeedback: m.countNewFeedback,
+  oldestNewFeedbackAt: vi.fn(),
 }));
-vi.mock('@bike4mind/database/infra', () => ({ secretRotationRepository: { countOverdue: m.countOverdue } }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: m.loggerError } }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
   getDlqRegistry: m.getDlqRegistry,
   getDlqUrl: (label: string) => `https://sqs.test/${label}`,
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ getQueueAttributes: m.getQueueAttributes }));
-vi.mock('@bike4mind/server-utils/lib/secretRotation/constants', () => ({
-  getSecretRotationConfig: () => ({ JWT_SECRET: {}, OTHER_SECRET: {} }),
-}));
 
-import { computeAdminActionCounts, resetDeadLetterCountCacheForTests } from './actionCounts';
+import {
+  ADMIN_ACTION_COUNTERS,
+  computeAdminActionCounts,
+  computeAdminActionOldest,
+  resetDeadLetterCountCacheForTests,
+} from './actionCounts';
 
 const NOW = new Date('2026-11-09T12:00:00.000Z');
 const fullAdmin = { id: 'admin', isAdmin: true };
@@ -63,7 +64,6 @@ beforeEach(() => {
     m.countReported,
     m.countAdminResolvable,
     m.countPendingSuggestions,
-    m.countOverdue,
     m.countFailed,
     m.countNewFeedback,
   ]) {
@@ -75,6 +75,20 @@ beforeEach(() => {
 });
 
 describe('computeAdminActionCounts access gating', () => {
+  it('keeps supported oldest dates, isolates failures and explains unsupported queues', async () => {
+    const original = ADMIN_ACTION_COUNTERS.feedback.oldestAt;
+    ADMIN_ACTION_COUNTERS.feedback.oldestAt = async () => NOW;
+    try {
+      const oldest = await computeAdminActionOldest(fullAdmin);
+      expect(oldest.feedback.at).toBe(NOW.toISOString());
+      expect(oldest.moderationReview.reason).toMatch(/failed/);
+      expect(oldest.deadLetters.reason).toMatch(/SQS/);
+      const denied = await computeAdminActionOldest({ id: 'member' });
+      expect(denied).toEqual({});
+    } finally {
+      ADMIN_ACTION_COUNTERS.feedback.oldestAt = original;
+    }
+  });
   it('gives a full admin every key', async () => {
     const counts = await computeAdminActionCounts(fullAdmin, 'admin', NOW);
 
@@ -156,11 +170,6 @@ describe('computeAdminActionCounts failures and caps', () => {
     expect(m.countPendingSuggestions).toHaveBeenCalledWith(limit);
     expect(m.countFailed).toHaveBeenCalledWith(limit);
     expect(m.countNewFeedback).toHaveBeenCalledWith(limit);
-    expect(m.countOverdue).toHaveBeenCalledWith({
-      now: NOW,
-      keyNames: ['JWT_SECRET', 'OTHER_SECRET'],
-      limit: ADMIN_ACTION_COUNT_CAP,
-    });
   });
 
   it('uses the capped unreviewed audit count', async () => {

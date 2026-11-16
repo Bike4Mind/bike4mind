@@ -6,8 +6,9 @@
  * alarmed in infra/providerSpend.ts). Unlike the ledger-derived EstimatedUsd (infra/llmSpend.ts),
  * this counts every call billed to the organization, whichever service made it.
  *
- * A provider whose admin key is not configured is skipped. A provider whose report cannot be read
- * fails the run after the others are published, so the poller-errors alarm sees it.
+ * A provider whose admin key is not configured is skipped and publishes ProviderUsagePollSkipped
+ * instead. A provider whose report cannot be read fails the run after the others are published, so
+ * the poller-errors alarm sees it.
  *
  * Schedule: hourly at minute 7 UTC
  * Enabled: production + dev
@@ -68,12 +69,21 @@ export async function handler(_event: unknown, context: Context) {
 
   const metricData: MetricDatum[] = [];
   const failed: string[] = [];
+  let published = 0;
   let skipped = 0;
 
   for (const { provider, getKey, fetch } of PROVIDERS) {
     const key = getKey();
     if (!key || key === 'not-configured') {
       logger.warn(`[ProviderUsagePoll] ${provider}: admin key not configured, skipping`);
+      // Read by the per-provider skipped alarm in infra/providerSpend.ts.
+      metricData.push({
+        MetricName: 'ProviderUsagePollSkipped',
+        Value: 1,
+        Unit: 'Count',
+        Dimensions: [{ Name: 'Provider', Value: provider }],
+        Timestamp: now,
+      });
       skipped++;
       continue;
     }
@@ -109,6 +119,8 @@ export async function handler(_event: unknown, context: Context) {
         }
       );
 
+      published++;
+
       const models = new Set(rows.map(row => row.model)).size;
       logger.info(
         `[ProviderUsagePoll] ${provider} ${window}: usd=$${price.usd.toFixed(2)} ` +
@@ -133,5 +145,5 @@ export async function handler(_event: unknown, context: Context) {
     throw new Error(`[ProviderUsagePoll] usage report failed for ${failed.join(', ')}`);
   }
 
-  return { published: metricData.length / 3, skipped };
+  return { published, skipped };
 }

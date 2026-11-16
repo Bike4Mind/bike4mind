@@ -1,5 +1,5 @@
 import { IUserDocument, IUserRepository } from '@bike4mind/common';
-import { generateBackupCodes, hashBackupCode } from './utils';
+import { generateBackupCodes, hashBackupCode, userHasMFAConfigured } from './utils';
 
 export interface RegenerateBackupCodesRequest {
   user: IUserDocument;
@@ -18,26 +18,22 @@ export async function regenerateBackupCodes(
   { user }: RegenerateBackupCodesRequest,
   userRepository: Pick<IUserRepository, 'update'>
 ): Promise<RegenerateBackupCodesResponse> {
-  if (!user.mfa || !user.mfa.totpEnabled) {
+  if (!userHasMFAConfigured(user)) {
     throw new Error('MFA is not enabled for this user.');
   }
-  // An empty secret means the stored one could not be decrypted (findByIdWithMfaSecrets). The
-  // secret-less write guard would then drop the whole mfa write, so the new codes would be shown
-  // to the user without ever being saved. Refuse instead.
-  if (!user.mfa.totpSecret) {
+  // An empty secret on an authenticator-app user means the stored one could not be decrypted
+  // (findByIdWithMfaSecrets), so the account's TOTP is broken: refuse rather than paper over it.
+  if (user.mfa.totpEnabled && !user.mfa.totpSecret) {
     throw new Error('MFA secret is unavailable; backup codes cannot be regenerated.');
   }
 
   const newBackupCodes = generateBackupCodes();
-  const hashedBackupCodes = newBackupCodes.map(hashBackupCode);
 
-  // Store hashed codes; return plaintext for one-time display.
-  const updatedMFA = { ...user.mfa };
-  updatedMFA.backupCodes = hashedBackupCodes;
-
+  // Field-level write: a passkey-only user has no totpSecret, so a whole-`mfa` write would be
+  // dropped by the user model's secret-less guard and the new codes never saved.
   const updatedUser = await userRepository.update({
     id: user.id,
-    mfa: updatedMFA,
+    'mfa.backupCodes': newBackupCodes.map(hashBackupCode),
     updatedAt: new Date(),
   });
 

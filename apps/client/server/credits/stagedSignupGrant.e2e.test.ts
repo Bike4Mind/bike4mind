@@ -667,6 +667,7 @@ describe('staged signup ledger', () => {
             update: async () => undefined,
             claimUnused: async () => true,
             releaseClaim: async () => undefined,
+            reopenUnlessClosed: async () => undefined,
           },
         },
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
