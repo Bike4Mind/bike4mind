@@ -5,7 +5,14 @@ import { DATA_HOLDER_REGISTRY } from './registry';
 import { valuesAt } from './documentPaths';
 import { DELETED_USER_NAME, DELETED_USER_OBJECT_ID, deletedUserValue } from './placeholder';
 import { SubjectErasurePlan, type ErasureCheckpoint, type ErasureEntry } from './subjectErasurePlan';
-import { MATCH_BATCH, SubjectMatcher, type DataSubject, type LeanDocument } from './subjectMatcher';
+import {
+  MATCH_BATCH,
+  SubjectMatcher,
+  orderParentsFirst,
+  parentKeyPaths,
+  type DataSubject,
+  type LeanDocument,
+} from './subjectMatcher';
 import type { DataHolderRegistry, UserReference } from './types';
 
 /**
@@ -14,6 +21,10 @@ import type { DataHolderRegistry, UserReference } from './types';
  * `types.ts`. Writes go by `_id` through the raw collection, so Mongoose immutability and soft-delete
  * hooks do not block them and soft-deleted rows are reached. Never run it inside `withTransaction`:
  * Mongoose would join these writes to the transaction.
+ *
+ * A model is written as soon as it is decided, except a `viaParent` parent: its writes wait until
+ * every other model is done and then run children before parents, so a run stopped part way never
+ * leaves children whose parent no longer names the person (the next run could not reach them).
  *
  * Left alone: the subject's own `User` row and their personal workspaces, which `hardDeleteUser`
  * deletes (completeAccountDeletion.ts); the purge finds those workspaces by `userId` on a retry.
@@ -55,6 +66,8 @@ function positional(segments: readonly string[], arrays: readonly number[], last
 export class SubjectErasureExecutor {
   private readonly matcher: SubjectMatcher;
   private personalWorkspaces: Promise<ReadonlySet<string>> | undefined;
+  private readonly parents: ReadonlySet<string>;
+  private readonly deferred = new Map<string, Operation[]>();
 
   constructor(
     private readonly subject: DataSubject,
@@ -62,12 +75,19 @@ export class SubjectErasureExecutor {
     private readonly registry: DataHolderRegistry = DATA_HOLDER_REGISTRY
   ) {
     this.matcher = new SubjectMatcher(subject);
+    this.parents = new Set(parentKeyPaths(registry).keys());
   }
 
   /** Erases what the registry decides and returns those decisions, counted per collection. */
   async run(): Promise<AdminErasureCollection[]> {
+    this.deferred.clear();
     const plan = new SubjectErasurePlan(this.subject, this.registry);
-    return plan.collections(this.assertLease, (model, entries) => this.write(model, entries));
+    const collections = await plan.collections(this.assertLease, (model, entries) => this.write(model, entries));
+    for (const model of orderParentsFirst(this.registry).reverse()) {
+      const operations = this.deferred.get(model);
+      if (operations) await this.apply(model, operations);
+    }
+    return collections;
   }
 
   private async write(model: string, entries: readonly ErasureEntry[]): Promise<void> {
@@ -75,7 +95,8 @@ export class SubjectErasureExecutor {
     const operations = entries.flatMap(entry =>
       skipped.has(String(entry.document._id)) ? [] : this.operationsFor(model, entry)
     );
-    await this.apply(model, operations);
+    if (!this.parents.has(model)) return this.apply(model, operations);
+    this.deferred.set(model, [...(this.deferred.get(model) ?? []), ...operations]);
   }
 
   private async apply(model: string, operations: readonly Operation[]): Promise<void> {

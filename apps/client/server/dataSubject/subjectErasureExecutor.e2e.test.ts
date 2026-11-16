@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import mongoose, { Schema } from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
+import { softDeletePlugin } from '../../../../packages/database/src/utils/mongo';
 import { DELETED_USER_EMAIL, DELETED_USER_ID, DELETED_USER_NAME, DELETED_USER_OBJECT_ID } from './placeholder';
 import { SubjectErasureExecutor } from './subjectErasureExecutor';
 import { SubjectErasurePlan, unerased } from './subjectErasurePlan';
@@ -37,6 +38,34 @@ const Ledger = mongoose.model('DsxLedger', new Schema({ ownerId: ObjectId, campa
 const Organization = mongoose.model('Organization');
 
 const retention = { expiresBy: 'policy', years: 7, from: 'the transaction date' } as const;
+
+const softNotebook = new Schema({ ownerId: ObjectId });
+softNotebook.plugin(softDeletePlugin);
+const Notebook = mongoose.model('DsxNotebook', softNotebook);
+const softMessage = new Schema({ notebookId: ObjectId, authorId: ObjectId, text: String });
+softMessage.plugin(softDeletePlugin);
+const Message = mongoose.model('DsxMessage', softMessage);
+const Access = mongoose.model('DsxAccess', new Schema({ viewerId: ObjectId }));
+const AccessQuery = mongoose.model('DsxAccessQuery', new Schema({ accessId: ObjectId, text: String }));
+const Invoice = mongoose.model('DsxInvoice', new Schema({ ownerId: ObjectId }));
+const InvoiceLine = mongoose.model('DsxInvoiceLine', new Schema({ invoiceId: ObjectId }));
+
+const childRegistry: DataHolderRegistry = {
+  DsxNotebook: { kind: 'holder', references: [{ path: 'ownerId', matchBy: 'userId', action: 'deleteDocument' }] },
+  DsxMessage: {
+    kind: 'viaParent',
+    parent: 'DsxNotebook',
+    foreignKey: 'notebookId',
+    attribution: [{ path: 'authorId', matchBy: 'userId', action: 'anonymize' }],
+  },
+  DsxAccess: { kind: 'holder', references: [{ path: 'viewerId', matchBy: 'userId', action: 'anonymize' }] },
+  DsxAccessQuery: { kind: 'viaParent', parent: 'DsxAccess', foreignKey: 'accessId', deleteWhenParentAnonymized: true },
+  DsxInvoice: {
+    kind: 'holder',
+    references: [{ path: 'ownerId', matchBy: 'userId', action: 'retain', reason: 'Bookkeeping law', retention }],
+  },
+  DsxInvoiceLine: { kind: 'viaParent', parent: 'DsxInvoice', foreignKey: 'invoiceId' },
+};
 
 const registry: DataHolderRegistry = {
   DsxPerson: {
@@ -222,5 +251,78 @@ describe('SubjectErasureExecutor', () => {
     await new SubjectErasureExecutor(subject, noLease, registry).run();
 
     expect(await snapshot()).toEqual(before);
+  });
+});
+
+describe('SubjectErasureExecutor with viaParent children', () => {
+  const me = new mongoose.Types.ObjectId();
+  const other = new mongoose.Types.ObjectId();
+  const subject = { userId: me.toString(), email: null };
+
+  it('deletes children with their parent, anonymizes attribution and keeps a retained parent whole', async () => {
+    const mine = await Notebook.create({ ownerId: me });
+    const theirs = await Notebook.create({ ownerId: other });
+    await Message.create({ notebookId: mine._id, authorId: other, text: 'on my notebook' });
+    const myReply = await Message.create({ notebookId: theirs._id, authorId: me, text: 'my reply' });
+    const theirMessage = await Message.create({ notebookId: theirs._id, authorId: other, text: 'theirs' });
+    const access = await Access.create({ viewerId: me });
+    await AccessQuery.create({ accessId: access._id, text: 'my search' });
+    const invoice = await Invoice.create({ ownerId: me });
+    const line = await InvoiceLine.create({ invoiceId: invoice._id });
+
+    await new SubjectErasureExecutor(subject, async () => {}, childRegistry).run();
+
+    expect((await Notebook.collection.find().toArray()).map(({ _id }) => String(_id))).toEqual([String(theirs._id)]);
+    expect(
+      (await Message.collection.find().sort({ _id: 1 }).toArray()).map(({ _id, authorId }) => [String(_id), authorId])
+    ).toEqual([
+      [String(myReply._id), DELETED_USER_OBJECT_ID],
+      [String(theirMessage._id), other],
+    ]);
+    expect((await Access.collection.findOne({ _id: access._id }))?.viewerId).toEqual(DELETED_USER_OBJECT_ID);
+    expect(await AccessQuery.collection.countDocuments()).toBe(0);
+    expect(await Invoice.collection.findOne({ _id: invoice._id })).toMatchObject({ ownerId: me });
+    expect(await InvoiceLine.collection.countDocuments({ _id: line._id })).toBe(1);
+  });
+
+  it('removes a soft-deleted parent and its soft-deleted child', async () => {
+    const notebook = await Notebook.create({ ownerId: me });
+    const message = await Message.create({ notebookId: notebook._id, authorId: other });
+    await message.softDelete();
+    await notebook.softDelete();
+    expect(await Notebook.collection.countDocuments()).toBe(1);
+
+    await new SubjectErasureExecutor(subject, async () => {}, childRegistry).run();
+
+    expect(await Notebook.collection.countDocuments()).toBe(0);
+    expect(await Message.collection.countDocuments()).toBe(0);
+  });
+
+  it('leaves no orphaned child when the lease is lost between a parent and its children', async () => {
+    const notebook = await Notebook.create({ ownerId: me });
+    await Message.create({ notebookId: notebook._id, authorId: other });
+    const access = await Access.create({ viewerId: me });
+    await AccessQuery.create({ accessId: access._id, text: 'my search' });
+    // Lost the first time a parent and its children are not both present or both gone.
+    let lost = false;
+    const lease = async () => {
+      if (lost) return;
+      const notebookGone = (await Notebook.collection.countDocuments()) === 0;
+      const messagesGone = (await Message.collection.countDocuments({ notebookId: notebook._id })) === 0;
+      const accessAnonymized = (await Access.collection.countDocuments({ viewerId: me })) === 0;
+      const queriesGone = (await AccessQuery.collection.countDocuments()) === 0;
+      if (notebookGone !== messagesGone || accessAnonymized !== queriesGone) {
+        lost = true;
+        throw new Error('lease lost');
+      }
+    };
+
+    await expect(new SubjectErasureExecutor(subject, lease, childRegistry).run()).rejects.toThrow('lease lost');
+    await new SubjectErasureExecutor(subject, lease, childRegistry).run();
+
+    expect(await Notebook.collection.countDocuments()).toBe(0);
+    expect(await Message.collection.countDocuments({ notebookId: notebook._id })).toBe(0);
+    expect(await AccessQuery.collection.countDocuments({ accessId: access._id })).toBe(0);
+    expect((await Access.collection.findOne({ _id: access._id }))?.viewerId).toEqual(DELETED_USER_OBJECT_ID);
   });
 });
