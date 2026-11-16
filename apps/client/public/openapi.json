@@ -4944,6 +4944,1115 @@
               "recommended_ids",
               "available"
             ]
+          },
+          "public_config": {
+            "type": "object",
+            "properties": {
+              "api_url": {
+                "type": "string"
+              },
+              "default_theme": {
+                "type": "string"
+              },
+              "allow_open_registration": {
+                "type": "boolean"
+              },
+              "pyodide_base_url": {
+                "type": "string"
+              },
+              "allow_trusted_devices": {
+                "type": "boolean"
+              },
+              "turnstile_site_key": {
+                "type": "string"
+              },
+              "apple_sign_in_enabled": {
+                "type": "boolean"
+              },
+              "support_email": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "api_url",
+              "default_theme",
+              "allow_open_registration",
+              "pyodide_base_url",
+              "allow_trusted_devices",
+              "turnstile_site_key",
+              "apple_sign_in_enabled",
+              "support_email"
+            ]
+          },
+          "transport": {
+            "type": "object",
+            "properties": {
+              "websocket_url": {
+                "type": "string"
+              },
+              "sse_completions_url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "websocket_url",
+              "sse_completions_url"
+            ]
+          },
+          "catalog": {
+            "type": "object",
+            "properties": {
+              "models": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "Pass as `model` on the generation endpoints."
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "text",
+                        "image",
+                        "speech-to-text",
+                        "video"
+                      ]
+                    },
+                    "backend": {
+                      "type": "string",
+                      "enum": [
+                        "openai",
+                        "bedrock",
+                        "anthropic",
+                        "gemini",
+                        "ollama",
+                        "openai-compatible",
+                        "bfl",
+                        "xai",
+                        "kimi",
+                        "deepseek",
+                        "voyageai",
+                        "aws",
+                        "local-image"
+                      ],
+                      "description": "The provider that serves the model."
+                    },
+                    "description": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "blurb": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Set on catalog image models; null otherwise."
+                    },
+                    "provider_label": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "The provider as shown to people (`OpenAI`, `Black Forest Labs`), where `backend` is the id. Display text. Set on catalog image models; null otherwise."
+                    },
+                    "context_window": {
+                      "type": "integer",
+                      "description": "Input context, in tokens."
+                    },
+                    "max_output_tokens": {
+                      "type": "integer"
+                    },
+                    "supports_streaming": {
+                      "type": "boolean"
+                    },
+                    "supports_thinking": {
+                      "type": "boolean"
+                    },
+                    "reasons_within_output_budget": {
+                      "type": "boolean",
+                      "description": "Whether reasoning tokens are spent inside `max_output_tokens` on every turn. When true, a small `max_tokens` can be used up by reasoning alone and return an empty reply, so leave room above the answer you expect."
+                    },
+                    "reasoning_efforts": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "minimal",
+                          "low",
+                          "medium",
+                          "high",
+                          "xhigh"
+                        ]
+                      },
+                      "description": "The `reasoningEffort` levels this model acts on, lowest first; empty when it ignores the option. `none` is listed only where it turns reasoning off. Each level is mapped to the nearest one the provider offers. A listed level can still be dropped on one request: some OpenAI models drop it on tool turns, and Claude models with a fixed thinking budget drop it when `max_tokens` leaves no room for the budget plus the answer."
+                    },
+                    "supports_tools": {
+                      "type": "boolean"
+                    },
+                    "supports_tool_search": {
+                      "type": "boolean",
+                      "description": "Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, so a large tool catalog is searched on demand instead of loaded into context up front. Describes the model: `/api/ai/v1/completions` honours it for every model with this flag set, whether its `backend` is `anthropic` or `bedrock`."
+                    },
+                    "supports_tool_changes": {
+                      "type": "boolean",
+                      "description": "Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model: `/api/ai/v1/completions` honours it only for models whose `backend` is `anthropic`; a `bedrock` model with this flag set is refused there with `errorCode: \"tool_changes_unsupported\"`."
+                    },
+                    "supports_assistant_prefill": {
+                      "type": "boolean",
+                      "description": "Whether `/api/ai/v1/completions` accepts a final assistant message for the model to continue. When false, a text prefill returns `400` with `errorCode: \"assistant_prefill_unsupported\"`; server-tool continuations are allowed. On Claude models that accept assistant prefill, it cannot be combined with `thinking`."
+                    },
+                    "supports_vision": {
+                      "type": "boolean"
+                    },
+                    "deprecation_date": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "`YYYY-MM-DD`; null when no retirement is scheduled."
+                    },
+                    "replaced_by": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "The id of the recommended successor, when there is one."
+                    },
+                    "image": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "sizing": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "presets"
+                                  ]
+                                },
+                                "presets": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "description": "Accepted `size` values, as `WxH`."
+                                },
+                                "default_size": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "presets",
+                                "default_size"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "constrained"
+                                  ]
+                                },
+                                "presets": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "description": "Suggested `size` values; any `WxH` meeting `constraints` is accepted."
+                                },
+                                "default_size": {
+                                  "type": "string"
+                                },
+                                "auto_size": {
+                                  "type": "string",
+                                  "description": "The `size` value that lets the provider choose."
+                                },
+                                "constraints": {
+                                  "type": "object",
+                                  "properties": {
+                                    "max_edge": {
+                                      "type": "integer"
+                                    },
+                                    "min_total_pixels": {
+                                      "type": "integer"
+                                    },
+                                    "max_total_pixels": {
+                                      "type": "integer"
+                                    },
+                                    "edge_multiple": {
+                                      "type": "integer",
+                                      "description": "Both edges must be a multiple of this."
+                                    },
+                                    "max_aspect_ratio": {
+                                      "type": "number",
+                                      "description": "Longest edge divided by shortest edge."
+                                    }
+                                  },
+                                  "required": [
+                                    "max_edge",
+                                    "min_total_pixels",
+                                    "max_total_pixels",
+                                    "edge_multiple",
+                                    "max_aspect_ratio"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "presets",
+                                "default_size",
+                                "auto_size",
+                                "constraints"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "dimensions"
+                                  ]
+                                },
+                                "presets": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "default_size": {
+                                  "type": "string"
+                                },
+                                "min_width": {
+                                  "type": "integer"
+                                },
+                                "max_width": {
+                                  "type": "integer"
+                                },
+                                "min_height": {
+                                  "type": "integer"
+                                },
+                                "max_height": {
+                                  "type": "integer"
+                                },
+                                "step": {
+                                  "type": "integer",
+                                  "description": "`width` and `height` are rounded to the nearest multiple of this."
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "presets",
+                                "default_size",
+                                "min_width",
+                                "max_width",
+                                "min_height",
+                                "max_height",
+                                "step"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "aspect_ratio"
+                                  ],
+                                  "description": "Takes an `aspect_ratio` such as `16:9`, not a `size`."
+                                }
+                              },
+                              "required": [
+                                "kind"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "input_image"
+                                  ],
+                                  "description": "Sized by the input image; takes no `size`."
+                                },
+                                "aspect_ratio": {
+                                  "type": "boolean",
+                                  "description": "Whether an `aspect_ratio` override is honoured."
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "aspect_ratio"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "fixed"
+                                  ],
+                                  "description": "The provider takes no size at all."
+                                }
+                              },
+                              "required": [
+                                "kind"
+                              ]
+                            }
+                          ]
+                        },
+                        "supports": {
+                          "type": "object",
+                          "properties": {
+                            "transparent_background": {
+                              "type": "boolean",
+                              "description": "`background: 'transparent'` yields real alpha."
+                            },
+                            "seed": {
+                              "type": "boolean"
+                            },
+                            "qualities": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "enum": [
+                                  "standard",
+                                  "hd",
+                                  "low",
+                                  "medium",
+                                  "high",
+                                  "xhigh",
+                                  "max",
+                                  "auto"
+                                ]
+                              },
+                              "description": "Accepted `quality` tiers; empty when none is taken."
+                            },
+                            "max_images": {
+                              "type": "integer",
+                              "description": "Most images one request may ask for via `n`."
+                            },
+                            "max_reference_images": {
+                              "type": "integer",
+                              "description": "Most `referenceImageFabFileIds` honoured on generation; 0 when the model takes none. FLUX.2 edits take one fewer, as the source uses a slot."
+                            },
+                            "edit": {
+                              "type": "boolean",
+                              "description": "Accepted by `POST /api/v1/image-edits`."
+                            },
+                            "requires_input_image": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "transparent_background",
+                            "seed",
+                            "qualities",
+                            "max_images",
+                            "max_reference_images",
+                            "edit",
+                            "requires_input_image"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "sizing",
+                        "supports"
+                      ],
+                      "description": "Size rules and supported parameters. Present on image models only; null for every other type."
+                    },
+                    "credits_per_1m_tokens": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "input": {
+                          "type": "number",
+                          "description": "Credits per 1M input tokens."
+                        },
+                        "output": {
+                          "type": "number",
+                          "description": "Credits per 1M output tokens."
+                        },
+                        "cached_input": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "description": "Credits per 1M input tokens served from the provider prompt cache. Null where cached tokens are not billed separately, so they cost the `input` rate."
+                        }
+                      },
+                      "required": [
+                        "input",
+                        "output",
+                        "cached_input"
+                      ],
+                      "description": "What a call is billed, in credits per 1M tokens, at the base context tier. Use it to compare models by cost. Null on non-text models and on any model with no published price; never 0 for an unpriced model."
+                    },
+                    "max_output_tokens_derived": {
+                      "type": "boolean"
+                    },
+                    "thinking_style": {
+                      "type": "string",
+                      "enum": [
+                        "legacy",
+                        "adaptive"
+                      ]
+                    },
+                    "thinking_always_on": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "openai_reasoning_effort": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "effort_incompatible_with_tools": {
+                      "type": "boolean"
+                    },
+                    "supports_image_variation": {
+                      "type": "boolean"
+                    },
+                    "supports_safety_tolerance": {
+                      "type": "boolean"
+                    },
+                    "training_cutoff": {
+                      "type": "string"
+                    },
+                    "release_date": {
+                      "type": "string"
+                    },
+                    "is_superseded": {
+                      "type": "boolean"
+                    },
+                    "is_slow_model": {
+                      "type": "boolean"
+                    },
+                    "disabled": {
+                      "type": "boolean"
+                    },
+                    "disabled_reason": {
+                      "type": "string"
+                    },
+                    "access": {
+                      "type": "object",
+                      "properties": {
+                        "locked": {
+                          "type": "boolean",
+                          "enum": [
+                            true
+                          ]
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "requires_paid_plan"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "locked",
+                        "reason"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "type",
+                    "backend",
+                    "description",
+                    "blurb",
+                    "provider_label",
+                    "context_window",
+                    "max_output_tokens",
+                    "supports_streaming",
+                    "supports_thinking",
+                    "reasons_within_output_budget",
+                    "reasoning_efforts",
+                    "supports_tools",
+                    "supports_tool_search",
+                    "supports_tool_changes",
+                    "supports_assistant_prefill",
+                    "supports_vision",
+                    "deprecation_date",
+                    "replaced_by",
+                    "image",
+                    "credits_per_1m_tokens",
+                    "supports_image_variation"
+                  ]
+                }
+              },
+              "locked_models": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "Pass as `model` on the generation endpoints."
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "text",
+                        "image",
+                        "speech-to-text",
+                        "video"
+                      ]
+                    },
+                    "backend": {
+                      "type": "string",
+                      "enum": [
+                        "openai",
+                        "bedrock",
+                        "anthropic",
+                        "gemini",
+                        "ollama",
+                        "openai-compatible",
+                        "bfl",
+                        "xai",
+                        "kimi",
+                        "deepseek",
+                        "voyageai",
+                        "aws",
+                        "local-image"
+                      ],
+                      "description": "The provider that serves the model."
+                    },
+                    "description": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "blurb": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Set on catalog image models; null otherwise."
+                    },
+                    "provider_label": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "The provider as shown to people (`OpenAI`, `Black Forest Labs`), where `backend` is the id. Display text. Set on catalog image models; null otherwise."
+                    },
+                    "context_window": {
+                      "type": "integer",
+                      "description": "Input context, in tokens."
+                    },
+                    "max_output_tokens": {
+                      "type": "integer"
+                    },
+                    "supports_streaming": {
+                      "type": "boolean"
+                    },
+                    "supports_thinking": {
+                      "type": "boolean"
+                    },
+                    "reasons_within_output_budget": {
+                      "type": "boolean",
+                      "description": "Whether reasoning tokens are spent inside `max_output_tokens` on every turn. When true, a small `max_tokens` can be used up by reasoning alone and return an empty reply, so leave room above the answer you expect."
+                    },
+                    "reasoning_efforts": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "minimal",
+                          "low",
+                          "medium",
+                          "high",
+                          "xhigh"
+                        ]
+                      },
+                      "description": "The `reasoningEffort` levels this model acts on, lowest first; empty when it ignores the option. `none` is listed only where it turns reasoning off. Each level is mapped to the nearest one the provider offers. A listed level can still be dropped on one request: some OpenAI models drop it on tool turns, and Claude models with a fixed thinking budget drop it when `max_tokens` leaves no room for the budget plus the answer."
+                    },
+                    "supports_tools": {
+                      "type": "boolean"
+                    },
+                    "supports_tool_search": {
+                      "type": "boolean",
+                      "description": "Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, so a large tool catalog is searched on demand instead of loaded into context up front. Describes the model: `/api/ai/v1/completions` honours it for every model with this flag set, whether its `backend` is `anthropic` or `bedrock`."
+                    },
+                    "supports_tool_changes": {
+                      "type": "boolean",
+                      "description": "Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model: `/api/ai/v1/completions` honours it only for models whose `backend` is `anthropic`; a `bedrock` model with this flag set is refused there with `errorCode: \"tool_changes_unsupported\"`."
+                    },
+                    "supports_assistant_prefill": {
+                      "type": "boolean",
+                      "description": "Whether `/api/ai/v1/completions` accepts a final assistant message for the model to continue. When false, a text prefill returns `400` with `errorCode: \"assistant_prefill_unsupported\"`; server-tool continuations are allowed. On Claude models that accept assistant prefill, it cannot be combined with `thinking`."
+                    },
+                    "supports_vision": {
+                      "type": "boolean"
+                    },
+                    "deprecation_date": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "`YYYY-MM-DD`; null when no retirement is scheduled."
+                    },
+                    "replaced_by": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "The id of the recommended successor, when there is one."
+                    },
+                    "image": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "sizing": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "presets"
+                                  ]
+                                },
+                                "presets": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "description": "Accepted `size` values, as `WxH`."
+                                },
+                                "default_size": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "presets",
+                                "default_size"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "constrained"
+                                  ]
+                                },
+                                "presets": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "description": "Suggested `size` values; any `WxH` meeting `constraints` is accepted."
+                                },
+                                "default_size": {
+                                  "type": "string"
+                                },
+                                "auto_size": {
+                                  "type": "string",
+                                  "description": "The `size` value that lets the provider choose."
+                                },
+                                "constraints": {
+                                  "type": "object",
+                                  "properties": {
+                                    "max_edge": {
+                                      "type": "integer"
+                                    },
+                                    "min_total_pixels": {
+                                      "type": "integer"
+                                    },
+                                    "max_total_pixels": {
+                                      "type": "integer"
+                                    },
+                                    "edge_multiple": {
+                                      "type": "integer",
+                                      "description": "Both edges must be a multiple of this."
+                                    },
+                                    "max_aspect_ratio": {
+                                      "type": "number",
+                                      "description": "Longest edge divided by shortest edge."
+                                    }
+                                  },
+                                  "required": [
+                                    "max_edge",
+                                    "min_total_pixels",
+                                    "max_total_pixels",
+                                    "edge_multiple",
+                                    "max_aspect_ratio"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "presets",
+                                "default_size",
+                                "auto_size",
+                                "constraints"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "dimensions"
+                                  ]
+                                },
+                                "presets": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "default_size": {
+                                  "type": "string"
+                                },
+                                "min_width": {
+                                  "type": "integer"
+                                },
+                                "max_width": {
+                                  "type": "integer"
+                                },
+                                "min_height": {
+                                  "type": "integer"
+                                },
+                                "max_height": {
+                                  "type": "integer"
+                                },
+                                "step": {
+                                  "type": "integer",
+                                  "description": "`width` and `height` are rounded to the nearest multiple of this."
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "presets",
+                                "default_size",
+                                "min_width",
+                                "max_width",
+                                "min_height",
+                                "max_height",
+                                "step"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "aspect_ratio"
+                                  ],
+                                  "description": "Takes an `aspect_ratio` such as `16:9`, not a `size`."
+                                }
+                              },
+                              "required": [
+                                "kind"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "input_image"
+                                  ],
+                                  "description": "Sized by the input image; takes no `size`."
+                                },
+                                "aspect_ratio": {
+                                  "type": "boolean",
+                                  "description": "Whether an `aspect_ratio` override is honoured."
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "aspect_ratio"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "fixed"
+                                  ],
+                                  "description": "The provider takes no size at all."
+                                }
+                              },
+                              "required": [
+                                "kind"
+                              ]
+                            }
+                          ]
+                        },
+                        "supports": {
+                          "type": "object",
+                          "properties": {
+                            "transparent_background": {
+                              "type": "boolean",
+                              "description": "`background: 'transparent'` yields real alpha."
+                            },
+                            "seed": {
+                              "type": "boolean"
+                            },
+                            "qualities": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "enum": [
+                                  "standard",
+                                  "hd",
+                                  "low",
+                                  "medium",
+                                  "high",
+                                  "xhigh",
+                                  "max",
+                                  "auto"
+                                ]
+                              },
+                              "description": "Accepted `quality` tiers; empty when none is taken."
+                            },
+                            "max_images": {
+                              "type": "integer",
+                              "description": "Most images one request may ask for via `n`."
+                            },
+                            "max_reference_images": {
+                              "type": "integer",
+                              "description": "Most `referenceImageFabFileIds` honoured on generation; 0 when the model takes none. FLUX.2 edits take one fewer, as the source uses a slot."
+                            },
+                            "edit": {
+                              "type": "boolean",
+                              "description": "Accepted by `POST /api/v1/image-edits`."
+                            },
+                            "requires_input_image": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "transparent_background",
+                            "seed",
+                            "qualities",
+                            "max_images",
+                            "max_reference_images",
+                            "edit",
+                            "requires_input_image"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "sizing",
+                        "supports"
+                      ],
+                      "description": "Size rules and supported parameters. Present on image models only; null for every other type."
+                    },
+                    "credits_per_1m_tokens": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "input": {
+                          "type": "number",
+                          "description": "Credits per 1M input tokens."
+                        },
+                        "output": {
+                          "type": "number",
+                          "description": "Credits per 1M output tokens."
+                        },
+                        "cached_input": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "description": "Credits per 1M input tokens served from the provider prompt cache. Null where cached tokens are not billed separately, so they cost the `input` rate."
+                        }
+                      },
+                      "required": [
+                        "input",
+                        "output",
+                        "cached_input"
+                      ],
+                      "description": "What a call is billed, in credits per 1M tokens, at the base context tier. Use it to compare models by cost. Null on non-text models and on any model with no published price; never 0 for an unpriced model."
+                    },
+                    "max_output_tokens_derived": {
+                      "type": "boolean"
+                    },
+                    "thinking_style": {
+                      "type": "string",
+                      "enum": [
+                        "legacy",
+                        "adaptive"
+                      ]
+                    },
+                    "thinking_always_on": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "openai_reasoning_effort": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "effort_incompatible_with_tools": {
+                      "type": "boolean"
+                    },
+                    "supports_image_variation": {
+                      "type": "boolean"
+                    },
+                    "supports_safety_tolerance": {
+                      "type": "boolean"
+                    },
+                    "training_cutoff": {
+                      "type": "string"
+                    },
+                    "release_date": {
+                      "type": "string"
+                    },
+                    "is_superseded": {
+                      "type": "boolean"
+                    },
+                    "is_slow_model": {
+                      "type": "boolean"
+                    },
+                    "disabled": {
+                      "type": "boolean"
+                    },
+                    "disabled_reason": {
+                      "type": "string"
+                    },
+                    "access": {
+                      "type": "object",
+                      "properties": {
+                        "locked": {
+                          "type": "boolean",
+                          "enum": [
+                            true
+                          ]
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "requires_paid_plan"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "locked",
+                        "reason"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "type",
+                    "backend",
+                    "description",
+                    "blurb",
+                    "provider_label",
+                    "context_window",
+                    "max_output_tokens",
+                    "supports_streaming",
+                    "supports_thinking",
+                    "reasons_within_output_budget",
+                    "reasoning_efforts",
+                    "supports_tools",
+                    "supports_tool_search",
+                    "supports_tool_changes",
+                    "supports_assistant_prefill",
+                    "supports_vision",
+                    "deprecation_date",
+                    "replaced_by",
+                    "image",
+                    "credits_per_1m_tokens",
+                    "supports_image_variation"
+                  ]
+                }
+              },
+              "superseded_models": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "replacement_id": {
+                      "type": "string"
+                    },
+                    "replacement_name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "replacement_id",
+                    "replacement_name"
+                  ]
+                }
+              },
+              "model_list_revision": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "catalog_unavailable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "models",
+              "locked_models",
+              "superseded_models",
+              "model_list_revision",
+              "catalog_unavailable"
+            ]
           }
         },
         "required": [
@@ -5022,6 +6131,55 @@
               }
             ]
           }
+        }
+      },
+      "getPublicClientConfigResponse200": {
+        "type": "object",
+        "properties": {
+          "api_url": {
+            "type": "string"
+          },
+          "default_theme": {
+            "type": "string"
+          },
+          "allow_open_registration": {
+            "type": "boolean"
+          },
+          "pyodide_base_url": {
+            "type": "string"
+          },
+          "allow_trusted_devices": {
+            "type": "boolean"
+          },
+          "turnstile_site_key": {
+            "type": "string"
+          },
+          "apple_sign_in_enabled": {
+            "type": "boolean"
+          },
+          "support_email": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "api_url",
+          "default_theme",
+          "allow_open_registration",
+          "pyodide_base_url",
+          "allow_trusted_devices",
+          "turnstile_site_key",
+          "apple_sign_in_enabled",
+          "support_email"
+        ],
+        "example": {
+          "api_url": "https://app.example.com",
+          "default_theme": "bike4mind",
+          "allow_open_registration": false,
+          "pyodide_base_url": "",
+          "allow_trusted_devices": true,
+          "turnstile_site_key": "",
+          "apple_sign_in_enabled": false,
+          "support_email": ""
         }
       },
       "approvePendingActionResponse200": {
@@ -28954,7 +30112,7 @@
       "get": {
         "operationId": "getClientConfig",
         "summary": "Get client configuration",
-        "description": "Returns what a client needs to configure itself in one call: whether the deployment is live, which product features are switched on deployment-wide, upload and credit limits, the default and recommended model ids, and every model the caller can use right now (the same list `GET /api/v1/models` pages through, unpaginated here). A feature flag says whether the deployment offers the feature, not whether this caller has opted in. The caller's identity, plan and entitlements are not repeated here - read them from `GET /api/v1/me`. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, `ai:chat` or `ai:generate`, or a JWT.",
+        "description": "Returns what a client needs to configure itself in one call: whether the deployment is live, which product features are switched on deployment-wide, upload and credit limits, the default and recommended model ids, and every model the caller can use right now (the same list `GET /api/v1/models` pages through, unpaginated here). A feature flag says whether the deployment offers the feature, not whether this caller has opted in. The caller's identity, plan and entitlements are not repeated here - read them from `GET /api/v1/me`. Responses are never cacheable. The optional catalog preserves picker order, disabled entries, locked cards and revision/fallback signals; it never includes internal pricing or dispatch configuration. Transport URLs require authentication. Pre-login clients use `GET /api/v1/client-config/public`, which returns only public login configuration. Authenticate with an API key (`b4m_live_`) carrying `me:read`, `ai:chat` or `ai:generate`, or a JWT.",
         "tags": [
           "Account"
         ],
@@ -29212,6 +30370,79 @@
             "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/client-config\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
           }
         ]
+      }
+    },
+    "/api/v1/client-config/public": {
+      "get": {
+        "operationId": "getPublicClientConfig",
+        "summary": "Get pre-login client configuration",
+        "description": "Public login and registration configuration only. Empty strings preserve unconfigured values. No caller models, transport URLs, credentials or admin configuration are returned. Responses are never cacheable.",
+        "tags": [
+          "Account"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The public login configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/getPublicClientConfigResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/pending-actions/{questId}/approve": {
