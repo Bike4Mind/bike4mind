@@ -12,7 +12,7 @@ import {
   Typography,
 } from '@mui/joy';
 import { Link } from '@tanstack/react-router';
-import { INCIDENT_OVERRIDABLE_REVIEW_STATUSES } from '@bike4mind/common';
+import { INCIDENT_OVERRIDABLE_REVIEW_STATUSES, type IncidentEscalationTrigger } from '@bike4mind/common';
 import { toast } from 'sonner';
 import {
   ADMIN_REASON_PRESETS,
@@ -28,6 +28,7 @@ import { REVIEW_STATUS_LABELS, formatConfidence, surfaceLabel } from './moderati
 import {
   type ModerationEscalationAlert,
   type ModerationEscalationResult,
+  type ModerationIncidentView,
   type ModerationVerdict,
   useModerationIncidentEscalation,
   useModerationIncidentVerdict,
@@ -59,6 +60,35 @@ const UNAVAILABLE_COPY: Record<'no_stored_image' | 'not_displayable', string> = 
   no_stored_image:
     'No stored image exists for this incident. Generated and edited images are blocked before they are stored.',
   not_displayable: 'The stored file is not an image this page can display.',
+};
+
+const ESCALATION_EVENT_LABELS: Record<IncidentEscalationTrigger, string> = {
+  manual: 'Escalated manually',
+  timeout: 'Escalated automatically',
+};
+
+type TimelineEvent = { id: string; label: string; at: string };
+
+/** The stamps the incident has, oldest first; one recorded at the same time keeps the order below. */
+const timelineEvents = (
+  data: ModerationIncidentView,
+  escalation: Pick<ModerationIncidentView, 'escalatedAt' | 'escalationTrigger' | 'escalationAlertedAt'>
+): TimelineEvent[] => {
+  const event = (id: string, label: string, at: string | null): TimelineEvent[] => (at ? [{ id, label, at }] : []);
+  return [
+    ...event('flagged', 'Flagged', data.createdAt),
+    ...event('alerted', 'Reviewer alerted', data.alertedAt),
+    ...event('reminded', 'Latest reminder sent', data.lastReminderAt),
+    ...event(
+      'escalated',
+      escalation.escalationTrigger ? ESCALATION_EVENT_LABELS[escalation.escalationTrigger] : 'Escalated',
+      escalation.escalatedAt
+    ),
+    ...event('escalation-alerted', 'Second reviewers alerted', escalation.escalationAlertedAt),
+    ...event('no-action', 'Closed as correctly blocked', data.noActionAt),
+    ...event('false-positive', 'Marked false positive', data.falsePositiveAt),
+    ...event('reported', 'Report recorded', data.reportedAt),
+  ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 };
 
 type Props = { incidentId: string; onBack: () => void };
@@ -321,6 +351,34 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
                     ))}
                   </Box>
                 )}
+              </SectionCard>
+
+              <SectionCard title="Timeline" body="custom" data-testid="moderation-incident-timeline">
+                <Box component="ol" sx={{ m: 0, px: 2, py: 1.75, listStyle: 'none', display: 'grid', gap: 1 }}>
+                  {timelineEvents(data, escalationState ?? data).map(event => (
+                    <Stack
+                      key={event.id}
+                      component="li"
+                      direction="row"
+                      flexWrap="wrap"
+                      columnGap={1.5}
+                      alignItems="baseline"
+                      data-testid={`moderation-incident-timeline-${event.id}`}
+                    >
+                      <Typography level="body-sm" sx={{ color: 'admin.ink' }}>
+                        {event.label}
+                      </Typography>
+                      <Typography
+                        component="time"
+                        dateTime={event.at}
+                        level="body-sm"
+                        sx={{ ml: 'auto', color: 'admin.inkMuted', fontVariantNumeric: 'tabular-nums' }}
+                      >
+                        {formatUtc(new Date(event.at))}
+                      </Typography>
+                    </Stack>
+                  ))}
+                </Box>
               </SectionCard>
             </Stack>
           </Box>

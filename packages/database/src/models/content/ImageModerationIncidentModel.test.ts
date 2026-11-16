@@ -650,6 +650,57 @@ describe('ImageModerationIncidentRepository', () => {
     });
   });
 
+  describe('summarize', () => {
+    const seedAt = async (createdAt: Date, fields: Record<string, unknown> = {}) => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      await ImageModerationIncident.collection.updateOne({ _id: inc._id }, { $set: { createdAt, ...fields } });
+    };
+
+    it('counts nothing and has no oldest incident on an empty collection', async () => {
+      expect(await imageModerationIncidentRepository.summarize()).toEqual({
+        needsReview: 0,
+        escalated: 0,
+        stuck: 0,
+        closed: { noAction: 0, falsePositive: 0, reported: 0 },
+        oldestPendingCreatedAt: null,
+      });
+    });
+
+    it('counts every status, the escalated waiting ones, and the oldest waiting incident', async () => {
+      const oldestWaiting = new Date('2026-10-02T00:00:00Z');
+      await seedAt(new Date('2026-10-01T00:00:00Z'), { reviewStatus: 'no_action' });
+      await seedAt(oldestWaiting);
+      await seedAt(new Date('2026-10-03T00:00:00Z'), { reviewStatus: 'pending_review' });
+      await seedAt(new Date('2026-10-04T00:00:00Z'), {
+        reviewStatus: 'pending_review',
+        escalatedAt: new Date('2026-10-05T00:00:00Z'),
+        escalationTrigger: 'timeout',
+      });
+      await seedAt(new Date('2026-10-05T00:00:00Z'), {
+        escalatedAt: new Date('2026-10-06T00:00:00Z'),
+        escalationTrigger: 'manual',
+      });
+      // Escalated before its verdict: counted as closed, not as escalated.
+      await seedAt(new Date('2026-09-01T00:00:00Z'), {
+        reviewStatus: 'false_positive',
+        escalatedAt: new Date('2026-09-02T00:00:00Z'),
+      });
+      await seedAt(new Date('2026-09-03T00:00:00Z'), { reviewStatus: 'false_positive' });
+      await seedAt(new Date('2026-09-04T00:00:00Z'), { reviewStatus: 'reported' });
+      await seedAt(new Date('2026-09-05T00:00:00Z'), { reviewStatus: 'reported' });
+      await seedAt(new Date('2026-09-06T00:00:00Z'), { reviewStatus: 'reported' });
+      await seedAt(new Date('2026-08-01T00:00:00Z'), { reviewStatus: 'confirmed_csam' });
+
+      expect(await imageModerationIncidentRepository.summarize()).toEqual({
+        needsReview: 4,
+        escalated: 2,
+        stuck: 1,
+        closed: { noAction: 1, falsePositive: 2, reported: 3 },
+        oldestPendingCreatedAt: oldestWaiting,
+      });
+    });
+  });
+
   describe('setNcmecReportId', () => {
     it('stores the reportId on a confirmed_csam incident without changing reviewStatus', async () => {
       const inc = await imageModerationIncidentRepository.record(baseIncident());

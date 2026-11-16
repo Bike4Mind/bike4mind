@@ -14,9 +14,11 @@ import {
 } from './shared';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import ModerationIncidentDetail from './ModerationIncidentDetail';
+import { ModerationIncidentsSummary, ModerationReviewerBanners } from './ModerationIncidentsSummary';
 import { REVIEW_STATUS_LABELS, formatLabel, surfaceLabel } from './moderationIncidentLabels';
 import {
   useModerationIncidentQueue,
+  useModerationIncidentSummary,
   type ClosedCursor,
   type ModerationIncidentQueueStatus,
   type ModerationIncidentRow,
@@ -38,6 +40,7 @@ export const ModerationIncidentsTab: React.FC = () => {
   const [closedCursor, setClosedCursor] = useState<ClosedCursor | undefined>(undefined);
   const closedBefore = closedCursor?.before;
   const queue = useModerationIncidentQueue(queueStatus, closedCursor);
+  const summary = useModerationIncidentSummary();
   const closed = queueStatus === 'closed';
   const changeQueueStatus = (status: ModerationIncidentQueueStatus) => {
     setQueueStatus(status);
@@ -151,6 +154,8 @@ export const ModerationIncidentsTab: React.FC = () => {
             : 'Image moderation incidents waiting for a verdict, oldest first. Opening one records a view in the audit log.'
         }
       />
+      <ModerationReviewerBanners summary={summary.data} />
+      <ModerationIncidentsSummary query={summary} now={now} />
       <SegmentedControl
         options={QUEUE_STATUS_OPTIONS}
         value={queueStatus}

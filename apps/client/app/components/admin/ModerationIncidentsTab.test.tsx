@@ -3,14 +3,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { ModerationIncidentRow } from '@client/app/hooks/data/moderationIncidents';
+import type { ModerationIncidentRow, ModerationIncidentSummary } from '@client/app/hooks/data/moderationIncidents';
 
 const m = vi.hoisted(() => ({
   queue: vi.fn(),
+  summary: vi.fn(),
   search: {} as Record<string, unknown>,
   navigate: vi.fn(),
 }));
-vi.mock('@client/app/hooks/data/moderationIncidents', () => ({ useModerationIncidentQueue: m.queue }));
+vi.mock('@client/app/hooks/data/moderationIncidents', () => ({
+  useModerationIncidentQueue: m.queue,
+  useModerationIncidentSummary: m.summary,
+}));
 vi.mock('@tanstack/react-router', () => ({ useSearch: () => m.search, useNavigate: () => m.navigate }));
 vi.mock('./ModerationIncidentDetail', () => ({
   default: (props: { incidentId: string; onBack: () => void }) => (
@@ -61,11 +65,32 @@ const ready = (data: ModerationIncidentRow[], truncated = false) => ({
   refetch: vi.fn(),
 });
 
+// Synthetic counts only.
+const totals = (over: Partial<ModerationIncidentSummary> = {}): ModerationIncidentSummary => ({
+  needsReview: 2,
+  escalated: 0,
+  stuck: 0,
+  closed: { noAction: 0, falsePositive: 0, reported: 0 },
+  oldestPendingCreatedAt: '2026-10-01T10:00:00.000Z',
+  reviewersConfigured: true,
+  escalationReviewersConfigured: true,
+  ...over,
+});
+const summaryReady = (data: ModerationIncidentSummary) => ({
+  data,
+  isPending: false,
+  isError: false,
+  isFetching: false,
+  refetch: vi.fn(),
+});
+const stat = (name: string) => screen.getByTestId(`moderation-incidents-stat-${name}`).textContent;
+
 describe('ModerationIncidentsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     m.search = {};
     m.queue.mockReturnValue(ready(rows));
+    m.summary.mockReturnValue(summaryReady(totals()));
   });
 
   it('lists id, time, surface and age in the order given, flagging a stuck report', () => {
@@ -177,5 +202,160 @@ describe('ModerationIncidentsTab', () => {
     m.queue.mockReturnValue(ready([]));
     renderTab();
     expect(screen.getByTestId('admin-empty-state').textContent).toContain('No incidents are waiting for review');
+  });
+  describe('summary', () => {
+    it('shows the totals between the header and the queue control', () => {
+      m.summary.mockReturnValue(
+        summaryReady(
+          totals({
+            needsReview: 1204,
+            escalated: 3,
+            closed: { noAction: 7, falsePositive: 1, reported: 2 },
+          })
+        )
+      );
+      renderTab();
+
+      const region = screen.getByTestId('moderation-incidents-summary');
+      const header = screen.getByTestId('admin-page-header');
+      const control = screen.getByTestId('moderation-incidents-status');
+      expect(header.compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(region.compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(region.textContent).toContain('Needs review');
+      expect(stat('needs-review')).toBe('1,204');
+      expect(stat('oldest-waiting')).toMatch(/ago/);
+      expect(region.textContent).toMatch(/1 Oct 2026, 10:00 UTC/);
+      expect(stat('escalated')).toBe('3');
+      expect(stat('reported')).toBe('2');
+      expect(stat('closed-without-report')).toBe('8');
+      expect(stat('closed-without-report-split')).toBe('7 correctly blocked, 1 false positive');
+      expect(screen.getAllByTestId('admin-stat-tile')).toHaveLength(5);
+    });
+
+    it('shows stuck reports only when there are some', () => {
+      renderTab();
+      expect(screen.queryByTestId('moderation-incidents-stat-stuck')).toBeNull();
+    });
+
+    it('notes stuck reports under Needs review', () => {
+      m.summary.mockReturnValue(summaryReady(totals({ stuck: 2 })));
+      renderTab();
+      expect(stat('stuck')).toBe('Plus 2 reports stuck');
+    });
+
+    it('shows a dash when nothing is waiting', () => {
+      m.summary.mockReturnValue(summaryReady(totals({ needsReview: 0, oldestPendingCreatedAt: null })));
+      renderTab();
+      expect(stat('needs-review')).toBe('0');
+      expect(stat('oldest-waiting')).toBe('\u2014');
+    });
+
+    it('keeps the queue working when the totals fail to load, and retries them', () => {
+      const failed = { data: undefined, isPending: false, isError: true, isFetching: false, refetch: vi.fn() };
+      m.summary.mockReturnValue(failed);
+      renderTab();
+
+      const region = screen.getByTestId('moderation-incidents-summary');
+      expect(region.textContent).toContain("Couldn't load the review totals.");
+      expect(screen.getByTestId('moderation-incident-row-inc-old')).toBeTruthy();
+      fireEvent.click(screen.getByTestId('moderation-incident-row-inc-old'));
+      expect(m.navigate).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+      expect(failed.refetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the queue visible while the totals load', () => {
+      m.summary.mockReturnValue({
+        data: undefined,
+        isPending: true,
+        isError: false,
+        isFetching: true,
+        refetch: vi.fn(),
+      });
+      renderTab();
+      expect(screen.getAllByTestId('admin-stat-skeleton')).toHaveLength(5);
+      expect(screen.getByTestId('moderation-incident-row-inc-old')).toBeTruthy();
+      expect(screen.queryByTestId('moderation-incidents-no-reviewers-banner')).toBeNull();
+    });
+  });
+
+  describe('reviewer banners', () => {
+    it('shows none when both reviewer lists are set', () => {
+      m.summary.mockReturnValue(summaryReady(totals({ escalated: 1 })));
+      renderTab();
+      expect(screen.queryByTestId('moderation-incidents-no-reviewers-banner')).toBeNull();
+      expect(screen.queryByTestId('moderation-incidents-no-escalation-reviewers-banner')).toBeNull();
+    });
+
+    it('says no reviewer is emailed while incidents wait and the reviewer list is empty', () => {
+      m.summary.mockReturnValue(summaryReady(totals({ needsReview: 2, reviewersConfigured: false })));
+      renderTab();
+
+      const banner = screen.getByTestId('moderation-incidents-no-reviewers-banner');
+      expect(banner.textContent).toContain('2 incidents are waiting');
+      expect(banner.textContent).toContain(
+        'No reviewer is emailed until Image Moderation Reviewer Emails in Admin settings, AI Moderation has an address.'
+      );
+      expect(screen.queryByTestId('moderation-incidents-no-escalation-reviewers-banner')).toBeNull();
+      const header = screen.getByTestId('admin-page-header');
+      const region = screen.getByTestId('moderation-incidents-summary');
+      expect(header.compareDocumentPosition(banner) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(banner.compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it('stays quiet about an empty reviewer list when nothing waits', () => {
+      m.summary.mockReturnValue(
+        summaryReady(totals({ needsReview: 0, oldestPendingCreatedAt: null, reviewersConfigured: false }))
+      );
+      renderTab();
+      expect(screen.queryByTestId('moderation-incidents-no-reviewers-banner')).toBeNull();
+    });
+
+    it('says no second reviewer is emailed while escalated incidents wait and that list is empty', () => {
+      m.summary.mockReturnValue(summaryReady(totals({ escalated: 1, escalationReviewersConfigured: false })));
+      renderTab();
+
+      const banner = screen.getByTestId('moderation-incidents-no-escalation-reviewers-banner');
+      expect(banner.textContent).toContain('1 escalated incident is waiting');
+      expect(banner.textContent).toContain(
+        'No second reviewer is emailed until Image Moderation Escalation Emails in Admin settings, AI Moderation has an address.'
+      );
+      expect(screen.queryByTestId('moderation-incidents-no-reviewers-banner')).toBeNull();
+    });
+
+    it('stays quiet about an empty escalation list when nothing is escalated', () => {
+      m.summary.mockReturnValue(summaryReady(totals({ escalated: 0, escalationReviewersConfigured: false })));
+      renderTab();
+      expect(screen.queryByTestId('moderation-incidents-no-escalation-reviewers-banner')).toBeNull();
+    });
+
+    it('shows one banner per list when both are empty', () => {
+      m.summary.mockReturnValue(
+        summaryReady(totals({ escalated: 1, reviewersConfigured: false, escalationReviewersConfigured: false }))
+      );
+      renderTab();
+      expect(screen.getAllByTestId('moderation-incidents-no-reviewers-banner')).toHaveLength(1);
+      expect(screen.getAllByTestId('moderation-incidents-no-escalation-reviewers-banner')).toHaveLength(1);
+    });
+
+    it.each([
+      ['moderation-incidents-no-reviewers-action-btn', 'ImageModerationReviewerEmails'],
+      ['moderation-incidents-no-escalation-reviewers-action-btn', 'ImageModerationEscalationEmails'],
+    ])('%s opens Admin settings on the list it names', (button, setting) => {
+      m.summary.mockReturnValue(
+        summaryReady(totals({ escalated: 1, reviewersConfigured: false, escalationReviewersConfigured: false }))
+      );
+      renderTab();
+      fireEvent.click(screen.getByTestId(button));
+
+      const { to, search } = m.navigate.mock.calls[0][0] as { to: string; search: (prev: object) => object };
+      expect(to).toBe('/admin');
+      expect(search({ tab: 'moderation-incidents' })).toMatchObject({
+        tab: 'admin-settings',
+        section: 'security',
+        q: setting,
+      });
+    });
   });
 });

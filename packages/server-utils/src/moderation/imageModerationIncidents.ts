@@ -1,3 +1,4 @@
+import { partitionEmailList } from '@bike4mind/common';
 import { adminSettingsRepository, imageModerationIncidentRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { getSettingsMap } from '@bike4mind/utils';
@@ -26,6 +27,18 @@ export function resolveAdminAppUrl(env: Record<string, string | undefined> = pro
 // Loaded once, on the first alert.
 let mailerModule: Promise<typeof import('../utils/mailer/index')> | undefined;
 
+type ReviewerListSetting = 'ImageModerationReviewerEmails' | 'ImageModerationEscalationEmails';
+
+// Stored as a JSON string; anything that does not parse holds no address.
+const parseStoredEmailList = (raw: unknown): unknown => {
+  if (typeof raw !== 'string') return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+};
+
 /**
  * Recipients, mail transport, admin link and logger shared by the request-path alert, the escalate
  * route and the scheduled review sweep (apps/workers/src/cron/imageModerationReviewSweep.ts), so all
@@ -36,18 +49,12 @@ let mailerModule: Promise<typeof import('../utils/mailer/index')> | undefined;
  * Lambda records incidents too and is not linked to the event bus.
  */
 export function createReviewerAlertDelivery(options: { skipSettingsCache?: boolean } = {}): IncidentEscalationDelivery {
-  const readEmailList = async (name: 'ImageModerationReviewerEmails' | 'ImageModerationEscalationEmails') => {
+  const readEmailList = async (name: ReviewerListSetting) => {
     const stores = { adminSettings: adminSettingsRepository };
     const settings = await (options.skipSettingsCache
       ? getSettingsMap(stores, { skipCache: true })
       : getSettingsMap(stores));
-    const raw = settings[name];
-    if (typeof raw !== 'string') return raw;
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return [];
-    }
+    return parseStoredEmailList(settings[name]);
   };
   // Every dependency resolves at call time, so importing this module costs an image path nothing.
   return {
@@ -62,6 +69,27 @@ export function createReviewerAlertDelivery(options: { skipSettingsCache?: boole
       warn: (msg, meta) => Logger.globalInstance.warn(msg, meta),
       error: (msg, meta) => Logger.globalInstance.error(msg, meta),
     },
+  };
+}
+
+/**
+ * Whether each reviewer list holds at least one address the alerts would send to (the same
+ * partitionEmailList rule). Read past the settings cache so a list saved moments ago shows at once.
+ * Returns no address and no count of addresses.
+ */
+export async function getReviewerListStatus(): Promise<{
+  reviewersConfigured: boolean;
+  escalationReviewersConfigured: boolean;
+}> {
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { skipCache: true, names: ['ImageModerationReviewerEmails', 'ImageModerationEscalationEmails'] }
+  );
+  const configured = (name: ReviewerListSetting) =>
+    partitionEmailList(parseStoredEmailList(settings[name])).valid.length > 0;
+  return {
+    reviewersConfigured: configured('ImageModerationReviewerEmails'),
+    escalationReviewersConfigured: configured('ImageModerationEscalationEmails'),
   };
 }
 

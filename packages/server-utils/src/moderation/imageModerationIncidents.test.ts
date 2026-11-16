@@ -24,6 +24,7 @@ vi.mock('../utils/mailer/index', () => ({ default: { sendEmail: mocks.sendEmail 
 
 import {
   createReviewerAlertDelivery,
+  getReviewerListStatus,
   imageModerationIncidents,
   resolveAdminAppUrl,
   sendIncidentEscalationAlert,
@@ -151,5 +152,53 @@ describe('sendIncidentEscalationAlert', () => {
     });
     expect(mocks.sendEmail).not.toHaveBeenCalled();
     expect(mocks.markEscalationAlerted).not.toHaveBeenCalled();
+  });
+});
+
+describe('getReviewerListStatus', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('reads only the two lists, past the settings cache', async () => {
+    mocks.getSettingsMap.mockResolvedValue({});
+
+    await getReviewerListStatus();
+
+    expect(mocks.getSettingsMap).toHaveBeenCalledExactlyOnceWith(
+      { adminSettings: expect.anything() },
+      { skipCache: true, names: ['ImageModerationReviewerEmails', 'ImageModerationEscalationEmails'] }
+    );
+  });
+
+  it.each([
+    ['absent', undefined, false],
+    ['empty', '[]', false],
+    ['unparseable', 'not json', false],
+    ['invalid entries only', '["not-an-address", ""]', false],
+    ['one valid entry among invalid ones', '["not-an-address", "reviewer@example.com"]', true],
+    ['a valid array', ['reviewer@example.com'], true],
+  ])('treats a list that is %s as configured=%s', async (_label, stored, expected) => {
+    mocks.getSettingsMap.mockResolvedValue({
+      ImageModerationReviewerEmails: stored,
+      ImageModerationEscalationEmails: stored,
+    });
+
+    await expect(getReviewerListStatus()).resolves.toEqual({
+      reviewersConfigured: expected,
+      escalationReviewersConfigured: expected,
+    });
+  });
+
+  it('judges each list on its own and never returns an address', async () => {
+    mocks.getSettingsMap.mockResolvedValue({
+      ImageModerationReviewerEmails: '["reviewer@example.com"]',
+      ImageModerationEscalationEmails: '["nope"]',
+    });
+
+    const status = await getReviewerListStatus();
+
+    expect(status).toEqual({ reviewersConfigured: true, escalationReviewersConfigured: false });
+    expect(JSON.stringify(status)).not.toContain('@');
   });
 });
