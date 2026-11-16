@@ -115,6 +115,15 @@ const fetchMock = vi.fn();
 
 const slackOk = (extra: Record<string, unknown> = {}) => ({ ok: true, json: async () => ({ ok: true, ...extra }) });
 
+describe('whatsNewHighlights module', () => {
+  // The legacy queue is gone; a kind-less entry point would let a handler bypass the kind router again.
+  it('exposes only the job function, not a queue entry point', async () => {
+    const highlights = await import('./whatsNewHighlights');
+    expect(highlights).not.toHaveProperty('dispatch');
+    expect(highlights.runHighlightsJob).toBeTypeOf('function');
+  });
+});
+
 describe('whatsNewHighlights queue handler', () => {
   beforeEach(() => {
     vi.clearAllMocks();

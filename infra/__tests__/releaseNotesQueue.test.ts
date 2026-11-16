@@ -32,8 +32,17 @@ describe("What's New queue subscription", () => {
   it('the admin highlights producer sends a kind-tagged message to the merged queue', () => {
     const producer = read('apps/client/pages/api/admin/generate-highlights.ts');
     expect(producer).toMatch(/kind:\s*'highlights'/);
-    expect(producer).toMatch(/\.whatsNewGenerationQueue;/);
+    expect(producer).toMatch(/getSourceQueueUrl\('whatsNewGenerationQueue'\)/);
     expect(producer).not.toMatch(/whatsNewHighlightsQueue/);
+  });
+
+  // The web Lambda is not linked to the queue directly, so the route must resolve it through sourceQueueUrls.
+  it('the web Lambda receives the merged queue URL through sourceQueueUrls', () => {
+    const web = read('infra/web.ts');
+    const start = web.indexOf("new sst.Linkable('sourceQueueUrls'");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const linkable = web.slice(start, web.indexOf('\n});', start));
+    expect(linkable).toMatch(/whatsNewGenerationQueue: whatsNewGenerationQueue\.url/);
   });
 
   it('no infra file still links or alarms on the legacy highlights queue', () => {
