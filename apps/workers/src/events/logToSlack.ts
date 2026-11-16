@@ -32,8 +32,16 @@ function generateSreFingerprint(errorMessage: string): string {
   return createHash('sha1').update(source).digest('hex');
 }
 
-function stripRequestPrefix(message: string): string {
-  return message.replace(/^[A-Z]+\s+[^\r\n]*?\s+(?:\u2192|->)\s+\d{3}:\s*/, '');
+export function stripRequestPrefix(message: string): string {
+  if (!/^[A-Z]+ /.test(message)) return message;
+  const firstLine = message.split(/[\r\n]/, 1)[0];
+  const unicodeArrow = firstLine.indexOf('\u2192');
+  const asciiArrow = firstLine.indexOf('->');
+  const arrow = unicodeArrow < 0 ? asciiArrow : asciiArrow < 0 ? unicodeArrow : Math.min(unicodeArrow, asciiArrow);
+  if (arrow < 0 || !/\s/.test(firstLine[arrow - 1] ?? '')) return message;
+  const tailStart = arrow + (arrow === asciiArrow ? 2 : 1);
+  const tail = /^[ \t]*\d{3}:[ \t]*/.exec(firstLine.slice(tailStart));
+  return tail ? message.slice(tailStart + tail[0].length) : message;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -105,10 +113,14 @@ export const ingest = async (event: CloudWatchLogsEvent, _context: Context) => {
         errorMessage = typeof message === 'string' ? stripRequestPrefix(message) : '';
         const error = asRecord(parsed.error);
         const err = asRecord(parsed.err);
-        stackTrace = [errorMessage, parsed.stack, parsed.stackTrace, error.stack, err.stack]
+        const stacks = [parsed.stack, parsed.stackTrace, error.stack, err.stack]
           .filter((value): value is string => typeof value === 'string' && value.length > 0)
-          .map(stripRequestPrefix)
-          .join('\n');
+          .map(stripRequestPrefix);
+        if (!errorMessage.trim()) {
+          const fallbackStack = stacks.find(stack => stack.trim())?.trimStart();
+          errorMessage = fallbackStack?.split(/[\r\n]/, 1)[0].trim() ?? '';
+        }
+        stackTrace = [errorMessage, ...stacks].filter(Boolean).join('\n');
         functionName = typeof parsed.functionName === 'string' ? parsed.functionName : undefined;
       } catch {
         // Unstructured logs retain their text after request-prefix normalization.

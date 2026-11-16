@@ -39,11 +39,6 @@ vi.mock('@bike4mind/utils', () => ({
   notifyEventLogsToSlack: (...args: unknown[]) => mockNotifyEventLogsToSlack(...args),
 }));
 
-vi.mock('@bike4mind/server-utils/services/liveopsFingerprint', () => ({
-  extractErrorType: vi.fn(() => 'TypeError'),
-  normalizeErrorMessage: vi.fn((m: string) => m),
-}));
-
 vi.mock('@bike4mind/common', () => ({
   SreClassification: { HIGH: 'HIGH', MEDIUM: 'MEDIUM', LOW: 'LOW', SKIP: 'SKIP' },
   SreSourceType: { CLOUDWATCH: 'CLOUDWATCH', GITHUB_ISSUE: 'GITHUB_ISSUE' },
@@ -62,7 +57,7 @@ vi.mock('@bike4mind/observability', async importOriginal => {
   };
 });
 
-import { ingest } from './logToSlack';
+import { ingest, stripRequestPrefix } from './logToSlack';
 
 /** Build a CloudWatch Logs event the way AWS delivers it: base64(gzip(JSON)). */
 function makeCwEvent(message: string, logGroup = '/aws/lambda/dev-fn'): CloudWatchLogsEvent {
@@ -74,6 +69,26 @@ function makeCwEvent(message: string, logGroup = '/aws/lambda/dev-fn'): CloudWat
 const ctx = {} as Context;
 // CloudWatch log line: timestamp\trequestId\tlevel\tjsonPayload
 const errorLine = `2026-01-01\treq-1\tERROR\t${JSON.stringify({ message: 'TypeError: boom', functionName: 'dev-fn' })}`;
+
+describe('stripRequestPrefix', () => {
+  it('handles long whitespace runs promptly', () => {
+    const message = `GET ${' '.repeat(100_000)}x`;
+    const start = performance.now();
+    expect(stripRequestPrefix(message)).toBe(message);
+    expect(performance.now() - start).toBeLessThan(50);
+  });
+
+  it.each(['\u2192', '->'])('normalizes the %s prefix', arrow => {
+    expect(stripRequestPrefix(`GET /route ${arrow} 500: TypeError: failed\n    at handler.ts:42`)).toBe(
+      'TypeError: failed\n    at handler.ts:42'
+    );
+  });
+
+  it('does not consume a prefix tail on a later line', () => {
+    const message = 'GET /route\n \u2192 500: TypeError: failed';
+    expect(stripRequestPrefix(message)).toBe(message);
+  });
+});
 
 describe('logToSlack.ingest — SRE dispatch', () => {
   beforeEach(() => {
@@ -114,6 +129,7 @@ describe('logToSlack.ingest — SRE dispatch', () => {
     expect(mockSendToQueue).toHaveBeenCalledTimes(1);
     const [, payload] = mockSendToQueue.mock.calls[0] as [string, Record<string, unknown>];
     expect(payload.errorMessage).toBe('Drain window expired with in-flight quests');
+    expect(payload.classification).toBe('LOW');
     expect(payload.functionName).toBe('chatCompletion');
     expect(payload.logGroup).toBe('/sst/cluster/dev/ChatCompletion');
   });
@@ -208,6 +224,21 @@ describe('logToSlack.ingest — SRE dispatch', () => {
     );
   });
 
+  it('skips JSON whose classifier keyword exists only in metadata', async () => {
+    await ingest(makeCwEvent(JSON.stringify({ message: 'Handler failed', path: '/TypeError' })), ctx);
+
+    expect(mockSendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('uses the first non-empty stack line for a missing message', async () => {
+    await ingest(makeCwEvent(JSON.stringify({ err: { stack: '\n  TypeError: failed\n    at handler.ts:42' } })), ctx);
+
+    expect(mockSendToQueue).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ errorMessage: 'TypeError: failed' })
+    );
+  });
+
   it('includes a serialized err stack without its other fields', async () => {
     const stack = 'TypeError: failed\n    at handle (handler.ts:10:2)';
     await ingest(makeCwEvent(JSON.stringify({ message: 'Failed', err: { stack, path: '/metadata' } })), ctx);
@@ -216,6 +247,21 @@ describe('logToSlack.ingest — SRE dispatch', () => {
       expect.any(String),
       expect.objectContaining({ stackTrace: `Failed\n${stack}`, classification: 'MEDIUM' })
     );
+  });
+
+  it.each(['err', 'error'])('derives distinct messages and fingerprints from %s stacks', async field => {
+    for (const message of ['TypeError: failed to load settings', 'ReferenceError: handler is missing']) {
+      const stack = `${message}\n    at handle (handler.ts:10:2)`;
+      await ingest(makeCwEvent(JSON.stringify({ [field]: { stack }, path: '/metadata' })), ctx);
+    }
+
+    expect(mockSendToQueue).toHaveBeenCalledTimes(2);
+    const first = mockSendToQueue.mock.calls[0][1];
+    const second = mockSendToQueue.mock.calls[1][1];
+    expect(first.errorMessage).toBe('TypeError: failed to load settings');
+    expect(second.errorMessage).toBe('ReferenceError: handler is missing');
+    expect(first.fingerprint).not.toBe(second.fingerprint);
+    expect(first.stackTrace).not.toContain('/metadata');
   });
 
   it.each([undefined, {}, { repos: [] }])('does not dispatch with unset or empty config: %j', async config => {
