@@ -40,10 +40,18 @@ describe('email verification links', () => {
   // The address the browser shows at the moment each request leaves (its Referer).
   let addressAtRequest: { what: string; href: string }[];
   let verifyPost: ReturnType<typeof vi.fn>;
+  let unsubscribeGet: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     addressAtRequest = [];
     verifyPost = vi.fn(async () => ({ data: {} }));
+    unsubscribeGet = vi.fn(async () => ({
+      data: {
+        email: 'reader@example.com',
+        preferences: { unsubscribedCategories: [], globalUnsubscribe: false },
+        categories: [],
+      },
+    }));
     vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       addressAtRequest.push({ what: `fetch ${String(input)}`, href: window.location.href });
       return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -57,7 +65,11 @@ describe('email verification links', () => {
         addressAtRequest.push({ what: `post ${url}`, href: window.location.href });
         return verifyPost(url, body);
       };
-      return { ...actual, api: Object.assign(Object.create(actual.api), { post }) };
+      const get = (url: string, config: unknown) => {
+        addressAtRequest.push({ what: `get ${url}`, href: window.location.href });
+        return unsubscribeGet(url, config);
+      };
+      return { ...actual, api: Object.assign(Object.create(actual.api), { post, get }) };
     });
   });
 
@@ -95,6 +107,28 @@ describe('email verification links', () => {
       const { router } = await openLink(`${path}?token=${token}&n=42`);
 
       await waitFor(() => expect(verifyPost).toHaveBeenCalledWith(endpoint, { token }));
+      await router.load();
+      expect(addressAtRequest.some(r => r.what.startsWith('fetch'))).toBe(true);
+      expect(addressAtRequest.filter(r => r.href.includes('token'))).toEqual([]);
+      expect(window.location.href).not.toContain('token');
+      expect(router.state.location.href).not.toContain('token');
+    },
+    LOAD_TIMEOUT_MS
+  );
+
+  it.each([
+    ['a #token= link', '/email/unsubscribe#token=frag-unsub', 'frag-unsub'],
+    ['an older ?token= link', '/email/unsubscribe?token=query-unsub&n=42', 'query-unsub'],
+  ])(
+    '/email/unsubscribe loads preferences from %s with the token in a header; no request and no later address carries it',
+    async (_form, href, token) => {
+      const { router } = await openLink(href);
+
+      await waitFor(() =>
+        expect(unsubscribeGet).toHaveBeenCalledWith('/api/email/unsubscribe', {
+          headers: { 'x-unsubscribe-token': token },
+        })
+      );
       await router.load();
       expect(addressAtRequest.some(r => r.what.startsWith('fetch'))).toBe(true);
       expect(addressAtRequest.filter(r => r.href.includes('token'))).toEqual([]);

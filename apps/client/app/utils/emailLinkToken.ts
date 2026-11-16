@@ -1,8 +1,9 @@
 /**
- * Email verification links (/verify-email, /verify-change) carry their single-use token in the URL
- * fragment (`#token=`, built by generateVerificationLink in packages/server-utils), which the browser
- * never sends to a server, so no access log, edge log or Referer header sees it. Links sent before the
- * fragment form keep working: they carry it as `?token=`, read when the fragment has none.
+ * Email links that land on a page with a token (/verify-email, /verify-change, /email/unsubscribe) carry
+ * it in the URL fragment (`#token=`, built by generateVerificationLink in packages/server-utils and by
+ * the unsubscribe footer in apps/workers/src/queueHandlers/emailBatch.ts), which the browser never sends
+ * to a server, so no access log, edge log or Referer header sees it. Links sent before the fragment form
+ * keep working, with no end date: they carry it as `?token=`, read when the fragment has none.
  *
  * captureEmailLinkToken MUST run at module load in router.tsx, before the visit beacon and before
  * createRouter: it moves the token out of the address into this module, so no request the page sends
@@ -15,9 +16,10 @@
  */
 export const VERIFY_EMAIL_PATH = '/verify-email';
 export const VERIFY_EMAIL_CHANGE_PATH = '/verify-change';
-export type EmailLinkPath = typeof VERIFY_EMAIL_PATH | typeof VERIFY_EMAIL_CHANGE_PATH;
+export const EMAIL_UNSUBSCRIBE_PATH = '/email/unsubscribe';
+export type EmailLinkPath = typeof VERIFY_EMAIL_PATH | typeof VERIFY_EMAIL_CHANGE_PATH | typeof EMAIL_UNSUBSCRIBE_PATH;
 
-const EMAIL_LINK_PATHS: readonly string[] = [VERIFY_EMAIL_PATH, VERIFY_EMAIL_CHANGE_PATH];
+const EMAIL_LINK_PATHS: readonly string[] = [VERIFY_EMAIL_PATH, VERIFY_EMAIL_CHANGE_PATH, EMAIL_UNSUBSCRIBE_PATH];
 
 let taken: { path: string; token: string } | undefined;
 
