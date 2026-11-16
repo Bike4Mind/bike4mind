@@ -126,7 +126,7 @@ class AdminAccessReviewRepository implements IAdminAccessReviewRepository {
           .findOneAndUpdate(
             { quarter, decisions: { $elemMatch: { userId: entry.userId, decision: 'confirmed' } } },
             { $set: { 'decisions.$': entry } },
-            { new: true }
+            { new: true, runValidators: true }
           )
           .lean<AdminAccessReviewDocumentShape>();
         if (replaced) return toAdminAccessReviewRecord(replaced);
@@ -136,7 +136,7 @@ class AdminAccessReviewRepository implements IAdminAccessReviewRepository {
         .findOneAndUpdate(
           { quarter, 'decisions.userId': { $ne: entry.userId } },
           { $push: { decisions: entry } },
-          { new: true }
+          { new: true, runValidators: true }
         )
         .lean<AdminAccessReviewDocumentShape>();
       if (pushed) return toAdminAccessReviewRecord(pushed);
@@ -175,7 +175,7 @@ class AdminAccessReviewRepository implements IAdminAccessReviewRepository {
             completedBy: null,
           },
         },
-        { upsert: true }
+        { upsert: true, runValidators: true }
       );
     try {
       await upsert();
