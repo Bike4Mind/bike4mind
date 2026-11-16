@@ -78,6 +78,8 @@ public final class URLSessionBackgroundUploader: BackgroundUploading, @unchecked
     var request = URLRequest(url: url)
     request.httpMethod = "PUT"
     request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+    // Create-only: the URL names a freshly minted key, so the PUT must never overwrite one.
+    request.setValue("*", forHTTPHeaderField: "If-None-Match")
     let task = session.uploadTask(with: request, fromFile: file)
     task.taskDescription = jobID.uuidString
     task.resume()

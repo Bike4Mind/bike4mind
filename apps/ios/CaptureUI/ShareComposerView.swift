@@ -1,4 +1,5 @@
 import B4MKit
+import ImageIO
 import SwiftUI
 
 /// The destination picker, note field and Send button shared by the share extension and the in-app capture
@@ -8,13 +9,15 @@ struct ShareComposerView: View {
   @State var model: ShareComposerModel
   let onFinish: () -> Void
   let onCancel: () -> Void
+  var asksQuestion = false
+  @FocusState private var questionFocused: Bool
   /// Guards `onFinish`: the Done button and the automatic close after "Sent" must not both complete the host.
   @State private var didFinish = false
 
   var body: some View {
     NavigationStack {
       content
-        .navigationTitle("Save to Bike4Mind")
+        .navigationTitle(asksQuestion ? "Point and Ask" : "Save to Bike4Mind")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
           ToolbarItem(placement: .cancellationAction) {
@@ -49,8 +52,12 @@ struct ShareComposerView: View {
 
   private var form: some View {
     Form {
+      if asksQuestion { noteSection }
       Section("Items") {
         ForEach(Array(model.items.enumerated()), id: \.offset) { index, item in
+          if asksQuestion, case .image(let file) = item {
+            CaptureImagePreview(url: file.fileURL)
+          }
           HStack {
             Image(systemName: Self.symbol(for: item)).foregroundStyle(.secondary).accessibilityHidden(true)
             VStack(alignment: .leading) {
@@ -87,11 +94,7 @@ struct ShareComposerView: View {
             .font(.footnote).foregroundStyle(.secondary)
         }
       }
-      Section("Note") {
-        TextField("Add a note (optional)", text: $model.note, axis: .vertical)
-          .lineLimit(1...4)
-          .accessibilityIdentifier("share-note-field")
-      }
+      if !asksQuestion { noteSection }
       if case .failed(let message) = model.phase {
         Section {
           Label(message, systemImage: "exclamationmark.octagon").foregroundStyle(BrandTheme.destructive)
@@ -111,6 +114,16 @@ struct ShareComposerView: View {
     finish()
   }
 
+  private var noteSection: some View {
+    Section(asksQuestion ? "Question" : "Note") {
+      TextField(asksQuestion ? "Ask about this photo" : "Add a note (optional)", text: $model.note, axis: .vertical)
+        .lineLimit(1...4)
+        .focused($questionFocused)
+        .onAppear { if asksQuestion { questionFocused = true } }
+        .accessibilityIdentifier("share-note-field")
+    }
+  }
+
   private func finish() {
     guard !didFinish else { return }
     didFinish = true
@@ -124,6 +137,32 @@ struct ShareComposerView: View {
     case .image: "photo"
     case .pdf: "doc.richtext"
     case .file: "doc"
+    }
+  }
+}
+
+private struct CaptureImagePreview: View {
+  let url: URL
+  @State private var thumbnail: UIImage?
+
+  var body: some View {
+    Group {
+      if let thumbnail {
+        Image(uiImage: thumbnail)
+          .resizable().scaledToFit().frame(maxHeight: 180)
+          .accessibilityLabel("Captured photo")
+          .accessibilityIdentifier("capture-ask-preview")
+      }
+    }
+    .task(id: url) {
+      guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return }
+      let options: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceThumbnailMaxPixelSize: 600,
+      ]
+      guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return }
+      thumbnail = UIImage(cgImage: image)
     }
   }
 }

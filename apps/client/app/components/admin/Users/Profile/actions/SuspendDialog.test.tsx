@@ -212,12 +212,15 @@ describe('SuspendDialog', () => {
     );
     await waitFor(() => expect(fetchCredits).toHaveBeenCalledTimes(2));
 
-    fireEvent.click(screen.getByTestId('suspend-dialog-zero-credits-checkbox'));
-    pickReason();
+    expect(screen.getByTestId('suspend-dialog-zero-credits-checkbox')).toBeDisabled();
+    expect(screen.getByTestId('suspend-dialog-reason-input-preset-0')).toBeDisabled();
     fireEvent.click(confirmButton());
     expect(mocks.update).not.toHaveBeenCalled();
 
     resolveRefetch(320);
+    await waitFor(() => expect(screen.getByTestId('suspend-dialog-zero-credits-checkbox')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('suspend-dialog-zero-credits-checkbox'));
+    pickReason();
     expect(await screen.findByText('Removes 320 credits.')).toBeInTheDocument();
     fireEvent.click(confirmButton());
     fireEvent.click(await screen.findByTestId('undo-toast-undo-btn'));

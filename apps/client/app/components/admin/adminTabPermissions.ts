@@ -27,8 +27,8 @@ export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, 
 
   // settings:manage only, not support:read: a support reader would 403 on the scoped overrides,
   // secrets, release-note and prompt history reads these pages load. General settings locks the
-  // FULL_ADMIN_SETTING_KEYS fields for delegates. Models, Secrets rotation and Tutorials stay
-  // full-admin: their writes check for a full admin on purpose.
+  // FULL_ADMIN_SETTING_KEYS fields for delegates. Secrets rotation and Tutorials stay full-admin:
+  // their writes check for a full admin on purpose.
   [AdminTab.AdminSettings]: 'settings:manage',
   [AdminTab.SystemPrompts]: 'settings:manage',
   [AdminTab.SystemSecrets]: 'settings:manage',
@@ -50,6 +50,10 @@ export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, 
   // Read-only for support:read: the roles routes' GET declares it. Creating, editing and deleting
   // are full-admin only, so the tab hides those controls from a delegate.
   [AdminTab.Roles]: 'support:read',
+
+  // Reads declare support:read; writes need a full admin and stay disabled for a delegate. The lifecycle queue and
+  // Settings section need settings:manage as well and gate themselves.
+  [AdminTab.Models]: 'support:read',
 
   // View-only for support:read; replay actions gate on settings:manage inside the tab.
   [AdminTab.DlqReplay]: 'support:read',
