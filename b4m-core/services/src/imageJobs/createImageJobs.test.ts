@@ -440,8 +440,8 @@ describe('createImageJobs', () => {
       const first = await run(deps, validRequest, { count: 2, idempotencyKey: 'k1' });
       const second = await run(deps, validRequest, { count: 2, idempotencyKey: 'k1' });
       if (!first.ok || !second.ok) throw new Error('expected both calls to succeed');
-      expect(first.created).toBe(true);
-      expect(second.created).toBe(false);
+      expect(first).toMatchObject({ created: true, createdCount: 2 });
+      expect(second).toMatchObject({ created: false, createdCount: 0 });
       expect(second.groupId).toBe(first.groupId);
       expect(second.jobs.map(job => job.id)).toEqual(first.jobs.map(job => job.id));
       expect(holdCredits).toHaveBeenCalledTimes(2);

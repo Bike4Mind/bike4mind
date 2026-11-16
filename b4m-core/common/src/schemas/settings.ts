@@ -895,9 +895,9 @@ export const OrchestrationDefaultsSchema = z.object({
     // instant without re-polluting the cached system prefix with a volatile
     // minute-precision date block.
     'current_datetime',
-    // Storage-backed artifact generation, opted into for agent mode: the agent
-    // writes these to generated-content storage, not user data, so they are safe
-    // to expose.
+    // Storage-backed artifact generation, opted into for agent mode. These only add
+    // new output (generated-content storage, or the user's Files for image jobs) and
+    // never modify existing user data, so they are safe to expose.
     // Start capped image jobs when the run gets an image job config (agentImagesPerRun).
     'image_generation',
     'edit_image',

@@ -85,6 +85,15 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
     return { apiKey, logger: deps.logger, now: () => deps.now(), signal };
   };
 
+  // Never throws, like recordGeneratedImages: the badge must not fail a paid, delivered image.
+  const countNotebookImage = async (questId: string) => {
+    try {
+      await deps.countNotebookImage?.(questId);
+    } catch (error) {
+      deps.logger.warn('[imageJobs] failed to count the image on its notebook', { questId, error });
+    }
+  };
+
   const noApiKey = (job: ImageJob): ImageStepResult =>
     fail('provider_error', `No API key configured for ${job.payload.providerId}`);
 
@@ -344,6 +353,8 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
       const charged = job.state === 'succeeded' || (job.state === 'blocked' && job.payload.billedBlock === true);
       if (charged) await settle(job);
       else await releaseJobHold(job, deps);
+      // After the settle, so a retried terminal (the settle threw) counts once; the engine claims terminal handling once.
+      if (job.state === 'succeeded' && job.payload.output && job.questId) await countNotebookImage(job.questId);
     },
   };
 }

@@ -1,23 +1,15 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ChatImageJob } from '@client/app/hooks/data/imageJobs';
 
 const h = vi.hoisted(() => ({
-  query: {} as { data?: ChatImageJob; isPending: boolean },
-  file: { data: undefined as { fileUrl?: string } | undefined },
-  fileId: null as string | null,
+  query: {} as { data?: ChatImageJob; isPending: boolean; refetch: () => Promise<unknown> },
 }));
 
 vi.mock('@client/app/hooks/data/imageJobs', () => ({ useImageJob: () => h.query }));
-vi.mock('@client/app/hooks/data/fabFileQueries', () => ({
-  useGetFabFile: (id: string | null) => {
-    h.fileId = id;
-    return h.file;
-  },
-}));
 
 import ImageJobCard from './ImageJobCard';
 
@@ -48,18 +40,19 @@ const job = (overrides: Partial<ChatImageJob> = {}): ChatImageJob => ({
 });
 
 const appTheme = extendTheme({ ...getThemeConfig() });
-const show = (data: ChatImageJob | undefined, isPending = false) => {
-  h.query = { data, isPending };
-  render(
+const refetch = vi.fn(async () => undefined);
+const ui = (data: ChatImageJob | undefined, isPending = false) => {
+  h.query = { data, isPending, refetch };
+  return (
     <CssVarsProvider theme={appTheme}>
       <ImageJobCard jobId="img-1" />
     </CssVarsProvider>
   );
 };
+const show = (data: ChatImageJob | undefined, isPending = false) => render(ui(data, isPending));
 
 beforeEach(() => {
-  h.file = { data: undefined };
-  h.fileId = null;
+  refetch.mockClear();
 });
 
 describe('ImageJobCard', () => {
@@ -84,34 +77,41 @@ describe('ImageJobCard', () => {
     expect(screen.queryByTestId('image-job-card-image')).toBeNull();
   });
 
-  it('keeps showing progress when succeeded but the output has not arrived', () => {
+  it('keeps showing progress, and a Finishing chip, when succeeded but the output has not arrived', () => {
     show(job({ state: 'succeeded' }));
     expect(screen.getByTestId('image-job-card-progress').textContent).toContain('Finishing');
+    expect(screen.getByTestId('image-job-card-state').textContent).toBe('Finishing');
   });
 
-  it('renders the signed url with the prompt as alt text', () => {
+  it('shows a Checking chip, not Ready, while the output is pending its scan', () => {
+    show(job({ state: 'succeeded', output: output({ availability: 'pending_scan', url: null }) }));
+    expect(screen.getByTestId('image-job-card-progress').textContent).toContain('Checking');
+    expect(screen.getByTestId('image-job-card-state').textContent).toBe('Checking');
+  });
+
+  it('renders the signed url with the prompt as alt text and a Ready chip', () => {
     show(job({ state: 'succeeded', output: output() }));
     const image = screen.getByTestId('image-job-card-image');
     expect(image.getAttribute('src')).toBe('https://signed.example/img.png');
     expect(image.getAttribute('alt')).toBe('a red fox');
-    expect(h.fileId).toBeNull();
+    expect(screen.getByTestId('image-job-card-state').textContent).toBe('Ready');
+    expect(screen.queryByTestId('image-job-card-download-btn')).toBeNull();
   });
 
-  it('falls back to the file record when the url is missing', () => {
-    h.file = { data: { fileUrl: 'https://files.example/fox.png' } };
-    show(job({ state: 'succeeded', output: output({ url: null }) }));
-    expect(h.fileId).toBe('file-1');
-    expect(screen.getByTestId('image-job-card-image').getAttribute('src')).toBe('https://files.example/fox.png');
-  });
+  it('keeps the shown url across a re-sign and takes the new one only after a load error', () => {
+    const { rerender } = show(job({ state: 'succeeded', output: output() }));
+    rerender(ui(job({ state: 'succeeded', output: output({ url: 'https://signed.example/img.png?v=2' }) })));
+    const image = screen.getByTestId('image-job-card-image');
+    expect(image.getAttribute('src')).toBe('https://signed.example/img.png');
 
-  it('shows a spinner while the file fallback resolves', () => {
-    show(job({ state: 'succeeded', output: output({ url: null }) }));
-    expect(screen.getByTestId('image-job-card-image-loading')).toBeTruthy();
+    fireEvent.error(image);
+    expect(screen.getByTestId('image-job-card-image').getAttribute('src')).toBe('https://signed.example/img.png?v=2');
   });
 
   it('notes an image that is no longer available', () => {
     show(job({ state: 'succeeded', output: output({ availability: 'unavailable', url: null }) }));
     expect(screen.getByTestId('image-job-card-unavailable-note')).toBeTruthy();
+    expect(screen.getByTestId('image-job-card-state').textContent).toBe('Unavailable');
   });
 
   it('shows the public error for a failed job', () => {

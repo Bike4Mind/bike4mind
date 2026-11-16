@@ -4353,8 +4353,6 @@ export class ChatCompletionProcess {
       // default so the nudge can never be silently stripped.
       const helpCenterContent = getSettingsValue('HelpCenterPrompt', defaultAdminSettings, HELP_CENTER_PROMPT);
 
-      // Extracted so the overflow-guard safety net below can rebuild with a trimmed
-      // history without duplicating this (long, order-sensitive) system/context block.
       const recentImageJobFiles = await this.resolveRecentImageJobFiles({
         recentImageJobs: cacheInfo.recentImageJobs,
         resolver: imageJobFilesResolver,
@@ -4362,6 +4360,8 @@ export class ChatCompletionProcess {
         logger,
       });
 
+      // Extracted so the overflow-guard safety net below can rebuild with a trimmed
+      // history without duplicating this (long, order-sensitive) system/context block.
       const taggedContextMessages = buildTaggedContextMessages({
         dateContext: [dateTimeContext], // Always provide current date/time awareness
         extraContext: extraContextMessages, // Extra context messages from external sources, at the top

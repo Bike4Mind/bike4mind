@@ -1150,8 +1150,10 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       // Include pinned: IChatHistoryItemDocument types it, so omitting it hands every caller undefined.
       // Include status so history can skip a prompt stopped before any reply (see isStoppedBeforeReply
       // in @bike4mind/utils).
+      // Include generationJobs so the recent-images note can see job-made images (recentImageJobs in
+      // @bike4mind/utils).
       .select(
-        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob suggestedChoices pinned status _id'
+        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob suggestedChoices pinned status generationJobs _id'
       )
       .sort({ timestamp: -1 })
       .limit(limit)

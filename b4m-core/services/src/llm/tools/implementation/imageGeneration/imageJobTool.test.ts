@@ -91,6 +91,22 @@ describe('buildGenerateJobRequest', () => {
     });
     expect(fromTool.outputFormat).toBe('webp');
   });
+
+  it("sends a BFL selection's width/height as the size, and drops a pair the model cannot take", () => {
+    const fitted = buildGenerateJobRequest(
+      selectionOf({ model: ImageModels.FLUX_PRO, size: '1024x768', width: 1024, height: 576 }),
+      'p',
+      {}
+    );
+    expect(fitted.size).toBe('1024x576');
+
+    const outOfBounds = buildGenerateJobRequest(
+      selectionOf({ model: ImageModels.FLUX_PRO, width: 4096, height: 4096 }),
+      'p',
+      {}
+    );
+    expect(outOfBounds.size).toBeUndefined();
+  });
 });
 
 describe('buildEditJobRequest', () => {
@@ -243,20 +259,18 @@ describe('edit_image on the job engine', () => {
     expect(createJobs).not.toHaveBeenCalled();
   });
 
-  it('falls back to the in-process edit for a file the caller can open but does not own', async () => {
-    const { context, statusUpdate } = makeContext();
-    const notOwned = {
-      ok: false,
-      status: 404,
-      code: 'input_image_not_found',
-      message: 'not found',
-    } as unknown as ImageToolJobsResult;
-    const { config, createJobs } = jobConfig({ model: ImageModels.GPT_IMAGE_1_5 }, notOwned);
+  it.each(['input_image_not_found', 'unsupported_input_image'])(
+    'falls back to the in-process edit on %s',
+    async code => {
+      const { context, statusUpdate } = makeContext();
+      const notOwned = { ok: false, status: 422, code, message: 'refused' } as unknown as ImageToolJobsResult;
+      const { config, createJobs } = jobConfig({ model: ImageModels.GPT_IMAGE_1_5 }, notOwned);
 
-    // The in-process path then runs against this bare context and fails on its own; only the hand-off matters here.
-    await edit(context, config)({ image: FILE_ID, prompt: 'make it blue' }).catch(() => undefined);
+      // The in-process path then runs against this bare context and fails on its own; only the hand-off matters here.
+      await edit(context, config)({ image: FILE_ID, prompt: 'make it blue' }).catch(() => undefined);
 
-    expect(createJobs).toHaveBeenCalledTimes(1);
-    expect(statusUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ generationJobs: expect.anything() }));
-  });
+      expect(createJobs).toHaveBeenCalledTimes(1);
+      expect(statusUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ generationJobs: expect.anything() }));
+    }
+  );
 });

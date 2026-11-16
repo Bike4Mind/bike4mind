@@ -73,6 +73,11 @@ export type ImageJobDeps = {
     /** `refusal` for a block that was billed: spend with no image delivered. */
     status: Extract<UsageEventStatus, 'ok' | 'refusal'>;
   }): Promise<void>;
+  /**
+   * Adds one image to the notebook (session) of a chat-made job's quest: the imageCount sidebar badge the in-process
+   * tools bump through recordGeneratedImages. Unset where nothing reads the badge.
+   */
+  countNotebookImage?(questId: string): Promise<void>;
   now(): Date;
   logger: Logger;
 };
@@ -112,7 +117,14 @@ export type CreateImageJobsErrorCode =
   | 'idempotency_key_reused';
 
 export type CreateImageJobsResult =
-  | { ok: true; groupId: string; jobs: ImageJob[]; created: boolean }
+  | {
+      ok: true;
+      groupId: string;
+      jobs: ImageJob[];
+      created: boolean;
+      /** Jobs this call created; fewer than jobs.length when part of the batch was an idempotent replay. */
+      createdCount?: number;
+    }
   | {
       ok: false;
       status: 400 | 402 | 422;

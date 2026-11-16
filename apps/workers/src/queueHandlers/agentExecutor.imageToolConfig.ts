@@ -11,6 +11,7 @@ import type { GenerateImageToolCall } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import type { ImageToolConfig, ImageToolJobsResult } from '@bike4mind/services/llm/tools';
 import { createImageJobs, type CreateImageJobsInput } from '@bike4mind/services/imageJobs';
+import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
 import { getCreateImageJobsDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 import {
   limitJobsPerRun,
@@ -42,6 +43,11 @@ export type BuildAgentImageToolConfigInput = {
   toolEnabled: boolean;
 };
 
+// createImageJobs asserts model admission (createModelAdmission) before it saves any job; its later failures are
+// plain Errors.
+const isAdmissionRefusal = (error: unknown): boolean =>
+  error instanceof ForbiddenError || error instanceof BadRequestError;
+
 const imageLimitRefusal = (limit: number): ImageToolJobsResult => ({
   ok: false,
   status: 403,
@@ -72,6 +78,7 @@ export async function buildAgentImageToolConfig(
         releaseNoun: 'image',
         refusal: imageLimitRefusal(limit),
         slotsFor: input => input.count,
+        isThrownBeforePersist: isAdmissionRefusal,
       }),
     };
   } catch (error) {

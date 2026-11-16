@@ -17,7 +17,7 @@ export type AgentGenerationSlots = {
 
 export type AgentRunLimitCaller = { userId: string; organizationId?: string };
 
-type CreateJobResult = { ok: true; created: boolean } | { ok: false };
+type CreateJobResult = { ok: true; created: boolean; createdCount?: number } | { ok: false };
 
 type LimitJobsPerRunOptions<TInput, TResult> = {
   questId: string;
@@ -32,21 +32,35 @@ type LimitJobsPerRunOptions<TInput, TResult> = {
   refusal: TResult;
   /** Slots one call takes, for a call that starts a batch (one image job per slot). Defaults to 1. */
   slotsFor?: (input: TInput) => number;
+  /** A throw createJob is known to raise before persisting anything (e.g. a model-admission refusal). */
+  isThrownBeforePersist?: (error: unknown) => boolean;
 };
 
-const startedNewJob = (result: CreateJobResult): boolean => result.ok && result.created;
+/** Slots a returned result keeps: one per newly created job, so a replayed job's slot goes back. */
+const slotsKept = (result: CreateJobResult, claimed: number): number =>
+  result.ok && result.created ? Math.min(claimed, result.createdCount ?? claimed) : 0;
 
 /**
  * Wraps `createJob` so a call past the cap returns `refusal` instead of starting a job. A call takes all of its
- * slots or none: a batch that does not fit gives back what it claimed and starts nothing. Slots are given back only
- * when createJob RETURNED without starting a job: a refusal, or an idempotent replay of a job this run already
- * started (`created: false`). A throw keeps them, because createJob can throw after the job is persisted (a failed
- * enqueue whose cleanup also failed), and so can a Lambda killed mid-call: both err toward one job fewer, never one
- * too many.
+ * slots or none: a batch that does not fit gives back what it claimed and starts nothing. When createJob RETURNS,
+ * slots for jobs it did not create go back: a refusal, or an idempotent replay of a job this run already started
+ * (`created: false`, or the replayed part of a mixed batch per `createdCount`). A throw keeps them unless
+ * `isThrownBeforePersist` vouches for it, because createJob can throw after the job is persisted (a failed enqueue
+ * whose cleanup also failed), and so can a Lambda killed mid-call: both err toward one job fewer, never one too many.
  */
 export function limitJobsPerRun<TInput, TResult extends CreateJobResult>(
   createJob: (input: TInput) => Promise<TResult>,
-  { questId, limit, slots, logger, logTag, releaseNoun, refusal, slotsFor }: LimitJobsPerRunOptions<TInput, TResult>
+  {
+    questId,
+    limit,
+    slots,
+    logger,
+    logTag,
+    releaseNoun,
+    refusal,
+    slotsFor,
+    isThrownBeforePersist,
+  }: LimitJobsPerRunOptions<TInput, TResult>
 ): (input: TInput) => Promise<TResult> {
   const release = async (count: number) => {
     for (let index = 0; index < count; index++) {
@@ -66,8 +80,14 @@ export function limitJobsPerRun<TInput, TResult extends CreateJobResult>(
       await release(claimed);
       return refusal;
     }
-    const result = await createJob(input);
-    if (!startedNewJob(result)) await release(claimed);
+    let result: TResult;
+    try {
+      result = await createJob(input);
+    } catch (error) {
+      if (isThrownBeforePersist?.(error)) await release(claimed);
+      throw error;
+    }
+    await release(claimed - slotsKept(result, claimed));
     return result;
   };
 }

@@ -124,7 +124,13 @@ export async function createImageJobs(
   if (reused) return reused;
   const replayed = replays.flatMap(replay => (replay?.ok ? [replay.job] : []));
   if (replayed.length === input.count) {
-    return { ok: true, groupId: replayed[0].payload.groupId ?? replayed[0].id, jobs: replayed, created: false };
+    return {
+      ok: true,
+      groupId: replayed[0].payload.groupId ?? replayed[0].id,
+      jobs: replayed,
+      created: false,
+      createdCount: 0,
+    };
   }
 
   await deps.assertModelAdmission(input.user.id, request.model, input.user.adminRoleWithheld);
@@ -166,7 +172,13 @@ export async function createImageJobs(
     const job = replay?.ok ? replay.job : fresh.next().value;
     return job ? [job] : [];
   });
-  return { ok: true, groupId: jobs[0]?.payload.groupId ?? groupId, jobs, created: true };
+  return {
+    ok: true,
+    groupId: jobs[0]?.payload.groupId ?? groupId,
+    jobs,
+    created: true,
+    createdCount: created.jobs.length,
+  };
 }
 
 type HoldParams = { enforceCredits: boolean; user: CreateImageJobsInput['user']; requiredCredits: number };

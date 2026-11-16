@@ -110,6 +110,12 @@ function dropUnsupportedSelectionFields(draft: ImageJobRequestDraft, sources: Fi
   return kept;
 }
 
+/** The chat settings modal stores a BFL pick as width/height; it outranks the selection's size preset. */
+const selectionSize = (selection: GenerateImageToolCall | undefined): string | null | undefined =>
+  selection?.width !== undefined && selection.height !== undefined
+    ? `${selection.width}x${selection.height}`
+    : selection?.size;
+
 /**
  * The request fields both modes share. The quality goes through the billed-tier mapping (standard -> medium,
  * hd -> high, an extended tier clamped) so a legacy alias is not refused by the catalog check.
@@ -121,7 +127,7 @@ function buildDraft(
 ): ImageJobRequestDraft {
   const sources: FieldSources = {};
   const draft: ImageJobRequestDraft = { ...base };
-  const size = pick(isPriceableImageSize(args.size) ? args.size : undefined, selection?.size);
+  const size = pick(isPriceableImageSize(args.size) ? args.size : undefined, selectionSize(selection));
   if (size) {
     draft.size = size.value;
     sources.size = size.from;

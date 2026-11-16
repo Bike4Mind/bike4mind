@@ -392,4 +392,43 @@ describe('GenerationUpdatesListener chat image jobs', () => {
       refetchType: 'all',
     });
   });
+
+  it('leaves an uncached card alone on a terminal frame', async () => {
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+    await send(frame({ id: 'img-uncached', kind: 'image', state: 'succeeded' }));
+    expect(queryClient.getQueryData(chatImageJobKeys.detail('img-uncached'))).toBeUndefined();
+    expect(invalidate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: chatImageJobKeys.detail('img-uncached') })
+    );
+  });
+
+  it('on reconnect refetches a running card and a succeeded one still waiting for its output', async () => {
+    queryClient.setQueryData(chatImageJobKeys.detail('img-live'), { ...chatJob('running'), id: 'img-live' });
+    queryClient.setQueryData(chatImageJobKeys.detail('img-no-output'), {
+      ...chatJob('succeeded'),
+      id: 'img-no-output',
+      output: null,
+    });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const tree = () => (
+      <QueryClientProvider client={queryClient}>
+        <GenerationUpdatesListener />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(tree());
+
+    h.readyState = 3;
+    rerender(tree());
+    h.readyState = 1;
+    rerender(tree());
+
+    for (const id of ['img-live', 'img-no-output']) {
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: chatImageJobKeys.detail(id),
+        exact: true,
+        refetchType: 'all',
+      });
+    }
+  });
 });

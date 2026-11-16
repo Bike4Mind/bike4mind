@@ -157,6 +157,55 @@ describe('image job handler through the real engine', () => {
     expect(vi.mocked(settleCreditHold).mock.calls[0][2]).toMatchObject({ sessionId: 'q-1', questId: 'q-1' });
   });
 
+  it("counts a delivered chat-made image once on its notebook's badge", async () => {
+    const countNotebookImage = vi.fn(async () => undefined);
+    const t = setup(
+      vi.fn<Generate>(async () => succeeded),
+      { countNotebookImage }
+    );
+    const created = await createImageJobs(
+      { user, request: request(), count: 1, source: 'agent', questId: 'q-1' },
+      t.deps
+    );
+    await t.runToCompletion();
+    expect(t.jobOf(created).state).toBe('succeeded');
+    expect(countNotebookImage).toHaveBeenCalledTimes(1);
+    expect(countNotebookImage).toHaveBeenCalledWith('q-1');
+  });
+
+  it('counts nothing for a Studio job or a blocked chat job, and a failed count never fails the job', async () => {
+    const countNotebookImage = vi.fn(async () => undefined);
+    const studio = setup(
+      vi.fn<Generate>(async () => succeeded),
+      { countNotebookImage }
+    );
+    await create(studio);
+    await studio.runToCompletion();
+
+    const blocked = setup(
+      vi.fn<Generate>(async () => succeeded),
+      { countNotebookImage, moderate: vi.fn(async () => ({ blocked: true as const, reason: 'no' })) }
+    );
+    await createImageJobs({ user, request: request(), count: 1, source: 'agent', questId: 'q-1' }, blocked.deps);
+    await blocked.runToCompletion();
+    expect(countNotebookImage).not.toHaveBeenCalled();
+
+    const throwing = setup(
+      vi.fn<Generate>(async () => succeeded),
+      {
+        countNotebookImage: vi.fn(async () => {
+          throw new Error('db down');
+        }),
+      }
+    );
+    const created = await createImageJobs(
+      { user, request: request(), count: 1, source: 'agent', questId: 'q-1' },
+      throwing.deps
+    );
+    await throwing.runToCompletion();
+    expect(throwing.jobOf(created).state).toBe('succeeded');
+  });
+
   it('generates, moderates, saves to Files and settles the hold', async () => {
     const generate = vi.fn<Generate>(async () => succeeded);
     const t = setup(generate);

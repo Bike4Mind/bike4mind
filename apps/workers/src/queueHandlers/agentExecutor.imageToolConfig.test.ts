@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
 import type { ImageToolJobsResult } from '@bike4mind/services/llm/tools';
 import type { CreateImageJobsInput, ImageJob } from '@bike4mind/services/imageJobs';
+import { ForbiddenError } from '@bike4mind/utils';
 
 // The production deps factory pulls in the DB and job wiring; these tests drive the pure half.
 vi.mock('@bike4mind/database', () => ({
@@ -102,6 +103,26 @@ describe('buildAgentImageToolConfig', () => {
     const replaying = await build(async () => ({ ...created(2), created: false }), 4);
     await replaying?.createJobs(inputOf(2));
     expect(slots.claimed).toBe(0);
+  });
+
+  it('keeps one slot per newly created job when part of the batch was replayed', async () => {
+    const config = await build(async () => ({ ...created(3), createdCount: 1 }), 5);
+    await config?.createJobs(inputOf(3));
+    expect(slots.claimed).toBe(1);
+  });
+
+  it('gives the slots back when model admission refuses, and keeps them for any other throw', async () => {
+    const refusing = await build(async () => {
+      throw new ForbiddenError('requires a paid plan');
+    }, 5);
+    await expect(refusing?.createJobs(inputOf(2))).rejects.toThrow('requires a paid plan');
+    expect(slots.claimed).toBe(0);
+
+    const failing = await build(async () => {
+      throw new Error('enqueue failed');
+    }, 5);
+    await expect(failing?.createJobs(inputOf(2))).rejects.toThrow('enqueue failed');
+    expect(slots.claimed).toBe(2);
   });
 
   it.each([

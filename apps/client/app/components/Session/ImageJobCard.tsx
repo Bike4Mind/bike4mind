@@ -1,8 +1,17 @@
-import { AspectRatio, Box, Card, Chip, CircularProgress, IconButton, Link, Stack, Typography } from '@mui/joy';
-import DownloadIcon from '@mui/icons-material/Download';
+import { useCallback } from 'react';
+import {
+  AspectRatio,
+  Box,
+  Card,
+  Chip,
+  CircularProgress,
+  Link,
+  Stack,
+  Typography,
+  type ColorPaletteProp,
+} from '@mui/joy';
 import type { GenerationJobState } from '@bike4mind/common';
-import { useGetFabFile } from '@client/app/hooks/data/fabFileQueries';
-import { STATE_COLORS } from '@client/app/hooks/data/generationJobCard';
+import { STATE_COLORS, useStablePlayerSrc } from '@client/app/hooks/data/generationJobCard';
 import { isTerminalGenerationState } from '@client/app/hooks/data/generationJobPolling';
 import { useImageJob, type ChatImageJob } from '@client/app/hooks/data/imageJobs';
 
@@ -23,48 +32,49 @@ const FAILURE_FALLBACK: Partial<Record<GenerationJobState, string>> = {
   cancelled: 'The generation was cancelled.',
 };
 
-type ImageOutput = NonNullable<ChatImageJob['output']>;
-
-// Saved images are re-signed through their file record, so a bare url that expired or never arrived still renders.
-const useImageSrc = (output: ImageOutput | null): string | null => {
-  const needsFile = !!output && !output.url && !!output.file_id;
-  const file = useGetFabFile(needsFile ? output.file_id : null);
-  return output?.url ?? file.data?.fileUrl ?? null;
+/** The chip names what the body shows: a succeeded job is "Ready" only once its image can be shown. */
+const chipFor = (job: ChatImageJob): { label: string; color: ColorPaletteProp } => {
+  if (job.state !== 'succeeded' || job.output?.availability === 'ready') {
+    return { label: STATE_LABELS[job.state], color: STATE_COLORS[job.state] };
+  }
+  if (job.output?.availability === 'unavailable') return { label: 'Unavailable', color: 'neutral' };
+  return { label: job.output ? 'Checking' : 'Finishing', color: 'primary' };
 };
 
-const ImageResult = ({ job, output }: { job: ChatImageJob; output: ImageOutput }) => {
-  const src = useImageSrc(output);
-  if (!src) return <CircularProgress size="sm" data-testid="image-job-card-image-loading" />;
-  return (
-    <>
-      <Link
-        href={src}
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label="Open image full size"
-        sx={{ display: 'contents' }}
-      >
-        <img src={src} alt={job.prompt} loading="lazy" data-testid="image-job-card-image" />
-      </Link>
-      <IconButton
-        component="a"
-        href={src}
-        download={`image-${job.id}`}
-        size="sm"
-        variant="soft"
-        aria-label="Download image"
-        data-testid="image-job-card-download-btn"
-        sx={{ position: 'absolute', right: 8, bottom: 8 }}
-      >
-        <DownloadIcon />
-      </IconButton>
-    </>
-  );
-};
+const ImageResult = ({
+  job,
+  src,
+  onError,
+  onLoaded,
+}: {
+  job: ChatImageJob;
+  src: string;
+  onError: () => void;
+  onLoaded: () => void;
+}) => (
+  <Link
+    href={src}
+    target="_blank"
+    rel="noopener noreferrer"
+    aria-label="Open image full size"
+    sx={{ display: 'contents' }}
+  >
+    <img
+      src={src}
+      alt={job.prompt}
+      loading="lazy"
+      onError={onError}
+      onLoad={onLoaded}
+      data-testid="image-job-card-image"
+    />
+  </Link>
+);
 
-const JobBody = ({ job }: { job: ChatImageJob }) => {
-  if (job.state === 'succeeded' && job.output?.availability === 'ready') {
-    return <ImageResult job={job} output={job.output} />;
+type Player = ReturnType<typeof useStablePlayerSrc>;
+
+const JobBody = ({ job, player }: { job: ChatImageJob; player: Player }) => {
+  if (job.state === 'succeeded' && job.output?.availability === 'ready' && player.src) {
+    return <ImageResult job={job} src={player.src} onError={player.onError} onLoaded={player.onLoaded} />;
   }
   if (job.state === 'succeeded' && job.output?.availability === 'unavailable') {
     return (
@@ -77,7 +87,7 @@ const JobBody = ({ job }: { job: ChatImageJob }) => {
     return (
       <Stack alignItems="center" gap={1} data-testid="image-job-card-progress">
         <CircularProgress size="sm" />
-        <Typography level="body-sm">{job.state === 'succeeded' ? 'Finishing' : STATE_LABELS[job.state]}</Typography>
+        <Typography level="body-sm">{chipFor(job).label}</Typography>
       </Stack>
     );
   }
@@ -90,7 +100,11 @@ const JobBody = ({ job }: { job: ChatImageJob }) => {
 
 /** One image a chat tool call asked for: progress while it renders, the image once saved, the public error if it failed. */
 const ImageJobCard = ({ jobId }: { jobId: string }) => {
-  const { data: job, isPending } = useImageJob(jobId);
+  const { data: job, isPending, refetch } = useImageJob(jobId);
+  const refresh = useCallback(() => void refetch(), [refetch]);
+  // Kept across re-signs so a fresh URL does not reload a shown image; the newest one is taken only after an error.
+  const readyUrl = job?.state === 'succeeded' && job.output?.availability === 'ready' ? job.output.url : null;
+  const player = useStablePlayerSrc(readyUrl, refresh);
 
   if (isPending) {
     return (
@@ -109,16 +123,17 @@ const ImageJobCard = ({ jobId }: { jobId: string }) => {
     );
   }
 
+  const chip = chipFor(job);
   return (
     <Card variant="outlined" data-testid="image-job-card" data-job-id={job.id} data-state={job.state} sx={{ gap: 1 }}>
-      <AspectRatio ratio="1" objectFit="contain" variant="soft" sx={{ position: 'relative' }}>
+      <AspectRatio ratio="1" objectFit="contain" variant="soft">
         <Box>
-          <JobBody job={job} />
+          <JobBody job={job} player={player} />
         </Box>
       </AspectRatio>
       <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
-        <Chip size="sm" variant="soft" color={STATE_COLORS[job.state]} data-testid="image-job-card-state">
-          {STATE_LABELS[job.state]}
+        <Chip size="sm" variant="soft" color={chip.color} data-testid="image-job-card-state">
+          {chip.label}
         </Chip>
         <Chip size="sm" variant="outlined">
           {job.model}

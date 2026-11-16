@@ -49,6 +49,14 @@ import {
   isImageJobToolConfig,
   reportImageJobs,
 } from '../imageGeneration/imageJobTool';
+import type { CreateImageJobsErrorCode } from '../../../../imageJobs/types';
+
+// A refused input the in-process edit can still take: a file the caller can open but does not own, or a format
+// the job path refuses.
+const IN_PROCESS_EDIT_FALLBACK_CODES: ReadonlySet<string> = new Set<CreateImageJobsErrorCode>([
+  'input_image_not_found',
+  'unsupported_input_image',
+]);
 
 async function imageUrlToBase64(imageUrl: string, trustConfiguredStorageOrigin = false): Promise<string> {
   try {
@@ -349,7 +357,7 @@ export const imageEditTool: ToolDefinition = {
       }
 
       // A job reads its inputs as the caller's own files, so only file ids take this path. A URL or a generated
-      // image key (older turns) still edits in-process, and so does a file the caller can open but does not own.
+      // image key (older turns) still edits in-process, and so does an input IN_PROCESS_EDIT_FALLBACK_CODES covers.
       if (isImageJobToolConfig(config) && isObjectIdShaped(toolImage) && (!toolMask || isObjectIdShaped(toolMask))) {
         const request = buildEditJobRequest(
           imageConfig,
@@ -360,7 +368,7 @@ export const imageEditTool: ToolDefinition = {
         // Billing is the job's own credit hold, so this path never calls context.onStart/onFinish.
         const result = await createImageJobsForTool(context, config, 'edit_image', request, 1);
         if (typeof result === 'string') return result;
-        if (result.ok || result.code !== 'input_image_not_found') {
+        if (result.ok || !IN_PROCESS_EDIT_FALLBACK_CODES.has(result.code)) {
           return reportImageJobs(context, config, 'Image edit', result);
         }
       }
