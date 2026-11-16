@@ -22,6 +22,8 @@ import {
   generatedCdnPath,
 } from '../services/cdn/invalidateRouterCdn';
 import { NOTEBOOK_DOWNLOAD_KEY_PREFIX } from '../notebooks/downloadCopyKeys';
+import { TEXT_EDIT_BACKUP_PREFIX } from '../utils/textEditBackupPrefix';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { Resource } from 'sst';
 import { z } from 'zod';
 
@@ -270,11 +272,39 @@ export async function purgeAccountFiles(userId: string, options: PurgeOptions): 
     await cdn.flush();
   }
   await purgeImportArchives(userId, options.assertLease);
-  // Notebook download copies: the current exports/ location plus the legacy one no lifecycle rule reaps.
-  // Safe only while durable curated files stay at curated-notebooks/<uuid> (fabFileService create.ts)
-  // and curated-notebooks/jobs/<sha> (workers queueHandlers/notebookCuration.ts), never under a user id.
-  for (const prefix of ['exports/account-data', NOTEBOOK_DOWNLOAD_KEY_PREFIX, 'curated-notebooks']) {
+  const owner = encodeURIComponent(userId);
+  const filesPrefixes = [
+    `exports/account-data/${owner}/`,
+    // Notebook download copies: the current exports/ location plus the legacy one no lifecycle rule reaps.
+    // Safe only while durable curated files stay at curated-notebooks/<uuid> (fabFileService create.ts)
+    // and curated-notebooks/jobs/<sha> (workers queueHandlers/notebookCuration.ts), never under a user id.
+    `${NOTEBOOK_DOWNLOAD_KEY_PREFIX}/${owner}/`,
+    `curated-notebooks/${owner}/`,
+    `${TEXT_EDIT_BACKUP_PREFIX}${owner}/`,
+    // Must match SHARED_EMAIL_FILES_PREFIX in apps/client/server/utils/mailer/emailAttachments.ts.
+    `shared-email-files/${owner}/`,
+  ];
+  for (const prefix of filesPrefixes) {
     await options.assertLease();
-    await getFilesStorage().deletePrefixPermanently(`${prefix}/${encodeURIComponent(userId)}/`);
+    await getFilesStorage().deletePrefixPermanently(prefix);
   }
+  await purgeLegacyEditBackups(owner, options);
+  await options.assertLease();
+  await new S3Storage(Resource.historyImportBucket.name).deletePrefixPermanently(`notebooks/${owner}/`);
+}
+
+/** Pre-edit copies written before `text-edit-backups/` existed; no lifecycle rule reaches them. */
+async function purgeLegacyEditBackups(owner: string, { logger, assertLease }: PurgeOptions): Promise<void> {
+  const prefix = `files/${owner}/backups/`;
+  await assertLease();
+  // No row is created for a backup key, so a surviving (organization or moderation-held) file
+  // pointing under it means the key layout changed; leave its bytes rather than guess.
+  const referenced = await FabFile.exists({ filePath: { $regex: `^${escapeRegex(prefix)}` } }).setOptions({
+    includeDeleted: true,
+  });
+  if (referenced) {
+    logger.warn('Account purge kept legacy edit backups a surviving file references', { prefix });
+    return;
+  }
+  await getFilesStorage().deletePrefixPermanently(prefix);
 }

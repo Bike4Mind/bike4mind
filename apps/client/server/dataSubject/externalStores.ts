@@ -56,17 +56,15 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
     bucket: 'fabFileBucket',
     holds: 'Pre-edit copies of file content taken before an AI text edit',
     locatedBy: 'The `text-edit-backups/<userId>/` prefix (`pages/api/fabfiles/[id]/apply-edit.ts`)',
-    erasure: { action: 'expires', after: '30 days (bucket lifecycle rule)' },
+    erasure: { action: 'erased', erasedBy: 'purgeAccountFiles' },
   },
   {
     kind: 's3',
     bucket: 'fabFileBucket',
     holds: 'Pre-edit copies written before `text-edit-backups/` existed',
-    locatedBy: 'Keys containing `/backups/` under `files/<userId>/`',
-    erasure: {
-      action: 'notErased',
-      gap: 'No lifecycle rule and no purge; only the manual `sweepLegacyBackups` script removes them',
-    },
+    locatedBy: 'The `files/<userId>/backups/` prefix',
+    // Kept, with a warning, if a surviving file row points under the prefix.
+    erasure: { action: 'erased', erasedBy: 'purgeAccountFiles' },
   },
   {
     kind: 's3',
@@ -79,11 +77,8 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
     kind: 's3',
     bucket: 'fabFileBucket',
     holds: 'Attachments shared through outgoing email',
-    locatedBy: 'The `shared-email-files/<email>/` prefix (`server/utils/mailer/emailAttachments.ts`)',
-    erasure: {
-      action: 'notErased',
-      gap: 'No lifecycle rule and no purge of the prefix; the key holds the raw email address',
-    },
+    locatedBy: "The sender's `shared-email-files/<userId>/` prefix (`server/utils/mailer/emailAttachments.ts`)",
+    erasure: { action: 'erased', erasedBy: 'purgeAccountFiles' },
   },
   {
     kind: 's3',
@@ -132,7 +127,7 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
     kind: 's3',
     bucket: 'historyImportBucket',
     holds: 'Chat-history and notebook import archives',
-    locatedBy: 'ImportHistoryJob `s3Key` (`<userId>/<source>/...`)',
+    locatedBy: 'ImportHistoryJob `s3Key` (`<userId>/<source>/...`); the `notebooks/<userId>/` prefix',
     erasure: { action: 'erased', erasedBy: 'purgeAccountFiles' },
   },
   {
