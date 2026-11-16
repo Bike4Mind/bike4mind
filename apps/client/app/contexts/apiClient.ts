@@ -5,7 +5,6 @@ import { getOrCreateIdempotencyKeyWithUUID } from '@client/lib/utils/idempotency
 import { generateRequestId } from '@bike4mind/common';
 import { observeDeployedRevision } from '../utils/deployRevision';
 import { useClientOutdatedStore } from '../stores/useClientOutdatedStore';
-import { version } from '../../package.json';
 
 /**
  * The axios instance and the request-side interceptors, split out as a LEAF module.
@@ -47,8 +46,6 @@ api.interceptors.request.use(config => {
 
   const requestId = config.headers['X-Request-ID'] || generateRequestId();
   config.headers['X-Request-ID'] = requestId;
-  config.headers['X-Client-Name'] = 'b4m-web';
-  config.headers['X-Client-Version'] = version;
 
   // Idempotency key for mutations (server middleware currently disabled).
   if (config.method && IDEMPOTENT_METHODS.includes(config.method.toLowerCase()) && config.url) {

@@ -64,6 +64,26 @@ describe('impersonation route policy', () => {
     expect(impersonationDecision('POST', '/api/files', true)).toBe('allow');
     expect(impersonationDecision('POST', '/api/auth/impersonation', false)).toBe('allow');
   });
+  it('admits only public client-config reads with a parked admin cookie', () => {
+    const next = vi.fn();
+    for (const method of ['GET', 'HEAD']) {
+      impersonationAnonymousGate(
+        { method, url: '/api/v1/client-config/public/?x=1', headers: { cookie: 'parked' } } as Request,
+        {} as Response,
+        next
+      );
+    }
+    expect(next).toHaveBeenCalledTimes(2);
+    for (const [method, url] of [
+      ['POST', '/api/v1/client-config/public'],
+      ['GET', '/api/v1/client-config'],
+      ['GET', '/api/v1/client-config/public/other'],
+    ]) {
+      expect(() =>
+        impersonationAnonymousGate({ method, url, headers: { cookie: 'parked' } } as Request, {} as Response, next)
+      ).toThrow('End support access');
+    }
+  });
   it.each([
     '/api/sessions/shared',
     '/api/sessions/count',

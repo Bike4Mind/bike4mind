@@ -6,11 +6,11 @@ vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get } }));
 
 const { getModelCatalog, getModels } = await import('./llm');
 
-it('reads the narrow model list from client-config without requesting the internal catalog', async () => {
-  const models = [{ id: 'public-model', supports_tools: true }];
-  get.mockResolvedValueOnce({ data: { models: { available: models } } });
+it('keeps getModels on the full picker list, including disabled entries', async () => {
+  const models = [{ id: 'picker-model', disabled: true, pricing: {} }];
+  get.mockResolvedValueOnce({ data: { models } });
   expect(await getModels()).toEqual(models);
-  expect(get).toHaveBeenCalledWith('/api/v1/client-config');
+  expect(get).toHaveBeenCalledWith('/api/models');
 });
 
 const model = (id: string, extra: Partial<ModelInfo> = {}) => ({ id, name: id, type: 'text', ...extra }) as ModelInfo;

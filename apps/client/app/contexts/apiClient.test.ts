@@ -4,7 +4,6 @@ import { api } from './apiClient';
 import { DEPLOY_REVISION_HEADER } from '@server/middlewares/deployRevision';
 import { resetDeployedRevisionBaseline } from '../utils/deployRevision';
 import { useClientOutdatedStore } from '../stores/useClientOutdatedStore';
-import { version } from '../../package.json';
 
 const adapterWith =
   (revision: string | undefined, status = 200, extraHeaders: Record<string, string> = {}): AxiosAdapter =>
@@ -24,14 +23,6 @@ const requestWith = (adapter: AxiosAdapter) => api.get('/api/probe', { adapter }
 const isOutdated = () => useClientOutdatedStore.getState().outdated;
 
 describe('api deploy-revision interceptor', () => {
-  it('identifies web requests before the first render', async () => {
-    await requestWith(async config => {
-      expect(config.headers.get('X-Client-Name')).toBe('b4m-web');
-      expect(config.headers.get('X-Client-Version')).toBe(version);
-      return { data: {}, status: 200, statusText: 'OK', headers: {}, config };
-    });
-  });
-
   beforeEach(() => {
     resetDeployedRevisionBaseline();
     useClientOutdatedStore.setState({ outdated: false });
