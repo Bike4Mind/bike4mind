@@ -7,11 +7,12 @@ const QUERY_TIMEOUT_MS = 350;
 // Bounds the rows scanned for a busy IP; the sort is backed by the (ipAddress, timestamp) index.
 const IP_USAGE_SCAN_LIMIT = 2000;
 const CI_COLLATION = { locale: 'en', strength: 2 };
+// isBanned is shown as "suspended" to match the admin user profile and list labels.
 const accountStatus = (user: {
   deletedAt?: Date | null;
   isBanned?: boolean;
   moderation?: { status?: string } | null;
-}) => (user.deletedAt ? 'deleted' : user.isBanned ? 'banned' : (user.moderation?.status ?? 'active'));
+}) => (user.deletedAt ? 'deleted' : user.isBanned ? 'suspended' : (user.moderation?.status ?? 'active'));
 const maskEmail = (email: string | null | undefined) => {
   if (!email) return 'No email';
   const [local, domain] = email.split('@');

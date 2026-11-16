@@ -138,7 +138,7 @@ describe('provider end-user identifier lookup', () => {
     await User.collection.updateOne({ _id: user._id }, { $set: { isBanned: true } });
     expect((await searchAdminEntities(identifier.toUpperCase()))[0]).toMatchObject({
       id: String(user._id),
-      secondary: 'f***@example.com - banned',
+      secondary: 'f***@example.com - suspended',
     });
   });
   it('returns nothing for an unknown identifier', async () => {
