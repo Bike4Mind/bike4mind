@@ -294,6 +294,14 @@ describe('per-prompt latency results', () => {
       []
     );
     expect(latencyGateTests(file, [{ model: 'model-x', averageResponseTimeSec: 9 }])).toEqual([]);
+    expect(latencyMetrics(file, [prompt({ aiModel: '' })])).toEqual([]);
+    expect(latencyGateTests(file, [prompt({ aiModel: '' })])).toEqual([]);
+  });
+
+  it('caps a long prompt label at the ingest schema limit', () => {
+    const [metric] = latencyMetrics(file, [prompt({ promptName: 'P'.repeat(300) })]);
+    expect(metric.label).toHaveLength(200);
+    expect(metric.label.startsWith('ai-latency-doc-prompts: PPP')).toBe(true);
   });
 
   it('passes a prompt within budget and fails one over it or with no measurement', () => {

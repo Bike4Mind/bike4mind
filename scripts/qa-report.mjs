@@ -252,9 +252,12 @@ function gateTest(testKey, title, status, error) {
  */
 function promptEntries(json) {
   return Array.isArray(json)
-    ? json.filter(e => typeof e?.aiModel === 'string' && typeof e.promptName === 'string')
+    ? json.filter(e => typeof e?.aiModel === 'string' && e.aiModel !== '' && typeof e.promptName === 'string')
     : [];
 }
+
+/** Mirrors the `label` max in QaMetricSchema (b4m-core/common/src/schemas/qa.ts): one over it 422s the whole run. */
+const METRIC_LABEL_MAX = 200;
 
 function promptSeconds(value) {
   const sec = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''));
@@ -275,7 +278,7 @@ export function latencyMetrics(fileName, json) {
     const metric = {
       kind: 'latency',
       model: entry.aiModel,
-      label: promptLabel(fileName, entry),
+      label: promptLabel(fileName, entry).slice(0, METRIC_LABEL_MAX),
       value: latencySec,
       unit: 's',
     };
@@ -303,7 +306,7 @@ export function latencyGateTests(fileName, json) {
 
 /**
  * Names the check(s) behind `exceedsThreshold`: the producer sets it when a detected rapid reply
- * beats `initialResponseThresholdSec`, or the actual or end-to-end time beats `thresholdSec`.
+ * exceeds `initialResponseThresholdSec`, or the actual or end-to-end time exceeds `thresholdSec`.
  */
 function promptBreachReason(entry) {
   const limit = entry.thresholdSec;
