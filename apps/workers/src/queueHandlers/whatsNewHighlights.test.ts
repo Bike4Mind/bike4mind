@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Context, SQSEvent } from 'aws-lambda';
-import { dispatch } from './whatsNewHighlights';
+import { dispatch } from './whatsNewJob';
 import { AdminSettings, releaseNoteRepository, slackDevWorkspaceRepository } from '@bike4mind/database';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { ChatModels } from '@bike4mind/common';
 import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { loadReleaseNotesConfig } from '@bike4mind/server-utils/releaseNotes/adminReleaseNotes';
+
+// Highlights reach runHighlightsJob through the merged What's New consumer, as in production.
+vi.mock('./releaseNotes', () => ({ runReleaseNotesJob: vi.fn() }));
 
 vi.mock('@bike4mind/database', () => ({
   releaseNoteRepository: { findPublishedBetween: vi.fn() },
@@ -59,12 +62,13 @@ vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: (value: string | null | undefined) => (value ? `decrypted:${value}` : null),
 }));
 
-const context = { functionName: 'whats-new-highlights', awsRequestId: 'req-1' } as unknown as Context;
+const context = { functionName: 'whats-new-job', awsRequestId: 'req-1' } as unknown as Context;
 
 const eventFor = (payload: Record<string, unknown>): SQSEvent =>
   ({ Records: [{ messageId: 'm-1', body: JSON.stringify(payload) }] }) as unknown as SQSEvent;
 
 const basePayload = {
+  kind: 'highlights',
   correlationId: 'corr-1',
   environment: 'dev',
   startDate: '2026-09-28',
@@ -110,6 +114,15 @@ const lastStatusUpdate = () => {
 const fetchMock = vi.fn();
 
 const slackOk = (extra: Record<string, unknown> = {}) => ({ ok: true, json: async () => ({ ok: true, ...extra }) });
+
+describe('whatsNewHighlights module', () => {
+  // The legacy queue is gone; a kind-less entry point would let a handler bypass the kind router again.
+  it('exposes only the job function, not a queue entry point', async () => {
+    const highlights = await import('./whatsNewHighlights');
+    expect(highlights).not.toHaveProperty('dispatch');
+    expect(highlights.runHighlightsJob).toBeTypeOf('function');
+  });
+});
 
 describe('whatsNewHighlights queue handler', () => {
   beforeEach(() => {
@@ -248,7 +261,7 @@ describe('whatsNewHighlights queue handler', () => {
   it('does not post to Slack when no channel is configured', async () => {
     mockNotes([note]);
 
-    await dispatch(eventFor({ correlationId: 'corr-1', environment: 'dev' }), context);
+    await dispatch(eventFor({ kind: 'highlights', correlationId: 'corr-1', environment: 'dev' }), context);
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(lastStatusUpdate()?.['settingValue.lastStatus']).toBe('success');
@@ -271,7 +284,7 @@ describe('whatsNewHighlights queue handler', () => {
   });
 
   it('rejects a payload that fails schema validation', async () => {
-    await expect(dispatch(eventFor({ environment: 'staging' }), context)).rejects.toThrow();
+    await expect(dispatch(eventFor({ kind: 'highlights', environment: 'staging' }), context)).rejects.toThrow();
 
     expect(releaseNoteRepository.findPublishedBetween).not.toHaveBeenCalled();
   });

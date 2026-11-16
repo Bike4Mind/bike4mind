@@ -27,7 +27,6 @@ import {
   GitHubWebhookPayload,
   GitHubHandlerContext,
 } from '@bike4mind/server-utils/integrations/github/types';
-import { dispatchReviewToSreRevision } from '@bike4mind/server-utils/integrations/github/sreRevisionDispatch';
 import { sanitizeDispatchError, sanitizeHandlerError, sanitizeNotificationError } from './sanitizeWebhookError';
 import { emitWebhookDeliveryMetric, WebhookMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
@@ -109,17 +108,6 @@ async function processOrgWebhook(message: z.infer<typeof OrgWebhookPayloadSchema
     });
 
   const repository = (payload as { repository?: { full_name?: string } }).repository?.full_name || 'unknown';
-
-  // SRE revision detection runs independently of notification subscribers.
-  // This ensures change requests on sre-fix/* PRs always trigger revision cycles,
-  // even when no webhook subscribers exist for this org+repo.
-  if (eventType === 'pull_request_review') {
-    try {
-      await dispatchReviewToSreRevision(payload, logger);
-    } catch (err) {
-      logger.error('SRE revision detection failed (non-fatal)', { error: err, deliveryId });
-    }
-  }
 
   const subscribers = await webhookSubscriptionRepository.findByOrgAndRepo(orgId, repository);
 
@@ -505,17 +493,6 @@ async function processMcpServerWebhook(message: z.infer<typeof McpServerWebhookP
       reason: !mcpServer ? 'not_found' : mcpServer.userId.toString() !== userId ? 'owner_mismatch' : 'disabled',
     });
     return; // Don't retry: server deleted, disabled, or not owned by this user
-  }
-
-  // SRE revision detection runs independently of the handler registry.
-  // Mirrors processOrgWebhook - no orgId needed; config is loaded from
-  // adminSettingsRepository directly inside the function.
-  if (eventType === 'pull_request_review') {
-    try {
-      await dispatchReviewToSreRevision(payload, logger);
-    } catch (err) {
-      logger.error('SRE revision detection failed (non-fatal)', { error: err, deliveryId });
-    }
   }
 
   // Route to appropriate handler

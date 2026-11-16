@@ -276,7 +276,6 @@ import { findTool, isOfferedEditTool, offeredMediaToolNames, toolsForRequest, us
 import { webContextFor } from './tools/webTools';
 import { DoomLoopTracker, THRESHOLD as LOOP_THRESHOLD } from './tools/doomLoop';
 import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimits';
-import { readsUntrusted, sendsOut } from './tools/riskAssessment';
 import { INTERRUPTED_MESSAGE, STOPPED_BEFORE_CHANGE, untilStopped } from './tools/interruptible';
 import type { PermissionScopeKey, PermissionService } from './permissions/PermissionService';
 import { describeRule, everySessionRules, permissionSubject } from './permissions/subject';
@@ -332,12 +331,7 @@ import {
   toolStateReminder,
   type ToolStateMark,
 } from './deferredTools';
-import {
-  IMPORTED_TAINT_SOURCE,
-  importedHistoryNeedsCompaction,
-  importedTurnAsText,
-  isImportedToolTurn,
-} from '../claudeImport/continuation';
+import { importedHistoryNeedsCompaction, importedTurnAsText, isImportedToolTurn } from '../claudeImport/continuation';
 
 /** The fields this client reads from `GET /api/settings/serverConfig`. */
 interface ServerTransportConfig {
@@ -4090,11 +4084,6 @@ export class ChatService {
       const directoryTurn: DirectoryTurn = {
         declined: [],
         granted: [],
-        ...(resume ? resumedUntrusted(resume.toolCalls) : {}),
-        ...(session.importOrigin ? { untrusted: IMPORTED_TAINT_SOURCE } : {}),
-        ...(session.messages.findLast(message => message.role === 'user')?.skill?.imported
-          ? { untrusted: 'skill' }
-          : {}),
       };
       const project = session.mode === 'code' ? session.project : undefined;
       // Started before the wire messages are built so the instruction files are read alongside
@@ -5545,15 +5534,6 @@ export class ChatService {
           });
         }
 
-        // Failed external results are still shown to the model; abandoned results are dropped.
-        if (
-          !abandoned &&
-          scope.directories &&
-          !scope.directories.untrusted &&
-          !settled.ownContent &&
-          readsUntrusted(request.name)
-        )
-          scope.directories.untrusted = request.name;
         this.emit({ type: 'tool-end', sessionId, messageId, call: settled });
         return settled;
       })
@@ -7353,10 +7333,7 @@ export class ChatService {
       this.deps.logger.warn(`PERMISSIONS: ${message}`);
       return refuseUnasked('denied', message, { kind: 'system', reason: 'error', detail: message });
     }
-    const outboundTool = () =>
-      sendsOut(call.name, call.input) && !(call.name === 'session_spawn' && context.host?.suggestions);
-    const needsProvenancePrompt = () => !!directories.untrusted && outboundTool();
-    if (!tool.interactive && !tool.approval && !rules?.size && !needsProvenancePrompt()) return { input: call.input };
+    if (!tool.interactive && !tool.approval && !rules?.size) return { input: call.input };
 
     // Building the prompt reads the filesystem for a write tool, and a refusal there - a path
     // outside every granted folder, a binary file - has to settle the call WITHOUT asking. A
@@ -7367,12 +7344,6 @@ export class ChatService {
         gatedPrompt = await tool.approval(call.input, context);
         // Read only by `run`, which no path below that refuses the call goes on to.
         context.approvedKey = gatedPrompt.key;
-      }
-      if (!gatedPrompt && needsProvenancePrompt()) {
-        gatedPrompt = {
-          key: `${call.name}:${JSON.stringify(call.input)}`,
-          detail: `${call.name} can send data or instructions to another context.\n\n${JSON.stringify(call.input, null, 2)}`,
-        };
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -7410,7 +7381,7 @@ export class ChatService {
     if (!gate) return { input: call.input };
 
     const askedByRule = verdict.decision === 'ask' ? `Asked because of the rule ${describeRule(verdict.rule)}.` : null;
-    if (!gatedPrompt && !askedByRule && !needsProvenancePrompt()) return { input: call.input };
+    if (!gatedPrompt && !askedByRule) return { input: call.input };
     let prompt: ApprovalPrompt = gatedPrompt ?? {
       detail: `${call.name} ${JSON.stringify(call.input)}`,
       key: `rule-ask\x00${call.name}\x00${JSON.stringify(call.input)}`,
@@ -7439,29 +7410,13 @@ export class ChatService {
       };
     }
 
-    // Unknown programs may send data too; absence of placed outside paths is not proof of locality.
-    // After external content, require fresh consent for that outbound call; proven local commands
-    // keep their normal path/risk decisions. Explicit user rules above retain precedence.
     const intrinsicAllowOnce = prompt.allowOnce;
-    const untrustedOutbound = () =>
-      mode === 'auto' && (prompt.outbound || outboundTool()) ? directories.untrusted : undefined;
-    const source = untrustedOutbound();
-    if (source) {
-      const reason = `Asked because this reply read untrusted content from ${source} before this potentially outbound call.`;
-      prompt = {
-        ...prompt,
-        askInAuto: true,
-        allowOnce: true,
-        detail: `${prompt.detail}\n\n${reason}`,
-        reasons: [...(prompt.reasons ?? []), reason],
-      };
-    }
 
     // An irreversible tool is asked every time, whatever was answered before: the standing set
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
     // enough reason to skip asking. The gate refuses to record one for these either.
     const standingAnswer = (): ChatApprovalAnswer | null => {
-      if (prompt.irreversible || prompt.allowOnce || stuck || askedByRule || untrustedOutbound()) return null;
+      if (prompt.irreversible || prompt.allowOnce || stuck || askedByRule) return null;
       const standing = gate.isStanding(
         sessionId,
         allowanceKey,
@@ -7499,7 +7454,7 @@ export class ChatService {
 
     // A script with no reason to ask that holds for all of it is decided part by part, and asks only
     // about the parts that no rule, "Allow in this chat" or the mode already covers.
-    const byPart = !(prompt.irreversible || prompt.allowOnce || stuck || askedByRule || untrustedOutbound());
+    const byPart = !(prompt.irreversible || prompt.allowOnce || stuck || askedByRule);
     const parts = byPart ? decideParts(prompt, subject, rules, gate, sessionId, mode) : null;
     if (parts && parts.uncovered.length === 0 && parts.directories.length === 0) {
       return {
@@ -7515,7 +7470,7 @@ export class ChatService {
     // every granted root - is still refused rather than waved through by a loose mode. A mode
     // loose enough to skip the question takes the card's primary action, which is the one the
     // user would have been shown pre-selected.
-    if (!askedByRule && this.autoApproves(mode, sessionId, call, prompt, stuck || !!untrustedOutbound())) {
+    if (!askedByRule && this.autoApproves(mode, sessionId, call, prompt, stuck)) {
       return {
         input: applyOption(call.input, runnable[0]),
         approval: approvalRecord('allowed', { kind: 'mode', mode }),
@@ -7593,7 +7548,7 @@ export class ChatService {
         });
       },
       {
-        remember: () => !prompt.irreversible && !prompt.allowOnce && !untrustedOutbound(),
+        remember: () => !prompt.irreversible && !prompt.allowOnce,
         // Another card's "always", or a rule saved from it, may cover this one while it waits.
         recheck: async () => {
           try {
@@ -7609,7 +7564,6 @@ export class ChatService {
               return { decision: 'deny' };
             }
             if (prompt.irreversible || intrinsicAllowOnce || stuck || askedByRule || decision === 'ask') return null;
-            if (untrustedOutbound() && decision !== 'allow') return null;
             if (freshVerdict?.decision === 'allow') {
               coveredBy = ruleDecider(freshVerdict.rule);
               return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
@@ -7619,8 +7573,7 @@ export class ChatService {
               coveredBy = { kind: 'chat-allowance' };
               return covering;
             }
-            const fresher =
-              byPart && !untrustedOutbound() ? decideParts(prompt, currentSubject, fresh, gate, sessionId, mode) : null;
+            const fresher = byPart ? decideParts(prompt, currentSubject, fresh, gate, sessionId, mode) : null;
             if (fresher && fresher.uncovered.length === 0 && fresher.directories.length === 0) {
               coveredBy = fresher.decidedBy;
               return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
@@ -8067,8 +8020,7 @@ export class ChatService {
    * repeat of the last two calls, a read of a `.env` file, a write the scan sees, or a command's
    * own words name, reach permission settings, or a folder outside the project the user has not
    * allowed that the command may write in. Commands the scan cannot follow or parse ask in
-   * every mode. After untrusted content, outbound shell commands require fresh consent in Auto;
-   * positively proven local commands retain their normal path/risk decisions.
+   * every mode.
    */
   private autoApproves(
     mode: ChatApprovalMode,
@@ -9502,14 +9454,6 @@ interface DirectoryTurn {
   declined: string[];
   /** Folders this round's cards granted; their own results already told the model. */
   granted: string[];
-  /** First external content source in this reply, including interrupted continuations. */
-  untrusted?: string;
-}
-
-/** A resumed reply sees its earlier tool results again, so their provenance still applies. */
-function resumedUntrusted(calls: readonly ChatToolCall[]): { untrusted?: string } {
-  const source = calls.find(call => call.status !== 'denied' && !call.ownContent && readsUntrusted(call.name));
-  return source ? { untrusted: source.name } : {};
 }
 
 /** `work`'s result, or `stopped` once `signal` aborts; a later result or rejection then goes nowhere. */

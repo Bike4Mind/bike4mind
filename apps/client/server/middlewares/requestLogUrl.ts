@@ -21,10 +21,13 @@ const TOKEN_PATH_RULES: TokenPathRule[] = [
   { prefix: ['api', 'publish', 'serve', 'a'] },
   // pages/api/admin/qa/report/[runId]/[token]/[...path].ts
   { prefix: ['api', 'admin', 'qa', 'report'], skip: 1 },
-  // pages/api/skills/market/by-token/[token].ts (deprecated; the index route reads a header)
+  // Removed path-token route (by-token/index.ts reads the x-share-token header); kept for old clients still calling it.
   { prefix: ['api', 'skills', 'market', 'by-token'] },
   // pages/api/file-links/[token].ts
   { prefix: ['api', 'file-links'] },
+  // pages/api/email/track/open/[token].ts and click/[token].ts (emailed pixel and link URLs)
+  { prefix: ['api', 'email', 'track', 'open'] },
+  { prefix: ['api', 'email', 'track', 'click'] },
   // pages/api/webhooks/github/[token].ts
   { prefix: ['api', 'webhooks', 'github'], except: ['lake', 'sre', 'subscriptions'] },
   // pages/api/webhooks/jira/[token].ts

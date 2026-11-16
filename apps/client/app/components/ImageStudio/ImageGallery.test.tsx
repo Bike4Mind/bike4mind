@@ -22,6 +22,7 @@ vi.mock('@client/app/hooks/data/studioImageJobs', () => ({
 }));
 vi.mock('@client/app/hooks/data/fabFileQueries', () => ({
   useGetFabFile: (id: string) => ({ data: h.files[id] }),
+  isFabFileScanInFlight: () => false,
 }));
 
 vi.mock('@client/app/hooks/data/fileLineage', () => ({
