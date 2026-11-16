@@ -96,6 +96,15 @@ export const infraHolders = {
     kind: 'holder',
     references: [{ path: 'openBursts.actorUserId', matchBy: 'userId', action: 'pullFromArray' }],
   },
+  OrgAdminNotificationPref: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  // Per-period alert dedup rows; only an alert about one person names them, and its scope repeats the id.
+  OrgAlertNotification: {
+    kind: 'holder',
+    references: [{ path: 'subjectUserId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
   OrganizationAuditEvent: {
     kind: 'holder',
     references: [
@@ -491,6 +500,15 @@ export const infraHolders = {
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
     secretPaths: ['downloadUrl'],
     unrelatedPaths: ['includeUserNames'],
+  },
+  // `ownerUserId` is anonymized like an organization owner, so members keep the Space.
+  Space: {
+    kind: 'holder',
+    references: [
+      { path: 'ownerUserId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'members.userId', matchBy: 'userId', action: 'pullFromArray' },
+      { path: 'removedUserIds', matchBy: 'userId', action: 'pullFromArray' },
+    ],
   },
   SreErrorPattern: { kind: 'noUserData', note: 'Learned error diagnosis pattern.' },
   // `fixVerdict.by` is a GitHub login of a staff reviewer, not a Bike4Mind user reference.

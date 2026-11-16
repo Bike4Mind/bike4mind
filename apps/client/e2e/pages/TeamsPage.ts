@@ -6,32 +6,28 @@ import { BasePage } from './BasePage';
 export type TeamTab =
   | 'Overview'
   | 'Members'
+  | 'Library'
   | 'Groups'
   | 'Usage'
   | 'Analysis'
-  | 'Billing'
   | 'Integrations'
-  | 'GitHub API'
-  | 'Webhooks'
-  | 'Connectors'
-  | 'API Keys'
-  | 'Settings'
-  | 'Audit';
+  | 'Billing'
+  | 'API keys'
+  | 'Audit'
+  | 'Settings';
 
 export const ALL_TEAM_TABS: TeamTab[] = [
   'Overview',
   'Members',
+  'Library',
   'Groups',
   'Usage',
   'Analysis',
-  'Billing',
   'Integrations',
-  'GitHub API',
-  'Webhooks',
-  'Connectors',
-  'API Keys',
-  'Settings',
+  'Billing',
+  'API keys',
   'Audit',
+  'Settings',
 ];
 
 /**

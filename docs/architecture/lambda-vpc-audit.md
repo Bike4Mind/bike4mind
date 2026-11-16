@@ -165,6 +165,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/events/sessionContextSummarization.handler` | `infra/eventBus.ts` | MongoDB; linked: `allSecrets`, `eventBus` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/sessionSummarization.handler` | `infra/eventBus.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `eventBus`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/sessionTagging.handler` | `infra/eventBus.ts` | MongoDB; linked: `allSecrets`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket`, `eventBus` | Yes | Connects to MongoDB. |
+| `apps/workers/src/events/slackQuickAsk.handler` | `infra/llm.ts` | MongoDB; linked: `allSecrets`, `fabFileBucket`, `generatedImagesBucket`, `websocketApi`, `eventBus` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/spider.handler` | `infra/eventBus.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `eventBus`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/stripe/customerSubscriptionUpdated.handler` | `infra/eventBus.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `eventBus` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/stripe/invoicePaymentSucceeded.handler` | `infra/eventBus.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `eventBus` | Yes | Connects to MongoDB. |

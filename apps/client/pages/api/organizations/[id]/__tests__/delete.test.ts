@@ -38,6 +38,7 @@ const txn = vi.hoisted(() => ({ depth: 0, depthAtDelete: -1 }));
 const deleteOrganization = vi.hoisted(() =>
   vi.fn(async () => {
     txn.depthAtDelete = txn.depth;
+    return { revokedApiKeyIds: ['key1', 'key2'] };
   })
 );
 vi.mock('@bike4mind/services', () => ({ organizationService: { deleteOrganization } }));
@@ -47,6 +48,16 @@ vi.mock('@bike4mind/database/infra', () => ({ organizationRepository }));
 
 const groupRepository = vi.hoisted(() => ({}));
 vi.mock('@bike4mind/database/social', () => ({ groupRepository }));
+
+const userApiKeyRepository = vi.hoisted(() => ({}));
+vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository }));
+
+const endKeyRealtimeConnections = vi.hoisted(() =>
+  vi.fn(async () => {
+    expect(txn.depth).toBe(0);
+  })
+);
+vi.mock('@server/utils/adminApiKeyActions', () => ({ endKeyRealtimeConnections }));
 
 const updateMany = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const deleteDomainClaims = vi.hoisted(() => vi.fn().mockResolvedValue(0));
@@ -142,9 +153,17 @@ describe('DELETE /api/organizations/[id]', () => {
           organizations: organizationRepository,
           groups: groupRepository,
           users: {},
+          userApiKeys: userApiKeyRepository,
         }),
       })
     );
+  });
+
+  it("ends the revoked org keys' realtime connections after the transaction commits", async () => {
+    endKeyRealtimeConnections.mockClear();
+    await call();
+
+    expect(endKeyRealtimeConnections.mock.calls.map(([keyId]) => keyId)).toEqual(['key1', 'key2']);
   });
 
   it("passes the data-lake adapters and audit principal so members' lake grants lapse in the same transaction", async () => {

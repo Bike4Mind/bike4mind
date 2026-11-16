@@ -1,12 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { tmpdir, userInfo } from 'node:os';
 import { basename, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatApprovalMode, ChatProject, ChatStreamEvent, ChatToolCall } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChatService } from './ChatService';
+import { ChatService, buildSystemMessage } from './ChatService';
+import { scratchDirectory } from './scratchDirectory';
 import { SessionStore } from './SessionStore';
 import type { ClaudeCodeSettings } from './permissions/ClaudeCodeSettings';
 import { PermissionRuleStore } from './permissions/PermissionRuleStore';
@@ -232,20 +233,103 @@ describe('ChatService approvals decided per part', () => {
     expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
   });
 
-  it('still asks about a folder outside the shared ones when every part is covered', async () => {
+  it('runs a read of a folder outside the shared ones in auto mode without a card', async () => {
+    const id = await session('auto');
+    await runCommand(id, `git status && ls "${outside}"; cd "${outside}" && ls`);
+
+    const ran = await settled();
+    expect(ran.status).toBe('done');
+    expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
+  });
+
+  it('still asks about git run in a folder outside the shared ones, which may run a program the repository names', async () => {
+    const id = await session('auto');
+    await runCommand(id, `cd "${outside}" && git status`);
+
+    await awaitCall('bash_execute', 'awaiting-approval');
+  });
+
+  it('still asks about a folder outside the shared ones that a command may write in', async () => {
     const id = await session('auto');
     // Not the temp folder, which the scan counts as shared.
-    await runCommand(id, `git status && ls "${outside}"`);
+    await runCommand(id, `git status && touch "${outside}/x"`);
 
     const card = await awaitCall('bash_execute', 'awaiting-approval');
     expect(card.approvalAlways).toContain('*');
     expect(card.approvalParts).toBeUndefined();
   });
 
+  it('gives a Code session a scratch folder for the turn, and removes it with the session', async () => {
+    const id = await session('auto', root);
+    const first = await runCommand(id, 'printf ok');
+    await finishReply(first);
+    const scratch = scratchDirectory(id) as string;
+    expect((await stat(scratch)).isDirectory()).toBe(true);
+
+    await service.deleteSession(id);
+    sessionIds.splice(sessionIds.indexOf(id), 1);
+    await expect(stat(scratch)).rejects.toThrow();
+  });
+
+  it('tells the model to put throwaway scripts in the scratch folder', () => {
+    const scratch = scratchDirectory('session-1') as string;
+    const prompt = String(buildSystemMessage([root, scratch], false, false, false, null).content);
+    expect(prompt).toContain(`Put throwaway scripts and files in ${scratch}, not the project`);
+    expect(String(buildSystemMessage([root], false, false, false, null).content)).not.toContain('throwaway');
+  });
+
+  describe('with a script written to /tmp', () => {
+    let scripts: string;
+
+    beforeEach(() => {
+      scripts = `/tmp/b4m-parts-${process.pid}-${Date.now()}`;
+    });
+
+    afterEach(async () => {
+      await rm(scripts, { recursive: true, force: true });
+    });
+
+    const writeAndRun = () =>
+      `mkdir -p ${scripts} && cat > ${scripts}/migrate.sh <<'EOF'\necho migrated\nEOF\ncd ${root} && sh ${scripts}/migrate.sh`;
+
+    it('writes and runs it in auto mode without a card', async () => {
+      const id = await session('auto', root);
+      await runCommand(id, writeAndRun());
+
+      const ran = await settled();
+      expect(ran.status).toBe('done');
+      expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
+    });
+
+    it('still asks in ask mode', async () => {
+      const id = await session('ask', root);
+      await runCommand(id, writeAndRun());
+      await awaitCall('bash_execute', 'awaiting-approval');
+    });
+
+    it('names only the folder outside the shared ones and temp on the card', async () => {
+      const id = await session('auto', root);
+      await runCommand(id, `mkdir -p ${scripts} && echo a > ${scripts}/x && echo b > "${outside}/y"`);
+
+      const card = await awaitCall('bash_execute', 'awaiting-approval');
+      expect(card.approvalDetail).toMatch(/Writes outside the shared folders: \S*b4m-parts-outside-\w+\./);
+      expect(card.approvalDetail).not.toMatch(/(Writes|Reaches) outside the shared folders: \S*\/tmp/);
+      expect(card.approvalReasons?.some(reason => reason.startsWith('Writes outside the shared folders'))).toBe(true);
+    });
+  });
+
+  it('says a read outside the shared folders reaches it', async () => {
+    const id = await session('ask');
+    await runCommand(id, `ls "${outside}"`);
+
+    const card = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(card.approvalDetail).toMatch(/Reaches outside the shared folders: \S*b4m-parts-outside-\w+\./);
+  });
+
   it('does not let a Read rule clear a folder outside the shared ones for a part only the mode covers', async () => {
     await permissions.setRules({ kind: 'user' }, { allow: [`Read(/${outside}/**)`], ask: [], deny: [] });
     const id = await session('auto');
-    await runCommand(id, `git status && ls "${outside}"`);
+    await runCommand(id, `git status && ls "${outside}" && touch "${outside}/x"`);
     await awaitCall('bash_execute', 'awaiting-approval');
   });
 

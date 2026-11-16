@@ -147,6 +147,7 @@ export * from './utils/skillFiles';
 export * from './utils/claudeMarketplace';
 export * from './utils/emailList';
 export * from './utils/researchSourceTiers';
+export * from './utils/researchFeedFingerprint';
 export * from './utils/emailAlias';
 export * from './utils/emailDomain';
 export * from './utils/canonicalEmail';
