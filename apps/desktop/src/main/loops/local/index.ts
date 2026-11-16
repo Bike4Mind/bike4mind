@@ -38,6 +38,7 @@ import type { LoopRunner } from '../LoopRunner';
 import { originOf } from '../index';
 import { checkedFields } from './fields';
 import { LocalLoopScheduler } from './LocalLoopScheduler';
+import { LoopMirror, MIRROR_MS } from './mirror';
 import { applyTicketPatch, LocalLoopStore } from './LocalLoopStore';
 import { createTicket, updateTicket } from './ticketTools';
 import { WATCHDOG_MS } from './watchdog';
@@ -76,6 +77,7 @@ export function registerLocalLoops(
       changed.clear();
       for (const window of appWindows()) window.webContents.send(IPC_CHANNELS.localLoopsChanged, { loopIds });
       for (const listener of listeners) listener();
+      mirror.changed();
     }, 50);
   };
 
@@ -136,8 +138,17 @@ export function registerLocalLoops(
     if (typeof body.creditsToday === 'number') store.setSetting(CLOUD_SPENT, { day, credits: body.creditsToday });
   };
 
+  // Read-only status for the web Loops page; on by default per loop (LocalLoop.mirror).
+  const mirror = new LoopMirror({
+    api: () => (currentScope ? auth.getApiClient() : null),
+    details: () => store.loops().map(loop => detail(loop.id)),
+    logger,
+  });
+  setInterval(() => void mirror.flush(), MIRROR_MS.heartbeat);
+
   const follow = () => {
     currentScope = scope();
+    mirror.reset();
     if (currentScope) {
       scheduler.start();
       void refreshBudget().then(() => scheduler.poke());
