@@ -25,7 +25,10 @@ const h = vi.hoisted(() => ({
   settings: vi.fn(),
   release: vi.fn(),
   advisories: vi.fn(),
+  decisions: vi.fn(),
   warn: vi.fn(),
+  aiSuggestion: vi.fn(),
+  aiOverride: vi.fn(),
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
@@ -93,12 +96,19 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
 }));
 vi.mock('@server/credits/riskReviewGrantRelease', () => ({ releaseRiskReviewedSignupGrant: h.release }));
 vi.mock('@server/security/abuseAssessment/riskReviewAdvisory', () => ({ findRiskReviewAdvisories: h.advisories }));
+vi.mock('@server/admin/ai/assessmentSuggestion', () => ({
+  userAssessmentSuggestion: h.aiSuggestion,
+  recordUserAssessmentOverride: h.aiOverride,
+  withSuggestionDecisions: h.decisions,
+}));
 import '@pages/api/admin/signup-risk-reviews';
 
 const ADMIN_ID = 'a'.repeat(24);
 const USER_A = '1'.repeat(24);
 const USER_B = '2'.repeat(24);
 const REASON = 'Spam or bot cohort';
+const ASSESSMENT_ID = 'b'.repeat(24);
+const SUGGESTION_ID = 'c'.repeat(24);
 
 const DELEGATE = { id: ADMIN_ID, isAdmin: false, adminPermissions: ['users:moderate', 'credits:adjust'] };
 const MODERATOR = { id: ADMIN_ID, isAdmin: false, adminPermissions: ['users:moderate'] };
@@ -128,6 +138,7 @@ const pendingUser = (id: string, email: string, score: number) => ({
 
 beforeEach(() => {
   h.advisories.mockResolvedValue(new Map());
+  h.decisions.mockImplementation(async (_surface: string, found: Map<string, object>) => found);
   h.warn.mockReset();
   h.findPending.mockReset().mockResolvedValue([]);
   h.findAutoApprovals.mockReset().mockResolvedValue([]);
@@ -139,6 +150,8 @@ beforeEach(() => {
   h.record.mockReset().mockImplementation(async () => expect(h.inTransaction).toBe(true));
   h.denySelf.mockReset().mockRejectedValue(new Error('Admins cannot review their own account.'));
   h.release.mockReset().mockResolvedValue(0);
+  h.aiSuggestion.mockReset().mockResolvedValue({ id: SUGGESTION_ID });
+  h.aiOverride.mockReset().mockResolvedValue({ id: SUGGESTION_ID, status: 'overridden' });
 });
 
 const NO_GRANT_RELEASES = { grantReleasedUserIds: [] };
@@ -292,6 +305,7 @@ describe('signup risk review queue', () => {
         [
           USER_A,
           {
+            assessmentId: 'a1',
             detectionId: 'd1',
             detector: 'signupNetworkBurst',
             result: 'abuse',
@@ -303,13 +317,19 @@ describe('signup risk review queue', () => {
         ],
       ])
     );
+    h.decisions.mockImplementation(
+      async (_surface: string, found: Map<string, object>) =>
+        new Map([...found].map(([userId, advisory]) => [userId, { ...advisory, decision: 'accepted' }]))
+    );
     const { req, res } = request('GET');
 
     await h.handlers.get(req, res);
 
     expect(h.advisories).toHaveBeenCalledWith([USER_A, USER_B], expect.objectContaining({ warn: h.warn }));
+    expect(h.decisions).toHaveBeenCalledWith('signupRiskReview', expect.any(Map));
     const body = res._getJSONData();
     expect(body.data[0].advisory).toEqual({
+      assessmentId: 'a1',
       detectionId: 'd1',
       detector: 'signupNetworkBurst',
       result: 'abuse',
@@ -317,6 +337,7 @@ describe('signup risk review queue', () => {
       assessedAt: assessedAt.toISOString(),
       otherVerdicts: 2,
       newerVerdicts: 1,
+      decision: 'accepted',
     });
     expect(body.data[1].advisory).toBeNull();
   });
@@ -389,6 +410,90 @@ describe('signup risk review queue', () => {
       ...NO_GRANT_RELEASES,
     });
     expect(h.release.mock.calls.map(([userId]) => userId)).toEqual([USER_A, USER_B]);
+  });
+
+  it('records approving over an abuse assessment as an override, linked in the audit entry', async () => {
+    const { req, res } = request('POST', {
+      action: 'approve',
+      userIds: [USER_A],
+      reason: REASON,
+      aiDecision: { assessmentId: ASSESSMENT_ID, overrideReason: 'Missing context' },
+    });
+
+    await h.handlers.post(req, res);
+
+    expect(h.aiSuggestion).toHaveBeenCalledWith('signupRiskReview', USER_A, ASSESSMENT_ID);
+    expect(h.record).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'user.signup_risk.approved',
+        details: { aiSuggestionId: SUGGESTION_ID },
+      })
+    );
+    expect(h.aiOverride).toHaveBeenCalledWith(
+      { id: SUGGESTION_ID },
+      {
+        overrideAction: { action: 'approve' },
+        overrideReason: 'Missing context',
+        decidedBy: { userId: ADMIN_ID, name: 'Admin' },
+      }
+    );
+    expect(res._getJSONData()).toMatchObject({ updatedUserIds: [USER_A] });
+  });
+
+  it('falls back to the approval reason when no why-wrong reason was picked', async () => {
+    const { req, res } = request('POST', {
+      action: 'approve',
+      userIds: [USER_A],
+      reason: REASON,
+      aiDecision: { assessmentId: ASSESSMENT_ID },
+    });
+
+    await h.handlers.post(req, res);
+
+    expect(h.aiOverride).toHaveBeenCalledWith(
+      { id: SUGGESTION_ID },
+      expect.objectContaining({ overrideReason: REASON })
+    );
+  });
+
+  it('records no override when the approval did not land', async () => {
+    h.setState.mockResolvedValue(false);
+    const { req, res } = request('POST', {
+      action: 'approve',
+      userIds: [USER_A],
+      reason: REASON,
+      aiDecision: { assessmentId: ASSESSMENT_ID },
+    });
+
+    await h.handlers.post(req, res);
+
+    expect(h.aiOverride).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a reopen', { action: 'reopen', userIds: [USER_A] }],
+    ['a batch', { action: 'approve', userIds: [USER_A, USER_B] }],
+  ])('refuses an AI decision on %s before writing', async (_label, body) => {
+    const { req, res } = request('POST', { ...body, reason: REASON, aiDecision: { assessmentId: ASSESSMENT_ID } });
+
+    await expect(h.handlers.post(req, res)).rejects.toThrow('applies to approving one account');
+    expect(h.setState).not.toHaveBeenCalled();
+    expect(h.release).not.toHaveBeenCalled();
+  });
+
+  it('refuses before paying when the assessment does not name the account', async () => {
+    h.aiSuggestion.mockRejectedValue(new Error('Assessment does not name this account'));
+    const { req, res } = request('POST', {
+      action: 'approve',
+      userIds: [USER_A],
+      reason: REASON,
+      aiDecision: { assessmentId: ASSESSMENT_ID },
+    });
+
+    await expect(h.handlers.post(req, res)).rejects.toThrow('does not name');
+    expect(h.release).not.toHaveBeenCalled();
+    expect(h.setState).not.toHaveBeenCalled();
   });
 
   it('keeps going when one account fails and reports it', async () => {

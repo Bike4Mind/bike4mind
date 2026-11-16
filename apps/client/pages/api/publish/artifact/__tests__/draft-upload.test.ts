@@ -125,20 +125,21 @@ describe('PUT /api/publish/artifact/draft-upload', () => {
     expect(opts).toEqual({ ContentType: 'text/html' });
   });
 
-  it('reads the token from the x-upload-token header ahead of the query string', async () => {
+  it('reads the token from the x-upload-token header', async () => {
     mocks.verify.mockReturnValue({ draftId: DRAFT_ID, path: 'index.html', size: 2 });
-    const { res, promise } = run({ headers: { 'x-upload-token': 'header' }, query: { token: 'query' }, body: 'hi' });
+    const { res, promise } = run({ headers: { 'x-upload-token': 'header' }, body: 'hi' });
     await promise;
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.verify).toHaveBeenCalledWith('header');
   });
 
-  it('still accepts the deprecated ?token= query parameter', async () => {
+  it('refuses a ?token= query parameter without reading it', async () => {
     mocks.verify.mockReturnValue({ draftId: DRAFT_ID, path: 'index.html', size: 2 });
     const { res, promise } = run({ query: { token: 'legacy' }, body: 'hi' });
     await promise;
-    expect(res._getStatusCode()).toBe(200);
-    expect(mocks.verify).toHaveBeenCalledWith('legacy');
+    expect(res._getStatusCode()).toBe(401);
+    expect(mocks.verify).not.toHaveBeenCalled();
+    expect(mocks.upload).not.toHaveBeenCalled();
   });
 
   // Hosted S3 refuses any length but the presign's bound one with 403; the proxy matches it.

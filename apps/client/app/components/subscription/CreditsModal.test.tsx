@@ -11,6 +11,7 @@ vi.mock('@client/app/hooks/data/credits', () => ({ useGetCreditTransactions: () 
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useGetSubscriptions: () => ({ data: [], isPending: false }),
   useGetSubscriptionsByOwner: () => ({ data: [], isPending: false }),
+  useGetSeatPlan: () => ({ data: null, isLoading: false }),
 }));
 vi.mock('@client/app/hooks/data/stripe', () => ({ useGetSubscriptionPlans: () => ({ isLoading: false }) }));
 vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({ useLowCreditsThreshold: () => 10 }));

@@ -471,17 +471,19 @@ export class B4mApiClient {
   }
 
   async uploadFileBytes(uploadUrl: string, bytes: Buffer, mimeType: string): Promise<void> {
+    // Create-only: the URL names a freshly minted key, and S3 refuses a create-only presign without it.
+    const headers = { 'Content-Type': mimeType, 'If-None-Match': '*' };
     if (uploadUrl.startsWith('//')) throw new Error('Unexpected file upload URL');
     const url = new URL(uploadUrl, this.baseURL);
     if (uploadUrl.startsWith('/')) {
       if (url.origin !== new URL(this.baseURL).origin || !/^\/api\/files\/[^/]+\/upload$/.test(url.pathname)) {
         throw new Error('Unexpected file upload proxy URL');
       }
-      await this.client.put(url.pathname, bytes, { headers: { 'Content-Type': mimeType } });
+      await this.client.put(url.pathname, bytes, { headers });
       return;
     }
     if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('Unexpected file upload URL');
-    const res = await fetch(url, { method: 'PUT', headers: { 'Content-Type': mimeType }, body: bytes });
+    const res = await fetch(url, { method: 'PUT', headers, body: bytes });
     if (!res.ok) throw new Error(`file upload failed (${res.status})`);
   }
 

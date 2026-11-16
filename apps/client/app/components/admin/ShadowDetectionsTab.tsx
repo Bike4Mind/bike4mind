@@ -64,6 +64,7 @@ import {
   useAdminListUrlState,
   type AdminReasonDraft,
   type AdminSelection,
+  type AiOverrideReason,
   type AiSuggestionData,
   type DataColumn,
   type DataTableGroup,
@@ -939,9 +940,11 @@ type VerdictDialogProps = {
   initialReason?: AdminReasonDraft;
   /** Opens the AI suggestion's why-wrong picker, for a dialog reached through the row's O key. */
   initialOverriding?: boolean;
+  /** The assessment the row's advisory chip showed; a grade taken from the assessment names it even before the panel's own query loads. */
+  advisoryAssessmentId?: string;
 };
 
-type Grading = { row: ShadowDetectionRow; prefill?: 'accept' | 'override' };
+type Grading = { row: ShadowDetectionRow; prefill?: 'accept' | 'override'; advisoryAssessmentId?: string };
 
 /** An unreviewed row's AI advisory as a suggestion to confirm abuse; null when there is none. */
 const advisorySuggestion = (
@@ -975,6 +978,7 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
   initialVerdict,
   initialReason,
   initialOverriding,
+  advisoryAssessmentId,
 }) => {
   const single = useShadowDetectionVerdict();
   const bulk = useShadowDetectionBulkVerdict();
@@ -982,6 +986,16 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
     initialVerdict ? { rowId: row.id, value: initialVerdict } : null
   );
   const [reasonSeed, setReasonSeed] = useState(initialReason);
+  // Set when the grade comes from the assessment (accept, override or a row shortcut for either), so the
+  // request names the assessment and the server records the decision.
+  const [aiOriginChoice, setAiOriginChoice] = useState<RowChoice<{ overrideReason?: AiOverrideReason }>>(
+    initialVerdict || initialOverriding ? { rowId: row.id, value: {} } : null
+  );
+  const [latestAssessmentChoice, setLatestAssessmentChoice] = useState<RowChoice<string | null>>(null);
+  const onLatestAssessment = useCallback(
+    (assessmentId: string | null) => setLatestAssessmentChoice({ rowId: row.id, value: assessmentId }),
+    [row.id]
+  );
   // Bumped to re-seed the reason after an in-dialog Accept.
   const [formKey, setFormKey] = useState(0);
   const [skipRelatedChoice, setSkipRelatedChoice] = useState<RowChoice<boolean>>(null);
@@ -1024,7 +1038,22 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
     setConflictChoice(null);
     setFailureChoice(null);
     if (!applyRelated) {
-      const result = await single.mutateAsync({ id: row.id, expectedRevision: row.revision, verdict, reason });
+      const aiOrigin = forRow(aiOriginChoice);
+      const assessmentId = forRow(latestAssessmentChoice) ?? advisoryAssessmentId;
+      const result = await single.mutateAsync({
+        id: row.id,
+        expectedRevision: row.revision,
+        verdict,
+        reason,
+        ...(aiOrigin && assessmentId
+          ? {
+              aiDecision: {
+                assessmentId,
+                ...(aiOrigin.overrideReason ? { overrideReason: aiOrigin.overrideReason } : {}),
+              },
+            }
+          : {}),
+      });
       if (result.status === 'conflict') {
         onRowChange(result.item);
         setConflictChoice({ rowId: row.id, value: result.message ?? CONFLICT_FALLBACK_MESSAGE });
@@ -1190,11 +1219,15 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
           enabled
           onAccept={proposed => {
             pickVerdict(proposed);
+            setAiOriginChoice({ rowId: row.id, value: {} });
             setReasonSeed(ACCEPTED_AI_REASON);
             setFormKey(key => key + 1);
           }}
-          // The why-wrong pick is not recorded until suggestion decisions are stored.
-          onOverride={() => setVerdictChoice(null)}
+          onOverride={overrideReason => {
+            setVerdictChoice(null);
+            setAiOriginChoice({ rowId: row.id, value: overrideReason ? { overrideReason } : {} });
+          }}
+          onLatestAssessment={onLatestAssessment}
           initialOverriding={initialOverriding}
         />
       )}
@@ -1269,13 +1302,15 @@ export const ShadowDetectionsTab: React.FC = () => {
   // A 403 or failed fetch leaves no data: no chips, and A/O stay inert.
   const advisory = useAiAdvisory();
   const advisories = new Map((advisory.data?.advisories ?? []).map(entry => [entry.detectionId, entry]));
-  const decisions = (row: ShadowDetectionRow): Partial<Record<DataTableRowShortcut, () => void>> =>
-    canGrade && advisorySuggestion(row, advisories)
-      ? {
-          a: () => setGrading({ row, prefill: 'accept' }),
-          o: () => setGrading({ row, prefill: 'override' }),
-        }
-      : {};
+  // Without an assessment id the grade could not be recorded against the suggestion, so the shortcut opens
+  // the plain dialog rather than prefilling an AI accept or override.
+  const decisions = (row: ShadowDetectionRow): Partial<Record<DataTableRowShortcut, () => void>> => {
+    if (!canGrade || !advisorySuggestion(row, advisories)) return {};
+    const advisoryAssessmentId = advisories.get(row.id)?.assessmentId;
+    const open = (prefill: 'accept' | 'override') => () =>
+      setGrading(advisoryAssessmentId ? { row, prefill, advisoryAssessmentId } : { row });
+    return { a: open('accept'), o: open('override') };
+  };
 
   // A selection and its open dialogs belong to the filters under which they were reviewed.
   const filterKey = JSON.stringify([detector ?? null, verdict]);
@@ -1682,6 +1717,7 @@ export const ShadowDetectionsTab: React.FC = () => {
           initialVerdict={grading.prefill === 'accept' ? 'confirmed_abuse' : undefined}
           initialReason={grading.prefill === 'accept' ? ACCEPTED_AI_REASON : undefined}
           initialOverriding={grading.prefill === 'override'}
+          advisoryAssessmentId={grading.advisoryAssessmentId}
         />
       )}
       {bulkGrading && (

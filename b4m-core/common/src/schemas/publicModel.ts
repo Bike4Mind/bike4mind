@@ -19,7 +19,8 @@ import { paginatedResponseSchema } from './pagination';
  * SPA and CLI. Wire fields are snake_case (CONVENTIONS.md section 2).
  */
 
-const PublicImageSizingSchema = z.discriminatedUnion('kind', [
+// Shared with GET /api/v1/image-models (schemas/imageModels.ts).
+export const PublicImageSizingSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('presets'),
     presets: z.array(z.string()).describe('Accepted `size` values, as `WxH`.'),
@@ -169,9 +170,9 @@ export type PublicImageCapabilities = z.infer<typeof PublicImageCapabilitiesSche
 export type PublicModel = z.infer<typeof PublicModelSchema>;
 export type PublicModelCreditsPer1MTokens = z.infer<typeof PublicModelCreditsPer1MTokensSchema>;
 
-type PublicImageSizing = PublicImageCapabilities['sizing'];
+export type PublicImageSizing = z.infer<typeof PublicImageSizingSchema>;
 
-function toPublicImageSizing(sizing: ImageSizing): PublicImageSizing {
+export function toPublicImageSizing(sizing: ImageSizing): PublicImageSizing {
   switch (sizing.kind) {
     case 'presets':
       return { kind: 'presets', presets: [...sizing.presets], default_size: sizing.defaultSize };
