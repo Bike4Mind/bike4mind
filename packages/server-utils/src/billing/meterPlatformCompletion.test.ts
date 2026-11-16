@@ -477,6 +477,16 @@ describe('meterPlatformCompletion for a restricted-tier caller', () => {
     expect(shape(overCap)).toEqual(shape(empty));
   });
 
+  it('refuses a frozen caller with spend_frozen before spending any daily token budget', async () => {
+    m.findFreeze.mockResolvedValueOnce({ scopeType: 'User', frozenAt: new Date() });
+    const err = await reserveCompletionCredits(restrictedReq(), 0.01, 'Lattice chat').catch(error => error);
+
+    expect(err.statusCode).toBe(403);
+    expect(err.additionalInfo).toEqual(expect.objectContaining({ errorCode: 'spend_frozen' }));
+    expect(m.tokenCounter).not.toHaveBeenCalled();
+    expect(m.userIncrement).not.toHaveBeenCalled();
+  });
+
   it('adds settled tokens to the daily counter and leaves other callers alone', async () => {
     m.userIncrement.mockResolvedValue({ currentCredits: 1000 });
     const reservation = await reserveCompletionCredits(restrictedReq(), 0.01, 'Lattice chat');

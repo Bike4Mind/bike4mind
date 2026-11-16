@@ -51,6 +51,7 @@ import {
 } from '@bike4mind/services/llm/shadowTier';
 import { getSettingsMap, getSettingsValue, usdToCredits, usdToCreditsStochastic } from '@bike4mind/utils';
 import { assertApiKeyOrgMembership } from './assertApiKeyOrgMembership';
+import { assertAiAccessAllowed } from '../auth/assertAiAccessAllowed';
 import { persistedIsAdmin } from '../auth/apiKeyAdminScope';
 import { recordPaidPlanRefusal } from './userLimitEvents';
 import { getUserEntitlements } from '../entitlements/index';
@@ -181,6 +182,14 @@ export async function reserveCompletionCredits(
   featureLabel: string,
   { organizationId, holdTtlMs }: { organizationId?: string | null; holdTtlMs?: number } = {}
 ): Promise<CreditReservation> {
+  // Access gate and freeze run ahead of the restricted-tier cap so a moderated or paused caller is told so
+  // and spends no daily token budget; reserveRequestCredits repeats both, which is harmless.
+  if (req.user) assertAiAccessAllowed(req.user);
+  await creditService.assertSpendNotFrozen(
+    spendFreezeSubjectForRequest(req, resolveRequestBillingOrgId(req, organizationId) ?? null),
+    { db: { spendFreezes: spendFreezeRepository } }
+  );
+
   // Restricted-tier daily token cap; refused like an empty balance.
   const user = throttleUser(req);
   if (user && isShadowTier(user)) {
