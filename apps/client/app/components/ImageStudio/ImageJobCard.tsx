@@ -23,7 +23,8 @@ const jobCaption = (job: StudioImageJob): string => {
 
 type ImageFit = 'contain' | 'cover';
 
-// The fit is set on the <img> itself: AspectRatio's objectFit only reaches its first child, which is JobBody.
+// The <img> sizes itself: AspectRatio's fill and objectFit only reach its first child, which is JobBody. The content
+// box is height 0 with the ratio in its padding, so only absolute positioning gives the image that height.
 const ImageJobPreview = ({ fileId, prompt, fit }: { fileId: string; prompt: string; fit: ImageFit }) => {
   const file = useGetFabFile(fileId, { pollUntilViewable: true });
   if (!file.data?.fileUrl) return <CircularProgress size="sm" data-testid="image-job-image-loading" />;
@@ -32,7 +33,7 @@ const ImageJobPreview = ({ fileId, prompt, fit }: { fileId: string; prompt: stri
       src={file.data.fileUrl}
       alt={prompt}
       loading="lazy"
-      style={{ width: '100%', height: '100%', objectFit: fit }}
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: fit }}
       data-testid="image-job-image"
     />
   );

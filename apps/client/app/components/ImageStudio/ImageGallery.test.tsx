@@ -121,8 +121,10 @@ describe('ImageGallery', () => {
 
     const [cutout, regular] = screen.getAllByTestId('image-job-image');
     expect(cutout).toHaveAttribute('src', 'https://files.example/cut.png');
-    expect(cutout).toHaveStyle({ objectFit: 'contain', width: '100%', height: '100%' });
-    expect(regular).toHaveStyle({ objectFit: 'cover', width: '100%', height: '100%' });
+    // jsdom does no layout: absolute fill is what keeps the image from collapsing in AspectRatio's 0-height box.
+    const fill = { position: 'absolute', width: '100%', height: '100%' };
+    expect(cutout).toHaveStyle({ ...fill, objectFit: 'contain' });
+    expect(regular).toHaveStyle({ ...fill, objectFit: 'cover' });
   });
 
   it('keeps a row the socket marked finished on Saving until its output arrives', () => {
