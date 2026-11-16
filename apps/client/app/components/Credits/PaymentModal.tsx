@@ -29,7 +29,8 @@ const PaymentModal = ({
       <ModalDialog
         data-testid="payment-modal-dialog"
         sx={{
-          minWidth: '400px',
+          // A bare 400px would overflow a 375px phone screen and push the pay button off the edge.
+          minWidth: 'min(400px, calc(100vw - 32px))',
           maxWidth: '600px',
           borderRadius: 'md',
           p: 3,
