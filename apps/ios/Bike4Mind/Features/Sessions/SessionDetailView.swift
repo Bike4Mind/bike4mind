@@ -189,7 +189,8 @@ private struct ChatScreen: View {
     ChatComposer(
       draft: $model.draft, isFocused: $composerFocused, canSend: model.canSend,
       agentRun: model.canRunAgent ? $model.sendsAsAgentRun : nil,
-      onDictate: { isRecordingVoice = true }, onSend: send)
+      onDictate: { isRecordingVoice = true },
+      onVoiceConversation: { services.navigator.startVoiceConversation(.session(session.id)) }, onSend: send)
   }
 
   private func send() {

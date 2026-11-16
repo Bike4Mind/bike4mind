@@ -142,6 +142,9 @@ function floorFor(cwd, forkPoint, head, filename) {
   const forkPointMs = Date.parse(git(cwd, ['show', '-s', '--format=%cI', forkPoint]));
   const addedAt = git(cwd, [
     'log',
+    // Include files first added by a merge, without printing the per-parent diffs.
+    '-m',
+    '--no-patch',
     '--format=%aI',
     '--diff-filter=A',
     `${forkPoint}..${head}`,

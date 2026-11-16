@@ -9,6 +9,7 @@ import {
 } from '../../events/alarmSlackMessage';
 import { SPEND_WINDOW_MS } from './baselines';
 import type { ResolvedScope } from './resolveScope';
+import type { AccountFunding, TopAccountContext } from './topAccountContext';
 
 export type SpendAlertMessageInput = {
   kind: 'open' | 'escalate' | 'resolve';
@@ -16,7 +17,8 @@ export type SpendAlertMessageInput = {
   scope: ResolvedScope;
   breakdown?: {
     topModels: { model: string; credits: number }[];
-    topAccounts?: { label: string; credits: number }[];
+    /** `account` is absent when its lookup failed or found no record; the line then shows label and credits only. */
+    topAccounts?: { label: string; credits: number; account?: TopAccountContext }[];
     sources?: Record<string, number>;
   };
   /** USD per credit, used only to show an approximate dollar figure. */
@@ -103,6 +105,40 @@ function accountLimitContext(alert: ISpendAlert): string[] {
     ...(spikeFloor !== null ? [`spike floor: ${formatCredits(spikeFloor)} credits / ${WINDOW_LABEL}`] : []),
     ...(ceiling !== null ? [`critical ceiling: ${formatCredits(ceiling)} credits / ${WINDOW_LABEL}`] : []),
   ];
+}
+
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+const YEAR_MS = 365 * DAY_MS;
+
+/** Coarse account age: minutes under an hour, hours under two days, days under a year, then whole years. */
+export function formatAccountAge(ms: number | null): string {
+  if (ms === null) return 'age unknown';
+  if (ms < HOUR_MS) return `${Math.max(1, Math.floor(ms / MINUTE_MS))} min old`;
+  if (ms < 2 * DAY_MS) return `${Math.floor(ms / HOUR_MS)} h old`;
+  if (ms < YEAR_MS) return `${Math.floor(ms / DAY_MS)} d old`;
+  return `${Math.floor(ms / YEAR_MS)} y old`;
+}
+
+const FUNDING_LABELS: Record<AccountFunding, string> = {
+  subscription: 'paid (subscription)',
+  purchase: 'paid (credit purchase)',
+  stripe_customer: 'Stripe customer, no purchase',
+  granted: 'free (granted credits only)',
+};
+
+type TopAccount = NonNullable<NonNullable<SpendAlertMessageInput['breakdown']>['topAccounts']>[number];
+
+function topAccountLine({ label, credits, account }: TopAccount, appUrl: string | undefined): string {
+  const line = `${safe(label)}: ${formatCredits(credits)}`;
+  if (!account) return line;
+  const balance =
+    account.creditBalance === null ? 'balance unknown' : `balance ${formatCredits(account.creditBalance)}`;
+  const facts = [account.kind, formatAccountAge(account.ageMs), balance, FUNDING_LABELS[account.funding]];
+  const activity = account.topModel ? `; ${safe(account.topModel.model)} x${account.topModel.calls}` : '';
+  const link = appUrl ? ` <${appUrl}${account.adminPath}|admin>` : '';
+  return `${line} - ${facts.join(', ')}${activity}${link}`;
 }
 
 const formatAge = (days: number | null): string => (days === null ? 'unknown' : `${days.toFixed(1)} days`);
@@ -196,13 +232,14 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
     fields.push(`*Trusted accounts, not in ratio*\n${formatAmount(alert.rule, trustedExcluded, creditUsd)}${estimate}`);
   }
 
+  const appUrl = input.appUrl?.replace(/\/+$/, '');
   const sections: string[] = accountContextSections(alert);
   if (breakdown?.topModels.length) {
     const lines = breakdown.topModels.map(m => `${safe(m.model)}: ${formatCredits(m.credits)}`);
     sections.push(`*Top models (credits)*\n${lines.join('\n')}`);
   }
   if (PLATFORM_RULES.has(alert.rule) && breakdown?.topAccounts?.length) {
-    const lines = breakdown.topAccounts.map(a => `${safe(a.label)}: ${formatCredits(a.credits)}`);
+    const lines = breakdown.topAccounts.map(account => topAccountLine(account, appUrl));
     sections.push(`*Top accounts (credits)*\n${lines.join('\n')}`);
   }
   if (breakdown?.sources && Object.keys(breakdown.sources).length > 0) {
@@ -213,7 +250,6 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
   }
 
   const buttons: { label: string; url: string }[] = [];
-  const appUrl = input.appUrl?.replace(/\/+$/, '');
   if (appUrl) {
     if (scope.adminPath) buttons.push({ label: `Open ${scope.label}`, url: `${appUrl}${scope.adminPath}` });
     buttons.push({ label: ADMIN_LINKS['spend-monitor'].label, url: `${appUrl}${ADMIN_LINKS['spend-monitor'].path}` });

@@ -24,7 +24,7 @@ const handler = nextRouteForContract(bulkDeleteFilesContract, {
   return res.json({
     deleted: results?.deleted ?? [],
     unshared: results?.unshared ?? [],
-    not_found: [...(results?.notFound ?? []), ...malformed],
+    not_found: [...(results?.notFound ?? []), ...(results?.denied ?? []), ...malformed],
     // The raw message can carry internals; the id is what a caller retries on.
     failed: (results?.failed ?? []).map(({ id }) => ({ id, error: 'The file could not be processed' })),
   });

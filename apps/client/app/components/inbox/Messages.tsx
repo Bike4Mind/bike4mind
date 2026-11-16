@@ -591,7 +591,7 @@ export const InboxDisplayModal: React.FC<{
                 </Button>
               )}
               {canReply && (
-                <Button color={'primary'} onClick={onReply} sx={blueButtonStyle} data-testid="inbox-reply-btn">
+                <Button color={'primary'} onClick={onReply} sx={blueButtonStyle} data-testid="inbox-message-reply-btn">
                   Reply
                 </Button>
               )}

@@ -91,7 +91,20 @@ function curatedBuildInfo(info: { devKeys: boolean; manifestUrl: string }): Plug
   };
 }
 
+/** The release-derived version an unpackaged run shows. Computed in every mode and unable to fail the build. */
+function devVersionInfo(): { version: string; basis: string } {
+  try {
+    const { readDevVersion } = createRequire(join(__dirname, 'package.json'))('./scripts/dev-version.cjs') as {
+      readDevVersion(cwd: string): { version: string; basis: string };
+    };
+    return readDevVersion(__dirname);
+  } catch {
+    return { version: '', basis: '' };
+  }
+}
+
 export default defineConfig(({ mode }) => {
+  const devVersion = devVersionInfo();
   const nodeEnv = mode === 'development' ? 'development' : 'production';
   const curatedUrl = baked(mode, 'B4M_CURATED_MANIFEST_URL');
   const curatedDevKeys = process.env.B4M_CURATED_DEV_KEYS === '1';
@@ -118,6 +131,8 @@ export default defineConfig(({ mode }) => {
         'process.env.B4M_UPDATE_PUBLIC_KEYS': JSON.stringify(baked(mode, 'B4M_UPDATE_PUBLIC_KEYS')),
         'process.env.B4M_CURATED_MANIFEST_URL': JSON.stringify(curatedUrl),
         __B4M_CURATED_DEV_KEYS__: JSON.stringify(curatedDevKeys),
+        __B4M_DEV_VERSION__: JSON.stringify(devVersion.version),
+        __B4M_DEV_VERSION_BASIS__: JSON.stringify(devVersion.basis),
       },
       // `@bike4mind/utils` is bundled rather than left external, and only main does this.
       // Main uses one subpath of it, `/artifactParser` - 20 kB that imports nothing but

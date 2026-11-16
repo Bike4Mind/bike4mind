@@ -12,6 +12,7 @@ const fullOrg = {
   currentCredits: 1000,
   systemPrompt: 'internal enterprise context',
   billingContact: 'billing@acme.com',
+  budgetAlerts: { enabled: true, monthlyBudgetCredits: 5000, percentThresholds: [80], lowBalanceCredits: 100 },
   stripeCustomerId: 'cus_SECRET',
   signupGrantUnlockCount: 3,
   adminUserIds: ['manager1', 'former-manager'],
@@ -50,6 +51,25 @@ describe('toSafeOrganization', () => {
     ]) {
       expect('stripeCustomerId' in toSafeOrganization(fullOrg, viewer)!).toBe(false);
       expect('signupGrantUnlockCount' in toSafeOrganization(fullOrg, viewer)!).toBe(false);
+    }
+  });
+
+  it('keeps budgetAlerts for the owner, a current manager and a site admin', () => {
+    for (const viewer of [
+      { userId: 'owner1', isAdmin: false },
+      { userId: 'manager1', isAdmin: false },
+      { userId: 'admin1', isAdmin: true },
+    ]) {
+      expect(toSafeOrganization(fullOrg, viewer)!.budgetAlerts).toEqual(fullOrg.budgetAlerts);
+    }
+  });
+
+  it('drops budgetAlerts for a plain member and a stale manager without a users row', () => {
+    for (const viewer of [
+      { userId: 'member2', isAdmin: false },
+      { userId: 'former-manager', isAdmin: false },
+    ]) {
+      expect('budgetAlerts' in toSafeOrganization(fullOrg, viewer)!).toBe(false);
     }
   });
 

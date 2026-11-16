@@ -1,5 +1,5 @@
 import type { NewSessionDefaults } from './sessionDefaults';
-import type { RolePolicy, TaskAction } from './orchestration';
+import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
 import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopApproveRequest, LoopApproveResult, LoopRunnerSettings, LoopRunnerState } from './loopRunner';
 import type {
@@ -94,7 +94,7 @@ import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pul
 import type { LocalContextFit, LocalContextSetting } from './localContextSetting';
 import type { SidebarSectionsState } from './sidebarSections';
 import type { WorkspaceChanges } from './workspaceChanges';
-import type { SkillsState } from './skills';
+import type { SkillsScope, SkillsState } from './skills';
 import type { PermissionMutationResult, PermissionRuleLists, PermissionScope, PermissionsState } from './permissions';
 import type {
   SkillMarketDetailResult,
@@ -219,6 +219,11 @@ export const IPC_CHANNELS = {
   chatGetRolePolicy: 'chat:get-role-policy',
   chatSetRolePolicy: 'chat:set-role-policy',
   chatTaskAction: 'chat:task-action',
+  chatListTaskDecisions: 'chat:list-task-decisions',
+  /** The user's answer on a worker's decision card. Renderer -> main only; no tool reaches it. */
+  chatAnswerTaskDecision: 'chat:answer-task-decision',
+  /** main -> renderer push; the whole list of decisions workers wait on the user for. */
+  chatTaskDecisions: 'chat:task-decisions',
   /**
    * The one way an approval mode changes. Renderer -> main only, driven by the composer pill:
    * there is deliberately no tool, no MCP surface and no model-facing path to this channel.
@@ -617,6 +622,8 @@ export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
 
 export interface AppInfo {
   appVersion: string;
+  /** How an unpackaged run's `appVersion` was derived; absent for a packaged build. */
+  versionBasis?: string;
   electronVersion: string;
   nodeVersion: string;
   chromeVersion: string;
@@ -947,6 +954,10 @@ export interface DesktopApi {
     getRolePolicy(): Promise<RolePolicy>;
     setRolePolicy(policy: RolePolicy): Promise<RolePolicy>;
     taskAction(sessionId: string, action: TaskAction): Promise<ChatSessionSummary>;
+    /** Decisions workers in this account wait on the user for; seeds what onTaskDecisions then replaces. */
+    listTaskDecisions(): Promise<PendingTaskDecision[]>;
+    answerTaskDecision(sessionId: string, decisionId: string, answer: TaskDecisionAnswer): Promise<void>;
+    onTaskDecisions(listener: (decisions: PendingTaskDecision[]) => void): () => void;
     /**
      * Set how much this conversation may do without asking. Called from the composer pill, in
      * response to the user clicking it, and from nowhere else - see IPC_CHANNELS above.
@@ -1179,16 +1190,20 @@ export interface DesktopApi {
     onSessionSummary(listener: (summary: ChatSessionSummary) => void): () => void;
     /**
      * The skills this conversation can run as `/name`, for the composer picker. Scoped to the
-     * session: a Chat session gets the user's own, a Code session also gets its project's once
+     * session or draft: a Chat one gets the user's own, a Code one also gets its project's once
      * that project is trusted.
      */
-    listSkills(sessionId: string): Promise<SkillsState>;
+    listSkills(scope: SkillsScope): Promise<SkillsState>;
     /**
-     * Trust (or untrust) this session's project to contribute its `.claude/skills/`. Called from
-     * the picker's prompt in response to a click, and from nowhere else - see IPC_CHANNELS.
-     * Returns the state the picker should now draw.
+     * Trust (or untrust) this session's or draft's project to contribute its `.claude/skills/`.
+     * Called from the picker's prompt in response to a click, and from nowhere else - see
+     * IPC_CHANNELS. Returns the state the picker should now draw.
      */
-    setProjectSkillsTrusted(sessionId: string, trusted: boolean): Promise<SkillsState>;
+    setProjectSkillsTrusted(
+      scope: SkillsScope,
+      trusted: boolean,
+      expectedProjectDirectory: string
+    ): Promise<SkillsState>;
   };
   /**
    * The Skill Market, read through main (SkillMarket.ts). Nothing here rejects: a signed-out or

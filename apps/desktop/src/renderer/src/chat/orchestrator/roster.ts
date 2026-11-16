@@ -1,11 +1,23 @@
-import type { ModelSelection, WorkerTask, RootPolicy } from '@shared/orchestration';
+import {
+  pendingDecisionOf,
+  type ModelSelection,
+  type PendingDecision,
+  type RootPolicy,
+  type WorkerTask,
+} from '@shared/orchestration';
 import type { ChildOutcome } from '@shared/agentOutcome';
 import type { ChatSessionStatus, ChatSessionSummary, SessionSetupStep } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
 import { descendantsOf } from '@shared/spawnTree';
 import { formatCredits } from '../statusLine';
 import type { AgentActivity } from './activity';
-import { AGENT_STATE_PRIORITY, deriveTaskAgentState, type AgentState } from '@shared/agentState';
+import {
+  AGENT_STATE_PRIORITY,
+  countAgentStates,
+  deriveTaskAgentState,
+  type AgentState,
+  type AgentStateCounts,
+} from '@shared/agentState';
 
 export {
   AGENT_STATE_LABEL,
@@ -28,6 +40,8 @@ export interface AgentView {
   model: string;
   workerSelection?: ModelSelection;
   workerTask?: WorkerTask;
+  /** The decision this agent waits on the user for; its state is then 'needs-you'. */
+  decision?: PendingDecision;
   orchestrationPolicy?: RootPolicy;
   state: AgentState;
   /** Working, but still being prepared: the setup step it is on. Stays 'working' for every count. */
@@ -93,6 +107,7 @@ export function buildRoster(input: {
   for (const { session, depth } of descendantsOf(sessions, rootId)) {
     const state = deriveTaskAgentState(session, statuses.get(session.id));
     const setup = state === 'working' ? preparing?.get(session.id) : undefined;
+    const decision = pendingDecisionOf(session.workerTask);
     views.push({
       id: session.id,
       title: session.title.trim() || 'Untitled agent',
@@ -104,6 +119,7 @@ export function buildRoster(input: {
       model: session.model,
       workerSelection: session.workerSelection,
       workerTask: session.workerTask,
+      ...(decision && { decision }),
       orchestrationPolicy: session.orchestrationPolicy,
       state,
       ...(setup && { preparing: setup }),
@@ -126,7 +142,8 @@ export function buildRoster(input: {
 
 export interface RosterSummary {
   total: number;
-  counts: Record<AgentState, number>;
+  /** countAgentStates: 'needs-you' includes the parent when it waits on the user. */
+  counts: AgentStateCounts;
   usdCost: number;
   credits: number;
   /** Some agent reported credits, so the total is shown in credits; dollars are only a fallback. */
@@ -137,12 +154,14 @@ export interface RosterSummary {
   costPartial: boolean;
 }
 
-export function summarizeRoster(agents: readonly AgentView[]): RosterSummary {
-  const counts: Record<AgentState, number> = { 'needs-you': 0, working: 0, done: 0, failed: 0, stopped: 0, idle: 0 };
+export function summarizeRoster(agents: readonly AgentView[], parent?: ParentView): RosterSummary {
+  const counts = countAgentStates(
+    agents.map(agent => agent.state),
+    parent?.status === 'needs-action' ? 1 : 0
+  );
   let usdCost = 0;
   let credits = 0;
   for (const agent of agents) {
-    counts[agent.state] += 1;
     usdCost += agent.usdCost ?? 0;
     credits += agent.credits ?? 0;
   }

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
@@ -11,10 +12,17 @@ import {
   FeedbackModel,
   FeedbackAiModel,
   FeedbackNoteModel,
+  OrgAdminNotificationPrefModel,
+  OrgAlertNotificationModel,
+  Inbox,
+  OrganizationGeneratedObject,
+  OrganizationRetentionEstimate,
+  OrganizationAuditEventModel,
   erasureRecordRepository,
   realtimeConnectionRepository,
 } from '@bike4mind/database';
 import { erasureIdHash } from '@bike4mind/server-utils/privacy/erasureHash';
+import { legacyOrganizationExportKey } from '@bike4mind/server-utils/utils/organizationDataExport';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -92,6 +100,8 @@ async function seedAccount() {
   const orgId = new mongoose.Types.ObjectId();
   const reportId = new mongoose.Types.ObjectId();
   const createdAt = new Date();
+  const mediaKey = `${randomUUID()}.png`;
+  const estimateToken = randomUUID();
   const expiresAt = new Date(Date.now() + 86400000);
   const insertRows = async () => {
     await raw(User).insertOne({ _id: userId, username: `u-${userId}`, email: `u-${userId}@example.test` });
@@ -127,6 +137,50 @@ async function seedAccount() {
       },
       { upsert: true }
     );
+    await raw(OrgAdminNotificationPrefModel).updateOne(
+      { userId: String(userId) },
+      { $set: { organizationId: 'team', kinds: {} } },
+      { upsert: true }
+    );
+    await raw(OrgAlertNotificationModel).updateOne(
+      { subjectUserId: String(userId) },
+      { $set: { organizationId: 'team', scope: `user:${userId}`, kind: 'member_cap', periodKey: '2026-11' } },
+      { upsert: true }
+    );
+    await raw(Inbox).updateOne(
+      { receiverId: String(userId), organizationAlert: true },
+      { $set: { message: 'org alert' } },
+      { upsert: true }
+    );
+    await OrganizationGeneratedObject.collection.updateOne(
+      { key: mediaKey },
+      {
+        $set: {
+          organizationId: 'abcdefabcdefabcdefabcdef',
+          key: mediaKey,
+          userId: String(userId),
+          sessionId: String(orgId),
+          createdAt,
+        },
+      },
+      { upsert: true }
+    );
+    await OrganizationRetentionEstimate.collection.updateOne(
+      { token: estimateToken },
+      {
+        $set: {
+          token: estimateToken,
+          organizationId: 'abcdefabcdefabcdefabcdef',
+          actorUserId: String(userId),
+          version: 1,
+          policy: { chats: 1, files: null, media: null },
+          counts: { chats: 0, files: 0, media: 0 },
+          estimatedAt: createdAt,
+          expiresAt,
+        },
+      },
+      { upsert: true }
+    );
     await raw(Organization).insertOne({ _id: orgId, name: 'Personal', userId: String(userId), personal: true });
     await raw(Session).insertOne({
       _id: new mongoose.Types.ObjectId(),
@@ -136,7 +190,7 @@ async function seedAccount() {
     });
   };
   await insertRows();
-  return { id: String(userId), insertRows };
+  return { id: String(userId), insertRows, mediaKey };
 }
 /** The restore overwrites the erased account's rows with their pre-erasure state. */
 const restoreAccount = async (id: string, insertRows: () => Promise<void>) => {
@@ -152,8 +206,42 @@ const rowCounts = async () => ({
 });
 
 describe('reapplyErasure after a simulated restore', () => {
-  it.each(['self', 'admin'] as const)('re-erases a %s-erased account and sends nothing', async initiatedBy => {
+  it('resumes a restored self erasure after strict legacy export deletion fails', async () => {
     const { id, insertRows } = await seedAccount();
+    await hardDeleteUser(id, { deletedBy: id, initiatedBy: 'self', logger }, users => users.delete(id));
+    const record = (await ErasureRecordModel.findOne({ idHash: erasureIdHash(id) }).lean())!;
+    await restoreAccount(id, insertRows);
+    const request = await OrganizationAuditEventModel.create({
+      organizationId: 'A'.repeat(24),
+      actorUserId: id,
+      action: 'export.requested',
+      targetId: randomUUID(),
+    });
+    const key = legacyOrganizationExportKey(request.organizationId, id, request.targetId!);
+    let fail = true;
+    effects.storage.mockImplementation(async (path: string) => {
+      if (path === key && fail) {
+        fail = false;
+        throw new Error('legacy archive unavailable');
+      }
+    });
+    try {
+      await expect(reapplyErasure(id, { record, logger })).rejects.toThrow('legacy archive unavailable');
+      const user = await User.findById(id).select('+accountFilePurge').lean();
+      expect(user?.deletion).toBeUndefined();
+      expect(user?.accountFilePurge?.startedAt).toBeInstanceOf(Date);
+      expect(user?.accountFilePurge?.afterAuditId).toBeUndefined();
+      await reapplyErasure(id, { record, logger });
+      expect(await User.exists({ _id: id })).toBeNull();
+      expect(effects.storage.mock.calls.filter(([path]) => path === key)).toHaveLength(2);
+      expect(await OrganizationAuditEventModel.findById(request._id).lean()).not.toBeNull();
+    } finally {
+      effects.storage.mockReset();
+    }
+  });
+
+  it.each(['self', 'admin'] as const)('re-erases a %s-erased account and sends nothing', async initiatedBy => {
+    const { id, insertRows, mediaKey } = await seedAccount();
     const bystander = await seedAccount();
     await hardDeleteUser(id, { deletedBy: id, initiatedBy, logger }, users => users.delete(id));
     const record = await ErasureRecordModel.findOne({ idHash: erasureIdHash(id) }).lean();
@@ -179,6 +267,16 @@ describe('reapplyErasure after a simulated restore', () => {
     expect(result.ownedOrganizationIds).toEqual([]);
     expect(await FeedbackAiModel.countDocuments()).toBe(1);
     expect(await FeedbackNoteModel.countDocuments()).toBe(1);
+    expect(await OrgAdminNotificationPrefModel.countDocuments({ userId: id })).toBe(0);
+    expect(await OrgAlertNotificationModel.countDocuments({ subjectUserId: id })).toBe(0);
+    expect(await Inbox.collection.countDocuments({ receiverId: id, organizationAlert: true })).toBe(0);
+    expect(await OrgAdminNotificationPrefModel.countDocuments({ userId: bystander.id })).toBe(1);
+    expect(await OrgAlertNotificationModel.countDocuments({ subjectUserId: bystander.id })).toBe(1);
+    expect(await Inbox.collection.countDocuments({ receiverId: bystander.id, organizationAlert: true })).toBe(1);
+    expect(await OrganizationRetentionEstimate.countDocuments({ actorUserId: id })).toBe(0);
+    expect(await OrganizationRetentionEstimate.countDocuments({ actorUserId: bystander.id })).toBe(1);
+    expect((await OrganizationGeneratedObject.findOne({ key: mediaKey }).lean())?.userId).toBe('deleted-account');
+    expect((await OrganizationGeneratedObject.findOne({ key: bystander.mediaKey }).lean())?.userId).toBe(bystander.id);
     expect((await raw(Connection).findOne({ connectionId: 'erased-connection' }))?.endedAt).toBeInstanceOf(Date);
     expect((await raw(Connection).findOne({ connectionId: 'bystander-connection' }))?.endedAt).toBeUndefined();
     expect((await raw(QuerySubscription).findOne({ queryId: 'restored-query' }))?.subscribers).toEqual([
@@ -295,5 +393,10 @@ describe('reapplyErasure after a simulated restore', () => {
     // The delete rolled back with the failed write: no row gone without its record.
     expect(await raw(User).countDocuments({ _id: new mongoose.Types.ObjectId(id) })).toBe(1);
     expect(await ErasureRecordModel.countDocuments({ idHash: record.idHash })).toBe(0);
+    if (initiatedBy === 'admin') {
+      expect(await OrgAdminNotificationPrefModel.countDocuments({ userId: id })).toBe(1);
+      expect(await OrgAlertNotificationModel.countDocuments({ subjectUserId: id })).toBe(1);
+      expect(await Inbox.collection.countDocuments({ receiverId: id, organizationAlert: true })).toBe(1);
+    }
   });
 });

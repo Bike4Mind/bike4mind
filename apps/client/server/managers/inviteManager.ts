@@ -18,8 +18,10 @@ import {
   sessionRepository,
   projectRepository,
   organizationRepository,
+  spaceRepository,
 } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
+import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 
 export const getInviteDetails = async (invite: IInviteDocument, includeUser?: boolean) => {
   const inviteWithDetails = invite;
@@ -49,6 +51,11 @@ export const getInviteDetails = async (invite: IInviteDocument, includeUser?: bo
       name = group?.name;
       break;
     }
+    case InviteType.Space: {
+      const space = await spaceRepository.findLiveById(docId);
+      name = space?.name;
+      break;
+    }
     default:
       break;
   }
@@ -74,6 +81,8 @@ export type InviteViewAccess = 'allowed' | 'expired' | 'revoked' | 'denied';
  * revoked) | 'denied'. Share-authorized callers still see expired invites.
  */
 export async function canViewInvite(user: IUserDocument, invite: IInviteDocument): Promise<InviteViewAccess> {
+  // Space routes sit behind EnableSpaces, so this read path must not reveal a Space invite with it off.
+  if (invite.type === InviteType.Space && !(await isFeatureEnabled('EnableSpaces'))) return 'denied';
   const expired = !!invite.expiresAt && new Date(invite.expiresAt).getTime() < Date.now();
   const email = user.email?.toLowerCase();
   const named = [...(invite.recipients?.pending ?? []), ...(invite.recipients?.accepted ?? [])];
@@ -93,13 +102,20 @@ export async function canViewInvite(user: IUserDocument, invite: IInviteDocument
   }
 
   try {
-    await sharingService.authorizeByInviteType(user, invite.type, invite.documentId, {
-      fabFiles: fabFileRepository,
-      sessions: sessionRepository,
-      projects: projectRepository,
-      organizations: organizationRepository,
-      groups: Group,
-    });
+    await sharingService.authorizeByInviteType(
+      user,
+      invite.type,
+      invite.documentId,
+      {
+        fabFiles: fabFileRepository,
+        sessions: sessionRepository,
+        projects: projectRepository,
+        organizations: organizationRepository,
+        groups: Group,
+        spaces: spaceRepository,
+      },
+      invite.type === InviteType.Space ? { requireManageGroups: true } : undefined
+    );
     return 'allowed';
   } catch {
     return isNamedRecipient && expired ? 'expired' : 'denied';

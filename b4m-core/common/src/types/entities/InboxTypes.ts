@@ -13,6 +13,8 @@ export interface IInbox {
   type: InboxType; // type of inbox
   title: string;
   message: string; // this should probably be a markdown string, wysiwyg
+  /** Trusted producer marker for transactional recipient erasure of organization alerts. */
+  organizationAlert?: boolean;
   readAt: Date | null;
   deletedAt: Date | null;
   /** Dedupe key of a system notice, unique among open notices; unset when the notice is resolved. Server-only. */
@@ -32,6 +34,7 @@ export interface IInboxRepository extends IBaseRepository<IInboxDocument> {
     title: string;
     message: string;
     type: InboxType;
+    organizationAlert?: boolean;
   }): Promise<IInboxDocument>;
   deleteByReceiverId(receiverId: string, messageId: string): Promise<boolean>;
   /** Creates a keyed notice; returns false when a notice still holds that `sourceKey`. */

@@ -69,6 +69,8 @@ export const createFabFileSchema = z.object({
 type CreateFabFileParameters = z.infer<typeof createFabFileSchema>;
 
 export interface CreateFabFileAdapters {
+  /** Server-validated ownership for generated assets, never parsed from upload parameters. */
+  ownerOrganizationId?: string;
   objectKey?: string;
   db: {
     fabFiles: {
@@ -208,6 +210,7 @@ export const prepareFabFile = async (
     pendingUploadBytes,
     serverUpload,
     storageExempt,
+    ownerOrganizationId: explicitOwnerOrganizationId,
   }: CreateFabFileAdapters
 ) => {
   const params = secureParameters(parameters, createFabFileSchema);
@@ -223,7 +226,7 @@ export const prepareFabFile = async (
   const tagNames = (params.tags ?? []).map(t => t.name);
   // The file is created under `userId`, so it is its own owner-to-be for the admission contract.
   const targetLakes = await assertCanWriteDataLakeTags(actor, tagNames, { db, members: [{ userId }] });
-  const ownerOrganizationId = pickOwnerOrganizationId(targetLakes);
+  const ownerOrganizationId = explicitOwnerOrganizationId ?? pickOwnerOrganizationId(targetLakes);
   assertCanWriteStaticRegistryTags(actor, tagNames);
 
   // A file joining a lake here must also land under that lake's content prefix, or it

@@ -54,6 +54,7 @@ import { registerAdminAuditAlerts } from './adminAuditAlerts';
 import { registerOauthAbuseAutoBlock } from './oauthAbuseAutoBlock';
 import { registerSignupGrantHeldRelease } from './signupGrantHeldRelease';
 import { registerAccountDeletionSweep } from './accountDeletionSweep';
+import { registerOrganizationRetention } from './organizationRetention';
 import { registerRealtimeConnectionSweep } from './realtimeConnectionSweep';
 import { registerIntegrationHealthCheck } from './integrationHealthCheck';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
@@ -74,6 +75,9 @@ import {
   GENERATION_JOB_MAX_RECEIVE_COUNT,
   GENERATION_JOB_VISIBILITY_TIMEOUT_SEC,
 } from '@bike4mind/server-utils/utils/sqsDelivery';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
+
+registerOrgAlertObserver();
 
 /**
  * Self-host background worker entrypoint.
@@ -139,6 +143,7 @@ async function main() {
   registerOauthAbuseAutoBlock(worker);
   registerSignupGrantHeldRelease(worker);
   registerAccountDeletionSweep(worker);
+  registerOrganizationRetention(worker);
   registerRealtimeConnectionSweep(worker);
   registerIntegrationHealthCheck(worker, bootLogger);
   registerLakeHealthSweep(worker);

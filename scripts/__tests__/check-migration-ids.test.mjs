@@ -188,6 +188,55 @@ describe('checkMigrationIds (real git repo)', () => {
     expect(checkMigrationIds({ cwd: repo, base: 'main', nowMs: NOW })).toEqual([]);
   });
 
+  function mergeBranch(branch, isoDate, args = []) {
+    execFileSync(
+      'git',
+      ['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'merge', '-q', '--no-ff', ...args, branch],
+      {
+        cwd: repo,
+        env: { ...process.env, GIT_AUTHOR_DATE: isoDate, GIT_COMMITTER_DATE: isoDate },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }
+    );
+  }
+
+  function addThroughMerge(id, onSideBranch = false) {
+    writeFileSync(join(repo, 'feature.txt'), 'feature\n');
+    commit('feature work', '2026-11-12T09:00:00Z');
+    execFileSync('git', ['checkout', '-qb', 'side', 'main'], { cwd: repo });
+    writeFileSync(join(repo, 'side.txt'), 'side\n');
+    if (onSideBranch) addMigration(id);
+    commit('side work', '2026-11-12T09:10:00Z');
+    execFileSync('git', ['checkout', '-q', 'feature'], { cwd: repo });
+    // A later merge must not hide the original addition on its side parent.
+    const mergedAt = onSideBranch ? '2026-11-15T09:20:00Z' : '2026-11-12T09:20:00Z';
+    mergeBranch('side', mergedAt, ['--no-commit']);
+    if (!onSideBranch) addMigration(id);
+    commit('merge side and add migration', mergedAt);
+    execFileSync('git', ['checkout', '-q', 'main'], { cwd: repo });
+    writeFileSync(join(repo, 'new-main.txt'), 'new main\n');
+    commit('newer main', '2026-11-16T08:00:00Z');
+    execFileSync('git', ['checkout', '-q', 'feature'], { cwd: repo });
+    mergeBranch('main', '2026-11-16T09:00:00Z');
+  }
+
+  it('keeps a generated id fresh when its first addition was in a merge commit', () => {
+    addThroughMerge('20261112091500');
+    expect(checkMigrationIds({ cwd: repo, base: 'main', nowMs: Date.UTC(2026, 10, 16, 10) })).toEqual([]);
+  });
+
+  it('still rejects a stale id first added in a merge commit', () => {
+    addThroughMerge('20260921000003');
+    expect(checkMigrationIds({ cwd: repo, base: 'main', nowMs: Date.UTC(2026, 10, 16, 10) })).toEqual([
+      expect.stringContaining('older than this change'),
+    ]);
+  });
+
+  it('still follows additions on the side parent of a merge', () => {
+    addThroughMerge('20261112090500', true);
+    expect(checkMigrationIds({ cwd: repo, base: 'main', nowMs: Date.UTC(2026, 10, 16, 10) })).toEqual([]);
+  });
+
   function runCli() {
     try {
       const stdout = execFileSync(

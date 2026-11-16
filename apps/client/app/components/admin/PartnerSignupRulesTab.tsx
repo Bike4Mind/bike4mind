@@ -1,186 +1,83 @@
 import { useState } from 'react';
 import {
-  Alert,
-  Autocomplete,
   Box,
   Button,
   Chip,
-  Divider,
-  FormControl,
-  FormHelperText,
-  FormLabel,
+  Dropdown,
   IconButton,
-  Input,
-  LinearProgress,
-  Modal,
-  ModalClose,
-  ModalDialog,
-  Option,
-  Select,
-  Sheet,
+  Menu,
+  MenuButton,
+  MenuItem,
   Stack,
   Switch,
-  Table,
-  Textarea,
   Tooltip,
   Typography,
 } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
-import EditIcon from '@mui/icons-material/Edit';
-import DeleteIcon from '@mui/icons-material/Delete';
-import HandshakeIcon from '@mui/icons-material/Handshake';
-import GroupAddIcon from '@mui/icons-material/GroupAdd';
-import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
+import { MoreHorizontal } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import type { IPartnerSignupRuleDocument } from '@bike4mind/common';
-import { KNOWN_ENTITLEMENT_KEYS } from '@bike4mind/server-utils/lib/entitlements/registry';
-import { SUBSCRIPTION_PLANS } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
-import type { SubscriptionPlanDetail } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import {
   fetchPartnerSignupRules,
-  createPartnerSignupRule,
   updatePartnerSignupRule,
   deletePartnerSignupRule,
-  searchOrganizations,
-  fetchOrganizationById,
   previewPartnerRuleBackfill,
   runPartnerRuleBackfill,
-  type OrganizationOption,
 } from '@client/app/utils/partnerSignupRuleAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 import type { GrantPackageRow } from '@client/app/utils/grantPackageAPICalls';
-import GrantPackageSelect, {
-  grantPackageUsage,
-  useGrantPackageOptions,
-  useSelectedGrantPackage,
-} from './InviteCenter/shared/GrantPackageSelect';
-
-// Options for the entitlements picker; spread to a mutable array for Joy Autocomplete.
-const ENTITLEMENT_OPTIONS = [...KNOWN_ENTITLEMENT_KEYS];
-
-const planLabel = (plan: SubscriptionPlanDetail): string => `${plan.name} (${plan.interval})`;
-
-// A saved rule can outlive its plan, so fall back to the raw price id rather than hide it.
-const planLabelForPriceId = (priceId: string): string => {
-  const plan = SUBSCRIPTION_PLANS.find(candidate => candidate.priceId === priceId);
-  return plan ? planLabel(plan) : priceId;
-};
+import { grantPackageUsage, useGrantPackageOptions } from './InviteCenter/shared/GrantPackageSelect';
+import {
+  ADMIN_REASON_PRESETS,
+  ActionDialog,
+  AdminPageHeader,
+  AdminSearchInput,
+  DataTable,
+  EmptyState,
+  ErrorState,
+  StatusChip,
+  type DataColumn,
+} from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import PartnerSignupRuleFormDialog, { planLabelForPriceId } from './PartnerSignupRuleFormDialog';
 
 const QUERY_KEY = 'partner-signup-rules';
-const PAGE_LIMIT = 25;
 
-type FormState = {
-  domain: string;
-  label: string;
-  entitlements: string[];
-  tags: string[];
-  subscriptionPriceId: string | null;
-  subscriptionMonths: string;
-  signupCredits: string;
-  grantPackageId: string | null;
-  notes: string;
-  enabled: boolean;
-  // `organizationId` is the value persisted; `organization` carries the name so the picker can
-  // render the current selection (seeded async when editing a rule that already has an org).
-  organizationId: string | null;
-  organization: OrganizationOption | null;
-};
+const dash = (
+  <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+    -
+  </Typography>
+);
+const none = (
+  <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+    none
+  </Typography>
+);
 
-const emptyForm: FormState = {
-  domain: '',
-  label: '',
-  entitlements: [],
-  tags: [],
-  subscriptionPriceId: null,
-  subscriptionMonths: '1',
-  signupCredits: '0',
-  grantPackageId: null,
-  notes: '',
-  enabled: true,
-  organizationId: null,
-  organization: null,
-};
-
-const ruleToForm = (rule: IPartnerSignupRuleDocument): FormState => ({
-  domain: rule.domain,
-  label: rule.label ?? '',
-  entitlements: rule.entitlements ?? [],
-  tags: rule.tags ?? [],
-  subscriptionPriceId: rule.subscription?.priceId ?? null,
-  subscriptionMonths: String(rule.subscription?.durationMonths ?? 1),
-  signupCredits: String(rule.signupCredits ?? 0),
-  grantPackageId: rule.grantPackageId ?? null,
-  notes: rule.notes ?? '',
-  enabled: rule.enabled,
-  organizationId: rule.organizationId ?? null,
-  organization: null,
-});
+const plural = (count: number) => (count === 1 ? '' : 's');
 
 export default function PartnerSignupRulesTab() {
   const queryClient = useQueryClient();
   // useDebounceValue owns the input state; `value` mirrors keystrokes, `debouncedValue` drives the query.
   const { value: searchInput, debouncedValue: search, setValue: setSearchInput } = useDebounceValue('');
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
-  // Modal state: `editing` null => create; a rule => edit that rule.
-  const [modalOpen, setModalOpen] = useState(false);
+  // `formOpen` with `editing` null => create; with a rule => edit that rule.
+  const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<IPartnerSignupRuleDocument | null>(null);
-  const [form, setForm] = useState<FormState>(emptyForm);
-  // A plan removed from the catalog after the rule was saved would otherwise match no Option and render blank.
-  const planOptions = SUBSCRIPTION_PLANS.map(plan => ({ priceId: plan.priceId, label: planLabel(plan) }));
-  if (form.subscriptionPriceId && !planOptions.some(option => option.priceId === form.subscriptionPriceId)) {
-    planOptions.push({ priceId: form.subscriptionPriceId, label: `${form.subscriptionPriceId} (unavailable)` });
-  }
-  const [formError, setFormError] = useState<string | null>(null);
-  const { data: packageList } = useGrantPackageOptions();
-  const selectedPackage = useSelectedGrantPackage(form.grantPackageId);
-  // Rule pending deletion (drives the confirm dialog); null when closed.
   const [deleteTarget, setDeleteTarget] = useState<IPartnerSignupRuleDocument | null>(null);
+  const [backfillTarget, setBackfillTarget] = useState<IPartnerSignupRuleDocument | null>(null);
+  const { data: packageList } = useGrantPackageOptions();
 
-  const { data, isPending } = useQuery({
-    queryKey: [QUERY_KEY, { page, search }],
-    queryFn: () => fetchPartnerSignupRules({ page, limit: PAGE_LIMIT, search: search || undefined }),
+  const { data, isPending, error, refetch } = useQuery({
+    queryKey: [QUERY_KEY, { page, pageSize, search }],
+    queryFn: () => fetchPartnerSignupRules({ page, limit: pageSize, search: search || undefined }),
   });
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: [QUERY_KEY] });
-
-  const saveMutation = useMutation({
-    mutationFn: async () => {
-      // Send label/notes as trimmed strings (not `|| undefined`): JSON drops undefined keys
-      // and the API only $sets keys it receives, so coalescing to undefined would make a
-      // cleared field un-clearable (the old value would persist on update).
-      const payload = {
-        entitlements: form.entitlements,
-        tags: form.tags,
-        // null (not undefined) so clearing the subscription is a real update; see organizationId below.
-        subscription: form.subscriptionPriceId
-          ? { priceId: form.subscriptionPriceId, durationMonths: Number(form.subscriptionMonths) }
-          : null,
-        signupCredits: Number(form.signupCredits),
-        grantPackageId: form.grantPackageId,
-        label: form.label.trim(),
-        notes: form.notes.trim(),
-        enabled: form.enabled,
-        // Send null (not undefined) so clearing the org association is a real update - the API
-        // $sets keys it receives, and JSON drops undefined, so undefined would be un-clearable.
-        organizationId: form.organizationId,
-      };
-      if (editing) {
-        return updatePartnerSignupRule(editing.id, payload);
-      }
-      return createPartnerSignupRule({ domain: form.domain, ...payload });
-    },
-    onSuccess: rule => {
-      invalidate();
-      setModalOpen(false);
-      toast.success(editing ? `Updated rule for ${rule.domain}` : `Created signup rule for ${rule.domain}`);
-    },
-    onError: (error: unknown) => {
-      setFormError(getErrorMessage(error));
-    },
-  });
 
   const toggleMutation = useMutation({
     mutationFn: (rule: IPartnerSignupRuleDocument) => updatePartnerSignupRule(rule.id, { enabled: !rule.enabled }),
@@ -201,18 +98,13 @@ export default function PartnerSignupRulesTab() {
     onError: (error: unknown) => toast.error(getErrorMessage(error)),
   });
 
-  // Org picker: debounced name search, only queried while the modal is open. The Autocomplete
-  // input stays uncontrolled so it shows the selected org's label; onInputChange feeds the search.
-  const { debouncedValue: orgSearch, setValue: setOrgSearchInput } = useDebounceValue('');
-  const { data: orgOptions = [], isFetching: orgOptionsLoading } = useQuery({
-    queryKey: ['org-search', orgSearch],
-    queryFn: () => searchOrganizations(orgSearch),
-    enabled: modalOpen,
-  });
-
-  // Backfill: the rule whose existing users we're sweeping into its org (null = closed).
-  const [backfillTarget, setBackfillTarget] = useState<IPartnerSignupRuleDocument | null>(null);
-  const { data: backfillPreview, isPending: backfillPreviewLoading } = useQuery({
+  const {
+    data: backfillPreview,
+    isPending: backfillPreviewLoading,
+    isFetching: backfillPreviewFetching,
+    error: backfillPreviewError,
+    refetch: refetchBackfillPreview,
+  } = useQuery({
     queryKey: ['partner-rule-backfill-preview', backfillTarget?.id],
     queryFn: () => previewPartnerRuleBackfill(backfillTarget!.id),
     enabled: !!backfillTarget,
@@ -232,567 +124,310 @@ export default function PartnerSignupRulesTab() {
     onError: (error: unknown) => toast.error(getErrorMessage(error)),
   });
 
-  const openCreate = () => {
-    setEditing(null);
-    setForm(emptyForm);
-    setFormError(null);
-    setModalOpen(true);
-  };
-
-  const openEdit = (rule: IPartnerSignupRuleDocument) => {
+  const openForm = (rule: IPartnerSignupRuleDocument | null) => {
     setEditing(rule);
-    setForm(ruleToForm(rule));
-    setFormError(null);
-    setModalOpen(true);
-    // Seed the picker's selected label. The rule stores only the id, so fetch the org name;
-    // guard against a since-deleted org (fetch returns null) by leaving the picker empty.
-    if (rule.organizationId) {
-      fetchOrganizationById(rule.organizationId)
-        .then(org => {
-          if (org) setForm(f => (f.organizationId === org.id ? { ...f, organization: org } : f));
-        })
-        .catch(() => {
-          /* non-fatal: the id still saves; only the display label is missing */
-        });
-    }
+    setFormOpen(true);
   };
 
-  const rules = data?.data ?? [];
-  const total = data?.meta.total ?? 0;
-  const totalPages = data?.meta.totalPages ?? 1;
-  const isEmpty = rules.length === 0 && !isPending;
+  const toggling = (rule: IPartnerSignupRuleDocument) =>
+    toggleMutation.isPending && toggleMutation.variables?.id === rule.id;
+
+  const columns: DataColumn<IPartnerSignupRuleDocument>[] = [
+    { id: 'domain', label: 'Domain', width: '12rem', render: rule => <b>{rule.domain}</b> },
+    { id: 'label', label: 'Label', width: '10rem', render: rule => rule.label || dash },
+    {
+      id: 'entitlements',
+      label: 'Entitlements',
+      width: '14rem',
+      render: rule =>
+        rule.entitlements.length ? (
+          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+            {rule.entitlements.map(key => (
+              <Chip key={key} size="sm" variant="soft" color="neutral">
+                {key}
+              </Chip>
+            ))}
+          </Stack>
+        ) : (
+          none
+        ),
+    },
+    {
+      id: 'tags',
+      label: 'Tags',
+      width: '10rem',
+      render: rule =>
+        rule.tags?.length ? (
+          <Stack
+            direction="row"
+            spacing={0.5}
+            flexWrap="wrap"
+            useFlexGap
+            data-testid={`partner-rule-tags-${rule.domain}`}
+          >
+            {rule.tags.map(tag => (
+              <Chip key={tag} size="sm" variant="soft" color="neutral">
+                {tag}
+              </Chip>
+            ))}
+          </Stack>
+        ) : (
+          none
+        ),
+    },
+    {
+      id: 'subscription',
+      label: 'Subscription',
+      width: '12rem',
+      render: rule => (
+        <span data-testid={`partner-rule-subscription-${rule.domain}`}>
+          {rule.subscription
+            ? `${planLabelForPriceId(rule.subscription.priceId)}, ${rule.subscription.durationMonths} mo`
+            : dash}
+        </span>
+      ),
+    },
+    {
+      id: 'credits',
+      label: 'Signup credits',
+      numeric: true,
+      width: '9rem',
+      render: rule =>
+        rule.grantPackageId ? (
+          <PackageCell ruleId={rule.id} pkg={packageList?.data.find(pkg => pkg.id === rule.grantPackageId)} />
+        ) : rule.signupCredits > 0 ? (
+          rule.signupCredits.toLocaleString()
+        ) : (
+          none
+        ),
+    },
+    {
+      id: 'org',
+      label: 'Org',
+      width: '5rem',
+      render: rule =>
+        rule.organizationId ? (
+          <Tooltip title="Verified signups on this domain are auto-added to an organization">
+            <span>
+              <StatusChip tone="good" label="linked" data-testid={`partner-rule-org-${rule.domain}`} />
+            </span>
+          </Tooltip>
+        ) : (
+          dash
+        ),
+    },
+    {
+      id: 'enabled',
+      label: 'Enabled',
+      width: '9rem',
+      render: rule => (
+        // A disabled Switch ignores pointer events, so the click would reach the row and open a stale edit form.
+        <Stack direction="row" alignItems="center" gap={1} onClick={e => e.stopPropagation()}>
+          <Tooltip title={rule.enabled ? 'Enabled - click to disable' : 'Disabled - click to enable'}>
+            <Switch
+              size="sm"
+              color={rule.enabled ? 'success' : 'neutral'}
+              checked={rule.enabled}
+              disabled={toggling(rule)}
+              onChange={() => toggleMutation.mutate(rule)}
+              slotProps={{ input: { 'aria-label': `Enable rule for ${rule.domain}` } }}
+              data-testid={`partner-rule-toggle-${rule.domain}`}
+            />
+          </Tooltip>
+          {!rule.enabled && <StatusChip tone="neutral" label="Disabled" />}
+        </Stack>
+      ),
+    },
+  ];
+
+  const rowActions = (rule: IPartnerSignupRuleDocument) => (
+    <Dropdown>
+      <MenuButton
+        slots={{ root: IconButton }}
+        slotProps={{ root: { variant: 'plain', size: 'sm', 'aria-label': `Actions for ${rule.domain}` } }}
+        data-testid={`partner-rule-actions-${rule.domain}`}
+      >
+        <MoreHorizontal size={16} />
+      </MenuButton>
+      <Menu placement="bottom-end">
+        <MenuItem onClick={() => openForm(rule)} data-testid={`partner-rule-edit-${rule.domain}`}>
+          Edit rule
+        </MenuItem>
+        {rule.organizationId && (
+          <MenuItem onClick={() => setBackfillTarget(rule)} data-testid={`partner-rule-backfill-${rule.domain}`}>
+            Backfill into organization
+          </MenuItem>
+        )}
+        <MenuItem
+          color="danger"
+          onClick={() => setDeleteTarget(rule)}
+          data-testid={`partner-rule-delete-${rule.domain}`}
+        >
+          Delete rule
+        </MenuItem>
+      </Menu>
+    </Dropdown>
+  );
+
+  const addButton = (testId: string, label = 'Add rule', variant: 'solid' | 'outlined' = 'solid') => (
+    <Button variant={variant} startDecorator={<AddIcon />} onClick={() => openForm(null)} data-testid={testId}>
+      {label}
+    </Button>
+  );
+
+  const matched = backfillPreview?.matched ?? 0;
 
   return (
-    <Box data-testid="partner-signup-rules-tab">
-      <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 2 }} gap={2}>
-        <Box>
-          <Stack direction="row" alignItems="center" gap={1}>
-            <Typography level="h4">Partner Signup Rules</Typography>
-            {total > 0 && (
-              <Chip size="sm" variant="soft" color="primary" data-testid="partner-rule-count">
-                {total}
-              </Chip>
-            )}
-          </Stack>
-          <Typography level="body-sm" sx={{ color: 'text.tertiary', maxWidth: 620 }}>
-            Auto-grant entitlements, a one-time signup-credit bonus, and optional organization membership to anyone who
-            registers with a verified email on a partner domain. Applied at email verification; disabled rules confer
-            nothing.
-          </Typography>
-        </Box>
-        <Button startDecorator={<AddIcon />} onClick={openCreate} data-testid="partner-rule-add-btn">
-          Add rule
-        </Button>
+    <Stack gap={ADMIN_REGION_GAP} data-testid="partner-signup-rules-tab">
+      <AdminPageHeader
+        title="Partner signups"
+        count={data?.meta.total}
+        description="Grant entitlements, credits, a plan or an org to verified signups on a partner domain."
+        actions={addButton('partner-rule-add-btn')}
+      />
+      <Stack direction="row" flexWrap="wrap" alignItems="center" gap={1}>
+        <AdminSearchInput
+          label="Search by domain or label"
+          value={searchInput}
+          onChange={value => {
+            setSearchInput(value);
+            setPage(1);
+          }}
+          data-testid="partner-rule-search-input"
+        />
       </Stack>
-
-      <Input
-        placeholder="Search by domain or label..."
-        value={searchInput}
-        onChange={e => {
-          setSearchInput(e.target.value);
-          setPage(1);
+      <DataTable
+        rows={data?.data ?? []}
+        columns={columns}
+        getRowId={rule => rule.id}
+        label="Partner signup rules"
+        minWidth="80rem"
+        loading={isPending}
+        error={error ? getErrorMessage(error) : undefined}
+        onRetry={() => void refetch()}
+        testId="partner-rules-table"
+        rowTestId={rule => `partner-rule-row-${rule.domain}`}
+        onRowActivate={rule => openForm(rule)}
+        rowActions={rowActions}
+        empty={
+          search ? (
+            <EmptyState
+              title="No rules match this search"
+              description="Try a different domain or label."
+              action={
+                <Button
+                  variant="outlined"
+                  color="neutral"
+                  onClick={() => {
+                    setSearchInput('');
+                    setPage(1);
+                  }}
+                  data-testid="partner-rule-clear-search-btn"
+                >
+                  Clear search
+                </Button>
+              }
+            />
+          ) : (
+            <EmptyState
+              title="No partner signup rules yet"
+              description="Create a rule to auto-grant entitlements and bonus credits to a partner's verified signups."
+              action={addButton('partner-rule-empty-add-btn', 'Add your first rule', 'outlined')}
+            />
+          )
+        }
+        pagination={{
+          page,
+          pageSize,
+          total: data?.meta.total ?? 0,
+          onPageChange: setPage,
+          onPageSizeChange: size => {
+            setPageSize(size);
+            setPage(1);
+          },
         }}
-        sx={{ mb: 2, maxWidth: 360 }}
-        data-testid="partner-rule-search-input"
       />
 
-      {isPending && <LinearProgress sx={{ mb: 1 }} />}
-
-      {isEmpty ? (
-        <Sheet
-          variant="soft"
-          sx={{
-            borderRadius: 'md',
-            py: 6,
-            px: 3,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: 1.5,
+      {formOpen && (
+        <PartnerSignupRuleFormDialog
+          editing={editing}
+          onClose={() => setFormOpen(false)}
+          onSaved={() => {
+            void invalidate();
+            setFormOpen(false);
           }}
-        >
-          <HandshakeIcon sx={{ fontSize: 44, color: 'neutral.400' }} />
-          <Typography level="title-md">{search ? 'No matching rules' : 'No partner signup rules yet'}</Typography>
-          <Typography level="body-sm" sx={{ color: 'text.tertiary', textAlign: 'center', maxWidth: 420 }}>
-            {search
-              ? 'Try a different domain or label.'
-              : 'Create a rule to auto-grant entitlements and bonus credits to a partner’s verified signups.'}
-          </Typography>
-          {!search && (
-            <Button
-              startDecorator={<AddIcon />}
-              onClick={openCreate}
-              sx={{ mt: 1 }}
-              data-testid="partner-rule-empty-add-btn"
-            >
-              Add your first rule
-            </Button>
-          )}
-        </Sheet>
-      ) : (
-        <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
-          <Table stickyHeader hoverRow sx={{ '--TableCell-headBackground': 'var(--joy-palette-background-level1)' }}>
-            <thead>
-              <tr>
-                <th>Domain</th>
-                <th>Label</th>
-                <th>Entitlements</th>
-                <th>Tags</th>
-                <th>Subscription</th>
-                <th style={{ width: 140, textAlign: 'right' }}>Signup credits</th>
-                <th style={{ width: 90, textAlign: 'center' }}>Org</th>
-                <th style={{ width: 90, textAlign: 'center' }}>Enabled</th>
-                <th style={{ width: 150, textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rules.map(rule => {
-                const toggling = toggleMutation.isPending && toggleMutation.variables?.id === rule.id;
-                return (
-                  <tr
-                    key={rule.id}
-                    data-testid={`partner-rule-row-${rule.domain}`}
-                    style={{ opacity: rule.enabled ? 1 : 0.55, transition: 'opacity 120ms ease' }}
-                  >
-                    <td>
-                      <Typography level="body-sm" fontWeight="lg">
-                        {rule.domain}
-                      </Typography>
-                    </td>
-                    <td>
-                      {rule.label || (
-                        <Typography level="body-xs" sx={{ color: 'neutral.400' }}>
-                          -
-                        </Typography>
-                      )}
-                    </td>
-                    <td>
-                      {rule.entitlements.length ? (
-                        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                          {rule.entitlements.map(key => (
-                            <Chip key={key} size="sm" variant="soft" color="primary">
-                              {key}
-                            </Chip>
-                          ))}
-                        </Stack>
-                      ) : (
-                        <Typography level="body-xs" sx={{ color: 'neutral.400' }}>
-                          none
-                        </Typography>
-                      )}
-                    </td>
-                    <td>
-                      {rule.tags?.length ? (
-                        <Stack
-                          direction="row"
-                          spacing={0.5}
-                          flexWrap="wrap"
-                          useFlexGap
-                          data-testid={`partner-rule-tags-${rule.domain}`}
-                        >
-                          {rule.tags.map(tag => (
-                            <Chip key={tag} size="sm" variant="soft" color="neutral">
-                              {tag}
-                            </Chip>
-                          ))}
-                        </Stack>
-                      ) : (
-                        <Typography level="body-xs" sx={{ color: 'neutral.400' }}>
-                          none
-                        </Typography>
-                      )}
-                    </td>
-                    <td data-testid={`partner-rule-subscription-${rule.domain}`}>
-                      {rule.subscription ? (
-                        <Typography level="body-sm">
-                          {planLabelForPriceId(rule.subscription.priceId)}, {rule.subscription.durationMonths} mo
-                        </Typography>
-                      ) : (
-                        <Typography level="body-xs" sx={{ color: 'neutral.400' }}>
-                          -
-                        </Typography>
-                      )}
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      {rule.grantPackageId ? (
-                        <PackageCell
-                          ruleId={rule.id}
-                          pkg={packageList?.data.find(pkg => pkg.id === rule.grantPackageId)}
-                        />
-                      ) : rule.signupCredits > 0 ? (
-                        <Typography level="body-sm">{rule.signupCredits.toLocaleString()}</Typography>
-                      ) : (
-                        <Typography level="body-xs" sx={{ color: 'neutral.400' }}>
-                          none
-                        </Typography>
-                      )}
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      {rule.organizationId ? (
-                        <Tooltip title="Verified signups on this domain are auto-added to an organization">
-                          <Chip
-                            size="sm"
-                            variant="soft"
-                            color="success"
-                            data-testid={`partner-rule-org-${rule.domain}`}
-                          >
-                            linked
-                          </Chip>
-                        </Tooltip>
-                      ) : (
-                        <Typography level="body-xs" sx={{ color: 'neutral.400' }}>
-                          -
-                        </Typography>
-                      )}
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <Tooltip title={rule.enabled ? 'Enabled - click to disable' : 'Disabled - click to enable'}>
-                        <Switch
-                          size="sm"
-                          color={rule.enabled ? 'success' : 'neutral'}
-                          checked={rule.enabled}
-                          disabled={toggling}
-                          onChange={() => toggleMutation.mutate(rule)}
-                          data-testid={`partner-rule-toggle-${rule.domain}`}
-                        />
-                      </Tooltip>
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      <Stack direction="row" spacing={0.5} justifyContent="flex-end">
-                        {rule.organizationId && (
-                          <Tooltip title="Backfill existing verified users into the organization">
-                            <IconButton
-                              size="sm"
-                              variant="plain"
-                              color="success"
-                              onClick={() => setBackfillTarget(rule)}
-                              data-testid={`partner-rule-backfill-${rule.domain}`}
-                            >
-                              <GroupAddIcon />
-                            </IconButton>
-                          </Tooltip>
-                        )}
-                        <Tooltip title="Edit">
-                          <IconButton
-                            size="sm"
-                            variant="plain"
-                            onClick={() => openEdit(rule)}
-                            data-testid={`partner-rule-edit-${rule.domain}`}
-                          >
-                            <EditIcon />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Delete">
-                          <IconButton
-                            size="sm"
-                            variant="plain"
-                            color="danger"
-                            onClick={() => setDeleteTarget(rule)}
-                            data-testid={`partner-rule-delete-${rule.domain}`}
-                          >
-                            <DeleteIcon />
-                          </IconButton>
-                        </Tooltip>
-                      </Stack>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </Table>
-        </Sheet>
+        />
       )}
 
-      {totalPages > 1 && (
-        <Stack direction="row" spacing={1} justifyContent="center" alignItems="center" sx={{ mt: 2 }}>
-          <Button size="sm" variant="outlined" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>
-            Previous
-          </Button>
-          <Typography level="body-sm">
-            Page {page} of {totalPages}
-          </Typography>
-          <Button size="sm" variant="outlined" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>
-            Next
-          </Button>
-        </Stack>
-      )}
-
-      {/* Create / edit modal */}
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)}>
-        <ModalDialog
-          sx={{ minWidth: 440, maxWidth: 540, maxHeight: '90vh', overflowY: 'auto' }}
-          data-testid="partner-rule-modal"
-        >
-          <ModalClose />
-          <Typography level="h4">{editing ? 'Edit signup rule' : 'Add signup rule'}</Typography>
-          <Typography level="body-sm" sx={{ color: 'text.tertiary', mt: -0.5 }}>
-            {editing ? editing.domain : 'Grant entitlements and bonus credits to a partner domain.'}
-          </Typography>
-          <Divider sx={{ my: 1 }} />
-
-          <Stack spacing={1.5}>
-            <FormControl required>
-              <FormLabel>Domain</FormLabel>
-              <Input
-                placeholder="partner.com"
-                autoFocus={!editing}
-                value={form.domain}
-                disabled={!!editing}
-                onChange={e => setForm(f => ({ ...f, domain: e.target.value }))}
-                data-testid="partner-rule-domain-input"
-              />
-              <FormHelperText>
-                {editing
-                  ? 'Domain is the key and cannot be changed. Delete and re-add to move it.'
-                  : 'Bare domain only (no @ or path). Public mail providers are rejected.'}
-              </FormHelperText>
-            </FormControl>
-
-            <FormControl>
-              <FormLabel>Label</FormLabel>
-              <Input
-                placeholder="Partner name (admin-facing)"
-                value={form.label}
-                onChange={e => setForm(f => ({ ...f, label: e.target.value }))}
-                data-testid="partner-rule-label-input"
-              />
-            </FormControl>
-
-            <FormControl>
-              <FormLabel>Entitlements</FormLabel>
-              <Autocomplete
-                multiple
-                freeSolo
-                options={ENTITLEMENT_OPTIONS}
-                value={form.entitlements}
-                onChange={(_event, value) => setForm(f => ({ ...f, entitlements: value }))}
-                placeholder={form.entitlements.length ? '' : 'Select entitlements to grant'}
-                data-testid="partner-rule-entitlements-input"
-              />
-              <FormHelperText>
-                {/* FormHelperText's root is flex, so mixed text/element children become separate
-                    flex items laid out side by side instead of flowing as one paragraph - a single
-                    wrapping child keeps the sentence inline. */}
-                <span>
-                  Pick from the products the registry recognizes, or type a lake grant as{' '}
-                  <code>datalake:&lt;slug&gt;</code> and press Enter. A new product key must be added to the entitlement
-                  registry before it appears in the list.
-                </span>
-              </FormHelperText>
-            </FormControl>
-
-            <FormControl>
-              <FormLabel>User tags</FormLabel>
-              <Autocomplete
-                multiple
-                freeSolo
-                autoSelect
-                options={[]}
-                value={form.tags}
-                onChange={(_event, value) => setForm(f => ({ ...f, tags: value }))}
-                placeholder={form.tags.length ? '' : 'Type a tag and press Enter'}
-                data-testid="partner-rule-tags-input"
-              />
-              <FormHelperText>
-                Added to the user&apos;s tags at email verification. Tags stay on the user if the rule is later disabled
-                or deleted.
-              </FormHelperText>
-            </FormControl>
-
-            <FormControl>
-              <FormLabel>Subscription</FormLabel>
-              <Select
-                placeholder="None"
-                value={form.subscriptionPriceId}
-                onChange={(_event, value) => setForm(f => ({ ...f, subscriptionPriceId: value }))}
-                slotProps={{ button: { 'data-testid': 'partner-rule-subscription-select' } }}
-              >
-                <Option value={null}>None</Option>
-                {planOptions.map(({ priceId, label }) => (
-                  <Option key={priceId} value={priceId}>
-                    {label}
-                  </Option>
-                ))}
-              </Select>
-              <FormHelperText>
-                Granted free at email verification through the admin-grant path (no Stripe). It stays on the user if the
-                rule is later disabled or deleted.
-              </FormHelperText>
-            </FormControl>
-
-            {form.subscriptionPriceId && (
-              <FormControl>
-                <FormLabel>Subscription duration</FormLabel>
-                <Input
-                  type="number"
-                  slotProps={{ input: { min: 1, max: 12, step: 1 } }}
-                  endDecorator={<Typography level="body-xs">months</Typography>}
-                  value={form.subscriptionMonths}
-                  onChange={e => setForm(f => ({ ...f, subscriptionMonths: e.target.value }))}
-                  data-testid="partner-rule-subscription-months-input"
-                />
-              </FormControl>
-            )}
-
-            <FormControl>
-              <FormLabel>Signup credits</FormLabel>
-              <Input
-                type="number"
-                slotProps={{ input: { min: 0 } }}
-                endDecorator={<Typography level="body-xs">credits</Typography>}
-                value={selectedPackage ? String(selectedPackage.credits) : form.signupCredits}
-                onChange={e => setForm(f => ({ ...f, signupCredits: e.target.value }))}
-                disabled={form.grantPackageId !== null}
-                data-testid="partner-rule-credits-input"
-              />
-              <FormHelperText>One-time bonus granted at email verification. 0 = access only, no bonus.</FormHelperText>
-            </FormControl>
-
-            <GrantPackageSelect
-              value={form.grantPackageId}
-              onChange={id => setForm(f => ({ ...f, grantPackageId: id }))}
-              testId="partner-rule-grant-package-select"
-              helperText="A package replaces the credits above and caps them; at the cap, signups still join the org and plan without credits."
-            />
-
-            <FormControl>
-              <FormLabel>Organization</FormLabel>
-              <Autocomplete
-                placeholder="Search organizations by name..."
-                options={orgOptions}
-                value={form.organization}
-                loading={orgOptionsLoading}
-                getOptionLabel={option => option.name}
-                isOptionEqualToValue={(option, value) => option.id === value.id}
-                onInputChange={(_event, value) => setOrgSearchInput(value)}
-                onChange={(_event, value) =>
-                  setForm(f => ({ ...f, organization: value, organizationId: value?.id ?? null }))
-                }
-                data-testid="partner-rule-org-input"
-              />
-              <FormHelperText>
-                Optional. Verified signups on this domain are auto-added to this organization as members. Existing users
-                are not touched - use the backfill action for those. Leave empty for no org.
-              </FormHelperText>
-            </FormControl>
-
-            <FormControl>
-              <FormLabel>Notes</FormLabel>
-              <Textarea
-                minRows={2}
-                placeholder="Deal reference, contact, etc."
-                value={form.notes}
-                onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
-                data-testid="partner-rule-notes-input"
-              />
-            </FormControl>
-
-            <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
-              <Box>
-                <FormLabel>Enabled</FormLabel>
-                <FormHelperText sx={{ mt: 0 }}>Turn off to stage a rule without granting anything.</FormHelperText>
-              </Box>
-              <Switch
-                color={form.enabled ? 'success' : 'neutral'}
-                checked={form.enabled}
-                onChange={e => setForm(f => ({ ...f, enabled: e.target.checked }))}
-                data-testid="partner-rule-enabled-switch"
-              />
-            </FormControl>
-
-            {formError && (
-              <Alert
-                color="danger"
-                variant="soft"
-                startDecorator={<WarningRoundedIcon />}
-                data-testid="partner-rule-form-error"
-              >
-                {formError}
-              </Alert>
-            )}
-
-            <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 0.5 }}>
-              <Button variant="plain" color="neutral" onClick={() => setModalOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                onClick={() => {
-                  setFormError(null);
-                  saveMutation.mutate();
-                }}
-                loading={saveMutation.isPending}
-                data-testid="partner-rule-save-btn"
-              >
-                {editing ? 'Save changes' : 'Create rule'}
-              </Button>
-            </Stack>
-          </Stack>
-        </ModalDialog>
-      </Modal>
-
-      {/* Delete confirmation */}
-      <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)}>
-        <ModalDialog role="alertdialog" variant="outlined" data-testid="partner-rule-delete-modal">
-          <Typography level="h4" startDecorator={<WarningRoundedIcon sx={{ color: 'danger.500' }} />}>
-            Delete signup rule
-          </Typography>
-          <Divider sx={{ my: 1 }} />
-          <Typography level="body-sm">
+      <ActionDialog
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        title="Delete signup rule"
+        tone="danger"
+        description={
+          <>
             Delete the rule for <b>{deleteTarget?.domain}</b>? New signups on this domain will stop receiving its
             entitlements and bonus credits. Existing users keep what they already have.
-          </Typography>
-          <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 2 }}>
-            <Button
-              variant="plain"
-              color="neutral"
-              onClick={() => setDeleteTarget(null)}
-              data-testid="partner-rule-delete-cancel-btn"
-            >
-              Cancel
-            </Button>
-            <Button
-              color="danger"
-              loading={deleteMutation.isPending}
-              onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget)}
-              data-testid="partner-rule-delete-confirm-btn"
-            >
-              Delete rule
-            </Button>
-          </Stack>
-        </ModalDialog>
-      </Modal>
+          </>
+        }
+        reasonPresets={ADMIN_REASON_PRESETS.partnerSignupRule}
+        reasonAudited={false}
+        confirmLabel="Delete rule"
+        pending={deleteMutation.isPending}
+        onConfirm={async () => {
+          if (deleteTarget) await deleteMutation.mutateAsync(deleteTarget);
+        }}
+        typedConfirm={deleteTarget ? { expected: deleteTarget.domain, noun: 'domain' } : undefined}
+        data-testid="partner-rule-delete-modal"
+        testIds={{ confirm: 'partner-rule-delete-confirm-btn' }}
+      />
 
-      {/* Backfill: preview (dry-run) then confirm */}
-      <Modal open={!!backfillTarget} onClose={() => setBackfillTarget(null)}>
-        <ModalDialog sx={{ minWidth: 440, maxWidth: 540 }} data-testid="partner-rule-backfill-modal">
-          <ModalClose />
-          <Typography level="h4" startDecorator={<GroupAddIcon />}>
-            Backfill into organization
-          </Typography>
-          <Divider sx={{ my: 1 }} />
-          <Typography level="body-sm">
-            Add existing <b>verified</b> users on <b>{backfillTarget?.domain}</b>
-            {' to '}
-            this rule&apos;s organization. Users already in the org are skipped, and no one is ever removed.
-          </Typography>
-
-          {backfillPreviewLoading ? (
-            <LinearProgress sx={{ my: 2 }} />
-          ) : (
-            <Sheet
-              variant="soft"
-              sx={{ borderRadius: 'sm', p: 2, my: 1.5 }}
+      <ActionDialog
+        open={!!backfillTarget}
+        onClose={() => setBackfillTarget(null)}
+        title="Backfill into organization"
+        description={
+          <>
+            Add existing <b>verified</b> users on <b>{backfillTarget?.domain}</b> to this rule&apos;s organization.
+            Users already in the org are skipped, and no one is ever removed.
+          </>
+        }
+        reasonPresets={ADMIN_REASON_PRESETS.partnerBackfill}
+        reasonAudited={false}
+        confirmLabel={`Add ${matched} user${plural(matched)}`}
+        blockedReason={
+          backfillPreviewLoading || backfillPreviewFetching
+            ? 'Checking who would be added...'
+            : backfillPreviewError
+              ? 'Load the backfill preview before adding users.'
+              : !matched
+                ? 'No existing users match this rule.'
+                : null
+        }
+        pending={backfillMutation.isPending}
+        onConfirm={async () => {
+          if (backfillTarget) await backfillMutation.mutateAsync(backfillTarget);
+        }}
+        data-testid="partner-rule-backfill-modal"
+        testIds={{ confirm: 'partner-rule-backfill-confirm-btn' }}
+      >
+        {backfillPreviewError ? (
+          <ErrorState
+            message={getErrorMessage(backfillPreviewError)}
+            onRetry={() => void refetchBackfillPreview()}
+            retrying={backfillPreviewFetching}
+          />
+        ) : (
+          !backfillPreviewLoading && (
+            <Box
               data-testid="partner-rule-backfill-preview"
+              sx={{ borderTop: '1px solid', borderBottom: '1px solid', borderColor: 'admin.border', py: 1.5 }}
             >
               <Typography level="title-md">
-                {backfillPreview?.matched ?? 0} user{(backfillPreview?.matched ?? 0) === 1 ? '' : 's'} will be added
+                {matched} user{plural(matched)} will be added
               </Typography>
               {backfillPreview && (
-                <Typography
-                  level="body-sm"
-                  sx={{ mt: 0.5, color: 'text.secondary' }}
-                  data-testid="partner-rule-backfill-seat-impact"
-                >
+                <Typography level="body-sm" sx={{ mt: 0.5 }} data-testid="partner-rule-backfill-seat-impact">
                   {backfillPreview.stripeBilled
                     ? `Stripe-billed org: seat ceiling stays at ${backfillPreview.seats}; candidates past it are rejected (add seats to admit them).`
                     : backfillPreview.projectedSeats > backfillPreview.seats
@@ -803,67 +438,39 @@ export default function PartnerSignupRulesTab() {
               {!!backfillPreview?.sample.length && (
                 <Stack spacing={0.25} sx={{ mt: 1, maxHeight: 180, overflow: 'auto' }}>
                   {backfillPreview.sample.map(user => (
-                    <Typography key={user.id} level="body-xs" sx={{ color: 'text.tertiary' }}>
+                    <Typography key={user.id} level="body-xs" sx={{ color: 'admin.inkMuted' }}>
                       {user.email || user.name}
                     </Typography>
                   ))}
                   {backfillPreview.matched > backfillPreview.sample.length && (
-                    <Typography level="body-xs" sx={{ color: 'neutral.400' }}>
+                    <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
                       + {backfillPreview.matched - backfillPreview.sample.length} more
                     </Typography>
                   )}
                 </Stack>
               )}
-            </Sheet>
-          )}
-
-          <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 1 }}>
-            <Button
-              variant="plain"
-              color="neutral"
-              onClick={() => setBackfillTarget(null)}
-              data-testid="partner-rule-backfill-cancel-btn"
-            >
-              Cancel
-            </Button>
-            <Button
-              color="success"
-              loading={backfillMutation.isPending}
-              disabled={backfillPreviewLoading || !backfillPreview?.matched}
-              onClick={() => backfillTarget && backfillMutation.mutate(backfillTarget)}
-              data-testid="partner-rule-backfill-confirm-btn"
-            >
-              Add {backfillPreview?.matched ?? 0} user{(backfillPreview?.matched ?? 0) === 1 ? '' : 's'}
-            </Button>
-          </Stack>
-        </ModalDialog>
-      </Modal>
-    </Box>
+            </Box>
+          )
+        )}
+      </ActionDialog>
+    </Stack>
   );
 }
 
 function PackageCell({ ruleId, pkg }: { ruleId: string; pkg: GrantPackageRow | undefined }) {
-  if (!pkg) {
-    return (
-      <Typography level="body-xs" sx={{ color: 'neutral.400' }}>
-        package
-      </Typography>
-    );
-  }
+  if (!pkg) return <Typography level="body-xs">package</Typography>;
   return (
     <Tooltip title={grantPackageUsage(pkg)}>
       <Typography level="body-sm" data-testid={`partner-rule-package-${ruleId}`}>
         {pkg.credits.toLocaleString()} ({pkg.name})
         {pkg.capHits > 0 && (
-          <Chip
-            size="sm"
-            variant="soft"
-            color="warning"
-            sx={{ ml: 0.5 }}
-            data-testid={`partner-rule-cap-hits-${ruleId}`}
-          >
-            {pkg.capHits.toLocaleString()} cap hits
-          </Chip>
+          <Box component="span" sx={{ ml: 0.5 }}>
+            <StatusChip
+              tone="warn"
+              label={`${pkg.capHits.toLocaleString()} cap hits`}
+              data-testid={`partner-rule-cap-hits-${ruleId}`}
+            />
+          </Box>
         )}
       </Typography>
     </Tooltip>

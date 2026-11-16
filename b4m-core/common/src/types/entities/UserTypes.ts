@@ -447,6 +447,13 @@ export interface IUser extends ICreditHolder {
   groups: Array<string> | null;
   isAdmin: boolean;
   adminPermissions?: AdminPermissionId[];
+  /** Admin roles held (b4m-core/common adminRoles.ts). Assigned through the admin permissions endpoint. */
+  adminRoleIds?: string[];
+  /**
+   * The permissions those roles carry, resolved per request by the auth step. A virtual, never
+   * stored: absent when roles were not resolved for this read.
+   */
+  roleAdminPermissions?: AdminPermissionId[];
   storageLimit: number /** Effective storage limit in decimal MB */;
   /** Manual or custom signup allocation; null means use plan/default. */
   storageLimitOverride?: number | null;
@@ -510,6 +517,16 @@ export interface IUser extends ICreditHolder {
   disputePending?: boolean;
   /** Set while a requested deletion is in its grace period (see IUserDeletion). */
   deletion?: IUserDeletion | null;
+  /** Private erasure retry state, including restored accounts with no deletion schedule. */
+  accountFilePurge?: {
+    startedAt?: Date;
+    leaseId?: string;
+    leaseExpiresAt?: Date;
+    initialized?: boolean;
+    throughAuditId?: string;
+    afterAuditId?: string;
+    complete?: boolean;
+  };
   /** Server-side lease preventing a data export from racing permanent account cleanup. */
   /** `jobId` names the export job holding it; leases taken before it was recorded have none. */
   accountDataExportLease?: { id: string; jobId?: string; expiresAt: Date };
@@ -525,6 +542,8 @@ export interface IUser extends ICreditHolder {
    * org's `users[]` roster, so it takes no seat and is not listed as a member.
    */
   serviceAccountOrganizationId?: string;
+  /** Set on a service account when its organization is deleted; getOrCreateOrgServiceAccount refuses a retired account. */
+  serviceAccountRetiredAt?: Date;
   subscribedUntil: string | null;
   photoUrl: string | null;
 
@@ -1068,6 +1087,8 @@ export interface IUserRepository
   removeGroupsFromAllUsers: (groupIds: string[]) => Promise<void>;
   /** Null `organizationId` on EVERY user pointing at the org (used when the org is deleted). */
   clearOrganizationPointer: (organizationId: string) => Promise<void>;
+  /** Stamp `serviceAccountRetiredAt` on the org's service account (used when the org is deleted). */
+  retireOrgServiceAccount: (userId: string, organizationId: string) => Promise<void>;
   /** Add a single group id to one user's `groups[]` (idempotent; used when assigning a member). */
   addGroupToUser: (userId: string, groupId: string) => Promise<void>;
   /** Merge tags into one user's `tags[]` (idempotent, no duplicates; used by partner signup rules). */
@@ -1145,10 +1166,15 @@ export interface IUserRepository
    * email or username an audit entry shows. Ids that are not ObjectId-shaped are dropped. Never return this
    * to a client: it carries admin permissions.
    */
-  findAdminTargetsByIds?: (
-    ids: string[]
-  ) => Promise<
-    Array<{ id: string; email?: string; username?: string; isAdmin?: boolean; adminPermissions?: string[] }>
+  findAdminTargetsByIds?: (ids: string[]) => Promise<
+    Array<{
+      id: string;
+      email?: string;
+      username?: string;
+      isAdmin?: boolean;
+      adminPermissions?: string[];
+      adminRoleIds?: string[];
+    }>
   >;
   /** Active (non-soft-deleted), emailed users among `ids` - for a notification addressee resolver. */
   findActiveEmailsByIds: (ids: string[]) => Promise<Array<{ id: string; email: string }>>;

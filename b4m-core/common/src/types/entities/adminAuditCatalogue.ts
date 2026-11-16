@@ -122,6 +122,11 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.invite_link.created': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.invite_link.revoked': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.member_budget.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.budget_alerts.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.domain.added': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.domain.verified': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.domain.policy_updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.domain.removed': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.custom_mcp_policy.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.slack_channel_api_posting.updated': { category: 'org', severity: 'notice', write: 'strict' },
   // Target the member, not the org, so the entry reaches the user's Admin log; organizationId names the org.
@@ -132,6 +137,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.api_key.created': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.rotated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.api_key.callback_secret_rotated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.access_updated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.member_revoked': { category: 'access', severity: 'notice', write: 'strict' },
 
@@ -419,6 +425,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'admin.approval.executed': { category: 'access', severity: 'critical', write: 'bestEffort' },
   'admin.approval.failed': { category: 'access', severity: 'critical', write: 'bestEffort' },
   'admin.approval.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  // Admin roles (pages/api/admin/admin-roles). Editing a role's permissions is a grant to every member.
+  'admin.role.created': { category: 'access', severity: 'notice', write: 'strict' },
+  'admin.role.updated': { category: 'access', severity: 'critical', write: 'strict' },
+  'admin.role.deleted': { category: 'access', severity: 'notice', write: 'strict' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 
 export type AdminAuditAction = keyof typeof ADMIN_AUDIT_CATALOGUE;

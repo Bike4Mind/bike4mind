@@ -328,7 +328,7 @@ describe('summarizeRoster', () => {
       view('idle'),
     ]);
     expect(result.total).toBe(4);
-    expect(result.counts).toEqual({ 'needs-you': 0, working: 1, done: 2, failed: 0, stopped: 0, idle: 1 });
+    expect(result.counts).toEqual({ total: 4, 'needs-you': 0, working: 1, done: 2, failed: 0, stopped: 0, idle: 1 });
     expect(result.usdCost).toBeCloseTo(0.75);
     expect(result.credits).toBe(15);
     expect(result.costPartial).toBe(true);

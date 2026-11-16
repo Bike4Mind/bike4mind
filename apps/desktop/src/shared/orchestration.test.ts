@@ -4,13 +4,16 @@ import {
   acceptTask,
   assertReportCoversCriteria,
   automaticUpgradeAllowed,
+  decisionQuestion,
   inheritancePolicy,
+  pendingDecisionOf,
   modelRequestHint,
   renderTaskBrief,
   resolveModelAlias,
   resolveWorkerModel,
   spawnOptionsSchema,
   taskContractSchema,
+  taskReportSchema,
   validateWorkerModel,
   workerTaskSchema,
   type TaskContract,
@@ -356,5 +359,86 @@ describe('orchestration contracts and role routing', () => {
         true
       )
     ).toBe(false);
+  });
+});
+
+describe('decision requests in a blocked report', () => {
+  const blocked = (decision: unknown) => ({
+    status: 'blocked',
+    reason: 'Needs a call on the prerequisite branch',
+    evidence: ['The prerequisite is not merged'],
+    decision,
+  });
+  const decision = {
+    question: 'Stack this task on the prerequisite branch, or wait until it merges?',
+    options: [
+      { label: 'Stack on it (Recommended)', description: 'Start now on top of the open branch.' },
+      { label: 'Wait for the merge', description: 'Pause until it lands on main.' },
+    ],
+  };
+
+  it('accepts the ask_user shape and keeps a blocked report without one valid', () => {
+    expect(taskReportSchema.parse(blocked(decision))).toMatchObject({ decision });
+    const { decision: _none, ...plain } = blocked(decision);
+    expect(taskReportSchema.parse(plain)).not.toHaveProperty('decision');
+  });
+
+  it.each([
+    [{ ...decision, options: decision.options.slice(0, 1) }, /2 to 4 options|>=2|too small/i],
+    [
+      {
+        ...decision,
+        options: [
+          ...decision.options,
+          ...decision.options.map(option => ({ ...option, label: `${option.label} 2` })),
+        ].concat({ label: 'Fifth', description: 'One too many.' }),
+      },
+      /4|too big/i,
+    ],
+    [{ ...decision, options: [...decision.options, { label: 'Other', description: 'Free text.' }] }, /Other/],
+    [
+      {
+        ...decision,
+        options: [
+          { label: 'Wait for the merge', description: 'Pause.' },
+          { label: 'Stack on it (Recommended)', description: 'Start now.' },
+        ],
+      },
+      /recommended option first/,
+    ],
+    [{ ...decision, question: '  ' }, /question|too small/i],
+  ])('refuses a decision the card could not draw (%#)', (value, message) => {
+    const parsed = taskReportSchema.safeParse(blocked(value));
+    expect(parsed.success).toBe(false);
+    expect(JSON.stringify(parsed.error?.issues)).toMatch(message);
+  });
+
+  it('draws the fitted question with the first option marked as recommended', () => {
+    const question = decisionQuestion({
+      ...decision,
+      options: [
+        { label: 'Stack on it', description: 'Start now.' },
+        { label: 'Wait for the merge', description: 'Pause.' },
+      ],
+    });
+    expect(question.header).toBe('Decision');
+    expect(question.options.map(option => option.label)).toEqual(['Stack on it (Recommended)', 'Wait for the merge']);
+    expect(decisionQuestion(decision).options[0].label).toBe('Stack on it (Recommended)');
+  });
+
+  it('stores a pending decision on the task and reads stored tasks without one', () => {
+    const pending = { id: 'd1', question: decisionQuestion(decision), askedAt: '2026-11-13' };
+    const stored = workerTaskSchema.parse({
+      ...task(),
+      state: { status: 'blocked', reason: 'r', evidence: ['e'], decision: pending },
+    });
+    expect(pendingDecisionOf(stored)).toEqual(pending);
+    expect(pendingDecisionOf({ ...stored, resolvedDecisions: ['d1'] })).toBeUndefined();
+    expect(
+      pendingDecisionOf(
+        workerTaskSchema.parse({ ...task(), state: { status: 'blocked', reason: 'r', evidence: ['e'] } })
+      )
+    ).toBeUndefined();
+    expect(workerTaskSchema.safeParse(task()).success).toBe(true);
   });
 });

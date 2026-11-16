@@ -25,6 +25,7 @@ const envelope = {
   cohortHash: 'a'.repeat(64),
 };
 const suspend = { target, action: { type: 'suspend' }, ...envelope };
+const addDeveloperTag = { target, action: { type: 'addTag', tag: 'Developer' }, ...envelope };
 const contain = { target, action: { type: 'contain', blockEmailDomains: true }, ...envelope };
 
 const approval = { requestedBy: { id: 'req', selfIds: ['req'] } } as unknown as AdminApproval;
@@ -82,6 +83,13 @@ describe('executeApprovedUsersBulk', () => {
     await expect(executeApprovedUsersBulk(contain, { req: approverReq(true, false), approval })).rejects.toBeInstanceOf(
       ForbiddenError
     );
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it('refuses a managed tag from a non-full-admin approver and never executes', async () => {
+    await expect(
+      executeApprovedUsersBulk(addDeveloperTag, { req: approverReq(false), approval })
+    ).rejects.toBeInstanceOf(ForbiddenError);
     expect(mockExecute).not.toHaveBeenCalled();
   });
 });

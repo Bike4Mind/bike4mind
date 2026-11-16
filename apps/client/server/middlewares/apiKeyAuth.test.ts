@@ -724,6 +724,29 @@ describe('apiKeyAuth with an exchange key', () => {
     ).toBe('client-1');
   });
 
+  it('passes the exchange client to the gate, so a starter-only owner is admitted only for that key', async () => {
+    const admitsOnlyExchange = async (_user: unknown, billing?: unknown) =>
+      !!(billing as { oauthExchangeClientId?: string } | undefined)?.oauthExchangeClientId;
+    isApiKeyAccessAllowedMock.mockImplementationOnce(admitsOnlyExchange).mockImplementationOnce(admitsOnlyExchange);
+    validateUserApiKeyMock.mockResolvedValue(keyWith({ oauthExchangeClientId: 'client-1' }));
+    expect((await run([ApiKeyScope.ME_READ], makeReq())).passed).toBe(true);
+    expect(isApiKeyAccessAllowedMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ oauthExchangeClientId: 'client-1' }),
+      expect.anything()
+    );
+
+    validateUserApiKeyMock.mockResolvedValue(keyWith({}));
+    const { passed, error } = await run([ApiKeyScope.ME_READ], makeReq());
+    expect(passed).toBe(false);
+    expect(error).toBeInstanceOf(ForbiddenError);
+    expect(isApiKeyAccessAllowedMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ oauthExchangeClientId: undefined }),
+      expect.anything()
+    );
+  });
+
   it('still admits a personal key with the same scopes on a scope-less route', async () => {
     validateUserApiKeyMock.mockResolvedValue(keyWith({}));
     expect((await run(undefined, makeReq())).passed).toBe(true);

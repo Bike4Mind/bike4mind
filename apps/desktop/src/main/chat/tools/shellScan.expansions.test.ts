@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { globMatches, scanShell } from './shellScan';
-import { runsCheckedInFull } from './shellApproval.testHelper';
+import { runsCheckedInAuto, runsCheckedInFull } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 
 describe('shell expansions reaching a protected location', () => {
@@ -43,7 +43,7 @@ describe('shell expansions reaching a protected location', () => {
         uncoverablePaths: [protectedFolder],
       }
     );
-    return { auto: !approval.askInAuto, full: runsCheckedInFull(approval) };
+    return { auto: runsCheckedInAuto(approval), full: runsCheckedInFull(approval) };
   };
 
   const expectAsks = async (command: string): Promise<void> => {
@@ -169,7 +169,10 @@ describe('shell expansions reaching a protected location', () => {
           uncoverablePaths: [protectedChild],
         }
       );
-      expect({ auto: !approval.askInAuto, full: runsCheckedInFull(approval) }).toEqual({ auto: false, full: false });
+      expect({ auto: runsCheckedInAuto(approval), full: runsCheckedInFull(approval) }).toEqual({
+        auto: false,
+        full: false,
+      });
     }
   );
 
