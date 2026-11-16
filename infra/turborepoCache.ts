@@ -1,4 +1,5 @@
 import { BLOCK_ALL_PUBLIC_ACCESS, encryptBucketAtRest } from './bucketSecurity';
+import { dlqAlarmTopic } from './dlqAlarms';
 
 // One shared cache, hosted on the staging stage only. CI and developers point at a single
 // endpoint, and production's `removal: 'retain'` would orphan the bucket if it were ever dropped.
@@ -61,3 +62,114 @@ const turboCacheFunction =
     : undefined;
 
 export const turboCacheUrl = turboCacheFunction?.url;
+
+export const TURBO_CACHE_ALARM_NAMESPACE = 'Lumina5/TurboCache';
+/** Refused credentials (401) per 5 minutes. Read-only upload 403s are routine for developers and not counted. */
+export const TURBO_CACHE_REJECTED_PER_5MIN = 50;
+/** Any throttle means the reserved concurrency cap is full. */
+export const TURBO_CACHE_THROTTLES_PER_5MIN = 1;
+/** Any failed invocation: S3 failures are rethrown, and Turbo reads a failed request as a miss. */
+export const TURBO_CACHE_ERRORS_PER_5MIN = 1;
+/** Artifacts expire after 30 days, so steady-state size tracks a month of builds. */
+export const TURBO_CACHE_BUCKET_SIZE_BYTES = 200 * 1024 ** 3;
+
+function createTurboCacheAlarms(fn: sst.aws.Function, bucket: sst.aws.Bucket) {
+  // The hosted stage (`dev`) is a monitored stage, so its alarm topic exists.
+  if (!dlqAlarmTopic) throw new Error('turbo cache alarms require dlqAlarmTopic');
+  const actions = [dlqAlarmTopic.arn];
+  const prefix = `${$app.name}-${$app.stage}`;
+  const tags = { Application: 'TurboCache', Severity: 'Warning' };
+
+  // The handler logs `turbo cache request rejected` (apps/workers/src/turboCache/handler.ts) for each
+  // refused credential on the public Function URL.
+  new aws.cloudwatch.LogMetricFilter('turboCacheRejectedFilter', {
+    name: `${prefix}-turbo-cache-rejected`,
+    logGroupName: fn.nodes.logGroup.apply(group => {
+      if (!group) throw new Error('TurboCacheHandler is missing its CloudWatch log group');
+      return group.name;
+    }),
+    // Counts 401s only; same top-level message selector as logMessageFilterPattern.ts.
+    pattern: '{ $.message = "turbo cache request rejected" && $.statusCode = 401 }',
+    metricTransformation: {
+      name: 'RejectedRequests',
+      namespace: TURBO_CACHE_ALARM_NAMESPACE,
+      value: '1',
+      unit: 'Count',
+    },
+  });
+
+  const rejected = new aws.cloudwatch.MetricAlarm('turboCacheRejected', {
+    name: `${prefix}-turbo-cache-rejected`,
+    alarmDescription: `Turbo cache refused ${TURBO_CACHE_REJECTED_PER_5MIN}+ credentials in 5 minutes: probing of the public endpoint or a stale CI token`,
+    comparisonOperator: 'GreaterThanOrEqualToThreshold',
+    evaluationPeriods: 1,
+    metricName: 'RejectedRequests',
+    namespace: TURBO_CACHE_ALARM_NAMESPACE,
+    period: 300,
+    statistic: 'Sum',
+    threshold: TURBO_CACHE_REJECTED_PER_5MIN,
+    treatMissingData: 'notBreaching',
+    alarmActions: actions,
+    okActions: actions,
+    tags,
+  });
+
+  const throttles = new aws.cloudwatch.MetricAlarm('turboCacheThrottles', {
+    name: `${prefix}-turbo-cache-throttles`,
+    alarmDescription: 'TurboCacheHandler hit its reserved concurrency cap: cache requests are being throttled',
+    comparisonOperator: 'GreaterThanOrEqualToThreshold',
+    evaluationPeriods: 1,
+    metricName: 'Throttles',
+    namespace: 'AWS/Lambda',
+    dimensions: { FunctionName: fn.nodes.function.name },
+    period: 300,
+    statistic: 'Sum',
+    threshold: TURBO_CACHE_THROTTLES_PER_5MIN,
+    treatMissingData: 'notBreaching',
+    alarmActions: actions,
+    okActions: actions,
+    tags,
+  });
+
+  // The handler rethrows unexpected S3 failures, and Turbo treats a failed request as a cache miss,
+  // so without this alarm a broken cache (for example a permissions gap) looks like a slow build.
+  const errors = new aws.cloudwatch.MetricAlarm('turboCacheErrors', {
+    name: `${prefix}-turbo-cache-errors`,
+    alarmDescription: 'TurboCacheHandler invocations are failing: cache reads and writes are falling back to misses',
+    comparisonOperator: 'GreaterThanOrEqualToThreshold',
+    evaluationPeriods: 1,
+    metricName: 'Errors',
+    namespace: 'AWS/Lambda',
+    dimensions: { FunctionName: fn.nodes.function.name },
+    period: 300,
+    statistic: 'Sum',
+    threshold: TURBO_CACHE_ERRORS_PER_5MIN,
+    treatMissingData: 'notBreaching',
+    alarmActions: actions,
+    okActions: actions,
+    tags,
+  });
+
+  // S3 publishes BucketSizeBytes once a day.
+  const bucketSize = new aws.cloudwatch.MetricAlarm('turboCacheBucketSize', {
+    name: `${prefix}-turbo-cache-bucket-size`,
+    alarmDescription: 'Turbo cache bucket is above its expected size: check for oversized or unexpected uploads',
+    comparisonOperator: 'GreaterThanOrEqualToThreshold',
+    evaluationPeriods: 1,
+    metricName: 'BucketSizeBytes',
+    namespace: 'AWS/S3',
+    dimensions: { BucketName: bucket.name, StorageType: 'StandardStorage' },
+    period: 86400,
+    statistic: 'Maximum',
+    threshold: TURBO_CACHE_BUCKET_SIZE_BYTES,
+    treatMissingData: 'notBreaching',
+    alarmActions: actions,
+    okActions: actions,
+    tags,
+  });
+
+  return { rejected, throttles, errors, bucketSize };
+}
+
+export const turboCacheAlarms =
+  turboCacheFunction && turboCacheBucket ? createTurboCacheAlarms(turboCacheFunction, turboCacheBucket) : undefined;

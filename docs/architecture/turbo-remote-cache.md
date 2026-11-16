@@ -35,6 +35,12 @@ Self-hosted Turborepo remote cache backed by S3 and a Lambda Function URL.
 - Each refused credential (401, or 403 for a read-only upload) logs one JSON line
   with `message: "turbo cache request rejected"`, method, path and source IP, never the
   token, so a CloudWatch metric filter can count them.
+- Four alarms go to the alarm topic on the hosted stage: 50+ refused credentials
+  (401 only; read-only upload 403s are routine) in 5 minutes, any throttle of the
+  cache function (its reserved concurrency is full), any failed invocation of the
+  cache function (Turbo reads a failed request as a miss, so a broken cache would
+  otherwise look like a slow build), and the bucket above 200 GiB (S3 reports
+  size daily).
 
 ## Contract-gate exception
 
@@ -154,6 +160,11 @@ env:
 - **400 on upload**: enable `remoteCache.preflight` in the consuming workspace.
 - **409 on upload**: the artifact already exists (another job uploaded the same
   hash first). A failed upload does not fail the Turbo task.
+- **Evicting a bad artifact**: uploads never replace a stored artifact, and the
+  handler has no delete permission. An operator with bucket access deletes the
+  object (`<team>/<hash>`, or `<hash>` with no team) from `turboCacheBucket`;
+  the next build then misses and uploads a fresh one. Otherwise it expires after
+  30 days.
 - **Cache misses**: confirm the endpoint, team and task inputs match the writer.
 - **Artifact size**: bytes travel directly to S3; single PUT uploads support up to
   5 GB. Split larger task outputs.
