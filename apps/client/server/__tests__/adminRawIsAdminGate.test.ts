@@ -7,15 +7,15 @@ import { blankStringLiterals } from './scopeCoverageHelpers';
 /**
  * Admin access gates through `adminApi()` with a per-method permission so a delegated admin
  * (`adminPermissions`) is honoured. A route that gates on the raw `isAdmin` flag
- * (`req.user.isAdmin`, `ensureAdmin(`) locks delegates out and bypasses the permission model.
+ * (`req.user.isAdmin`, a local bound to it, `ensureAdmin(`) locks delegates out and bypasses the
+ * permission model. Both invariants below resolve those locals, so an alias does not hide a gate.
  *
  * Invariants, over every route under `pages/api`:
  * - No route gates on the raw flag unless it checks a permission (`adminApi(`, or
  *   `requireAdminPermission(` / `hasAdminPermission(` on the admin branch of a route that also serves
  *   non-admins), or is listed in OWNER_OR_ADMIN, FULL_ADMIN_ONLY or OUTSIDE_ADMIN_GATE with its reason.
- * - No route built with `adminApi()` also reads the caller's raw flag (`req.user.isAdmin`, directly or
- *   through a local bound to `req.user`), which would
- *   silently refuse the delegates its declared permission admits, unless it is listed the same way.
+ * - No route built with `adminApi()` also reads the caller's raw flag, which would silently refuse
+ *   the delegates its declared permission admits, unless it is listed the same way.
  * - Every `pages/api/admin` route, and every route anywhere that calls `adminApi(`, declares a
  *   non-empty `adminPermissions` map, unless it is in OUTSIDE_ADMIN_GATE or PERMISSION_CHECKED_IN_HANDLER.
  *
@@ -170,8 +170,8 @@ const OWNER_OR_ADMIN = new Map<string, string>([
   ['publish/artifact/upload-url.ts', 'isAdmin only forwarded as actor flag to the publish access check'],
   ['publish/artifacts/[id].ts', 'owner or admin may manage a published artifact'],
   ['publish/artifacts/index.ts', 'admins see all artifacts in browse, users see own and live'],
-  ['publish/gate/owner.ts', 'artifact owner or admin skips the passphrase; mints a proof cookie for that artifact'],
   ['publish/fabfile.ts', 'file owner or admin may publish a file; isAdmin forwarded to access checks'],
+  ['publish/gate/owner.ts', 'artifact owner or admin skips the passphrase; mints a proof cookie for that artifact'],
   ['publish/reply.ts', 'session owner or admin may reply; isAdmin forwarded to access checks'],
   ['sessions/[id]/summary.ts', 'session owner summarizes; an admin may summarize any session'],
   ['skills/[id]/index.ts', 'skill owner or admin reads, edits, deletes via canEdit/canDelete helpers'],
