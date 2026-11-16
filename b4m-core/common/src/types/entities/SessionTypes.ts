@@ -275,6 +275,12 @@ export interface IChatHistoryItem {
   /** Agent-mode songs this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
   agentMusicTracksClaimed?: number;
 
+  /** Agent-mode speech clips this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentSpeechClipsClaimed?: number;
+
+  /** Agent-mode sound effects this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentSoundEffectsClaimed?: number;
+
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;
   promptMeta?: PromptMeta;

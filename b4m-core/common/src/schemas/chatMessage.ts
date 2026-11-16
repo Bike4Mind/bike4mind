@@ -42,6 +42,8 @@ const CHAT_MESSAGE_RESPONSE_FIELDS = {
   generationJobs: true,
   agentVideoClipsClaimed: true,
   agentMusicTracksClaimed: true,
+  agentSpeechClipsClaimed: true,
+  agentSoundEffectsClaimed: true,
   oob: true,
   promptMeta: true,
   status: true,

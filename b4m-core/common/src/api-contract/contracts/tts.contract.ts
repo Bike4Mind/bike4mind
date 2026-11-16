@@ -1,7 +1,8 @@
 import { defineEndpoint } from '../defineEndpoint';
 import { EXAMPLE_RESOURCE_ID } from '../exampleIds';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
-import { GENERATED_AUDIO_DESCRIPTION, generatedAudioResponses } from './audioResponses';
+import { GENERATED_AUDIO_DESCRIPTION, generatedAudioResponses, outlastedAudioResponse } from './audioResponses';
+import { SpeechGenerationSchema } from '../../schemas/audioGenerations';
 // Import the specific schema files, NOT the barrel (`../../schemas`) - see the
 // note in tools.contract.ts (the barrel drags in an unbuilt dist in the CI
 // openapi job).
@@ -16,6 +17,22 @@ import {
   BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION,
   BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
 } from '../../schemas/billingOrganization';
+
+const exampleOutlastedJob = {
+  id: EXAMPLE_RESOURCE_ID,
+  object: 'speech_generation',
+  state: 'running',
+  text: 'Your password has been reset.',
+  provider: 'elevenlabs',
+  model: null,
+  voice: null,
+  source: 'api',
+  error: null,
+  output: null,
+  credits: { reserved: 12, settled: null },
+  created_at: '2026-10-14T00:00:00.000Z',
+  updated_at: '2026-10-14T00:00:30.000Z',
+} as const;
 
 /**
  * Contract for POST /api/ai/tts - multi-provider text-to-speech.
@@ -66,6 +83,7 @@ export const synthesizeSpeechContract = defineEndpoint({
       },
       tooLargeSchema: ttsResponseTooLargeSchema,
     }),
+    202: outlastedAudioResponse({ noun: 'speech', schema: SpeechGenerationSchema, example: exampleOutlastedJob }),
     401: {
       description:
         'Missing/invalid credentials, no provider has a usable key (`provider_not_configured`), or the ' +

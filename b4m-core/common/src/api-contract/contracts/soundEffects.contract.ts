@@ -13,7 +13,29 @@ import {
   BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
 } from '../../schemas/billingOrganization';
 import { generatedAudioResponseSchema, generatedAudioTooLargeSchema } from '../../generatedAudio';
-import { GENERATED_AUDIO_CONTENT_TYPES, GENERATED_AUDIO_DESCRIPTION, generatedAudioResponses } from './audioResponses';
+import {
+  GENERATED_AUDIO_CONTENT_TYPES,
+  GENERATED_AUDIO_DESCRIPTION,
+  generatedAudioResponses,
+  outlastedAudioResponse,
+} from './audioResponses';
+import { EXAMPLE_RESOURCE_ID } from '../exampleIds';
+import { SoundEffectGenerationSchema } from '../../schemas/audioGenerations';
+
+const exampleOutlastedJob = {
+  id: EXAMPLE_RESOURCE_ID,
+  object: 'sound_effect_generation',
+  state: 'running',
+  text: 'heavy wooden door creaking open',
+  provider: 'elevenlabs',
+  duration_seconds: 3,
+  source: 'api',
+  error: null,
+  output: null,
+  credits: { reserved: 12, settled: null },
+  created_at: '2026-10-14T00:00:00.000Z',
+  updated_at: '2026-10-14T00:00:30.000Z',
+} as const;
 
 /**
  * Contract for POST /api/ai/sound-effects - one-shot sound-effect generation.
@@ -48,6 +70,11 @@ export const generateSoundEffectContract = defineEndpoint({
       },
       binaryContentTypes: GENERATED_AUDIO_CONTENT_TYPES,
       tooLargeSchema: generatedAudioTooLargeSchema,
+    }),
+    202: outlastedAudioResponse({
+      noun: 'sound effect',
+      schema: SoundEffectGenerationSchema,
+      example: exampleOutlastedJob,
     }),
     400: {
       description: `The billing user or organization could not be resolved. ${BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION}`,

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { CreditHolderType, isZodError } from '@bike4mind/common';
+import { CreditHolderType, isZodError, SpeechGenerationSchema } from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
 
 const { mocks } = vi.hoisted(() => ({
@@ -12,6 +12,7 @@ const { mocks } = vi.hoisted(() => ({
     getSignedUrl: vi.fn(),
     orgFindById: vi.fn(),
     orgFindAccessibleById: vi.fn(),
+    generationJobFindById: vi.fn(),
   },
 }));
 
@@ -47,6 +48,7 @@ vi.mock('@bike4mind/server-utils/generationJobs/audioJobWiring', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { findById: (...a: unknown[]) => mocks.fabFileFindById(...a) },
+  generationJobRepository: { findById: (...a: unknown[]) => mocks.generationJobFindById(...a) },
   organizationRepository: {
     findById: (...a: unknown[]) => mocks.orgFindById(...a),
     shareable: { findAccessibleById: (...a: unknown[]) => mocks.orgFindAccessibleById(...a) },
@@ -67,6 +69,10 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 
 import { AI_ACCESS_REVOKED_MESSAGE } from '@bike4mind/services/userService/accountState';
 import { GENERATED_AUDIO_TOO_LARGE_MESSAGE } from '@server/utils/generatedAudioDelivery';
+vi.mock('@server/generations/routeDeps', () => ({
+  mapperDeps: { sign: vi.fn(), now: () => new Date('2026-10-06T00:02:00Z') },
+}));
+
 import { AUDIO_JOB_INLINE_TIMEOUT_MS } from '@server/generations/syncAudioJob';
 import handler from '../tts';
 
@@ -374,14 +380,41 @@ describe('POST /api/ai/tts', () => {
     expect(logger.error).toHaveBeenCalled();
   });
 
-  it('answers 502 and logs the job id when the job does not finish in time', async () => {
+  it('answers 202 with the job resource when the job does not finish in time', async () => {
     mocks.runAudioJobInline.mockResolvedValue(null);
+    mocks.generationJobFindById.mockResolvedValue(
+      speechJob(
+        {
+          state: 'running',
+          source: 'studio',
+          createdAt: new Date('2026-10-06T00:00:00Z'),
+          updatedAt: new Date('2026-10-06T00:01:00Z'),
+        },
+        { output: undefined }
+      )
+    );
+    const { res, logger, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(202);
+    const body = SpeechGenerationSchema.parse(res._getJSONData());
+    expect(body).toMatchObject({ id: 'job-1', state: 'running', text: 'hi', output: null, error: null });
+    expect(mocks.generationJobFindById).toHaveBeenCalledWith('job-1');
+    expect(mocks.readAudioJobOutput).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('background'),
+      expect.objectContaining({ jobId: 'job-1' })
+    );
+  });
+
+  it('answers 502 when the job vanished during the inline wait', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(null);
+    mocks.generationJobFindById.mockResolvedValue(null);
     const { res, logger, promise } = run({ text: 'hi' });
     await promise;
     expect(res._getStatusCode()).toBe(502);
     expect(res._getJSONData()).toEqual({ error: 'Failed to generate speech', provider: 'openai' });
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('background'),
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('vanished'),
       expect.objectContaining({ jobId: 'job-1' })
     );
   });

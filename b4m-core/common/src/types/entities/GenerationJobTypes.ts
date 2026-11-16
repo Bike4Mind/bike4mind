@@ -15,6 +15,17 @@ export type GenerationJobKind = (typeof GENERATION_JOB_KINDS)[number];
 export const QUEST_GENERATION_JOB_KINDS = ['video', 'music'] as const satisfies readonly GenerationJobKind[];
 export type QuestGenerationJobKind = (typeof QUEST_GENERATION_JOB_KINDS)[number];
 
+/**
+ * The kinds an agent-mode run caps per run, one counter each on the run's Quest (QuestRepository.claimAgentGenerationSlot).
+ * Wider than QUEST_GENERATION_JOB_KINDS: speech and sound effects are capped but answer inline, so they never get a card.
+ */
+export const AGENT_GENERATION_SLOT_KINDS = [
+  ...QUEST_GENERATION_JOB_KINDS,
+  'speech',
+  'sound_effect',
+] as const satisfies readonly GenerationJobKind[];
+export type AgentGenerationSlotKind = (typeof AGENT_GENERATION_SLOT_KINDS)[number];
+
 /** A job a chat message started, as stored on the quest: the kind picks the card and the endpoint that reads it. */
 export type GenerationJobRef = { id: string; kind: QuestGenerationJobKind };
 

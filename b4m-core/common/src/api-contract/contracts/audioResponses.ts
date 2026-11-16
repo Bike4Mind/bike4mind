@@ -81,3 +81,24 @@ export function generatedAudioResponses(options: {
     },
   };
 }
+
+/**
+ * The 202 a generated-audio endpoint answers when the clip outlasts the request. `noun` names the clip, `schema` is
+ * the endpoint's job resource. Speech and sound effects only: music has its own job API.
+ */
+export function outlastedAudioResponse(options: {
+  noun: string;
+  schema: z.ZodTypeAny;
+  example: unknown;
+}): ResponseSpec {
+  return {
+    description:
+      `The ${options.noun} took longer than this request can wait (about 55 seconds), so no audio is returned. ` +
+      'Generation carries on: the body is the job as it stands. Unless `preview` was set, the audio is saved to ' +
+      'the file browser when it finishes. Credits are settled only if it succeeds and returned otherwise. This ' +
+      'job cannot be polled through the API yet; look for the saved file instead of retrying, which would ' +
+      'generate (and bill) a second clip.',
+    schema: options.schema,
+    example: options.example,
+  };
+}

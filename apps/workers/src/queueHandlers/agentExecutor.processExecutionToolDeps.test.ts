@@ -104,6 +104,28 @@ vi.mock('./agentExecutor.musicToolConfig', async () => {
   };
 });
 
+vi.mock('./agentExecutor.audioToolConfig', async () => {
+  const actual = await vi.importActual<typeof import('./agentExecutor.audioToolConfig')>(
+    './agentExecutor.audioToolConfig'
+  );
+  return {
+    ...actual,
+    getAgentAudioToolJobsDeps: vi.fn().mockReturnValue({
+      buildBaseJobs: vi.fn().mockReturnValue({
+        createSpeechJob: vi.fn().mockResolvedValue({ ok: true, created: true }),
+        createSoundEffectJob: vi.fn().mockResolvedValue({ ok: true, created: true }),
+        runInline: vi.fn(),
+        readOutput: vi.fn(),
+      }),
+      resolveSpeechLimit: vi.fn().mockResolvedValue(3),
+      resolveSoundEffectLimit: vi.fn().mockResolvedValue(4),
+      speechSlots: { claim: vi.fn().mockResolvedValue(true), release: vi.fn().mockResolvedValue(undefined) },
+      soundEffectSlots: { claim: vi.fn().mockResolvedValue(true), release: vi.fn().mockResolvedValue(undefined) },
+      logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    }),
+  };
+});
+
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn().mockReturnValue({}),
   getGeneratedImageStorage: vi.fn().mockReturnValue({}),
@@ -459,6 +481,48 @@ describe('processExecution tool deps', () => {
       await runWithExecDoc({ ...musicExecDoc, apiKeyId: 'key-1' });
 
       expect(vi.mocked(buildSubagentToolConfig).mock.calls[0][0].musicConfig).toBeNull();
+    });
+  });
+
+  describe('audio_generation wiring', () => {
+    const audioExecDoc = {
+      ...execDoc,
+      linkedQuestId: 'q-run',
+      resolvedEnabledTools: ['audio_generation'],
+    };
+
+    async function runWithExecDoc(doc: Record<string, unknown>) {
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce(doc as never);
+      await runWithSession(baseSession);
+    }
+
+    const audioInput = { user: { id: 'user-1', organizationId: 'org-1' }, request: {}, source: 'agent' } as const;
+
+    it('caps speech and sound effects on the run Quest with the limits resolved for the run org', async () => {
+      const { buildSubagentToolConfig } = await import('./agentExecutor.subagentToolConfig');
+      const { getAgentAudioToolJobsDeps } = await import('./agentExecutor.audioToolConfig');
+      await runWithExecDoc({ ...audioExecDoc, organizationId: 'org-1' });
+
+      const deps = vi.mocked(getAgentAudioToolJobsDeps).mock.results[0].value;
+      expect(deps.resolveSpeechLimit).toHaveBeenCalledWith({ userId: 'user-1', organizationId: 'org-1' });
+      const audioJobs = vi.mocked(buildSubagentToolConfig).mock.calls[0][0].audioJobs;
+      await audioJobs!.createSpeechJob(audioInput);
+      await audioJobs!.createSoundEffectJob(audioInput);
+      expect(deps.speechSlots.claim).toHaveBeenCalledWith('q-run', 3);
+      expect(deps.soundEffectSlots.claim).toHaveBeenCalledWith('q-run', 4);
+    });
+
+    it('keeps the uncapped job functions for a run started with an API key', async () => {
+      const { buildSubagentToolConfig } = await import('./agentExecutor.subagentToolConfig');
+      const { getAgentAudioToolJobsDeps } = await import('./agentExecutor.audioToolConfig');
+      await runWithExecDoc({ ...audioExecDoc, apiKeyId: 'key-1' });
+
+      const deps = vi.mocked(getAgentAudioToolJobsDeps).mock.results[0].value;
+      expect(vi.mocked(buildSubagentToolConfig).mock.calls[0][0].audioJobs).toBe(
+        deps.buildBaseJobs.mock.results[0].value
+      );
+      expect(deps.resolveSpeechLimit).not.toHaveBeenCalled();
     });
   });
 

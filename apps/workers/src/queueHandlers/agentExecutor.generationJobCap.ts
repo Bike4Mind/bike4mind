@@ -1,10 +1,10 @@
 /**
  * The per-run cap shared by the agent-mode generation tools (agentExecutor.videoToolConfig.ts,
- * agentExecutor.musicToolConfig.ts). One run can fan out across in-process subagents and many
+ * agentExecutor.musicToolConfig.ts, agentExecutor.audioToolConfig.ts). One run can fan out across in-process subagents and many
  * iterations, so each kind is capped by a setting (platform default, org override; 0 removes the
  * tool) and counted atomically on the run's Quest (QuestRepository.claimAgentGenerationSlot).
  */
-import type { QuestGenerationJobKind } from '@bike4mind/common';
+import type { AgentGenerationSlotKind } from '@bike4mind/common';
 import { questRepository, adminSettingsRepository, scopedSettingsRepository } from '@bike4mind/database';
 import { scopedSettingsService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
@@ -61,7 +61,7 @@ export function limitJobsPerRun<TInput, TResult extends CreateJobResult>(
 }
 
 /** Production slots for one job kind, counted on the run's Quest. */
-export const questGenerationSlots = (kind: QuestGenerationJobKind): AgentGenerationSlots => ({
+export const questGenerationSlots = (kind: AgentGenerationSlotKind): AgentGenerationSlots => ({
   claim: (questId, limit) => questRepository.claimAgentGenerationSlot(questId, kind, limit),
   release: questId => questRepository.releaseAgentGenerationSlot(questId, kind),
 });
@@ -72,7 +72,10 @@ export const questGenerationSlots = (kind: QuestGenerationJobKind): AgentGenerat
  * lift an org's 0 back to the platform value.
  */
 export const resolveAgentRunLimit =
-  (key: 'agentVideoClipsPerRun' | 'agentMusicTracksPerRun', logger: Logger) =>
+  (
+    key: 'agentVideoClipsPerRun' | 'agentMusicTracksPerRun' | 'agentSpeechClipsPerRun' | 'agentSoundEffectsPerRun',
+    logger: Logger
+  ) =>
   async (caller: AgentRunLimitCaller): Promise<number> => {
     const { value } = await scopedSettingsService.resolveScopedSetting(
       key,

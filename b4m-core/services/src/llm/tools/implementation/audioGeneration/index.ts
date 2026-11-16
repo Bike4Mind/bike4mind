@@ -30,9 +30,18 @@ import { buildJobIdempotencyKey, isReplayOfDeadJob } from '../generationJobTool'
  * (server-utils buildAudioToolJobs) because the job deps are server wiring; a host without them gets
  * the unavailable message rather than a second, host-billed path.
  */
+// The agent-mode per-run caps (workers agentExecutor.audioToolConfig.ts) refuse with these; the create functions
+// never return them, so they stay out of CreateAudioJobErrorCode, whose codes the public audio routes publish.
+export type AudioLimitRefusal = {
+  ok: false;
+  status: 403;
+  code: 'speech_limit_reached' | 'sound_effect_limit_reached';
+  message: string;
+};
+
 export type AudioToolJobs = {
-  createSpeechJob(input: CreateSpeechJobInput): Promise<CreateSpeechJobResult>;
-  createSoundEffectJob(input: CreateAudioJobInput): Promise<CreateSoundEffectJobResult>;
+  createSpeechJob(input: CreateSpeechJobInput): Promise<CreateSpeechJobResult | AudioLimitRefusal>;
+  createSoundEffectJob(input: CreateAudioJobInput): Promise<CreateSoundEffectJobResult | AudioLimitRefusal>;
   /** The job once terminal, or null when it is still running at the timeout (the worker then finishes it). */
   runInline(jobId: string, options: { timeoutMs: number; minStepMs: number }): Promise<IGenerationJobDocument | null>;
   readOutput(output: AudioJobOutput): Promise<Buffer>;
@@ -211,7 +220,7 @@ async function generate(
   // Status only (live chat status line and the voice preamble): billing is the job's.
   await context.onStart?.('audio_generation', { kind });
 
-  let created: CreateSpeechJobResult | CreateSoundEffectJobResult;
+  let created: CreateSpeechJobResult | CreateSoundEffectJobResult | AudioLimitRefusal;
   try {
     created = await create(true);
     // As the audio routes: a full Files quota still gets the clip inline, just without the saved copy.
@@ -260,11 +269,11 @@ async function generate(
       jobId: created.job.id,
       error: error instanceof Error ? error.message : String(error),
     });
-    return stillGenerating(label, created.job.payload.saveToFiles);
+    return stillGenerating(label, created.job.id, created.job.payload.saveToFiles);
   }
   if (!job) {
     context.logger.warn('[audio_generation] job still running at the inline timeout', { jobId: created.job.id });
-    return stillGenerating(label, created.job.payload.saveToFiles);
+    return stillGenerating(label, created.job.id, created.job.payload.saveToFiles);
   }
   const output = jobOutput(job);
   if (job.state !== 'succeeded' || !output) {
@@ -297,9 +306,15 @@ async function generate(
   return kind === 'speech' ? 'Successfully generated speech' : 'Successfully generated sound effect';
 }
 
-const stillGenerating = (label: string, savesToFiles: boolean) =>
-  `The ${label} is still generating.` +
-  (savesToFiles ? " It will be saved to the user's Files when it finishes." : '') +
+/**
+ * Not an error: the job carries on in the worker and bills only if the clip is made. There is no audio job card in
+ * chat yet, so the text is the user's only pointer to where the clip lands.
+ */
+const stillGenerating = (label: string, jobId: string, savesToFiles: boolean) =>
+  `The ${label} is still being generated (job ${jobId}).` +
+  (savesToFiles
+    ? " It will appear in the user's Files when it is ready; tell the user to look for it there."
+    : ' It will not be shown in this chat.') +
   ' Do not call audio_generation again for it.';
 
 const jobOutput = (job: IGenerationJobDocument): AudioJobOutput | undefined =>

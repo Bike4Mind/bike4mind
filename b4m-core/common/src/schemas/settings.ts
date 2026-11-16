@@ -823,6 +823,10 @@ export const SettingKeySchema = z.enum([
   'musicGeneration',
   'agentMusicTracksPerRun',
 
+  // AUDIO GENERATION (agent-mode caps)
+  'agentSpeechClipsPerRun',
+  'agentSoundEffectsPerRun',
+
   // MODEL DISCOVERY (live model registry)
   'enableModelDiscovery',
   'modelDiscoveryMode',
@@ -899,6 +903,7 @@ export const OrchestrationDefaultsSchema = z.object({
     'edit_image',
     // Only offered when the run gets a music config, which enforces agentMusicTracksPerRun.
     'music_generation',
+    // Speech and sound effects are capped per run by agentSpeechClipsPerRun / agentSoundEffectsPerRun.
     'audio_generation',
     'excel_generation',
     // Only offered when the run gets a video config, which enforces agentVideoClipsPerRun.
@@ -8513,6 +8518,32 @@ export const settingsMap = {
     category: 'AI',
     order: 148,
     // Consumed by apps/workers/src/queueHandlers/agentExecutor.musicToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  agentSpeechClipsPerRun: makeNumberSetting({
+    key: 'agentSpeechClipsPerRun',
+    name: 'Agent Speech Clips Per Run',
+    defaultValue: 10,
+    min: 0,
+    int: true,
+    description:
+      'Most audio_generation speech clips one agent-mode run may start, counted across the run and all of its subagents. 0 refuses speech in agent mode. Each clip still holds and settles its own credits.',
+    category: 'AI',
+    order: 149,
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.audioToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  agentSoundEffectsPerRun: makeNumberSetting({
+    key: 'agentSoundEffectsPerRun',
+    name: 'Agent Sound Effects Per Run',
+    defaultValue: 10,
+    min: 0,
+    int: true,
+    description:
+      'Most audio_generation sound effects one agent-mode run may start, counted across the run and all of its subagents. 0 refuses sound effects in agent mode. Each effect still holds and settles its own credits.',
+    category: 'AI',
+    order: 150,
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.audioToolConfig.ts.
     scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   enableModelDiscovery: makeBooleanSetting({

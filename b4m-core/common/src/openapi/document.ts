@@ -128,7 +128,10 @@ export function infoDescription(scopes: readonly string[] = PUBLIC_DOC_API_KEY_S
       '`GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
     '- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll ' +
       '`GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.',
-    '- **Audio** endpoints are synchronous and return the result directly.',
+    '- **Audio** endpoints are synchronous and return the result directly. A text-to-speech ' +
+      '(`POST /api/ai/tts`) or sound-effect (`POST /api/ai/sound-effects`) clip that outlasts the request ' +
+      'answers `202` with its job resource instead; it cannot be polled yet, and unless `preview` was set the ' +
+      'clip is saved to the file browser when it finishes.',
     '- **Transcriptions** (`POST /api/v1/transcriptions`) are synchronous too: after the upload, one call ' +
       'returns the text. Long audio can outlast the request timeout and fail with a `504`; see that ' +
       'endpoint for the limit.',

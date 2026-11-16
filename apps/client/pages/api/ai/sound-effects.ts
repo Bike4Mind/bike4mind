@@ -21,12 +21,15 @@ import {
   AUDIO_JOB_INLINE_TIMEOUT_MS,
   createAudioJobKeepingAudioOnFullQuota,
   dailyLimitError,
+  findOutlastingAudioJob,
   isRateLimitedFailure,
   retryAfterSecondsOf,
   savedCopyOf,
 } from '@server/generations/syncAudioJob';
 import { providerBusyHttpError } from '@server/utils/providerBusyHttpError';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
+import { mapperDeps } from '@server/generations/routeDeps';
+import { SOUND_EFFECT_GENERATION_PROJECTION, toPublicGenerationJob } from '@server/generations/toPublicGenerationJob';
 
 const GENERATION_FAILED = { error: 'Sound generation failed' };
 
@@ -34,6 +37,7 @@ const GENERATION_FAILED = { error: 'Sound generation failed' };
 // request: the job holds the duration-driven cost, settles it on success and returns it otherwise, records usage and
 // keeps the saved copy. Bills the organization's shared pool for org-billed API keys and for org-seat members;
 // otherwise the user. Scope-gated (AI_GENERATE) so an under-scoped API key can't drive paid provider generation.
+// A clip that outlasts the request is answered 202 with the sound-effect job resource; it lands in Files when done.
 //
 // Auth mode, required scopes, and request validation all come from generateSoundEffectContract (the same source of
 // truth that drives the OpenAPI spec); `req.validated` is the parsed, typed body.
@@ -89,11 +93,18 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
     minStepMs: inlineMinStepMs('sound_effect'),
   });
   if (!job || !isGenerationJobOfKind(job, 'sound_effect')) {
-    req.logger.warn('Sound-effects job did not finish in time; it continues, and bills, in the background', {
-      jobId: result.job.id,
+    const outlasting = await findOutlastingAudioJob(result.job.id, 'sound_effect');
+    if (!outlasting) {
+      req.logger.error('Sound-effects job vanished during the inline wait', { jobId: result.job.id, provider });
+      return res.status(502).json(GENERATION_FAILED);
+    }
+    req.logger.warn('Sound-effects job did not finish in time; it continues in the background', {
+      jobId: outlasting.id,
       provider,
     });
-    return res.status(502).json(GENERATION_FAILED);
+    return res
+      .status(202)
+      .json(await toPublicGenerationJob(outlasting, mapperDeps, SOUND_EFFECT_GENERATION_PROJECTION));
   }
 
   if (job.state !== 'succeeded') {

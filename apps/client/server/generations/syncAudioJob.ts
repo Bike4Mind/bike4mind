@@ -1,12 +1,14 @@
 import {
   DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
   TooManyRequestsError,
+  isGenerationJobOfKind,
   type AudioJobOutput,
   type GeneratedAssetSaveSkippedReason,
   type IGenerationJobDocument,
+  type IGenerationJobDocumentOf,
   type StorageLimitErrorInfo,
 } from '@bike4mind/common';
-import { fabFileRepository } from '@bike4mind/database';
+import { fabFileRepository, generationJobRepository } from '@bike4mind/database';
 import type { SaveGeneratedAssetResult } from '@bike4mind/services';
 import type { CreateAudioJobResult } from '@bike4mind/services/audioJobs';
 
@@ -60,6 +62,18 @@ export async function savedCopyOf(
     fileName: file.fileName,
     ...(file.fileUrl && { fileUrl: file.fileUrl }),
   };
+}
+
+/**
+ * The job as it stands after the inline wait gave up on it, for the 202 the routes answer with: it carries on in the
+ * worker and settles only if the clip is made. Null when it is gone (or not of `kind`), which stays a 502.
+ */
+export async function findOutlastingAudioJob<K extends 'speech' | 'sound_effect'>(
+  jobId: string,
+  kind: K
+): Promise<IGenerationJobDocumentOf<K> | null> {
+  const job = await generationJobRepository.findById(jobId);
+  return job && isGenerationJobOfKind(job, kind) ? job : null;
 }
 
 /** The provider's HTTP status on a failed job, when the provider answered with one (see the audio job handlers). */

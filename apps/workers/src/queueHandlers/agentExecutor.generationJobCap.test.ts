@@ -38,9 +38,11 @@ vi.mock('@bike4mind/server-utils/generationJobs/wiring', () => ({
 }));
 vi.mock('@bike4mind/server-utils/musicGenerations/buildMusicToolConfig', () => ({ buildMusicToolConfig: vi.fn() }));
 vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => ({ buildVideoToolConfig: vi.fn() }));
+vi.mock('@bike4mind/server-utils/generationJobs/audioJobWiring', () => ({ buildAudioToolJobs: vi.fn() }));
 
 const { getAgentMusicToolConfigDeps } = await import('./agentExecutor.musicToolConfig');
 const { getAgentVideoToolConfigDeps } = await import('./agentExecutor.videoToolConfig');
+const { getAgentAudioToolJobsDeps } = await import('./agentExecutor.audioToolConfig');
 
 const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;
 
@@ -88,5 +90,32 @@ describe('production generation deps factories', () => {
 
     expect(h.scopeForCaller).toHaveBeenCalledWith({ userId: 'u-1', organizationId: 'org-1' });
     expect(h.resolveScopedSetting.mock.calls[0]?.[0]).toBe('agentVideoClipsPerRun');
+  });
+
+  it('counts speech and sound effects on their own counters', async () => {
+    const deps = getAgentAudioToolJobsDeps(logger);
+
+    await deps.speechSlots.claim('q-1', 4);
+    await deps.speechSlots.release('q-1');
+    await deps.soundEffectSlots.claim('q-1', 5);
+    await deps.soundEffectSlots.release('q-1');
+
+    expect(h.claimAgentGenerationSlot).toHaveBeenCalledWith('q-1', 'speech', 4);
+    expect(h.releaseAgentGenerationSlot).toHaveBeenCalledWith('q-1', 'speech');
+    expect(h.claimAgentGenerationSlot).toHaveBeenCalledWith('q-1', 'sound_effect', 5);
+    expect(h.releaseAgentGenerationSlot).toHaveBeenCalledWith('q-1', 'sound_effect');
+  });
+
+  it('reads the speech and sound-effect setting keys for the run org', async () => {
+    const deps = getAgentAudioToolJobsDeps(logger);
+
+    await expect(deps.resolveSpeechLimit({ userId: 'u-1', organizationId: 'org-1' })).resolves.toBe(7);
+    await expect(deps.resolveSoundEffectLimit({ userId: 'u-1', organizationId: 'org-1' })).resolves.toBe(7);
+
+    expect(h.scopeForCaller).toHaveBeenCalledWith({ userId: 'u-1', organizationId: 'org-1' });
+    expect(h.resolveScopedSetting.mock.calls.map(call => call[0])).toEqual([
+      'agentSpeechClipsPerRun',
+      'agentSoundEffectsPerRun',
+    ]);
   });
 });

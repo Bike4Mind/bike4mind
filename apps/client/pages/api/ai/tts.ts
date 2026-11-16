@@ -25,11 +25,14 @@ import {
   AUDIO_JOB_INLINE_TIMEOUT_MS,
   createAudioJobKeepingAudioOnFullQuota,
   dailyLimitError,
+  findOutlastingAudioJob,
   isRateLimitedFailure,
   providerStatusOf,
   retryAfterSecondsOf,
   savedCopyOf,
 } from '@server/generations/syncAudioJob';
+import { mapperDeps } from '@server/generations/routeDeps';
+import { SPEECH_GENERATION_PROJECTION, toPublicGenerationJob } from '@server/generations/toPublicGenerationJob';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
@@ -39,7 +42,8 @@ import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAcce
  * Body: { text, provider?, model?, voice?, format?, encoding?, stability?, similarityBoost?, languageCode? }
  * - provider defaults to openai; model/voice/format fall back to per-provider defaults.
  * - generation, billing and the saved copy run as a speech job (createSpeechJob), stepped in this request; the
- *   response (encoding, oversized-audio URL, save headers) is written by the shared deliverGeneratedAudio.
+ *   response (encoding, oversized-audio URL, save headers) is written by the shared deliverGeneratedAudio. A clip
+ *   that outlasts the request is answered 202 with the speech job resource instead (it lands in Files when done).
  * - when the chosen provider has no usable key or rejects our credentials, another configured provider stands in
  *   and the response reports the substitution via { provider, fallbackFrom } / the X-B4M-Tts-Provider* headers.
  *
@@ -119,11 +123,16 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
     minStepMs: inlineMinStepMs('speech'),
   });
   if (!job || !isGenerationJobOfKind(job, 'speech')) {
-    req.logger.warn('TTS job did not finish in time; it continues, and bills, in the background', {
-      jobId: result.job.id,
+    const outlasting = await findOutlastingAudioJob(result.job.id, 'speech');
+    if (!outlasting) {
+      req.logger.error('TTS job vanished during the inline wait', { jobId: result.job.id, provider: vendor });
+      return res.status(502).json({ error: 'Failed to generate speech', provider: vendor });
+    }
+    req.logger.warn('TTS job did not finish in time; it continues in the background', {
+      jobId: outlasting.id,
       provider: vendor,
     });
-    return res.status(502).json({ error: 'Failed to generate speech', provider: vendor });
+    return res.status(202).json(await toPublicGenerationJob(outlasting, mapperDeps, SPEECH_GENERATION_PROJECTION));
   }
 
   switch (job.state) {

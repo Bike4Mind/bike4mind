@@ -336,7 +336,7 @@ describe('audio_generation tool', () => {
   it('says the clip may still be generating when the inline run throws', async () => {
     jobs.runInline.mockRejectedValue(new Error('database down'));
     await expect(run(context, { kind: 'speech', text: 'hello' }, { jobs })).resolves.toMatch(
-      /^The speech is still generating\. It will be saved to the user's Files/
+      /^The speech is still being generated \(job job-1\)\. It will appear in the user's Files when it is ready/
     );
     expect(context.logger.error).toHaveBeenCalledWith(
       '[audio_generation] inline run failed',
@@ -347,9 +347,11 @@ describe('audio_generation tool', () => {
 
   it('says the clip is still generating when the inline run times out', async () => {
     jobs.runInline.mockResolvedValue(null);
-    await expect(run(context, { kind: 'sound_effect', text: 'boom' }, { jobs })).resolves.toMatch(
-      /^The sound effect is still generating\. It will be saved to the user's Files/
+    const result = await run(context, { kind: 'sound_effect', text: 'boom' }, { jobs });
+    expect(result).toMatch(
+      /^The sound effect is still being generated \(job job-1\)\. It will appear in the user's Files when it is ready/
     );
+    expect(result).not.toMatch(/^Error/);
     expect(context.imageGenerateStorage.upload).not.toHaveBeenCalled();
   });
 

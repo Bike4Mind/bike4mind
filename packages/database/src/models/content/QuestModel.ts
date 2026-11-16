@@ -12,7 +12,7 @@ import {
   QuestCallbackStateSchema,
   ChatToolModeSchema,
   type GenerationJobRef,
-  type QuestGenerationJobKind,
+  type AgentGenerationSlotKind,
   QUEST_GENERATION_JOB_KINDS,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
@@ -647,6 +647,8 @@ export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schem
     // Agent-mode jobs claimed by this run, one per-run cap counter per kind (see claimAgentGenerationSlot).
     agentVideoClipsClaimed: { type: Number, required: false },
     agentMusicTracksClaimed: { type: Number, required: false },
+    agentSpeechClipsClaimed: { type: Number, required: false },
+    agentSoundEffectsClaimed: { type: Number, required: false },
     oob: { type: String, required: false },
     promptMeta: { type: PromptMetaSchema, required: false },
     status: { type: String, required: false },
@@ -964,7 +966,9 @@ export function sessionKeysetFilter(sessionId: string, after?: { timestamp: Date
 const AGENT_GENERATION_SLOT_FIELDS = {
   video: 'agentVideoClipsClaimed',
   music: 'agentMusicTracksClaimed',
-} as const satisfies Record<QuestGenerationJobKind, keyof IChatHistoryItem>;
+  speech: 'agentSpeechClipsClaimed',
+  sound_effect: 'agentSoundEffectsClaimed',
+} as const satisfies Record<AgentGenerationSlotKind, keyof IChatHistoryItem>;
 
 class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implements IChatHistoryItemRepository {
   ctx: mongoose.mongo.ClientSession | null;
@@ -1384,7 +1388,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    * checkpoint continuations share this Quest and can claim concurrently, so the check and the increment must be one atomic update.
    * Returns false when the cap is reached or no Quest matches.
    */
-  async claimAgentGenerationSlot(questId: string, kind: QuestGenerationJobKind, limit: number): Promise<boolean> {
+  async claimAgentGenerationSlot(questId: string, kind: AgentGenerationSlotKind, limit: number): Promise<boolean> {
     if (limit <= 0) return false;
     const field = AGENT_GENERATION_SLOT_FIELDS[kind];
     const result = await this.model.updateOne(
@@ -1409,7 +1413,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /** Give back a slot from claimAgentGenerationSlot whose call started no new job. */
-  async releaseAgentGenerationSlot(questId: string, kind: QuestGenerationJobKind): Promise<void> {
+  async releaseAgentGenerationSlot(questId: string, kind: AgentGenerationSlotKind): Promise<void> {
     const field = AGENT_GENERATION_SLOT_FIELDS[kind];
     await this.model.updateOne({ _id: convertId(questId), [field]: { $gt: 0 } }, { $inc: { [field]: -1 } });
   }

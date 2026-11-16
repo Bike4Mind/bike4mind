@@ -3430,6 +3430,72 @@ export interface components {
           delivery?: 'inline';
           audio: string;
         };
+    /**
+     * @example {
+     *       "id": "664f1c2b9a1e4d0012ab34cd",
+     *       "object": "speech_generation",
+     *       "state": "running",
+     *       "text": "Your password has been reset.",
+     *       "provider": "elevenlabs",
+     *       "model": null,
+     *       "voice": null,
+     *       "source": "api",
+     *       "error": null,
+     *       "output": null,
+     *       "credits": {
+     *         "reserved": 12,
+     *         "settled": null
+     *       },
+     *       "created_at": "2026-10-14T00:00:00.000Z",
+     *       "updated_at": "2026-10-14T00:00:30.000Z"
+     *     }
+     */
+    synthesizeSpeechResponse202: {
+      id: string;
+      /** @enum {string} */
+      object: 'speech_generation';
+      /** @enum {string} */
+      state: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+      text: string;
+      /**
+       * @description The provider asked for, with the default applied.
+       * @enum {string}
+       */
+      provider: 'openai' | 'elevenlabs';
+      /** @description The model you sent, or null for the provider default. */
+      model: string | null;
+      /** @description The voice you sent, or null for the default. */
+      voice: string | null;
+      /** @enum {string} */
+      source: 'api' | 'studio' | 'agent';
+      error: {
+        /** @enum {string} */
+        code: 'content_blocked' | 'provider_timeout' | 'provider_error' | 'output_too_large' | 'cancelled';
+        message: string;
+      } | null;
+      output: {
+        /**
+         * @description `ready`: url is set. `pending_scan`: the saved file is still being scanned. `unavailable`: the file was blocked by the scan or deleted and url will never be set.
+         * @enum {string}
+         */
+        availability: 'ready' | 'pending_scan' | 'unavailable';
+        /** @description Signed download URL, valid until expires_at. Set only when availability is `ready`, otherwise null. */
+        url: string | null;
+        /** @description ISO 8601. When url stops working; null whenever url is. */
+        expires_at: string | null;
+        content_type: string;
+        /** @description The length of the clip, or null when it could not be measured. */
+        duration_seconds: number | null;
+        /** @description The Files entry, or null when the clip was stored outside Files. */
+        file_id: string | null;
+      } | null;
+      credits: {
+        reserved: number | null;
+        settled: number | null;
+      };
+      created_at: string;
+      updated_at: string;
+    };
     synthesizeSpeechResponse400: {
       error: string;
       request_id?: string;
@@ -3680,6 +3746,66 @@ export interface components {
           delivery?: 'inline';
           audio: string;
         };
+    /**
+     * @example {
+     *       "id": "664f1c2b9a1e4d0012ab34cd",
+     *       "object": "sound_effect_generation",
+     *       "state": "running",
+     *       "text": "heavy wooden door creaking open",
+     *       "provider": "elevenlabs",
+     *       "duration_seconds": 3,
+     *       "source": "api",
+     *       "error": null,
+     *       "output": null,
+     *       "credits": {
+     *         "reserved": 12,
+     *         "settled": null
+     *       },
+     *       "created_at": "2026-10-14T00:00:00.000Z",
+     *       "updated_at": "2026-10-14T00:00:30.000Z"
+     *     }
+     */
+    generateSoundEffectResponse202: {
+      id: string;
+      /** @enum {string} */
+      object: 'sound_effect_generation';
+      /** @enum {string} */
+      state: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+      text: string;
+      /** @enum {string} */
+      provider: 'elevenlabs';
+      /** @description The length requested, or null to let the provider choose. */
+      duration_seconds: number | null;
+      /** @enum {string} */
+      source: 'api' | 'studio' | 'agent';
+      error: {
+        /** @enum {string} */
+        code: 'content_blocked' | 'provider_timeout' | 'provider_error' | 'output_too_large' | 'cancelled';
+        message: string;
+      } | null;
+      output: {
+        /**
+         * @description `ready`: url is set. `pending_scan`: the saved file is still being scanned. `unavailable`: the file was blocked by the scan or deleted and url will never be set.
+         * @enum {string}
+         */
+        availability: 'ready' | 'pending_scan' | 'unavailable';
+        /** @description Signed download URL, valid until expires_at. Set only when availability is `ready`, otherwise null. */
+        url: string | null;
+        /** @description ISO 8601. When url stops working; null whenever url is. */
+        expires_at: string | null;
+        content_type: string;
+        /** @description The length of the clip, or null when it could not be measured. */
+        duration_seconds: number | null;
+        /** @description The Files entry, or null when the clip was stored outside Files. */
+        file_id: string | null;
+      } | null;
+      credits: {
+        reserved: number | null;
+        settled: number | null;
+      };
+      created_at: string;
+      updated_at: string;
+    };
     generateSoundEffectResponse403: {
       error: string;
       request_id?: string;
@@ -6417,6 +6543,8 @@ export interface components {
       generationJobs?: unknown;
       agentVideoClipsClaimed?: unknown;
       agentMusicTracksClaimed?: unknown;
+      agentSpeechClipsClaimed?: unknown;
+      agentSoundEffectsClaimed?: unknown;
       oob?: unknown;
       promptMeta?: unknown;
       status?: unknown;
@@ -6471,6 +6599,8 @@ export interface components {
         generationJobs?: unknown;
         agentVideoClipsClaimed?: unknown;
         agentMusicTracksClaimed?: unknown;
+        agentSpeechClipsClaimed?: unknown;
+        agentSoundEffectsClaimed?: unknown;
         oob?: unknown;
         promptMeta?: unknown;
         status?: unknown;
@@ -12437,6 +12567,29 @@ export interface operations {
           'audio/pcm': string;
         };
       };
+      /** @description The speech took longer than this request can wait (about 55 seconds), so no audio is returned. Generation carries on: the body is the job as it stands. Unless `preview` was set, the audio is saved to the file browser when it finishes. Credits are settled only if it succeeds and returned otherwise. This job cannot be polled through the API yet; look for the saved file instead of retrying, which would generate (and bill) a second clip. */
+      202: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['synthesizeSpeechResponse202'];
+        };
+      };
       /** @description Binary encoding only: the audio exceeds the ~4MB response ceiling, so it was offloaded to storage and `Location` is a time-limited signed GET for it. HTTP clients that follow redirects receive the audio transparently (they drop the `Authorization` header on the cross-origin hop, as the signed URL requires); browser callers should use `encoding: "base64"`, since the storage origin sends no CORS headers. Carries the same `X-B4M-*` headers as the 200. */
       303: {
         headers: {
@@ -13067,6 +13220,29 @@ export interface operations {
           'audio/opus': string;
           'audio/L16': string;
           'audio/basic': string;
+        };
+      };
+      /** @description The sound effect took longer than this request can wait (about 55 seconds), so no audio is returned. Generation carries on: the body is the job as it stands. Unless `preview` was set, the audio is saved to the file browser when it finishes. Credits are settled only if it succeeds and returned otherwise. This job cannot be polled through the API yet; look for the saved file instead of retrying, which would generate (and bill) a second clip. */
+      202: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['generateSoundEffectResponse202'];
         };
       };
       /** @description Binary encoding only: the audio exceeds the ~4MB response ceiling, so it was offloaded to storage and `Location` is a time-limited signed GET for it. HTTP clients that follow redirects receive the audio transparently (they drop the `Authorization` header on the cross-origin hop, as the signed URL requires); browser callers should use `encoding: "base64"`, since the storage origin sends no CORS headers. Carries the same `X-B4M-*` headers as the 200. */

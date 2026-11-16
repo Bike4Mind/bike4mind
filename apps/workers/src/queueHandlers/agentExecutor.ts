@@ -234,7 +234,7 @@ import {
 import { capAgentRoundOutput, capsRoundOutput, outOfCreditsOutcome } from './agentExecutor.roundOutputCap';
 import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentExecutor.videoToolConfig';
 import { buildAgentMusicToolConfig, getAgentMusicToolConfigDeps } from './agentExecutor.musicToolConfig';
-import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
+import { buildAgentAudioToolJobs, getAgentAudioToolJobsDeps } from './agentExecutor.audioToolConfig';
 import { publishRunGenerationJobs } from './agentExecutor.generationJobs';
 import {
   resolveTopLevelProfile,
@@ -2348,7 +2348,16 @@ async function runExecution(
       apiKeyTable: shadowSettings ? undefined : (apiKeyTable as ApiKeyTable),
       imageConfig: execution.imageConfig,
       audioConfig: execution.audioConfig,
-      audioJobs: buildAudioToolJobs(),
+      audioJobs: await buildAgentAudioToolJobs(
+        {
+          userId: execution.userId,
+          organizationId: execution.organizationId,
+          apiKeyId: execution.apiKeyId,
+          questId: runQuestId,
+          toolEnabled: profileEnabledTools.includes('audio_generation'),
+        },
+        getAgentAudioToolJobsDeps(logger)
+      ),
       videoConfig: await buildAgentVideoToolConfig(
         {
           userId: execution.userId,

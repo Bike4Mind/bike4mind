@@ -1,4 +1,4 @@
-import { CreditHolderType, isZodError } from '@bike4mind/common';
+import { CreditHolderType, isZodError, SoundEffectGenerationSchema } from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,6 +12,7 @@ const { mocks } = vi.hoisted(() => ({
     getSignedUrl: vi.fn(),
     orgFindById: vi.fn(),
     orgFindAccessibleById: vi.fn(),
+    generationJobFindById: vi.fn(),
   },
 }));
 
@@ -47,6 +48,7 @@ vi.mock('@bike4mind/server-utils/generationJobs/audioJobWiring', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { findById: (...a: unknown[]) => mocks.fabFileFindById(...a) },
+  generationJobRepository: { findById: (...a: unknown[]) => mocks.generationJobFindById(...a) },
   organizationRepository: {
     findById: (...a: unknown[]) => mocks.orgFindById(...a),
     shareable: { findAccessibleById: (...a: unknown[]) => mocks.orgFindAccessibleById(...a) },
@@ -66,6 +68,10 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
     upload: (...a: unknown[]) => mocks.upload(...a),
     getSignedUrl: (...a: unknown[]) => mocks.getSignedUrl(...a),
   }),
+}));
+
+vi.mock('@server/generations/routeDeps', () => ({
+  mapperDeps: { sign: vi.fn(), now: () => new Date('2026-10-06T00:02:00Z') },
 }));
 
 import { AUDIO_JOB_INLINE_TIMEOUT_MS } from '@server/generations/syncAudioJob';
@@ -303,13 +309,40 @@ describe('POST /api/ai/sound-effects', () => {
     expect(mocks.runAudioJobInline).not.toHaveBeenCalled();
   });
 
-  it('answers 502 and logs the job id when the job does not finish in time', async () => {
+  it('answers 202 with the job resource when the job does not finish in time', async () => {
     mocks.runAudioJobInline.mockResolvedValue(null);
+    mocks.generationJobFindById.mockResolvedValue(
+      soundJob(
+        {
+          state: 'running',
+          source: 'studio',
+          createdAt: new Date('2026-10-06T00:00:00Z'),
+          updatedAt: new Date('2026-10-06T00:01:00Z'),
+        },
+        { output: undefined }
+      )
+    );
+    const { res, logger, promise } = run({ text: 'door creak' });
+    await promise;
+    expect(res._getStatusCode()).toBe(202);
+    const body = SoundEffectGenerationSchema.parse(res._getJSONData());
+    expect(body).toMatchObject({ id: 'job-1', state: 'running', text: 'door creak', output: null, error: null });
+    expect(mocks.generationJobFindById).toHaveBeenCalledWith('job-1');
+    expect(mocks.readAudioJobOutput).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('background'),
+      expect.objectContaining({ jobId: 'job-1' })
+    );
+  });
+
+  it('answers 502 when the job vanished during the inline wait', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(null);
+    mocks.generationJobFindById.mockResolvedValue(null);
     const { res, logger, promise } = run({ text: 'door creak' });
     await promise;
     expect(res._getStatusCode()).toBe(502);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('background'),
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('vanished'),
       expect.objectContaining({ jobId: 'job-1' })
     );
   });

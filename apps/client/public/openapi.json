@@ -3,7 +3,7 @@
   "info": {
     "title": "Bike4Mind API",
     "version": "26.0.0",
-    "description": "Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions that validate requests at runtime, so this spec cannot drift from the implementation - with one documented exception: a `pollResult` schema (see the `x-poll-result` extension) describes a handoff response's outcome on a plain, non-contract endpoint, so it is hand-maintained against that handler rather than runtime-validated, and can drift if the handler changes without a matching schema update.\n\n## Getting started\n1. Create a key in the web app under **Profile > API Keys** (pick a scope preset).\n2. Make a first call: `GET /api/v1/me` with `Authorization: Bearer b4m_live_<key>`. It needs only the `me:read` scope, spends no credits, and returns your identity, plan tier and credit balance.\n3. Read the rest of this page for the behaviour shared across endpoints: rate limits, credits, errors and async jobs.\n\nEndpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), **Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Skills** and **Account**.\n\n## Authentication\nSend an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.\n\n## Scopes\nAPI keys carry `resource:action` scopes. The documented scopes are:\n- `notebooks:read`\n- `notebooks:write`\n- `files:read`\n- `files:write`\n- `ai:generate`\n- `ai:decide`\n- `ai:chat`\n- `projects:read`\n- `projects:write`\n- `agents:read`\n- `agents:write`\n- `me:read`\n- `personas:mint`\n- `marketing-reports:read`\n- `marketing-reports:write`\n- `hearth:read`\n- `hearth:write`\n- `datalake:read`\n- `datalake:write`\n- `datalake:share`\n- `datalake:query`\n- `overwatch:read`\n- `skills:read`\n- `skills:write`\n- `skills:review`\n- `bob:read`\n- `bob:run`\n- `slack:post`\n- `api-keys:manage`\n\nPer-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no `x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).\n\n## Rate limits\nEach API key has a per-minute and a per-day request ceiling, by default 60 requests/minute and 1000 requests/day (a key can be minted with its own ceilings). Responses from rate-limited operations carry the current state of both windows (the streaming completions endpoint sends them only on an API-key `429`):\n- `X-RateLimit-Limit-Minute`\n- `X-RateLimit-Remaining-Minute`\n- `X-RateLimit-Reset-Minute`\n- `X-RateLimit-Limit-Day`\n- `X-RateLimit-Remaining-Day`\n- `X-RateLimit-Reset-Day`\n\nReset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait that long before retrying. This includes `POST /api/ai/v1/completions`, which rate-limits before it opens its event stream. `GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/video-models`, `GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations` and `/api/v1/music-generations`, and the poll endpoints listed under Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches the limiter and carries no rate-limit headers.\n\n## Credits\nGeneration endpoints spend credits from the balance shown at `credits.balance` on `GET /api/v1/me` (the caller's personal ledger). A key without `me:read` reads the same number from `GET /api/v1/credits`, which accepts `ai:chat`, `ai:generate` and `ai:decide` too. A synchronous call that cannot be paid for fails with `422` and `errorCode: \"insufficient_credits\"`. On a queued job the same code arrives on the polled result instead (see Async jobs), so check both places.\n\n## Errors\nError bodies use one envelope, the `ErrorResponse` schema: `{ \"error\": string, \"request_id\"?: string }`, plus an `errorCode` on failures a client is expected to branch on (`insufficient_credits`, `spend_cap_exceeded`, `provider_not_configured`, ...). A deprecated `name` field may also appear until its sunset date; do not rely on it. Branch on the HTTP status and `errorCode`, never on the `error` prose. A few operations declare a bespoke error shape for a specific status (e.g. the `500` of the tools endpoint and the `413` of text-to-speech); each operation lists the statuses it can return and the body for each.\n\nThe shared statuses: a malformed JSON body is `400`, a body that fails schema validation is `422`, a missing or invalid credential is `401`, a valid key without the required scope is `403`, an unknown resource is `404` and an exceeded rate limit is `429`. A `401` carrying `errorCode: \"provider_rejected\"` means the upstream provider refused the provider key the request used - the platform key by default, or your own stored provider key when you configured one - so your API key itself was accepted.\n\n## Async jobs\nWork that is not provably fast is queued and polled rather than held open:\n- **Chat** (`POST /api/chat`) and **image generation/editing** (`POST /api/v1/image-generations`, `POST /api/v1/image-edits`) return a quest. Poll `GET /api/v1/quests/{id}` until `status` is `done` or `stopped`; chat text arrives in `reply`, generated images in `images`, edited images in `files[].url`. Check for failure before reading results: a job that ends `done` with `type: \"error\"` failed (the reason is in `reply`), and a job that ends `stopped` also failed even when `type` is not `\"error\"` (its `reply` carries an explanation, not an answer). The outcome schema of each of these quest handoffs is linked from its response via the `x-poll-result` extension. Chat also accepts `wait: true` to block until the reply is ready.\n- **Agent runs** (`POST /api/v1/agent-executions`) return `202`. Poll `GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.\n- **Video generation** (`POST /api/v1/video-generations`) returns `202`. Poll `GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **Music generation** (`POST /api/v1/music-generations`) returns `202`. Poll `GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.\n- **Audio** endpoints are synchronous and return the result directly.\n- **Transcriptions** (`POST /api/v1/transcriptions`) are synchronous too: after the upload, one call returns the text. Long audio can outlast the request timeout and fail with a `504`; see that endpoint for the limit.\n\nPoll with a backoff of a few seconds: each poll counts against the per-minute limit.\n\n## Versioning\nNew endpoints live under `/api/v1`. Published endpoints are forward-only: a live URL is never renamed or removed, and a breaking change ships as a new path while the old one keeps working. Nothing published is removed silently - a deprecated field or endpoint is marked `deprecated` in this spec with a sunset date in its description, and keeps working until that date.\n\n## CORS\nThe spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints themselves are called server-to-server with a secret key and are not intended for browser CORS use.\n\n## Correlation\nEvery response carries an `X-Request-ID` header (echoed as `request_id`/`requestId` in bodies and events) for log correlation.",
+    "description": "Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions that validate requests at runtime, so this spec cannot drift from the implementation - with one documented exception: a `pollResult` schema (see the `x-poll-result` extension) describes a handoff response's outcome on a plain, non-contract endpoint, so it is hand-maintained against that handler rather than runtime-validated, and can drift if the handler changes without a matching schema update.\n\n## Getting started\n1. Create a key in the web app under **Profile > API Keys** (pick a scope preset).\n2. Make a first call: `GET /api/v1/me` with `Authorization: Bearer b4m_live_<key>`. It needs only the `me:read` scope, spends no credits, and returns your identity, plan tier and credit balance.\n3. Read the rest of this page for the behaviour shared across endpoints: rate limits, credits, errors and async jobs.\n\nEndpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), **Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Skills** and **Account**.\n\n## Authentication\nSend an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.\n\n## Scopes\nAPI keys carry `resource:action` scopes. The documented scopes are:\n- `notebooks:read`\n- `notebooks:write`\n- `files:read`\n- `files:write`\n- `ai:generate`\n- `ai:decide`\n- `ai:chat`\n- `projects:read`\n- `projects:write`\n- `agents:read`\n- `agents:write`\n- `me:read`\n- `personas:mint`\n- `marketing-reports:read`\n- `marketing-reports:write`\n- `hearth:read`\n- `hearth:write`\n- `datalake:read`\n- `datalake:write`\n- `datalake:share`\n- `datalake:query`\n- `overwatch:read`\n- `skills:read`\n- `skills:write`\n- `skills:review`\n- `bob:read`\n- `bob:run`\n- `slack:post`\n- `api-keys:manage`\n\nPer-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no `x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).\n\n## Rate limits\nEach API key has a per-minute and a per-day request ceiling, by default 60 requests/minute and 1000 requests/day (a key can be minted with its own ceilings). Responses from rate-limited operations carry the current state of both windows (the streaming completions endpoint sends them only on an API-key `429`):\n- `X-RateLimit-Limit-Minute`\n- `X-RateLimit-Remaining-Minute`\n- `X-RateLimit-Reset-Minute`\n- `X-RateLimit-Limit-Day`\n- `X-RateLimit-Remaining-Day`\n- `X-RateLimit-Reset-Day`\n\nReset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait that long before retrying. This includes `POST /api/ai/v1/completions`, which rate-limits before it opens its event stream. `GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/video-models`, `GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations` and `/api/v1/music-generations`, and the poll endpoints listed under Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches the limiter and carries no rate-limit headers.\n\n## Credits\nGeneration endpoints spend credits from the balance shown at `credits.balance` on `GET /api/v1/me` (the caller's personal ledger). A key without `me:read` reads the same number from `GET /api/v1/credits`, which accepts `ai:chat`, `ai:generate` and `ai:decide` too. A synchronous call that cannot be paid for fails with `422` and `errorCode: \"insufficient_credits\"`. On a queued job the same code arrives on the polled result instead (see Async jobs), so check both places.\n\n## Errors\nError bodies use one envelope, the `ErrorResponse` schema: `{ \"error\": string, \"request_id\"?: string }`, plus an `errorCode` on failures a client is expected to branch on (`insufficient_credits`, `spend_cap_exceeded`, `provider_not_configured`, ...). A deprecated `name` field may also appear until its sunset date; do not rely on it. Branch on the HTTP status and `errorCode`, never on the `error` prose. A few operations declare a bespoke error shape for a specific status (e.g. the `500` of the tools endpoint and the `413` of text-to-speech); each operation lists the statuses it can return and the body for each.\n\nThe shared statuses: a malformed JSON body is `400`, a body that fails schema validation is `422`, a missing or invalid credential is `401`, a valid key without the required scope is `403`, an unknown resource is `404` and an exceeded rate limit is `429`. A `401` carrying `errorCode: \"provider_rejected\"` means the upstream provider refused the provider key the request used - the platform key by default, or your own stored provider key when you configured one - so your API key itself was accepted.\n\n## Async jobs\nWork that is not provably fast is queued and polled rather than held open:\n- **Chat** (`POST /api/chat`) and **image generation/editing** (`POST /api/v1/image-generations`, `POST /api/v1/image-edits`) return a quest. Poll `GET /api/v1/quests/{id}` until `status` is `done` or `stopped`; chat text arrives in `reply`, generated images in `images`, edited images in `files[].url`. Check for failure before reading results: a job that ends `done` with `type: \"error\"` failed (the reason is in `reply`), and a job that ends `stopped` also failed even when `type` is not `\"error\"` (its `reply` carries an explanation, not an answer). The outcome schema of each of these quest handoffs is linked from its response via the `x-poll-result` extension. Chat also accepts `wait: true` to block until the reply is ready.\n- **Agent runs** (`POST /api/v1/agent-executions`) return `202`. Poll `GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.\n- **Video generation** (`POST /api/v1/video-generations`) returns `202`. Poll `GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **Music generation** (`POST /api/v1/music-generations`) returns `202`. Poll `GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.\n- **Audio** endpoints are synchronous and return the result directly. A text-to-speech (`POST /api/ai/tts`) or sound-effect (`POST /api/ai/sound-effects`) clip that outlasts the request answers `202` with its job resource instead; it cannot be polled yet, and unless `preview` was set the clip is saved to the file browser when it finishes.\n- **Transcriptions** (`POST /api/v1/transcriptions`) are synchronous too: after the upload, one call returns the text. Long audio can outlast the request timeout and fail with a `504`; see that endpoint for the limit.\n\nPoll with a backoff of a few seconds: each poll counts against the per-minute limit.\n\n## Versioning\nNew endpoints live under `/api/v1`. Published endpoints are forward-only: a live URL is never renamed or removed, and a breaking change ships as a new path while the old one keeps working. Nothing published is removed silently - a deprecated field or endpoint is marked `deprecated` in this spec with a sunset date in its description, and keeps working until that date.\n\n## CORS\nThe spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints themselves are called server-to-server with a secret key and are not intended for browser CORS use.\n\n## Correlation\nEvery response carries an `X-Request-ID` header (echoed as `request_id`/`requestId` in bodies and events) for log correlation.",
     "contact": {
       "name": "Bike4Mind",
       "url": "https://your-deployment.example.com"
@@ -3448,6 +3448,206 @@
           "fabFileId": "664f1c2b9a1e4d0012ab34cd"
         }
       },
+      "synthesizeSpeechResponse202": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "speech_generation"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "storing",
+              "succeeded",
+              "failed",
+              "blocked",
+              "cancelled"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ],
+            "description": "The provider asked for, with the default applied."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The model you sent, or null for the provider default."
+          },
+          "voice": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The voice you sent, or null for the default."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "api",
+              "studio",
+              "agent"
+            ]
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "content_blocked",
+                  "provider_timeout",
+                  "provider_error",
+                  "output_too_large",
+                  "cancelled"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          },
+          "output": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "availability": {
+                "type": "string",
+                "enum": [
+                  "ready",
+                  "pending_scan",
+                  "unavailable"
+                ],
+                "description": "`ready`: url is set. `pending_scan`: the saved file is still being scanned. `unavailable`: the file was blocked by the scan or deleted and url will never be set."
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Signed download URL, valid until expires_at. Set only when availability is `ready`, otherwise null."
+              },
+              "expires_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "ISO 8601. When url stops working; null whenever url is."
+              },
+              "content_type": {
+                "type": "string"
+              },
+              "duration_seconds": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "The length of the clip, or null when it could not be measured."
+              },
+              "file_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The Files entry, or null when the clip was stored outside Files."
+              }
+            },
+            "required": [
+              "availability",
+              "url",
+              "expires_at",
+              "content_type",
+              "duration_seconds",
+              "file_id"
+            ]
+          },
+          "credits": {
+            "type": "object",
+            "properties": {
+              "reserved": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "settled": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "reserved",
+              "settled"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "object",
+          "state",
+          "text",
+          "provider",
+          "model",
+          "voice",
+          "source",
+          "error",
+          "output",
+          "credits",
+          "created_at",
+          "updated_at"
+        ],
+        "example": {
+          "id": "664f1c2b9a1e4d0012ab34cd",
+          "object": "speech_generation",
+          "state": "running",
+          "text": "Your password has been reset.",
+          "provider": "elevenlabs",
+          "model": null,
+          "voice": null,
+          "source": "api",
+          "error": null,
+          "output": null,
+          "credits": {
+            "reserved": 12,
+            "settled": null
+          },
+          "created_at": "2026-10-14T00:00:00.000Z",
+          "updated_at": "2026-10-14T00:00:30.000Z"
+        }
+      },
       "synthesizeSpeechResponse400": {
         "type": "object",
         "properties": {
@@ -4117,6 +4317,195 @@
           "audio": "SUQzBAAAAAAA...",
           "contentType": "audio/mpeg",
           "saved": true
+        }
+      },
+      "generateSoundEffectResponse202": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "sound_effect_generation"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "storing",
+              "succeeded",
+              "failed",
+              "blocked",
+              "cancelled"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "elevenlabs"
+            ]
+          },
+          "duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "The length requested, or null to let the provider choose."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "api",
+              "studio",
+              "agent"
+            ]
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "content_blocked",
+                  "provider_timeout",
+                  "provider_error",
+                  "output_too_large",
+                  "cancelled"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          },
+          "output": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "availability": {
+                "type": "string",
+                "enum": [
+                  "ready",
+                  "pending_scan",
+                  "unavailable"
+                ],
+                "description": "`ready`: url is set. `pending_scan`: the saved file is still being scanned. `unavailable`: the file was blocked by the scan or deleted and url will never be set."
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Signed download URL, valid until expires_at. Set only when availability is `ready`, otherwise null."
+              },
+              "expires_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "ISO 8601. When url stops working; null whenever url is."
+              },
+              "content_type": {
+                "type": "string"
+              },
+              "duration_seconds": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "The length of the clip, or null when it could not be measured."
+              },
+              "file_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The Files entry, or null when the clip was stored outside Files."
+              }
+            },
+            "required": [
+              "availability",
+              "url",
+              "expires_at",
+              "content_type",
+              "duration_seconds",
+              "file_id"
+            ]
+          },
+          "credits": {
+            "type": "object",
+            "properties": {
+              "reserved": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "settled": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "reserved",
+              "settled"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "object",
+          "state",
+          "text",
+          "provider",
+          "duration_seconds",
+          "source",
+          "error",
+          "output",
+          "credits",
+          "created_at",
+          "updated_at"
+        ],
+        "example": {
+          "id": "664f1c2b9a1e4d0012ab34cd",
+          "object": "sound_effect_generation",
+          "state": "running",
+          "text": "heavy wooden door creaking open",
+          "provider": "elevenlabs",
+          "duration_seconds": 3,
+          "source": "api",
+          "error": null,
+          "output": null,
+          "credits": {
+            "reserved": 12,
+            "settled": null
+          },
+          "created_at": "2026-10-14T00:00:00.000Z",
+          "updated_at": "2026-10-14T00:00:30.000Z"
         }
       },
       "generateSoundEffectResponse403": {
@@ -11224,6 +11613,8 @@
           "generationJobs": {},
           "agentVideoClipsClaimed": {},
           "agentMusicTracksClaimed": {},
+          "agentSpeechClipsClaimed": {},
+          "agentSoundEffectsClaimed": {},
           "oob": {},
           "promptMeta": {},
           "status": {},
@@ -11289,6 +11680,8 @@
               "generationJobs": {},
               "agentVideoClipsClaimed": {},
               "agentMusicTracksClaimed": {},
+              "agentSpeechClipsClaimed": {},
+              "agentSoundEffectsClaimed": {},
               "oob": {},
               "promptMeta": {},
               "status": {},
@@ -27643,6 +28036,60 @@
               }
             }
           },
+          "202": {
+            "description": "The speech took longer than this request can wait (about 55 seconds), so no audio is returned. Generation carries on: the body is the job as it stands. Unless `preview` was set, the audio is saved to the file browser when it finishes. Credits are settled only if it succeeds and returned otherwise. This job cannot be polled through the API yet; look for the saved file instead of retrying, which would generate (and bill) a second clip.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse202"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
           "303": {
             "description": "Binary encoding only: the audio exceeds the ~4MB response ceiling, so it was offloaded to storage and `Location` is a time-limited signed GET for it. HTTP clients that follow redirects receive the audio transparently (they drop the `Authorization` header on the cross-origin hop, as the signed URL requires); browser callers should use `encoding: \"base64\"`, since the storage origin sends no CORS headers. Carries the same `X-B4M-*` headers as the 200.",
             "headers": {
@@ -29208,6 +29655,60 @@
                 "schema": {
                   "type": "string",
                   "contentEncoding": "binary"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "The sound effect took longer than this request can wait (about 55 seconds), so no audio is returned. Generation carries on: the body is the job as it stands. Unless `preview` was set, the audio is saved to the file browser when it finishes. Credits are settled only if it succeeds and returned otherwise. This job cannot be polled through the API yet; look for the saved file instead of retrying, which would generate (and bill) a second clip.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/generateSoundEffectResponse202"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
