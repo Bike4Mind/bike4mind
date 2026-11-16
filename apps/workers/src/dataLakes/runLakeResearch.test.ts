@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   findLakeById: vi.fn(),
   findUserById: vi.fn(),
   findOrgById: vi.fn(),
+  findActiveFreeze: vi.fn(),
   resolveWebSearchProviders: vi.fn(),
   executeResearchRun: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
@@ -39,6 +40,7 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   userRepository: { findById: h.findUserById },
   organizationRepository: { findById: h.findOrgById, findIdsWithAdminRights: h.findIdsWithAdminRights },
+  spendFreezeRepository: { findActiveForSubject: h.findActiveFreeze },
   dataLakeRepository: { findById: h.findLakeById },
   dataLakeResearchRunRepository: {
     claimForExecution: h.claimForExecution,
@@ -142,6 +144,7 @@ beforeEach(() => {
   h.findLakeById.mockResolvedValue({ id: 'lake-1', createdByUserId: 'owner-1' });
   h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: null });
   h.findOrgById.mockResolvedValue(null);
+  h.findActiveFreeze.mockResolvedValue(null);
   h.resolveWebSearchProviders.mockResolvedValue([{ name: 'serpapi', search: vi.fn(async () => []) }, null]);
   h.getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'k' });
   h.getAvailableModels.mockResolvedValue([{ id: 'gpt-4.1-mini', backend: 'openai' }]);
@@ -187,6 +190,34 @@ describe('runLakeResearch', () => {
       'run-1',
       expect.objectContaining({ status: 'failed', spentMicroUsd: 0, error: expect.stringMatching(/owner account/) })
     );
+  });
+
+  it('fails a run whose lake owner has spending paused before any search, judgment or charge', async () => {
+    h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: 'org-7' });
+    h.findActiveFreeze.mockResolvedValue({ scopeType: 'Organization', frozenAt: new Date() });
+
+    expect(await runLakeResearch('run-1', logger)).toEqual({ claimed: true });
+
+    expect(h.findActiveFreeze).toHaveBeenCalledWith({ userId: 'owner-1', organizationId: 'org-7' });
+    expect(h.executeResearchRun).not.toHaveBeenCalled();
+    expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+    expect(h.settleRun).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        status: 'failed',
+        spentMicroUsd: 0,
+        error: expect.stringMatching(/Spending is paused/),
+      })
+    );
+  });
+
+  it('settles and rethrows when the spend freeze read fails, without searching', async () => {
+    h.findActiveFreeze.mockRejectedValue(new Error('db down'));
+
+    await expect(runLakeResearch('run-1', logger)).rejects.toThrow('db down');
+
+    expect(h.executeResearchRun).not.toHaveBeenCalled();
+    expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'failed', error: 'db down' }));
   });
 
   it('settles a finished run with its stop reason, spend and totals', async () => {

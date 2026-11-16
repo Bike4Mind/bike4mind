@@ -1,4 +1,4 @@
-import { usageEventRepository, userRepository } from '@bike4mind/database';
+import { spendFreezeRepository, usageEventRepository, userRepository } from '@bike4mind/database';
 import {
   ApiKeyScope,
   LLMApiRequestBody,
@@ -15,6 +15,8 @@ import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminSc
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
 import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
 import { dataLakeToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
@@ -95,7 +97,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // API key always bills its own org, as on the v1 media routes; naming another is a 403.
     const effectiveOrgId = await resolveRequestBillingOrgId(req, invokeParams.organizationId);
 
-    // Refuse a capped free-tier turn here, as a 429, rather than letting the quest worker settle it.
+    // Refuse a frozen or capped turn here, rather than letting the quest worker settle it. The freeze
+    // goes first so a frozen caller is not told to wait for the daily reset.
+    await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, effectiveOrgId ?? null), {
+      db: { spendFreezes: spendFreezeRepository },
+    });
     await checkFreeTierDailySpendCap({
       user: req.user,
       req,

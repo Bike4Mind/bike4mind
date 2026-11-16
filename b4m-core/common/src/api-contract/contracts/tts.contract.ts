@@ -16,6 +16,7 @@ import {
   BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION,
   BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
 } from '../../schemas/billingOrganization';
+import { SPEND_FROZEN_FORBIDDEN_NOTE } from '../../schemas/chat';
 
 /**
  * Contract for POST /api/ai/tts - multi-provider text-to-speech.
@@ -79,7 +80,7 @@ export const synthesizeSpeechContract = defineEndpoint({
     403: {
       description:
         'The API key lacks the `ai:generate` scope (`required_scopes` names it), or ' +
-        `${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION}`,
+        `${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION} ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
       schema: ttsForbiddenResponseSchema,
     },
     404: {

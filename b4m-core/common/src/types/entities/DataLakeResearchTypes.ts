@@ -367,6 +367,8 @@ export const RESEARCH_SCHEDULE_SKIP_REASONS = [
   'insufficient_credits',
   /** The lake is not active (archived, deleted or missing). */
   'lake_inactive',
+  /** Spending is paused for the lake's owner or their org. Clears when the pause is lifted. */
+  'spend_frozen',
 ] as const;
 export type ResearchScheduleSkipReason = (typeof RESEARCH_SCHEDULE_SKIP_REASONS)[number];
 

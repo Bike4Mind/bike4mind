@@ -18,6 +18,7 @@ import { createMocks } from 'node-mocks-http';
 
 const {
   mockCheckFreeTierDailySpendCap,
+  mockFindActiveFreeze,
   mockValidate,
   mockUserFindById,
   mockUserUpdate,
@@ -32,6 +33,7 @@ const {
   mockResolveUserRateLimitPerMin,
 } = vi.hoisted(() => ({
   mockCheckFreeTierDailySpendCap: vi.fn().mockResolvedValue(undefined),
+  mockFindActiveFreeze: vi.fn(),
   mockValidate: vi.fn(),
   mockUserFindById: vi.fn(),
   mockUserUpdate: vi.fn(),
@@ -122,6 +124,7 @@ vi.mock('@bike4mind/database', async orig => {
       ...(actual.cacheRepository as object),
       tryIncrementWithinLimitFixedWindow: (...a: unknown[]) => mockTryIncrement(...a),
     },
+    spendFreezeRepository: { findActiveForSubject: (...a: unknown[]) => mockFindActiveFreeze(...a) },
     // resolveBillingOrgId -> resolveActiveOrg run for real here; only the org-membership repo call
     // is stubbed, so the billing wiring (route -> resolver -> gate) is exercised end to end.
     organizationRepository: {
@@ -226,6 +229,7 @@ function validateWithScopes(scopes: ApiKeyScope[] | string[]) {
 describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFindActiveFreeze.mockResolvedValue(null);
     mockUserFindById.mockResolvedValue({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false });
     mockApiKeyRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
     mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
@@ -259,6 +263,19 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     );
     expect(mockGetOrCreateSession).not.toHaveBeenCalled();
     expect(mockUserUpdate).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it('refuses a frozen caller with 403 spend_frozen ahead of the daily cap and before a session', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockFindActiveFreeze.mockResolvedValueOnce({ scopeType: 'apiKey', frozenAt: new Date('2026-11-01T00:00:00Z') });
+    const { req, res } = fire({ body: { sessionId: undefined, sessionName: 'New notebook' } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'spend_frozen', frozenScope: 'api_key' });
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'user-1', organizationId: null, apiKeyId: 'k1' });
+    expect(mockCheckFreeTierDailySpendCap).not.toHaveBeenCalled();
+    expect(mockGetOrCreateSession).not.toHaveBeenCalled();
     expect(mockInvoke).not.toHaveBeenCalled();
   });
 

@@ -26,6 +26,7 @@ import { Logger } from '@bike4mind/observability';
 
 const {
   mockCheckFreeTierDailySpendCap,
+  mockFindActiveFreeze,
   mockValidate,
   mockFindById,
   mockRateLimit,
@@ -53,6 +54,7 @@ const {
   fakeCustomMcpHost,
 } = vi.hoisted(() => ({
   mockCheckFreeTierDailySpendCap: vi.fn().mockResolvedValue(undefined),
+  mockFindActiveFreeze: vi.fn(),
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
   mockRateLimit: vi.fn(),
@@ -265,6 +267,7 @@ vi.mock('@bike4mind/database', async orig => {
       ...(actual.sessionRepository as object),
       delete: (...a: unknown[]) => mockDeleteSession(...a),
     },
+    spendFreezeRepository: { findActiveForSubject: (...a: unknown[]) => mockFindActiveFreeze(...a) },
     questRepository: {
       ...(actual.questRepository as object),
       findById: (...a: unknown[]) => mockQuestFindById(...a),
@@ -346,6 +349,7 @@ function validateWithScopes(scopes: ApiKeyScope[] | string[]) {
 describe('POST /api/chat (integration — scope enforcement via real middleware chain)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFindActiveFreeze.mockResolvedValue(null);
     mockGetSettingsMap.mockResolvedValue({});
     mockInvoke.mockResolvedValue({ id: 'quest-1', status: 'queued' });
     mockFindById.mockReturnValue(
@@ -394,6 +398,28 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     );
     expect(mockCreateSession).not.toHaveBeenCalled();
     expect(mockFindByIdAndUpdate).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['API key', VALID_KEY, { message: 'hello' }],
+    ['new conversation', null, { message: 'hello', newConversation: true }],
+    ['inline completion', VALID_KEY, { message: 'hello', wait: true }],
+  ] as const)('refuses a frozen %s with 403 spend_frozen ahead of the daily cap', async (_label, apiKey, body) => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockFindActiveFreeze.mockResolvedValueOnce({ scopeType: 'User', frozenAt: new Date('2026-11-01T00:00:00Z') });
+    const { req, res } = fire({ apiKey, body });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'spend_frozen', frozenScope: 'user' });
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith({
+      userId: req.user.id,
+      organizationId: null,
+      apiKeyId: apiKey ? 'k1' : null,
+    });
+    expect(mockCheckFreeTierDailySpendCap).not.toHaveBeenCalled();
+    expect(mockCreateSession).not.toHaveBeenCalled();
     expect(mockInvoke).not.toHaveBeenCalled();
     expect(mockProcess).not.toHaveBeenCalled();
   });
@@ -914,6 +940,19 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
         });
         await handler(req, res);
         expect(res._getStatusCode()).toBe(403);
+        expect(mockInvoke).not.toHaveBeenCalled();
+      });
+
+      it('checks the freeze against the key org and key, never the holder', async () => {
+        mockFindActiveFreeze.mockResolvedValueOnce({
+          scopeType: 'Organization',
+          frozenAt: new Date('2026-11-01T00:00:00Z'),
+        });
+        const { req, res } = fire();
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(403);
+        expect(res._getJSONData()).toMatchObject({ errorCode: 'spend_frozen', frozenScope: 'organization' });
+        expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: null, organizationId: orgId, apiKeyId: 'k1' });
         expect(mockInvoke).not.toHaveBeenCalled();
       });
 

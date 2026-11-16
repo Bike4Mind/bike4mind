@@ -13,12 +13,13 @@ import {
   type WakeDeps,
   type WakeSteps,
 } from '@bike4mind/agents';
-import { insufficientCreditsError, TooManyRequestsError, type ModelInfo } from '@bike4mind/common';
+import { insufficientCreditsError, spendFrozenError, TooManyRequestsError, type ModelInfo } from '@bike4mind/common';
 import { meterCompletionBackend } from '@bike4mind/services';
 import { processWake, WakePayloadSchema } from './wakeHandler';
 import {
   MISSION_MODEL_REFUSED_BLOCKER,
   MISSION_NEEDS_CREDITS_BLOCKER,
+  MISSION_SPEND_FROZEN_BLOCKER,
   MissionModelRefusedError,
 } from '@bike4mind/server-utils/deepAgent/wakeMetering';
 
@@ -232,6 +233,34 @@ describe('processWake', () => {
     const handoff = store.handoffs.get('agent-1')!;
     expect(handoff.nextWakeIntervalMs).toBeUndefined();
     expect(handoff.openBlockers).toEqual([MISSION_MODEL_REFUSED_BLOCKER]);
+  });
+
+  it('pauses the mission with the spend freeze blocker when the owner is frozen', async () => {
+    const store = new FakeStore();
+    store.charters.set('agent-1', charter());
+    store.handoffs.set('agent-1', {
+      agentId: 'agent-1',
+      wakeCount: 3,
+      lastWakeAt: ISO,
+      lastActionSummary: 'did a thing',
+      nextIntendedAction: 'next',
+      nextWakeIntervalMs: 60_000,
+      openBlockers: [],
+      updatedAt: ISO,
+    });
+    const steps: WakeSteps = {
+      ...STEPS,
+      async orient() {
+        throw spendFrozenError({ scopeType: 'User', frozenAt: new Date(ISO) });
+      },
+    };
+
+    await processWake({ agentId: 'agent-1' }, new Logger(), { deps: { ...fakeDeps(store), steps } });
+
+    const handoff = store.handoffs.get('agent-1')!;
+    expect(handoff.nextWakeIntervalMs).toBeUndefined();
+    expect(handoff.openBlockers).toEqual([MISSION_SPEND_FROZEN_BLOCKER]);
+    expect(store.episodes).toHaveLength(0);
   });
 
   describe('when the owner hits the free-tier daily cap', () => {

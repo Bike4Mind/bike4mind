@@ -6295,7 +6295,7 @@ describe('ChatCompletionProcess', () => {
       const freezeRecord = (scopeType: 'User' | 'Organization' | 'apiKey') => ({
         scopeType,
         frozenAt: new Date('2026-11-16T00:00:00.000Z'),
-        reason: 'chargeback ring',
+        reason: 'admin review',
       });
 
       it.each([
@@ -6324,7 +6324,7 @@ describe('ChatCompletionProcess', () => {
           );
           expect(mockQuest.type).toBe('error');
           expect(mockQuest.errorCode).toBe('spend_frozen');
-          expect(JSON.stringify(mockQuest.replies)).not.toContain('chargeback ring');
+          expect(JSON.stringify(mockQuest.replies)).not.toContain('admin review');
           expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
           expect(mockDb.users.incrementCredits).not.toHaveBeenCalled();
           expect(complete).not.toHaveBeenCalled();

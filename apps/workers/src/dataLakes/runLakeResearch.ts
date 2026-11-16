@@ -9,6 +9,7 @@ import {
   dataLakeResearchRunRepository,
   fabFileRepository,
   organizationRepository,
+  spendFreezeRepository,
   usageEventRepository,
   userRepository,
 } from '@bike4mind/database';
@@ -215,6 +216,24 @@ export async function runLakeResearch(
       spentMicroUsd: 0,
       totals: claimed.totals,
       error: "This data lake's owner account cannot run research",
+    });
+    return { claimed: true };
+  }
+
+  // The owner pays, so a pause on the owner or their org since the start was admitted stops the run
+  // before it spends. A failed read settles failed and rethrows, like the reads above.
+  const ownerFreeze = owner
+    ? await spendFreezeRepository
+        .findActiveForSubject({ userId: owner.id, organizationId: owner.organizationId ?? null })
+        .catch(error => failAndRethrow(error, 0, claimed.totals))
+    : null;
+  if (ownerFreeze) {
+    await settle({
+      status: 'failed',
+      completedAt: new Date(),
+      spentMicroUsd: 0,
+      totals: claimed.totals,
+      error: "Spending is paused for this data lake's owner",
     });
     return { claimed: true };
   }

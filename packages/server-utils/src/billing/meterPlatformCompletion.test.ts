@@ -22,11 +22,13 @@ const m = vi.hoisted(() => ({
   getSettingsMap: vi.fn(async (..._args: unknown[]) => ({})),
   enforceCredits: true,
   tokenCounter: vi.fn(),
+  findFreeze: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
 }));
 
 vi.mock('@bike4mind/database', async () => ({
   ...(await import('../__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   adminSettingsRepository: { findOne: m.findBySettingName },
+  spendFreezeRepository: { findActiveForSubject: m.findFreeze },
   creditTransactionRepository: {},
   organizationRepository: { findById: m.orgFindById, incrementCredits: m.orgIncrement },
   userRepository: { findById: m.userFindById, incrementCredits: m.userIncrement },
@@ -686,6 +688,15 @@ describe('assertOwnerCanAfford', () => {
     m.enforceCredits = false;
     await expect(assertOwnerCanAfford({ id: 'u1', currentCredits: 0 } as never)).resolves.toBeUndefined();
   });
+
+  it('refuses a frozen owner with 403 spend_frozen ahead of the balance, credits on or off', async () => {
+    m.enforceCredits = false;
+    m.findFreeze.mockResolvedValueOnce({ scopeType: 'Organization', frozenAt: new Date('2026-11-01T00:00:00Z') });
+    await expect(
+      assertOwnerCanAfford({ id: 'u1', organizationId: 'o1', currentCredits: 500 } as never)
+    ).rejects.toMatchObject({ statusCode: 403, additionalInfo: { errorCode: 'spend_frozen' } });
+    expect(m.findFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: 'o1' });
+  });
 });
 
 describe('assertRequestCanAfford', () => {
@@ -725,6 +736,17 @@ describe('assertRequestCanAfford', () => {
     m.orgFindById.mockResolvedValue({ id: 'seat', currentCredits: 0, userDetails: [], users: [{ userId: 'u1' }] });
     await expect(assertRequestCanAfford(keyReq(undefined))).rejects.toMatchObject({ statusCode: 422 });
     expect(m.orgFindById).toHaveBeenCalledWith('seat');
+  });
+
+  it('checks an org-billed key against its org and key, not the holder', async () => {
+    m.findFreeze.mockResolvedValueOnce({ scopeType: 'apiKey', frozenAt: new Date('2026-11-01T00:00:00Z') });
+    await expect(
+      assertRequestCanAfford(
+        keyReq({ billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org', keyId: 'k1' })
+      )
+    ).rejects.toMatchObject({ statusCode: 403, additionalInfo: { errorCode: 'spend_frozen', frozenScope: 'api_key' } });
+    expect(m.findFreeze).toHaveBeenCalledWith({ userId: null, organizationId: 'key-org', apiKeyId: 'k1' });
+    expect(m.orgFindById).not.toHaveBeenCalled();
   });
 
   it('refuses an org-billed key whose holder has left the org with a 400, even when the org is funded', async () => {

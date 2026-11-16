@@ -17,11 +17,13 @@ import {
   type ModelInfo,
   type ApiKeyCompletionSource,
   type ReadOrgModelPolicy,
+  type SpendFreezeSubject,
 } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   cacheRepository,
   organizationRepository,
+  spendFreezeRepository,
   usageEventRepository,
 } from '@bike4mind/database';
 import { estimateInputTokens, estimateToolTokens } from '@bike4mind/services/cliCompletions';
@@ -54,6 +56,7 @@ import { recordPaidPlanRefusal } from './userLimitEvents';
 import { getUserEntitlements } from '../entitlements/index';
 import { resolveRequestUsageSource } from '../utils/resolveRequestUsageSource';
 import { reserveRequestCredits, resolveRequestBillingOrgId, type CreditReservation } from './reserveRequestCredits';
+import { spendFreezeSubjectForRequest } from './spendFreezeSubject';
 
 /**
  * Metering for routes that run a text completion outside ChatCompletionInvoke (so nothing else
@@ -380,11 +383,13 @@ export function createRequestCompletionMeter(
 
 /**
  * Pre-enqueue gate for queued platform-key work billed later through createCompletionMeter: refuses
- * (422 insufficient_credits) when the billing owner - the org seat when present, else the user - has
- * no credits or the member is at their org cap. A no-op when enforceCredits is off.
+ * (403 spend_frozen) when the user or the billing owner is frozen, then (422 insufficient_credits) when
+ * the billing owner - the org seat when present, else the user - has no credits or the member is at
+ * their org cap. Only the freeze applies when enforceCredits is off.
  */
 export async function assertOwnerCanAfford(user: IUserDocument): Promise<void> {
-  await assertCanAfford(user, user.organizationId ? String(user.organizationId) : undefined);
+  const organizationId = user.organizationId ? String(user.organizationId) : undefined;
+  await assertCanAfford(user, organizationId, { userId: user.id, organizationId: organizationId ?? null });
 }
 
 /**
@@ -393,14 +398,23 @@ export async function assertOwnerCanAfford(user: IUserDocument): Promise<void> {
  * key holder's org seat.
  */
 export async function assertRequestCanAfford(req: MeteredRequest): Promise<void> {
-  await assertCanAfford(req.user!, resolveRequestBillingOrgId(req), Boolean(req.apiKeyInfo));
+  const organizationId = resolveRequestBillingOrgId(req);
+  await assertCanAfford(
+    req.user!,
+    organizationId,
+    spendFreezeSubjectForRequest(req, organizationId ?? null),
+    Boolean(req.apiKeyInfo)
+  );
 }
 
 async function assertCanAfford(
   user: IUserDocument,
   organizationId: string | undefined,
+  freezeSubject: SpendFreezeSubject,
   isApiKeyCaller = false
 ): Promise<void> {
+  // Same order as reserveRequestCredits, which re-checks it when the queued work reserves.
+  await creditService.assertSpendNotFrozen(freezeSubject, { db: { spendFreezes: spendFreezeRepository } });
   if (!(await isCreditsEnforced())) return;
   const org = organizationId ? await organizationRepository.findById(organizationId) : null;
   // Same refusal reserveRequestCredits' assertBillable raises at hold time; checked here so a departed

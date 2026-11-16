@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DeepAgentStore } from '@bike4mind/agents';
-import type { ModelInfo } from '@bike4mind/common';
+import { spendFrozenError, type ModelInfo } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
 const state = vi.hoisted(() => ({ disabled: false, restricted: false, failure: undefined as Error | undefined }));
@@ -50,6 +50,14 @@ describe('missionWakeMeter admission refusals', () => {
       await expect(meter(model, [], 100)).rejects.toBeInstanceOf(MissionModelRefusedError);
     }
   );
+
+  it('keeps a spend freeze as spend_frozen rather than a model refusal', async () => {
+    const error = spendFrozenError({ scopeType: 'User', frozenAt: new Date('2026-11-01T00:00:00Z') });
+    state.failure = error;
+    const meter = await missionWakeMeter(store, 'mission', new Logger());
+
+    await expect(meter(model, [], 100)).rejects.toBe(error);
+  });
 
   it('leaves an infrastructure failure retryable', async () => {
     const error = new Error('database unavailable');

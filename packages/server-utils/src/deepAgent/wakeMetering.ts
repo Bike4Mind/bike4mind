@@ -2,6 +2,7 @@ import {
   BadRequestError,
   ForbiddenError,
   getQuestErrorCode,
+  isSpendFrozenError,
   type IUserDocument,
   type TooManyRequestsError,
 } from '@bike4mind/common';
@@ -25,6 +26,8 @@ export const MISSION_NEEDS_CREDITS_BLOCKER =
   'stopped: the mission owner ran out of credits. Topping up does not restart it; start a new mission to continue';
 export const MISSION_MODEL_REFUSED_BLOCKER =
   'stopped: the mission model is not available to its owner. Start a new mission once it is available';
+export const MISSION_SPEND_FROZEN_BLOCKER =
+  'stopped: spending is paused for the mission owner. Start a new mission once it is resumed';
 
 /** A model-admission refusal during a wake, as opposed to any other ForbiddenError. */
 export class MissionModelRefusedError extends ForbiddenError {}
@@ -48,7 +51,9 @@ export async function missionWakeMeter(
       return await meter(...args);
     } catch (err) {
       // This meter runs admission and reservation only; provider errors occur after it returns.
-      // Disabled models use 400, while entitlement and pricing refusals use 403.
+      // Disabled models use 400, while entitlement and pricing refusals use 403. A spend freeze is also a
+      // 403 but is about the owner, not the model, so it keeps its own classifier.
+      if (isSpendFrozenError(err)) throw err;
       if (err instanceof ForbiddenError || err instanceof BadRequestError) {
         throw new MissionModelRefusedError(err.message, err.additionalInfo);
       }
