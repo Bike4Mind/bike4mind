@@ -74,6 +74,7 @@ export {
   removeDataLakeFileContract,
   searchDataLakeContract,
 } from './contracts/dataLakes.contract';
+export { listImageModelsContract } from './contracts/imageModels.contract';
 export {
   cancelVideoGenerationContract,
   createVideoGenerationContract,

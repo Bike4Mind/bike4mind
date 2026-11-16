@@ -17,6 +17,10 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
   'test-video': {
     provider: 'test',
     displayName: 'Test video (non-production)',
+    // Ranks after every GA model; a preview still ranks after it.
+    tier: 'fast',
+    releasedAt: '1970-01-01',
+    preview: false,
     modes: ['text_to_video', 'image_to_video'],
     // Every role, so multi-input requests can be exercised end to end; the test provider ignores the images.
     inputs: { first_frame: { max: 1 }, last_frame: { max: 1 }, reference: { max: 3 }, style: { max: 1 } },
@@ -33,6 +37,9 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
   'gemini-omni-1.1-flash': {
     provider: 'gemini-omni',
     displayName: 'Gemini Omni Flash',
+    tier: 'fast',
+    releasedAt: '2026-08-27',
+    preview: false,
     modes: ['text_to_video', 'image_to_video'],
     inputs: { first_frame: { max: 1 } },
     duration: { kind: 'range', min: 3, max: 10, step: 1 },
@@ -48,6 +55,9 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
   'grok-imagine-video-1.5': {
     provider: 'xai',
     displayName: 'Grok Imagine Video 1.5',
+    tier: 'flagship',
+    releasedAt: '2026-06-16',
+    preview: false,
     modes: ['text_to_video', 'image_to_video'],
     inputs: { first_frame: { max: 1 } },
     duration: { kind: 'range', min: 1, max: 15, step: 1 },
@@ -66,6 +76,9 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
   'veo-3.1-fast-generate-preview': {
     provider: 'veo',
     displayName: 'Veo 3.1 Fast',
+    tier: 'fast',
+    releasedAt: '2025-10-15',
+    preview: true,
     modes: ['text_to_video', 'image_to_video'],
     inputs: { first_frame: { max: 1 } },
     duration: { kind: 'discrete', values: [4, 6, 8] },
@@ -84,6 +97,9 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
   'flux-3-video': {
     provider: 'bfl',
     displayName: 'FLUX 3 Video',
+    tier: 'flagship',
+    releasedAt: '2026-08-04',
+    preview: false,
     modes: ['text_to_video'],
     inputs: {},
     duration: { kind: 'range', min: 5, max: 20, step: 1 },
