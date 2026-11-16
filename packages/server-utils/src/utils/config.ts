@@ -73,6 +73,8 @@ const Config = {
   APNS_TEAM_ID: readOptionalSecret('APNS_TEAM_ID', () => Resource.APNS_TEAM_ID.value),
   APNS_KEY: readOptionalSecret('APNS_KEY', () => Resource.APNS_KEY.value),
   APNS_TOPIC: readOptionalSecret('APNS_TOPIC', () => Resource.APNS_TOPIC.value),
+  // FCM (Android push) service account JSON; resolved by readFcmConfig in ./pushDelivery.
+  FCM_SERVICE_ACCOUNT: readOptionalSecret('FCM_SERVICE_ACCOUNT', () => Resource.FCM_SERVICE_ACCOUNT.value),
   STRIPE_WEBHOOK_SECRET: Resource.STRIPE_WEBHOOK_SECRET.value,
   STRIPE_SECRET_KEY: Resource.STRIPE_SECRET_KEY.value,
   STRIPE_PUBLISHABLE_KEY: Resource.STRIPE_PUBLISHABLE_KEY.value,
