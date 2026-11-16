@@ -26,10 +26,18 @@ const OTHER = 'user-other';
 const FILE_MINE = 'a'.repeat(24);
 const FILE_THEIRS = 'b'.repeat(24);
 const FILE_NEW = 'c'.repeat(24);
+const FILE_PDF = 'f'.repeat(24);
+const MIME_TYPES: Record<string, string> = {
+  [FILE_MINE]: 'video/mp4',
+  [FILE_THEIRS]: 'video/mp4',
+  [FILE_NEW]: 'image/png',
+  [FILE_PDF]: 'application/pdf',
+};
+const fabFile = (id: string) => ({ id, mimeType: MIME_TYPES[id] }) as IFabFileDocument;
 const PROJECT_MINE = 'd'.repeat(24);
 const PROJECT_THEIRS = 'e'.repeat(24);
 
-const createFakeAdapters = (readableFileIds: string[] = [FILE_MINE, FILE_NEW]) => {
+const createFakeAdapters = (readableFileIds: string[] = [FILE_MINE, FILE_NEW, FILE_PDF]) => {
   const rows = new Map<string, IStudioCompositionDocument>();
   let nextId = 0;
   const owned = (id: string, userId: string) => {
@@ -61,7 +69,7 @@ const createFakeAdapters = (readableFileIds: string[] = [FILE_MINE, FILE_NEW]) =
       },
       fabFiles: {
         findAccessibleInIds: vi.fn(async (ids: string[]) =>
-          ids.filter(id => readableFileIds.includes(id)).map(id => ({ id }) as IFabFileDocument)
+          ids.filter(id => readableFileIds.includes(id)).map(fabFile)
         ),
       },
       projects: {
@@ -134,6 +142,26 @@ describe('createComposition', () => {
     ]);
   });
 
+  it('refuses a readable file of a kind its slot cannot play', async () => {
+    const timeline = defaultStudioTimeline('ad_campaign');
+    const codes = await issueCodes(
+      create(createFakeAdapters(), {
+        title: 'Launch',
+        brandKit: { logoFileId: FILE_MINE },
+        timeline: {
+          ...timeline,
+          tracks: [
+            { id: 'music-1', kind: 'music', clips: [{ id: 'm1', fileId: FILE_PDF, startMs: 0, durationMs: 1000 }] },
+          ],
+        },
+      })
+    );
+    expect(codes).toEqual([
+      ['unsupported_file_kind', 'timeline.tracks.0.clips.0.fileId'],
+      ['unsupported_file_kind', 'brandKit.logoFileId'],
+    ]);
+  });
+
   it('links only a project the caller owns', async () => {
     const adapters = createFakeAdapters();
     expect((await create(adapters, { title: 'Launch', projectId: PROJECT_MINE })).projectId).toBe(PROJECT_MINE);
@@ -173,7 +201,7 @@ describe('updateComposition', () => {
     const created = await create(adapters, { title: 'Launch', timeline: videoTimeline(FILE_MINE) });
     // The stored file is no longer readable (deleted or unshared since).
     adapters.db.fabFiles.findAccessibleInIds.mockImplementation(async (ids: string[]) =>
-      ids.filter(id => id === FILE_NEW).map(id => ({ id }) as IFabFileDocument)
+      ids.filter(id => id === FILE_NEW).map(fabFile)
     );
 
     const updated = await update(adapters, created.id, {

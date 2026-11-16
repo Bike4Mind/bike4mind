@@ -6,8 +6,18 @@ import { z } from 'zod';
  * absolute times in integer ms, source in-points (trims) rather than out-points, pixel output sizes, and styling
  * expressed relative to the output frame so one spec renders every output size.
  *
+ * Rendering rules both consumers implement identically (the schema cannot express them):
+ * - Frames: a clip edge in ms lands on frame Math.round(ms * fps / 1000), at the start and at the end.
+ * - Compositing: video tracks draw bottom to top over `backgroundColor`. Anything a clip leaves uncovered
+ *   (letterbox bars from `fit: 'contain'`, a fade, a gap between clips) is transparent, so what is below shows.
+ * - Media: a video track takes video or image files (an image ignores `trimStartMs` and has no audio); the
+ *   voice, sfx and music tracks take audio or video files (a video contributes only its audio).
+ * - Captions wrap at word boundaries to `maxWidthPct` of the output width and honor explicit line breaks.
+ *   A `fontFamily` neither consumer can load falls back to the default sans-serif in both.
+ *
  * Bump STUDIO_TIMELINE_VERSION (and add the new shape to the union) for any change an older consumer would
- * misread; additive optional fields with defaults do not need a bump.
+ * misread; additive optional fields with defaults do not need a bump. Within a version, limits and field rules
+ * may be loosened but never tightened: stored documents are re-parsed on every read.
  */
 export const STUDIO_TIMELINE_VERSION = 1;
 
@@ -80,6 +90,7 @@ const MediaClipShape = {
 /** Linear gain, 1 = unity. Above 1 boosts, which ffmpeg's `volume` filter and a Web Audio GainNode both accept. */
 const VolumeSchema = z.number().min(0).max(2);
 
+/** On an audio clip a fade ramps the gain from and to silence. */
 const AudioShape = {
   volume: VolumeSchema.default(1),
   fadeInMs: MsSchema.default(0),
@@ -89,6 +100,10 @@ const AudioShape = {
 /** How a source whose shape differs from an output's fills that frame: crop to fill, or letterbox to fit. */
 export const STUDIO_VIDEO_FIT_MODES = ['cover', 'contain'] as const;
 
+/**
+ * On a video clip a fade ramps opacity from and to transparent (revealing what is below) and the clip's audio
+ * gain with it, so a cross-fade is two overlapping clips on two video tracks.
+ */
 export const StudioVideoClipSchema = z.object({
   ...MediaClipShape,
   ...AudioShape,
@@ -108,6 +123,8 @@ export const StudioCaptionStyleSchema = z.object({
   align: z.enum(STUDIO_CAPTION_ALIGNMENTS).default('center'),
   fontFamily: z.string().trim().min(1).max(100).optional(),
   fontSizePct: z.number().min(1).max(20).default(5),
+  // Percentage of the output width the text block may span before it wraps.
+  maxWidthPct: z.number().min(10).max(100).default(90),
   color: HexColorSchema.default('#FFFFFF'),
   backgroundColor: HexColorSchema.optional(),
 });
@@ -124,7 +141,8 @@ const trackShape = <Kind extends StudioTimelineTrackKind, Clip extends z.ZodType
   z.object({
     id: TimelineIdSchema,
     kind: z.literal(kind),
-    muted: z.boolean().default(false),
+    // A disabled track neither plays nor draws; it stays in the spec so the editor can toggle it back.
+    enabled: z.boolean().default(true),
     clips: z.array(clip).max(STUDIO_TIMELINE_LIMITS.maxClipsPerTrack),
   });
 
@@ -146,6 +164,7 @@ export const StudioTimelineSchema = z.object({
   version: z.literal(STUDIO_TIMELINE_VERSION),
   durationMs: PositiveMsSchema.max(STUDIO_TIMELINE_LIMITS.maxDurationMs),
   fps: z.literal(STUDIO_TIMELINE_FPS),
+  backgroundColor: HexColorSchema.default('#000000'),
   outputs: z.array(StudioTimelineOutputSchema).min(1).max(STUDIO_TIMELINE_LIMITS.maxOutputs),
   tracks: z.array(StudioTimelineTrackSchema).max(STUDIO_TIMELINE_LIMITS.maxTracks),
 });

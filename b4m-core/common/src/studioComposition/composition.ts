@@ -166,6 +166,7 @@ export const defaultStudioTimeline = (template: StudioCompositionTemplate): Stud
     version: STUDIO_TIMELINE_VERSION,
     durationMs,
     fps: DEFAULT_TIMELINE_FPS,
+    backgroundColor: '#000000',
     outputs: aspects.map(aspectRatio => ({
       id: `out-${aspectRatio.replace(':', 'x')}`,
       aspectRatio,

@@ -4,6 +4,7 @@ import {
   UnprocessableEntityError,
   defaultStudioTimeline,
   studioCompositionFileIds,
+  studioFileMediaKind,
   validateStudioComposition,
   type IStudioCompositionDocument,
   type IStudioCompositionSummary,
@@ -38,7 +39,8 @@ const assertProjectOwned = async (
 
 /**
  * Files already on the stored composition stay valid even if they have since been deleted or unshared, so an
- * unrelated edit never fails on them; only newly referenced files must be readable by the caller.
+ * unrelated edit never fails on them; only newly referenced files must be readable by the caller and of a kind
+ * their slot plays. A stored id is not proof of access: whatever later reads the file (preview, render) re-checks.
  */
 const assertContentValid = async (
   { db }: StudioCompositionServiceAdapters,
@@ -49,8 +51,9 @@ const assertContentValid = async (
   const newFileIds = studioCompositionFileIds(content).filter(id => !previouslyReferenced.has(id));
   const accessible = newFileIds.length > 0 ? await db.fabFiles.findAccessibleInIds(newFileIds, { userId }) : [];
   const knownFileIds = new Set([...previouslyReferenced, ...accessible.map(file => file.id)]);
+  const fileKinds = new Map(accessible.map(file => [file.id, studioFileMediaKind(file.mimeType)]));
 
-  const issues = validateStudioComposition(content, { knownFileIds });
+  const issues = validateStudioComposition(content, { knownFileIds, fileKinds });
   if (issues.length > 0) throw new UnprocessableEntityError('Invalid composition', { issues });
 };
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { StudioTimelineSchema, studioTimelineFileIds, type StudioTimelineInput } from './timeline';
-import { validateStudioTimeline } from './validateTimeline';
+import { studioFileMediaKind, validateStudioTimeline } from './validateTimeline';
 
 const FILE_A = 'a'.repeat(24);
 const FILE_B = 'b'.repeat(24);
@@ -45,6 +45,7 @@ describe('StudioTimelineSchema', () => {
       position: 'bottom',
       align: 'center',
       fontSizePct: 5,
+      maxWidthPct: 90,
       color: '#FFFFFF',
     });
     expect(validateStudioTimeline(timeline)).toEqual([]);
@@ -100,6 +101,24 @@ describe('validateStudioTimeline', () => {
     expect(codes(baseTimeline({ tracks }))).toEqual([['clip_overlap', 'tracks.0.clips.0']]);
   });
 
+  it('flags every clip a long clip spans, not only its neighbour', () => {
+    const tracks: StudioTimelineInput['tracks'] = [
+      {
+        id: 'video-1',
+        kind: 'video',
+        clips: [
+          { id: 'long', fileId: FILE_A, startMs: 0, durationMs: 10_000 },
+          { id: 'b', fileId: FILE_A, startMs: 1000, durationMs: 1000 },
+          { id: 'c', fileId: FILE_A, startMs: 3000, durationMs: 1000 },
+        ],
+      },
+    ];
+    expect(codes(baseTimeline({ tracks }))).toEqual([
+      ['clip_overlap', 'tracks.0.clips.1'],
+      ['clip_overlap', 'tracks.0.clips.2'],
+    ]);
+  });
+
   it('allows the same span on two tracks of one kind', () => {
     const clip = { fileId: FILE_A, startMs: 0, durationMs: 1000 };
     const tracks: StudioTimelineInput['tracks'] = [
@@ -153,5 +172,26 @@ describe('validateStudioTimeline', () => {
     expect(codes(input, { sourceDurationsMs: new Map([[FILE_B, 5500]]) })).toEqual([
       ['trim_out_of_bounds', 'tracks.0.clips.1'],
     ]);
+  });
+
+  it('flags a file whose kind its track cannot play', () => {
+    const fileKinds = new Map([
+      [FILE_A, studioFileMediaKind('audio/mpeg')],
+      [FILE_B, studioFileMediaKind('image/png')],
+    ]);
+    // FILE_A is audio: fine on the music track, not on the video track. FILE_B is an image still on video.
+    expect(codes(baseTimeline(), { fileKinds })).toEqual([['unsupported_file_kind', 'tracks.0.clips.0.fileId']]);
+  });
+});
+
+describe('studioFileMediaKind', () => {
+  it.each([
+    ['video/mp4', 'video'],
+    ['IMAGE/PNG', 'image'],
+    ['audio/wav', 'audio'],
+    ['application/pdf', 'other'],
+    ['', 'other'],
+  ])('maps %s to %s', (mimeType, kind) => {
+    expect(studioFileMediaKind(mimeType)).toBe(kind);
   });
 });

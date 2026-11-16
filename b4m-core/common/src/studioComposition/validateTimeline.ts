@@ -1,4 +1,9 @@
-import { STUDIO_OUTPUT_ASPECT_RATIOS, type StudioOutputAspectRatio, type StudioTimeline } from './timeline';
+import {
+  STUDIO_OUTPUT_ASPECT_RATIOS,
+  type StudioOutputAspectRatio,
+  type StudioTimeline,
+  type StudioTimelineTrackKind,
+} from './timeline';
 
 export const STUDIO_TIMELINE_ISSUE_CODES = [
   'duplicate_id',
@@ -9,6 +14,7 @@ export const STUDIO_TIMELINE_ISSUE_CODES = [
   'odd_output_edge',
   'aspect_ratio_mismatch',
   'unknown_file',
+  'unsupported_file_kind',
 ] as const;
 export type StudioTimelineIssueCode = (typeof STUDIO_TIMELINE_ISSUE_CODES)[number];
 
@@ -19,13 +25,31 @@ export type StudioTimelineIssue = {
   message: string;
 };
 
+export const STUDIO_FILE_MEDIA_KINDS = ['video', 'image', 'audio', 'other'] as const;
+export type StudioFileMediaKind = (typeof STUDIO_FILE_MEDIA_KINDS)[number];
+
+/** The media kind of a file from its MIME type, the one signal a FabFile always carries. */
+export const studioFileMediaKind = (mimeType: string): StudioFileMediaKind => {
+  const [topLevel] = mimeType.toLowerCase().split('/');
+  return topLevel === 'video' || topLevel === 'image' || topLevel === 'audio' ? topLevel : 'other';
+};
+
+/** Which file kinds each track plays; see the media rule in ./timeline. */
+export const STUDIO_TRACK_FILE_KINDS: Record<Exclude<StudioTimelineTrackKind, 'captions'>, StudioFileMediaKind[]> = {
+  video: ['video', 'image'],
+  voice: ['audio', 'video'],
+  sfx: ['audio', 'video'],
+  music: ['audio', 'video'],
+};
+
 /**
- * What the caller knows about the referenced files. Both are optional: the browser preview validates with nothing
- * known, the server with what it looked up. A file left out of `sourceDurationsMs` (an image, or not probed yet)
- * skips the trim check.
+ * What the caller knows about the referenced files. All are optional: the browser preview validates with nothing
+ * known, the server with what it looked up. A file left out of `fileKinds` skips the kind check, and one left out
+ * of `sourceDurationsMs` (an image, or not probed yet) skips the trim check.
  */
 export type StudioTimelineReferenceContext = {
   knownFileIds?: ReadonlySet<string>;
+  fileKinds?: ReadonlyMap<string, StudioFileMediaKind>;
   sourceDurationsMs?: ReadonlyMap<string, number>;
 };
 
@@ -78,7 +102,10 @@ const validateTrackLane = (timeline: StudioTimeline, trackIndex: number): Studio
     .map((clip, clipIndex) => ({ clip, clipIndex }))
     .sort((a, b) => a.clip.startMs - b.clip.startMs);
 
-  ordered.forEach(({ clip, clipIndex }, position) => {
+  // Compare each clip with the latest-ending clip before it, not just its neighbour, so a long clip that spans
+  // several later ones flags every one of them.
+  let latest: { id: string; endMs: number } | undefined;
+  ordered.forEach(({ clip, clipIndex }) => {
     const path = ['tracks', trackIndex, 'clips', clipIndex];
     const endMs = clip.startMs + clip.durationMs;
     if (endMs > timeline.durationMs) {
@@ -88,15 +115,15 @@ const validateTrackLane = (timeline: StudioTimeline, trackIndex: number): Studio
         message: `Clip "${clip.id}" ends at ${endMs}ms, past the timeline's ${timeline.durationMs}ms`,
       });
     }
-    const next = ordered[position + 1];
     // Back-to-back clips (end == next start) are fine; the interval is half-open.
-    if (next && next.clip.startMs < endMs) {
+    if (latest && clip.startMs < latest.endMs) {
       issues.push({
         code: 'clip_overlap',
-        path: ['tracks', trackIndex, 'clips', next.clipIndex],
-        message: `Clip "${next.clip.id}" overlaps "${clip.id}" on track "${track.id}"`,
+        path,
+        message: `Clip "${clip.id}" overlaps "${latest.id}" on track "${track.id}"`,
       });
     }
+    if (!latest || endMs > latest.endMs) latest = { id: clip.id, endMs };
   });
   return issues;
 };
@@ -117,6 +144,14 @@ const validateMediaClips = (timeline: StudioTimeline, context: StudioTimelineRef
           message: `Clip "${clip.id}" references a file that is missing or not yours`,
         });
       }
+      const fileKind = context.fileKinds?.get(clip.fileId);
+      if (fileKind && !STUDIO_TRACK_FILE_KINDS[track.kind].includes(fileKind)) {
+        issues.push({
+          code: 'unsupported_file_kind',
+          path: [...path, 'fileId'],
+          message: `Clip "${clip.id}" is a ${fileKind} file, which a ${track.kind} track cannot play`,
+        });
+      }
       const sourceDurationMs = context.sourceDurationsMs?.get(clip.fileId);
       if (sourceDurationMs !== undefined && clip.trimStartMs + clip.durationMs > sourceDurationMs) {
         issues.push({
@@ -132,7 +167,7 @@ const validateMediaClips = (timeline: StudioTimeline, context: StudioTimelineRef
 /**
  * The rules a schema-valid timeline must also meet before preview or render: unique ids, no overlap within a
  * track, every clip inside the timeline, fades inside their clip, renderable output sizes, and (given context)
- * known files and trims inside their source. Returns every issue rather than the first, so an editor can mark
+ * known files of a kind the track plays and trims inside their source. Returns every issue rather than the first, so an editor can mark
  * them all at once. Parse with StudioTimelineSchema first; this assumes a parsed timeline.
  */
 export const validateStudioTimeline = (

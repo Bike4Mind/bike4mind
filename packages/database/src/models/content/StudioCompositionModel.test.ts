@@ -5,7 +5,9 @@ import {
   StudioBrandKitSchema,
   StudioCompositionBriefSchema,
   StudioCompositionContentSchema,
+  StudioCompositionResponseSchema,
   StudioCompositionSchema,
+  StudioCompositionSummaryResponseSchema,
   defaultStudioTimeline,
   type IStudioComposition,
 } from '@bike4mind/common';
@@ -111,6 +113,20 @@ describe('StudioCompositionRepository', () => {
     ]);
     expect(updated?.title).toBe('Renamed');
     expect(updated).not.toHaveProperty('projectId');
+  });
+
+  it('reads back documents the route response schemas accept, without ownership fields', async () => {
+    const created = await studioCompositionRepository.createOwned(composition({ organizationId: 'org-1' }));
+
+    const item = StudioCompositionResponseSchema.parse(await studioCompositionRepository.findOwned(created.id, OWNER));
+    expect(item.id).toBe(created.id);
+    expect(item).not.toHaveProperty('userId');
+    expect(item).not.toHaveProperty('organizationId');
+
+    const [row] = await studioCompositionRepository.listOwned(OWNER, { limit: 10, skip: 0 });
+    const summary = StudioCompositionSummaryResponseSchema.parse(row);
+    expect(summary).toMatchObject({ id: created.id, title: 'Spring ad' });
+    expect(summary).not.toHaveProperty('userId');
   });
 
   it('deletes an owned composition', async () => {
