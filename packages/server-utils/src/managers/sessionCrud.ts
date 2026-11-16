@@ -36,6 +36,7 @@ import {
   recordNotebookAddedToProjectActivity,
 } from './sessionSideEffects';
 import { pinnableMessageFileIds } from './pinnableMessageFileIds';
+import { resolveRetentionOrganization } from '../organizations/retentionOwnership';
 
 /**
  * Session lifecycle, querying, and basic persistence.
@@ -285,6 +286,7 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
           agents: agentRepository,
         },
         ...lakeAdapters,
+        resolveRetentionOrganization,
       },
       { origin }
     );
@@ -528,7 +530,13 @@ export const createSession = async (
     firstCreated: new Date(),
   };
 
-  const finalData = { ...defaultData, ...data };
+  const owner = await userRepository.findById(userId);
+  const finalData = {
+    ...defaultData,
+    ...data,
+    userId,
+    retentionOrganizationId: owner ? await resolveRetentionOrganization(owner, data.organizationId) : undefined,
+  };
   const notebook = new Session(finalData);
   await notebook.save({ session });
 

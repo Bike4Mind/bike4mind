@@ -12,10 +12,14 @@ vi.mock('@bike4mind/database', () => ({
   sessionRepository: {},
   projectRepository: {},
   organizationRepository: {},
+  spaceRepository: {},
 }));
 
 const { authorizeByInviteType } = vi.hoisted(() => ({ authorizeByInviteType: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({ sharingService: { authorizeByInviteType } }));
+
+const { isFeatureEnabled } = vi.hoisted(() => ({ isFeatureEnabled: vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ isFeatureEnabled }));
 
 import { canViewInvite, filterInviteRecipientsToSelf, omitInviteToken, toSharerInviteViews } from './inviteManager';
 
@@ -136,6 +140,35 @@ describe('canViewInvite', () => {
     // A caller who holds no permission on the document: the share arm always denies,
     // so every `true` below has to come from the link arm and nowhere else.
     authorizeByInviteType.mockRejectedValue(new Error('not authorized'));
+  });
+
+  describe('Space invites', () => {
+    const spaceInvite = () => namedInvite(future(), { pending: ['other@x.com'], accepted: [], refused: [] });
+    const asSpace = (invite: object) => ({ ...invite, type: 'Space' }) as Parameters<typeof canViewInvite>[1];
+
+    beforeEach(() => isFeatureEnabled.mockResolvedValue(true));
+
+    it('refuses a plain member who is not a recipient, asking for manager standing', async () => {
+      await expect(canViewInvite(user, asSpace(spaceInvite()))).resolves.toBe('denied');
+      expect(authorizeByInviteType).toHaveBeenCalledWith(user, 'Space', 'doc1', expect.anything(), {
+        requireManageGroups: true,
+      });
+    });
+
+    it('allows a Space manager who is not a recipient', async () => {
+      authorizeByInviteType.mockResolvedValue(undefined);
+      await expect(canViewInvite(user, asSpace(spaceInvite()))).resolves.toBe('allowed');
+    });
+
+    it('still lets the named recipient view it', async () => {
+      await expect(canViewInvite(user, asSpace(namedInvite(future())))).resolves.toBe('allowed');
+    });
+
+    it('refuses everyone when EnableSpaces is off', async () => {
+      isFeatureEnabled.mockResolvedValue(false);
+      await expect(canViewInvite(user, asSpace(namedInvite(future())))).resolves.toBe('denied');
+      await expect(canViewInvite(user, asSpace(linkInvite()))).resolves.toBe('denied');
+    });
   });
 
   it('lets a stranger view a redeemable link invite without consulting the share arm', async () => {

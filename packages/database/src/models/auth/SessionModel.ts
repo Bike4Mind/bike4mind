@@ -117,6 +117,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
   {
     name: { type: String, required: true },
     userId: { type: String, required: true },
+    retentionOrganizationId: { type: String, immutable: true },
     organizationId: { type: String, immutable: true },
     lastUpdated: { type: Date, required: true },
     firstCreated: { type: Date, required: true },
@@ -992,6 +993,10 @@ SessionSchema.plugin(softDeletePlugin);
 SessionSchema.plugin(organizationContentPolicyPlugin);
 
 // Optimize session listing - used on homepage and many screens
+SessionSchema.index(
+  { retentionOrganizationId: 1, deletedAt: 1, _id: 1 },
+  { name: 'retention_sessions_present', partialFilterExpression: { retentionOrganizationId: { $exists: true } } }
+);
 SessionSchema.index({ deletedAt: 1, userId: 1, lastUpdated: -1 });
 
 // Session list filtered by origin (sidebar "Only API" / "Hide API"); see sessionListFilterQuery.

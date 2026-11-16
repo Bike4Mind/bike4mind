@@ -417,6 +417,11 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       description:
         'Post status messages and thread replies to Slack channels through the Bike4Mind bot, without holding a Slack token.',
     },
+    {
+      name: 'Tools',
+      description:
+        'Built-in tools for your own agent loop: web search, reading a web page, and the current weather, each returned as text a model can read.',
+    },
   ];
 
   // Attach per-operation vendor extensions + headers by operationId. Restrict to

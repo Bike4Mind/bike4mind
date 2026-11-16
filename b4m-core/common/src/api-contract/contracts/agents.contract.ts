@@ -3,6 +3,7 @@ import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 import {
   AgentIdParamSchema,
   AgentResourceSchema,
+  CreateAgentFromContextRequestSchema,
   CreateAgentRequestSchema,
   EnhanceAgentFieldRequestSchema,
   EnhanceAgentFieldResponseSchema,
@@ -11,6 +12,8 @@ import {
   GenerateAgentDescriptionResponseSchema,
   GenerateAgentSystemPromptResponseSchema,
   ListAgentsResponseSchema,
+  TransferAgentCreditsRequestSchema,
+  TransferAgentCreditsResponseSchema,
   UpdateAgentRequestSchema,
 } from '../../schemas/agentPublic';
 import { PaginationQuerySchema } from '../../schemas/pagination';
@@ -19,8 +22,8 @@ import { ApiErrorSchema, InsufficientCreditsErrorSchema, ScopeForbiddenErrorSche
 /**
  * The integrator-facing subset of the agent API. Each route is a `/api/v1` twin of an SPA route
  * under `/api/agents/*` and reuses its logic (server/agents/createAgent.ts, deleteAgent.ts and the
- * server/agents/authoring assistants); the SPA routes are unchanged. Credit transfers and
- * create-from-context are deliberately not published.
+ * server/agents/authoring assistants, transferCreditsToAgent and createAgentFromContext); the SPA
+ * routes are unchanged.
  */
 
 // agents:write is accepted for reads so a key that creates agents can read back what it wrote
@@ -345,4 +348,83 @@ export const enhanceAgentFieldContract = defineEndpoint({
     502: { description: AUTHORING_502, schema: ApiErrorSchema },
   },
   codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: ENHANCE_FIELD_EXAMPLE },
+});
+
+const TRANSFER_EXAMPLE = { amount: 500 };
+
+export const transferAgentCreditsContract = defineEndpoint({
+  method: 'post',
+  path: '/api/v1/agents/{id}/transfer-credits',
+  operationId: 'transferAgentCredits',
+  summary: 'Transfer credits to an agent',
+  description:
+    'Moves credits from your balance to an agent you own, for agents that spend their own credits. The ' +
+    'transfer is atomic: either both balances change or neither does. Credits held by an agent come back to ' +
+    'you when you delete it (`deleteAgent`). Unknown body fields are rejected.',
+  tags: ['Agents'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.WRITE_AGENTS],
+  pathParams: AgentIdParamSchema,
+  request: TransferAgentCreditsRequestSchema,
+  requestExample: TRANSFER_EXAMPLE,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: { description: 'The transfer was made.', schema: TransferAgentCreditsResponseSchema },
+    403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
+    422: {
+      description:
+        `${BODY_422} Also answers a balance below \`amount\`, tagged \`errorCode: "insufficient_credits"\`. ` +
+        'Nothing is moved.',
+      schema: InsufficientCreditsErrorSchema,
+    },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: TRANSFER_EXAMPLE },
+});
+
+const FROM_CONTEXT_EXAMPLE = { agent_name: 'Launch planner', session_id: '<notebook-id>' };
+
+export const createAgentFromContextContract = defineEndpoint({
+  method: 'post',
+  path: '/api/v1/agents/from-context',
+  operationId: 'createAgentFromContext',
+  summary: 'Create an agent from a notebook',
+  description:
+    'Creates an agent owned by the caller whose description, personality and system prompt a model writes ' +
+    'from the messages and attached files of one of your notebooks, and gives it a dedicated project. The ' +
+    'number of agents a user may own depends on their plan. ' +
+    'Requires `agents:write`: the call runs a model on the deployment and bills the caller for it. Unknown ' +
+    'body fields are rejected.',
+  tags: ['Agents'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.WRITE_AGENTS],
+  request: CreateAgentFromContextRequestSchema,
+  requestExample: FROM_CONTEXT_EXAMPLE,
+  emitsRateLimitHeaders: true,
+  responses: {
+    201: { description: 'The created agent.', schema: AgentResourceSchema },
+    400: {
+      description:
+        'The caller already owns as many agents as their plan allows (`errorCode: agent_limit_reached`), ' +
+        'agent generation is disabled on this deployment, no model is available to run it, or the body is not ' +
+        `valid JSON. ${BILLING_400} Nothing is created.`,
+      schema: ApiErrorSchema,
+    },
+    403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    404: {
+      description:
+        'No notebook with that id is available to the caller: it does not exist, the id is malformed, or you ' +
+        'hold neither ownership nor create access to it. The cases are not told apart.',
+      schema: ApiErrorSchema,
+    },
+    422: { description: `${BODY_422} ${AUTHORING_CREDITS_422}`, schema: InsufficientCreditsErrorSchema },
+    429: {
+      description: AUTHORING_429,
+      schema: ApiErrorSchema,
+      headers: { 'Retry-After': 'Seconds to wait before retrying.' },
+    },
+    502: { description: AUTHORING_502, schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: FROM_CONTEXT_EXAMPLE },
 });

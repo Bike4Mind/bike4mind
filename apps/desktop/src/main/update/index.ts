@@ -3,6 +3,7 @@ import { app, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { UpdateBusyReport, UpdateState } from '@shared/update';
+import { currentVersion } from '../appVersion';
 import { DismissedUpdatePreference } from './DismissedUpdatePreference';
 import { releasePageUrl, resolveFeedUrl } from './feed';
 import { parseUpdatePublicKeys } from './manifestSignature';
@@ -111,12 +112,14 @@ export function registerUpdates(deps: UpdateDeps): RegisteredUpdates {
         // A mismatch rejects here, so it lands as a failed download like any other.
         if (signed) service.apply({ type: 'downloaded', version: await signed.confirmDownload(file) });
       },
-      install: () => autoUpdater.quitAndInstall(),
+      // Silent, so Windows applies the update without showing the assisted setup wizard. A silent
+      // install only reopens the app when asked to, hence the second flag. macOS ignores both.
+      install: () => autoUpdater.quitAndInstall(true, true),
     };
   }
 
   const service = new UpdateService({
-    currentVersion: app.getVersion(),
+    currentVersion: currentVersion(),
     updater: port,
     busy: deps.busy,
     prepareQuit: deps.prepareQuit,

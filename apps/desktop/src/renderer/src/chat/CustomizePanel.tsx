@@ -257,7 +257,8 @@ function SkillsSettings({
   sessionId: string | null;
   onOpenSkillMarket?: (listing?: SkillMarketListingRef) => void;
 }) {
-  const { skills, refresh } = useSkills(sessionId);
+  // With no conversation open the user's own skills still exist; only a project's need one.
+  const { skills, refresh } = useSkills(sessionId ? { sessionId } : { draftDirectory: null });
   const upload = useSkillUpload(() => void refresh(), sessionId);
   const startUpload = upload.start;
   const uploadRow = useCallback(

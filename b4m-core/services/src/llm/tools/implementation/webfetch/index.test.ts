@@ -489,6 +489,40 @@ describe('firecrawlFetch llms.txt probe', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('does not probe when the caller opts out (llmsTxtHint: false)', async () => {
+    bigDoc();
+    fetchMock.mockImplementation(async () => fetchRes(200));
+    const res = await firecrawlFetch(adapters, 'https://example.com/docs/page', { llmsTxtHint: false });
+    expect(res.truncated).toBe(true);
+    expect(res.llmsTxtUrl).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('probes when llmsTxtHint is passed as true (same as unset)', async () => {
+    bigDoc();
+    fetchMock.mockImplementation(async () => fetchRes(200));
+    const res = await firecrawlFetch(adapters, 'https://example.com/docs/page', { llmsTxtHint: true });
+    expect(res.llmsTxtUrl).toBe('https://example.com/llms-full.txt');
+  });
+
+  it('does not probe on the keyless plain-fetch path when the caller opts out', async () => {
+    mockCreateApp.mockReturnValueOnce(null);
+    mockPlainFetch.mockResolvedValueOnce({ markdown: 'y'.repeat(120_000), title: 'Big' });
+    fetchMock.mockImplementation(async () => fetchRes(200));
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc', { llmsTxtHint: false });
+    expect(res.truncated).toBe(true);
+    expect(res.llmsTxtUrl).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('probes on the keyless plain-fetch path by default', async () => {
+    mockCreateApp.mockReturnValueOnce(null);
+    mockPlainFetch.mockResolvedValueOnce({ markdown: 'y'.repeat(120_000), title: 'Big' });
+    fetchMock.mockImplementation(async () => fetchRes(200));
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc');
+    expect(res.llmsTxtUrl).toBe('https://example.com/llms-full.txt');
+  });
+
   it('refuses, without probing, when the origin is a literal private host', async () => {
     bigDoc();
     fetchMock.mockImplementation(async () => fetchRes(200));

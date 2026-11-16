@@ -117,7 +117,6 @@ async function harness(
         notice: notice => notices.push(notice),
         label: () => undefined,
         moved: () => undefined,
-        ownContent: () => undefined,
         diff: () => undefined,
         detail: () => undefined,
         image: (_bytes, mimeType) => shown.push(mimeType),

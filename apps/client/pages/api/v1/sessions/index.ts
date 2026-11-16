@@ -41,6 +41,7 @@ import { holdsApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScop
 import { CreateSessionRequestBody } from '../../../../types/api';
 import { toPublicSession } from '@server/sessions/toPublicSession';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { resolveRetentionOrganization } from '@bike4mind/server-utils/organizations/retentionOwnership';
 
 /**
  * The only fields a key holding `ai:generate` WITHOUT `notebooks:write` may set. Everything else
@@ -218,6 +219,7 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
           req.logger
         )(),
       workspaceSessionSettings: premiumWorkspaceSessionSettings,
+      resolveRetentionOrganization,
     },
     { origin: resolveSessionOrigin(req) }
   );

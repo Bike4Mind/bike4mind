@@ -15,7 +15,7 @@ import {
   Typography,
 } from '@mui/joy';
 import type { IDataLakeProposalDocument } from '@bike4mind/common';
-import { RESEARCH_RUN_PRODUCER } from '@bike4mind/common';
+import { RESEARCH_RUN_PRODUCER, feedLabel } from '@bike4mind/common';
 
 export type ProposalsView = 'pending' | 'declined';
 type ProposalSort = 'relevance' | 'newest';
@@ -333,6 +333,12 @@ export function DataLakeProposalsPanel({
                 {proposal.provenance.query ? ` while researching "${proposal.provenance.query}"` : ''}
                 {` \u00b7 retrieved ${formatRetrieved(proposal.provenance.retrievedAt)}`}
               </Typography>
+
+              {proposal.provenance.feedUrl && (
+                <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-proposal-feed-source">
+                  {`from feed ${feedLabel(proposal.provenance.feedUrl)}`}
+                </Typography>
+              )}
 
               {!declinedView && proposal.proposedTags.length > 0 && (
                 <Stack

@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   ChatModels,
   ModelBackend,
-  getTextModelCost,
   usdToCredits,
   type CompletionInfo,
   type CompletionTool,
@@ -324,8 +323,8 @@ describe('executeCompletion - Claude prompt caching', () => {
       expect(usd).toBeCloseTo(1_000 * perM(3) + 500 * perM(15) + 20_000 * perM(0.2) + 4_000 * perM(3) * 1.25, 10);
     });
 
-    // The hold prices round one fully uncached, so the 1.25x write premium settles above it.
-    it('charges the cache-write premium of a first turn as a shortfall against the hold', async () => {
+    // Nothing is cached before the first reply, so the hold prices round one's prompt at the 1.25x write.
+    it('holds the cache-write premium of a first turn, so settlement takes no shortfall', async () => {
       const text = (tokens: number) => 'x'.repeat(tokens * 2.5);
       const maxTokens = 1_024;
       usage = { inputTokens: 0, outputTokens: maxTokens, cacheCreationInputTokens: 30_000 };
@@ -337,12 +336,10 @@ describe('executeCompletion - Claude prompt caching', () => {
         options: { maxTokens },
       });
 
-      const hold = usdToCredits(getTextModelCost(CLAUDE_DIRECT, 30_000, maxTokens));
       const settled = Math.ceil((30_000 * perM(3) * 1.25 + maxTokens * perM(15)) * CREDITS_PER_USD);
-      expect(settled).toBeGreaterThan(hold);
-      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -hold);
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -settled);
       expect(users.incrementCredits).toHaveBeenCalledTimes(1);
-      expect(users.decrementCreditsFloored).toHaveBeenCalledWith('user1', settled - hold);
+      expect(users.decrementCreditsFloored).not.toHaveBeenCalled();
     });
 
     it('refunds a warm-cache turn, which reads at a tenth of what the hold priced', async () => {
@@ -399,7 +396,9 @@ describe('executeCompletion - 1-hour cache TTL', () => {
 
     const hold = -(users.incrementCredits.mock.calls[0][1] as number);
     const settled = Math.ceil((30_000 * perM(3) * 2 + maxTokens * perM(15)) * CREDITS_PER_USD);
-    expect(users.decrementCreditsFloored).toHaveBeenCalledWith('user1', settled - hold);
+    // The hold priced the first round's writes at the 1-hour rate too, so nothing is short.
+    expect(hold).toBe(settled);
+    expect(users.decrementCreditsFloored).not.toHaveBeenCalled();
     expect(onChunk.mock.calls.at(-1)?.[1]).toMatchObject({ creditsUsed: settled, cacheWrite1hInputTokens: 30_000 });
   });
 
@@ -417,7 +416,9 @@ describe('executeCompletion - 1-hour cache TTL', () => {
     const hold = -(users.incrementCredits.mock.calls[0][1] as number);
     const writeUsd = 20_000 * perM(3) * 1.25 + 10_000 * perM(3) * 2;
     const settled = Math.ceil((writeUsd + maxTokens * perM(15)) * CREDITS_PER_USD);
-    expect(users.decrementCreditsFloored).toHaveBeenCalledWith('user1', settled - hold);
+    // Held as all 1-hour writes; the reported 5-minute share settles below that and is refunded.
+    expect(users.decrementCreditsFloored).not.toHaveBeenCalled();
+    expect(users.incrementCredits).toHaveBeenLastCalledWith('user1', hold - settled);
   });
 
   it('stamps the usage event with the 1-hour writes and rate', async () => {

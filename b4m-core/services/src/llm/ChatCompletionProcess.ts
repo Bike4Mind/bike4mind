@@ -212,6 +212,7 @@ import {
 } from './chatCreditCap';
 import { buildChatRequestMeta } from './chatRequestMeta';
 import { capRoundOutput, gateEveryRound } from '../completionCreditBudget';
+import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import {
   executedModelFields,
   recordShadowTokenUsage,
@@ -267,7 +268,7 @@ import { AgentDetectionFeature } from './features/AgentDetectionFeature';
 import { SkillsFeature, type QuestWithSkillCatalog } from './features/SkillsFeature';
 import { StatusManager } from './StatusManager';
 import { DEFAULT_VERBATIM_WINDOW_FRACTION, SYSTEM_PROMPT_RESERVE_TOKENS } from './historyBudgetConstants';
-import { buildContextOverflowMessage } from './contextOverflowMessage';
+import { buildContextOverflowMessage, ContextOverflowError, isContextOverflowError } from './contextOverflowMessage';
 import {
   ALWAYS_ON_FLOOR_SOURCES,
   buildTaggedContextMessages,
@@ -726,7 +727,7 @@ export function isOperatorFault(error: unknown): boolean {
     error instanceof ResponsesStreamTruncatedError ||
     isToolPairingError(error) ||
     isOverloadedError(error) ||
-    error.message.startsWith('Your request is too large for')
+    isContextOverflowError(error)
   );
 }
 
@@ -4859,20 +4860,6 @@ export class ChatCompletionProcess {
         );
       }
       if (!inputTokensEstimated && inputTokens > maxSafeInputTokens) {
-        logger.error(`🚨 CRITICAL: Context overflow detected!`, {
-          inputTokens,
-          maxTokens: safeMaxTokens,
-          contextLimit,
-          maxSafeInputTokens,
-          userId: this.user.id,
-          sessionId,
-          questId,
-          model,
-          mementoCount: (featureContextMessages['mementos'] ?? []).length,
-          totalMessages: messages.length,
-          tokenBreakdown: tokensBySource,
-        });
-
         // Persist telemetry before throwing - the outer catch block's saveQuest() writes it to MongoDB
         if (telemetryBuilder) {
           telemetryBuilder.setContextWindow({
@@ -4887,15 +4874,26 @@ export class ChatCompletionProcess {
           quest.promptMeta!.contextTelemetry = telemetryBuilder.build();
         }
 
-        throw new Error(
+        const mementoCount = (featureContextMessages['mementos'] ?? []).length;
+        throw new ContextOverflowError(
           buildContextOverflowMessage({
             modelName: requestedModelInfo.name || model,
             inputTokens,
             maxSafeInputTokens,
             tokensBySource,
             messageCount: messages.length,
-            mementoCount: (featureContextMessages['mementos'] ?? []).length,
-          })
+            mementoCount,
+          }),
+          {
+            modelId: model,
+            inputTokens,
+            maxSafeInputTokens,
+            contextLimit,
+            reservedOutputTokens: safeMaxTokens,
+            tokenBreakdown: tokensBySource ?? null,
+            messageCount: messages.length,
+            mementoCount,
+          }
         );
       }
 
@@ -5024,6 +5022,12 @@ export class ChatCompletionProcess {
             await this.recordLimitEvent(logger, 'insufficient_credits', chargedModelInfo.id, {
               reason: 'member_cap',
               requiredCredits: capCheckCredits,
+            });
+            await notifyOrgEvent({
+              type: 'member_cap_check',
+              organizationId: organization.id,
+              userId: this.user.id,
+              refused: true,
             });
             throw new InsufficientCreditsError(
               buildMemberCreditCapMessage({
@@ -7963,9 +7967,13 @@ export class ChatCompletionProcess {
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
-      } else if (err instanceof Error && err.message.startsWith('Your request is too large for')) {
-        logger.error(`[Context Overflow] Quest ${questId}: ${err.message}`);
-        // quest.reply already set to err.message above (line 2825) - includes token breakdown
+      } else if (isContextOverflowError(err)) {
+        // Expected refusal (the request does not fit the chosen model), so warn, not error: it must
+        // not page. The reply set from err.message above already carries the breakdown and remedy.
+        logger.warn('[Context Overflow] Request refused: too large for the selected model', {
+          questId,
+          ...err.details,
+        });
         return;
       }
       throw err;

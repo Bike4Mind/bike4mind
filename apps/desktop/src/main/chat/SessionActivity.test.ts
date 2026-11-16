@@ -187,4 +187,19 @@ describe('SessionActivity', () => {
     expect(activity.snapshot()).toEqual([]);
     expect(events.map(event => event.status)).toEqual(['needs-action', 'done']);
   });
+
+  it('shows a worker waiting on a user decision as needs-action until it is answered or forgotten', () => {
+    const { activity, events } = track();
+
+    activity.decisionChanged('a', true);
+    expect(activity.statusOf('a')).toBe('needs-action');
+    expect(activity.snapshot()).toEqual([{ sessionId: 'a', status: 'needs-action' }]);
+
+    activity.decisionChanged('a', false);
+    expect(activity.statusOf('a')).toBe('done');
+    activity.decisionChanged('b', true);
+    activity.forget('b');
+    expect(activity.snapshot()).toEqual([]);
+    expect(events.map(event => event.status)).toEqual(['needs-action', 'done', 'needs-action']);
+  });
 });
