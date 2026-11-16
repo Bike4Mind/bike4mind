@@ -102,7 +102,6 @@ const OWNER_OR_ADMIN = new Map<string, string>([
   ['organizations/[id]/api-keys/options.ts', ORG_MANAGER_REASON],
   ['organizations/[id]/custom-mcp/connections.ts', ORG_MANAGER_REASON],
   ['organizations/[id]/custom-mcp/policy.ts', ORG_MANAGER_REASON],
-  ['organizations/[id]/model-policy.ts', ORG_MANAGER_REASON],
   ['organizations/[id]/feedback-report.ts', ORG_MANAGER_REASON],
   ['organizations/[id]/feedback-report/[feedbackId].ts', ORG_MANAGER_REASON],
   ['organizations/[id]/feedback-report/items.ts', ORG_MANAGER_REASON],
@@ -134,6 +133,7 @@ const OWNER_OR_ADMIN = new Map<string, string>([
   ['organizations/[id]/members/[userId]/index.ts', 'isAdmin only passed to toSafeOrganization for response shaping'],
   ['organizations/[id]/members/[userId]/manager.ts', 'isAdmin only passed to toSafeOrganization for response shaping'],
   ['organizations/[id]/mfa-policy.ts', 'isAdmin only passed to toSafeOrganization for response shaping'],
+  ['organizations/[id]/model-policy.ts', ORG_MANAGER_REASON],
   ['organizations/[id]/pendingUsers.ts', 'isAdmin only widens projection of returned users'],
   [
     'organizations/[id]/retention.ts',
