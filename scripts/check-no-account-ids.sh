@@ -16,28 +16,39 @@
 # comment, a test fixture):
 #   1. Add an extended-regex pattern to scripts/account-ids-allowlist.txt
 #   2. Add a comment explaining why the match is acceptable
+#
+# Usage: check-no-account-ids.sh [--staged]
+#   (no flag)  every tracked and untracked, non-ignored file under SCAN_DIRS (CI runs this)
+#   --staged   only the staged copies of staged files (the pre-commit hook runs this)
 
 set -euo pipefail
+
+STAGED=false
+if [ "${1:-}" = "--staged" ]; then STAGED=true; fi
 
 ALLOWLIST="scripts/account-ids-allowlist.txt"
 
 # Shippable code only. docs-site deploys from main, so its non-markdown files are scanned too.
 SCAN_DIRS=(apps b4m-core packages infra docs-site .github/workflows)
 
-INCLUDES=(--include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx'
-  --include='*.mjs' --include='*.cjs' --include='*.json' --include='*.yml' --include='*.yaml')
+EXTENSIONS=(ts tsx js jsx mjs cjs json yml yaml)
 
 # Test fixtures and seed data legitimately reference example domains/emails and do
 # not couple a fork to Bike4Mind infrastructure — the functional open-core risk is
 # in runtime/infra/CI code. Excluded here; branding-in-tests is a separate concern.
-EXCLUDE_FILES=(--exclude='*.test.ts' --exclude='*.test.tsx' --exclude='*.spec.ts'
-  --exclude='*.spec.tsx' --exclude='*.test.js' --exclude='*.spec.js'
-  --exclude='*.test.[cm]js' --exclude='*.spec.[cm]js'
-  --exclude=pnpm-lock.yaml)
+EXCLUDE_FILES=('*.test.ts' '*.test.tsx' '*.spec.ts' '*.spec.tsx' '*.test.js' '*.spec.js'
+  '*.test.[cm]js' '*.spec.[cm]js' 'pnpm-lock.yaml')
 
-EXCLUDE_DIRS=(--exclude-dir=node_modules --exclude-dir=dist --exclude-dir=build
-  --exclude-dir=.next --exclude-dir=.turbo --exclude-dir=coverage --exclude-dir=__tests__
-  --exclude-dir=seeders --exclude-dir=out)
+EXCLUDE_DIRS=(node_modules dist build .next .turbo coverage __tests__ seeders out)
+
+# The same scope as git pathspecs, so git grep reads the index instead of walking every build
+# artifact on disk (a full filesystem walk took over a minute in a built worktree).
+PATHSPECS=()
+for dir in "${SCAN_DIRS[@]}"; do
+  for ext in "${EXTENSIONS[@]}"; do PATHSPECS+=(":(glob)$dir/**/*.$ext"); done
+done
+for name in "${EXCLUDE_FILES[@]}"; do PATHSPECS+=(":(exclude,glob)**/$name"); done
+for name in "${EXCLUDE_DIRS[@]}"; do PATHSPECS+=(":(exclude,glob)**/$name/**"); done
 
 # Scope (issue #9306, §8.3/§8.5): account-tied identifiers that functionally couple
 # a fork to Bike4Mind infrastructure — NOT general brand copy. Genericizing
@@ -89,18 +100,21 @@ fi
 # Skip blank lines and comments; each remaining line is an ERE allow pattern.
 allow_patterns=$(grep -vE '^[[:space:]]*(#|$)' "$ALLOWLIST" || true)
 
-raw_findings=$(grep -rEn "${INCLUDES[@]}" "${EXCLUDE_FILES[@]}" "${EXCLUDE_DIRS[@]}" \
-  -e "$ALWAYS_PATTERN" -e "$FALLBACK_PATTERN" "${SCAN_DIRS[@]}" 2>/dev/null || true)
-
-# The scan walks the filesystem, so it also reaches git-ignored local artifacts - e2e auth
-# state, probe manifests - which hold real ids by design and can never be committed. Drop
-# them here rather than naming each directory, so a new kind of local artifact does not fail
-# every contributor's next commit. A check-ignore error takes the same branch as "not
-# ignored", keeping the guard loud rather than silently permissive.
-if [ -n "$raw_findings" ]; then
-  raw_findings=$(printf '%s\n' "$raw_findings" | while IFS= read -r line; do
-    git check-ignore -q -- "${line%%:*}" || printf '%s\n' "$line"
-  done)
+# git lists the files (from the index, never walking build output); grep matches them, since
+# git grep's ERE does not honour \b on every platform and the ObjectId rule depends on it.
+# Neither mode lists git-ignored local artifacts (e2e auth state, probe manifests), which hold
+# real ids by design and can never be committed. --staged checks the staged files' working copy.
+if [ "$STAGED" = true ]; then
+  list_files() { git diff --cached --name-only --diff-filter=ACMR -z -- "${PATHSPECS[@]}"; }
+else
+  list_files() { git ls-files --cached --others --exclude-standard -z -- "${PATHSPECS[@]}"; }
+fi
+# grep exits 1 on no match; anything above that is a real failure and must stay loud.
+scan_status=0
+raw_findings=$(list_files | xargs -0 grep -HnE -e "$ALWAYS_PATTERN" -e "$FALLBACK_PATTERN" --) || scan_status=$?
+if [ "$scan_status" -gt 1 ] && [ "$scan_status" -ne 123 ]; then
+  echo "❌ ERROR: account-tied ID scan failed (exit $scan_status)"
+  exit 1
 fi
 
 if [ -n "$allow_patterns" ] && [ -n "$raw_findings" ]; then
