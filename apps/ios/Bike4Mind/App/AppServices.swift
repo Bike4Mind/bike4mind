@@ -39,6 +39,10 @@ final class AppServices {
   let agentRunMonitor: AgentRunMonitor
   /// Starts a fire-and-forget agent run with its own Live Activity.
   let agentRuns: any AgentRunStarting
+  /// Answers an agent's pending approval, on whichever server the app points at.
+  let pendingActions: any PendingActionAPI
+  /// Answers an approval from a notification button.
+  let approvalNotifications: ApprovalNotificationHandler
   /// Whether the signed-in account is waiting to be deleted; `RootView` shows the restore screen then.
   let accountStatus = AccountStatus()
   /// Whether the server has refused this build (HTTP 426); `RootView` shows the update screen then.
@@ -80,6 +84,15 @@ final class AppServices {
     let monitor = AgentRunMonitor(api: agentRunAPI, tracker: activities, policy: monitorPolicy)
     agentRunMonitor = monitor
     agentRuns = AgentRunService(api: agentRunAPI, tracker: activities, monitor: monitor)
+
+    let pendingActionAPI = ForwardingPendingActionAPI {
+      #if DEBUG
+        if FixtureServices.isEnabled { return FixtureServices.pendingActionAPI }
+      #endif
+      return PendingActionClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
+    pendingActions = pendingActionAPI
+    approvalNotifications = ApprovalNotificationHandler(api: pendingActionAPI, feedback: SystemApprovalFeedback())
 
     #if DEBUG
       if FixtureServices.isEnabled, FixtureServices.accountScenario == .pending {
@@ -303,5 +316,14 @@ struct ForwardingAgentRunAPI: AgentRunAPI {
 
   func run(id: String) async throws -> AgentRunStatus {
     try await provider().run(id: id)
+  }
+}
+
+/// Routes approval answers to whichever server the app currently points at (it can change in debug builds).
+struct ForwardingPendingActionAPI: PendingActionAPI {
+  let provider: @MainActor @Sendable () -> any PendingActionAPI
+
+  func respond(to target: PendingActionTarget, decision: PendingActionDecision) async throws -> PendingActionResult {
+    try await provider().respond(to: target, decision: decision)
   }
 }
