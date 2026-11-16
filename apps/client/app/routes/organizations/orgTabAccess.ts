@@ -103,8 +103,8 @@ export const canViewOrgUsage = (
 export const canManageOrgIntegrations = ownerTierGate;
 
 /**
- * Who may see the Billing & Subscription tab. Owner only - NOT `canManageOrg`, which is satisfied
- * by any member holding `share`/`update`. All three of the tab's actions are owner-gated, so a
+ * Who may see the Billing & Subscription tab. Owner only - NOT `canManageOrg`, which also admits
+ * managers. All three of the tab's actions are owner-gated, so a
  * member reaching it saw an enabled control for every one of them and an error back from each:
  * - Subscribe        pages/api/organizations/subscriptions/subscribe.ts (verifyOrgOwner)
  * - Change seats     pages/api/organizations/subscriptions/update-seats.ts
