@@ -14,6 +14,7 @@ import {
   isBlankSettingValue,
   isSupportedEmbeddingModel,
   OpenAIEmbeddingModel,
+  type ClientConfigPublic,
 } from '@bike4mind/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
@@ -30,6 +31,7 @@ import {
 } from './queryKeys';
 import { useAccessToken, useIsFullyAuthenticated } from '@client/app/hooks/useAccessToken';
 import { isMfaEnrollmentRequired } from '@client/app/utils/mfaEnrollmentInterceptor';
+import { clientConfigQuery } from './clientConfig';
 
 export function useUpdateSettings() {
   const queryClient = useQueryClient();
@@ -259,17 +261,39 @@ export function useLogoSettings() {
 }
 
 export function usePublicConfig() {
-  return useQuery({
+  const isFullyAuthenticated = useIsFullyAuthenticated();
+  const bootstrap = useQuery({
+    ...clientConfigQuery,
+    enabled: isFullyAuthenticated,
+    select: config => config.public_config && toPublicConfig(config.public_config),
+  });
+  const publicConfig = useQuery({
     queryKey: ['server-config-public'],
     queryFn: async () => {
-      const response = await api.get<ServerConfigPublic>('/api/settings/serverConfigPublic');
-      return response.data;
+      const response = await api.get<ClientConfigPublic>('/api/v1/client-config/public');
+      return toPublicConfig(response.data);
     },
+    enabled: !isFullyAuthenticated,
     staleTime: 1000 * 60 * 5, // 5 minutes
     refetchOnWindowFocus: false,
   });
+  return isFullyAuthenticated ? bootstrap : publicConfig;
 }
 
+function toPublicConfig(config: ClientConfigPublic): ServerConfigPublic {
+  return {
+    apiUrl: config.api_url,
+    defaultTheme: config.default_theme,
+    allowOpenRegistration: config.allow_open_registration,
+    pyodideBaseUrl: config.pyodide_base_url,
+    allowTrustedDevices: config.allow_trusted_devices,
+    turnstileSiteKey: config.turnstile_site_key,
+    appleSignInEnabled: config.apple_sign_in_enabled,
+    supportEmail: config.support_email,
+  };
+}
+
+// Runtime capabilities, storage and admin fields are intentionally outside client-config.
 export function useConfig() {
   const isFullyAuthenticated = useIsFullyAuthenticated();
 
@@ -301,7 +325,14 @@ export function useConfig() {
 }
 
 export function useServerStatus() {
-  return useQuery({
+  const isFullyAuthenticated = useIsFullyAuthenticated();
+  const bootstrap = useQuery({
+    ...clientConfigQuery,
+    enabled: isFullyAuthenticated,
+    refetchOnWindowFocus: true,
+    select: config => ({ serverStatus: config.server.status as ServerStatusEnum }),
+  });
+  const publicStatus = useQuery({
     queryKey: ['server-status'],
     queryFn: async () => {
       const response = await api.get<{ serverStatus: ServerStatusEnum }>('/api/settings/serverStatus');
@@ -310,5 +341,7 @@ export function useServerStatus() {
     },
     staleTime: 1000 * 60 * 5,
     refetchOnWindowFocus: true,
+    enabled: !isFullyAuthenticated,
   });
+  return isFullyAuthenticated ? bootstrap : publicStatus;
 }
