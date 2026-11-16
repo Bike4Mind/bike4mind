@@ -47,6 +47,10 @@ export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, 
   [AdminTab.StripeDisputes]: 'support:read',
   [AdminTab.ShadowDetections]: 'support:read',
 
+  // Read-only for support:read: the roles routes' GET declares it. Creating, editing and deleting
+  // are full-admin only, so the tab hides those controls from a delegate.
+  [AdminTab.Roles]: 'support:read',
+
   // View-only for support:read; replay actions gate on settings:manage inside the tab.
   [AdminTab.DlqReplay]: 'support:read',
 
