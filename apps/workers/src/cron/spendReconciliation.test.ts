@@ -26,6 +26,16 @@ vi.mock('@bike4mind/observability', () => {
 
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 
+const mockSecretSend = vi.fn();
+vi.mock('@aws-sdk/client-secrets-manager', () => ({
+  SecretsManagerClient: class {
+    send = (command: unknown) => mockSecretSend(command);
+  },
+  GetSecretValueCommand: class {
+    constructor(public readonly input: unknown) {}
+  },
+}));
+
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     MONGODB_URI: 'mongodb://test/%STAGE%',
@@ -60,6 +70,7 @@ describe('spendReconciliation cron', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
   const lambdaContext = {
@@ -147,6 +158,75 @@ describe('spendReconciliation cron', () => {
     expect(row.internalUsd).toBe(0);
     expect(row.deltaUsd).toBe(100);
     expect(row.deltaPct).toBe(100);
+  });
+
+  describe('with the admin key secret store', () => {
+    const errorLogger = { log: vi.fn(), error: vi.fn() };
+    const storedKeys: Record<string, string | Error> = {};
+
+    beforeEach(() => {
+      vi.stubEnv('PROVIDER_ADMIN_KEY_SECRET_ANTHROPIC', 'anthropic-secret-arn');
+      vi.stubEnv('PROVIDER_ADMIN_KEY_SECRET_OPENAI', 'openai-secret-arn');
+      storedKeys['anthropic-secret-arn'] = 'stored-anthropic-key';
+      storedKeys['openai-secret-arn'] = 'stored-openai-key';
+      mockSecretSend.mockImplementation(async command => {
+        const value = storedKeys[(command as { input: { SecretId: string } }).input.SecretId];
+        if (value instanceof Error) throw value;
+        return { SecretString: value };
+      });
+    });
+
+    it('fetches with the stored keys, not the Config ones', async () => {
+      mockAnthropicFetch.mockResolvedValue(null);
+      mockOpenAIFetch.mockResolvedValue(null);
+
+      await runHandler();
+
+      expect(mockAnthropicFetch).toHaveBeenCalledWith('stored-anthropic-key', expect.any(String));
+      expect(mockOpenAIFetch).toHaveBeenCalledWith('stored-openai-key', expect.any(String));
+    });
+
+    it('skips a provider whose secret has no value yet', async () => {
+      storedKeys['openai-secret-arn'] = Object.assign(new Error('no current value'), {
+        name: 'ResourceNotFoundException',
+      });
+      mockAnthropicFetch.mockResolvedValue(null);
+
+      const body = JSON.parse((await runHandler()).body);
+
+      expect(body.skipped).toBeGreaterThan(0);
+      expect(mockOpenAIFetch).not.toHaveBeenCalled();
+    });
+
+    it('counts a failed key lookup as a failed provider and still reconciles the other one', async () => {
+      storedKeys['anthropic-secret-arn'] = Object.assign(new Error('not authorized'), {
+        name: 'AccessDeniedException',
+      });
+      mockOpenAIFetch.mockResolvedValue({ providerUsd: 210, breakdown: {} });
+      const { runSpendReconciliation } = await import('./spendReconciliation');
+
+      const result = await runSpendReconciliation({ logger: errorLogger as never });
+
+      expect(result).toEqual({ reconciled: 2, skipped: 0, failed: 1 });
+      expect(mockAnthropicFetch).not.toHaveBeenCalled();
+      expect(mockOpenAIFetch).toHaveBeenCalledTimes(2);
+      expect(errorLogger.error).toHaveBeenCalledWith(
+        '[SpendReconciliation] anthropic admin key lookup failed',
+        expect.any(Error)
+      );
+    });
+
+    it('reports every lookup failure when no provider key could be read', async () => {
+      const denied = Object.assign(new Error('not authorized'), { name: 'AccessDeniedException' });
+      storedKeys['anthropic-secret-arn'] = denied;
+      storedKeys['openai-secret-arn'] = denied;
+      const { runSpendReconciliation } = await import('./spendReconciliation');
+
+      const result = await runSpendReconciliation({ logger: errorLogger as never });
+
+      expect(result).toEqual({ reconciled: 0, skipped: 0, failed: 2 });
+      expect(mockMonthlyCogsByProvider).not.toHaveBeenCalled();
+    });
   });
 
   describe('runSpendReconciliation', () => {
