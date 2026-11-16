@@ -118,6 +118,19 @@ describe('ChatService permission rules', () => {
     return created.id;
   }
 
+  it.each(['auto', 'full'] as const)('keeps opaque shell approval under a broad Bash allow rule in %s', async mode => {
+    rules = ruleSet({ allow: ['Bash(*)'] });
+    const execute = vi.spyOn(bashExecute, 'run').mockResolvedValue('test execution');
+    await run(mode, 'bash_execute', {
+      command: 'cat notes.txt && rm "$OPAQUE_TARGET"',
+      cwd: root,
+    });
+
+    await awaitCall('bash_execute', 'awaiting-approval');
+    expect(execute).not.toHaveBeenCalled();
+    expect(await readFile(join(root, 'notes.txt'), 'utf8')).toBe('hello\n');
+  });
+
   it.each(['ask', 'auto', 'full'] as const)('refuses tool execution when rules fail to load in %s', async mode => {
     rulesFailure = new Error('permission file unreadable');
     await run(mode, 'file_read', { path: join(root, 'notes.txt') });

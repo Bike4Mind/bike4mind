@@ -7,6 +7,9 @@ import { billedVideoRequest, estimateVideoCostCredits, estimateVideoCostUsd } fr
 const perSecond: VideoModelCapabilities = {
   provider: 'test',
   displayName: 'Per second',
+  tier: 'standard',
+  releasedAt: '2026-01-01',
+  preview: false,
   modes: ['text_to_video'],
   duration: { kind: 'range', min: 3, max: 10, step: 1 },
   aspectRatios: ['16:9'],

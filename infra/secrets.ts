@@ -55,6 +55,9 @@ export const secrets = {
   APNS_TEAM_ID: new sst.Secret('APNS_TEAM_ID', 'not-configured'),
   APNS_KEY: new sst.Secret('APNS_KEY', 'not-configured'),
   APNS_TOPIC: new sst.Secret('APNS_TOPIC', 'not-configured'),
+  // FCM push delivery to the Android client: the Firebase service account JSON, verbatim. Left on
+  // 'not-configured', Android push is off (APNs is unaffected). It is a secret because it holds a private key.
+  FCM_SERVICE_ACCOUNT: new sst.Secret('FCM_SERVICE_ACCOUNT', 'not-configured'),
   STRIPE_SECRET_KEY: new sst.Secret('STRIPE_SECRET_KEY', 'not-configured'),
   STRIPE_PUBLISHABLE_KEY: new sst.Secret('STRIPE_PUBLISHABLE_KEY', 'not-configured'),
   STRIPE_WEBHOOK_SECRET: new sst.Secret('STRIPE_WEBHOOK_SECRET', 'not-configured'),
@@ -67,6 +70,7 @@ export const secrets = {
   ANTHROPIC_API_KEY: new sst.Secret('ANTHROPIC_API_KEY', 'not-configured'),
   // Anthropic Admin API key for billing/spend reconciliation (cost_report endpoint).
   // Requires an admin-scoped key from console.anthropic.com.
+  // The spend crons read it from the store in infra/providerAdminKeys.ts where that exists; this is the fallback.
   ANTHROPIC_ADMIN_API_KEY: new sst.Secret('ANTHROPIC_ADMIN_API_KEY', 'not-configured'),
   // Cloudflare Turnstile secret key; the check stays off until a real value is set.
   TURNSTILE_SECRET_KEY: new sst.Secret('TURNSTILE_SECRET_KEY', 'not-configured'),
@@ -79,6 +83,7 @@ export const secrets = {
   OPENAI_API_KEY: new sst.Secret('OPENAI_API_KEY', 'not-configured'),
   // OpenAI admin API key for billing/spend reconciliation (usage endpoint).
   // Requires an org-admin-scoped key from platform.openai.com.
+  // The spend crons read it from the store in infra/providerAdminKeys.ts where that exists; this is the fallback.
   OPENAI_ADMIN_API_KEY: new sst.Secret('OPENAI_ADMIN_API_KEY', 'not-configured'),
   XAI_API_KEY: new sst.Secret('XAI_API_KEY', 'not-configured'),
   MOONSHOT_API_KEY: new sst.Secret('MOONSHOT_API_KEY', 'not-configured'),

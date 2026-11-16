@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
-import { render, waitFor, screen, fireEvent } from '@testing-library/react';
+import { act, render, waitFor, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -884,5 +884,105 @@ describe('MFAEnforcementWrapper - the server decides, not the settings copy in t
     expect(screen.getByTestId('app-content')).not.toBeNull();
     expect(screen.queryByTestId('mfa-enforcement-required-screen')).toBeNull();
     expect(mfaSetupCalls()).toBe(0);
+  });
+});
+
+describe('MFAEnforcementWrapper - status success ordering', () => {
+  const notRequired = { enabled: false, required: false };
+  const now = 1_800_000_000_000;
+
+  beforeEach(() => {
+    post.mockReset();
+    get.mockReset();
+    interceptorUse.mockClear();
+    interceptorEject.mockClear();
+    adminSettings.enforceMFA = 'false';
+    post.mockRejectedValue(new Error('setup failed'));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    adminSettings.enforceMFA = 'true';
+  });
+
+  it.each([0, -1_000])('keeps a refusal when the failed refresh clock moved by %s ms', async offset => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    get.mockResolvedValue({ data: notRequired });
+    const { queryClient } = renderWrapper();
+    await screen.findByTestId('app-content');
+    await waitFor(() => expect(queryClient.getQueryState(['mfa', 'status'])?.dataUpdatedAt).toBe(now));
+    clock.mockReturnValue(now + offset);
+    get.mockRejectedValue(new Error('status unavailable'));
+    const onRejected = await registeredRefusalHandler();
+    await act(async () => {
+      await onRejected(enrollmentRefusal()).catch(() => undefined);
+    });
+    await waitFor(() => expect(queryClient.getQueryState(['mfa', 'status'])?.status).toBe('error'));
+    expect(await screen.findByTestId('mfa-enforcement-required-screen')).not.toBeNull();
+    expect(screen.queryByTestId('app-content')).toBeNull();
+    await waitFor(() => expect(mfaSetupCalls()).toBe(1));
+  });
+
+  it('accepts a new identical not-required answer at the same clock value', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    get.mockResolvedValue({ data: notRequired });
+    const { queryClient } = renderWrapper();
+    await screen.findByTestId('app-content');
+    const before = queryClient.getQueryData(['mfa', 'status']);
+    const onRejected = await registeredRefusalHandler();
+    await act(async () => {
+      await onRejected(enrollmentRefusal()).catch(() => undefined);
+    });
+    await waitFor(() => expect(mfaStatusCalls()).toBe(2));
+    await screen.findByTestId('app-content');
+    expect(queryClient.getQueryData(['mfa', 'status'])).toBe(before);
+    expect(queryClient.getQueryState(['mfa', 'status'])?.dataUpdatedAt).toBe(now);
+    expect(screen.queryByTestId('mfa-enforcement-required-screen')).toBeNull();
+    expect(mfaSetupCalls()).toBe(0);
+  });
+
+  it('accepts a successful same-clock read after the query success count resets', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    get.mockResolvedValue({ data: notRequired });
+    const { queryClient } = renderWrapper();
+    await screen.findByTestId('app-content');
+    get.mockRejectedValue(new Error('status unavailable'));
+    const onRejected = await registeredRefusalHandler();
+    await act(async () => {
+      await onRejected(enrollmentRefusal()).catch(() => undefined);
+    });
+    await screen.findByTestId('mfa-enforcement-required-screen');
+    await waitFor(() => expect(queryClient.getQueryState(['mfa', 'status'])?.status).toBe('error'));
+    get.mockResolvedValue({ data: notRequired });
+    await act(async () => {
+      await queryClient.resetQueries({ queryKey: ['mfa', 'status'], exact: true });
+    });
+    await screen.findByTestId('app-content');
+    expect(queryClient.getQueryState(['mfa', 'status'])?.dataUpdateCount).toBe(1);
+    expect(screen.queryByTestId('mfa-enforcement-required-screen')).toBeNull();
+  });
+
+  it('requires a server success after a manual cache update', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    get.mockResolvedValue({ data: notRequired });
+    const { queryClient } = renderWrapper();
+    await screen.findByTestId('app-content');
+    get.mockRejectedValue(new Error('status unavailable'));
+    const onRejected = await registeredRefusalHandler();
+    await act(async () => {
+      await onRejected(enrollmentRefusal()).catch(() => undefined);
+    });
+    await screen.findByTestId('mfa-enforcement-required-screen');
+    await waitFor(() => expect(queryClient.getQueryState(['mfa', 'status'])?.status).toBe('error'));
+    act(() => {
+      queryClient.setQueryData(['mfa', 'status'], { ...notRequired });
+    });
+    expect(screen.queryByTestId('app-content')).toBeNull();
+    expect(screen.getByTestId('mfa-enforcement-required-screen')).not.toBeNull();
+    get.mockResolvedValue({ data: notRequired });
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: ['mfa', 'status'], exact: true });
+    });
+    await screen.findByTestId('app-content');
   });
 });

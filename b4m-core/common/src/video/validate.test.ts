@@ -12,6 +12,9 @@ import { VIDEO_VALIDATION_ERROR_CODES, validateAgainstCapabilities } from './val
 const rangeCaps: VideoModelCapabilities = {
   provider: 'test',
   displayName: 'Range',
+  tier: 'standard',
+  releasedAt: '2026-01-01',
+  preview: false,
   modes: ['text_to_video', 'image_to_video'],
   inputs: { first_frame: { max: 1 }, reference: { max: 2 } },
   duration: { kind: 'range', min: 3, max: 10, step: 1 },

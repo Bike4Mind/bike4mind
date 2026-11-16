@@ -54,14 +54,10 @@ describe('shellApproval per part', () => {
   const parts = (prompt: ApprovalPrompt) =>
     (prompt.always?.commands ?? []).map(({ text, coverable, ask }) => ({ text, coverable, kinds: ask?.kinds ?? [] }));
 
-  it('marks the sending part of a chain, which auto mode runs over a clean reply, leaving the other coverable', async () => {
+  it('puts no ask on a part that may send data out', async () => {
     const prompt = await approve('git status && node -e 1');
-    expect(prompt.byPart).toBe(true);
     expect(prompt.askInAuto).toBeUndefined();
-    expect(parts(prompt)).toEqual([
-      { text: 'git status', coverable: true, kinds: [] },
-      expect.objectContaining({ kinds: ['outbound'] }),
-    ]);
+    expect(parts(prompt).map(part => part.kinds)).toEqual([[], []]);
   });
 
   it('asks about the whole script when a part has an unread operand', async () => {

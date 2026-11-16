@@ -704,7 +704,7 @@ B4M_DISCOVERY_DRIVER=true
 
 The `worker` is the only service that runs discovery on a schedule, even though every service loads the same env file. It runs discovery once at boot (if no recent successful run exists) and then on the interval. The flag gates the admin "Run now" button too: without it the app answers 503 and starts nothing, so an install that never sets it stays offline however the run is asked for.
 
-Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Profile menu -> More -> API Keys) - there is nothing extra to configure, except for Bedrock (see [Amazon Bedrock](#amazon-bedrock-optional) below). Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
+Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Profile menu -> More -> API Keys) - there is nothing extra to configure, except for Bedrock (see [Amazon Bedrock](#amazon-bedrock-optional) below). Everything else is tuned in the app under **Admin > AI > Models**, in the **Settings** section: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). The **Discovery** section of the same page shows the last run and what it found.
 
 ### Amazon Bedrock (optional)
 
@@ -1405,7 +1405,8 @@ Covered shapes (inventory kind in brackets):
 - `sst.aws.Cron`, including shared Function `job` targets (`schedule`)
 - `sst.aws.Bus` `subscribe()` / `subscribeQueue()` (`event`)
 - bucket `notify()` notifications to a Function or queue (`notification`)
-- `aws.cloudwatch.EventRule` with its `aws.cloudwatch.EventTarget`s (`eventRule`)
+- `aws.cloudwatch.EventRule` with its `aws.cloudwatch.EventTarget`s (`eventRule`); a target that is a
+  not-covered storage resource such as a log group delivers to no function
 - `aws.ses.ReceiptRule` (`sesRule`)
 - `aws.cloudwatch.LogSubscriptionFilter` (`logSubscription`)
 - `aws.sns.TopicSubscription` and `sst.aws.SnsTopic` `subscribe()` (`snsSubscription`)
@@ -1422,7 +1423,8 @@ in `b4mContributions.infraResources`: their constructors are listed by name expr
 Not covered: every other `sst.aws.*` / `aws.<ns>.*` constructor must be listed, with a one-line
 reason, in the `NOT_COVERED` constant in `packages/scripts/src/selfhostParityInventory.ts`
 (HTTP Functions, web/router/WebSocket surfaces, CDN origin request policies, topics and buses whose subscriptions are
-covered, alarms, dashboards, outbound SES metric destinations, IAM policies, deploy-time invocations, network and WAF plumbing,
+covered, alarms, dashboards, outbound SES metric destinations, IAM policies, KMS keys and aliases, Secrets Manager secrets and
+their resource policies, log groups and their resource policies, deploy-time invocations, network and WAF plumbing,
 and infrastructure contributed by private overlays). A constructor that is neither covered nor
 listed fails the guard.
 

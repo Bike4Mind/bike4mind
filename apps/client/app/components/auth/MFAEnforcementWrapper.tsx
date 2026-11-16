@@ -45,9 +45,10 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   const [isLoading, setIsLoading] = useState(true);
   // The server answers an unenrolled session with a 403 instead of this tab's settings query
   // seeing the toggle. That refusal is authoritative even if the status query then errors.
-  // Epoch ms of the latest handled refusal; null until one is seen.
-  const [refusedAt, setRefusedAt] = useState<number | null>(null);
-  const enrollmentRefused = refusedAt !== null;
+  const statusSuccessRevisionRef = useRef(0);
+  const [statusSuccessRevision, setStatusSuccessRevision] = useState(0);
+  const [refusalStatusRevision, setRefusalStatusRevision] = useState<number | null>(null);
+  const enrollmentRefused = refusalStatusRevision !== null;
   const [verifyError, setVerifyError] = useState<string | null>(null);
   // Backup codes from a passkey enrolled as the factor, shown until the user continues.
   const [passkeyBackupCodes, setPasskeyBackupCodes] = useState<string[] | null>(null);
@@ -58,6 +59,16 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // The server decides who owes enrollment: the status reads its own enforceMFA, so a missing or
   // stale client settings copy cannot hide the setup screen from a user every call refuses.
   const mfaStatusQuery = useMFAStatus(!!userId && !isImpersonating);
+  useLayoutEffect(() => {
+    const cache = queryClient.getQueryCache();
+    return cache.subscribe(event => {
+      if (event.type !== 'updated' || event.action.type !== 'success' || event.action.manual) return;
+      if (event.query !== cache.find({ queryKey: MFA_STATUS_QUERY_KEY, exact: true })) return;
+      // Notify even for identical data and timestamps; a reset must not reset this ordering.
+      statusSuccessRevisionRef.current += 1;
+      setStatusSuccessRevision(statusSuccessRevisionRef.current);
+    });
+  }, [queryClient]);
   const mfaStatus = mfaStatusQuery.data;
   const mfaQueryFailed = mfaStatusQuery.isError;
   // The status query is the authority, not currentUser.mfa: the persisted user store drops `mfa`,
@@ -67,7 +78,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // An older server omits `required`; then only a refusal, never a missing field, asks for setup.
   // After a refusal only a status fetched since then can clear it: a failed refetch keeps the
   // data cached before the refusal, and that answer is no longer the server's.
-  const statusPredatesRefusal = refusedAt !== null && mfaStatusQuery.dataUpdatedAt < refusedAt;
+  const statusPredatesRefusal = refusalStatusRevision !== null && statusSuccessRevision <= refusalStatusRevision;
   const needsEnrollment =
     statusPredatesRefusal ||
     (!mfaStatus?.enabled && (mfaStatus?.required === true || (enrollmentRefused && mfaStatus?.required !== false)));
@@ -134,7 +145,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
       registerMfaEnrollmentInterceptor(api, () => {
         if (refusalRefetchInFlightRef.current) return;
         refusalRefetchInFlightRef.current = true;
-        setRefusedAt(Date.now());
+        setRefusalStatusRevision(statusSuccessRevisionRef.current);
         const rearm = () => {
           refusalRefetchInFlightRef.current = false;
         };

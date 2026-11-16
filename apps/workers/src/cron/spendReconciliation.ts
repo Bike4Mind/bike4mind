@@ -20,6 +20,7 @@ import { ISpendReconciliationInput } from '@bike4mind/common';
 import { spendReconciliationService } from '@bike4mind/services';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
+import { type AdminKeyProvider, resolveProviderAdminKey } from './providerAdminKey';
 
 const contextToLogs = (context: Context) => ({
   requestId: context.awsRequestId ?? randomUUID(),
@@ -29,10 +30,9 @@ const contextToLogs = (context: Context) => ({
 });
 
 interface ProviderConfig {
-  provider: string;
+  provider: AdminKeyProvider;
   source: ISpendReconciliationInput['source'];
   fetch: (key: string, month: string) => Promise<{ providerUsd: number; breakdown: Record<string, number> } | null>;
-  getKey: () => string | undefined;
 }
 
 const PROVIDERS: ProviderConfig[] = [
@@ -40,13 +40,11 @@ const PROVIDERS: ProviderConfig[] = [
     provider: 'anthropic',
     source: 'anthropic_admin_api',
     fetch: spendReconciliationService.fetchAnthropicSpend,
-    getKey: () => Config.ANTHROPIC_ADMIN_API_KEY,
   },
   {
     provider: 'openai',
     source: 'openai_usage_api',
     fetch: spendReconciliationService.fetchOpenAISpend,
-    getKey: () => Config.OPENAI_ADMIN_API_KEY,
   },
 ];
 
@@ -81,7 +79,14 @@ export async function runSpendReconciliation({
 
   const configured: { providerConfig: ProviderConfig; key: string }[] = [];
   for (const providerConfig of PROVIDERS) {
-    const key = providerConfig.getKey();
+    let key: string | undefined;
+    try {
+      key = await resolveProviderAdminKey(providerConfig.provider);
+    } catch (err) {
+      failed++;
+      logger.error(`[SpendReconciliation] ${providerConfig.provider} admin key lookup failed`, err);
+      continue;
+    }
     if (!key || key === 'not-configured') {
       logger.log(`[SpendReconciliation] ${providerConfig.provider}: admin key not configured, skipping`);
       skipped++;
@@ -91,7 +96,10 @@ export async function runSpendReconciliation({
   }
 
   if (configured.length === 0) {
-    logger.log(`[SpendReconciliation] Done: no provider admin key configured, ${skipped} skipped`);
+    logger.log(
+      `[SpendReconciliation] Done: no provider admin key configured, ${skipped} skipped` +
+        (failed > 0 ? `, ${failed} failed` : '')
+    );
     return { reconciled, skipped, failed };
   }
 

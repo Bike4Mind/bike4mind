@@ -122,6 +122,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.invite_link.created': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.invite_link.revoked': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.member_budget.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.budget_alerts.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.domain.added': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.domain.verified': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.domain.policy_updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
@@ -136,8 +137,24 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.api_key.created': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.rotated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.api_key.callback_secret_rotated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.access_updated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.member_revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.settings.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.logo.updated': { category: 'org', severity: 'info', write: 'bestEffort' },
+  // strict: written inside the delete transaction, so the delete never lands without its entry.
+  'org.deleted': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.slack.connected': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.created': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.deleted': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.secret_rotated': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.deliveries_replayed': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.github_connection.created': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.deleted': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.key_rotated': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.pat_rotated': { category: 'access', severity: 'notice', write: 'bestEffort' },
 
   'settings.admin_settings.updated': { category: 'settings', severity: 'notice', write: 'strict' },
   'settings.admin_settings.denied': { category: 'settings', severity: 'critical', write: 'bestEffort' },
@@ -377,6 +394,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // bestEffort: the AbuseAssessment record is the source of truth; an advisory assessment never acts.
   'security.detection.assessed': { category: 'access', severity: 'info', write: 'bestEffort' },
   'security.detection.replayed': { category: 'access', severity: 'info', write: 'bestEffort' },
+  // An admin agreeing with an abuse assessment on a user queue; records the suggestion decision only.
+  'security.ai_assessment.accepted': { category: 'access', severity: 'info', write: 'strict' },
   // bestEffort: the AbuseEvalSet record is the source of truth; evaluation sets are grading data and never act.
   'abuse.eval_set.created': { category: 'access', severity: 'info', write: 'bestEffort' },
   'abuse.eval_set.verdict_recorded': { category: 'access', severity: 'info', write: 'bestEffort' },
@@ -423,6 +442,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'admin.approval.executed': { category: 'access', severity: 'critical', write: 'bestEffort' },
   'admin.approval.failed': { category: 'access', severity: 'critical', write: 'bestEffort' },
   'admin.approval.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  // Admin roles (pages/api/admin/admin-roles). Editing a role's permissions is a grant to every member.
+  'admin.role.created': { category: 'access', severity: 'notice', write: 'strict' },
+  'admin.role.updated': { category: 'access', severity: 'critical', write: 'strict' },
+  'admin.role.deleted': { category: 'access', severity: 'notice', write: 'strict' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 
 export type AdminAuditAction = keyof typeof ADMIN_AUDIT_CATALOGUE;

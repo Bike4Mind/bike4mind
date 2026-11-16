@@ -55,10 +55,10 @@ const ONE_IMAGE_CREDITS = usdToCredits(new GeminiImageCostCalculator().getCost({
  * One user whose balance moves through a single atomic counter, like Mongo's $inc, and a hold port
  * built on the real holdCredits / settleCreditHold / releaseCreditHold.
  */
-const makeWallet = (balance: number) => {
+const makeWallet = (balance: number, userFields: Record<string, unknown> = {}) => {
   const state = { balance, ledger: [] as number[] };
   const users = {
-    findById: vi.fn(async (id: string) => ({ id, currentCredits: state.balance })),
+    findById: vi.fn(async (id: string) => ({ id, currentCredits: state.balance, ...userFields })),
     incrementCredits: vi.fn(async (id: string, delta: number) => {
       state.balance += delta;
       return { id, currentCredits: state.balance };
@@ -187,6 +187,19 @@ describe('ImageGenerationService credit hold', () => {
     expect(mockGeminiGenerate).toHaveBeenCalledTimes(1);
     expect(wallet.state.balance).toBeGreaterThanOrEqual(0);
     expect(wallet.state.balance + wallet.state.ledger.reduce((a, b) => a + b, 0)).toBe(ONE_IMAGE_CREDITS);
+  });
+
+  it('moves no credits and calls no provider when the account is blocked by the time the hold is placed', async () => {
+    // Admission is stubbed to pass, so the hold's own account check is the gate under test.
+    const wallet = makeWallet(ONE_IMAGE_CREDITS * 2, { isBanned: true });
+    const { run } = makeService(wallet);
+
+    await run('q1');
+
+    expect(wallet.users.incrementCredits).not.toHaveBeenCalled();
+    expect(wallet.state.balance).toBe(ONE_IMAGE_CREDITS * 2);
+    expect(wallet.state.ledger).toEqual([]);
+    expect(mockGeminiGenerate).not.toHaveBeenCalled();
   });
 
   it('refunds the whole hold when the provider fails', async () => {
