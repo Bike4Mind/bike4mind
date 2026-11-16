@@ -74,12 +74,29 @@ describe('ImageJobCard preview', () => {
 
   it('stops polling and says so when the scan outlasts the wait', () => {
     vi.useFakeTimers();
-    h.file = { data: { moderationStatus: 'pending' } };
-    renderCard();
-    expect(screen.getByTestId('image-job-image-loading')).toBeInTheDocument();
-
+    // Mount with no data, as the real first render does, so the deadline must start on the scan, not on mount.
+    const { rerender } = renderCard();
     act(() => {
       vi.advanceTimersByTime(IMAGE_SCAN_WAIT_MS);
+    });
+    expect(screen.getByTestId('image-job-image-loading')).toBeInTheDocument();
+
+    h.file = { data: { moderationStatus: 'pending' } };
+    rerender(<ImageJobCard job={savedJob} />);
+    act(() => {
+      vi.advanceTimersByTime(IMAGE_SCAN_WAIT_MS / 2);
+    });
+    // Each poll hands back a new data object; that must not push the deadline out.
+    h.file = { data: { moderationStatus: 'scanning' } };
+    rerender(<ImageJobCard job={savedJob} />);
+    act(() => {
+      vi.advanceTimersByTime(IMAGE_SCAN_WAIT_MS / 2 - 1);
+    });
+    expect(screen.getByTestId('image-job-image-loading')).toBeInTheDocument();
+    expect(h.useGetFabFile).toHaveBeenLastCalledWith(FILE_ID, { pollWhileScanning: true });
+
+    act(() => {
+      vi.advanceTimersByTime(1);
     });
     expect(screen.getByTestId('image-job-image-unavailable')).toHaveTextContent('could not be loaded');
     expect(h.useGetFabFile).toHaveBeenLastCalledWith(FILE_ID, { pollWhileScanning: false });
