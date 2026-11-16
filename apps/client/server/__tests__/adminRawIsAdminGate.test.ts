@@ -92,6 +92,7 @@ const OWNER_OR_ADMIN = new Map<string, string>([
   ['memory/[kind]/[id].ts', 'lake owner deletes lake memory; admin override in canShredLakeMemory'],
   ['oauth/federated-admin.ts', "reports target user's isAdmin as data to a relying party; no caller admin gate"],
   ['otc/verify.ts', 'sign-in; reads the signing-in account isAdmin as data for the self-host first-admin bootstrap'],
+  ['organizations/[id]/api-keys/[keyId]/callback-secret.ts', ORG_MANAGER_REASON],
   ['organizations/[id]/api-keys/[keyId]/index.ts', ORG_MANAGER_REASON],
   ['organizations/[id]/api-keys/[keyId]/revoke.ts', ORG_MANAGER_REASON],
   ['organizations/[id]/api-keys/[keyId]/rotate.ts', ORG_MANAGER_REASON],
