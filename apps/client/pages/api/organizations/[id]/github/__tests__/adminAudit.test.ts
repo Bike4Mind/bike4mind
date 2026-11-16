@@ -5,7 +5,7 @@ type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 
 const h = vi.hoisted(() => ({
   registered: {} as Record<string, Handler>,
-  verifyOrgOwner: vi.fn(),
+  verifyOrgPermission: vi.fn(),
   recordAdminActionFromRequest: vi.fn(async () => null),
   connectionRepo: {
     findByOrganizationId: vi.fn(),
@@ -27,7 +27,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => ({}) }));
-vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission: h.verifyOrgPermission }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: h.recordAdminActionFromRequest,
 }));
@@ -62,7 +62,7 @@ const ORG = { id: 'org-1', name: 'Acme' };
 describe('GitHub connection routes write team audit entries', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    h.verifyOrgOwner.mockResolvedValue(ORG);
+    h.verifyOrgPermission.mockResolvedValue(ORG);
   });
 
   it('records a PAT rotation without the token', async () => {
