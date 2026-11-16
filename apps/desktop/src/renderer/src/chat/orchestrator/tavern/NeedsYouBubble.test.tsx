@@ -103,6 +103,20 @@ describe('NeedsYouBubble', () => {
       expect(onSelect).toHaveBeenCalledWith('a');
     });
 
+    it('keeps the next wait on the same agent answerable after the first is answered', async () => {
+      chat.getSession.mockResolvedValue(sessionWith('a', [parkedCall('ap-1'), parkedCall('ap-2')]));
+      await renderTavern([agentFixture('a', 'needs-you')]);
+      await click('orchestrator-tavern-bubble-a-approve');
+      expect(chat.respondToApproval).toHaveBeenCalledWith('ap-1', { decision: 'once' });
+
+      // The agent is still waiting on the second call; the next push refreshes the snapshot.
+      chat.getSession.mockResolvedValue(sessionWith('a', [parkedCall('ap-2')]));
+      await renderTavern([agentFixture('a', 'needs-you', { updatedAt: '2026-10-01T00:00:01.000Z' })]);
+      expect(el('orchestrator-tavern-bubble-a-approve').hasAttribute('disabled')).toBe(false);
+      await click('orchestrator-tavern-bubble-a-approve');
+      expect(chat.respondToApproval).toHaveBeenLastCalledWith('ap-2', { decision: 'once' });
+    });
+
     it('shows a failed answer in the bubble and lets the user try again', async () => {
       chat.respondToApproval.mockRejectedValueOnce(new Error('Request expired'));
       await renderTavern([agentFixture('a', 'needs-you')]);
@@ -141,7 +155,7 @@ describe('NeedsYouBubble', () => {
     chat.getSession.mockImplementation(async (id: string) => sessionWith(id, [parkedCall(`ap-${id}`)]));
     await renderTavern(['a', 'b', 'c'].map(id => agentFixture(id, 'needs-you')));
     const bubble = 'orchestrator-tavern-bubble-b';
-    expect(el(`${bubble}-label`).textContent).toBe('Needs you! ×3');
+    expect(el(`${bubble}-label`).textContent).toBe('Needs you! \u00d73');
     expect(el(`${bubble}-prompt`).textContent).toMatch(/^.+: bash pnpm test$/);
 
     const names = new Set<string>();

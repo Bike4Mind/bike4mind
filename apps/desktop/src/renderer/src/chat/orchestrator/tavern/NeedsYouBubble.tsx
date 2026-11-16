@@ -9,7 +9,7 @@ import { type BubblePlan, planForCall, planForQuestion } from './bubbleAnswer';
 
 const PROMPT_MAX = 70;
 
-const truncate = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+const truncate = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}\u2026` : text);
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -22,6 +22,13 @@ function usePlan(agent: AgentView): BubblePlan {
     return planForQuestion(agent.decision.question, { via: 'decision', decisionId: agent.decision.id });
   }
   return planForCall(pendingCallsIn(messages)[0]);
+}
+
+/** The approval or decision a plan answers; Open answers nothing. */
+function waitIdOf(plan: BubblePlan): string | undefined {
+  if (plan.kind === 'approve') return plan.approvalId;
+  if (plan.kind === 'choose') return plan.target.via === 'decision' ? plan.target.decisionId : plan.target.approvalId;
+  return undefined;
 }
 
 // Pixel-sign buttons, drawn in the bubble's own ink so they read as part of it.
@@ -69,7 +76,7 @@ export function NeedsYouBubble({
     waiting.findIndex(agent => agent.id === focusedId)
   );
   const agent = waiting[index];
-  const label = waiting.length === 1 ? 'Needs you!' : `Needs you! ×${waiting.length}`;
+  const label = waiting.length === 1 ? 'Needs you!' : `Needs you! \u00d7${waiting.length}`;
   return (
     <Box
       data-testid={testId}
@@ -103,7 +110,7 @@ export function NeedsYouBubble({
             onClick={() => setFocusedId(waiting[(index + 1) % waiting.length].id)}
             sx={buttonSx}
           >
-            {'▸'}
+            {'\u25b8'}
           </Box>
         )}
       </Box>
@@ -135,23 +142,32 @@ function AgentAnswer({
   testId: string;
 }) {
   const plan = usePlan(agent);
-  const [sending, setSending] = useState(false);
+  // Ids of the waits already answered (or in flight). One agent can hold several waits at once, so
+  // this is per wait, not a single flag: the next wait stays answerable, and the one just answered
+  // stays disabled while the session snapshot catches up.
+  const [answered, setAnswered] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const waitId = waitIdOf(plan);
+  const sending = waitId !== undefined && answered.has(waitId);
 
-  const send = async (request: () => Promise<unknown>) => {
-    setSending(true);
+  const send = async (answeredId: string, request: () => Promise<unknown>) => {
+    setAnswered(previous => new Set(previous).add(answeredId));
     setError(null);
     try {
       await request();
     } catch (caught) {
       setError(errorText(caught));
-      setSending(false);
+      setAnswered(previous => {
+        const next = new Set(previous);
+        next.delete(answeredId);
+        return next;
+      });
     }
   };
   const respond = (approvalId: string, answer: ChatApprovalAnswer) =>
-    void send(() => window.b4m.chat.respondToApproval(approvalId, answer));
+    void send(approvalId, () => window.b4m.chat.respondToApproval(approvalId, answer));
   const decide = (decisionId: string, answer: TaskDecisionAnswer) =>
-    void send(() => window.b4m.chat.answerTaskDecision(agent.id, decisionId, answer));
+    void send(decisionId, () => window.b4m.chat.answerTaskDecision(agent.id, decisionId, answer));
 
   const prompt = plan.kind === 'approve' ? plan.summary : plan.prompt;
   const open = (
