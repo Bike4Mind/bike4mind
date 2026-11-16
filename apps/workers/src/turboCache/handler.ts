@@ -1,6 +1,7 @@
 import { GetObjectCommand, PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createS3Client } from '@bike4mind/fab-pipeline';
+import { Logger } from '@bike4mind/observability';
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { timingSafeEqual } from 'node:crypto';
 import { Resource } from 'sst';
@@ -13,6 +14,8 @@ const PRESIGNED_URL_EXPIRY = 900; // 15 minutes
 // short limits how long an issued upload URL can be replayed, including after a token rotation.
 const UPLOAD_URL_EXPIRY = 60;
 const TEAM_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+// Always JSON so a CloudWatch metric filter can match the rejection line.
+const logger = new Logger({ metadata: { service: 'turboCache' }, logInJson: true });
 
 function bucketName(): string {
   const name = process.env.TURBO_CACHE_BUCKET;
@@ -28,16 +31,13 @@ function artifactKey(hash: string, team?: string): string {
 // One structured line per refused credential, so a metric filter can count 401/403s on this public
 // URL. Never includes the Authorization header or any part of the token.
 function logRejected(event: APIGatewayProxyEventV2, statusCode: 401 | 403, reason: string): void {
-  console.warn(
-    JSON.stringify({
-      msg: 'turbo cache request rejected',
-      statusCode,
-      reason,
-      method: event.requestContext.http.method,
-      path: event.rawPath,
-      sourceIp: event.requestContext.http.sourceIp,
-    })
-  );
+  logger.warn('turbo cache request rejected', {
+    statusCode,
+    reason,
+    method: event.requestContext.http.method,
+    path: event.rawPath,
+    sourceIp: event.requestContext.http.sourceIp,
+  });
 }
 
 function unauthorized(event: APIGatewayProxyEventV2): APIGatewayProxyStructuredResultV2 {

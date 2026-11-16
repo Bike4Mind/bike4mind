@@ -123,7 +123,13 @@ describe('turboCache handler', () => {
     );
     const lines = warn.mock.calls.map(call => JSON.parse(String(call[0])));
     expect(lines).toEqual([
-      expect.objectContaining({ statusCode: 401, method: 'GET', path: '/v8/artifacts/abc123', sourceIp: '127.0.0.1' }),
+      expect.objectContaining({
+        message: 'turbo cache request rejected',
+        statusCode: 401,
+        method: 'GET',
+        path: '/v8/artifacts/abc123',
+        sourceIp: '127.0.0.1',
+      }),
       expect.objectContaining({ statusCode: 403, method: 'OPTIONS', path: '/v8/artifacts/abc123' }),
     ]);
     const logged = warn.mock.calls.flat().join(' ');
@@ -207,7 +213,10 @@ describe('turboCache handler', () => {
     expect(result.statusCode).toBe(409);
     expect(result.headers?.location).toBeUndefined();
     expect(mockGetSignedUrl).not.toHaveBeenCalled();
-    expect(mockSend.mock.calls[0][0].input).toEqual({ Bucket: 'test-turbo-cache-bucket', Key: 'bike4mind/abc123def456' });
+    expect(mockSend.mock.calls[0][0].input).toEqual({
+      Bucket: 'test-turbo-cache-bucket',
+      Key: 'bike4mind/abc123def456',
+    });
   });
 
   it('rethrows unexpected S3 errors on the upload existence check', async () => {

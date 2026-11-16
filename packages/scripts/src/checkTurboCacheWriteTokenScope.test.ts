@@ -27,7 +27,10 @@ function workflowTriggers(contents: string): string[] {
   const lines = contents.split(/\r?\n/);
   const start = lines.findIndex(line => /^(on|'on'|"on"):/.test(line));
   if (start === -1) return [];
-  const inline = lines[start].replace(/^(on|'on'|"on"):/, '').replace(/#.*$/, '').trim();
+  const inline = lines[start]
+    .replace(/^(on|'on'|"on"):/, '')
+    .replace(/#.*$/, '')
+    .trim();
   if (inline) {
     return inline
       .replace(/^\[|\]$/g, '')
@@ -88,7 +91,8 @@ describe('Turborepo cache write token scope', () => {
   });
 
   it('leaves read-token workflows alone', () => {
-    const workflow = 'on:\n  pull_request:\njobs:\n  ci:\n    env:\n      TURBO_TOKEN: ${{ secrets.TURBO_CACHE_READ_TOKEN }}\n';
+    const workflow =
+      'on:\n  pull_request:\njobs:\n  ci:\n    env:\n      TURBO_TOKEN: ${{ secrets.TURBO_CACHE_READ_TOKEN }}\n';
     expect(writeTokenProblems(workflow)).toEqual([]);
   });
 

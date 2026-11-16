@@ -33,7 +33,7 @@ Self-hosted Turborepo remote cache backed by S3 and a Lambda Function URL.
   artifact is never replaced through the cache API. Upload URLs expire after 60
   seconds; download URLs after 15 minutes.
 - Each refused credential (401, or 403 for a read-only upload) logs one JSON line
-  with `msg: "turbo cache request rejected"`, method, path and source IP, never the
+  with `message: "turbo cache request rejected"`, method, path and source IP, never the
   token, so a CloudWatch metric filter can count them.
 
 ## Contract-gate exception
