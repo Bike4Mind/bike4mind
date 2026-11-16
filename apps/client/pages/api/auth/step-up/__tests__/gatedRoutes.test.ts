@@ -70,6 +70,9 @@ vi.mock('@server/middlewares/baseApi', async () => {
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: Middleware) => fn }));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: h.passThrough }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: h.passThrough }));
+vi.mock('@server/utils/recipientSendLimits', () => ({
+  reserveRecipientSendBudget: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/auditLog', () => ({ logAuditEvent: vi.fn(), EmailAuditEvents: {} }));
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));

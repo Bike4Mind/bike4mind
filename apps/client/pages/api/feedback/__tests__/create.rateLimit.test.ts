@@ -19,7 +19,8 @@ vi.mock('@server/middlewares/baseApi', () => {
   };
   return { baseApi: () => chain };
 });
-vi.mock('@bike4mind/database', () => ({
+vi.mock('@bike4mind/database', async importOriginal => ({
+  ...(await importOriginal<object>()),
   FeedbackModel: {},
   FeedbackTextModel: {},
   adminSettingsRepository: {},
@@ -30,6 +31,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsMap: vi.fn(),
   getSettingsValue: vi.fn(),
 }));
+vi.mock('@server/utils/recipientSendLimits', () => ({ reserveRecipientSendBudget: vi.fn() }));
 vi.mock('@server/utils/feedbackReadAudit', () => ({ recordFeedbackRead: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postFeedbackToSlack: vi.fn() }));
