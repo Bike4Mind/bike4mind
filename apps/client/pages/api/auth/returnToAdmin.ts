@@ -2,6 +2,7 @@ import { userRepository, authSessionRepository, realtimeConnectionRepository } f
 import { authSessionService } from '@bike4mind/services';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
@@ -98,7 +99,7 @@ const handler = baseApi({ auth: false })
     }
 
     return respond(res, selfSessionResponseSchema, {
-      user: redactUserSecretsForSelf(restored.user),
+      user: redactUserSecretsForSelf(await resolveRoleAdminPermissions(restored.user)),
       accessToken: restored.accessToken,
       impersonating: false,
     });
