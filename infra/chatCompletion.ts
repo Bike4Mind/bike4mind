@@ -200,7 +200,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   loadBalancer: {
     public: true,
     ...(originDomain && originCertificateArn
-      ? { domain: { name: originDomain, cert: originCertificateArn, dns: originDns } }
+      ? { domain: { name: originDomain, cert: originCertificateArn, dns: false } }
       : {}),
     rules: [
       ...(originDomain ? ([{ listen: '443/https', forward: '8080/http' }] as const) : []),
@@ -329,9 +329,6 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
             .apply(eips => $util.all(eips.map(e => e.publicIp)))
             .apply(ips => ips.map(ip => `${ip}/32`));
 
-      // The description is immutable, so a new value replaces the group: the load balancer moves
-      // to a complete ingress set instead of having its live rules revoked and re-authorized.
-      sgArgs.description = 'ChatCompletion load balancer: CloudFront edge and VPC NAT, ports 80-443';
       // One rule per source spanning the listener ports: the CloudFront prefix list counts its
       // full entry limit against the group's rule quota for every rule that references it, so a
       // rule per port does not fit.
@@ -372,6 +369,19 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   },
 });
 
+// The alias record is created here, not by the Service (`dns: false` above), so the routes can
+// wait for it: the returned URL resolves only once the origin name points at the load balancer.
+// Until then the name is answered by the app host's wildcard record.
+function routableOriginUrl(domainName: string) {
+  const loadBalancer = chatCompletion.nodes.loadBalancer;
+  const aliasRecords = originDns.createAlias(
+    'ChatCompletionOrigin',
+    { name: domainName, aliasName: loadBalancer.dnsName, aliasZone: loadBalancer.zoneId },
+    {}
+  );
+  return $util.all([chatCompletion.url, ...aliasRecords.map(record => record.id)]).apply(([url]) => url);
+}
+
 // Allow the service's internal ALB to reach the task on the container port (8080).
 // The cluster pins the VPC's shared `default` security group for tasks (see infra/vpc.ts),
 // which has no ingress for 8080 — so the ALB's health checks time out, the target is marked
@@ -391,14 +401,15 @@ if (!$dev) {
   // on the shared dev distribution (empty on deployed dev/production). Guarded on !$dev because
   // the load balancer (and thus `.url`) only exists when the Service runs in the cloud - under
   // `sst dev` it runs via dev.command with no ALB, and the CLI reaches it on localhost:8788.
-  router.route(`${routePrefix}/api/ai/v1/completions`, chatCompletion.url);
+  const originUrl = originDomain ? routableOriginUrl(originDomain) : chatCompletion.url;
+  router.route(`${routePrefix}/api/ai/v1/completions`, originUrl);
 
   // Public embed chat endpoint (epic #41 Phase B). Same always-on origin as the
   // completions routes, so it inherits their all-viewer forwarding: the browser
   // Origin header and the OPTIONS preflight reach the container (the route sets
   // its own per-origin CORS), and the SSE stream is not cached. Only the chat
   // path is on this origin; /api/embed/session is a normal Next app route.
-  router.route(`${routePrefix}/api/embed/chat`, chatCompletion.url);
+  router.route(`${routePrefix}/api/embed/chat`, originUrl);
 
   const defaultSecurityGroupId = aws.ec2
     .getSecurityGroupsOutput({
