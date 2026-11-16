@@ -13,7 +13,10 @@ import {
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
 // Only what leaves the database is stubbed; every purge step that writes Mongo runs for real.
-vi.mock('@bike4mind/server-utils/users/purgeAccountFiles', () => ({ purgeAccountFiles: vi.fn() }));
+vi.mock('@bike4mind/server-utils/users/purgeAccountFiles', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/users/purgeAccountFiles')>()),
+  purgeAccountFiles: vi.fn(),
+}));
 vi.mock('@bike4mind/server-utils/users/accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: vi.fn() }));
 vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({ emitBillingEvent: vi.fn() }));
 vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', async importOriginal => ({
@@ -168,7 +171,7 @@ async function seedAccount(source: 'self' | 'admin' = 'admin') {
   // Soft-deleted rows still name the person and must go too.
   await insert('Project', { name: 'Trashed project', userId, deletedAt: new Date() });
   await insert('DeepAgentEpisode', { agentId, deletedAt: new Date() });
-  return { userId, email: `erase-${userId}@example.test`, sharedNotebook, teamRows, other: String(other) };
+  return { userId, email: `erase-${userId}@example.test`, sharedNotebook, teamRows, other: String(other), shared };
 }
 
 describe('admin erasure against the real data holder registry', () => {
@@ -209,6 +212,27 @@ describe('admin erasure against the real data holder registry', () => {
     });
     expect(await inboxRepository.findByReceiverId(other)).toEqual([]);
     expect(await mongoose.model('Inbox').collection.countDocuments({ receiverId: other })).toBe(0);
+  });
+
+  it('erases a personal file with its chunks and leaves a team file and its chunks in place', async () => {
+    const { userId, shared } = await seedAccount();
+    const personalFile = await insert('FabFile', { userId, fileName: 'personal.txt' });
+    const teamFile = await insert('FabFile', { userId, fileName: 'team.txt', organizationId: String(shared) });
+    const personalChunk = await insert('FabFileChunk', { fabFileId: String(personalFile), text: 'mine' });
+    const teamChunk = await insert('FabFileChunk', { fabFileId: String(teamFile), text: 'team' });
+
+    await expect(completeAccountDeletion(userId, { logger: logger as never, erasureRegistry })).resolves.toEqual({
+      deleted: true,
+    });
+
+    const files = mongoose.model('FabFile').collection;
+    const chunks = mongoose.model('FabFileChunk').collection;
+    expect(await files.findOne({ _id: personalFile })).toBeNull();
+    expect(await chunks.findOne({ _id: personalChunk })).toBeNull();
+    const kept = await files.findOne({ _id: teamFile });
+    expect(kept).not.toBeNull();
+    expect(String(kept!.userId)).not.toBe(userId);
+    expect(await chunks.findOne({ _id: teamChunk })).not.toBeNull();
   });
 });
 
