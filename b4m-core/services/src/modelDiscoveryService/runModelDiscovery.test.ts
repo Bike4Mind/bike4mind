@@ -1504,19 +1504,30 @@ describe('runModelDiscovery', () => {
       expect(second.passes).toBeGreaterThanOrEqual(2);
     });
 
-    it('words a per-image literal as priced in this build, which no trusted source quotes', async () => {
+    it('promotes an image model on its build literal, which no source quotes', async () => {
       const image: DiscoveredModel = {
+        modelId: 'gpt-image-2',
+        patch: { ...gpt6.patch, id: 'gpt-image-2', name: 'GPT Image 2', type: 'image' },
+      };
+      const imaging = harness([openaiSource([image])], { modelDiscoveryAutoEnable: 'priced' });
+
+      const result = await runModelDiscovery(imaging.adapters, imaging.options);
+
+      expect(result.diff[0].blockedBy ?? []).not.toContain('no-trusted-price');
+      expect(imaging.catalog.rows[0].patch).toMatchObject({ lifecycle: { status: 'active' }, autoDisabled: false });
+    });
+
+    it('words a text-typed id whose only literal is non-text as awaiting a price', async () => {
+      const mistyped: DiscoveredModel = {
         modelId: 'gpt-image-1',
         patch: { ...gpt6.patch, id: 'gpt-image-1', name: 'GPT Image 1' },
       };
-      const imaging = harness([openaiSource([image])]);
+      const imaging = harness([openaiSource([mistyped])]);
 
       const result = await runModelDiscovery(imaging.adapters, imaging.options);
 
       expect(result.diff[0].blockedBy).toContain('no-trusted-price');
-      expect(imaging.catalog.rows[0].patch).toMatchObject({
-        autoDisabledReason: 'discovered, priced in this build per image or minute, no trusted per-token price',
-      });
+      expect(imaging.catalog.rows[0].patch).toMatchObject({ autoDisabledReason: 'discovered, awaiting price' });
     });
 
     it('still blocks a model with neither a literal, a row, nor a trusted source price', async () => {

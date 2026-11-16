@@ -52,7 +52,7 @@ import {
   recordOperationalUsage,
 } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
-import { reserveRequestCredits, type CreditReservation } from '@server/billing/reserveRequestCredits';
+import { reserveRequestCredits, type CreditReservation } from '@bike4mind/server-utils/billing/reserveRequestCredits';
 import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
 import { activePlanResolver } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 import { getEmbeddingModelCost, provenancePayloadShape } from '@bike4mind/common';

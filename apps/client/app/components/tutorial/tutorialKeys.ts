@@ -3,3 +3,4 @@ export const tutorialProgressKey = (apiBase: string) => [apiBase, 'tutorial', 'p
 export const tutorialModulesKey = (apiBase: string) => [apiBase, 'tutorial', 'modules'] as const;
 export const tutorialAdminModulesKey = (apiBase: string) => [apiBase, 'tutorial', 'admin-modules'] as const;
 export const tutorialSwitchKey = (apiBase: string) => [apiBase, 'tutorial', 'switch'] as const;
+export const tutorialDraftsKey = (apiBase: string) => [apiBase, 'tutorial', 'drafts'] as const;

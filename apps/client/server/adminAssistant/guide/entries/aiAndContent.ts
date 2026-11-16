@@ -2,6 +2,21 @@ import type { AdminGuideEntry } from '../types';
 
 export const AI_AND_CONTENT_GUIDE: readonly AdminGuideEntry[] = [
   {
+    id: 'ai-operations',
+    title: 'AI operations',
+    summary: 'Reviews admin AI spend, agreement and readiness, with audited global, feature and class controls.',
+    views: ['admin.ai_operations'],
+    settings: ['adminAiConfig'],
+    howTo: [
+      'Review spend, daily calls, skipped attempts and agreement before changing a budget or mode.',
+      'Enable admin AI and configure monthly and per-feature budgets and call caps. Zero caps stop calls.',
+      'Record policy-versioned offline replay evidence before Recommend becomes available. Act also requires a registered action handler; none are registered by default.',
+      'Save changes from the save bar. Manual controls remain available when AI is off or a budget is exhausted.',
+      'The Dashboard morning brief shows operational facts and links to queues needing a person. Scheduled Slack delivery is an explicit deployment opt-in.',
+    ],
+    keywords: ['admin AI', 'autonomy', 'budget', 'replay evidence', 'morning brief', 'shadow mode'],
+  },
+  {
     id: 'admin-settings',
     title: 'Admin Settings',
     summary:

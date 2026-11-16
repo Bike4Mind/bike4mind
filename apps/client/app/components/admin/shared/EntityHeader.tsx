@@ -9,11 +9,13 @@ export function CopyValue({
   value,
   label,
   mono,
+  truncate = false,
   'data-testid': testId,
 }: {
   value: string;
   label: string;
   mono?: boolean;
+  truncate?: boolean;
   'data-testid'?: string;
 }) {
   const [result, setResult] = useState<'idle' | 'copied' | 'error'>('idle');
@@ -25,27 +27,35 @@ export function CopyValue({
       setResult('error');
     }
   };
+  const text = (
+    <Typography
+      component="span"
+      level="body-sm"
+      noWrap={truncate}
+      tabIndex={truncate ? 0 : undefined}
+      sx={{
+        color: 'admin.inkMuted',
+        ...(truncate ? { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } : { overflowWrap: 'anywhere' }),
+        ...(mono && { fontFamily: 'code', fontSize: 12 }),
+      }}
+    >
+      {value}
+    </Typography>
+  );
   return (
     <Stack component="span" direction="row" gap={0.5} alignItems="center" sx={{ minWidth: 0 }}>
-      <Typography
-        component="span"
-        level="body-sm"
-        sx={{
-          color: 'admin.inkMuted',
-          overflowWrap: 'anywhere',
-          ...(mono && { fontFamily: 'code', fontSize: 12 }),
-        }}
-      >
-        {value}
-      </Typography>
+      {truncate ? <Tooltip title={value}>{text}</Tooltip> : text}
       <Tooltip title={result === 'copied' ? 'Copied' : `Copy ${label}`}>
         <IconButton
           size="sm"
           variant="plain"
           aria-label={`Copy ${label}`}
-          onClick={() => void copy()}
+          onClick={event => {
+            event.stopPropagation();
+            void copy();
+          }}
           data-testid={testId ?? `admin-entity-copy-${label}-btn`}
-          sx={{ '--IconButton-size': '22px', minHeight: 22, minWidth: 22, color: 'admin.inkMuted' }}
+          sx={{ flexShrink: 0, '--IconButton-size': '22px', minHeight: 22, minWidth: 22, color: 'admin.inkMuted' }}
         >
           {result === 'copied' ? (
             <CheckRoundedIcon sx={{ fontSize: 14 }} />

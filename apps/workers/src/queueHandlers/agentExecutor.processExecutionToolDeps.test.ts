@@ -6,7 +6,7 @@ import type { ServerSubagentTracker } from '@bike4mind/services/llm';
 import { OPTI_SURFACE, isShadowTier } from '@bike4mind/common';
 
 // Model admission reads admin settings from the real repository; these tests exercise other gates.
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
 }));
 
@@ -1035,6 +1035,74 @@ describe('processExecution tool deps', () => {
     const deps = await runWithSession({ ...baseSession, includeLibraryFiles: false, forceKnowledgeRetrieval: false });
 
     expect(deps.sessionIncludeLibraryFiles).toBe(true);
+  });
+
+  describe('in-process subagent account check', () => {
+    type StepTracker = {
+      onStep: (info: {
+        childExecutionId: string;
+        agentName: string;
+        step: unknown;
+        iteration: number;
+      }) => Promise<void>;
+    };
+    async function runToolWiring() {
+      await runWithSession(baseSession);
+      const [, callbacks, options] = buildSharedToolsMock.mock.calls[0] as [
+        unknown,
+        { subagentTracker: StepTracker },
+        { getAbortSignal: () => AbortSignal },
+      ];
+      return { tracker: callbacks.subagentTracker, signal: options.getAbortSignal() };
+    }
+    const step = (iteration: number) => ({
+      childExecutionId: 'child-1',
+      agentName: 'researcher',
+      step: { type: 'thought', content: 'x' },
+      iteration,
+    });
+
+    it("aborts the run's tool signal when a child step finds the account blocked", async () => {
+      const { userRepository } = await import('@bike4mind/database');
+      const { tracker, signal } = await runToolWiring();
+      vi.spyOn(userRepository, 'findById').mockResolvedValueOnce({ id: 'user-1', isBanned: true } as never);
+
+      await tracker.onStep(step(0));
+
+      expect(signal.aborted).toBe(true);
+    });
+
+    it('records a child stopped by the account abort as refused, not timed out', async () => {
+      const { userRepository, agentExecutionRepository } = await import('@bike4mind/database');
+      const { tracker } = await runToolWiring();
+      vi.spyOn(userRepository, 'findById').mockResolvedValueOnce({ id: 'user-1', isBanned: true } as never);
+      await tracker.onStep(step(0));
+
+      await (
+        tracker as unknown as {
+          onFailure: (info: { childExecutionId: string; error: string; isTimeout: boolean }) => Promise<void>;
+        }
+      ).onFailure({ childExecutionId: 'child-1', error: 'timed out', isTimeout: true });
+
+      expect(agentExecutionRepository.markFailed).toHaveBeenCalledWith('child-1', {
+        message: expect.not.stringContaining('timed out'),
+        timedOut: false,
+      });
+    });
+
+    it('reads the account once per child iteration and leaves an active run alone', async () => {
+      const { userRepository } = await import('@bike4mind/database');
+      const { tracker, signal } = await runToolWiring();
+      const findUser = vi.spyOn(userRepository, 'findById').mockResolvedValue({ id: 'user-1' } as never);
+
+      await tracker.onStep(step(0));
+      await tracker.onStep(step(0));
+      await tracker.onStep(step(1));
+
+      expect(findUser).toHaveBeenCalledTimes(2);
+      expect(findUser).toHaveBeenCalledWith('user-1');
+      expect(signal.aborted).toBe(false);
+    });
   });
 
   describe('contributed workspace session settings', () => {

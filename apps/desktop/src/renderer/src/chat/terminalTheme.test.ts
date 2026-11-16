@@ -11,4 +11,9 @@ describe('the terminal theme', () => {
     expect(theme.cursor).toBe(DARK_PALETTE.ink);
     expect(theme.selectionBackground).toBe(DARK_PALETTE.selected);
   });
+
+  it('falls back to the web light surface in light mode', () => {
+    const theme = xtermTheme(document.createElement('div'), 'light');
+    expect(theme.background?.toLowerCase()).toBe('#fbfcfe');
+  });
 });

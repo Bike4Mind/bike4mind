@@ -1,5 +1,11 @@
 import { Logger } from '@bike4mind/observability';
-import { IFabFileRepository, IProjectDocument, IProjectRepository, IUserDocument } from '@bike4mind/common';
+import {
+  IFabFileRepository,
+  IProjectDocument,
+  IProjectRepository,
+  IUserDocument,
+  withoutOrgApiKeyReach,
+} from '@bike4mind/common';
 import { BadRequestError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { canonicalId, distinctIdCount } from '../utils/objectIds';
@@ -44,7 +50,7 @@ export const addSystemPrompts = async (
       : found
   ) as IProjectDocument;
 
-  const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
+  const files = await db.fabFiles.shareable.findAllAccessibleByIds(withoutOrgApiKeyReach(user), fileIds);
   if (files.length !== distinctIdCount(fileIds)) throw new BadRequestError('Some files are not accessible');
 
   // Resolved ids, in REQUEST order: a doubled id - or the same id in two hex cases - would push two

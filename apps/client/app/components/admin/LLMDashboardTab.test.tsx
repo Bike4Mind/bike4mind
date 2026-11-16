@@ -28,12 +28,21 @@ const models: LLMModelConfig[] = [
 ];
 
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({
-  useModelInfo: () => ({ data: models, isLoading: false, error: null }),
+  useModelInfo: () => ({
+    data: models.map(model => ({ ...model, accessEntry: null })),
+    isLoading: false,
+    refetch: vi.fn(),
+    error: null,
+  }),
 }));
 
 vi.mock('@client/app/hooks/data/llmModelConfig', () => ({
-  useLLMModelConfigurationsWithDefaults: () => ({ data: models, isLoading: false }),
-  useSaveLLMModelConfigurations: () => ({ mutate: h.saveMutate, isPending: false }),
+  useLLMModelConfigurationsWithDefaults: () => ({
+    data: models.map(model => ({ ...model, accessEntry: null })),
+    isLoading: false,
+    refetch: vi.fn(),
+  }),
+  useSaveLLMModelConfigurations: () => ({ mutateAsync: h.saveMutate, isPending: false }),
 }));
 
 vi.mock('@client/app/hooks/data/user', () => ({
@@ -179,14 +188,15 @@ describe('LLMDashboardTab bulk selection', () => {
     fireEvent.click(screen.getByTestId('llm-dashboard-bulk-disable-btn'));
     search('');
     fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    fireEvent.click(screen.getByTestId('llm-dashboard-save-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('llm-dashboard-save-dialog-confirm-btn'));
 
     expect(h.saveMutate).toHaveBeenCalledTimes(1);
-    const saved = h.saveMutate.mock.calls[0][0] as LLMModelConfig[];
-    expect(saved.map(model => [model.id, model.enabled])).toEqual([
+    const saved = h.saveMutate.mock.calls[0][0] as import('@bike4mind/common').ModelAccessSaveRequest;
+    expect(saved.reason).toBe('Update model availability');
+    expect(saved.changes.map(model => [model.id, model.change.enabled])).toEqual([
       ['gpt-5-preview', false],
       ['claude-opus-preview', false],
-      ['gpt-5', true],
-      ['flux-pro', false],
     ]);
   });
 

@@ -38,7 +38,7 @@ vi.mock('@bike4mind/database', () => ({
 
 const mockVerifyOrgOwner = vi.fn();
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
-  verifyOrgOwner: (...a: unknown[]) => mockVerifyOrgOwner(...a),
+  verifyOrgAccess: (...a: unknown[]) => mockVerifyOrgOwner(...a),
 }));
 
 vi.mock('@server/utils/resolveUserNames', () => ({
@@ -76,6 +76,7 @@ function call(options: {
 const emptySummary = {
   overTime: [],
   byMember: [],
+  byProject: [],
   byModel: [],
   byFeature: [],
   totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },
@@ -117,6 +118,26 @@ describe('GET /api/usage - access', () => {
   });
 
   describe('Organization owner', () => {
+    it('returns manager-readable project usage without billing mutations', async () => {
+      mockVerifyOrgOwner.mockResolvedValue({
+        id: ORG,
+        userId: 'owner',
+        adminUserIds: [SELF],
+        users: [{ userId: SELF }],
+      });
+      mockOwnerUsageSummary.mockResolvedValue({
+        ...emptySummary,
+        byProject: [{ projectId: null, requests: 1, creditsCharged: 3, cogsUsd: 0.01 }],
+      });
+      const { run, res } = call({ query: { ownerType: 'Organization', ownerId: ORG, days: '7' } });
+      await run();
+      expect(mockVerifyOrgOwner).toHaveBeenCalledWith({ id: SELF, isAdmin: false }, ORG);
+      expect(mockOwnerUsageSummary).toHaveBeenCalledWith(ORG, 'Organization', 7);
+      expect(res._getJSONData().byProject).toEqual([
+        { projectId: null, requests: 1, creditsCharged: 3, cogsUsd: 0.01 },
+      ]);
+    });
+
     it('gates access through verifyOrgOwner for the requested org', async () => {
       const { run } = call({ isAdmin: false });
       await run();

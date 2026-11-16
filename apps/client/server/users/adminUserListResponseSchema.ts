@@ -14,7 +14,7 @@ const ADMIN_USER_ROW_KEYS = Object.fromEntries([...ADMIN_USER_LIST_FIELDS, 'id']
 const adminUserRowSchema = z.object({
   ...passthroughShape(ADMIN_USER_ROW_KEYS),
   mfa: z
-    .object(passthroughShape({ totpEnabled: true, setupAt: true, lastUsedAt: true }))
+    .object(passthroughShape({ totpEnabled: true, passkeyEnabled: true, setupAt: true, lastUsedAt: true }))
     .nullable()
     .optional(),
   pendingInvite: z.boolean().optional(),

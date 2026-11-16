@@ -9,7 +9,7 @@ import {
   raceAbort,
   toDataUrl,
 } from '../shared';
-import type { ImageInputs, ImageProvider } from '../types';
+import type { ImageInputs, SyncImageProvider } from '../types';
 
 type Rendered = { kind: 'image'; dataUrl: string } | { kind: 'clarification'; question: string };
 
@@ -18,7 +18,7 @@ type Rendered = { kind: 'image'; dataUrl: string } | { kind: 'clarification'; qu
  * format, quality or seed for these models, so only the prompt and the input image reach Gemini. A generate
  * reference makes it image-to-image, which the service serves through its edit call (as the chat path does).
  */
-export class GeminiImageProvider implements ImageProvider {
+export class GeminiImageProvider implements SyncImageProvider {
   readonly mode = 'sync' as const;
   readonly id = 'gemini' as const;
   readonly models = GEMINI_IMAGE_MODELS;

@@ -38,7 +38,7 @@ import {
   resolveShadowSubstitute,
   settleCompletion,
   type CompletionUsage,
-} from '@server/billing/meterPlatformCompletion';
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 /** Max tokens for the LLM response */
 const MAX_RESPONSE_TOKENS = 1000;

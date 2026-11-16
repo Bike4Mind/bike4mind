@@ -35,6 +35,10 @@ const mockFindByOrganizationId = vi.fn();
 const mockWorkspaceDelete = vi.fn();
 const mockClearApiPosting = vi.fn();
 const mockRecordAudit = vi.fn();
+const mockOrgAudit = vi.fn();
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({
+  recordOrganizationAuditEventSafe: (...args: unknown[]) => mockOrgAudit(...args),
+}));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...args: unknown[]) => mockRecordAudit(...args),
 }));
@@ -173,6 +177,11 @@ describe('DELETE /api/organizations/[id]/integrations/slack', () => {
     // The id of the resolved workspace, not the org id: deleting by the wrong key would still
     // satisfy a bare "was it called" assertion.
     expect(mockWorkspaceDelete).toHaveBeenCalledWith('ws_1');
+    expect(mockOrgAudit).toHaveBeenCalledWith({
+      organizationId: ORG,
+      actorUserId: OWNER,
+      action: 'connector.disconnected',
+    });
     expect(res.statusCode).toBe(200);
     expect(res._getJSONData()).toMatchObject({ success: true });
     expect(mockClearApiPosting).toHaveBeenCalledWith('T1');

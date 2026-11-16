@@ -121,11 +121,18 @@ const SUGGESTION = {
   suggestedAt: new Date('2026-07-20T00:00:00Z'),
 };
 
-function call(options: { method: 'GET' | 'POST'; isAdmin?: boolean; query?: object; body?: object }) {
+function call(options: {
+  method: 'GET' | 'POST';
+  isAdmin?: boolean;
+  adminPermissions?: string[];
+  query?: object;
+  body?: object;
+}) {
   const { req, res } = createMocks({ method: options.method, query: options.query ?? {}, body: options.body });
-  (req as unknown as { user: { isAdmin: boolean; id: string } }).user = {
+  (req as unknown as { user: { isAdmin: boolean; id: string; adminPermissions?: string[] } }).user = {
     isAdmin: options.isAdmin ?? true,
     id: 'admin-1',
+    ...(options.adminPermissions ? { adminPermissions: options.adminPermissions } : {}),
   };
   return { req, res, run: () => (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res) };
 }
@@ -263,6 +270,17 @@ describe('POST /api/admin/model-deprecation-status', () => {
   it('rejects non-admin users', async () => {
     const { run } = call({ method: 'POST', isAdmin: false, body: { modelId: 'gpt-sunset', action: 'dismiss' } });
     await expect(run()).rejects.toThrow(/missing permission/i);
+    expect(mockResolveSuggestion).not.toHaveBeenCalled();
+  });
+
+  it('refuses a delegate holding settings:manage', async () => {
+    const { run } = call({
+      method: 'POST',
+      isAdmin: false,
+      adminPermissions: ['settings:manage'],
+      body: { modelId: 'gpt-sunset', action: 'dismiss' },
+    });
+    await expect(run()).rejects.toMatchObject({ statusCode: 403 });
     expect(mockResolveSuggestion).not.toHaveBeenCalled();
   });
 

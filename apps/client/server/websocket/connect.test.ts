@@ -28,7 +28,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 const mockVerifyApiKey = vi.fn();
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyApiKey: (...args: unknown[]) => mockVerifyApiKey(...args),
 }));
 

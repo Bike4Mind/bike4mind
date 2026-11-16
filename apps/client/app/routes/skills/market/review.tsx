@@ -294,6 +294,7 @@ const ReportsQueue: FC = () => {
               </Typography>
               <Chip size="sm" color="danger" variant="soft">
                 {item.count} report{item.count > 1 ? 's' : ''}
+                {item.countingCount < item.count ? ` (${item.countingCount} count toward auto-hide)` : ''}
               </Chip>
               {item.listing.hiddenByReports ? (
                 <Chip size="sm" color="warning" variant="soft">

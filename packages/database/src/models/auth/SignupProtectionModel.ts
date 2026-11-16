@@ -199,6 +199,14 @@ export const signupDomainHoldListRepository = {
       limit: options.limit,
     }).exec();
   },
+  async oldestPendingAt(): Promise<Date | null> {
+    const row = await SignupDomainReviewModel.findOne(holdListQuery({ status: 'pending' }))
+      .sort({ triggeredAt: 1 })
+      .select({ triggeredAt: 1 })
+      .maxTimeMS(2000)
+      .lean();
+    return row?.triggeredAt ?? null;
+  },
   /** Rows per status view under the same reason filter and visibility window. */
   async countByStatus(
     filter: Omit<SignupDomainHoldListFilter, 'status'>

@@ -9,13 +9,17 @@ export { sessionGetContract } from './contracts/sessionGet.contract';
 export { sessionDeleteContract } from './contracts/sessionDelete.contract';
 export { sessionCloneContract } from './contracts/sessionClone.contract';
 export { executeToolContract } from './contracts/tools.contract';
+export { searchWebContract, fetchWebPageContract, getCurrentWeatherContract } from './contracts/webTools.contract';
 export { createCompletionContract } from './contracts/completions.contract';
+export { createCompletionRunContract } from './contracts/completionRuns.contract';
 export { synthesizeSpeechContract } from './contracts/tts.contract';
 export { generateMusicContract } from './contracts/music.contract';
 export { generateSoundEffectContract } from './contracts/soundEffects.contract';
 export { getMeContract } from './contracts/me.contract';
 export { getClientConfigContract } from './contracts/clientConfig.contract';
+export { approvePendingActionContract, denyPendingActionContract } from './contracts/pendingActions.contract';
 export { registerPushTokenContract, unregisterPushTokenContract } from './contracts/pushTokens.contract';
+export { mintPersonaContract, deletePersonaContract } from './contracts/personas.contract';
 export { getCreditBalanceContract } from './contracts/credits.contract';
 export { listModelsContract } from './contracts/models.contract';
 export { generateImageContract } from './contracts/imageGeneration.contract';
@@ -29,6 +33,7 @@ export {
   chunkFileContract,
   searchFilesContract,
   getFilesByIdsContract,
+  getFileLineageContract,
   bulkDeleteFilesContract,
 } from './contracts/files.contract';
 export { createEmbeddingsContract, listEmbeddingModelsContract } from './contracts/embeddings.contract';
@@ -117,6 +122,8 @@ export {
   generateAgentDescriptionContract,
   generateAgentSystemPromptContract,
   enhanceAgentFieldContract,
+  transferAgentCreditsContract,
+  createAgentFromContextContract,
 } from './contracts/agents.contract';
 export {
   getClaudeBundleZipContract,

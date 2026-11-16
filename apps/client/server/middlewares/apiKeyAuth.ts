@@ -10,7 +10,7 @@ import {
 import { UnauthorizedError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
-import { UserApiKeyEvents } from '@bike4mind/common';
+import { UserApiKeyEvents, attachOrgApiKeyReach, isOrgServiceAccountOf } from '@bike4mind/common';
 import ability from '@bike4mind/server-utils/auth/ability';
 import { Request, Response, NextFunction } from 'express';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
@@ -22,15 +22,20 @@ import { createHash } from 'crypto';
 import type { z } from 'zod';
 import {
   decideScopeGate,
+  isLegacyApiKey,
+  LEGACY_SCOPE_PASS_LOG,
   parseStagedScopes,
+  shouldLogLegacyPass,
   SCOPE_STAGING_ENV_VAR,
 } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 import { resolveRouteTemplate } from '@bike4mind/server-utils/utils/resolveRouteTemplate';
-import { refuseIfSuspendedOwner } from '@server/auth/suspendedApiKeyRefusal';
+import { refuseIfSuspendedOwner } from '@bike4mind/server-utils/auth/suspendedApiKeyRefusal';
 import { apiKeyGrantsAdmin, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { resolveUntrustedKeyLimits } from '@bike4mind/server-utils/utils/apiKeyTrust';
+import { resolveOrgApiKeyReach } from '@server/organizations/orgApiKeyReach';
 
 type ScopeForbiddenDetail = Pick<z.infer<typeof ScopeForbiddenErrorSchema>, 'required_scopes' | 'also_required_scopes'>;
 
@@ -73,11 +78,13 @@ const hashApiKeyForLogging = (apiKey: string): string => {
  * @param options.recordUse - `false` for routes the app calls on its own (baseApi's
  *   `recordsActivity: false`): the key's `lastUsedAt` is not stamped and no USED event is
  *   counted. ApiKeyUsageLog still records the call, as it does every authenticated request.
+ * @param options.grandfatherLegacyKeys - Admit legacy keys that miss `requiredScopes`
+ *   (baseApi's `grandfatherLegacyKeys`); see LEGACY_API_KEY_WINDOW in apiKeyScopeGate.ts.
  */
 export const apiKeyAuth = (
   requiredScopes?: ApiKeyScopeValue[],
   alsoRequiredScopes?: ApiKeyScopeValue[],
-  { recordUse = true }: { recordUse?: boolean } = {}
+  { recordUse = true, grandfatherLegacyKeys = false }: { recordUse?: boolean; grandfatherLegacyKeys?: boolean } = {}
 ) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     // If already authenticated via JWT, skip API key auth
@@ -139,7 +146,11 @@ export const apiKeyAuth = (
           });
         }
       }
-      const gate = decideScopeGate(requiredScopes, validation.scopes, staged, alsoRequiredScopes);
+      const grandfathered = grandfatherLegacyKeys && isLegacyApiKey(validation.createdAt);
+      const gate = decideScopeGate(requiredScopes, validation.scopes, staged, alsoRequiredScopes, {
+        grandfathered,
+        exchangeKey: !!validation.oauthExchangeClientId,
+      });
       if (gate.outcome !== 'allow') {
         // A scope 403 fires before req.apiKeyInfo is set, so log from `validation`
         // (never the raw key) - otherwise the only trace is errorHandler's generic warn.
@@ -156,6 +167,8 @@ export const apiKeyAuth = (
         };
         if (gate.outcome === 'stagedAllow') {
           req.logger?.warn('API key scope check missed but staged - allowing', context);
+        } else if (gate.outcome === 'legacyAllow') {
+          if (shouldLogLegacyPass(validation.keyId, endpointPath)) req.logger?.info(LEGACY_SCOPE_PASS_LOG, context);
         } else {
           req.logger?.warn('API key scope check failed', context);
           throw new ForbiddenError(
@@ -181,6 +194,8 @@ export const apiKeyAuth = (
       }
       // The same gate the JWT/CLI/WebSocket surfaces use, so the two cannot drift.
       assertAccountStateUsable(user);
+      // Before withholdAdminRole, which then hides the role permissions too for a key without the admin scope.
+      await resolveRoleAdminPermissions(user);
 
       // Must run before withholdAdminRole: admins bypass the paid-only switch.
       if (
@@ -190,6 +205,7 @@ export const apiKeyAuth = (
             billingOwnerType: validation.billingOwnerType,
             organizationId: validation.organizationId,
             createdByUserId: validation.createdByUserId,
+            oauthExchangeClientId: validation.oauthExchangeClientId,
           },
           req
         ))
@@ -216,6 +232,16 @@ export const apiKeyAuth = (
       // Admin authority over an API key comes from the key's scope, not from who minted it.
       if (!apiKeyGrantsAdmin(validation.scopes)) withholdAdminRole(user);
 
+      // An org-owned key reads org-shared content only through its own grants, resolved live here
+      // and attached before the ability below is built from this user (orgApiKeyReach.ts).
+      if (
+        validation.orgOwnedGrants &&
+        validation.organizationId &&
+        isOrgServiceAccountOf(user, validation.organizationId)
+      ) {
+        attachOrgApiKeyReach(user, await resolveOrgApiKeyReach(validation.organizationId, validation.orgOwnedGrants));
+      }
+
       req.apiKeyInfo = {
         keyId: validation.keyId!,
         scopes: validation.scopes!,
@@ -226,6 +252,8 @@ export const apiKeyAuth = (
         billingOwnerType: validation.billingOwnerType,
         organizationId: validation.organizationId,
         preauthorizedLakeIds: validation.preauthorizedLakeIds,
+        createdAt: validation.createdAt,
+        oauthExchangeClientId: validation.oauthExchangeClientId,
       };
 
       // Create CASL ability for the user

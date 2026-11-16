@@ -46,6 +46,43 @@ export class ProfilePage extends BasePage {
     }
   }
 
+  /**
+   * Profile > API Keys, on the My keys sub-tab once the gate's answer is in. Until the eligibility read
+   * lands the Create button renders enabled, so an "enabled" assertion made earlier proves nothing.
+   */
+  async gotoApiKeys() {
+    const eligibilityLoaded = this.page.waitForResponse(
+      r => new URL(r.url()).pathname === '/api/user-api-keys/eligibility' && r.request().method() === 'GET'
+    );
+    await this.gotoProfile();
+    await this.clickTab('API-keys');
+    expect((await eligibilityLoaded).status()).toBe(200);
+    await expect(this.page.getByTestId('api-keys-create-btn')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+  }
+
+  /** Profile > API Keys > API Documentation > Scopes. */
+  async gotoApiKeyScopesDocs() {
+    await this.gotoApiKeys();
+    await this.page.getByTestId('api-keys-docs-tab').click();
+    await this.page.getByTestId('api-keys-docs-scopes-tab').click();
+    await expect(this.page.getByTestId('api-keys-scopes-open-endpoints')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+  }
+
+  /** Creates a key through the New Key dialog with its default read-only scopes; returns the POST response. */
+  async createApiKeyInUi(name: string) {
+    await this.page.getByTestId('api-keys-create-btn').click();
+    await this.fillMuiInput(this.page.getByTestId('api-key-name-input').locator('input'), name);
+    const minted = this.page.waitForResponse(
+      r => new URL(r.url()).pathname === '/api/user-api-keys' && r.request().method() === 'POST'
+    );
+    await this.page.getByTestId('api-key-create-btn').click();
+    const response = await minted;
+    await expect(this.page.getByTestId('api-key-created-dialog')).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    await this.page.getByTestId('api-key-created-continue-btn').click();
+    await expect(this.page.getByTestId('api-key-created-dialog')).toBeHidden({ timeout: TIMEOUTS.ELEMENT_STATE });
+    return response;
+  }
+
   async clickEditProfile() {
     await this.page.getByTestId('profile-edit-btn').click({ timeout: TIMEOUTS.VISIBLE });
     // Wait for the Name field to render (first form field)

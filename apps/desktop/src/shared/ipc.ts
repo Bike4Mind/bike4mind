@@ -1,4 +1,5 @@
-import type { RolePolicy, TaskAction } from './orchestration';
+import type { NewSessionDefaults } from './sessionDefaults';
+import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
 import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopResult, LoopState } from './loop';
 import type { PromptCacheTtl } from '@bike4mind/common';
@@ -81,7 +82,7 @@ import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pul
 import type { LocalContextFit, LocalContextSetting } from './localContextSetting';
 import type { SidebarSectionsState } from './sidebarSections';
 import type { WorkspaceChanges } from './workspaceChanges';
-import type { SkillsState } from './skills';
+import type { SkillsScope, SkillsState } from './skills';
 import type { PermissionMutationResult, PermissionRuleLists, PermissionScope, PermissionsState } from './permissions';
 import type {
   SkillMarketDetailResult,
@@ -143,6 +144,7 @@ import type {
 } from './model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
 import type { LocalHistoryResult, LocalHistoryState } from './history';
+import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnapshot } from './watch';
 
 /**
  * IPC contract shared by the main process and the preload bridge.
@@ -205,6 +207,11 @@ export const IPC_CHANNELS = {
   chatGetRolePolicy: 'chat:get-role-policy',
   chatSetRolePolicy: 'chat:set-role-policy',
   chatTaskAction: 'chat:task-action',
+  chatListTaskDecisions: 'chat:list-task-decisions',
+  /** The user's answer on a worker's decision card. Renderer -> main only; no tool reaches it. */
+  chatAnswerTaskDecision: 'chat:answer-task-decision',
+  /** main -> renderer push; the whole list of decisions workers wait on the user for. */
+  chatTaskDecisions: 'chat:task-decisions',
   /**
    * The one way an approval mode changes. Renderer -> main only, driven by the composer pill:
    * there is deliberately no tool, no MCP surface and no model-facing path to this channel.
@@ -215,6 +222,7 @@ export const IPC_CHANNELS = {
   chatExportLocalData: 'chat:export-local-data',
   chatListSessions: 'chat:list-sessions',
   chatCreateSession: 'chat:create-session',
+  chatDraftDefaults: 'chat:draft-defaults',
   chatCreateCodeSession: 'chat:create-code-session',
   chatUpdateProject: 'chat:update-project',
   chatPickProjectDirectory: 'chat:pick-project-directory',
@@ -259,6 +267,8 @@ export const IPC_CHANNELS = {
   chatAddAttachments: 'chat:add-attachments',
   chatReadAttachment: 'chat:read-attachment',
   chatDiscardAttachment: 'chat:discard-attachment',
+  chatCopyDraftAttachments: 'chat:copy-draft-attachments',
+  chatDiscardDraftAttachments: 'chat:discard-draft-attachments',
   chatImageAction: 'chat:image-action',
   chatAttachImage: 'chat:attach-image',
   chatListArtifacts: 'chat:list-artifacts',
@@ -517,6 +527,9 @@ export const IPC_CHANNELS = {
   prDismiss: 'pr:dismiss',
   prRefresh: 'pr:refresh',
   prSetOption: 'pr:set-option',
+  /** The Settings auto-fix attempt budget; main validates it, see @shared/autoFixSetting. */
+  prGetAutoFixAttempts: 'pr:get-auto-fix-attempts',
+  prSetAutoFixAttempts: 'pr:set-auto-fix-attempts',
   /** main -> renderer push; one conversation's bar changed. */
   prStateChanged: 'pr:state-changed',
   /** The sidebar's PR icons. The read is of stored state only and never reaches GitHub. */
@@ -553,12 +566,26 @@ export const IPC_CHANNELS = {
   attentionOpen: 'attention:open',
   /** A notice clicked while no window was open, waiting for the window it reopened; see takePendingOpen. */
   attentionTakePendingOpen: 'attention:take-pending-open',
+  /** The menu-bar toggle, for Settings; see @shared/watch. */
+  watchGetPreferences: 'watch:get-preferences',
+  watchSetPreferences: 'watch:set-preferences',
+  /** main -> app windows push: a preference changed (e.g. hidden from the menu-bar item itself). */
+  watchPreferences: 'watch:preferences',
+  /** The mini Tavern window's own surface (preload/mini.ts); refused from any other window. */
+  watchGetSnapshot: 'watch:get-snapshot',
+  /** main -> mini Tavern push of the latest WatchSnapshot. */
+  watchSnapshot: 'watch:snapshot',
+  watchRespond: 'watch:respond',
+  watchFocusAgent: 'watch:focus-agent',
+  watchCloseMini: 'watch:close-mini',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
 
 export interface AppInfo {
   appVersion: string;
+  /** How an unpackaged run's `appVersion` was derived; absent for a packaged build. */
+  versionBasis?: string;
   electronVersion: string;
   nodeVersion: string;
   chromeVersion: string;
@@ -689,6 +716,21 @@ export type CreateCodeSessionIpcRequest = CreateCodeSessionRequest & CreateSessi
 export type CreateCodeSessionIpcResult = ({ ok: true } & CreatedSession) | { ok: false; error: string };
 
 /** The whole surface exposed on `window.b4m`. Mirrored in src/preload/index.d.ts. */
+/**
+ * Everything the mini Tavern window can reach, exposed as `window.b4mMini` by preload/mini.ts. Kept
+ * this narrow on purpose: the window floats over other apps all day, so it gets the watch snapshot
+ * and three actions, not the chat, auth or filesystem surface of `window.b4m`.
+ */
+export interface MiniTavernApi {
+  getSnapshot(): Promise<WatchSnapshot>;
+  onSnapshot(listener: (snapshot: WatchSnapshot) => void): () => void;
+  /** Approve once or deny a quick request; false when it was not answerable from here. */
+  respond(approvalId: string, decision: WatchDecision): Promise<boolean>;
+  /** Raise the main window on this agent, the way clicking its notification does. */
+  focusAgent(sessionId: string, rootId: string): Promise<void>;
+  close(): Promise<void>;
+}
+
 export interface DesktopApi {
   getAppInfo(): Promise<AppInfo>;
   setTheme(mode: 'light' | 'dark' | 'system', backgroundColor: string): Promise<void>;
@@ -847,6 +889,10 @@ export interface DesktopApi {
     getRolePolicy(): Promise<RolePolicy>;
     setRolePolicy(policy: RolePolicy): Promise<RolePolicy>;
     taskAction(sessionId: string, action: TaskAction): Promise<ChatSessionSummary>;
+    /** Decisions workers in this account wait on the user for; seeds what onTaskDecisions then replaces. */
+    listTaskDecisions(): Promise<PendingTaskDecision[]>;
+    answerTaskDecision(sessionId: string, decisionId: string, answer: TaskDecisionAnswer): Promise<void>;
+    onTaskDecisions(listener: (decisions: PendingTaskDecision[]) => void): () => void;
     /**
      * Set how much this conversation may do without asking. Called from the composer pill, in
      * response to the user clicking it, and from nowhere else - see IPC_CHANNELS above.
@@ -861,6 +907,7 @@ export interface DesktopApi {
     listSessions(): Promise<ChatSessionSummary[]>;
     /** Start a Chat session: no project, the mode everything before this was. */
     createSession(request?: CreateSessionRequest): Promise<CreatedSession>;
+    defaultsForNewSession(): Promise<NewSessionDefaults>;
     /**
      * Start a Code session, creating or adopting its worktree first when one is asked for.
      * A request with no `directory` creates an UNBOUND session, which the chip row then binds.
@@ -987,6 +1034,8 @@ export interface DesktopApi {
     readAttachment(sessionId: string, attachmentId: string, mediaType: string): Promise<string | null>;
     /** Throw away an attachment the user removed before sending. Unknown ids are ignored. */
     discardAttachment(sessionId: string, attachmentId: string): Promise<void>;
+    copyDraftAttachments(draftId: string, sessionId: string, attachmentIds: string[]): Promise<void>;
+    discardDraftAttachments(draftId: string): Promise<void>;
     /** One image context menu item, run in main against a ref main resolves itself. Never rejects. */
     imageAction(image: ChatImageRef, action: ChatImageAction): Promise<ChatImageActionResult>;
     /** Add a thread image to this session's draft, through the same intake as a paste. */
@@ -1076,16 +1125,20 @@ export interface DesktopApi {
     onSessionSummary(listener: (summary: ChatSessionSummary) => void): () => void;
     /**
      * The skills this conversation can run as `/name`, for the composer picker. Scoped to the
-     * session: a Chat session gets the user's own, a Code session also gets its project's once
+     * session or draft: a Chat one gets the user's own, a Code one also gets its project's once
      * that project is trusted.
      */
-    listSkills(sessionId: string): Promise<SkillsState>;
+    listSkills(scope: SkillsScope): Promise<SkillsState>;
     /**
-     * Trust (or untrust) this session's project to contribute its `.claude/skills/`. Called from
-     * the picker's prompt in response to a click, and from nowhere else - see IPC_CHANNELS.
-     * Returns the state the picker should now draw.
+     * Trust (or untrust) this session's or draft's project to contribute its `.claude/skills/`.
+     * Called from the picker's prompt in response to a click, and from nowhere else - see
+     * IPC_CHANNELS. Returns the state the picker should now draw.
      */
-    setProjectSkillsTrusted(sessionId: string, trusted: boolean): Promise<SkillsState>;
+    setProjectSkillsTrusted(
+      scope: SkillsScope,
+      trusted: boolean,
+      expectedProjectDirectory: string
+    ): Promise<SkillsState>;
   };
   /**
    * The Skill Market, read through main (SkillMarket.ts). Nothing here rejects: a signed-out or
@@ -1314,6 +1367,9 @@ export interface DesktopApi {
      * only; see PrBinding.
      */
     setOption(sessionId: string, option: PrOption, enabled: boolean): Promise<PrActionResult>;
+    getAutoFixAttempts(): Promise<number>;
+    /** Answers with what was saved: anything out of range lands as the default. */
+    setAutoFixAttempts(attempts: number): Promise<number>;
     onStateChanged(listener: (state: PrBarState) => void): () => void;
     /** Every conversation's PR icon for the sidebar, from what main already knows. */
     getSummaries(): Promise<PrSummaryEvent[]>;
@@ -1368,6 +1424,12 @@ export interface DesktopApi {
      * the renderer is listening.
      */
     takePendingOpen(): Promise<AttentionOpenEvent | null>;
+  };
+  /** The menu-bar item's setting; the mini Tavern's bounds and visibility are main's to keep. */
+  watch: {
+    getPreferences(): Promise<WatchPreferences>;
+    setPreferences(patch: WatchPreferencesPatch): Promise<WatchPreferences>;
+    onPreferences(listener: (preferences: WatchPreferences) => void): () => void;
   };
   /**
    * The developer log window's own surface. Used by the `#/dev-logs` route and nothing else.

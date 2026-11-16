@@ -27,7 +27,10 @@ vi.mock('@server/middlewares/adminApi', () => ({
     },
   }),
 }));
-vi.mock('@bike4mind/common', () => ({ ApiKeyScope: { ADMIN: 'admin' } }));
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  ApiKeyScope: { ADMIN: 'admin' },
+}));
 vi.mock('@bike4mind/database', async () => ({
   dlqReplayLogRepository: (
     await import('../../../../../../../packages/database/src/models/infra/webhooks/DlqReplayLogModel')
@@ -78,6 +81,7 @@ async function callReplay(mode: 'direct' | 'batch') {
     method: 'POST',
     body: {
       queueLabel: 'quest',
+      reason: 'Verify persisted replay budget',
       ...(mode === 'direct'
         ? { messages: [{ messageId: attempt.messageId, receiptHandle: 'receipt-1', body: '{}' }] }
         : { batchSize: 1 }),

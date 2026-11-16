@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   collation: vi.fn(),
   updateOne: vi.fn(),
   completeAccountDeletion: vi.fn(),
+  erasureRegistry: { scope: vi.fn(), audit: vi.fn() },
   sstSecret: { value: 'right-secret' } as { value: string } | undefined,
 }));
 
@@ -39,7 +40,10 @@ vi.mock('@bike4mind/database', () => ({
     updateOne: h.updateOne,
   },
 }));
-vi.mock('@server/users/completeAccountDeletion', () => ({ completeAccountDeletion: h.completeAccountDeletion }));
+vi.mock('@server/dataSubject/erasureRegistry', () => ({ erasureRegistry: h.erasureRegistry }));
+vi.mock('@bike4mind/server-utils/users/completeAccountDeletion', () => ({
+  completeAccountDeletion: h.completeAccountDeletion,
+}));
 
 import handler from '../expire-account-deletion';
 
@@ -127,7 +131,11 @@ describe('POST /api/test/expire-account-deletion', () => {
     const [filter, update] = h.updateOne.mock.calls[0];
     expect(filter).toEqual({ _id: USER_ID, deletion: { $ne: null } });
     const now: Date = update.$set['deletion.scheduledFor'];
-    expect(h.completeAccountDeletion).toHaveBeenCalledExactlyOnceWith(USER_ID, { logger, now });
+    expect(h.completeAccountDeletion).toHaveBeenCalledExactlyOnceWith(USER_ID, {
+      logger,
+      now,
+      erasureRegistry: h.erasureRegistry,
+    });
     expect(status).toHaveBeenCalledWith(200);
     expect(json).toHaveBeenCalledWith({ deleted: true });
   });

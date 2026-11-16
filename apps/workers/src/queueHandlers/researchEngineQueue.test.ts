@@ -61,7 +61,7 @@ vi.mock('@bike4mind/services', async () => ({
     DEEP_RESEARCH_FAILED_REPLY: 'research failed',
   },
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createCompletionMeter: () => h.meter,
   assertOwnerCanAfford: h.afford,
 }));

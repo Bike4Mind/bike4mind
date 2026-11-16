@@ -1,4 +1,5 @@
 import {
+  ConflictError,
   IGroupDocument,
   IGroupRepository,
   IOrganizationRepository,
@@ -19,7 +20,7 @@ interface GroupMembershipAdapters {
 interface RenameGroupAdapters {
   db: {
     organizations: Pick<IOrganizationRepository, 'findById'>;
-    groups: Pick<IGroupRepository, 'findById' | 'update'>;
+    groups: Pick<IGroupRepository, 'findById' | 'update' | 'renameIfNameMatches'>;
   };
 }
 
@@ -124,11 +125,19 @@ export async function removeUserFromGroup(
  */
 export async function renameGroup(
   actingUser: IUserDocument,
-  { organizationId, groupId, name }: { organizationId: string; groupId: string; name: string },
+  {
+    organizationId,
+    groupId,
+    name,
+    expectedName,
+  }: { organizationId: string; groupId: string; name: string; expectedName?: string },
   adapters: RenameGroupAdapters
 ): Promise<IGroupDocument | null> {
   await authorizeAndValidate(actingUser, { organizationId, groupId }, adapters, false);
-  return adapters.db.groups.update({ id: groupId, name });
+  if (expectedName === undefined) return adapters.db.groups.update({ id: groupId, name });
+  const renamed = await adapters.db.groups.renameIfNameMatches({ groupId, organizationId, expectedName, name });
+  if (!renamed) throw new ConflictError('The group name changed; reload before undoing');
+  return renamed;
 }
 
 /**

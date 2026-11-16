@@ -1,4 +1,9 @@
-import { ApiKeyScope } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  AdminActionReasonSchema,
+  DLQ_MAX_REPLAY_ATTEMPTS,
+  requiresDlqReplayReason,
+} from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
@@ -14,8 +19,10 @@ import { dlqReplayLogRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 
-const MAX_REPLAY_ATTEMPTS = 3;
+const MAX_REPLAY_ATTEMPTS = DLQ_MAX_REPLAY_ATTEMPTS;
 const MAX_BATCH_SIZE = 100;
+// Short polling samples a subset of SQS servers, so a receive can miss messages the queue holds (including the fallback match).
+const RECEIVE_WAIT_SECONDS = 2;
 // Upper bound on receives while searching the DLQ for specific message IDs.
 const TARGETED_MAX_RECEIVES = 20;
 
@@ -31,6 +38,7 @@ const BodySchema = z
     batchSize: z.number().int().min(1).max(MAX_BATCH_SIZE).optional().default(10),
     messageIds: z.array(z.string().min(1)).min(1).max(MAX_BATCH_SIZE).optional(),
     messages: z.array(DirectMessageSchema).min(1).max(MAX_BATCH_SIZE).optional(),
+    reason: AdminActionReasonSchema.optional(),
   })
   .refine(data => !(data.messageIds && data.messages), {
     message: 'Cannot specify both messageIds and messages',
@@ -84,7 +92,7 @@ const handler = adminApi({
     throw new BadRequestError(result.error.issues[0]?.message || 'Invalid request body');
   }
 
-  const { queueLabel, batchSize, messageIds, messages: directMessages } = result.data;
+  const { queueLabel, batchSize, messageIds, messages: directMessages, reason } = result.data;
   const adminUserId = req.user?.id;
   if (!adminUserId) throw new BadRequestError('Admin user ID is required');
 
@@ -95,6 +103,10 @@ const handler = adminApi({
 
   if (!dlqEntry.sourceQueue) {
     throw new BadRequestError(`Replay is not available for DLQ: ${queueLabel}`);
+  }
+
+  if (requiresDlqReplayReason(dlqEntry.replay) && !reason) {
+    throw new BadRequestError('A reason of at least 5 characters is required for this replay');
   }
 
   const dlqUrl = getDlqUrl(dlqEntry.label);
@@ -112,6 +124,7 @@ const handler = adminApi({
       action: 'ops.dlq.replayed',
       target: { kind: 'system', id: 'dlq-replay', displayName: 'DLQ replay' },
       summary: `replayed ${summary.replayed} messages from ${queueLabel}`,
+      reason,
       details: {
         queueLabel,
         messageCount: summary.replayed,
@@ -183,7 +196,7 @@ const handler = adminApi({
           });
 
           let fallbackDeleted = false;
-          const fallbackMessages = await receiveFromQueue(dlqUrl, 10, 60);
+          const fallbackMessages = await receiveFromQueue(dlqUrl, 10, 60, RECEIVE_WAIT_SECONDS);
           const match = fallbackMessages.find(m => m.MessageId === dm.messageId);
           if (match?.ReceiptHandle) {
             try {
@@ -292,16 +305,17 @@ const handler = adminApi({
     // so they do not stay hidden for the rest of the visibility timeout.
     await releaseReceivedMessages(dlqUrl, queueLabel, others, 'untargeted');
   } else {
-    const iterations = Math.ceil(batchSize / 10);
-    for (let i = 0; i < iterations; i++) {
+    // Each non-empty receive adds at least one message, so batchSize calls is a hard upper bound.
+    for (let i = 0; i < batchSize && allMessages.length < batchSize; i++) {
       const toReceive = Math.min(batchSize - allMessages.length, 10);
-      const messages = await receiveFromQueue(dlqUrl, toReceive, 60);
+      const messages = await receiveFromQueue(dlqUrl, toReceive, 60, RECEIVE_WAIT_SECONDS);
       allMessages.push(...messages);
 
-      // Stop if no more messages
-      if (messages.length < toReceive) break;
+      // SQS can return fewer messages than it holds, so only an empty receive means the queue is drained.
+      if (messages.length === 0) break;
     }
-    messagesToReplay = allMessages;
+    // At-least-once delivery can return one message twice in a run; keep the latest copy, whose receipt handle is the valid one.
+    messagesToReplay = [...new Map(allMessages.map(m => [m.MessageId ?? '', m])).values()];
   }
 
   // Track which requested messageIds were not found in the received batch

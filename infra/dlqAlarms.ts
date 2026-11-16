@@ -41,6 +41,7 @@ import {
   slackExportQueueDLQ,
   questExportQueueDLQ,
   accountDataExportQueueDLQ,
+  accountErasureQueueDLQ,
   publishThumbnailQueueDLQ,
   generatedMediaPurgeQueueDLQ,
   dataLakeCleanupQueueDLQ,
@@ -90,6 +91,7 @@ import { apiProbeDetectorDeadLetter } from './apiProbeDetectorDeadLetter';
 import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
+import { organizationRetentionDeadLetter } from './organizationRetention';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
@@ -143,8 +145,8 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
   // A log group arn drops the API's trailing stream wildcard, so the policy names both forms.
   const spendLogSources = llmSpendLogSources();
   const spendLogGroupNames = spendLogSources.map(source => source.logGroupName);
-  const spendLogGroupArns = spendLogSources.flatMap(({ logGroupName, logGroupArn }) => {
-    const arn = logGroupArn ?? aws.cloudwatch.getLogGroupOutput({ name: logGroupName }).arn;
+  const spendLogGroupArns = spendLogSources.flatMap(({ logGroupName }) => {
+    const arn = aws.cloudwatch.getLogGroupOutput({ name: logGroupName }).arn;
     return [arn, $interpolate`${arn}:*`];
   });
   dlqAlarmTopic!.subscribe(
@@ -364,6 +366,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'AccountDataExport',
     sourceQueue: 'accountDataExportQueue',
     queue: accountDataExportQueueDLQ,
+  },
+  {
+    label: 'account-erasure',
+    displayName: 'Account Erasure',
+    application: 'AccountErasure',
+    sourceQueue: 'accountErasureQueue',
+    queue: accountErasureQueueDLQ,
   },
   {
     label: 'data-lake-cleanup',
@@ -682,6 +691,15 @@ if (isMonitoredStage) {
       displayName: 'Account Deletion Sweep',
       application: 'Account',
       queue: accountDeletionSweepDeadLetter.queue,
+    });
+  }
+
+  if (organizationRetentionDeadLetter) {
+    createDlqAlarms({
+      label: 'organization-retention',
+      displayName: 'Organization Retention',
+      application: 'Organization',
+      queue: organizationRetentionDeadLetter.queue,
     });
   }
 

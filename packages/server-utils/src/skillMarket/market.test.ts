@@ -115,6 +115,7 @@ describe('publicVersionView', () => {
       'u1'
     );
     expect(view.selfApproved).toBe(true);
+    expect(view).toMatchObject({ reviewStatus: 'approved' });
     expect(view).not.toHaveProperty('reviewerUserId');
   });
 });

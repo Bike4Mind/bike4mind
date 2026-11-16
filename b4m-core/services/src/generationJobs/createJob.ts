@@ -13,6 +13,7 @@ import {
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { holdCredits, releaseCreditHold, type CreditHold, type CreditHoldAdapters } from '../creditService/creditHold';
+import { checkNewAccountSpendCap } from '../creditService/newAccountSpendCap';
 import type { GenerationJobEngine } from './engine';
 
 /**
@@ -84,6 +85,13 @@ export async function findIdempotentReplay<K extends GenerationJobKind>(
   return existing ? replayOrReject(existing, kind, request) : null;
 }
 
+const insufficientCredits = (message: string): InsufficientCredits => ({
+  ok: false,
+  status: 402,
+  code: 'insufficient_credits',
+  message,
+});
+
 /** Holds `requiredCredits` when credits are enforced; null when they are not. Insufficient credits is a value. */
 export async function holdJobCredits(
   params: {
@@ -109,10 +117,38 @@ export async function holdJobCredits(
     return { ok: true, hold };
   } catch (error) {
     if (getQuestErrorCode(error) === 'insufficient_credits' && error instanceof Error) {
-      return { ok: false, status: 402, code: 'insufficient_credits', message: error.message };
+      return insufficientCredits(error.message);
     }
     throw error;
   }
+}
+
+/**
+ * Checks a multi-job batch's total against the new-account spend cap before its per-job holds. Refuses with
+ * holdJobCredits' shape.
+ */
+export async function checkBatchSpendCap(
+  params: {
+    enforceCredits: boolean;
+    user: { id: string; organizationId: string | null };
+    totalCredits: number;
+  },
+  deps: Pick<CreateGenerationJobDeps, 'credits' | 'logger'>
+): Promise<InsufficientCredits | null> {
+  if (!params.enforceCredits || params.totalCredits <= 0) return null;
+  const user = await deps.credits.users.findById(params.user.id);
+  // holdCredits refuses a missing user on the first hold; nothing to cap here.
+  if (!user) return null;
+  const message = await checkNewAccountSpendCap(
+    {
+      user,
+      requestedCredits: params.totalCredits,
+      billedToOrganization: resolveJobOwner(params.user).ownerType === CreditHolderType.Organization,
+      logger: deps.logger,
+    },
+    deps.credits.newAccountSpendCap
+  );
+  return message ? insufficientCredits(message) : null;
 }
 
 /**

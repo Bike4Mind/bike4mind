@@ -63,6 +63,8 @@ export const getClientConfigContract = defineEndpoint({
               type: 'text',
               backend: 'anthropic',
               description: null,
+              blurb: null,
+              provider_label: null,
               context_window: 1_000_000,
               max_output_tokens: 128_000,
               supports_streaming: true,

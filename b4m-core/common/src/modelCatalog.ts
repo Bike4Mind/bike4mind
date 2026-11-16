@@ -119,6 +119,9 @@ export type ToModelInfoIsTotal = Expect<
  */
 export const DISCOVERY_VERDICT_PREFIX = 'discovered, ';
 
+/** The disable reason toModelInfo gives a record whose lifecycle says retired and that states no other reason. */
+export const RETIRED_BY_PROVIDER_REASON = 'retired by the provider';
+
 export const isDiscoveryVerdict = (reason: unknown): reason is string =>
   typeof reason === 'string' && reason.startsWith(DISCOVERY_VERDICT_PREFIX);
 
@@ -181,7 +184,7 @@ export function toModelInfo(record: RenderableModelRecord): ModelInfo {
     private: record.private ?? false,
     disabled,
     disabledReason:
-      record.disabledReason ?? record.autoDisabledReason ?? (retired ? 'retired by the provider' : undefined),
+      record.disabledReason ?? record.autoDisabledReason ?? (retired ? RETIRED_BY_PROVIDER_REASON : undefined),
     // Absent means "not filtered": deprecation is never inferred by the adapter.
     isSuperseded: record.lifecycle?.isSuperseded,
     deprecationDate: record.lifecycle?.deprecationDate,

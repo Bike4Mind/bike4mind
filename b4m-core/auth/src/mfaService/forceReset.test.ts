@@ -44,6 +44,29 @@ describe('forceResetMFA', () => {
     expect(users.update).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['an authenticator app only', { totpEnabled: true }],
+    ['a passkey only', { totpEnabled: false, passkeyEnabled: true }],
+    ['both factors', { totpEnabled: true, passkeyEnabled: true }],
+  ])('resets MFA for a target with %s', async (_label, mfa) => {
+    const users = repo({ ...target, mfa });
+    await expect(
+      forceResetMFA({ targetUserId: 'target1', adminUser: actor({ isAdmin: true }) }, users)
+    ).resolves.toMatchObject({ success: true });
+    expect(users.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'target1', mfa: null }));
+  });
+
+  it.each([
+    ['no mfa', null],
+    ['a pending app setup', { totpEnabled: false }],
+  ])('refuses a target with %s', async (_label, mfa) => {
+    const users = repo({ ...target, mfa } as object);
+    await expect(
+      forceResetMFA({ targetUserId: 'target1', adminUser: actor({ isAdmin: true }) }, users)
+    ).rejects.toThrow('Target user does not have MFA enabled.');
+    expect(users.update).not.toHaveBeenCalled();
+  });
+
   it('lets a full admin reset MFA for another admin', async () => {
     const users = repo({ ...target, isAdmin: true });
     await forceResetMFA({ targetUserId: 'target1', adminUser: actor({ isAdmin: true }) }, users);

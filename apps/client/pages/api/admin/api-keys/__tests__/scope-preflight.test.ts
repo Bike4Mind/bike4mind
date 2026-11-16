@@ -157,6 +157,24 @@ describe('GET /api/admin/api-keys/scope-preflight', () => {
     expect(body.stagedScopes).toEqual(['optihashi:read']);
   });
 
+  it('predicts a deny for an exchange key where a personal key rides the staging window', async () => {
+    process.env.API_KEY_SCOPE_STAGING = 'optihashi:read';
+    findKeyTrafficByEndpointPrefix.mockResolvedValue([
+      { keyId: PASSES, userId: 'u1', requests: 7, lastUsed: new Date() },
+      { keyId: BREAKS, userId: 'u2', requests: 7, lastUsed: new Date() },
+    ]);
+    find.mockResolvedValue([
+      { id: PASSES, scopes: ['ai:generate'] },
+      { id: BREAKS, scopes: ['ai:generate'], metadata: { createdFrom: 'oauth-exchange', oauthClientId: 'client-1' } },
+    ]);
+
+    const body = (await invoke({ endpointPrefix: '/api/x', scopes: 'optihashi:read' }))._getJSONData();
+    const outcomeOf = (id: string) =>
+      (body.rows as { keyId: string; outcome: string }[]).find(r => r.keyId === id)?.outcome;
+    expect(outcomeOf(PASSES)).toBe('stagedAllow');
+    expect(outcomeOf(BREAKS)).toBe('deny');
+  });
+
   it('survives a log row whose keyId is not a valid ObjectId', async () => {
     // An unfiltered $in would raise a Mongoose CastError, which errorHandler
     // turns into a 404 - indistinguishable from "no data" to the operator.
@@ -169,7 +187,7 @@ describe('GET /api/admin/api-keys/scope-preflight', () => {
     const body = (await invoke({ endpointPrefix: '/api/x', scopes: 'admin:*' }))._getJSONData();
 
     // Only the castable id reaches the query, projected to the one field read.
-    expect(find).toHaveBeenCalledWith({ _id: { $in: ['507f1f77bcf86cd799439011'] } }, { scopes: 1 });
+    expect(find).toHaveBeenCalledWith({ _id: { $in: ['507f1f77bcf86cd799439011'] } }, { scopes: 1, metadata: 1 });
     // ...and the malformed row is still reported rather than dropped.
     expect(body.rows).toHaveLength(2);
     expect(body.rows.find((r: any) => r.keyId === 'not-an-objectid').outcome).toBe('deny');

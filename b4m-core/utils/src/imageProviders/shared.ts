@@ -1,9 +1,12 @@
 import type { ImageInputRole } from '@bike4mind/common';
 import { ImageInputRejectedError, ImageModerationBlockedError } from '../imageGeneration/imageGenerationErrors';
+import { downloadDeliveryUrl } from '../generationProviders/http';
 import type { ProviderOutput, ProviderTerminalResult } from '../generationProviders/types';
 import type { ImageInputs, ResolvedImageInput } from './types';
 
 const MAX_CAUSE_DEPTH = 5;
+// Well above a large PNG at the biggest size any image model renders; the cap only stops a runaway download.
+export const MAX_IMAGE_OUTPUT_BYTES = 64 * 1024 * 1024;
 const DATA_URL_PATTERN = /^data:([^;,]+);base64,(.+)$/s;
 
 /**
@@ -30,12 +33,14 @@ export const raceAbort = <T>(start: () => Promise<T>, signal: AbortSignal): Prom
   });
 };
 
-// The services rewrap SDK errors in prose; the SDK error (with its HTTP status) rides on `cause`.
+// The services rewrap SDK errors in prose; the SDK error (with its HTTP status) rides on `cause`. OpenAI SDK errors
+// carry `status`; axios errors (BFL) carry it on `response`.
 const httpStatusOf = (error: unknown): number | undefined => {
   let current: unknown = error;
   for (let depth = 0; depth < MAX_CAUSE_DEPTH && current instanceof Error; depth++) {
-    const status: unknown = (current as { status?: unknown }).status;
+    const { status, response } = current as { status?: unknown; response?: { status?: unknown } };
     if (typeof status === 'number') return status;
+    if (typeof response?.status === 'number') return response.status;
     current = current.cause;
   }
   return undefined;
@@ -76,6 +81,12 @@ export const dataUrlToOutput = (dataUrl: string): ProviderOutput => {
 };
 
 export const decodeInlineOutput = (output: ProviderOutput): Buffer => {
-  if (output.kind !== 'inline') throw new Error('image providers only produce inline output');
+  if (output.kind !== 'inline') throw new Error('expected inline image output');
   return Buffer.from(output.base64, 'base64');
+};
+
+/** Downloads a provider's delivery URL (an unauthenticated, short-lived link) under the image size cap. */
+export const downloadImageOutput = async (output: ProviderOutput, signal: AbortSignal): Promise<Buffer> => {
+  if (output.kind !== 'url') throw new Error('expected url image output');
+  return downloadDeliveryUrl(output.url, MAX_IMAGE_OUTPUT_BYTES, signal);
 };

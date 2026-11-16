@@ -1,17 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import {
-  Button,
-  Checkbox,
-  Dropdown,
-  FormControl,
-  FormLabel,
-  Input,
-  Menu,
-  MenuButton,
-  MenuItem,
-  Stack,
-  Typography,
-} from '@mui/joy';
+import { Button, Checkbox, FormControl, FormLabel, Input, MenuItem, Stack, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import { ADMIN_TAB_PARAM } from '@bike4mind/common';
 import { ADMIN_SUBSCRIPTIONS_TAB_SLUG } from './Subscriptions/Detail/subscriptionDetailModel';
@@ -46,7 +34,6 @@ import { toast } from 'sonner';
 import OrganizationProfileModal from './OrganizationProfileModal';
 import OrganizationMembers from '@client/app/components/organizations/Member';
 import AddIcon from '@mui/icons-material/Add';
-import MoreVertIcon from '@mui/icons-material/MoreVert';
 import { useSearchOrganizations, useCreateOrganization } from '@client/app/hooks/data/organizations';
 import {
   useAdjustOrgSeats,
@@ -61,6 +48,7 @@ import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { openInNewTab } from '@client/app/utils/externalLinks';
 import { organizationsPageToClampTo } from './organizationsTabSearch';
 import { useOpenOrganizationId, useOrganizationsParams, useOrganizationsTabUrlSync } from './useOrganizationsTabParams';
+import { RowActionsMenu } from './shared/RowActionsMenu';
 
 /**
  * Adjust Seats modal, extracted so it can fetch pending invites for the org
@@ -330,64 +318,54 @@ const OrganizationsTab: React.FC = () => {
   const rowActions = (org: WithId<IOrganizationDocument>) => {
     const isGranted = grantedOrgIds.has(org.id);
     return (
-      <Dropdown>
-        <MenuButton
-          slots={{ root: Button }}
-          slotProps={{ root: { variant: 'plain', color: 'neutral', size: 'sm' } }}
-          aria-label={`Actions for ${org.name}`}
-          data-testid={`org-actions-${org.id}`}
+      <RowActionsMenu testId={`org-actions-${org.id}`} ariaLabel={`Actions for ${org.name}`}>
+        <MenuItem onClick={() => setOrgId(org.id)} data-testid={`edit-org-${org.id}`}>
+          Edit profile
+        </MenuItem>
+        <MenuItem onClick={() => setMembersOrg(org)} data-testid={`members-org-${org.id}`}>
+          View members
+        </MenuItem>
+        <MenuItem
+          data-testid={`topup-credits-${org.id}`}
+          onClick={() => {
+            setTopUpOrg(org);
+            setTopUpCredits(50_000);
+          }}
         >
-          <MoreVertIcon sx={{ fontSize: 16 }} />
-        </MenuButton>
-        <Menu>
-          <MenuItem onClick={() => setOrgId(org.id)} data-testid={`edit-org-${org.id}`}>
-            Edit profile
+          Top up credits
+        </MenuItem>
+        {isGranted && (
+          <MenuItem data-testid={`view-subscription-${org.id}`} onClick={() => viewSubscription(org.id)}>
+            View subscription
           </MenuItem>
-          <MenuItem onClick={() => setMembersOrg(org)} data-testid={`members-org-${org.id}`}>
-            View members
-          </MenuItem>
+        )}
+        {isGranted && (
           <MenuItem
-            data-testid={`topup-credits-${org.id}`}
+            data-testid={`adjust-seats-${org.id}`}
             onClick={() => {
-              setTopUpOrg(org);
-              setTopUpCredits(50_000);
+              setSeatsOrg(org);
+              setSeatsValue(org.seats ?? 1);
             }}
           >
-            Top up credits
+            Adjust seats
           </MenuItem>
-          {isGranted && (
-            <MenuItem data-testid={`view-subscription-${org.id}`} onClick={() => viewSubscription(org.id)}>
-              View subscription
-            </MenuItem>
-          )}
-          {isGranted && (
-            <MenuItem
-              data-testid={`adjust-seats-${org.id}`}
-              onClick={() => {
-                setSeatsOrg(org);
-                setSeatsValue(org.seats ?? 1);
-              }}
-            >
-              Adjust seats
-            </MenuItem>
-          )}
-          {!isGranted && !org.personal && (
-            <MenuItem data-testid={`sync-from-stripe-${org.id}`} onClick={() => syncFromStripe(org)}>
-              Sync from Stripe
-            </MenuItem>
-          )}
-          {isGranted && (
-            <MenuItem data-testid={`convert-to-paid-${org.id}`} onClick={() => setConvertOrg(org)}>
-              Convert to paid
-            </MenuItem>
-          )}
-          {isGranted && (
-            <MenuItem data-testid={`revoke-grant-${org.id}`} color="danger" onClick={() => setRevokeOrg(org)}>
-              Revoke grant
-            </MenuItem>
-          )}
-        </Menu>
-      </Dropdown>
+        )}
+        {!isGranted && !org.personal && (
+          <MenuItem data-testid={`sync-from-stripe-${org.id}`} onClick={() => syncFromStripe(org)}>
+            Sync from Stripe
+          </MenuItem>
+        )}
+        {isGranted && (
+          <MenuItem data-testid={`convert-to-paid-${org.id}`} onClick={() => setConvertOrg(org)}>
+            Convert to paid
+          </MenuItem>
+        )}
+        {isGranted && (
+          <MenuItem data-testid={`revoke-grant-${org.id}`} color="danger" onClick={() => setRevokeOrg(org)}>
+            Revoke grant
+          </MenuItem>
+        )}
+      </RowActionsMenu>
     );
   };
 

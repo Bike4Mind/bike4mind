@@ -1,3 +1,4 @@
+import { isGrantPackageExpired } from '@bike4mind/common';
 import { grantPackageRepository, organizationRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
@@ -17,7 +18,7 @@ export async function assertOrganizationExists(organizationId: string | null | u
 
 /**
  * Same guard for a rule's grant package. A `null` id (unlinking the package) is always allowed.
- * Pass `requireActive` when the rule is being linked to this package: an inactive package would
+ * Pass `requireActive` when the rule is being linked to this package: an inactive or expired package would
  * silently withhold the signup credits (same message as referService.requireActiveGrantPackage).
  */
 export async function assertGrantPackageExists(
@@ -31,5 +32,8 @@ export async function assertGrantPackageExists(
   }
   if (requireActive && !grantPackage.active) {
     throw new BadRequestError('Grant package is inactive');
+  }
+  if (requireActive && isGrantPackageExpired(grantPackage)) {
+    throw new BadRequestError('Grant package has expired');
   }
 }

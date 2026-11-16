@@ -2,8 +2,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sharingService } from '@bike4mind/services';
-import { sessionRepository, fabFileRepository } from '@bike4mind/database';
-import { browserFileStorage } from '@server/files/browserFileSigner';
+import { sessionRepository, fabFileRepository, organizationRepository } from '@bike4mind/database';
+import { browserFileStorage } from '@bike4mind/server-utils/files/browserFileSigner';
 import { z } from 'zod';
 
 interface SharingParams {
@@ -34,7 +34,7 @@ const handler = baseApi().put(
       req.user,
       { id, type, isGlobalRead, isGlobalWrite },
       {
-        db: { sessions: sessionRepository, fabFiles: fabFileRepository },
+        db: { sessions: sessionRepository, fabFiles: fabFileRepository, organizations: organizationRepository },
         storage: browserFileStorage(),
       }
     );

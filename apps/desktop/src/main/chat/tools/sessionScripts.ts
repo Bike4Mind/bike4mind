@@ -4,6 +4,7 @@ import type { Node } from 'web-tree-sitter';
 import { parseWslPath, wslLocation } from '../../wsl/wslPath';
 import { directoryOptionValues } from './bashArity';
 import { parseBash } from './bashParser';
+import { listedSetting } from './gitTable';
 import { hostPhysicalTarget, isWithin, operandTargets, resolveOperand } from './paths';
 import {
   expandHome,
@@ -341,14 +342,18 @@ function skipWrappers(tokens: readonly string[]): {
   return { start, wrapped, launched, launchers };
 }
 
-/** A git config key that names a program git runs, set on the command line. */
-const GIT_PROGRAM_KEY = /(^|\s)(-c\s*|--config-env[=\s])['"]?core\.(fsmonitor|hookspath|sshcommand)=?/i;
+/** A git config key that names a program git runs, set on the command line, with the value given. */
+const GIT_PROGRAM_KEY = /(^|\s)(-c\s*|--config-env[=\s])(['"]?)core\.(fsmonitor|hookspath|sshcommand)(=(\S*))?/gi;
 
-/** The `-c core.*` setting that makes git run a program, which auto mode asks about. */
+/** The `-c core.*` setting that makes git run a program, which auto mode asks about; a value gitTable lists runs none. */
 export function gitRunsConfiguredProgram(commands: readonly { words: string }[]): string | null {
   for (const { words: text } of commands) {
-    const match = /^\s*(\S+\s+)*?(\S*\/)?git\s/.test(text) ? GIT_PROGRAM_KEY.exec(text) : null;
-    if (match) return `core.${match[3]}`;
+    if (!/^\s*(\S+\s+)*?(\S*\/)?git\s/.test(text)) continue;
+    for (const [, , option = '', quote = '', name = '', , given] of text.matchAll(GIT_PROGRAM_KEY)) {
+      const value = quote && given?.endsWith(quote) ? given.slice(0, -1) : given;
+      const literal = option.startsWith('-c') && value !== undefined && !/['"$`\\]/.test(value);
+      if (!(literal && listedSetting(`core.${name}`, value))) return `core.${name}`;
+    }
   }
   return null;
 }

@@ -55,6 +55,28 @@ describe('DataLakeProposalsPanel', () => {
     expect(screen.getByTestId('datalake-proposal-tag')).toHaveTextContent('finance');
   });
 
+  it('names the feed a proposal came from by origin and path only', () => {
+    renderPanel({
+      proposals: [
+        proposal({
+          provenance: {
+            producer: 'research_run',
+            retrievedAt: new Date('2026-08-01'),
+            feedUrl: 'https://example.com/news/feed.xml',
+          },
+        }),
+      ],
+    });
+    expect(screen.getByTestId('datalake-proposal-feed-source').textContent).toBe(
+      'from feed https://example.com/news/feed.xml'
+    );
+  });
+
+  it('shows no feed line for a proposal that did not come from a feed', () => {
+    renderPanel();
+    expect(screen.queryByTestId('datalake-proposal-feed-source')).toBeNull();
+  });
+
   // `producer` is free-form by design, so an unmapped one must still say something rather than
   // rendering blank.
   it('falls back to the raw producer token for a producer it has no name for', () => {
@@ -203,6 +225,9 @@ describe('DataLakeProposalsPanel', () => {
     renderPanel({ proposals: [] });
 
     expect(screen.getByTestId('datalake-proposals-empty')).toHaveTextContent(/Nothing is waiting for review/);
+    expect(screen.getByTestId('datalake-proposals-empty')).toHaveTextContent(
+      /unless a research configuration adds results from its trusted sites automatically/
+    );
   });
 
   it('flags a source a reviewer previously declined rather than hiding it', () => {

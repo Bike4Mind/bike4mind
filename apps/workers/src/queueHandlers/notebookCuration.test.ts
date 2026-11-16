@@ -70,7 +70,7 @@ vi.mock('@bike4mind/services', async () => ({
   },
 }));
 
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createCompletionMeter: curation.createCompletionMeter,
   createRequestCompletionMeter: curation.createRequestCompletionMeter,
 }));

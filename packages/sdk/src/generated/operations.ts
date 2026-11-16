@@ -17,6 +17,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/projects/{id}/system-prompts',
   },
+  approvePendingAction: {
+    method: 'POST',
+    path: '/api/v1/pending-actions/{questId}/approve',
+  },
   bulkDeleteFiles: {
     method: 'POST',
     path: '/api/v1/files/bulk-delete',
@@ -41,6 +45,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/agents',
   },
+  createAgentFromContext: {
+    method: 'POST',
+    path: '/api/v1/agents/from-context',
+  },
   createArtifact: {
     method: 'POST',
     path: '/api/v1/artifacts',
@@ -52,6 +60,10 @@ export const operations = {
   createCompletion: {
     method: 'POST',
     path: '/api/ai/v1/completions',
+  },
+  createCompletionRun: {
+    method: 'POST',
+    path: '/api/v1/completion-runs',
   },
   createDecision: {
     method: 'POST',
@@ -117,6 +129,10 @@ export const operations = {
     method: 'DELETE',
     path: '/api/v1/files/{id}',
   },
+  deletePersona: {
+    method: 'DELETE',
+    path: '/api/v1/personas/{id}',
+  },
   deleteProject: {
     method: 'DELETE',
     path: '/api/v1/projects/{id}',
@@ -128,6 +144,10 @@ export const operations = {
   deleteSessionMessage: {
     method: 'DELETE',
     path: '/api/v1/sessions/{id}/messages/{messageId}',
+  },
+  denyPendingAction: {
+    method: 'POST',
+    path: '/api/v1/pending-actions/{questId}/deny',
   },
   editImage: {
     method: 'POST',
@@ -144,6 +164,10 @@ export const operations = {
   executeTool: {
     method: 'POST',
     path: '/api/ai/v1/tools',
+  },
+  fetchWebPage: {
+    method: 'POST',
+    path: '/api/v1/tools/web-fetch',
   },
   generateAgentAvatar: {
     method: 'POST',
@@ -205,6 +229,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/credits',
   },
+  getCurrentWeather: {
+    method: 'POST',
+    path: '/api/v1/tools/weather',
+  },
   getDataLake: {
     method: 'GET',
     path: '/api/v1/data-lakes/{id}',
@@ -216,6 +244,10 @@ export const operations = {
   getFile: {
     method: 'GET',
     path: '/api/v1/files/{id}',
+  },
+  getFileLineage: {
+    method: 'GET',
+    path: '/api/v1/files/{id}/lineage',
   },
   getFilesByIds: {
     method: 'GET',
@@ -377,6 +409,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/whats-new',
   },
+  mintPersona: {
+    method: 'POST',
+    path: '/api/v1/personas',
+  },
   postSlackMessage: {
     method: 'POST',
     path: '/api/v1/slack/messages',
@@ -433,6 +469,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/sessions/semantic-search',
   },
+  searchWeb: {
+    method: 'POST',
+    path: '/api/v1/tools/web-search',
+  },
   sendChatMessage: {
     method: 'POST',
     path: '/api/chat',
@@ -448,6 +488,10 @@ export const operations = {
   synthesizeSpeech: {
     method: 'POST',
     path: '/api/ai/tts',
+  },
+  transferAgentCredits: {
+    method: 'POST',
+    path: '/api/v1/agents/{id}/transfer-credits',
   },
   unregisterPushToken: {
     method: 'DELETE',

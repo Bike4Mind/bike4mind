@@ -1,5 +1,5 @@
 import { IUserDocument, IUserRepository } from '@bike4mind/common';
-import { verifyBackupCode } from './utils';
+import { userHasMFAConfigured, verifyBackupCode } from './utils';
 import { claimTOTPCode, MfaAttemptRejectedError, withReservedMfaAttempt, type MfaAttemptRepository } from './attempt';
 
 export interface VerifyMFARequest {
@@ -15,20 +15,21 @@ export interface VerifyMFAResponse {
 
 /**
  * Verify MFA token (TOTP or backup code) for a user during login. The attempt is counted toward
- * the lockout before the code is compared; a refusal throws MfaAttemptRejectedError.
+ * the lockout before the code is compared; a refusal throws MfaAttemptRejectedError. A passkey-only
+ * user has no TOTP secret, so only a backup code can match for them.
  */
 export async function verifyMFA(
   { user, token }: VerifyMFARequest,
   userRepository: Pick<IUserRepository, 'update'> & MfaAttemptRepository
 ): Promise<VerifyMFAResponse> {
-  if (!user.mfa || !user.mfa.totpEnabled) {
+  if (!userHasMFAConfigured(user)) {
     throw new Error('MFA is not enabled for this user.');
   }
 
   const mfa = user.mfa;
   return withReservedMfaAttempt(user.id, userRepository, async attemptState => {
     let usedBackupCode: string | undefined;
-    const totpStep = await claimTOTPCode(user.id, mfa.totpSecret, token, userRepository);
+    const totpStep = mfa.totpEnabled ? await claimTOTPCode(user.id, mfa.totpSecret, token, userRepository) : null;
     if (totpStep === null) {
       const backupResult = verifyBackupCode(mfa.backupCodes, token);
       if (!backupResult.isValid || !backupResult.usedBackupCode) {

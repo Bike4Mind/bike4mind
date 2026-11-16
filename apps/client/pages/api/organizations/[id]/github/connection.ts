@@ -224,7 +224,7 @@ const handler = baseApi()
       throw error;
     }
 
-    logConnectionCreated(
+    await logConnectionCreated(
       {
         connectionId: connection.id,
         organizationId: orgId,
@@ -348,7 +348,7 @@ const handler = baseApi()
     }
 
     if (changedFields.length > 0) {
-      logConnectionUpdated(
+      await logConnectionUpdated(
         {
           connectionId: connection.id,
           organizationId: orgId,
@@ -419,7 +419,7 @@ const handler = baseApi()
 
     await orgGitHubConnectionRepository.delete(connection.id);
 
-    logConnectionDeleted({
+    await logConnectionDeleted({
       connectionId: connection.id,
       organizationId: orgId,
       actorUserId: user.id,

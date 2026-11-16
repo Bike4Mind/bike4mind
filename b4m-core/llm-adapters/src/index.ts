@@ -730,17 +730,25 @@ export async function isModelProviderConfigured(modelId: string, apiKeys: ApiKey
   return false;
 }
 
+let cachedStaticModels: Promise<readonly ModelInfo[]> | undefined;
 let cachedSeededIds: Promise<ReadonlySet<string>> | undefined;
 
 /**
- * Every id a static-table backend of getAvailableModels lists, whatever its catalog status says: the price
- * backends plus BFL, which publishes image models only. The runtime-listed backends (RUNTIME_DISCOVERED_BACKENDS)
- * are absent because their listing is a live call. Must cover every static backend getAvailableModels builds.
+ * Every model a static-table backend of getAvailableModels lists, read from the tables alone (no key, no network),
+ * whatever its catalog status says: the price backends plus BFL, which publishes image models only. The
+ * runtime-listed backends (RUNTIME_DISCOVERED_BACKENDS) are absent because their listing is a live call. Must cover
+ * every static backend getAvailableModels builds.
  */
-export function seededModelIds(): Promise<ReadonlySet<string>> {
-  cachedSeededIds ??= Promise.all(
+export function staticAdapterModels(): Promise<readonly ModelInfo[]> {
+  cachedStaticModels ??= Promise.all(
     [...staticPriceBackends(), new BFLBackend('static-listing')].map(backend => backend.getModelInfo())
-  ).then(tables => new Set(tables.flat().map(model => String(model.id))));
+  ).then(tables => tables.flat());
+  return cachedStaticModels;
+}
+
+/** The ids of staticAdapterModels. */
+export function seededModelIds(): Promise<ReadonlySet<string>> {
+  cachedSeededIds ??= staticAdapterModels().then(models => new Set(models.map(model => String(model.id))));
   return cachedSeededIds;
 }
 

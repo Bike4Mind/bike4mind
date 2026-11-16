@@ -36,7 +36,7 @@ const mocks = vi.hoisted(() => ({
   assertModelAdmission: vi.fn(),
 }));
 
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createModelAdmission: async () => ({ assert: mocks.assertModelAdmission, admits: async () => true }),
 }));
 

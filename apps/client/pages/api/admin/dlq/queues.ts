@@ -12,6 +12,7 @@ import { getQueueAttributes } from '@bike4mind/server-utils/utils/sqs';
 import { Logger } from '@bike4mind/observability';
 
 const QUEUE_LOGS_WINDOW_MS = 24 * 60 * 60_000;
+const NOT_DEPLOYED = Symbol('not-deployed');
 
 // Overlay-contributed entries carry no help fields, so those keys are left undefined.
 function queueMeta(entry: RegisteredDlqDescriptor) {
@@ -30,7 +31,8 @@ function queueMeta(entry: RegisteredDlqDescriptor) {
 /**
  * GET /api/admin/dlq/queues
  *
- * Returns all DLQs with their approximate message counts, message retention and replay help, plus a
+ * Returns all DLQs with their approximate message counts (-1 when unreadable; a queue this stage
+ * does not create also carries deployed: false), message retention and replay help, plus a
  * Logs Insights link over the last 24h of each queue's consumer logs (null when the consumer could
  * not be resolved).
  */
@@ -45,10 +47,19 @@ const handler = adminApi({
 
   const registry = getDlqRegistry();
 
+  // Stage-gated queues (scheduled jobs, the alarm relay) have no URL on stages that do not create
+  // them, so a missing URL means "not on this stage", not a failed read.
+  const dlqUrls = registry.map(entry => {
+    try {
+      return getDlqUrl(entry.label);
+    } catch {
+      return null;
+    }
+  });
+
   const now = Date.now();
   const [results, consumerLogs] = await Promise.all([
-    // async so a registry throw for a missing DLQ URL becomes that row's -1 fallback, not a 500.
-    Promise.allSettled(registry.map(async entry => getQueueAttributes(getDlqUrl(entry.label)))),
+    Promise.allSettled(dlqUrls.map(async url => (url === null ? NOT_DEPLOYED : getQueueAttributes(url)))),
     settleWithinBudget(
       registry.map(entry => resolveConsumerLogsForSourceQueue(entry.sourceQueue)),
       CONSUMER_LOGS_BUDGET_MS
@@ -71,6 +82,9 @@ const handler = adminApi({
         : null,
     };
     if (result.status === 'fulfilled') {
+      if (result.value === NOT_DEPLOYED) {
+        return { ...base, deployed: false, approximateMessageCount: -1, approximateNotVisibleCount: -1 };
+      }
       return {
         ...base,
         approximateMessageCount: result.value.approximateMessageCount,

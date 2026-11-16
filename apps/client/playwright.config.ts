@@ -97,7 +97,8 @@ const specProjects = [
   {
     name: 'credits',
     setupMatch: /(?:^|\/)credits\.setup\.ts$/,
-    testMatch: /(?:^|\/)credits\.spec\.ts$/,
+    // free-tier-limits rides here for the admin token from core setup; it mints its own free accounts.
+    testMatch: /(?:^|\/)(?:credits|free-tier-limits)\.spec\.ts$/,
     auth: './e2e/.auth/credits-user.json',
   },
   // Byte-fidelity suite: opt-in via EXPORT_BYTES_RUN. Three tests that each wait out an async S3

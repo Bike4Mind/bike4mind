@@ -11,7 +11,7 @@ const h = vi.hoisted(() => ({
   destination: vi.fn(),
 }));
 
-vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 vi.mock('@bike4mind/slack', () => ({ resolveNotificationDestination: h.destination }));
 
 vi.mock('@server/middlewares/baseApi', () => ({

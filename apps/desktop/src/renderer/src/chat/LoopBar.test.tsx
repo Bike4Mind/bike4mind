@@ -68,6 +68,15 @@ describe('LoopBar', () => {
     expect(stop).toHaveBeenCalledWith('s', 'stop');
     act(() => changed({ sessionId: 's', state: { ...state, phase: 'paused', nextRunAt: null, error: 'No credits' } }));
     expect(host.textContent).toContain('No credits');
+    act(() =>
+      changed({
+        sessionId: 's',
+        state: { ...state, phase: 'ended', nextRunAt: null, until: Date.now() + 60_000, notice: 'Loop ended: done.' },
+      })
+    );
+    expect(host.textContent).toContain(', until ');
+    expect(host.textContent).toContain('Loop ended: done.');
+    expect(host.querySelector('[data-testid="loop-stop-btn"]')?.textContent).toBe('Dismiss');
     act(() => changed({ sessionId: 's', state: null }));
     expect(host.querySelector('[data-testid="loop-status"]')).toBeNull();
   });

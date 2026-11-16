@@ -354,6 +354,25 @@ describe('AuthService', () => {
 
     service.dispose();
   });
+
+  it('re-saves the vault in the current cipher format before it reads anything from it', async () => {
+    const vault = new TokenVault(cipher, memoryFile(), silentLogger);
+    const order: string[] = [];
+    vi.spyOn(vault, 'reencrypt').mockImplementation(async () => {
+      order.push('reencrypt');
+    });
+    const getEnvironment = vault.getEnvironment.bind(vault);
+    vi.spyOn(vault, 'getEnvironment').mockImplementation(() => {
+      order.push('getEnvironment');
+      return getEnvironment();
+    });
+    const { service } = build({ vault });
+
+    await service.initialize();
+
+    expect(order).toEqual(['reencrypt', 'getEnvironment']);
+    service.dispose();
+  });
 });
 
 describe('toDesktopUser', () => {

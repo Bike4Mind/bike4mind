@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import type { CreateVideoGenerationBody, VideoModel } from '@bike4mind/common';
 import ImageBrowserModal from '@client/app/components/Agent/ImageBrowserModal';
 import GenerationPayerNote from '@client/app/components/Credits/GenerationPayerNote';
@@ -8,6 +9,7 @@ import {
   type StudioFormRules,
 } from '@client/app/components/Studio/useCapabilityFormState';
 import { useImageBrowser } from '@client/app/hooks/agent/useImageBrowser';
+import { videoModelCards, withRankedVideoDefaultFirst } from './videoCreateV2';
 import { videoCapabilityFields } from './videoFields';
 import {
   canSubmit,
@@ -25,27 +27,44 @@ type VideoStudioFormProps = {
   models: NonEmptyList<VideoModel>;
   isSubmitting: boolean;
   onSubmit: (body: CreateVideoGenerationBody) => void;
+  // Create v2: model cards, visual controls, and a model switch that keeps every value (marking the ones it rejects).
+  createV2?: boolean;
 };
 
-const VideoStudioForm = ({ models, isSubmitting, onSubmit }: VideoStudioFormProps) => {
-  const { form, model, changes, update, selectModel } = useCapabilityFormState(models, VIDEO_FORM_RULES);
+const VideoStudioForm = ({ models, isSubmitting, onSubmit, createV2 = false }: VideoStudioFormProps) => {
+  // Create v2 opens on the ranker's pick; legacy keeps the server's order.
+  const ordered = useMemo(() => (createV2 ? withRankedVideoDefaultFirst(models) : models), [models, createV2]);
+  const { form, model, changes, update, selectModel } = useCapabilityFormState(
+    ordered,
+    VIDEO_FORM_RULES,
+    createV2 ? 'keep' : 'clamp'
+  );
   const imageBrowser = useImageBrowser();
 
   if (!model) return null;
 
+  const picker = createV2
+    ? { modelCards: videoModelCards(models, form) }
+    : { models: models.map(candidate => ({ value: candidate.id, label: candidate.display_name })) };
+
   return (
     <CapabilityForm
       testIdPrefix="video-form"
-      models={models.map(candidate => ({ value: candidate.id, label: candidate.display_name }))}
+      {...picker}
       modelId={form.modelId}
       onModelChange={selectModel}
       changes={changes}
-      fields={videoCapabilityFields(model, form, { update, pickImage: () => imageBrowser.openImageBrowser() })}
+      fields={videoCapabilityFields(
+        model,
+        form,
+        { update, pickImage: () => imageBrowser.openImageBrowser() },
+        createV2 ? 'createV2' : 'legacy'
+      )}
       estimateCredits={estimateCredits(form)}
       submitLabel="Generate video"
       canSubmit={canSubmit(form)}
       isSubmitting={isSubmitting}
-      onSubmit={() => onSubmit(toCreateBody(form))}
+      onSubmit={() => onSubmit(toCreateBody(form, model))}
     >
       <GenerationPayerNote data-testid="video-form-payer-note" />
       <ImageBrowserModal

@@ -50,7 +50,6 @@ import {
   Package,
   Plug,
   Radar,
-  RotateCcw,
   Scale,
   ScanSearch,
   ScrollText,
@@ -79,7 +78,7 @@ export enum AdminTab {
   AdminSettings = 1,
   Feedback = 2,
   Analytics = 3,
-  // 4, 11 and 17 were tabs with no panel; never reuse them.
+  // 4, 11, 16 and 17 were tabs that no longer exist; never reuse them.
   RegistrationInvites = 5,
   Migrate = 6,
   Modals = 7,
@@ -90,7 +89,6 @@ export enum AdminTab {
   Subscriptions = 13,
   Organizations = 14,
   CreditAnalytics = 15,
-  SecretsRotation = 16,
   ModelLogs = 18,
   ModelMetrics = 19,
   EventMetrics = 20,
@@ -149,6 +147,8 @@ export enum AdminTab {
   StripeDisputes = 75,
   Approvals = 76,
   Tutorials = 77,
+  AiOperations = 78,
+  LegacyApiKeys = 79,
 }
 
 /**
@@ -255,7 +255,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     Icon: Coins,
     label: 'Money',
     items: [
-      { Icon: ChartSpline, tab: AdminTab.Revenue, label: 'Revenue', testid: 'admin-revenue-btn' },
+      { Icon: ChartSpline, tab: AdminTab.Revenue, label: 'Revenue & payments', testid: 'admin-revenue-btn' },
       { Icon: Coins, tab: AdminTab.CreditAnalytics, label: 'Credits' },
       { Icon: CreditCard, tab: AdminTab.Subscriptions, label: 'Subscriptions', badge: 'newSubscriptions' },
       { Icon: Tag, tab: AdminTab.GrowthPricing, label: 'Pricing', testid: 'admin-growth-pricing-btn' },
@@ -292,8 +292,8 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: Fingerprint, tab: AdminTab.IdentityProviders, label: 'Identity providers' },
       { Icon: KeyRound, tab: AdminTab.OAuthClients, label: 'OAuth clients', testid: 'admin-oauth-clients-btn' },
       { Icon: Key, tab: AdminTab.ApiKeyScopePreflight, label: 'API key scopes', testid: 'admin-scope-preflight-btn' },
+      { Icon: Key, tab: AdminTab.LegacyApiKeys, label: 'Legacy API keys', testid: 'admin-legacy-api-keys-btn' },
       { Icon: Lock, tab: AdminTab.SystemSecrets, label: 'System secrets' },
-      { Icon: RotateCcw, tab: AdminTab.SecretsRotation, label: 'Secrets rotation', badge: 'secretRotation' },
       {
         Icon: Globe,
         tab: AdminTab.PublishedPages,
@@ -308,6 +308,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     Icon: Sparkles,
     label: 'AI',
     items: [
+      { Icon: Gauge, tab: AdminTab.AiOperations, label: 'AI operations', testid: 'admin-ai-operations-btn' },
       { Icon: Brain, tab: AdminTab.LLMDashboard, label: 'Models' },
       { Icon: Bot, tab: AdminTab.AgentOps, label: 'Agents' },
       { Icon: FileText, tab: AdminTab.SystemPrompts, label: 'System prompts' },

@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { Alert, Button, FormControl, FormLabel, Input, Typography } from '@mui/joy';
+import { Alert, Button, FormControl, FormLabel, IconButton, Input, Typography } from '@mui/joy';
 import { toast } from 'sonner';
 import { CAMPAIGN_WATCH_MAX_MEMBERS } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -17,6 +17,7 @@ export function WatchAccountsButton({
   label = 'Watch these accounts',
   incomplete = false,
   incompleteHint = 'This list is incomplete. Open an individual detection to watch a complete group.',
+  icon,
   onCreated,
 }: {
   userIds: readonly string[];
@@ -25,6 +26,8 @@ export function WatchAccountsButton({
   incomplete?: boolean;
   /** Tooltip on the disabled button explaining why an incomplete list cannot be watched. */
   incompleteHint?: string;
+  /** Renders a ghost icon button labelled `label` instead of a text button, e.g. in a table's row actions. */
+  icon?: ReactNode;
   onCreated?: () => void;
 }) {
   const { currentUser: user } = useUser();
@@ -36,23 +39,27 @@ export function WatchAccountsButton({
   const [snapshot, setSnapshot] = useState<string[]>([]);
   const ids = [...new Set(userIds)];
   if (!canUseCampaignWatches(user) || ids.length === 0) return null;
+  const trigger = {
+    disabled: incomplete || ids.length > CAMPAIGN_WATCH_MAX_MEMBERS,
+    title: incomplete ? incompleteHint : icon ? label : undefined,
+    onClick: () => {
+      setSnapshot(ids);
+      setOpen(true);
+      setError(null);
+    },
+    'data-testid': 'watch-accounts-open-btn',
+  };
   return (
     <>
-      <Button
-        size="sm"
-        variant="outlined"
-        color="neutral"
-        disabled={incomplete || ids.length > CAMPAIGN_WATCH_MAX_MEMBERS}
-        title={incomplete ? incompleteHint : undefined}
-        onClick={() => {
-          setSnapshot(ids);
-          setOpen(true);
-          setError(null);
-        }}
-        data-testid="watch-accounts-open-btn"
-      >
-        {label}
-      </Button>
+      {icon ? (
+        <IconButton size="sm" variant="plain" color="neutral" aria-label={label} {...trigger}>
+          {icon}
+        </IconButton>
+      ) : (
+        <Button size="sm" variant="outlined" color="neutral" {...trigger}>
+          {label}
+        </Button>
+      )}
       {open && (
         <ActionDialog
           open

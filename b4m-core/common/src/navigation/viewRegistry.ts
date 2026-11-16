@@ -512,16 +512,6 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
-    id: 'admin.secrets_rotation',
-    section: 'admin',
-    label: 'Secrets Rotation',
-    description: 'Manage API key rotation and secret lifecycle',
-    navigationType: 'tab',
-    target: '16', // AdminTab.SecretsRotation
-    keywords: ['secrets', 'rotation', 'API keys', 'credentials'],
-    requiresAdmin: true,
-  },
-  {
     id: 'admin.feedback',
     section: 'admin',
     label: 'Feedback',
@@ -874,6 +864,16 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.legacy_api_keys',
+    section: 'admin',
+    label: 'Legacy API keys',
+    description: 'See which recently used API keys still rely on legacy access, and their owners',
+    navigationType: 'tab',
+    target: '79', // AdminTab.LegacyApiKeys
+    keywords: ['legacy api keys', 'legacy keys', 'api keys', 'grandfathered', 'scoped key', 'key owners'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.published_pages',
     section: 'admin',
     label: 'Published pages',
@@ -992,6 +992,16 @@ export const VIEW_REGISTRY: NavigableView[] = [
     navigationType: 'tab',
     target: '42', // AdminTab.DlqReplay
     keywords: ['dlq', 'dead letters', 'dead-letter queue', 'failed messages', 'replay', 'retry'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.ai_operations',
+    section: 'admin',
+    label: 'AI operations',
+    description: 'Admin AI spend, agreement, budget caps, kill switches and autonomy readiness',
+    navigationType: 'tab',
+    target: '78',
+    keywords: ['AI operations', 'AI spend', 'agreement', 'kill switch', 'autonomy', 'AI budget'],
     requiresAdmin: true,
   },
   {

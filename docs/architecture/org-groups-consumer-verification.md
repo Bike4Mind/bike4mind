@@ -26,7 +26,7 @@ those three covers all five.
 | Consumer | Implementation | Notes |
 |---|---|---|
 | CASL ability resolution (`packages/server-utils/src/auth/ability.ts`) | **A. CASL `$elemMatch`** | The access gate. Compiled to a Mongo query via `accessibleBy`. |
-| Data lakes (`apps/client/server/dataLakes/index.ts`, both call sites) | **B. `buildOwnershipConditions` `$elemMatch`** | Thin pass-through of `user.groups ?? []` into `fabfiles.search`. |
+| Data lakes (`packages/server-utils/src/dataLakes/index.ts`, both call sites) | **B. `buildOwnershipConditions` `$elemMatch`** | Thin pass-through of `user.groups ?? []` into `fabfiles.search`. |
 | `ChatCompletionFeatures.ts` forced retrieval | **B** | Pass-through into `db.fabfiles.search`. |
 | `knowledgeBaseSearch` (semantic + keyword) | **B** | Semantic path funnels through `collectScopedFiles` -> `fabfiles.search`; keyword path calls `fabfiles.search` directly. |
 | `knowledgeBaseRetrieve` Path B (tag/query search) | **B** | Same `fabfiles.search` funnel. |

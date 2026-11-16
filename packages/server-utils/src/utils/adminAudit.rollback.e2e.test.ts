@@ -30,6 +30,7 @@ import {
   AdminSettings,
   EmailJob,
   Organization,
+  OrganizationAuditEventModel,
   SlackDevWorkspace,
   emailJobRepository,
   organizationRepository,
@@ -45,6 +46,7 @@ import {
   scopedSettingsService,
 } from '@bike4mind/services';
 import { BadRequestError } from './errors';
+import { recordOrganizationAuditEvent } from './organizationAudit';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -93,6 +95,51 @@ const seedUser = async (isAdmin = false) =>
 const isAdminNow = async (id: string) => (await User.findById(id).lean())?.isAdmin;
 
 describe('strict admin audit writes roll back the action on a real replica set', () => {
+  it('rolls back the business write when the organization audit store fails', async () => {
+    const owner = await seedUser();
+    const organization = await Organization.create({ name: 'Before', userId: owner.id, seats: 2 });
+    await OrganizationAuditEventModel.createCollection();
+    const create = vi
+      .spyOn(OrganizationAuditEventModel, 'create')
+      .mockRejectedValueOnce(new Error('org audit unavailable'));
+    try {
+      await expect(
+        withTransaction(async () => {
+          await Organization.updateOne({ _id: organization._id }, { $set: { name: 'After' } });
+          await recordOrganizationAuditEvent({
+            organizationId: organization.id,
+            actorUserId: 'admin',
+            action: 'owner.transferred',
+          });
+        })
+      ).rejects.toThrow('org audit unavailable');
+      expect((await Organization.findById(organization.id))?.name).toBe('Before');
+      expect(await OrganizationAuditEventModel.countDocuments({ organizationId: organization.id })).toBe(0);
+    } finally {
+      create.mockRestore();
+    }
+  });
+
+  it('rolls back the organization audit row with a later business failure', async () => {
+    const owner = await seedUser();
+    const organization = await Organization.create({ name: 'Before', userId: owner.id, seats: 2 });
+    await OrganizationAuditEventModel.createCollection();
+    await expect(
+      withTransaction(async () => {
+        await Organization.updateOne({ _id: organization._id }, { $set: { name: 'After' } });
+        await recordOrganizationAuditEvent({
+          organizationId: organization.id,
+          actorUserId: 'admin',
+          action: 'owner.transferred',
+        });
+        expect(await OrganizationAuditEventModel.countDocuments({ organizationId: organization.id })).toBe(1);
+        throw new Error('business operation failed');
+      })
+    ).rejects.toThrow('business operation failed');
+    expect((await Organization.findById(organization.id))?.name).toBe('Before');
+    expect(await OrganizationAuditEventModel.countDocuments({ organizationId: organization.id })).toBe(0);
+  });
+
   it('a failed audit write leaves a role grant uncommitted', async () => {
     const user = await seedUser();
 

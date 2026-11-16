@@ -1,20 +1,5 @@
 import { useState } from 'react';
-import {
-  Alert,
-  Box,
-  Button,
-  Dropdown,
-  IconButton,
-  Input,
-  Menu,
-  MenuButton,
-  MenuItem,
-  Stack,
-  Switch,
-  Textarea,
-  Typography,
-} from '@mui/joy';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
+import { Alert, Box, Button, Input, MenuItem, Stack, Switch, Textarea, Typography } from '@mui/joy';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { z } from 'zod';
@@ -25,11 +10,12 @@ import {
   AdminPageHeader,
   DataTable,
   EmptyState,
+  RowActionsMenu,
   StatusChip,
   UpdatingBar,
   type DataColumn,
 } from './shared';
-import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import { AdminPermissionAction } from './shared/MissingPermission';
 
 /**
@@ -242,56 +228,43 @@ function GearRowMenu({
   const [resetOpen, setResetOpen] = useState(false);
   return (
     <>
-      <Dropdown>
-        {/* Every item in this menu writes (edit, reset), so the trigger carries the gate. */}
-        <AdminPermissionAction requirement="settings:manage">
-          {disabled => (
-            <MenuButton
-              slots={{ root: IconButton }}
-              slotProps={{
-                root: {
-                  size: 'sm',
-                  variant: 'plain',
-                  disabled: disabled || busy || pending,
-                  'aria-label': `Actions for ${gear.key}`,
-                  sx: { ...adminFocus, color: 'admin.inkMuted' },
-                },
-              }}
-              data-testid={`manage-gear-actions-${gear.key}`}
-            >
-              <MoreHorizIcon sx={{ fontSize: 18 }} />
-            </MenuButton>
-          )}
-        </AdminPermissionAction>
-        <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
-          {editing ? (
-            <MenuItem
-              disabled={busy || pending}
-              onClick={() => {
-                discard();
-                onStopEditing();
-              }}
-              data-testid={`manage-gear-cancel-${gear.key}`}
-            >
-              Cancel editing
-            </MenuItem>
-          ) : (
-            <MenuItem disabled={busy || pending} onClick={onEdit} data-testid={`manage-gear-edit-${gear.key}`}>
-              Edit gear
-            </MenuItem>
-          )}
-          {gear.override !== null && (
-            <MenuItem
-              color="danger"
-              disabled={busy || pending}
-              onClick={() => setResetOpen(true)}
-              data-testid={`manage-gear-reset-${gear.key}`}
-            >
-              Reset to code defaults
-            </MenuItem>
-          )}
-        </Menu>
-      </Dropdown>
+      {/* Every item in this menu writes (edit, reset), so the trigger carries the gate. */}
+      <AdminPermissionAction requirement="settings:manage">
+        {disabled => (
+          <RowActionsMenu
+            testId={`manage-gear-actions-${gear.key}`}
+            ariaLabel={`Actions for ${gear.key}`}
+            disabled={disabled || busy || pending}
+          >
+            {editing ? (
+              <MenuItem
+                disabled={busy || pending}
+                onClick={() => {
+                  discard();
+                  onStopEditing();
+                }}
+                data-testid={`manage-gear-cancel-${gear.key}`}
+              >
+                Cancel editing
+              </MenuItem>
+            ) : (
+              <MenuItem disabled={busy || pending} onClick={onEdit} data-testid={`manage-gear-edit-${gear.key}`}>
+                Edit gear
+              </MenuItem>
+            )}
+            {gear.override !== null && (
+              <MenuItem
+                color="danger"
+                disabled={busy || pending}
+                onClick={() => setResetOpen(true)}
+                data-testid={`manage-gear-reset-${gear.key}`}
+              >
+                Reset to code defaults
+              </MenuItem>
+            )}
+          </RowActionsMenu>
+        )}
+      </AdminPermissionAction>
       <ActionDialog
         open={resetOpen}
         onClose={() => setResetOpen(false)}

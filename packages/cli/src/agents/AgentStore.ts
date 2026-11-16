@@ -68,12 +68,12 @@ export const MODEL_ALIASES: Record<string, string> = {
   // Anthropic/Claude Models
   // Short aliases (most common)
   opus: ChatModels.CLAUDE_4_8_OPUS,
-  sonnet: ChatModels.CLAUDE_4_5_SONNET,
+  sonnet: ChatModels.CLAUDE_5_5_SONNET,
   haiku: ChatModels.CLAUDE_4_5_HAIKU,
 
   // Claude-prefixed aliases
   'claude-opus': ChatModels.CLAUDE_4_8_OPUS,
-  'claude-sonnet': ChatModels.CLAUDE_4_5_SONNET,
+  'claude-sonnet': ChatModels.CLAUDE_5_5_SONNET,
   'claude-haiku': ChatModels.CLAUDE_4_5_HAIKU,
 
   // Version-specific Claude aliases
@@ -82,13 +82,13 @@ export const MODEL_ALIASES: Record<string, string> = {
   'claude-4.6-opus': ChatModels.CLAUDE_4_6_OPUS,
   'claude-4.6-sonnet': ChatModels.CLAUDE_4_6_SONNET,
   'claude-4.5-opus': ChatModels.CLAUDE_4_5_OPUS,
-  'claude-4.5-sonnet': ChatModels.CLAUDE_4_5_SONNET,
+  'claude-4.5-sonnet': ChatModels.CLAUDE_5_5_SONNET,
   'claude-4.5-haiku': ChatModels.CLAUDE_4_5_HAIKU,
   'claude-4-opus': ChatModels.CLAUDE_4_8_OPUS,
   'claude-4-sonnet': ChatModels.CLAUDE_4_6_SONNET,
   'claude-4.1-opus': ChatModels.CLAUDE_4_8_OPUS,
   'claude-3.7-sonnet': ChatModels.CLAUDE_4_6_SONNET,
-  'claude-3.5-sonnet': ChatModels.CLAUDE_4_5_SONNET,
+  'claude-3.5-sonnet': ChatModels.CLAUDE_5_5_SONNET,
   'claude-3.5-haiku': ChatModels.CLAUDE_4_5_HAIKU,
   'claude-3-opus': ChatModels.CLAUDE_4_8_OPUS,
 

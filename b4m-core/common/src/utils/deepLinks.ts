@@ -68,6 +68,18 @@ export function adminModerationIncidentPath(incidentId: string): string {
   return `/admin?${params.toString()}`;
 }
 
+/** Admin console Dead letters tab slug; same stability rule as ADMIN_FEEDBACK_TAB_SLUG. */
+export const ADMIN_DLQ_REPLAY_TAB_SLUG = 'dlq-replay';
+/** Preselects one queue on the Dead letters tab, by its DLQ registry label. */
+export const DLQ_QUEUE_PARAM = 'dlqQueue';
+
+/** Deep link to the Dead letters tab, optionally opened on one queue. */
+export function adminDlqReplayPath(queueLabel?: string): string {
+  const params = new URLSearchParams({ [ADMIN_TAB_PARAM]: ADMIN_DLQ_REPLAY_TAB_SLUG });
+  if (queueLabel) params.set(DLQ_QUEUE_PARAM, queueLabel);
+  return `/admin?${params.toString()}`;
+}
+
 /**
  * Deep link to one user's admin profile. Ids here come from counter logs, so they are not trusted:
  * URLSearchParams encoding keeps a crafted id from grafting extra params onto the link.

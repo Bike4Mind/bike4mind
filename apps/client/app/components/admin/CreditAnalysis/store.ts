@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 
 /** Inner tab values of the Credit Analytics tab; must match the Tab/TabPanel values in ./index.tsx. */
-export type CreditAnalysisTab = 'users' | 'pricing' | 'margins' | 'org-usage' | 'api-usage' | 'ledger' | 'adjustments';
+export type CreditAnalysisTab =
+  'users' | 'pricing' | 'margins' | 'org-usage' | 'api-usage' | 'ledger' | 'adjustments' | 'economy';
 
 /**
  * Inner-tab and focus state for Credit Analytics.

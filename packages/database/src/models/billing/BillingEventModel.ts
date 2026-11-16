@@ -4,6 +4,13 @@ import BaseRepository from '@bike4mind/db-core';
 
 const ModelName = 'BillingEvent';
 
+/** Events that change the outcome of an earlier payment; the payment follow-up index is partial on them. */
+export const BILLING_EVENT_PAYMENT_FOLLOW_UP_TYPES = [
+  'charge.refunded',
+  'charge.dispute.created',
+  'charge.dispute.closed',
+] as const;
+
 /**
  * One Stripe webhook event this stage owns, written by pages/api/stripe/webhook.ts after the event's side
  * effects succeed (docs/admin-subscriptions-spec.md 6.2). Feeds the subscription Timeline tab and is the
@@ -48,6 +55,16 @@ const BillingEventSchema = new Schema<IBillingEventDocument>(
 
 BillingEventSchema.index({ subscriptionId: 1, occurredAt: -1 });
 BillingEventSchema.index({ ownerType: 1, ownerId: 1, occurredAt: -1 });
+// The admin Payments report (server/admin/payments): invoice and refund scans by date, and the refund and
+// dispute follow-ups of one payment intent. Built by the 20260921241030 ensure migration.
+BillingEventSchema.index({ type: 1, occurredAt: -1 });
+BillingEventSchema.index(
+  { 'data.paymentIntentId': 1, type: 1 },
+  {
+    name: 'billing_event_payment_follow_ups',
+    partialFilterExpression: { type: { $in: [...BILLING_EVENT_PAYMENT_FOLLOW_UP_TYPES] } },
+  }
+);
 
 export const BillingEventModel: IBillingEventModel =
   (mongoose.models[ModelName] as IBillingEventModel) ||

@@ -20,7 +20,6 @@ import type { ApiClient } from '../auth/ApiClient';
 import { logger } from '../utils/Logger';
 import { DEFAULT_OLLAMA_PORT, withDefaultOllamaPort } from '../utils/ollamaHost.js';
 import { ServerLlmBackend } from '../llm/ServerLlmBackend';
-import { WebSocketLlmBackend } from '../llm/WebSocketLlmBackend';
 import { MultiLlmBackend, type LlmRoute } from '../llm/MultiLlmBackend.js';
 import { ServerModelBackend } from '../llm/ServerModelBackend.js';
 import { desktopRequestSettings, desktopRuntimeIdForHost } from '../llm/desktopModelSettings.js';
@@ -49,7 +48,7 @@ import {
 } from './signedOutLocal.js';
 
 /** The concrete backend types this builder can produce. */
-export type CliLlmBackend = ServerLlmBackend | WebSocketLlmBackend | MultiLlmBackend | SignedOutCloudBackend;
+export type CliLlmBackend = ServerLlmBackend | MultiLlmBackend | SignedOutCloudBackend;
 
 export interface BuildLlmBackendInput {
   config: CliConfig;

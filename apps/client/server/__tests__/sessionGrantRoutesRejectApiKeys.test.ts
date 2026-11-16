@@ -35,6 +35,7 @@ const MINTING_HELPERS: Record<string, RegExp> = {
   issueSessionForRequest: /\bissueSessionForRequest\(/,
   issueBrowserSession: /\bissueBrowserSession\(/,
   completeMfaLogin: /\bcompleteMfaLogin\(/,
+  completeMfaEnrollment: /\bcompleteMfaEnrollment\(/,
   issueSession: /\.issueSession\(/,
   signAccessToken: /\.signAccessToken\(/,
   generateAuthCode: /\bgenerateAuthCode\(/,

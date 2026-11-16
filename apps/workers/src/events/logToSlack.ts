@@ -6,7 +6,7 @@ import { Resource } from 'sst';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { connectDB } from '@bike4mind/database';
-import { extractErrorType, normalizeErrorMessage } from '@server/services/liveopsFingerprint';
+import { extractErrorType, normalizeErrorMessage } from '@bike4mind/server-utils/services/liveopsFingerprint';
 import { classifyError } from './logToSlackClassify';
 import {
   SreClassification,

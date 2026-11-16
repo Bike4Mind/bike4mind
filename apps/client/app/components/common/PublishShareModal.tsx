@@ -33,6 +33,7 @@ import type { CommentPolicy, PublishResult, PublishVisibility } from '@bike4mind
 import { ELISION_PUBLISH_TITLE } from '@bike4mind/common';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { getValidationViolationsMessage } from '@client/app/utils/error';
+import { api } from '@client/app/contexts/ApiContext';
 import { ShareActions } from './ShareActions';
 import { EmbedAllowlistEditor } from './EmbedAllowlistEditor';
 import { ClearGateConfirmModal, StoredGateNote, STORED_GATE_CLEARED_MESSAGE } from './StoredGateClear';
@@ -110,6 +111,7 @@ export interface PublishShareModalProps {
    * rather than a hard block.
    */
   incompleteWarning?: string;
+  policySource?: { artifactId?: string; sessionId?: string };
 }
 
 const SHARE_EXPIRY_DAYS = { none: null, '1d': 1, '7d': 7, '30d': 30 } as const;
@@ -320,6 +322,7 @@ export function PublishShareModal({
   resolvePublished,
   orgOption,
   incompleteWarning,
+  policySource,
 }: PublishShareModalProps) {
   const [visibility, setVisibility] = useState<PublishVisibility>(defaultVisibility);
   const [commentsOn, setCommentsOn] = useState(true);
@@ -328,6 +331,27 @@ export function PublishShareModal({
   const [discoverableOn, setDiscoverableOn] = useState(false);
   const [result, setResult] = useState<PublishResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const [policyError, setPolicyError] = useState<string | null>(null);
+  const [publicLinkBlockedReason, setPublicLinkBlockedReason] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open || !policySource) return;
+    let active = true;
+    api
+      .get<{ publicLinkBlockedReason: string | null }>('/api/publish/policy', { params: policySource })
+      .then(response => {
+        if (active) setPublicLinkBlockedReason(response.data.publicLinkBlockedReason);
+      })
+      .catch(() => {
+        /* The publish endpoint remains authoritative. */
+      });
+    return () => {
+      active = false;
+      setPublicLinkBlockedReason(null);
+    };
+  }, [open, policySource]);
+  useEffect(() => {
+    if (publicLinkBlockedReason) setVisibility(current => (current === 'public' ? 'private' : current));
+  }, [publicLinkBlockedReason]);
   // A prior publication of this artifact, resolved asynchronously after the dialog opens.
   // Its presence reveals the "update existing vs publish as new" choice. We keep the
   // prior commentPolicy so an update can RE-ASSERT it exactly rather than collapsing the binary
@@ -380,6 +404,7 @@ export function PublishShareModal({
   useEffect(() => {
     if (open) {
       setResult(null);
+      setPolicyError(null);
       setVisibility(defaultVisibility);
       setCommentsOn(true);
       setDiscoverableOn(false);
@@ -575,6 +600,7 @@ export function PublishShareModal({
   // Phase 1 -> publish with the chosen visibility.
   const handleCreate = async () => {
     if (!publish) return;
+    if (visibility === 'public' && publicLinkBlockedReason) return;
     // Validate the staged gate BEFORE publishing so a typo'd passphrase doesn't
     // leave the page momentarily open-public.
     const stagedGate = isPublic && gateTouched ? buildGateInput() : null;
@@ -621,7 +647,9 @@ export function PublishShareModal({
       }
       setResult(r);
     } catch (err) {
-      toast.error(errorMessage(err));
+      const message = errorMessage(err);
+      setPolicyError(message);
+      toast.error(message);
     } finally {
       setBusy(false);
     }
@@ -682,9 +710,11 @@ export function PublishShareModal({
     try {
       await updatePublishedVisibility(result.publicId, next);
       toast.success(next === 'public' ? 'Now public - anyone with the link can view' : `Visibility set to ${next}`);
-    } catch {
+    } catch (err) {
       setVisibility(prev);
-      toast.error('Failed to update visibility');
+      const message = errorMessage(err);
+      setPolicyError(message);
+      toast.error(message);
     } finally {
       setBusy(false);
     }
@@ -692,6 +722,7 @@ export function PublishShareModal({
 
   const onPick = (next: PublishVisibility) => {
     if (busy) return;
+    if (next === 'public' && publicLinkBlockedReason) return;
     // Leaving public retires a staged search-listing choice rather than parking it on a
     // hidden control. Re-picking Public starts from off, so listing is always a choice
     // made against the exposure the artifact actually has.
@@ -746,8 +777,12 @@ export function PublishShareModal({
   }, [confirmingClear]);
 
   // No-sign-in link (`/a/<token>`): mint on demand, rotate (revokes old links), or revoke.
-  const runShareToken = async (action: () => Promise<MintedLink | null>, successMsg: string): Promise<void> => {
-    if (!result || shareBusy) return;
+  const runShareToken = async (
+    action: () => Promise<MintedLink | null>,
+    successMsg: string,
+    revoking = false
+  ): Promise<void> => {
+    if (!result || shareBusy || (!revoking && publicLinkBlockedReason)) return;
     setShareBusy(true);
     try {
       const minted = await action();
@@ -774,10 +809,14 @@ export function PublishShareModal({
       'Link regenerated - the old link no longer works'
     );
   const onRevokeShareToken = () =>
-    runShareToken(async () => {
-      await revokeShareToken(result!.publicId);
-      return null;
-    }, 'Link turned off');
+    runShareToken(
+      async () => {
+        await revokeShareToken(result!.publicId);
+        return null;
+      },
+      'Link turned off',
+      true
+    );
 
   const copyToClipboard = async (text: string) => {
     try {
@@ -886,6 +925,16 @@ export function PublishShareModal({
 
         <FormControl sx={{ mb: 2 }}>
           <FormLabel>Visibility</FormLabel>
+          {publicLinkBlockedReason && (
+            <Alert color="warning" data-testid="publish-sharing-policy-explanation" sx={{ mb: 1 }}>
+              {publicLinkBlockedReason}
+            </Alert>
+          )}
+          {policyError && (
+            <Alert color="warning" data-testid="publish-sharing-policy-error" sx={{ mb: 1 }}>
+              {policyError}
+            </Alert>
+          )}
           <RadioGroup
             value={visibility}
             onChange={e => onPick(e.target.value as PublishVisibility)}
@@ -913,7 +962,7 @@ export function PublishShareModal({
                     transition: 'border-color .15s, background-color .15s',
                   }}
                 >
-                  <Radio value={o.value} disabled={busy} />
+                  <Radio value={o.value} disabled={busy || (o.value === 'public' && !!publicLinkBlockedReason)} />
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1 }}>
                     <AccessIcon
                       access={getPublishAccess({ visibility: o.value })}

@@ -3,7 +3,7 @@ import { ApiKeyScope, MODERATION_PAGE_READ, type UserSignInsPage } from '@bike4m
 import { Logger } from '@bike4mind/observability';
 import { adminApi } from '@server/middlewares/adminApi';
 import { encodeAuditCursor, parseCursorPageQuery } from '@server/utils/adminAuditQuery';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { listUserSignIns } from '@server/utils/userSignIns';
 
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;

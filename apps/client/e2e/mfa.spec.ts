@@ -187,9 +187,12 @@ test.describe('MFA enforcement screen', () => {
     await loginPage.submitOtcExpectingMfa();
 
     expect((await setupResponse).status()).toBe(200);
-    await expect(page).not.toHaveURL(/\/login/);
-    await expect(page.getByTestId('mfa-enforcement-required-screen')).toBeVisible();
     await expect(page.getByTestId('mfa-modal-content')).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    // With the stage's real enforceMFA on, sign-in itself demands enrollment and opens setup on /login;
+    // with it off, sign-in completes and the enforcement screen opens setup inside the app.
+    if (!/\/login/.test(new URL(page.url()).pathname)) {
+      await expect(page.getByTestId('mfa-enforcement-required-screen')).toBeVisible();
+    }
   });
 
   test('an enrolled user is not asked to set up MFA again after a reload', async ({

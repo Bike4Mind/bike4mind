@@ -80,6 +80,42 @@ runs on an unsigned simulator build. Needs the staging deploy to have seeded tha
 - [ ] Camera, microphone and photo-library permission prompts show the usage strings and denial is handled with a clear message.
 - [ ] Voice note records, transcribes and drops text into the composer.
 
+## Hands-free voice conversation
+
+Voice chat is a full-screen mode opened from the composer (waveform button), the drawer (Voice chat) and any notebook. It
+listens with on-device speech recognition, sends each utterance as a normal chat turn, speaks the reply sentence by sentence
+with the system voice, and listens again. Speech recognition and the speech engine are limited in the Simulator, so everything
+below the line needs a signed build on a real iPhone.
+
+What v1 supports: multi-turn conversation; barge-in by talking over the reply (two or more words) or tapping the orb or Stop;
+mute; pause on calls and when the audio device disconnects, with a Resume button; speaker by default, AirPods and other
+Bluetooth headsets; ducking other audio while the mode is open and restoring it after; background audio (the `audio`
+background mode) so the conversation continues with the screen locked. The credits used per turn show on screen and are never
+spoken. Out of scope for v1: server-side voices, an Action Button or Control Center entry, wake-free start.
+
+Simulator (fixture run, `B4M_UI_FIXTURES=1`, scripted utterance, no microphone):
+
+- [ ] The waveform button on Chat home and in a notebook, and the Voice chat drawer row, each open the screen.
+- [ ] The orb cycles Listening, Sending, Thinking, Speaking and back; Done closes it; a new conversation lands in its notebook.
+- [ ] Against a real server (Debug > Server switcher, signed in), launch a Debug build with `B4M_VOICE_SCRIPTED_SPEECH=1`: the
+  scripted utterance goes through the real send and the streamed reply is spoken.
+
+Device only:
+
+- [ ] First start shows the speech recognition and then the microphone prompts; denying either shows the Open Settings message.
+- [ ] Ask a question without touching the screen, hear the whole reply, follow up twice; the transcript shows normal turns.
+- [ ] Talk over a long reply: speech stops within about a second and your new question is the next turn. On the loudspeaker
+      with no headset, confirm the reply does not interrupt itself (echo); if it does, note the model and volume.
+- [ ] AirPods: start, lock the phone and put it in a pocket, hold a three-turn exchange. Take one AirPod out mid-reply: playback
+      pauses (it must not jump to the speaker) and Resume continues.
+- [ ] Receive a phone call mid-reply: the mode pauses and resumes when the call ends.
+- [ ] Music playing before start is ducked while listening and speaking and comes back after Done.
+- [ ] Background the app and lock the screen mid-conversation: listening and speaking continue; the orange microphone indicator
+      stays on and clears after Done.
+- [ ] VoiceOver: the state label, Stop, microphone and Done are reachable; paused and failed states are announced.
+- [ ] Airplane mode: a send fails with a spoken message and listening resumes.
+- [ ] Credits line shows after a reply and is not read aloud.
+
 ## Studio gallery, AirPlay and Siri
 
 - [ ] Video and audio play from the Studio gallery; AirPlay routes; Picture in Picture works; presigned URL expiry recovers on its own.

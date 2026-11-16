@@ -16,7 +16,7 @@ export const AuditActorSchema = z.object({
 export type AuditActor = z.infer<typeof AuditActorSchema>;
 
 export const AuditTargetSchema = z.object({
-  kind: z.enum(['user', 'organization', 'settings', 'oauthClient', 'apiKey', 'system', 'curatedCatalog']),
+  kind: z.enum(['user', 'organization', 'settings', 'oauthClient', 'apiKey', 'system', 'curatedCatalog', 'adminRole']),
   id: z.string(),
   displayName: z.string(),
 });
@@ -123,6 +123,8 @@ export interface IAdminAuditLogRepository {
   ): Promise<number>;
   /** Entries one actor recorded under `actions` with occurredAt at or after `since`, skipping approval-run ones. */
   countActions(actorUserId: string, actions: readonly AdminAuditAction[], since: Date): Promise<number>;
+  /** Entries under `actions` by any actor with occurredAt at or after `since`. */
+  countActionsSince(actions: readonly AdminAuditAction[], since: Date): Promise<number>;
 }
 
 /** The subscription Timeline read capability, without extending the base repository's required contract. */

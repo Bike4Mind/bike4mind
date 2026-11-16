@@ -148,4 +148,18 @@ describe('Stripe state write on a real replica set', () => {
     expect(await AdminAuditLogModel.countDocuments({})).toBe(0);
     expect((await BillingMismatchModel.findOne({}).lean())?.status).toBe('open');
   });
+  it('persists the actual termination time separately from the earlier cancellation request', async () => {
+    const { row } = await seed();
+    const canceledAt = 1_800_100_000;
+    const endedAt = 1_801_000_000;
+    await withTransaction(async () => {
+      await applyStripeSubscriptionState(
+        { ...stripeSubscription, status: 'canceled', canceled_at: canceledAt, ended_at: endedAt },
+        { ownerType: SubscriptionOwnerType.Organization }
+      );
+    });
+    const stored = await Subscription.findById(row.id).lean<{ canceledAt: Date; endedAt: Date }>();
+    expect(stored?.canceledAt).toEqual(new Date(canceledAt * 1000));
+    expect(stored?.endedAt).toEqual(new Date(endedAt * 1000));
+  });
 });

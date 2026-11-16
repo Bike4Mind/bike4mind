@@ -48,6 +48,22 @@ const openDialog = (props: HarnessProps = {}) => {
 };
 
 describe('ActionDialog', () => {
+  it('allows a reason-free command when the caller policy does not require one', async () => {
+    const onConfirm = vi.fn();
+    const confirm = openDialog({ onConfirm, reasonRequired: false });
+    expect(confirm).toBeEnabled();
+    expect(screen.queryByTestId('adjust-dialog-reason-input')).not.toBeInTheDocument();
+    fireEvent.click(confirm);
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledWith(''));
+  });
+
+  it('still gates a reason-free command on typed confirmation', () => {
+    const confirm = openDialog({ reasonRequired: false, typedConfirm: { expected: 'queue', noun: 'queue name' } });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByTestId('adjust-dialog-typed-input'), { target: { value: 'queue' } });
+    expect(confirm).toBeEnabled();
+  });
+
   it('seeds a complete, editable reason from initialReason', async () => {
     const onConfirm = vi.fn();
     expect(isAdminReasonComplete(ACCEPTED_AI_REASON)).toBe(true);

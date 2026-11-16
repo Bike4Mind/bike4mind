@@ -5,7 +5,7 @@ const h = vi.hoisted(() => ({
   checkCredits: vi.fn(),
 }));
 
-vi.mock('@server/utils/sessionOperationalCreditPreflight', () => ({
+vi.mock('@bike4mind/server-utils/utils/sessionOperationalCreditPreflight', () => ({
   checkSessionOperationalCredits: h.checkCredits,
 }));
 

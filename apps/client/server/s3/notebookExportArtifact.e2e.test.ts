@@ -13,7 +13,7 @@ import {
   artifactContentRepository,
 } from '@bike4mind/database';
 import { notebookExportService, notebookImportService } from '@bike4mind/services';
-import { createArtifactWrites, createSessionWrites } from './notebookImportComplete';
+import { createArtifactWrites, createSessionWrites } from '@bike4mind/server-utils/s3/notebookImportComplete';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND hooks.
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });

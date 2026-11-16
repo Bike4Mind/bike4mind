@@ -170,6 +170,22 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     delete process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT;
   });
 
+  it('inherits the registered profile and ignores a request-supplied profile', async () => {
+    const rateLimit = { requestsPerMinute: 300, requestsPerDay: 20_000 };
+    mockVerifyClientSecret.mockResolvedValue({ ...FEDERATED_CLIENT, rateLimit });
+    const { req, res } = makeReq({ ...VALID_BODY, rateLimit: { requestsPerMinute: 9999, requestsPerDay: 999999 } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockCreateUserApiKey.mock.calls[0][1].rateLimit).toEqual(rateLimit);
+  });
+
+  it('leaves mint defaults unchanged for a client without a profile', async () => {
+    const { req, res } = makeReq();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockCreateUserApiKey.mock.calls[0][1].rateLimit).toBeUndefined();
+  });
+
   it('grant gate (enforce): valid token but no grant for this client -> 403 access_denied, no mint', async () => {
     process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
     mockFindGrant.mockResolvedValue(null);
@@ -387,9 +403,21 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
       error: 'subscription_required',
       error_description: 'API keys require an active paid subscription',
     });
-    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(CONSENTED_USER, undefined, req);
+    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(CONSENTED_USER, { oauthExchangeClientId: 'client-1' }, req);
     expect(mockCreateUserApiKey).not.toHaveBeenCalled();
     expect(mockRevokeUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('gives a starter-only user a key when the gate admits the verified client, with no request-supplied marker', async () => {
+    isApiKeyAccessAllowedMock.mockImplementation(
+      async (_user: unknown, billing?: { oauthExchangeClientId?: string }) =>
+        billing?.oauthExchangeClientId === 'client-1'
+    );
+    const { req, res } = makeReq({ ...VALID_BODY, oauthExchangeClientId: 'other-client' });
+    await handler(...([req, res] as unknown as Parameters<typeof handler>));
+    expect(res._getStatusCode()).toBe(200);
+    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(CONSENTED_USER, { oauthExchangeClientId: 'client-1' }, req);
+    expect(mockCreateUserApiKey).toHaveBeenCalled();
   });
 
   it('AC5: reuse-or-replace revokes the prior exchange key for this (user, client) before minting', async () => {

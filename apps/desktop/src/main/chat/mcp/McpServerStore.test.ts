@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { openedAs, versionedCipher } from '../../secrets/versionedCipher.testHelper';
 import { McpServerStore, type SecretCipher, type StoreFile } from './McpServerStore';
 
 // Non-hex on purpose: the store writes random UUID ids into the same file the not.toContain checks scan.
@@ -154,5 +155,59 @@ describe('McpServerStore', () => {
     expect(file.contents).toContain('Chair blueprint');
     const reloaded = new McpServerStore(cipher(), file, logger);
     expect((await reloaded.get(record.id))?.addedBy).toEqual(addedBy);
+  });
+});
+
+describe('McpServerStore.reencrypt', () => {
+  async function legacyFile() {
+    const file = memoryFile();
+    const legacy = new McpServerStore(versionedCipher('old'), file, logger);
+    await legacy.add({ name: 'gh', transport: 'stdio', command: 'node', env: { TOKEN: SECRET } });
+    await legacy.add({ name: 'plain', transport: 'stdio', command: 'node' });
+    return file;
+  }
+  const sealed = (file: { contents: string | null }) =>
+    (JSON.parse(file.contents ?? '{}') as { servers: { name: string; secrets?: string }[] }).servers.map(server => [
+      server.name,
+      server.secrets && openedAs(server.secrets).slice(0, 4),
+    ]);
+
+  it('re-seals legacy secrets once, and they still read back', async () => {
+    const file = await legacyFile();
+    const writes = vi.spyOn(file, 'write');
+    const store = new McpServerStore(versionedCipher('new'), file, logger);
+
+    await store.reencrypt();
+    await store.reencrypt();
+
+    expect(sealed(file)).toEqual([
+      ['gh', 'new:'],
+      ['plain', undefined],
+    ]);
+    expect(writes).toHaveBeenCalledTimes(1);
+    const reopened = await new McpServerStore(versionedCipher('new'), file, logger).list();
+    expect(reopened.find(server => server.name === 'gh')?.env).toEqual({ TOKEN: SECRET });
+  });
+
+  it('keeps a legacy blob it cannot open, so nothing is lost', async () => {
+    const file = await legacyFile();
+    const before = file.contents;
+    const writes = vi.spyOn(file, 'write');
+
+    await new McpServerStore(versionedCipher('new', { opensOld: false }), file, logger).reencrypt();
+
+    expect(writes).not.toHaveBeenCalled();
+    expect(file.contents).toBe(before);
+  });
+
+  it('does nothing without a keychain, or with a cipher that asks for no migration', async () => {
+    for (const current of [versionedCipher('new', { available: false }), cipher()]) {
+      const file = await legacyFile();
+      const writes = vi.spyOn(file, 'write');
+
+      await new McpServerStore(current, file, logger).reencrypt();
+
+      expect(writes).not.toHaveBeenCalled();
+    }
   });
 });

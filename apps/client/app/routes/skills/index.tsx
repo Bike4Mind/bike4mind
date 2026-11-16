@@ -11,6 +11,7 @@ import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { useDeleteSkill, useGetSkills } from '@client/app/hooks/data/skills';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import MarketStatusBadge from '@client/app/components/SkillMarket/MarketStatusBadge';
+import OrganizationLibraryPicker from '@client/app/components/organizations/OrganizationLibraryPicker';
 
 const SkillsListPage: FC = () => {
   useDocumentTitle('Skills');
@@ -81,6 +82,7 @@ const SkillsListPage: FC = () => {
         onChange={e => setSearch(e.target.value)}
         slotProps={{ input: { 'data-testid': 'skills-search-input' } }}
       />
+      <OrganizationLibraryPicker kind="skill" />
 
       {isLoading ? (
         <Stack alignItems="center" sx={{ py: 8 }}>

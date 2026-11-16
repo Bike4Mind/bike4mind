@@ -1638,26 +1638,47 @@ describe('planCatalogWrites', () => {
     });
   });
 
-  it('says the build holds a price for a per-image literal no trusted source quotes', () => {
-    // Text literals arrive as a trusted price; the per-image and per-minute ones do not, which is
-    // the only way a build-priced model is still blocked on price.
-    const image = gpt6({ id: 'gpt-image-1', name: 'GPT Image 1' });
-    const contributions = [
-      { name: 'openai', kind: 'provider' as const, records: [{ ...image, modelId: 'gpt-image-1' }] },
-    ];
-
-    const priced = plan({
-      resolveDispatch: dispatchable,
-      contributions,
-      buildPricedModelIds: new Set(['gpt-image-1']),
+  describe('non-text models', () => {
+    const image = gpt6({ id: 'gpt-image-9', name: 'GPT Image 9', type: 'image' });
+    const imageSource = (pricing?: DiscoveredModel['pricing']) => ({
+      name: 'openai',
+      kind: 'provider' as const,
+      records: [{ ...image, modelId: 'gpt-image-9', ...(pricing ? { pricing } : {}) }],
     });
-    const unpriced = plan({ resolveDispatch: dispatchable, contributions, buildPricedModelIds: new Set(['other']) });
 
-    expect(priced.diff[0].blockedBy).toEqual(['no-trusted-price']);
-    expect(priced.rows[0].patch).toMatchObject({
-      autoDisabledReason: 'discovered, priced in this build per image or minute, no trusted per-token price',
+    it('promotes on a build literal alone, with no price row or source quote', () => {
+      const result = plan({
+        resolveDispatch: dispatchable,
+        contributions: [imageSource()],
+        buildPricedModelIds: new Set(['gpt-image-9']),
+      });
+
+      expect(result.diff[0]).toMatchObject({ promoted: true, blockedBy: [] });
+      expect(result.rows[0].patch).toMatchObject({ lifecycle: { status: 'active' }, autoDisabled: false });
     });
-    expect(unpriced.rows[0].patch).toMatchObject({ autoDisabledReason: 'discovered, awaiting price' });
+
+    it('ignores per-token rows, consensus and provider quotes without a build literal', () => {
+      const result = plan({
+        resolveDispatch: dispatchable,
+        contributions: [imageSource({ inputPerMTok: 5, outputPerMTok: 40 })],
+        knownPricedModelIds: new Set(['gpt-image-9']),
+        consensusPricedModelIds: new Set(['gpt-image-9']),
+        buildPricedModelIds: new Set(['other']),
+      });
+
+      expect(result.diff[0].blockedBy).toEqual(['no-trusted-price']);
+      expect(result.rows[0].patch).toMatchObject({
+        autoDisabled: true,
+        autoDisabledReason: "discovered, no price in this build's model tables",
+      });
+    });
+
+    it('leaves a text model to its own clauses: a build literal alone is not a trusted price', () => {
+      const result = plan({ resolveDispatch: dispatchable, buildPricedModelIds: new Set(['gpt-6']) });
+
+      expect(result.diff[0].blockedBy).toEqual(['no-trusted-price']);
+      expect(result.rows[0].patch).toMatchObject({ autoDisabledReason: 'discovered, awaiting price' });
+    });
   });
 
   describe('uncorroborated wording across runs', () => {

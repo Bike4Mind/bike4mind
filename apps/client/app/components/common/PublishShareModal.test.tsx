@@ -47,6 +47,32 @@ const noopPublish = vi.fn<[], Promise<PublishResult>>();
 const radio = (value: string) =>
   document.querySelector(`input[type="radio"][value="${value}"]`) as HTMLInputElement | null;
 
+describe('PublishShareModal organization policy', () => {
+  it('explains why public publication is unavailable before publishing', async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({
+      data: { publicLinkBlockedReason: 'Your organization does not allow public links for this content.' },
+    });
+    const publish = vi.fn();
+    render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={publish}
+          title="Bound artifact"
+          policySource={{ artifactId: 'artifact' }}
+        />
+      </Wrapper>
+    );
+    expect(await screen.findByTestId('publish-sharing-policy-explanation')).toHaveTextContent(
+      'does not allow public links'
+    );
+    expect(radio('public')).toBeDisabled();
+    await waitFor(() => expect(radio('private')).toBeChecked());
+    expect(publish).not.toHaveBeenCalled();
+  });
+});
+
 describe('PublishShareModal — update seeds controls from the prior publication', () => {
   it('carries a PRIVATE, comments-off publication into update mode (does not reset to public)', async () => {
     render(
@@ -624,6 +650,38 @@ describe('PublishShareModal - no-sign-in (/a) share link', () => {
     fireEvent.click(screen.getByTestId('publish-share-create'));
     await screen.findByTestId('publish-share-url'); // shared phase
   };
+
+  it('revokes an existing token when organization policy blocks new public links', async () => {
+    apiGet.mockImplementation((url: string) =>
+      Promise.resolve({
+        data: url.endsWith('/policy')
+          ? { publicLinkBlockedReason: 'Your organization does not allow public links for this content.' }
+          : url.endsWith('/share-token')
+            ? { shareToken: 'OLD', shareLinks: [] }
+            : { artifact: {} },
+      })
+    );
+    apiDelete.mockClear().mockResolvedValue({ data: {} });
+    apiPost.mockClear();
+    render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          title="Bound artifact"
+          policySource={{ artifactId: 'artifact' }}
+          defaultVisibility="private"
+          publish={vi.fn().mockResolvedValue(publishResult)}
+        />
+      </Wrapper>
+    );
+    await screen.findByTestId('publish-sharing-policy-explanation');
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    await screen.findByTestId('publish-share-token-revoke');
+    fireEvent.click(screen.getByTestId('publish-share-token-revoke'));
+    await waitFor(() => expect(apiDelete).toHaveBeenCalledWith('/api/publish/pub-1/share-token'));
+    expect(apiPost).not.toHaveBeenCalledWith('/api/publish/pub-1/share-token', expect.anything());
+  });
 
   it('hides the section for a public page, whose main link already opens without sign-in', async () => {
     await renderShared('public');

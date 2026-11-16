@@ -208,7 +208,7 @@ async function listAlarms(
   return { total, inAlarm };
 }
 
-async function getAlarms(app: string, stage: string): Promise<IncidentAlarms> {
+export async function getAlarms(app: string, stage: string): Promise<IncidentAlarms> {
   // The prefix also matches a stage whose name starts with `${stage}-`; stage names are expected not to nest.
   const prefix = `${app}-${stage}-`;
   const defaultClient = new CloudWatchClient({});

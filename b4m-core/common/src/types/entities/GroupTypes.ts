@@ -24,6 +24,13 @@ export interface IGroup {
 export interface IGroupDocument extends IGroup, IMongoDocument {}
 
 export interface IGroupRepository extends IBaseRepository<IGroupDocument> {
+  /** Atomically rename a live group only while its last successful name still matches. */
+  renameIfNameMatches(input: {
+    groupId: string;
+    organizationId: string;
+    expectedName: string;
+    name: string;
+  }): Promise<IGroupDocument | null>;
   /**
    * Group instances owned by an organization. Live-only by default; `includeDeleted` also returns
    * soft-deleted rows (org deletion must purge membership for every group the org EVER owned - a

@@ -5,7 +5,7 @@ vi.mock('./config', () => ({ Config: h.config }));
 
 import { isPushDeliveryConfigured, readApnsCredentials } from './pushDelivery';
 
-const NAMES = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY', 'APNS_TOPIC'] as const;
+const NAMES = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY', 'APNS_TOPIC', 'FCM_SERVICE_ACCOUNT'] as const;
 
 describe('isPushDeliveryConfigured', () => {
   const saved: Partial<Record<(typeof NAMES)[number], string>> = {};
@@ -46,5 +46,12 @@ describe('isPushDeliveryConfigured', () => {
   it('falls back to plain env, as a self-host worker sets it', () => {
     Object.assign(process.env, { APNS_KEY_ID: 'K', APNS_TEAM_ID: 'T', APNS_KEY: 'pem', APNS_TOPIC: 'com.example' });
     expect(readApnsCredentials()).toEqual({ keyId: 'K', teamId: 'T', key: 'pem', topic: 'com.example' });
+  });
+
+  it('is true with FCM alone, and false for a malformed FCM secret', () => {
+    h.config.FCM_SERVICE_ACCOUNT = JSON.stringify({ project_id: 'p', client_email: 'e@x', private_key: 'k' });
+    expect(isPushDeliveryConfigured()).toBe(true);
+    h.config.FCM_SERVICE_ACCOUNT = '{nope';
+    expect(isPushDeliveryConfigured()).toBe(false);
   });
 });

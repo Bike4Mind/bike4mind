@@ -35,7 +35,7 @@ const OrgSlackIntegration: FC<OrgSlackIntegrationProps> = ({ organization }) => 
       const errorMessages: Record<string, string> = {
         access_denied: 'Slack authorization was denied.',
         invalid_state: 'Authorization expired. Please try again.',
-        workspace_taken: 'This Slack workspace is already connected to another organization.',
+        workspace_taken: 'This Slack workspace is already connected to another team.',
         token_exchange_failed: 'Failed to connect. Please try again.',
         slack_unavailable: 'Slack is temporarily unavailable. Please try again later.',
         server_error: 'An unexpected error occurred. Please try again.',
@@ -58,7 +58,7 @@ const OrgSlackIntegration: FC<OrgSlackIntegrationProps> = ({ organization }) => 
       type: 'danger',
       title: 'Disconnect Slack Workspace',
       description:
-        'Are you sure you want to disconnect this Slack workspace? Team members will no longer receive Slack notifications from this organization, and API posting is turned off for every channel.',
+        'Are you sure you want to disconnect this Slack workspace? Team members will no longer receive Slack notifications from this team, and API posting is turned off for every channel.',
       onOk: () => {
         disconnectMutation.mutate(organization.id);
       },

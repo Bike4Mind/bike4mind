@@ -1,4 +1,4 @@
-import type { ResearchRunLevers, ResearchUnlistedSources } from '@bike4mind/common';
+import type { ResearchFeedFingerprintLevers, ResearchRunLevers, ResearchUnlistedSources } from '@bike4mind/common';
 import {
   boundedStringList,
   deriveLegacyAllowedDomains,
@@ -9,6 +9,9 @@ import {
   RESEARCH_COST_CEILING_MICRO_USD_LIMIT,
   RESEARCH_CONFIG_QUERY_MAX_CHARS,
   RESEARCH_DOMAIN_LIST_MAX,
+  RESEARCH_FEED_URL_MAX_CHARS,
+  RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
+  RESEARCH_MAX_AUTO_ADMITS_LIMIT,
   RESEARCH_MAX_PROPOSALS_DEFAULT,
   RESEARCH_MAX_PROPOSALS_LIMIT,
   RESEARCH_MAX_RESULTS_DEFAULT,
@@ -72,6 +75,9 @@ export function normalizeResearchLevers(input: ResearchLeversDraft): ResearchRun
   const query = typeof input.query === 'string' ? input.query.trim() : '';
   if (!query) throw new BadRequestError('A research run needs a question to research');
 
+  const source = (input.source as unknown) === 'feed' ? ('feed' as const) : ('search' as const);
+  const feedUrl = typeof input.feedUrl === 'string' ? input.feedUrl.trim().slice(0, RESEARCH_FEED_URL_MAX_CHARS) : '';
+
   const recencyDays = clampInt(input.recencyDays, 0, 0, RESEARCH_RECENCY_DAYS_LIMIT);
 
   // Legacy `allowedDomains` is normalized BEFORE the upgrade so emptiness is judged on what the
@@ -93,6 +99,9 @@ export function normalizeResearchLevers(input: ResearchLeversDraft): ResearchRun
   };
 
   return {
+    source,
+    // Shape errors on the URL are the service's 400s; this runs on stored configs and must not throw.
+    feedUrl: source === 'feed' && feedUrl ? feedUrl : null,
     query: query.slice(0, RESEARCH_CONFIG_QUERY_MAX_CHARS),
     // Left exactly as given, including absent: the run resolves the model against the deployment's
     // live catalog, which is the only place that knows whether it is still available.
@@ -103,6 +112,10 @@ export function normalizeResearchLevers(input: ResearchLeversDraft): ResearchRun
     // and the UI both see one representation of it instead of two.
     ...(recencyDays > 0 ? { recencyDays } : {}),
     ...tierFields,
+    autoAdmitTrusted: input.autoAdmitTrusted === true,
+    // Not clamped against maxProposals: the lower cap wins at run time, and a save-time clamp goes
+    // stale when either lever is edited later.
+    maxAutoAdmits: clampInt(input.maxAutoAdmits, RESEARCH_MAX_AUTO_ADMITS_DEFAULT, 1, RESEARCH_MAX_AUTO_ADMITS_LIMIT),
     allowedDomains: deriveLegacyAllowedDomains(tierFields),
     blockedDomains: normalizeDomainList(input.blockedDomains),
     minRelevance: clampUnitInterval(input.minRelevance, RESEARCH_MIN_RELEVANCE_DEFAULT),
@@ -118,4 +131,16 @@ export function normalizeResearchLevers(input: ResearchLeversDraft): ResearchRun
     // those at the queue door, and duplicating the rule is how the two copies drift.
     proposedTags: boundedStringList(input.proposedTags, RESEARCH_DOMAIN_LIST_MAX),
   };
+}
+
+/**
+ * The levers a run snapshotted from this stored config would carry, for fingerprinting. Falls back to
+ * the stored fields when they cannot be normalized, so a status read never throws on a broken config.
+ */
+export function feedFingerprintLevers(config: ResearchLeversDraft): ResearchFeedFingerprintLevers {
+  try {
+    return normalizeResearchLevers(config);
+  } catch {
+    return config as ResearchFeedFingerprintLevers;
+  }
 }

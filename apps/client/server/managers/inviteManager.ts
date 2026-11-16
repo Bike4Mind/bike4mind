@@ -18,8 +18,10 @@ import {
   sessionRepository,
   projectRepository,
   organizationRepository,
+  spaceRepository,
 } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
+import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 
 export const getInviteDetails = async (invite: IInviteDocument, includeUser?: boolean) => {
   const inviteWithDetails = invite;
@@ -49,6 +51,11 @@ export const getInviteDetails = async (invite: IInviteDocument, includeUser?: bo
       name = group?.name;
       break;
     }
+    case InviteType.Space: {
+      const space = await spaceRepository.findLiveById(docId);
+      name = space?.name;
+      break;
+    }
     default:
       break;
   }
@@ -67,10 +74,15 @@ export const getInviteDetails = async (invite: IInviteDocument, includeUser?: bo
   return inviteWithDetails;
 };
 
-export type InviteViewAccess = 'allowed' | 'expired' | 'denied';
+export type InviteViewAccess = 'allowed' | 'expired' | 'revoked' | 'denied';
 
-/** 'allowed' | 'expired' (caller could view it but it lapsed) | 'denied'. Share-authorized callers still see expired invites. */
+/**
+ * 'allowed' | 'expired' (caller could view it but it lapsed) | 'revoked' (a share link its sharer
+ * revoked) | 'denied'. Share-authorized callers still see expired invites.
+ */
 export async function canViewInvite(user: IUserDocument, invite: IInviteDocument): Promise<InviteViewAccess> {
+  // Space routes sit behind EnableSpaces, so this read path must not reveal a Space invite with it off.
+  if (invite.type === InviteType.Space && !(await isFeatureEnabled('EnableSpaces'))) return 'denied';
   const expired = !!invite.expiresAt && new Date(invite.expiresAt).getTime() < Date.now();
   const email = user.email?.toLowerCase();
   const named = [...(invite.recipients?.pending ?? []), ...(invite.recipients?.accepted ?? [])];
@@ -82,18 +94,28 @@ export async function canViewInvite(user: IUserDocument, invite: IInviteDocument
   // already holds it. Gating it out would 404 the /share/$id landing page and leave acceptInvite's
   // link path unreachable. Redeemability is the gate here: exhaustion denies, expiry yields 'expired'.
   if (isLinkOnlyInvite(invite)) {
+    // Ahead of the exhaustion check: revoking also zeroes `remaining`, and the holder of the link
+    // should be told it was revoked rather than shown a generic not-found.
+    if (invite.revokedAt) return 'revoked';
     if (invite.remaining <= 0) return 'denied';
     return expired ? 'expired' : 'allowed';
   }
 
   try {
-    await sharingService.authorizeByInviteType(user, invite.type, invite.documentId, {
-      fabFiles: fabFileRepository,
-      sessions: sessionRepository,
-      projects: projectRepository,
-      organizations: organizationRepository,
-      groups: Group,
-    });
+    await sharingService.authorizeByInviteType(
+      user,
+      invite.type,
+      invite.documentId,
+      {
+        fabFiles: fabFileRepository,
+        sessions: sessionRepository,
+        projects: projectRepository,
+        organizations: organizationRepository,
+        groups: Group,
+        spaces: spaceRepository,
+      },
+      invite.type === InviteType.Space ? { requireManageGroups: true } : undefined
+    );
     return 'allowed';
   } catch {
     return isNamedRecipient && expired ? 'expired' : 'denied';

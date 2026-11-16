@@ -15,6 +15,8 @@ type BlockerOptions = {
 
 const h = vi.hoisted(() => ({
   saveMutate: vi.fn(),
+  configError: null as Error | null,
+  refetchConfigs: vi.fn(),
   refetch: vi.fn(),
   onSaved: undefined as (() => void) | undefined,
   emptyStateTitles: [] as string[],
@@ -35,12 +37,14 @@ vi.mock('@client/app/hooks/data/useModelInfo', () => ({
 vi.mock('@client/app/hooks/data/llmModelConfig', () => ({
   // Same contract as the real hook: without a pending flag it infers loading from missing data.
   useLLMModelConfigurationsWithDefaults: (infos?: LLMModelConfig[], pending = !infos) => ({
-    data: infos ?? [],
+    data: h.configError ? [] : (infos ?? []).map(model => ({ ...model, accessEntry: null })),
+    error: h.configError,
+    refetch: h.refetchConfigs,
     isLoading: pending,
   }),
-  useSaveLLMModelConfigurations: (onSuccess?: () => void) => {
-    h.onSaved = onSuccess;
-    return { mutate: h.saveMutate, isPending: false };
+  useSaveLLMModelConfigurations: (onSuccess?: (result: import('@bike4mind/common').ModelAccessSaveResult) => void) => {
+    h.onSaved = () => onSuccess?.({ entries: [], changed: 0, revision: null });
+    return { mutateAsync: h.saveMutate, isPending: false };
   },
 }));
 
@@ -135,6 +139,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
   h.onSaved = undefined;
+  h.configError = null;
   h.emptyStateTitles = [];
   h.modelInfo = { data: models, isPending: false, isLoading: false, isFetching: false, error: null };
 });
@@ -247,8 +252,11 @@ describe('LLMDashboardTab pager and selection', () => {
 
     fireEvent.click(screen.getByTestId('llm-dashboard-bulk-disable-btn'));
     fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
-    const saved = h.saveMutate.mock.calls[0][0] as LLMModelConfig[];
-    expect(saved.filter(model => model.enabled)).toEqual([]);
+    fireEvent.click(screen.getByTestId('llm-dashboard-save-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('llm-dashboard-save-dialog-confirm-btn'));
+    const saved = h.saveMutate.mock.calls[0][0] as import('@bike4mind/common').ModelAccessSaveRequest;
+    expect(saved.changes).toHaveLength(30);
+    expect(saved.changes.every(model => model.change.enabled === false)).toBe(true);
   });
 
   it('adds every matching model to a selection made under another filter', () => {
@@ -316,15 +324,23 @@ describe('LLMDashboardTab save bar', () => {
     fireEvent.click(inputIn('llm-dashboard-entitlement-claude-opus-pro:plan'));
 
     fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    fireEvent.click(screen.getByTestId('llm-dashboard-save-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('llm-dashboard-save-dialog-confirm-btn'));
 
     expect(h.saveMutate).toHaveBeenCalledTimes(1);
-    const saved = h.saveMutate.mock.calls[0][0] as LLMModelConfig[];
-    expect(saved.map(model => [model.id, model.enabled, model.allowedUserTags, model.allowedEntitlements])).toEqual([
+    const saved = h.saveMutate.mock.calls[0][0] as import('@bike4mind/common').ModelAccessSaveRequest;
+    expect(saved.reason).toBe('Update model availability');
+    expect(
+      saved.changes.map(model => [
+        model.id,
+        model.change.enabled,
+        model.change.allowedUserTags,
+        model.change.allowedEntitlements,
+      ])
+    ).toEqual([
       ['gpt-5', true, ['developer'], []],
       ['claude-opus', true, ['beta'], ['pro:plan']],
-      ['dall-e', true, [], []],
       ['flux-pro', true, [], []],
-      ['whisper', true, [], []],
     ]);
 
     act(() => h.onSaved?.());
@@ -338,6 +354,8 @@ describe('LLMDashboardTab save bar', () => {
     renderTab();
     fireEvent.click(inputIn('llm-dashboard-toggle-flux-pro'));
     fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    fireEvent.click(screen.getByTestId('llm-dashboard-save-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('llm-dashboard-save-dialog-confirm-btn'));
     act(() => h.onSaved?.());
 
     fireEvent.click(inputIn('llm-dashboard-toggle-flux-pro'));
@@ -352,11 +370,13 @@ describe('LLMDashboardTab save bar', () => {
     renderTab();
     fireEvent.click(inputIn('llm-dashboard-toggle-gpt-5'));
     fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    fireEvent.click(screen.getByTestId('llm-dashboard-save-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('llm-dashboard-save-dialog-confirm-btn'));
     fireEvent.click(inputIn('llm-dashboard-toggle-claude-opus'));
     act(() => h.onSaved?.());
 
-    const sent = h.saveMutate.mock.calls[0][0] as LLMModelConfig[];
-    expect(sent.find(model => model.name === 'Claude Opus')?.enabled).toBe(true);
+    const sent = h.saveMutate.mock.calls[0][0] as import('@bike4mind/common').ModelAccessSaveRequest;
+    expect(sent.changes.some(model => model.id === 'claude-opus')).toBe(false);
     expect(saveBarText()).toContain('1 unsaved change');
     expect(inputIn('llm-dashboard-toggle-claude-opus')).not.toBeChecked();
   });
@@ -417,7 +437,7 @@ describe('LLMDashboardTab states', () => {
     };
     renderTab();
 
-    expect(screen.queryByTestId('admin-error-state')).toBeNull();
+    expect(screen.getByTestId('admin-error-state')).toHaveTextContent('loaded editor and unsaved changes are retained');
     expect(visibleModelIds()).toEqual(['gpt-5', 'claude-opus', 'dall-e', 'flux-pro']);
   });
 
@@ -429,5 +449,17 @@ describe('LLMDashboardTab states', () => {
     expect(empty).toHaveTextContent('No models available');
     fireEvent.click(within(empty).getByTestId('llm-dashboard-refresh-btn'));
     expect(h.refetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('model access read recovery', () => {
+  it('shows a useful retry when the catalog loaded but the initial access read failed', () => {
+    h.configError = new Error('Access read failed');
+    renderTab();
+    expect(screen.getByText('Could not load models: Access read failed')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(h.refetch).toHaveBeenCalled();
+    expect(h.refetchConfigs).toHaveBeenCalled();
+    expect(screen.queryByTestId('llm-dashboard-table')).not.toBeInTheDocument();
   });
 });

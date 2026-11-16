@@ -59,6 +59,9 @@ describe('model logs params', () => {
     ['modelLogsLimit', 25, 25],
     ['modelLogsLimit', '50', 50],
     ['modelLogsLimit', 20, undefined],
+    // The old 10-row size: a link that still carries it opens at the default.
+    ['modelLogsLimit', 10, undefined],
+    ['modelLogsLimit', '100', 100],
     ['modelLogsPage', 3, 3],
     ['modelLogsPage', 0, undefined],
     ['modelLogsPage', '1.5', undefined],
@@ -73,7 +76,7 @@ describe('model logs params', () => {
     it('is the rolling last 7 days for a bare URL', () => {
       expect(modelLogsViewFromSearch({})).toEqual({
         page: 1,
-        limit: 10,
+        limit: 25,
         startDate: '2026-10-15',
         endDate: '2026-10-21',
         model: undefined,

@@ -8,7 +8,7 @@ import {
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import type { AnalyticsOverviewQuery, AnalyticsTopAccounts, TopAccountRow } from '@client/app/utils/analyticsOverview';
 import { daysBetween, resolveOverviewWindow } from './analyticsOverview';
-import { shiftDay } from './analyticsRollup';
+import { shiftDay } from '@bike4mind/server-utils/analytics/analyticsRollup';
 
 const QUERY_DEADLINE_MS = 30_000;
 const OBJECT_ID = /^[a-f\d]{24}$/i;

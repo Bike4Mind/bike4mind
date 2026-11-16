@@ -49,6 +49,7 @@ vi.mock('@bike4mind/services', () => ({ sessionService: { cloneSession: h.cloneS
 vi.mock('@bike4mind/database', () => ({
   agentRepository: {},
   fabFileRepository: {},
+  organizationRepository: {},
   projectRepository: {},
   questRepository: {},
   Session: class {},

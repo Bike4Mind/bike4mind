@@ -10,6 +10,8 @@ import { Logger } from '@bike4mind/observability';
  */
 
 const incrementUserCounter = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const organizationAudit = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('./organizationAudit', () => ({ recordOrganizationAuditEventSafe: organizationAudit }));
 vi.mock('@bike4mind/services', () => ({ counterService: { incrementUserCounter } }));
 vi.mock('@bike4mind/database', () => ({
   mongoose: {},
@@ -19,7 +21,7 @@ vi.mock('@bike4mind/database', () => ({
   CounterLog: {},
 }));
 
-import { UserApiKeyEvents } from '@bike4mind/common';
+import { OrganizationEvents, UserApiKeyEvents } from '@bike4mind/common';
 import { logEvent, logEventSafe } from './analyticsLog';
 
 const event = {
@@ -76,6 +78,30 @@ describe('logEventSafe', () => {
       expect.anything()
     );
     expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('keeps the trusted actor separate from the analytics subject and stores only the member ID', async () => {
+    const metadata = {
+      organizationId: 'org',
+      userId: 'new-member',
+      memberEmail: 'member@example.test',
+      memberLevel: 'member',
+    };
+    await logEvent(
+      { userId: 'impersonated-member', type: OrganizationEvents.ADD_ORG_MEMBER, metadata },
+      { organizationAuditActorUserId: 'real-admin' }
+    );
+    expect(organizationAudit).toHaveBeenCalledExactlyOnceWith({
+      organizationId: 'org',
+      actorUserId: 'real-admin',
+      action: 'member.added',
+      targetId: 'new-member',
+    });
+    expect(incrementUserCounter).toHaveBeenCalledWith(
+      'impersonated-member',
+      expect.objectContaining({ metadata }),
+      expect.anything()
+    );
   });
 
   it('leaves logEvent throwing, for callers whose response IS the write', async () => {

@@ -100,7 +100,7 @@ describe('AdminLayoutRoute', () => {
     useAccessToken.setState({ impersonating: false });
   });
 
-  it.each(['/admin', '/admin/users/0123456789abcdef01234567'])(
+  it.each(['/admin', '/admin?tab=modals', '/admin/users/0123456789abcdef01234567'])(
     'sends a non-admin on %s to /new without rendering the shell',
     async path => {
       mockUseUser.mockReturnValue({ currentUser: { id: 'u1', isAdmin: false, tags: [] } });
@@ -145,6 +145,32 @@ describe('AdminLayoutRoute', () => {
       expect(within(sidebar).queryByTestId('admin-users-tab-btn')).toBeNull();
     });
 
+    it('with settings:manage can follow a Modals deep link', async () => {
+      mockUseUser.mockReturnValue(delegate(['settings:manage']));
+
+      const router = await renderAt('/admin?tab=modals');
+
+      expect(await screen.findByTestId('console-page')).toBeInTheDocument();
+      expect(router.state.location.pathname).toBe('/admin');
+      expect(router.state.location.search).toEqual({ tab: 'modals' });
+      expect(within(desktopSidebar()).getByTestId('admin-modals-tab-btn')).toBeInTheDocument();
+      expect(within(desktopSidebar()).queryByTestId('admin-users-tab-btn')).toBeNull();
+    });
+
+    it('with settings:manage can leave a denied detail page for Modals', async () => {
+      mockUseUser.mockReturnValue(delegate(['settings:manage']));
+      const router = await renderAt('/admin/users/0123456789abcdef01234567');
+      await screen.findByTestId('admin-missing-permission-state');
+
+      fireEvent.click(within(desktopSidebar()).getByTestId('admin-modals-tab-btn'));
+
+      await waitFor(() => expect(router.state.location.pathname).toBe('/admin'));
+      expect(router.state.location.search).toEqual({ tab: 'modals' });
+      expect(useAdminModal.getState().activeTab).toBe(AdminTab.Modals);
+      expect(await screen.findByTestId('console-page')).toBeInTheDocument();
+      expect(profileRendered).not.toHaveBeenCalled();
+    });
+
     it('whose permissions open no tab is sent to /new', async () => {
       mockUseUser.mockReturnValue(delegate(['users:impersonate']));
 
@@ -185,6 +211,22 @@ describe('AdminLayoutRoute', () => {
     await screen.findByTestId('admin-layout');
     expect(mockActionCounts).toHaveBeenCalled();
     expect(mockActionCounts).not.toHaveBeenCalledWith({ enabled: true });
+  });
+
+  it('keeps Modals and full-admin tabs available to an admin without delegated permissions', async () => {
+    mockUseUser.mockReturnValue({ currentUser: { id: 'u1', isAdmin: true, adminPermissions: [], tags: [] } });
+    const router = await renderAt('/admin/users/0123456789abcdef01234567');
+    await screen.findByTestId('profile-page');
+
+    const sidebar = desktopSidebar();
+    expect(within(sidebar).getByTestId('admin-users-tab-btn')).toBeInTheDocument();
+    expect(within(sidebar).getByTestId('admin-dashboard-tab-btn')).toBeInTheDocument();
+    fireEvent.click(within(sidebar).getByTestId('admin-modals-tab-btn'));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/admin'));
+    expect(router.state.location.search).toEqual({ tab: 'modals' });
+    expect(useAdminModal.getState().activeTab).toBe(AdminTab.Modals);
+    expect(await screen.findByTestId('console-page')).toBeInTheDocument();
   });
 
   it('does not fetch the sidebar counts for a delegated admin', async () => {

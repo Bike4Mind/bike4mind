@@ -14,7 +14,7 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
-import { assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import type { Request } from 'express';
 
 type UpdateFabFileParams = Parameters<typeof fabFilesService.updateFabFile>[1];

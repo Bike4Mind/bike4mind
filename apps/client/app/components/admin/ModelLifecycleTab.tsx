@@ -3,20 +3,16 @@ import {
   Alert,
   Box,
   Button,
-  Dropdown,
   FormControl,
   FormLabel,
   IconButton,
   Input,
   Link,
-  Menu,
-  MenuButton,
   MenuItem,
   Stack,
   Textarea,
   Typography,
 } from '@mui/joy';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import type { PerMTokRate } from '@bike4mind/common';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
@@ -40,7 +36,8 @@ import {
   type AdminSelection,
   type DataColumn,
 } from './shared';
-import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import { RowActionsMenu } from './shared/RowActionsMenu';
 
 /** Wire shapes of /api/admin/model-deprecation-status (dates arrive as strings). */
 interface QueueItem {
@@ -431,35 +428,22 @@ export const ModelLifecycleTab: React.FC = () => {
   ];
 
   const queueMenu = (item: QueueItem) => (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: {
-            size: 'sm',
-            variant: 'plain',
-            disabled: pendingDismissId === item.modelId,
-            'aria-label': `Actions for ${item.modelId}`,
-            sx: { ...adminFocus, color: 'admin.inkMuted' },
-          },
-        }}
-        data-testid={`model-lifecycle-queue-actions-${item.modelId}`}
+    <RowActionsMenu
+      testId={`model-lifecycle-queue-actions-${item.modelId}`}
+      ariaLabel={`Actions for ${item.modelId}`}
+      disabled={pendingDismissId === item.modelId}
+    >
+      <MenuItem onClick={() => openAccept(item)} data-testid={`model-lifecycle-accept-${item.modelId}`}>
+        Accept suggestion
+      </MenuItem>
+      <MenuItem
+        color="danger"
+        onClick={() => openDismiss(item)}
+        data-testid={`model-lifecycle-dismiss-${item.modelId}`}
       >
-        <MoreHorizIcon sx={{ fontSize: 18 }} />
-      </MenuButton>
-      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
-        <MenuItem onClick={() => openAccept(item)} data-testid={`model-lifecycle-accept-${item.modelId}`}>
-          Accept suggestion
-        </MenuItem>
-        <MenuItem
-          color="danger"
-          onClick={() => openDismiss(item)}
-          data-testid={`model-lifecycle-dismiss-${item.modelId}`}
-        >
-          Dismiss suggestion
-        </MenuItem>
-      </Menu>
-    </Dropdown>
+        Dismiss suggestion
+      </MenuItem>
+    </RowActionsMenu>
   );
 
   const horizonColumns: DataColumn<ExpiringRow>[] = [

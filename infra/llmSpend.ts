@@ -1,8 +1,7 @@
 /**
  * Estimated upstream LLM spend from the `llm-usage-settled` log line
- * (b4m-core/services/src/llm/llmUsageSettledLog.ts) of the ChatCompletion service and the
- * `cli_completion_request` WebSocket route: metric filters, a dashboard, and a
- * 5-minute spend-rate alarm and an hourly spend alarm per provider (LLM_SPEND_ALARM_USD_PER_5MIN,
+ * (b4m-core/services/src/llm/llmUsageSettledLog.ts) of the ChatCompletion service: metric filters,
+ * a dashboard, and a 5-minute spend-rate alarm and an hourly spend alarm per provider (LLM_SPEND_ALARM_USD_PER_5MIN,
  * LLM_SPEND_ALARM_USD_PER_HOUR, LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC) plus hourly and 5-minute
  * ceilings on young-account spend (YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR, YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR,
  * LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN), and a count of completions that cost more than the balance could pay.
@@ -285,7 +284,7 @@ if (isMonitoredStage) {
     tags: { Application: 'LLMSpend', Severity: 'Medium' },
   });
 
-  // Emitted by signupAlarms.ts (default region) and waf.ts (us-east-1, production with WAF only).
+  // Emitted by signupAlarms.ts (default region, incl. SignupLimitFailOpen) and waf.ts (us-east-1, production with WAF only).
   const signupNamespace = `${$app.name}/${$app.stage}/Signup`;
 
   const dashboardBody = $util
@@ -466,6 +465,21 @@ if (isMonitoredStage) {
               region: 'us-east-1',
               period: 300,
               yAxis: { left: { min: 0, label: 'Requests' } },
+            },
+          },
+          {
+            type: 'metric',
+            x: 0,
+            y: 33,
+            width: 12,
+            height: 6,
+            properties: {
+              title: 'Signup network caps skipped (failed open) per 5 min',
+              metrics: [[signupNamespace, 'SignupLimitFailOpen', { stat: 'Sum', label: 'Cap checks failed open' }]],
+              view: 'timeSeries',
+              region,
+              period: 300,
+              yAxis: { left: { min: 0, label: 'Count' } },
             },
           },
         ],

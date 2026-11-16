@@ -2,7 +2,7 @@ import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQ
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import { HTTPError, redactSessionForClient } from '@bike4mind/common';
 import { meterCompletionBackend, sessionService } from '@bike4mind/services';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { InternalServerError, NotFoundError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertSessionAccess } from '@bike4mind/server-utils/utils/sessionAccess';
