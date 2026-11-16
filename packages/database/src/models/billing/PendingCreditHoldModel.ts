@@ -8,8 +8,13 @@ import { CreditHolderType, type CreditHoldRecord } from '@bike4mind/common';
  *
  * expiresAt is never a TTL index. Only settledAt expires: those rows describe completed money movement.
  */
+/** The completion run budget a hold also claimed (CompletionRunModel claimBudget). */
+export type PendingCreditHoldRunClaim = { runId: string; credits: number };
+
 export type PendingCreditHold = CreditHoldRecord & {
   id: string;
+  /** Released together with the hold: by settlement, refund or the expired-hold sweep. */
+  runClaim?: PendingCreditHoldRunClaim;
   featureLabel: string;
   expiresAt: Date;
   settledAt?: Date;
@@ -34,6 +39,13 @@ const PendingCreditHoldSchema = new Schema<PendingCreditHoldDocument>(
     expiresAt: { type: Date, required: true },
     settledAt: { type: Date },
     settledCredits: { type: Number },
+    runClaim: {
+      type: new Schema<PendingCreditHoldRunClaim>(
+        { runId: { type: String, required: true }, credits: { type: Number, required: true } },
+        { _id: false }
+      ),
+      required: false,
+    },
   },
   { timestamps: true }
 );
@@ -60,14 +72,20 @@ const toPendingCreditHold = (doc: PendingCreditHoldDocument): PendingCreditHold 
   balanceAfterHold: doc.balanceAfterHold,
   featureLabel: doc.featureLabel,
   expiresAt: doc.expiresAt,
+  ...(doc.runClaim ? { runClaim: { runId: doc.runClaim.runId, credits: doc.runClaim.credits } } : {}),
   ...(doc.settledAt ? { settledAt: doc.settledAt, settledCredits: doc.settledCredits } : {}),
 });
 
 export class PendingCreditHoldRepository {
   constructor(private readonly model: PendingCreditHoldModel) {}
 
-  async record(hold: CreditHoldRecord, featureLabel: string, expiresAt: Date): Promise<PendingCreditHold> {
-    const doc = await this.model.create({ ...hold, featureLabel, expiresAt });
+  async record(
+    hold: CreditHoldRecord,
+    featureLabel: string,
+    expiresAt: Date,
+    runClaim?: PendingCreditHoldRunClaim
+  ): Promise<PendingCreditHold> {
+    const doc = await this.model.create({ ...hold, featureLabel, expiresAt, ...(runClaim && { runClaim }) });
     return toPendingCreditHold(doc.toObject());
   }
 

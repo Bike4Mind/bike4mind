@@ -76,6 +76,7 @@ describe('durable platform completion holds', () => {
     await reserve();
     const settle = async () => {
       await userRepository.incrementCredits(ownerId, 20);
+      return 10;
     };
     expect(await lifecycle.settle(10, settle)).toBe(true);
     expect(await lifecycle.settle(10, settle)).toBe(true);

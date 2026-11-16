@@ -32,6 +32,18 @@ describe('PendingCreditHoldModel', () => {
     expect(recorded).toEqual({ ...hold, id: expect.any(String), featureLabel: 'embeddings', expiresAt: minutes(60) });
   });
 
+  it('round-trips a run budget claim, and hands it back to whoever claims the hold', async () => {
+    const recorded = await pendingCreditHoldRepository.record(hold, 'platform-key completion', minutes(60), {
+      runId: 'run-1',
+      credits: 40,
+    });
+
+    expect(recorded.runClaim).toEqual({ runId: 'run-1', credits: 40 });
+    await expect(pendingCreditHoldRepository.claim(recorded.id)).resolves.toMatchObject({
+      runClaim: { runId: 'run-1', credits: 40 },
+    });
+  });
+
   it('lets exactly one caller claim a hold', async () => {
     const { id } = await pendingCreditHoldRepository.record(hold, 'embeddings', minutes(60));
 

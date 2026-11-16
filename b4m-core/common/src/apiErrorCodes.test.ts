@@ -20,6 +20,8 @@ import {
   UPGRADE_REQUIRED_ERROR_CODE,
   ACCOUNT_SUSPENDED_ERROR_CODE,
   RUN_NOT_FOUND_ERROR_CODE,
+  RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+  RUN_BUDGET_NOT_RAISED_ERROR_CODE,
 } from './apiErrorCodes';
 import { QUEST_ERROR_CODES } from './types/entities/SessionTypes';
 import { TTS_ERROR_CODES, ttsErrorResponseSchema } from './voiceGeneration';
@@ -97,6 +99,8 @@ describe('API_ERROR_CODES', () => {
     // RUN_NOT_FOUND_ERROR_CODE likewise; proven by apps/client/server/chatCompletion/external/sseRoute.test.ts.
     // ORG_MODEL_NOT_ALLOWED_ERROR_CODE likewise; proven by services/src/llm/modelAdmission.test.ts.
     // ORG_TOOL_NOT_ALLOWED_ERROR_CODE likewise; proven by the ChatCompletionInvoke org tool policy test.
+    // RUN_BUDGET_EXHAUSTED_ERROR_CODE likewise; proven by apps/client/server/billing/completionCreditHolds.test.ts.
+    // RUN_BUDGET_NOT_RAISED_ERROR_CODE likewise; proven by apps/client/pages/api/v1/completion-runs/[runId]/__tests__/budget.test.ts.
     // 'input_file_not_found' likewise; proven by services/src/sceneJobs/sceneJobHandler.test.ts.
     const emitted = new Set<string>([
       ...NARROWING_TUPLES.flat(),
@@ -120,6 +124,8 @@ describe('API_ERROR_CODES', () => {
       RUN_NOT_FOUND_ERROR_CODE,
       ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
       ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+      RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+      RUN_BUDGET_NOT_RAISED_ERROR_CODE,
       'input_file_not_found',
     ]);
     expect(API_ERROR_CODES.filter(code => !emitted.has(code))).toEqual([]);
