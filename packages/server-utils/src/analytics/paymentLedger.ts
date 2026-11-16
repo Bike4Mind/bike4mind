@@ -78,6 +78,16 @@ const countsAsReversal = (dispute: DisputeRow) =>
   dispute.stripeStatus === 'lost' ||
   (dispute.state === 'open' && !dispute.closedAt);
 
+// A trial collects its first payment when it ends, and never when it was cancelled before then.
+// Null when no payment has been collected before `until`.
+const firstChargeAt = (sub: SubscriptionRow, until: Date): Date | null => {
+  const createdAt = new Date(sub.createdAt);
+  const trialEnd = sub.trialEndsAt && new Date(sub.trialEndsAt) > createdAt ? new Date(sub.trialEndsAt) : null;
+  if (trialEnd && sub.canceledAt && new Date(sub.canceledAt) <= trialEnd) return null;
+  if (trialEnd && trialEnd >= until) return null;
+  return trialEnd ?? createdAt;
+};
+
 const purchasesOf = (ownerType: CreditHolderType, ownerIds: string[], until: Date, maxTimeMS: number) =>
   CreditTransaction.find({
     $and: [
@@ -135,7 +145,7 @@ export async function loadPaymentLedger(
           status: { $nin: UNPAID_SUBSCRIPTION_STATUSES },
           createdAt: { $lt: until },
         })
-          .select('ownerType ownerId createdAt status source subscriptionId')
+          .select('ownerType ownerId createdAt status source subscriptionId trialEndsAt canceledAt')
           .maxTimeMS(maxTimeMS())
           .lean<SubscriptionRow[]>()
       : [],
@@ -184,19 +194,29 @@ export async function loadPaymentLedger(
     ledgers.get(purchase.ownerId)?.payments.push({ kind: 'credit', at: purchase.at, reversed: purchase.reversed });
   }
 
-  for (const sub of subscriptions) {
-    if (resolveSubscriptionSource(sub) !== SubscriptionSource.Stripe) continue;
-    // A trial collects its first payment when it ends, and never when it was cancelled before then.
-    const createdAt = new Date(sub.createdAt);
-    const trialEnd = sub.trialEndsAt && new Date(sub.trialEndsAt) > createdAt ? new Date(sub.trialEndsAt) : null;
-    if (trialEnd && sub.canceledAt && new Date(sub.canceledAt) <= trialEnd) continue;
-    if (trialEnd && trialEnd >= until) continue;
-    const at = trialEnd ?? createdAt;
-    const reversed = (userDisputesOpened.get(sub.ownerId) ?? []).some(openedAt => openedAt >= at);
+  const chargedSubscriptions = subscriptions.flatMap(sub => {
+    if (resolveSubscriptionSource(sub) !== SubscriptionSource.Stripe) return [];
+    const at = firstChargeAt(sub, until);
+    return at ? [{ sub, at }] : [];
+  });
+  // A user dispute names no subscription, so it is held against the latest one charged before it opened.
+  const disputedSubscriptions = new Set<SubscriptionRow>();
+  for (const [ownerId, openedDates] of userDisputesOpened) {
+    for (const openedAt of openedDates) {
+      let latest: { sub: SubscriptionRow; at: Date } | undefined;
+      for (const charged of chargedSubscriptions) {
+        if (charged.sub.ownerId !== ownerId || charged.at > openedAt) continue;
+        if (!latest || charged.at > latest.at) latest = charged;
+      }
+      if (latest) disputedSubscriptions.add(latest.sub);
+    }
+  }
+
+  for (const { sub, at } of chargedSubscriptions) {
     ledgers.get(sub.ownerId)?.payments.push({
       kind: 'subscription',
       at,
-      reversed,
+      reversed: disputedSubscriptions.has(sub),
       subscription: {
         status: sub.status,
         periodStartsAt: sub.periodStartsAt,
@@ -211,9 +231,10 @@ export async function loadPaymentLedger(
 
   const orgPaidAt = [
     ...orgPurchases.map(row => ({ ownerId: row.ownerId, at: new Date(row.createdAt) })),
-    ...orgSubscriptions
-      .filter(sub => resolveSubscriptionSource(sub) === SubscriptionSource.Stripe)
-      .map(sub => ({ ownerId: sub.ownerId, at: new Date(sub.createdAt) })),
+    ...orgSubscriptions.flatMap(sub => {
+      const at = resolveSubscriptionSource(sub) === SubscriptionSource.Stripe ? firstChargeAt(sub, until) : null;
+      return at ? [{ ownerId: sub.ownerId, at }] : [];
+    }),
   ];
   for (const { ownerId, at } of orgPaidAt) {
     const ledger = ledgers.get(ownerOfOrganization.get(ownerId) ?? '');

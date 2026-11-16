@@ -226,6 +226,39 @@ describe('loadPaymentLedger', () => {
     expect(ledgers.get(orgOnly)!.payments).toEqual([]);
     expect(ledgers.get(orgOnly)!.orgBuyerAt).toEqual(at('2026-05-15'));
   });
+
+  it('dates an organization trial at its end and ignores one cancelled during the trial', async () => {
+    const converted = newId();
+    const cancelled = newId();
+    const team = await Organization.create({ name: 'Trial', userId: converted });
+    const lapsed = await Organization.create({ name: 'Lapsed', userId: cancelled });
+    const trial = { createdAt: at('2026-05-20'), trialEndsAt: at('2026-05-27') };
+    await seedSubscription('Organization', String(team._id), trial);
+    await seedSubscription('Organization', String(lapsed._id), {
+      ...trial,
+      status: 'canceled',
+      canceledAt: at('2026-05-24'),
+    });
+
+    const ledgers = await loadPaymentLedger([converted, cancelled], opts);
+
+    expect(ledgers.get(converted)!.orgBuyerAt).toEqual(at('2026-05-27'));
+    expect(ledgers.get(cancelled)!.orgBuyerAt).toBeNull();
+  });
+
+  it('holds a user dispute against only the latest subscription charged before it opened', async () => {
+    const owner = newId();
+    await seedSubscription('User', owner, { subscriptionId: `sub_old_${owner}`, createdAt: at('2026-05-10') });
+    await seedSubscription('User', owner, { subscriptionId: `sub_new_${owner}`, createdAt: at('2026-05-20') });
+    await openDispute('dp_two_subs', { subjectId: owner });
+
+    const ledger = (await loadPaymentLedger([owner], opts)).get(owner)!;
+
+    expect(ledger.payments.map(p => [p.at, p.reversed])).toEqual([
+      [at('2026-05-10'), false],
+      [at('2026-05-20'), true],
+    ]);
+  });
 });
 
 describe('classifyFirstPaid', () => {
