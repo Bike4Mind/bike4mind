@@ -290,10 +290,10 @@ describe('ImageStudioForm', () => {
 
     it('says why a stored value did not come back, until the next model pick', () => {
       renderForm();
-      requestRestore({ model: ImageModels.FLUX_PRO_ULTRA, prompt: 'x', seed: 4 });
+      requestRestore({ model: ImageModels.FLUX_KONTEXT_PRO, prompt: 'x', seed: 4 });
 
       const changes = screen.getByTestId('image-form-changes');
-      expect(changes).toHaveTextContent('FLUX Ultra cannot run in Create');
+      expect(changes).toHaveTextContent('FLUX Kontext Pro cannot run in Create');
       expect(changes).toHaveTextContent("Create does not set the seed, so the model's defaults are used.");
 
       pickCard(ImageModels.GEMINI_3_1_FLASH_IMAGE);
