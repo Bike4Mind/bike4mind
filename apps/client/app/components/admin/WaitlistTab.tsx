@@ -15,16 +15,12 @@ import {
   Box,
   Alert,
   Chip,
-  Dropdown,
-  Menu,
-  MenuButton,
   MenuItem,
   IconButton,
 } from '@mui/joy';
 import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { GRANT_PACKAGES_QUERY_KEY } from '@client/app/utils/grantPackageAPICalls';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CloseIcon from '@mui/icons-material/Close';
 import { api } from '@client/app/contexts/ApiContext';
@@ -42,6 +38,7 @@ import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import { InviteCenterShell } from './InviteCenterShell';
 import { SubscriberNetworkCell, SuspiciousNameChip } from './WaitlistSignals';
 import GrantPackageSelect, { useGrantPackageOptions } from './InviteCenter/shared/GrantPackageSelect';
+import { RowActionsMenu } from './shared/RowActionsMenu';
 
 const SOURCE_LABELS: Record<SubscriberSource, string> = {
   subscribe_page: 'Waitlist page',
@@ -335,33 +332,22 @@ const WaitlistSection = () => {
   ];
 
   const rowActions = (subscriber: ISubscriberDocument) => (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: { variant: 'plain', size: 'sm', 'aria-label': `Actions for ${subscriber.email}` },
-        }}
-        data-testid={`waitlist-row-actions-${subscriber.id}`}
+    <RowActionsMenu testId={`waitlist-row-actions-${subscriber.id}`} ariaLabel={`Actions for ${subscriber.email}`}>
+      <MenuItem
+        onClick={() => handleGenerateInvite(subscriber)}
+        disabled={subscriber.inviteGenerated}
+        data-testid={`waitlist-generate-invite-${subscriber.id}`}
       >
-        <MoreHorizIcon sx={{ fontSize: 18 }} />
-      </MenuButton>
-      <Menu size="sm" placement="bottom-end">
-        <MenuItem
-          onClick={() => handleGenerateInvite(subscriber)}
-          disabled={subscriber.inviteGenerated}
-          data-testid={`waitlist-generate-invite-${subscriber.id}`}
-        >
-          Generate invite
-        </MenuItem>
-        <MenuItem
-          color="danger"
-          onClick={() => handleDelete(subscriber.id)}
-          data-testid={`waitlist-remove-${subscriber.id}`}
-        >
-          Remove from waitlist
-        </MenuItem>
-      </Menu>
-    </Dropdown>
+        Generate invite
+      </MenuItem>
+      <MenuItem
+        color="danger"
+        onClick={() => handleDelete(subscriber.id)}
+        data-testid={`waitlist-remove-${subscriber.id}`}
+      >
+        Remove from waitlist
+      </MenuItem>
+    </RowActionsMenu>
   );
 
   return (

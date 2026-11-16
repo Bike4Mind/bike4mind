@@ -1,4 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { LiveopsTriageConfig } from '@bike4mind/common';
+import type { ILiveopsTriageConfigDocument } from '@bike4mind/database';
+import type { IssueTrackerService } from './issueTrackers/types';
+
+const { proposalBlocks } = vi.hoisted(() => ({ proposalBlocks: vi.fn() }));
+vi.mock('../integrations/slack/liveopsTriageApproval', () => ({
+  createLiveopsProposalBlocks: proposalBlocks,
+}));
 
 // Mock slackPackageInit to prevent transitive imports of @bike4mind/database and @server/*
 vi.mock('../integrations/slack/slackPackageInit', () => ({
@@ -558,6 +566,72 @@ describe('LiveopsTriageService', () => {
   });
 
   describe('postTriageSummary', () => {
+    it.each(['legacy', 'github', 'jira'])('proposes a P0 without creating or paging (%s)', async mode => {
+      const config = {
+        ...mockConfig,
+        approverIds: 'U1',
+        slackWorkspaceId: 'W1',
+        runIntervalHours: 12,
+        regressionLookbackDays: 30,
+        regressionGracePeriodHours: 48,
+        postWhenNoErrors: true,
+      } satisfies LiveopsTriageConfig;
+      const summary = {
+        totalAlerts: 1,
+        newIssues: 1,
+        duplicates: 0,
+        regressions: 0,
+        p0Count: 1,
+        p1Count: 0,
+        p2Count: 0,
+        p3Count: 0,
+        recurringPatterns: [],
+        healthAssessment: 'Review <!here>',
+      };
+      vi.spyOn(service, 'getConfig').mockResolvedValue(config);
+      vi.spyOn(service, 'updateConfig').mockResolvedValue();
+      vi.spyOn(service, 'fetchSlackAlerts').mockResolvedValue([
+        { ts: '1', text: 'Something failed', timestamp: new Date() },
+      ]);
+      vi.spyOn(service, 'fetchExistingIssues').mockResolvedValue([]);
+      vi.spyOn(service, 'fetchRecentlyClosedIssues').mockResolvedValue([]);
+      vi.spyOn(service, 'triageAlertsWithLLM').mockResolvedValue({
+        triageResults: [{ ...mockTriageResult, priority: 'P0' }],
+        summary,
+      });
+      proposalBlocks.mockResolvedValue([{ type: 'section', text: { type: 'mrkdwn', text: 'Proposed issue (P0)' } }]);
+      const tracker: IssueTrackerService = {
+        type: mode === 'jira' ? 'jira' : 'github',
+        createIssue: vi.fn(),
+        searchExistingIssues: vi.fn().mockResolvedValue([]),
+        fetchRecentlyClosedIssues: vi.fn().mockResolvedValue([]),
+        checkHealth: vi.fn(),
+      };
+      const result =
+        mode === 'legacy'
+          ? await service.runTriage('token', mockGitHubService as unknown as GitHubService)
+          : await service.runTriageForConfig('token', tracker, {
+              ...config,
+              id: 'config1',
+              name: 'test',
+              issueTracker: mode,
+              jiraProjectKey: 'TEST',
+            } as unknown as ILiveopsTriageConfigDocument);
+      expect(result.status).toBe('success');
+      expect(result.issuesCreated).toEqual([]);
+      expect(result.p0Issues).toEqual([]);
+      expect(tracker.createIssue).not.toHaveBeenCalled();
+      expect(mockGitHubService.createIssue).not.toHaveBeenCalled();
+      expect(proposalBlocks).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ priority: 'P0' }),
+        ...(mode === 'legacy' ? [] : ['config1'])
+      );
+      const posted = JSON.stringify(mockSlackClient.sendMessage.mock.calls);
+      expect(posted).toContain('Proposed issue (P0)');
+      expect(posted).not.toContain('<!here>');
+    });
+
     it('escapes issue titles and the health assessment before posting', async () => {
       await service.initSlackClient('test-token');
       mockSlackClient.sendMessage.mockResolvedValue(undefined);

@@ -219,6 +219,13 @@ describe('saveGeneratedAsset', () => {
     expect(sourceMetadata).not.toHaveProperty('generatedCopyKey');
   });
 
+  it('stamps retention ownership without overriding storage ownership', async () => {
+    await saveGeneratedAsset(params(), { ...deps, retentionOrganizationId: 'team-1' });
+    const adapters = createFabFile.mock.calls[0][2];
+    expect(adapters.provenance.sourceMetadata.retentionOrganizationId).toBe('team-1');
+    expect(adapters).not.toHaveProperty('ownerOrganizationId');
+  });
+
   it("keeps the caller's file name over the generated one", async () => {
     await saveGeneratedAsset(params({ fileName: 'my-song.mp3' }), deps);
 

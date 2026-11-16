@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 /**
  * GET /api/organizations must (1) scope non-admins to their OWN orgs so the search
@@ -81,6 +82,35 @@ describe('GET /api/organizations - scoping + safe serialization', () => {
     await mockRefs.getHandler!(req, res);
     const params = search.mock.calls[0][1];
     expect(params.filters?.userId).toBeUndefined();
+  });
+
+  it('scopes an admin calling with an API key that lacks the admin scope to their own organizations', async () => {
+    // API key auth applies withholdAdminRole to a key without ApiKeyScope.ADMIN.
+    const { req, res } = mocks(withholdAdminRole({ id: 'admin1', isAdmin: true }));
+    await mockRefs.getHandler!(req, res);
+    const params = search.mock.calls[0][1];
+    expect(params.filters.userId).toBe('admin1');
+  });
+
+  it('returns only member-visible fields to a plain member of a listed organization', async () => {
+    search.mockResolvedValueOnce({
+      data: [
+        {
+          id: 'org1',
+          userId: 'owner1',
+          name: 'Acme',
+          systemPrompt: 'internal enterprise context',
+          users: [{ userId: 'u1', permissions: ['read'] }],
+        },
+      ],
+      hasMore: false,
+      total: 1,
+    } as never);
+    const { req, res } = mocks({ id: 'u1', isAdmin: false });
+    await mockRefs.getHandler!(req, res);
+    const [org] = res._getJSONData().data;
+    expect(org.name).toBe('Acme');
+    expect(org).not.toHaveProperty('systemPrompt');
   });
 
   it('overrides an attacker-supplied filters.userId for a non-admin', async () => {

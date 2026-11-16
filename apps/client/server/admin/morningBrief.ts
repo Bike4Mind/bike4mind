@@ -27,7 +27,6 @@ const QUEUE_TABS = {
   publishedPages: 'published-pages',
   stripeDisputes: 'disputes',
   modelLifecycle: 'model-lifecycle',
-  secretRotation: 'secrets-rotation',
   sreAgent: 'sre-agent',
   feedback: 'feedback',
   deadLetters: 'dlq-replay',

@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AspectRatio, Card, CardContent, Chip, CircularProgress, IconButton, Stack, Typography } from '@mui/joy';
 import TimelineIcon from '@mui/icons-material/Timeline';
 import type { GenerationJobState } from '@bike4mind/common';
-import { useGetFabFile } from '@client/app/hooks/data/fabFileQueries';
+import { isFabFileScanInFlight, useGetFabFile } from '@client/app/hooks/data/fabFileQueries';
 import type { StudioImageJob } from '@client/app/hooks/data/studioImageJobs';
 import StudioTrailDialog from '@client/app/components/Studio/trail/StudioTrailDialog';
 import type { StudioTrailRestore } from '@client/app/components/Studio/trail/StudioTrail';
@@ -14,35 +14,55 @@ const LIVE_LABELS: Partial<Record<GenerationJobState, string>> = {
   storing: 'Saving',
 };
 
-// GET /api/files/:id signs the file, so the saved image renders straight from its record.
 // A cutout's prompt is the server's fixed instruction, so it is named for what it is instead.
 const jobCaption = (job: StudioImageJob): string => {
   if (job.purpose !== 'cutout') return job.request.prompt;
   return job.state === 'succeeded' ? 'Background removed' : 'Background removal';
 };
 
-type ImageFit = 'contain' | 'cover';
+/** How long (ms) a card waits on the moderation scan before it stops asking for the image. */
+export const IMAGE_SCAN_WAIT_MS = 30 * 1000;
 
-// The <img> sizes itself: AspectRatio's fill and objectFit only reach its first child, which is JobBody. The content
-// box is height 0 with the ratio in its padding, so only absolute positioning gives the image that height.
-const ImageJobPreview = ({ fileId, prompt, fit }: { fileId: string; prompt: string; fit: ImageFit }) => {
-  const file = useGetFabFile(fileId, { pollUntilViewable: true });
-  if (!file.data?.fileUrl) return <CircularProgress size="sm" data-testid="image-job-image-loading" />;
+const PreviewMessage = ({ testId, children }: { testId: string; children: string }) => (
+  <Typography level="body-sm" textAlign="center" sx={{ px: 2 }} data-testid={testId}>
+    {children}
+  </Typography>
+);
+
+// GET /api/files/:id signs the file once its moderation scan is clean, so the image renders straight from its record.
+const ImageJobPreview = ({ fileId, prompt }: { fileId: string; prompt: string }) => {
+  const [gaveUp, setGaveUp] = useState(false);
+  const file = useGetFabFile(fileId, { pollWhileScanning: !gaveUp });
+  const scanning = !!file.data && isFabFileScanInFlight(file.data);
+
+  useEffect(() => {
+    if (!scanning) return;
+    const timer = setTimeout(() => setGaveUp(true), IMAGE_SCAN_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [scanning]);
+
+  if (file.data?.fileUrl) {
+    return <img src={file.data.fileUrl} alt={prompt} loading="lazy" data-testid="image-job-image" />;
+  }
+  if (file.data?.moderationStatus === 'blocked') {
+    return (
+      <PreviewMessage testId="image-job-image-blocked">This image was blocked by content moderation.</PreviewMessage>
+    );
+  }
+  if ((!file.data && !file.isError) || (scanning && !gaveUp)) {
+    return <CircularProgress size="sm" data-testid="image-job-image-loading" />;
+  }
   return (
-    <img
-      src={file.data.fileUrl}
-      alt={prompt}
-      loading="lazy"
-      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: fit }}
-      data-testid="image-job-image"
-    />
+    <PreviewMessage testId="image-job-image-unavailable">
+      The image could not be loaded. Reload the page to try again.
+    </PreviewMessage>
   );
 };
 
 // A socket frame marks the row 'succeeded' before the gallery refetch brings its output.
 const isAwaitingOutput = (job: StudioImageJob) => job.state === 'succeeded' && job.output === null;
 
-const JobBody = ({ job, fit }: { job: StudioImageJob; fit: ImageFit }) => {
+const JobBody = ({ job }: { job: StudioImageJob }) => {
   const liveLabel = isAwaitingOutput(job) ? LIVE_LABELS.storing : LIVE_LABELS[job.state];
   if (liveLabel) {
     return (
@@ -54,7 +74,7 @@ const JobBody = ({ job, fit }: { job: StudioImageJob; fit: ImageFit }) => {
   }
   if (job.state === 'succeeded') {
     return job.output?.fileId ? (
-      <ImageJobPreview fileId={job.output.fileId} prompt={jobCaption(job)} fit={fit} />
+      <ImageJobPreview fileId={job.output.fileId} prompt={jobCaption(job)} />
     ) : (
       // Final: the worker kept the image outside Files (imageJobHandler's fallback), so there is no file to show.
       <Typography level="body-sm" textAlign="center" sx={{ px: 2 }} data-testid="image-job-unviewable">
@@ -83,8 +103,16 @@ const ImageJobCard = ({ job, onRestore }: ImageJobCardProps) => {
   return (
     <Card variant="outlined" data-testid={`image-job-card-${job.id}`} data-state={job.state}>
       {/* A cutout is shown whole, on a checkerboard, so its transparent background reads as transparent. */}
-      <AspectRatio ratio="1" variant="soft" sx={deliveredCutout ? { '& > div': CHECKERBOARD_SX } : undefined}>
-        <JobBody job={job} fit={deliveredCutout ? 'contain' : 'cover'} />
+      <AspectRatio
+        ratio="1"
+        objectFit={deliveredCutout ? 'contain' : 'cover'}
+        variant="soft"
+        sx={deliveredCutout ? { '& > div': CHECKERBOARD_SX } : undefined}
+      >
+        {/* AspectRatio centers, and fits an img in, only the DOM element that receives its data-first-child prop. */}
+        <div>
+          <JobBody job={job} />
+        </div>
       </AspectRatio>
       <CardContent>
         <Typography

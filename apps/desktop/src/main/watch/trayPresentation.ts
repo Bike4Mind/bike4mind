@@ -1,5 +1,5 @@
 import { describeAgentStates, type AgentState } from '@shared/agentState';
-import type { WatchOverall, WatchSnapshot } from '@shared/watch';
+import { rootNeedsYou, type WatchOverall, type WatchSnapshot } from '@shared/watch';
 
 export type TrayAction = 'open-tavern' | 'toggle-mini' | 'hide-tray';
 
@@ -46,7 +46,11 @@ export function needsYouTitle(count: number): string {
 function headline(snapshot: WatchSnapshot): string {
   const states = snapshot.orchestrations.flatMap(orchestration => orchestration.agents.map(agent => agent.state));
   if (snapshot.orchestrations.length === 0) return 'No orchestrations running';
-  return describeAgentStates(states);
+  const parentsNeedingYou = snapshot.orchestrations.reduce(
+    (sum, orchestration) => sum + rootNeedsYou(orchestration),
+    0
+  );
+  return describeAgentStates(states, parentsNeedingYou);
 }
 
 /** What the menu-bar item shows for a snapshot: pure, so the mapping is tested without Electron. */

@@ -61,6 +61,7 @@ vi.mock('@bike4mind/services', () => ({
   projectService: { get: vi.fn() },
 }));
 
+import { resolveRetentionOrganization } from '@bike4mind/server-utils/organizations/retentionOwnership';
 import handler from '../index';
 
 const makeRes = () => {
@@ -107,6 +108,12 @@ describe('POST /api/sessions/create - summaryTrigger is never client input', () 
 
     expect('summaryTrigger' in paramsOf()).toBe(false);
     expect(paramsOf().retrievalTags).toEqual(['datalake:acme']);
+  });
+
+  it('forwards the actual notebook-retention resolver to the creation service', async () => {
+    const { res } = makeRes();
+    await run(post({ name: 'Bound notebook' }), res);
+    expect(h.createSession.mock.calls[0][2].resolveRetentionOrganization).toBe(resolveRetentionOrganization);
   });
 
   it('leaves an ordinary create untouched when no trigger is sent', async () => {

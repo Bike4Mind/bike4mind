@@ -34,6 +34,7 @@ import {
 } from '@client/app/hooks/data/useOrgCustomMcpPolicy';
 import { useGetOrganizationUsers } from '@client/app/hooks/data/user';
 import PaginationControls from '@client/app/components/admin/Subscriptions/components/PaginationControls';
+import OrgFormSaveBar from './OrgFormSaveBar';
 
 type OpenMode = Exclude<CustomMcpPolicyMode, 'off'>;
 
@@ -137,10 +138,15 @@ const OrgCustomMcpPolicySection: FC<{ organization: IOrganizationDocument }> = (
 
   const policy = useMemo(() => (form ? fromForm(form) : undefined), [form]);
   const changedElsewhere = !!view && !!loadedFrom && JSON.stringify(view.policy) !== JSON.stringify(loadedFrom);
-  const dirty = useMemo(
-    () => !!view && !!policy && JSON.stringify(policy) !== JSON.stringify(view.policy),
-    [policy, view]
-  );
+  // Fields that differ from the stored policy: the number the save bar reports. Compared on the
+  // form shape so an invalid draft (no `policy`) still counts as unsaved.
+  const changeCount = useMemo(() => {
+    if (!view || !form) return 0;
+    const stored = toForm(view.policy);
+    return (Object.keys(form) as Array<keyof PolicyForm>).filter(
+      key => JSON.stringify(form[key]) !== JSON.stringify(stored[key])
+    ).length;
+  }, [form, view]);
 
   if (isError && !view) {
     return (
@@ -286,14 +292,6 @@ const OrgCustomMcpPolicySection: FC<{ organization: IOrganizationDocument }> = (
 
       <Stack direction="row" gap={1} alignItems="center">
         <Button
-          disabled={!policy || !dirty || busy}
-          loading={save.isPending}
-          onClick={() => policy && save.mutate(policy)}
-          data-testid="org-custom-mcp-save-btn"
-        >
-          Save policy
-        </Button>
-        <Button
           variant="outlined"
           color="neutral"
           disabled={!view.overridden || busy}
@@ -303,11 +301,6 @@ const OrgCustomMcpPolicySection: FC<{ organization: IOrganizationDocument }> = (
         >
           Use platform default
         </Button>
-        {!policy && (
-          <Typography level="body-sm" color="danger">
-            Check the host lists and the connection limit.
-          </Typography>
-        )}
         {view.overridden ? null : (
           <Typography level="body-sm" color="neutral">
             Using the platform default.
@@ -375,6 +368,13 @@ const OrgCustomMcpPolicySection: FC<{ organization: IOrganizationDocument }> = (
           </Typography>
         )}
       </Box>
+      <OrgFormSaveBar
+        count={changeCount}
+        pending={busy}
+        blockedReason={policy ? undefined : 'Check the host lists and the connection limit.'}
+        onSave={() => policy && save.mutate(policy)}
+        onDiscard={() => load(view.policy)}
+      />
     </Stack>
   );
 };

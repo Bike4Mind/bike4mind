@@ -1,4 +1,5 @@
 import { IMAGE_SIZE_CONSTRAINTS, ImageModels } from '../models';
+import { MAX_BFL_EDIT_REGIONS } from '../llm';
 import { MAX_IMAGES_PER_REQUEST, type ImageOutputFormat, type OpenAIImageQuality } from '../schemas/openai';
 import type { ImageSizing } from '../utils/imageCapabilities';
 import {
@@ -9,7 +10,14 @@ import {
   supportsBflOutputFormat,
   supportsBflSeed,
 } from '../utils/modelHelpers';
-import type { AspectRatioCapability, ImageModeCapabilities, ImageModelCatalogEntry } from './types';
+import {
+  TEST_IMAGE_MODEL,
+  isLocalImageModelId,
+  type AspectRatioCapability,
+  type ImageJobModelId,
+  type ImageModeCapabilities,
+  type ImageModelCatalogEntry,
+} from './types';
 
 const GPT_IMAGE_QUALITIES = ['low', 'medium', 'high', 'auto'] as const satisfies readonly OpenAIImageQuality[];
 const GPT_IMAGE_25_QUALITIES = [
@@ -135,6 +143,7 @@ const flux3 = (model: ImageModels): ImageModelCatalogEntry => ({
         inputs: { edit_source: { max: 1 }, reference: { max: getMaxEditReferenceImages(model) } },
         aspectRatios: null,
         outputFormats: supportsBflOutputFormat(model) ? PNG_JPEG : [],
+        editRegions: { max: MAX_BFL_EDIT_REGIONS },
       }),
     },
     sizing: BFL_SIZING,
@@ -273,4 +282,45 @@ export const IMAGE_MODEL_CATALOG: Record<ImageModels, ImageModelCatalogEntry> = 
   [ImageModels.GEMINI_3_PRO_IMAGE]: gemini(),
 };
 
-export const getImageModelCatalogEntry = (model: ImageModels): ImageModelCatalogEntry => IMAGE_MODEL_CATALOG[model];
+/** The test provider's model: one free image per job, in either mode, with no settings to honour. */
+export const TEST_IMAGE_CATALOG_ENTRY: ImageModelCatalogEntry = {
+  provider: 'test',
+  modes: {
+    generate: { inputs: { reference: { max: 1 } }, maxOutputs: 1, aspectRatios: null, outputFormats: [] },
+    edit: editMode({ inputs: { edit_source: { max: 1 }, mask: { max: 1 } }, aspectRatios: null, outputFormats: [] }),
+  },
+  sizing: { kind: 'fixed' },
+  qualities: [],
+  styles: [],
+  transparentBackground: false,
+  seed: false,
+};
+
+/**
+ * Every self-hosted checkpoint shares one entry: the backend is AUTOMATIC1111-compatible txt2img, which takes a
+ * width and height (in steps of 8) and nothing else this catalog describes. LocalImageService has no edit path.
+ */
+export const LOCAL_IMAGE_CATALOG_ENTRY: ImageModelCatalogEntry = {
+  provider: 'local',
+  modes: { generate: { inputs: {}, maxOutputs: 1, aspectRatios: null, outputFormats: [] } },
+  sizing: {
+    kind: 'dimensions',
+    presets: ['512x512', '768x768', '1024x1024'],
+    defaultSize: '512x512',
+    minWidth: 256,
+    maxWidth: 2048,
+    minHeight: 256,
+    maxHeight: 2048,
+    step: 8,
+  },
+  qualities: [],
+  styles: [],
+  transparentBackground: false,
+  seed: false,
+};
+
+export function getImageModelCatalogEntry(model: ImageJobModelId): ImageModelCatalogEntry {
+  if (model === TEST_IMAGE_MODEL) return TEST_IMAGE_CATALOG_ENTRY;
+  if (isLocalImageModelId(model)) return LOCAL_IMAGE_CATALOG_ENTRY;
+  return IMAGE_MODEL_CATALOG[model];
+}

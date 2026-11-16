@@ -44,6 +44,7 @@ vi.mock('./useReferenceCutouts', () => ({
 }));
 vi.mock('@client/app/hooks/data/fabFileQueries', () => ({
   useGetFabFile: (fileId: string) => ({ data: { fileUrl: `https://files.test/${fileId}.png` } }),
+  isFabFileScanInFlight: () => false,
 }));
 
 import ImageStudioForm from './ImageStudioForm';

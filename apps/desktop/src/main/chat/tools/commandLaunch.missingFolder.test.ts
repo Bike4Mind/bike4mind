@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
-import { launchCommand } from './commandLaunch';
+import { launchCommand, spawnFailure } from './commandLaunch';
 import { bashExecute } from './shellTools';
 
 vi.mock('./userPath', () => ({ resolveUserPath: async () => process.env.PATH ?? '' }));
@@ -38,13 +38,10 @@ describe.skipIf(process.platform === 'win32')('a command launched in a working f
       .then(String, (error: Error) => error.message);
 
   const background = async (cwd: string): Promise<string> => {
-    const started = await registry.start({
-      sessionId: 's',
-      command: 'echo ran',
-      cwd,
-      roots: [cwd],
-      protectedPaths: [],
-    });
+    const started = await registry
+      .start({ sessionId: 's', command: 'echo ran', cwd, roots: [cwd], protectedPaths: [] })
+      .catch((error: Error) => error);
+    if (started instanceof Error) return `failed: ${started.message}`;
     await registry.settle(started.id, 5_000);
     const info = registry.get(started.id, 's');
     return `${info?.status}: ${info?.error ?? ''}`;
@@ -62,6 +59,29 @@ describe.skipIf(process.platform === 'win32')('a command launched in a working f
     expect(started).not.toMatch(/ENOENT|spawn/);
   });
 
+  it('says a file used as the working folder is not a directory', async () => {
+    const file = join(base, 'notes.txt');
+    await writeFile(file, 'x');
+
+    const ran = await foreground(file);
+    expect(ran).toContain(`The working folder ${file} is not a directory`);
+    expect(ran).toContain('the command was not run');
+    expect(ran).not.toMatch(/ENOTDIR|spawn/);
+
+    const started = await background(file);
+    expect(started).toContain(`failed: The working folder ${file} is not a directory`);
+    expect(started).not.toMatch(/ENOTDIR|spawn/);
+  });
+
+  it('says the same when a parent of the working folder is a file', async () => {
+    const file = join(base, 'notes.txt');
+    await writeFile(file, 'x');
+    const nested = join(file, 'sub');
+
+    expect(await foreground(nested)).toContain(`The working folder ${nested} is not a directory`);
+    expect(await background(nested)).toContain(`failed: The working folder ${nested} is not a directory`);
+  });
+
   it('still blames the shell when the folder is there and the shell is not', async () => {
     const shell = join(base, 'no-such-shell');
     const missingShell = { executable: shell, args: [], cleanup: async () => undefined };
@@ -71,5 +91,12 @@ describe.skipIf(process.platform === 'win32')('a command launched in a working f
 
     vi.mocked(launchCommand).mockResolvedValueOnce(missingShell);
     expect(await background(folder)).toBe(`failed: spawn ${shell} ENOENT`);
+  });
+});
+
+describe('spawnFailure on a WSL folder', () => {
+  it.each(['ENOENT', 'ENOTDIR'])('hands a %s back unchanged without looking at the folder', code => {
+    const error = Object.assign(new Error(`spawn ${code}`), { code });
+    expect(spawnFailure(error, '/no/such/folder', { wslDistro: 'Ubuntu' })).toBe(error);
   });
 });

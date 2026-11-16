@@ -54,6 +54,7 @@ import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLe
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
+import { organizationRetentionDeadLetter } from './organizationRetention';
 import { businessMetricAlertsDLQ } from './businessMetricAlerts';
 import { dlqAlarmHandlerDlq } from './dlqAlarmHandlerDeadLetter';
 import { mcpHandler } from './mcp';
@@ -98,7 +99,6 @@ import {
   githubLakeRevokeQueue,
   githubLakeRevokeQueueDLQ,
   whatsNewGenerationQueue,
-  whatsNewHighlightsQueue,
   notebookCurationQueue,
   webhookDeliveryQueue,
   liveOpsTriageQueue,
@@ -112,7 +112,6 @@ import {
   generationJobDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
-  whatsNewHighlightsQueueDLQ,
   notebookCurationQueueDLQ,
   agentProactiveMessageQueueDLQ,
   slackExportQueueDLQ,
@@ -151,7 +150,6 @@ import {
   generationJobQueueSubscription,
   researchEngineQueueSubscription,
   whatsNewGenerationQueueSubscription,
-  whatsNewHighlightsQueueSubscription,
   notebookCurationQueueSubscription,
   agentProactiveMessageQueueSubscription,
   slackExportQueueSubscription,
@@ -232,7 +230,6 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
       'generation-job': generationJobDLQ.url,
       'research-engine': researchEngineQueueDLQ.url,
       'release-notes': whatsNewGenerationQueueDLQ.url,
-      'whats-new-highlights': whatsNewHighlightsQueueDLQ.url,
       'notebook-curation': notebookCurationQueueDLQ.url,
       'agent-proactive-message': agentProactiveMessageQueueDLQ.url,
       'slack-export': slackExportQueueDLQ.url,
@@ -292,6 +289,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
         'subscription-reconciliation': subscriptionReconciliationDeadLetter.queue.url,
       }),
       ...(accountDeletionSweepDeadLetter && { 'account-deletion-sweep': accountDeletionSweepDeadLetter.queue.url }),
+      ...(organizationRetentionDeadLetter && { 'organization-retention': organizationRetentionDeadLetter.queue.url }),
       ...(businessMetricAlertsDLQ && { 'business-metric-alerts': businessMetricAlertsDLQ.url }),
     }),
     // This raw AWS queue retains its existing provider-assigned physical name.
@@ -332,7 +330,6 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     questExportQueue: questExportQueue.url,
     accountDataExportQueue: accountDataExportQueue.url,
     accountErasureQueue: accountErasureQueue.url,
-    whatsNewHighlightsQueue: whatsNewHighlightsQueue.url,
     whatsNewGenerationQueue: whatsNewGenerationQueue.url,
     liveOpsTriageQueue: liveOpsTriageQueue.url,
     notebookCurationQueue: notebookCurationQueue.url,
@@ -741,7 +738,6 @@ const dlqConsumerFunctionArns = [
   generationJobQueueSubscription,
   researchEngineQueueSubscription,
   whatsNewGenerationQueueSubscription,
-  whatsNewHighlightsQueueSubscription,
   notebookCurationQueueSubscription,
   agentProactiveMessageQueueSubscription,
   slackExportQueueSubscription,

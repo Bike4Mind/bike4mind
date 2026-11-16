@@ -1,11 +1,14 @@
+import { useEffect, useState } from 'react';
 import { Chip, CircularProgress, IconButton, Sheet, Stack, Switch, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
-import { useGetFabFile } from '@client/app/hooks/data/fabFileQueries';
+import { isFabFileScanInFlight, useGetFabFile } from '@client/app/hooks/data/fabFileQueries';
 import type { ReferenceCutout, ReferenceFile } from './capabilityFields';
 import { CHECKERBOARD_SX } from './checkerboard';
 
 // Longest side of the cutout preview, in px.
 const PREVIEW_SIZE = 96;
+// How long (ms) the preview waits on the moderation scan before it stops asking; mirrors ImageJobCard.
+const SCAN_WAIT_MS = 30 * 1000;
 
 type ReferenceChipProps = {
   file: ReferenceFile;
@@ -18,7 +21,17 @@ type ReferenceChipProps = {
 // GET /api/files/:id signs the file, so the cutout renders straight from its record.
 const CutoutPreview = ({ fileId, alt, testId }: { fileId: string; alt: string; testId: string }) => {
   // Saved moments before the job succeeded, so its signed URL appears only once upload moderation clears.
-  const file = useGetFabFile(fileId, { pollUntilViewable: true });
+  const [gaveUp, setGaveUp] = useState(false);
+  const file = useGetFabFile(fileId, { pollWhileScanning: !gaveUp });
+  const scanning = !!file.data && isFabFileScanInFlight(file.data);
+
+  useEffect(() => {
+    if (!scanning) return;
+    const timer = setTimeout(() => setGaveUp(true), SCAN_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [scanning]);
+
+  const unavailable = file.data?.moderationStatus === 'blocked' || file.isError || (scanning && gaveUp);
   return (
     <Sheet
       variant="outlined"
@@ -27,7 +40,7 @@ const CutoutPreview = ({ fileId, alt, testId }: { fileId: string; alt: string; t
     >
       {file.data?.fileUrl ? (
         <img src={file.data.fileUrl} alt={alt} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-      ) : file.data?.moderationStatus === 'blocked' ? (
+      ) : unavailable ? (
         <Stack alignItems="center" justifyContent="center" height="100%" sx={{ px: 1 }}>
           <Typography level="body-xs" textAlign="center" data-testid={`${testId}-preview-unavailable`}>
             Preview unavailable

@@ -33,7 +33,6 @@ import {
   generationCallbackQueueDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
-  whatsNewHighlightsQueueDLQ,
   notebookCurationQueueDLQ,
   agentProactiveMessageQueueDLQ,
   githubWebhookQueueDLQ,
@@ -91,6 +90,7 @@ import { apiProbeDetectorDeadLetter } from './apiProbeDetectorDeadLetter';
 import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
+import { organizationRetentionDeadLetter } from './organizationRetention';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
@@ -309,13 +309,6 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'ReleaseNotes',
     sourceQueue: 'whatsNewGenerationQueue',
     queue: whatsNewGenerationQueueDLQ,
-  },
-  {
-    label: 'whats-new-highlights',
-    displayName: "What's New Highlights",
-    application: 'WhatsNewGeneration',
-    sourceQueue: 'whatsNewHighlightsQueue',
-    queue: whatsNewHighlightsQueueDLQ,
   },
   {
     label: 'notebook-curation',
@@ -690,6 +683,15 @@ if (isMonitoredStage) {
       displayName: 'Account Deletion Sweep',
       application: 'Account',
       queue: accountDeletionSweepDeadLetter.queue,
+    });
+  }
+
+  if (organizationRetentionDeadLetter) {
+    createDlqAlarms({
+      label: 'organization-retention',
+      displayName: 'Organization Retention',
+      application: 'Organization',
+      queue: organizationRetentionDeadLetter.queue,
     });
   }
 

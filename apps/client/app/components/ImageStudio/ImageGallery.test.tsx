@@ -8,7 +8,6 @@ import { getThemeConfig } from '@client/app/utils/themes';
 const h = vi.hoisted(() => ({
   jobs: [] as unknown[],
   files: {} as Record<string, { fileUrl?: string } | undefined>,
-  fileOptions: {} as Record<string, unknown>,
 }));
 
 vi.mock('@client/app/hooks/data/studioImageJobs', () => ({
@@ -22,10 +21,8 @@ vi.mock('@client/app/hooks/data/studioImageJobs', () => ({
   }),
 }));
 vi.mock('@client/app/hooks/data/fabFileQueries', () => ({
-  useGetFabFile: (id: string, options?: unknown) => {
-    h.fileOptions[id] = options;
-    return { data: h.files[id] };
-  },
+  useGetFabFile: (id: string) => ({ data: h.files[id] }),
+  isFabFileScanInFlight: () => false,
 }));
 
 vi.mock('@client/app/hooks/data/fileLineage', () => ({
@@ -57,7 +54,6 @@ const job = (overrides: Partial<StudioImageJob>): StudioImageJob => ({
 beforeEach(() => {
   h.jobs = [];
   h.files = {};
-  h.fileOptions = {};
 });
 
 describe('ImageGallery', () => {
@@ -94,14 +90,7 @@ describe('ImageGallery', () => {
     expect(screen.getByTestId('image-job-image-loading')).toBeInTheDocument();
   });
 
-  it('keeps polling a saved image until its signed URL appears', () => {
-    const fileId = 'b'.repeat(24);
-    h.jobs = [job({ id: 'done', state: 'succeeded', output: { fileId, contentType: 'image/png', bytes: 1 } })];
-    render(<ImageGallery />, { wrapper: TestWrapper });
-    expect(h.fileOptions[fileId]).toEqual({ pollUntilViewable: true });
-  });
-
-  it('fits a cutout whole and crops a regular render to fill, on the image itself', () => {
+  it('fits a cutout whole and crops a regular render to fill', () => {
     const cutoutId = 'c'.repeat(24);
     const renderId = 'd'.repeat(24);
     h.jobs = [
@@ -121,10 +110,10 @@ describe('ImageGallery', () => {
 
     const [cutout, regular] = screen.getAllByTestId('image-job-image');
     expect(cutout).toHaveAttribute('src', 'https://files.example/cut.png');
-    // jsdom does no layout: absolute fill is what keeps the image from collapsing in AspectRatio's 0-height box.
-    const fill = { position: 'absolute', width: '100%', height: '100%' };
-    expect(cutout).toHaveStyle({ ...fill, objectFit: 'contain' });
-    expect(regular).toHaveStyle({ ...fill, objectFit: 'cover' });
+    // AspectRatio sizes and fits only an img directly inside the element holding its data-first-child prop.
+    expect(cutout.parentElement).toHaveAttribute('data-first-child');
+    expect(getComputedStyle(cutout).objectFit).toBe('contain');
+    expect(getComputedStyle(regular).objectFit).toBe('cover');
   });
 
   it('keeps a row the socket marked finished on Saving until its output arrives', () => {

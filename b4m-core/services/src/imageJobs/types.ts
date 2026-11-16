@@ -1,6 +1,7 @@
 import type {
   GeneratedAssetLineageEntry,
   GeneratedAssetMetadata,
+  GenerationJobDelivery,
   GenerationJobSource,
   IGenerationJobDocumentOf,
   IGenerationJobRepository,
@@ -90,6 +91,8 @@ export type CreateImageJobsInput = {
   count: number;
   source: GenerationJobSource;
   apiKeyId?: string;
+  /** Where the finished batch is posted besides the websocket update; every job in the batch carries it. */
+  delivery?: GenerationJobDelivery;
   /** Scopes the whole batch; each job holds `${idempotencyKey}:${index}/${count}`. */
   idempotencyKey?: string;
   /** Server-chosen only (see createCutoutJob); never read from a client body. */

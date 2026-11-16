@@ -1,3 +1,4 @@
+import { runInNewContext } from 'node:vm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserPaneState } from '@shared/ipc';
 
@@ -15,6 +16,7 @@ const contents = vi.hoisted(() => {
     /** Urls of the frames below the top one. */
     subframes: [] as string[],
     stops: 0,
+    inputEvents: [] as unknown[],
     nextId: 0,
     /** Every contents made, in order, so a test can reach a tab's own handlers. */
     made: [] as Array<{
@@ -27,7 +29,7 @@ const contents = vi.hoisted(() => {
     }>,
     loads: [] as Array<{ id: number; url: string }>,
     load: (_url: string): Promise<void> => Promise.resolve(),
-    script: (): Promise<unknown> => Promise.resolve(null),
+    script: (_code: string): Promise<unknown> => Promise.resolve(null),
     capture: (..._args: unknown[]): Promise<unknown> => Promise.resolve({ isEmpty: () => true }),
     /** The DevTools protocol, shared by every contents: what a command answers, and who attached. */
     cdp: (_method: string, _params?: unknown): Promise<unknown> => Promise.reject(new Error('no DevTools')),
@@ -79,7 +81,9 @@ vi.mock('electron', () => {
         contents.loads.push({ id, url });
         return contents.load(url);
       },
-      executeJavaScript: () => contents.script(),
+      focus: () => undefined,
+      sendInputEvent: (input: unknown) => contents.inputEvents.push(input),
+      executeJavaScript: (code: string) => contents.script(code),
       capturePage: (...args: unknown[]) => contents.capture(...args),
       debugger: {
         isAttached: () => contents.debuggerAttached,
@@ -221,6 +225,46 @@ describe('BrowserManager page deadlines', () => {
         () => resolve(value),
       ]);
     });
+
+  it('refuses deferred execution in an origin adopted after the call was made', async () => {
+    const page = await openPage();
+    const probe = vi.fn(() => 'private result');
+    contents.script = async code => {
+      contents.url = 'https://mail.example.com/inbox';
+      return runInNewContext(code, { location: { origin: 'https://mail.example.com' }, probe });
+    };
+
+    await expect(page.evaluate('probe()')).rejects.toThrow(/changed origin before/);
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('refuses a fallback key after origin changes during an Enter form probe', async () => {
+    const page = await openPage();
+    contents.inputEvents = [];
+    contents.script = async () => {
+      contents.url = 'https://mail.example.com/inbox';
+      return false;
+    };
+
+    await expect(page.press('Enter')).rejects.toThrow(/changed origin before/);
+    expect(contents.inputEvents).toEqual([]);
+  });
+
+  it.each(['probe()', 'const value = probe(); return value;'])(
+    'executes same-origin expressions or statements through the origin guard: %s',
+    async expression => {
+      const page = await openPage();
+      const probe = vi.fn(() => 'permitted result');
+      contents.script = async code =>
+        runInNewContext(code, {
+          location: { origin: new URL(contents.url).origin },
+          probe,
+        });
+
+      await expect(page.evaluate(expression)).resolves.toBe('permitted result');
+      expect(probe).toHaveBeenCalledOnce();
+    }
+  );
 
   it('stops a load that never answers and says so, rather than reporting the old page as loaded', async () => {
     const page = await openPage();
@@ -955,6 +999,23 @@ describe('BrowserManager screenshots', () => {
     expect({ attaches: contents.attaches, detaches: contents.detaches }).toEqual({ attaches: 1, detaches: 1 });
     expect(contents.debuggerAttached).toBe(false);
   });
+
+  it.each(['did-start-navigation', 'did-frame-navigate'] as const)(
+    'discards a screenshot after a transient frame navigation recorded by %s',
+    async event => {
+      const tab = await page();
+      manager.setPane(window, 's', bounds);
+      const capture = Promise.withResolvers<typeof frame>();
+      contents.capture = () => capture.promise;
+      const result = expect(tab.screenshot()).rejects.toThrow(/changed while the screenshot/);
+      contents.subframes = ['https://mail.example.com/inbox'];
+      contents.emit(event, 'https://mail.example.com/inbox', false, false);
+      contents.subframes = [];
+      capture.resolve(frame);
+
+      await result;
+    }
+  );
 
   it('captures a page on screen in the pane as before, without the debugger', async () => {
     const tab = await page();

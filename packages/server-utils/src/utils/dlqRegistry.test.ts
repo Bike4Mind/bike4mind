@@ -12,7 +12,6 @@ const mockDlqUrls = vi.hoisted(() => ({
   'generation-job': 'https://sqs.us-east-2.amazonaws.com/123456789/generationJobDLQ',
   'research-engine': 'https://sqs.us-east-2.amazonaws.com/123456789/researchEngineQueueDLQ',
   'release-notes': 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewGenerationQueueDLQ',
-  'whats-new-highlights': 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewHighlightsQueueDLQ',
   'notebook-curation': 'https://sqs.us-east-2.amazonaws.com/123456789/notebookCurationQueueDLQ',
   'agent-proactive-message': 'https://sqs.us-east-2.amazonaws.com/123456789/agentProactiveMessageQueueDLQ',
   'slack-export': 'https://sqs.us-east-2.amazonaws.com/123456789/slackExportQueueDLQ',
@@ -57,6 +56,7 @@ const mockDlqUrls = vi.hoisted(() => ({
       'revenue-snapshot',
       'subscription-reconciliation',
       'account-deletion-sweep',
+      'organization-retention',
       'fab-file-moderation',
       'telemetry-alert-rule',
       'session-enrichment',
@@ -81,7 +81,6 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   generationJobQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/generationJobQueue',
   researchEngineQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/researchEngineQueue',
   whatsNewGenerationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewGenerationQueue',
-  whatsNewHighlightsQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewHighlightsQueue',
   notebookCurationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/notebookCurationQueue',
   agentProactiveMessageQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/agentProactiveMessageQueue',
   slackExportQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/slackExportQueue',
@@ -144,7 +143,7 @@ describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
     it('returns every DLQ entry', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(62);
+      expect(registry.map(entry => entry.label).sort()).toEqual(Object.keys(mockDlqUrls).sort());
     });
 
     it('each entry has required fields', () => {
@@ -321,5 +320,17 @@ describe('dead-letter message describe', () => {
     expect(describeDlqMessage(entry, 'not json')).toBeNull();
     expect(describeDlqMessage(entry, undefined)).toBeNull();
     expect(describeDlqMessage({ ...entry, describe: undefined }, '{"fabFileId":"f1"}')).toBeNull();
+  });
+
+  it("release-notes tells the two kinds on the merged What's New DLQ apart", () => {
+    const entry = getDlqByLabel('release-notes')!;
+    expect(describeDlqMessage(entry, '{"kind":"release-notes","releaseTag":"v1.2.3.4"}')).toEqual({
+      type: 'Release',
+      id: 'v1.2.3.4',
+    });
+    expect(describeDlqMessage(entry, '{"kind":"highlights","correlationId":"c1","environment":"dev"}')).toEqual({
+      type: 'Highlights run',
+      id: 'c1',
+    });
   });
 });

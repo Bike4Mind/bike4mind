@@ -6,7 +6,7 @@ import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { inheritancePolicy, type TaskContract } from '@shared/orchestration';
 import type { ChatAutomaticOrigin, ChatModelOption, ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
-import { ChatService } from './ChatService';
+import { ChatService, type ChatServiceDeps } from './ChatService';
 import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import type { ModelCatalog } from './ModelCatalog';
@@ -38,6 +38,7 @@ describe('role routing and task runtime compatibility', () => {
   let store: SessionStore;
   let service: ChatService;
   let project: string;
+  let dependencies: ChatServiceDeps;
   let models: ChatModelOption[];
   let streams: PassThrough[];
   let events: ChatStreamEvent[];
@@ -64,7 +65,7 @@ describe('role routing and task runtime compatibility', () => {
       return Promise.resolve({ data: stream, status: 200 });
     });
     post = boundPost;
-    service = new ChatService({
+    dependencies = {
       store,
       queue: new MessageQueue(() => undefined),
       summaryChanged,
@@ -78,7 +79,8 @@ describe('role routing and task runtime compatibility', () => {
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: event => emitted.push(event),
-    });
+    };
+    service = new ChatService(dependencies);
   });
   afterEach(() => {
     vi.restoreAllMocks();

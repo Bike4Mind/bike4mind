@@ -115,43 +115,37 @@ export function isFabFileProcessingTerminal(
   return !!(file.error || file.chunkStallReason || file.noExtractableTextAt || file.chunkEmbeddingModelStampedAt);
 }
 
-const FAB_FILE_VIEWABLE_POLL_MS = 2000;
-// About a minute of polling: upload moderation normally clears in seconds.
-const FAB_FILE_VIEWABLE_MAX_FETCHES = 30;
+const FAB_FILE_SCAN_POLL_MS = 1000;
 
-/**
- * Whether polling for a file's signed URL is over: it has one, moderation blocked it (it never will), or the bounded
- * attempts ran out. A freshly saved file has no `fileUrl` until moderation clears.
- */
-export function isFabFileViewableSettled(
-  file: Pick<IFabFileDocument, 'fileUrl' | 'moderationStatus'>,
-  fetches: number
-) {
-  return !!file.fileUrl || file.moderationStatus === 'blocked' || fetches >= FAB_FILE_VIEWABLE_MAX_FETCHES;
+/** Every file read withholds `fileUrl` until the upload moderation scan clears the file (isImageServeable). */
+export const isFabFileScanInFlight = (file: Pick<IFabFileDocument, 'moderationStatus'>): boolean =>
+  file.moderationStatus === 'pending' || file.moderationStatus === 'scanning';
+
+type FabFilePollOptions = { pollWhileProcessing?: boolean; pollWhileScanning?: boolean };
+
+/** useGetFabFile's refetch cadence (ms) for the file it last read, or false to stop. */
+export function fabFilePollInterval(
+  file: IFabFileDocument | undefined,
+  { pollWhileProcessing = false, pollWhileScanning = false }: FabFilePollOptions
+): number | false {
+  if (!file) return false;
+  if (pollWhileScanning && isFabFileScanInFlight(file)) return FAB_FILE_SCAN_POLL_MS;
+  if (pollWhileProcessing && !isFabFileProcessingTerminal(file)) return FAB_FILE_PROCESSING_POLL_MS;
+  return false;
 }
 
-type UseGetFabFileOptions = {
-  /** Poll until the chunk/vector pipeline is terminal. */
-  pollWhileProcessing?: boolean;
-  /** Poll (bounded) until the file has a signed `fileUrl` to display. */
-  pollUntilViewable?: boolean;
-};
-
-export function useGetFabFile(id: string | null, options: UseGetFabFileOptions = {}) {
+/**
+ * `pollWhileScanning` re-reads a file whose moderation scan is still running, so a just-saved image gets its URL
+ * about a second later. The caller bounds it by turning the flag off (see ImageJobCard).
+ */
+export function useGetFabFile(id: string | null, options: FabFilePollOptions = {}) {
+  const polls = !!(options.pollWhileProcessing || options.pollWhileScanning);
   return useQuery({
     queryKey: fabFileKeys.doc(id),
     queryFn: () => getFabFileByIdFromServer(id!),
     staleTime: !!id ? undefined : 1000 * 60 * 30, // 30 minutes
     enabled: !!id,
-    refetchInterval: query => {
-      const { data, dataUpdateCount } = query.state;
-      if (!data) return false;
-      if (options.pollUntilViewable && !isFabFileViewableSettled(data, dataUpdateCount)) {
-        return FAB_FILE_VIEWABLE_POLL_MS;
-      }
-      if (options.pollWhileProcessing && !isFabFileProcessingTerminal(data)) return FAB_FILE_PROCESSING_POLL_MS;
-      return false;
-    },
+    refetchInterval: polls ? query => fabFilePollInterval(query.state.data, options) : undefined,
   });
 }
 

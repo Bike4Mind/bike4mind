@@ -1469,14 +1469,6 @@
       "count": 2
     }
   },
-  "apps/client/pages/api/agents/create-from-context.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 3
-    },
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/agents/index.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
@@ -1540,11 +1532,6 @@
       "count": 8
     }
   },
-  "apps/client/pages/api/analytics/__tests__/aggregate.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 5
-    }
-  },
   "apps/client/pages/api/analytics/aggregate.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 3
@@ -1571,11 +1558,6 @@
     }
   },
   "apps/client/pages/api/app-files/__tests__/get-file-url.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 5
-    }
-  },
-  "apps/client/pages/api/app-files/__tests__/index.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 5
     }
@@ -2036,11 +2018,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/mcp/confirm.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 3
-    }
-  },
   "apps/client/pages/api/mcp/delete-attachment.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
@@ -2477,11 +2454,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/secret-rotations/__tests__/secretRotations.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 13
-    }
-  },
   "apps/client/pages/api/security/__tests__/user-recent.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 10
@@ -2705,11 +2677,6 @@
   "apps/client/pages/api/users/[id]/__tests__/projects.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 5
-    }
-  },
-  "apps/client/pages/api/users/[id]/__tests__/recalculate-storage.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 8
     }
   },
   "apps/client/pages/api/users/[id]/__tests__/userInvites.test.ts": {
@@ -3015,6 +2982,11 @@
   "apps/client/server/managers/regInviteManager.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
+    }
+  },
+  "apps/client/server/mcp/resolveMcpPendingAction.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
     }
   },
   "apps/client/server/middlewares/__tests__/requireStripeWebhook.test.ts": {
@@ -3854,7 +3826,7 @@
   },
   "b4m-core/services/src/organizationService/groupMembership.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 2
+      "count": 1
     }
   },
   "b4m-core/services/src/organizationService/leave.test.ts": {
@@ -4187,16 +4159,6 @@
       "count": 2
     }
   },
-  "b4m-core/slack/src/CommandHandler.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 7
-    }
-  },
-  "b4m-core/slack/src/SlackClient.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 7
-    }
-  },
   "b4m-core/slack/src/SlackEvent.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
@@ -4255,11 +4217,6 @@
   "b4m-core/slack/src/handlers/channel-manager.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 5
-    }
-  },
-  "b4m-core/slack/src/handlers/modelConfigHandlers.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 8
     }
   },
   "b4m-core/slack/src/handlers/notebook-messaging.ts": {
@@ -4634,7 +4591,7 @@
   },
   "packages/server-utils/src/integrations/slack/slackPackageInit.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 2
+      "count": 1
     }
   },
   "packages/server-utils/src/managers/sessionCrud.test.ts": {

@@ -100,6 +100,7 @@ const INVITE_TYPE_TO_API_PATH = {
   [InviteType.Group]: 'groups',
   [InviteType.Organization]: 'organizations',
   [InviteType.Tool]: 'tools',
+  [InviteType.Space]: 'spaces',
 };
 
 export const shareDocument = async (data: {

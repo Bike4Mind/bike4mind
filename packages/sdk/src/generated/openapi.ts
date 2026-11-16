@@ -120,9 +120,69 @@ export interface paths {
     put?: never;
     /**
      * Execute a server-side tool
-     * @description Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`, `decide`) and returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT accepted on this endpoint. Rate-limited to 100 requests/hour per user, counted separately from other endpoints. `web_search` and `web_fetch` are billed per call from the caller's credits (or their organization's), and refused with a 422 `insufficient_credits` before the provider is called. `request_id` echoes the X-Request-ID response header.
+     * @description Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`, `decide`) and returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT accepted on this endpoint. To call `web_search`, `web_fetch` or `weather_info` with an API key, use `POST /api/v1/tools/web-search`, `/api/v1/tools/web-fetch` or `/api/v1/tools/weather`. Rate-limited to 100 requests/hour per user, counted separately from other endpoints. `web_search` and `web_fetch` are billed per call from the caller's credits (or their organization's), and refused with a 422 `insufficient_credits` before the provider is called. `request_id` echoes the X-Request-ID response header.
      */
     post: operations['executeTool'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/tools/web-search': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Search the web
+     * @description Runs one web search on the provider this deployment is configured with and returns the hits as one formatted text block (title, link and snippet per result), ready to hand to a model. When no search provider is configured, `result` says so instead of listing hits. Billed per call from the caller's credits (or their organization's) when the deployment's provider charges for it, and refused with a 422 `insufficient_credits` before the provider is called when the payer cannot cover it. Authenticate with an API key (`b4m_live_`) carrying `ai:chat` or `ai:generate`, or a JWT. Every call counts against one hourly budget of 600 calls per user, shared by the three `/api/v1/tools/*` endpoints and the three `/api/tools/*` routes.
+     */
+    post: operations['searchWeb'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/tools/web-fetch': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Read a web page
+     * @description Fetches one public http or https page and returns its readable content as Markdown, headed by the page title when it has one. A long page is truncated, and the end of `result` says which `offset` to pass to read the next part. Private, loopback and cloud-metadata addresses are refused. Billed per call from the caller's credits (or their organization's) when the deployment's provider charges for it, and refused with a 422 `insufficient_credits` before the provider is called when the payer cannot cover it. Authenticate with an API key (`b4m_live_`) carrying `ai:chat` or `ai:generate`, or a JWT. Every call counts against one hourly budget of 600 calls per user, shared by the three `/api/v1/tools/*` endpoints and the three `/api/tools/*` routes.
+     */
+    post: operations['fetchWebPage'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/tools/weather': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Get the current weather
+     * @description Returns the current temperature and conditions at a coordinate as one sentence. Not billed. Authenticate with an API key (`b4m_live_`) carrying `ai:chat` or `ai:generate`, or a JWT. Every call counts against one hourly budget of 600 calls per user, shared by the three `/api/v1/tools/*` endpoints and the three `/api/tools/*` routes.
+     */
+    post: operations['getCurrentWeather'];
     delete?: never;
     options?: never;
     head?: never;
@@ -265,11 +325,71 @@ export interface paths {
     };
     /**
      * Get client configuration
-     * @description Returns what a client needs to configure itself in one call: whether the deployment is live, which product features are switched on deployment-wide, upload and credit limits, the default and recommended model ids, and every model the caller can use right now (the same list `GET /api/v1/models` pages through, unpaginated here). A feature flag says whether the deployment offers the feature, not whether this caller has opted in. The caller's identity, plan and entitlements are not repeated here - read them from `GET /api/v1/me`. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, `ai:chat` or `ai:generate`, or a JWT.
+     * @description Returns what a client needs to configure itself in one call: whether the deployment is live, which product features are switched on deployment-wide, upload and credit limits, the default and recommended model ids, and every model the caller can use right now (the same list `GET /api/v1/models` pages through, unpaginated here). A feature flag says whether the deployment offers the feature, not whether this caller has opted in. The caller's identity, plan and entitlements are not repeated here - read them from `GET /api/v1/me`. Responses are never cacheable. The optional catalog preserves picker order, disabled entries, locked cards and revision/fallback signals; it never includes internal pricing or dispatch configuration. Transport URLs require authentication. Pre-login clients use `GET /api/v1/client-config/public`, which returns only public login configuration. Authenticate with an API key (`b4m_live_`) carrying `me:read`, `ai:chat` or `ai:generate`, or a JWT.
      */
     get: operations['getClientConfig'];
     put?: never;
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/client-config/public': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get pre-login client configuration
+     * @description Public login and registration configuration only. Empty strings preserve unconfigured values. No caller models, transport URLs, credentials or admin configuration are returned. Responses are never cacheable.
+     */
+    get: operations['getPublicClientConfig'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/pending-actions/{questId}/approve': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Approve an agent action
+     * @description Approves the tool call an agent is waiting on and runs it. An approval is answered once and only while it is current: it lapses 15 minutes after it was raised, and a newer approval on the same quest replaces it. Authenticate with a JWT access token of the signed-in user: an API key cannot answer an approval. The caller must own the session the action belongs to; anyone else gets `404`, exactly like a missing action. Nothing in a push notification authorizes this call.
+     */
+    post: operations['approvePendingAction'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/pending-actions/{questId}/deny': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Deny an agent action
+     * @description Declines the tool call an agent is waiting on; nothing runs. An approval is answered once and only while it is current: it lapses 15 minutes after it was raised, and a newer approval on the same quest replaces it. Authenticate with a JWT access token of the signed-in user: an API key cannot answer an approval. The caller must own the session the action belongs to; anyone else gets `404`, exactly like a missing action. Nothing in a push notification authorizes this call.
+     */
+    post: operations['denyPendingAction'];
     delete?: never;
     options?: never;
     head?: never;
@@ -287,7 +407,7 @@ export interface paths {
     put?: never;
     /**
      * Register a device push token
-     * @description Registers a push token for the signed-in device so the server can notify it. Idempotent: re-registering the same token refreshes it and rebinds it to the calling user and session, which is how a token moves when a different account signs in on the same device. The token is removed automatically when the registering session ends. Authenticate with a JWT access token only: the token is bound to the signed-in session that registers it, and API keys have no session. A token with no session claim (legacy access token) is refused with `401`; sign in again.
+     * @description Registers a push token for the signed-in device so the server can notify it. Idempotent: re-registering the same token refreshes it and rebinds it to the calling user and session, which is how a token moves when a different account signs in on the same device. The token is removed automatically when the registering session ends. `platform` selects the delivery service: `ios` (APNs) or `android` (FCM; send `production` as the environment). Authenticate with a JWT access token only: the token is bound to the signed-in session that registers it, and API keys have no session. A token with no session claim (legacy access token) is refused with `401`; sign in again.
      */
     post: operations['registerPushToken'];
     /**
@@ -399,7 +519,7 @@ export interface paths {
     put?: never;
     /**
      * Start a file upload
-     * @description Registers a file and returns a presigned `upload_url`. Uploading is three steps: (1) call this endpoint with the file name, MIME type, and size in bytes; (2) `PUT` the raw bytes to `upload_url` before `upload_url_expires_at` - send no `Authorization` header, the URL signature is the credential, and do send a `Content-Type` matching `mime_type`; the URL is bound to `file_size`, so the body must be exactly that many bytes or storage refuses it with 403; (3) poll `GET /api/v1/files/{id}` until `moderation_status` is `clean` (usually a few seconds after the PUT), then pass `id` wherever an endpoint takes a file id (for example `fabFileIds` and `referenceImageFabFileIds` on `POST /api/v1/image-edits`). Unsupported types, a size over the upload limit, or a size that would exceed your storage quota are rejected with 400 before any URL is issued. Authenticate with an API key (`b4m_live_`) carrying `files:write`, or a JWT.
+     * @description Registers a file and returns a presigned `upload_url`. Uploading is three steps: (1) call this endpoint with the file name, MIME type, and size in bytes; (2) `PUT` the raw bytes to `upload_url` before `upload_url_expires_at` - send no `Authorization` header, the URL signature is the credential, and do send a `Content-Type` matching `mime_type` and `If-None-Match: *`, which makes the upload create-only (a URL may require it, and a PUT onto an object that already landed is refused with 412); the URL is bound to `file_size`, so the body must be exactly that many bytes or storage refuses it with 403; (3) poll `GET /api/v1/files/{id}` until `moderation_status` is `clean` (usually a few seconds after the PUT), then pass `id` wherever an endpoint takes a file id (for example `fabFileIds` and `referenceImageFabFileIds` on `POST /api/v1/image-edits`). Unsupported types, a size over the upload limit, or a size that would exceed your storage quota are rejected with 400 before any URL is issued. Authenticate with an API key (`b4m_live_`) carrying `files:write`, or a JWT.
      */
     post: operations['createFileUpload'];
     delete?: never;
@@ -488,6 +608,26 @@ export interface paths {
      * @description Returns the files with the given ids, each with a `download_url` once it is downloadable. `ids` is a comma-separated list of at most 100 file ids. An id that does not exist, is malformed, or is not visible to you is left out of `files` rather than failing the request, so compare the ids you got back against the ones you sent. Data-lake files are returned only to a key that also holds `datalake:read`. Safe (GET) requests are exempt from the per-day API-key quota; only the per-minute burst limit applies. Authenticate with an API key (`b4m_live_`) carrying `files:read`, or a JWT.
      */
     get: operations['getFilesByIds'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/files/{id}/lineage': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get what a generated file was made from and into
+     * @description Returns the trail around a file: `ancestors` (the file itself first, then what it was made from, walked up to 8 generations and 32 files) and `children` (up to 24 readable files made directly from it, newest first), with one `edges` entry per link naming the `role` the parent played (`first_frame`, `last_frame`, `reference`, `style`, `extend_of`, `variation_of`, `edit_source`, `mask`). An ancestor you cannot read is returned `redacted` with only its id and depth, and its own inputs are not followed. `request` on a node is the stored generation request, for re-running it with different settings. Safe (GET) requests are exempt from the per-day API-key quota; only the per-minute burst limit applies. Authenticate with an API key (`b4m_live_`) carrying `files:read`, or a JWT.
+     */
+    get: operations['getFileLineage'];
     put?: never;
     post?: never;
     delete?: never;
@@ -1682,6 +1822,46 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/agents/{id}/transfer-credits': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Transfer credits to an agent
+     * @description Moves credits from your balance to an agent you own, for agents that spend their own credits. The transfer is atomic: either both balances change or neither does. Credits held by an agent come back to you when you delete it (`deleteAgent`). Unknown body fields are rejected.
+     */
+    post: operations['transferAgentCredits'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/agents/from-context': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Create an agent from a notebook
+     * @description Creates an agent owned by the caller whose description, personality and system prompt a model writes from the messages and attached files of one of your notebooks, and gives it a dedicated project. The number of agents a user may own depends on their plan. Requires `agents:write`: the call runs a model on the deployment and bills the caller for it. Unknown body fields are rejected.
+     */
+    post: operations['createAgentFromContext'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/skills/market/claude-marketplace.json': {
     parameters: {
       query?: never;
@@ -2651,6 +2831,96 @@ export interface components {
       input: {
         [key: string]: unknown;
       };
+    };
+    /**
+     * @example {
+     *       "result": "1. TypeScript release notes\n   https://example.com/release-notes\n   ..."
+     *     }
+     */
+    searchWebResponse200: {
+      result: string;
+    };
+    searchWebResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+    };
+    /**
+     * @example {
+     *       "query": "latest stable TypeScript release",
+     *       "num_results": 3
+     *     }
+     */
+    searchWebRequest: {
+      /** @description The search query. */
+      query: string;
+      /** @description How many results to return. Defaults to 3. */
+      num_results?: number;
+    };
+    /**
+     * @example {
+     *       "result": "# Getting started\n\nInstall the package, then ..."
+     *     }
+     */
+    fetchWebPageResponse200: {
+      result: string;
+    };
+    fetchWebPageResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+    };
+    /**
+     * @example {
+     *       "url": "https://example.com/docs/getting-started"
+     *     }
+     */
+    fetchWebPageRequest: {
+      /**
+       * Format: uri
+       * @description The http or https page to read.
+       */
+      url: string;
+      /** @description Character offset to resume a long page from, as hinted at the end of a truncated result. */
+      offset?: number | null;
+    };
+    /**
+     * @example {
+     *       "result": "Right now it's 14° in Seattle, with light rain."
+     *     }
+     */
+    getCurrentWeatherResponse200: {
+      result: string;
+    };
+    /**
+     * @example {
+     *       "lat": 47.6062,
+     *       "lon": -122.3321,
+     *       "units": "metric"
+     *     }
+     */
+    getCurrentWeatherRequest: {
+      /** @description Latitude in decimal degrees. */
+      lat: number;
+      /** @description Longitude in decimal degrees. */
+      lon: number;
+      /**
+       * @description Temperature units. Defaults to `imperial`.
+       * @enum {string}
+       */
+      units?: 'imperial' | 'metric';
     };
     /**
      * @example {
@@ -3755,6 +4025,424 @@ export interface components {
           } | null;
         }[];
       };
+      public_config?: {
+        api_url: string;
+        default_theme: string;
+        allow_open_registration: boolean;
+        pyodide_base_url: string;
+        allow_trusted_devices: boolean;
+        turnstile_site_key: string;
+        apple_sign_in_enabled: boolean;
+        support_email: string;
+      };
+      transport?: {
+        websocket_url: string;
+        sse_completions_url: string;
+      };
+      catalog?: {
+        models: {
+          /** @description Pass as `model` on the generation endpoints. */
+          id: string;
+          name: string;
+          /** @enum {string} */
+          type: 'text' | 'image' | 'speech-to-text' | 'video';
+          /**
+           * @description The provider that serves the model.
+           * @enum {string}
+           */
+          backend:
+            | 'openai'
+            | 'bedrock'
+            | 'anthropic'
+            | 'gemini'
+            | 'ollama'
+            | 'openai-compatible'
+            | 'bfl'
+            | 'xai'
+            | 'kimi'
+            | 'deepseek'
+            | 'voyageai'
+            | 'aws'
+            | 'local-image';
+          description: string | null;
+          /** @description How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Set on catalog image models; null otherwise. */
+          blurb: string | null;
+          /** @description The provider as shown to people (`OpenAI`, `Black Forest Labs`), where `backend` is the id. Display text. Set on catalog image models; null otherwise. */
+          provider_label: string | null;
+          /** @description Input context, in tokens. */
+          context_window: number;
+          max_output_tokens: number;
+          supports_streaming: boolean;
+          supports_thinking: boolean;
+          /** @description Whether reasoning tokens are spent inside `max_output_tokens` on every turn. When true, a small `max_tokens` can be used up by reasoning alone and return an empty reply, so leave room above the answer you expect. */
+          reasons_within_output_budget: boolean;
+          /** @description The `reasoningEffort` levels this model acts on, lowest first; empty when it ignores the option. `none` is listed only where it turns reasoning off. Each level is mapped to the nearest one the provider offers. A listed level can still be dropped on one request: some OpenAI models drop it on tool turns, and Claude models with a fixed thinking budget drop it when `max_tokens` leaves no room for the budget plus the answer. */
+          reasoning_efforts: ('none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh')[];
+          supports_tools: boolean;
+          /** @description Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, so a large tool catalog is searched on demand instead of loaded into context up front. Describes the model: `/api/ai/v1/completions` honours it for every model with this flag set, whether its `backend` is `anthropic` or `bedrock`. */
+          supports_tool_search: boolean;
+          /** @description Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model: `/api/ai/v1/completions` honours it only for models whose `backend` is `anthropic`; a `bedrock` model with this flag set is refused there with `errorCode: "tool_changes_unsupported"`. */
+          supports_tool_changes: boolean;
+          /** @description Whether `/api/ai/v1/completions` accepts a final assistant message for the model to continue. When false, a text prefill returns `400` with `errorCode: "assistant_prefill_unsupported"`; server-tool continuations are allowed. On Claude models that accept assistant prefill, it cannot be combined with `thinking`. */
+          supports_assistant_prefill: boolean;
+          supports_vision: boolean;
+          /** @description `YYYY-MM-DD`; null when no retirement is scheduled. */
+          deprecation_date: string | null;
+          /** @description The id of the recommended successor, when there is one. */
+          replaced_by: string | null;
+          /** @description Size rules and supported parameters. Present on image models only; null for every other type. */
+          image: {
+            sizing:
+              | {
+                  /** @enum {string} */
+                  kind: 'presets';
+                  /** @description Accepted `size` values, as `WxH`. */
+                  presets: string[];
+                  default_size: string;
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'constrained';
+                  /** @description Suggested `size` values; any `WxH` meeting `constraints` is accepted. */
+                  presets: string[];
+                  default_size: string;
+                  /** @description The `size` value that lets the provider choose. */
+                  auto_size: string;
+                  constraints: {
+                    max_edge: number;
+                    min_total_pixels: number;
+                    max_total_pixels: number;
+                    /** @description Both edges must be a multiple of this. */
+                    edge_multiple: number;
+                    /** @description Longest edge divided by shortest edge. */
+                    max_aspect_ratio: number;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'dimensions';
+                  presets: string[];
+                  default_size: string;
+                  min_width: number;
+                  max_width: number;
+                  min_height: number;
+                  max_height: number;
+                  /** @description `width` and `height` are rounded to the nearest multiple of this. */
+                  step: number;
+                }
+              | {
+                  /**
+                   * @description Takes an `aspect_ratio` such as `16:9`, not a `size`.
+                   * @enum {string}
+                   */
+                  kind: 'aspect_ratio';
+                }
+              | {
+                  /**
+                   * @description Sized by the input image; takes no `size`.
+                   * @enum {string}
+                   */
+                  kind: 'input_image';
+                  /** @description Whether an `aspect_ratio` override is honoured. */
+                  aspect_ratio: boolean;
+                }
+              | {
+                  /**
+                   * @description The provider takes no size at all.
+                   * @enum {string}
+                   */
+                  kind: 'fixed';
+                };
+            supports: {
+              /** @description `background: 'transparent'` yields real alpha. */
+              transparent_background: boolean;
+              seed: boolean;
+              /** @description Accepted `quality` tiers; empty when none is taken. */
+              qualities: ('standard' | 'hd' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto')[];
+              /** @description Most images one request may ask for via `n`. */
+              max_images: number;
+              /** @description Most `referenceImageFabFileIds` honoured on generation; 0 when the model takes none. FLUX.2 edits take one fewer, as the source uses a slot. */
+              max_reference_images: number;
+              /** @description Accepted by `POST /api/v1/image-edits`. */
+              edit: boolean;
+              requires_input_image: boolean;
+            };
+          } | null;
+          /** @description What a call is billed, in credits per 1M tokens, at the base context tier. Use it to compare models by cost. Null on non-text models and on any model with no published price; never 0 for an unpriced model. */
+          credits_per_1m_tokens: {
+            /** @description Credits per 1M input tokens. */
+            input: number;
+            /** @description Credits per 1M output tokens. */
+            output: number;
+            /** @description Credits per 1M input tokens served from the provider prompt cache. Null where cached tokens are not billed separately, so they cost the `input` rate. */
+            cached_input: number | null;
+          } | null;
+          max_output_tokens_derived?: boolean;
+          /** @enum {string} */
+          thinking_style?: 'legacy' | 'adaptive';
+          /** @enum {boolean} */
+          thinking_always_on?: true;
+          /** @enum {boolean} */
+          openai_reasoning_effort?: true;
+          effort_incompatible_with_tools?: boolean;
+          supports_image_variation: boolean;
+          supports_safety_tolerance?: boolean;
+          training_cutoff?: string;
+          release_date?: string;
+          is_superseded?: boolean;
+          is_slow_model?: boolean;
+          disabled?: boolean;
+          disabled_reason?: string;
+          access?: {
+            /** @enum {boolean} */
+            locked: true;
+            /** @enum {string} */
+            reason: 'requires_paid_plan';
+          };
+        }[];
+        locked_models: {
+          /** @description Pass as `model` on the generation endpoints. */
+          id: string;
+          name: string;
+          /** @enum {string} */
+          type: 'text' | 'image' | 'speech-to-text' | 'video';
+          /**
+           * @description The provider that serves the model.
+           * @enum {string}
+           */
+          backend:
+            | 'openai'
+            | 'bedrock'
+            | 'anthropic'
+            | 'gemini'
+            | 'ollama'
+            | 'openai-compatible'
+            | 'bfl'
+            | 'xai'
+            | 'kimi'
+            | 'deepseek'
+            | 'voyageai'
+            | 'aws'
+            | 'local-image';
+          description: string | null;
+          /** @description How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Set on catalog image models; null otherwise. */
+          blurb: string | null;
+          /** @description The provider as shown to people (`OpenAI`, `Black Forest Labs`), where `backend` is the id. Display text. Set on catalog image models; null otherwise. */
+          provider_label: string | null;
+          /** @description Input context, in tokens. */
+          context_window: number;
+          max_output_tokens: number;
+          supports_streaming: boolean;
+          supports_thinking: boolean;
+          /** @description Whether reasoning tokens are spent inside `max_output_tokens` on every turn. When true, a small `max_tokens` can be used up by reasoning alone and return an empty reply, so leave room above the answer you expect. */
+          reasons_within_output_budget: boolean;
+          /** @description The `reasoningEffort` levels this model acts on, lowest first; empty when it ignores the option. `none` is listed only where it turns reasoning off. Each level is mapped to the nearest one the provider offers. A listed level can still be dropped on one request: some OpenAI models drop it on tool turns, and Claude models with a fixed thinking budget drop it when `max_tokens` leaves no room for the budget plus the answer. */
+          reasoning_efforts: ('none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh')[];
+          supports_tools: boolean;
+          /** @description Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, so a large tool catalog is searched on demand instead of loaded into context up front. Describes the model: `/api/ai/v1/completions` honours it for every model with this flag set, whether its `backend` is `anthropic` or `bedrock`. */
+          supports_tool_search: boolean;
+          /** @description Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model: `/api/ai/v1/completions` honours it only for models whose `backend` is `anthropic`; a `bedrock` model with this flag set is refused there with `errorCode: "tool_changes_unsupported"`. */
+          supports_tool_changes: boolean;
+          /** @description Whether `/api/ai/v1/completions` accepts a final assistant message for the model to continue. When false, a text prefill returns `400` with `errorCode: "assistant_prefill_unsupported"`; server-tool continuations are allowed. On Claude models that accept assistant prefill, it cannot be combined with `thinking`. */
+          supports_assistant_prefill: boolean;
+          supports_vision: boolean;
+          /** @description `YYYY-MM-DD`; null when no retirement is scheduled. */
+          deprecation_date: string | null;
+          /** @description The id of the recommended successor, when there is one. */
+          replaced_by: string | null;
+          /** @description Size rules and supported parameters. Present on image models only; null for every other type. */
+          image: {
+            sizing:
+              | {
+                  /** @enum {string} */
+                  kind: 'presets';
+                  /** @description Accepted `size` values, as `WxH`. */
+                  presets: string[];
+                  default_size: string;
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'constrained';
+                  /** @description Suggested `size` values; any `WxH` meeting `constraints` is accepted. */
+                  presets: string[];
+                  default_size: string;
+                  /** @description The `size` value that lets the provider choose. */
+                  auto_size: string;
+                  constraints: {
+                    max_edge: number;
+                    min_total_pixels: number;
+                    max_total_pixels: number;
+                    /** @description Both edges must be a multiple of this. */
+                    edge_multiple: number;
+                    /** @description Longest edge divided by shortest edge. */
+                    max_aspect_ratio: number;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'dimensions';
+                  presets: string[];
+                  default_size: string;
+                  min_width: number;
+                  max_width: number;
+                  min_height: number;
+                  max_height: number;
+                  /** @description `width` and `height` are rounded to the nearest multiple of this. */
+                  step: number;
+                }
+              | {
+                  /**
+                   * @description Takes an `aspect_ratio` such as `16:9`, not a `size`.
+                   * @enum {string}
+                   */
+                  kind: 'aspect_ratio';
+                }
+              | {
+                  /**
+                   * @description Sized by the input image; takes no `size`.
+                   * @enum {string}
+                   */
+                  kind: 'input_image';
+                  /** @description Whether an `aspect_ratio` override is honoured. */
+                  aspect_ratio: boolean;
+                }
+              | {
+                  /**
+                   * @description The provider takes no size at all.
+                   * @enum {string}
+                   */
+                  kind: 'fixed';
+                };
+            supports: {
+              /** @description `background: 'transparent'` yields real alpha. */
+              transparent_background: boolean;
+              seed: boolean;
+              /** @description Accepted `quality` tiers; empty when none is taken. */
+              qualities: ('standard' | 'hd' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto')[];
+              /** @description Most images one request may ask for via `n`. */
+              max_images: number;
+              /** @description Most `referenceImageFabFileIds` honoured on generation; 0 when the model takes none. FLUX.2 edits take one fewer, as the source uses a slot. */
+              max_reference_images: number;
+              /** @description Accepted by `POST /api/v1/image-edits`. */
+              edit: boolean;
+              requires_input_image: boolean;
+            };
+          } | null;
+          /** @description What a call is billed, in credits per 1M tokens, at the base context tier. Use it to compare models by cost. Null on non-text models and on any model with no published price; never 0 for an unpriced model. */
+          credits_per_1m_tokens: {
+            /** @description Credits per 1M input tokens. */
+            input: number;
+            /** @description Credits per 1M output tokens. */
+            output: number;
+            /** @description Credits per 1M input tokens served from the provider prompt cache. Null where cached tokens are not billed separately, so they cost the `input` rate. */
+            cached_input: number | null;
+          } | null;
+          max_output_tokens_derived?: boolean;
+          /** @enum {string} */
+          thinking_style?: 'legacy' | 'adaptive';
+          /** @enum {boolean} */
+          thinking_always_on?: true;
+          /** @enum {boolean} */
+          openai_reasoning_effort?: true;
+          effort_incompatible_with_tools?: boolean;
+          supports_image_variation: boolean;
+          supports_safety_tolerance?: boolean;
+          training_cutoff?: string;
+          release_date?: string;
+          is_superseded?: boolean;
+          is_slow_model?: boolean;
+          disabled?: boolean;
+          disabled_reason?: string;
+          access?: {
+            /** @enum {boolean} */
+            locked: true;
+            /** @enum {string} */
+            reason: 'requires_paid_plan';
+          };
+        }[];
+        superseded_models: {
+          id: string;
+          name: string;
+          replacement_id: string;
+          replacement_name: string;
+        }[];
+        model_list_revision: string | null;
+        catalog_unavailable: boolean;
+      };
+    };
+    /**
+     * @example {
+     *       "api_url": "https://app.example.com",
+     *       "default_theme": "bike4mind",
+     *       "allow_open_registration": false,
+     *       "pyodide_base_url": "",
+     *       "allow_trusted_devices": true,
+     *       "turnstile_site_key": "",
+     *       "apple_sign_in_enabled": false,
+     *       "support_email": ""
+     *     }
+     */
+    getPublicClientConfigResponse200: {
+      api_url: string;
+      default_theme: string;
+      allow_open_registration: boolean;
+      pyodide_base_url: string;
+      allow_trusted_devices: boolean;
+      turnstile_site_key: string;
+      apple_sign_in_enabled: boolean;
+      support_email: string;
+    };
+    approvePendingActionResponse200: {
+      /** @description False when the action was approved but the tool reported a failure. */
+      success: boolean;
+      message: string;
+      /** @description Link to what the tool created, when it returns one. */
+      url?: string;
+    };
+    approvePendingActionResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'action_replaced' | 'action_expired' | 'action_already_resolved';
+    };
+    /**
+     * @example {
+     *       "pendingActionTs": 1767225600000
+     *     }
+     */
+    approvePendingActionRequest: {
+      pendingActionTs: number;
+    };
+    denyPendingActionResponse200: {
+      /** @description False when the action was approved but the tool reported a failure. */
+      success: boolean;
+      message: string;
+      /** @description Link to what the tool created, when it returns one. */
+      url?: string;
+    };
+    denyPendingActionResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'action_replaced' | 'action_expired' | 'action_already_resolved';
+    };
+    /**
+     * @example {
+     *       "pendingActionTs": 1767225600000
+     *     }
+     */
+    denyPendingActionRequest: {
+      pendingActionTs: number;
     };
     /**
      * @example {
@@ -3770,7 +4458,7 @@ export interface components {
       /** @enum {string} */
       kind: 'device' | 'liveActivity';
       /** @enum {string} */
-      platform: 'ios';
+      platform: 'ios' | 'android';
       /** @enum {string} */
       environment: 'sandbox' | 'production';
       activityId?: string;
@@ -4559,6 +5247,92 @@ export interface components {
         download_url_expires_at: string | null;
         created_at: string;
       }[];
+    };
+    /**
+     * @example {
+     *       "file_id": "<fileId>",
+     *       "ancestors": [
+     *         {
+     *           "file_id": "<fileId>",
+     *           "depth": 0,
+     *           "redacted": false,
+     *           "file_name": "fox-animated.mp4",
+     *           "mime_type": "video/mp4",
+     *           "generator": "video",
+     *           "model_id": "veo-3",
+     *           "prompt": "The fox trots through snow",
+     *           "download_url": "https://<cdn>/<key>?Signature=...",
+     *           "created_at": "2026-09-29T12:00:00.000Z",
+     *           "request": {
+     *             "aspectRatio": "16:9"
+     *           }
+     *         },
+     *         {
+     *           "file_id": "<parentFileId>",
+     *           "depth": 1,
+     *           "redacted": true,
+     *           "file_name": null,
+     *           "mime_type": null,
+     *           "generator": null,
+     *           "model_id": null,
+     *           "prompt": null,
+     *           "download_url": null,
+     *           "created_at": null,
+     *           "request": null
+     *         }
+     *       ],
+     *       "children": [],
+     *       "edges": [
+     *         {
+     *           "parent_id": "<parentFileId>",
+     *           "child_id": "<fileId>",
+     *           "role": "first_frame"
+     *         }
+     *       ],
+     *       "truncated": false
+     *     }
+     */
+    getFileLineageResponse200: {
+      file_id: string;
+      ancestors: {
+        file_id: string;
+        depth: number;
+        redacted: boolean;
+        file_name: string | null;
+        mime_type: string | null;
+        /** @enum {string|null} */
+        generator: 'music' | 'video' | 'image' | 'speech' | 'sound_effect' | null;
+        model_id: string | null;
+        prompt: string | null;
+        download_url: string | null;
+        created_at: string | null;
+        request: {
+          [key: string]: unknown;
+        } | null;
+      }[];
+      children: {
+        file_id: string;
+        depth: number;
+        redacted: boolean;
+        file_name: string | null;
+        mime_type: string | null;
+        /** @enum {string|null} */
+        generator: 'music' | 'video' | 'image' | 'speech' | 'sound_effect' | null;
+        model_id: string | null;
+        prompt: string | null;
+        download_url: string | null;
+        created_at: string | null;
+        request: {
+          [key: string]: unknown;
+        } | null;
+      }[];
+      edges: {
+        parent_id: string;
+        child_id: string;
+        /** @description How the parent was used. Known values: first_frame, last_frame, reference, style, extend_of, variation_of, edit_source, mask. Treat others as generic. */
+        role: string;
+      }[];
+      truncated: boolean;
     };
     /**
      * @example {
@@ -8032,6 +8806,80 @@ export interface components {
       /** @description Overrides the agent's stored name in the prompt. At most 200 characters. */
       agent_name?: string;
     };
+    transferAgentCreditsResponse200: {
+      /** @description Credits moved to the agent. */
+      transferred: number;
+      /** @description Your balance after the transfer. */
+      user_credits: number;
+      /** @description The agent's balance after the transfer. */
+      agent_credits: number;
+    };
+    transferAgentCreditsResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+    };
+    /**
+     * @example {
+     *       "amount": 500
+     *     }
+     */
+    transferAgentCreditsRequest: {
+      /** @description Credits to move from your balance to the agent. A positive whole number. */
+      amount: number;
+    };
+    createAgentFromContextResponse201: {
+      id: string;
+      name: string;
+      description: string;
+      /** @description The agent's system prompt. `null` unless the caller owns the agent. */
+      system_prompt: string | null;
+      /** @description Model id the agent answers with; `null` uses the default. */
+      preferred_model: string | null;
+      temperature: number | null;
+      max_tokens: number | null;
+      /** @description Tools the agent may call. An empty list (or `null`) means the default tool policy applies. */
+      allowed_tools: string[] | null;
+      /** @description Tools the agent may never call. An empty list (or `null`) means the default tool policy applies. */
+      denied_tools: string[] | null;
+      /** @description Mentions (for example `@research`) that invoke the agent in chat. */
+      trigger_words: string[];
+      /** @description Whether the caller owns the agent, rather than having it shared with them. */
+      is_owner: boolean;
+      /** @description ISO 8601 timestamp. */
+      created_at: string | null;
+      /** @description ISO 8601 timestamp. */
+      updated_at: string | null;
+    };
+    createAgentFromContextResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+    };
+    /**
+     * @example {
+     *       "agent_name": "Launch planner",
+     *       "session_id": "<notebook-id>"
+     *     }
+     */
+    createAgentFromContextRequest: {
+      /** @description Name for the new agent. At most 200 characters. */
+      agent_name: string;
+      /** @description The notebook (session) to learn from: its messages and attached files shape the agent. You must own it, or hold create access to it. */
+      session_id: string;
+    };
     /**
      * @example {
      *       "name": "b4m-org-664f1c2b9a1e4d0012ab34cd",
@@ -10629,6 +11477,619 @@ export interface operations {
       };
     };
   };
+  searchWeb: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['searchWebRequest'];
+      };
+    };
+    responses: {
+      /** @description The formatted search results. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['searchWebResponse200'];
+        };
+      };
+      /** @description The billing user or organization could not be resolved, or the API key bills an organization its owner is no longer a member of. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key holds neither `ai:chat` nor `ai:generate`, or the account may not use outbound tools right now (an administrator restricted it, or it is new or unverified: `errorCode: "account_trust_required"`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request body failed validation, or the caller cannot afford the call (`errorCode: "insufficient_credits"`). */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['searchWebResponse422'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Rate limit exceeded: the per-key limit, or the hourly budget shared by the tool endpoints. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The search provider failed, or an unexpected server error. */
+      500: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  fetchWebPage: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['fetchWebPageRequest'];
+      };
+    };
+    responses: {
+      /** @description The page content as Markdown. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['fetchWebPageResponse200'];
+        };
+      };
+      /** @description The URL points at an address that may not be fetched (private, loopback or cloud metadata), the billing user or organization could not be resolved, or the API key bills an organization its owner is no longer a member of. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key holds neither `ai:chat` nor `ai:generate`, or the account may not use outbound tools right now (an administrator restricted it, or it is new or unverified: `errorCode: "account_trust_required"`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request body failed validation, the page cannot be read (unreachable, or a content type that is not a readable page), or the caller cannot afford the call (`errorCode: "insufficient_credits"`). */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['fetchWebPageResponse422'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Rate limit exceeded: the per-key limit, or the hourly budget shared by the tool endpoints. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The fetch failed, or an unexpected server error. */
+      500: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getCurrentWeather: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['getCurrentWeatherRequest'];
+      };
+    };
+    responses: {
+      /** @description The current weather as one sentence. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getCurrentWeatherResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key holds neither `ai:chat` nor `ai:generate`, or the account may not use outbound tools right now (an administrator restricted it, or it is new or unverified: `errorCode: "account_trust_required"`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Rate limit exceeded: the per-key limit, or the hourly budget shared by the tool endpoints. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The weather provider is not configured or failed, or an unexpected server error. */
+      500: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
   createCompletion: {
     parameters: {
       query?: never;
@@ -12096,6 +13557,310 @@ export interface operations {
           'X-RateLimit-Remaining-Day'?: number;
           /** @description Unix epoch (seconds) when the day window resets. */
           'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getPublicClientConfig: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The public login configuration. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getPublicClientConfigResponse200'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+    };
+  };
+  approvePendingAction: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        questId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['approvePendingActionRequest'];
+      };
+    };
+    responses: {
+      /** @description The action ran. `success: false` means the tool reported a failure. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['approvePendingActionResponse200'];
+        };
+      };
+      /** @description The action cannot be confirmed (not a confirmable tool, or its repository is not enabled). */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Missing or invalid JWT. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description MCP servers or custom connectors are disabled, or a file the action attaches is not accessible to you. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description No such quest, or it is not yours. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The action was replaced by a newer one (`errorCode: action_replaced`), lapsed (`action_expired`, and it is cleared), or was already answered (`action_already_resolved`). Also a custom connector tool that is no longer offered. Do not retry; review the quest for a newer approval. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['approvePendingActionResponse409'];
+        };
+      };
+      /** @description The body is not `{ pendingActionTs }`. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The file the action attaches could not be downloaded. */
+      502: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  denyPendingAction: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        questId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['denyPendingActionRequest'];
+      };
+    };
+    responses: {
+      /** @description The action was denied and cleared. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['denyPendingActionResponse200'];
+        };
+      };
+      /** @description Missing or invalid JWT. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No such quest, or it is not yours. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The action was replaced by a newer one (`errorCode: action_replaced`), lapsed (`action_expired`, and it is cleared), or was already answered (`action_already_resolved`). Also a custom connector tool that is no longer offered. Do not retry; review the quest for a newer approval. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['denyPendingActionResponse409'];
+        };
+      };
+      /** @description The body is not `{ pendingActionTs }`. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
           [name: string]: unknown;
         };
         content: {
@@ -14196,6 +15961,181 @@ export interface operations {
         };
       };
       /** @description `ids` is empty, or lists more than 100 ids. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getFileLineage: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The trail around the file. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getFileLineageResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `files:read`. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No file with that id is visible to you. A file that does not exist, one you cannot read and a malformed id are all reported as 404. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -27731,6 +29671,410 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['enhanceAgentFieldResponse422'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded, or the account used up its tokens-per-minute or concurrent-request allowance (`errorCode: "token_rate_limit_exceeded"`, with a `Retry-After` for when the window drains, or `"concurrency_limit_exceeded"`). */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Seconds to wait before retrying. */
+          'Retry-After'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The model or image provider failed to produce a result. Nothing is written; retry later. */
+      502: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  transferAgentCredits: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['transferAgentCreditsRequest'];
+      };
+    };
+    responses: {
+      /** @description The transfer was made. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['transferAgentCreditsResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `agents:write`. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No agent with that id is yours. An agent shared with you, one that does not exist, a deleted agent and a malformed id are all reported as 404, so agent ids cannot be probed through this endpoint. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request body failed validation: an unknown field, an out-of-range value, an unknown `preferred_model`, or a malformed `trigger_words`/tool list. Also answers a balance below `amount`, tagged `errorCode: "insufficient_credits"`. Nothing is moved. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['transferAgentCreditsResponse422'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  createAgentFromContext: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['createAgentFromContextRequest'];
+      };
+    };
+    responses: {
+      /** @description The created agent. */
+      201: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createAgentFromContextResponse201'];
+        };
+      };
+      /** @description The caller already owns as many agents as their plan allows (`errorCode: agent_limit_reached`), agent generation is disabled on this deployment, no model is available to run it, or the body is not valid JSON. The billing user or organization could not be resolved, or the API key bills an organization its owner is no longer a member of. Nothing is created. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No notebook with that id is available to the caller: it does not exist, the id is malformed, or you hold neither ownership nor create access to it. The cases are not told apart. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request body failed validation: an unknown field, an out-of-range value, an unknown `preferred_model`, or a malformed `trigger_words`/tool list. The caller cannot afford the model call, tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). Nothing is written. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createAgentFromContextResponse422'];
         };
       };
       /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
