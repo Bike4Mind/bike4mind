@@ -25,8 +25,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-const verifyOrgAccess = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
+const verifyOrgPermission = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission }));
 const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 const strictAudit = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -56,7 +56,7 @@ const call = async (method: 'get' | 'put' | 'delete', body?: unknown) => {
 beforeEach(() => {
   vi.clearAllMocks();
   stored = undefined;
-  verifyOrgAccess.mockImplementation(async () => org());
+  verifyOrgPermission.mockImplementation(async () => org());
   organizationRepository.findById.mockImplementation(async () => org());
   organizationRepository.update.mockImplementation(async (data: { modelPolicy?: Record<string, unknown> }, opts) => {
     if (opts?.unset?.includes('modelPolicy')) stored = undefined;
@@ -75,9 +75,13 @@ describe('/api/organizations/[id]/model-policy', () => {
     ['put', { allowedTools: [] }],
     ['delete', undefined],
   ] as const)('%s is limited to owners and managers, and a refusal changes nothing', async (method, body) => {
-    verifyOrgAccess.mockRejectedValue(new NotFoundError('Organization not found'));
+    verifyOrgPermission.mockRejectedValue(new NotFoundError('Organization not found'));
     await expect(call(method, body)).rejects.toThrow('Organization not found');
-    expect(verifyOrgAccess).toHaveBeenCalledWith(expect.objectContaining({ id: 'manager1' }), 'org1');
+    expect(verifyOrgPermission).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'manager1' }),
+      'org1',
+      'managePolicies'
+    );
     expect(organizationRepository.update).not.toHaveBeenCalled();
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
