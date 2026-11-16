@@ -57,6 +57,20 @@ describe('summarizeQaRuns', () => {
     expect(p.e2e).toMatchObject({ runs: 1, cleanRuns: 1 });
   });
 
+  it('counts a known latency suite as latency even when none of its runs here has a metric', () => {
+    const runs = [
+      run({ suite: 'Full' }),
+      { ...run({ suite: 'AI Latency', passed: 0, failed: 4 }), metrics: [] },
+      run({ product: 'product-b', suite: 'AI Latency', passed: 0, failed: 1 }),
+    ];
+    const [a, b] = summarizeQaRuns(runs, new Map([['product-a', new Set(['AI Latency'])]]));
+    expect(a.e2e).toMatchObject({ runs: 1, cleanRuns: 1, passRate: 1 });
+    expect(a.latency).toEqual({ runs: 1, passedRuns: 0, checks: 0, checksWithinLimit: 0, checkRate: null });
+    // Known suites are per product: product-b's AI Latency has no metric anywhere, so it stays E2E.
+    expect(b.latency).toBeNull();
+    expect(b.e2e).toMatchObject({ runs: 1, cleanRuns: 0 });
+  });
+
   it('gives one card per product, sorted, with null figures when a kind has no runs', () => {
     const out = summarizeQaRuns([
       run({ product: 'product-b', suite: 'AI Latency', metrics: [latency(1, 10)] }),

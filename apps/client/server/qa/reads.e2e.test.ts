@@ -174,6 +174,17 @@ describe('getQaSummary', () => {
     const staging = await getQaSummary({ ...SUMMARY_FILTERS, env: 'staging' });
     expect(staging.products[0].e2e?.runs).toBe(2);
   });
+
+  it('counts a crashed latency run as latency when the suite posted latency results outside the range', async () => {
+    const scheduled = 'Run via Schedule';
+    const metric = { kind: 'latency' as const, model: 'model-a', value: 5, unit: 's', threshold: 10 };
+    await seed({ hours: 24 * 30, suite: 'AI Latency', trigger: 'Run via Dispatch', branch: 'pr-9', metrics: [metric] });
+    await seed({ hours: 2, suite: 'Full', trigger: scheduled });
+    await seed({ hours: 3, suite: 'AI Latency', trigger: scheduled, failing: [TEST_A, TEST_B], metrics: [] });
+    const [p] = (await getQaSummary(SUMMARY_FILTERS)).products;
+    expect(p.e2e).toMatchObject({ runs: 1, cleanRuns: 1 });
+    expect(p.latency).toMatchObject({ runs: 1, passedRuns: 0, checks: 0, checkRate: null });
+  });
 });
 
 describe('listQaRuns', () => {

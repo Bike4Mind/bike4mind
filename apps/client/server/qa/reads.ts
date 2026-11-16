@@ -318,32 +318,39 @@ export async function getQaOverview(f: QaFilters): Promise<QaOverview> {
 
 /**
  * Every product's scheduled runs in the filter's date range, any suite, for the weekly ops summary.
- * One query per product so each uses the { product, startedAt } index.
+ * Queries per product so each uses the { product, startedAt } index. Latency suites are looked up
+ * over all of the product's runs, any branch, env or date, so a range where every latency run
+ * crashed (no metrics) still counts them as latency rather than E2E.
  */
 export async function getQaSummary(f: QaSummaryFilters): Promise<QaSummary> {
   const products = strings(await QaRun.distinct('product'));
   let truncated = false;
+  const latencySuites = new Map<string, Set<string>>();
   const perProduct = await Promise.all(
     products.map(async product => {
-      const runs = await QaRun.find({
-        product,
-        branch: f.branch,
-        ...(f.env ? { env: f.env } : {}),
-        trigger: SCHEDULED_TRIGGER,
-        startedAt: { $gte: f.from, $lt: f.to },
-      })
-        .sort({ startedAt: -1 })
-        .limit(QA_SUMMARY_MAX_RUNS)
-        .select('product suite status counts metrics')
-        .lean<QaSummaryRunInput[]>();
+      const [runs, suites] = await Promise.all([
+        QaRun.find({
+          product,
+          branch: f.branch,
+          ...(f.env ? { env: f.env } : {}),
+          trigger: SCHEDULED_TRIGGER,
+          startedAt: { $gte: f.from, $lt: f.to },
+        })
+          .sort({ startedAt: -1 })
+          .limit(QA_SUMMARY_MAX_RUNS)
+          .select('product suite status counts metrics')
+          .lean<QaSummaryRunInput[]>(),
+        QaRun.distinct('suite', { product, 'metrics.kind': 'latency' }),
+      ]);
       if (runs.length === QA_SUMMARY_MAX_RUNS) truncated = true;
+      latencySuites.set(product, new Set(strings(suites)));
       return runs;
     })
   );
   return {
     from: f.from.toISOString(),
     to: f.to.toISOString(),
-    products: summarizeQaRuns(perProduct.flat()),
+    products: summarizeQaRuns(perProduct.flat(), latencySuites),
     truncated,
   };
 }

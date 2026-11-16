@@ -102,16 +102,22 @@ function groupBy<T>(items: T[], key: (item: T) => string): Map<string, T[]> {
 }
 
 /**
- * One card per product. A suite counts as latency when any of its runs carries a latency metric,
- * so a latency run that produced no result still lands in the latency figures (as not passed).
+ * One card per product. A suite counts as latency when `knownLatencySuites` (per product, from runs
+ * outside the range too) names it or any of its runs here carries a latency metric. A latency run
+ * that produced no result therefore lands in the latency figures as not passed, even when every
+ * run of that suite in the range crashed.
  */
-export function summarizeQaRuns(runs: QaSummaryRunInput[]): QaProductSummary[] {
+export function summarizeQaRuns(
+  runs: QaSummaryRunInput[],
+  knownLatencySuites: ReadonlyMap<string, ReadonlySet<string>> = new Map()
+): QaProductSummary[] {
   return [...groupBy(runs, r => r.product)]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([product, productRuns]) => {
-      const latencySuites = new Set(
-        productRuns.filter(r => (r.metrics ?? []).some(m => m.kind === 'latency')).map(r => r.suite)
-      );
+      const latencySuites = new Set(knownLatencySuites.get(product));
+      for (const r of productRuns) {
+        if ((r.metrics ?? []).some(m => m.kind === 'latency')) latencySuites.add(r.suite);
+      }
       const e2eRuns = productRuns.filter(r => !latencySuites.has(r.suite));
       const latencyRuns = productRuns.filter(r => latencySuites.has(r.suite));
 
