@@ -88,7 +88,7 @@ To group requests, mint a run with `POST /api/v1/completion-runs` (body `{ "root
 
 `runId` and `role` (`root` or `worker`) are required; the other fields are optional. A `runId` you did not create returns 404 `run_not_found`; see [Errors](./errors.md#runs).
 
-To read what a run has cost so far, call `GET /api/v1/completion-runs/{runId}/usage` with the same credential. It returns the run's settled spend (`creditsCharged`, `usdCost`, `requests` and token counts), counted once per request, with breakdowns by `role`, `purpose`, `model` and task attempt. Its `creditsCharged` is the sum of the `settled` events those requests sent. A request still running, or one sent without `run`, is not included.
+To read what a run has cost so far, call `GET /api/v1/completion-runs/{runId}/usage` with the same credential. It returns the run's settled spend (`creditsCharged`, `requests` and token counts), counted once per request, with breakdowns by `role`, `purpose`, `model` and task attempt (the largest 500 attempts; `byAttemptTruncated` says when there are more). Its `creditsCharged` is the sum of the `settled` events those requests sent. A request still running, or one sent without `run`, is not included.
 
 ---
 

@@ -3319,11 +3319,6 @@
                 "minimum": 0,
                 "description": "Credits the ledger recorded for these requests: the same amount each `settled` stream event reported."
               },
-              "usdCost": {
-                "type": "number",
-                "minimum": 0,
-                "description": "The provider cost, in USD, those credits were priced from."
-              },
               "requests": {
                 "type": "integer",
                 "minimum": 0,
@@ -3348,7 +3343,6 @@
             },
             "required": [
               "creditsCharged",
-              "usdCost",
               "requests",
               "inputTokens",
               "outputTokens",
@@ -3366,11 +3360,6 @@
                   "type": "number",
                   "minimum": 0,
                   "description": "Credits the ledger recorded for these requests: the same amount each `settled` stream event reported."
-                },
-                "usdCost": {
-                  "type": "number",
-                  "minimum": 0,
-                  "description": "The provider cost, in USD, those credits were priced from."
                 },
                 "requests": {
                   "type": "integer",
@@ -3403,7 +3392,6 @@
               },
               "required": [
                 "creditsCharged",
-                "usdCost",
                 "requests",
                 "inputTokens",
                 "outputTokens",
@@ -3422,11 +3410,6 @@
                   "type": "number",
                   "minimum": 0,
                   "description": "Credits the ledger recorded for these requests: the same amount each `settled` stream event reported."
-                },
-                "usdCost": {
-                  "type": "number",
-                  "minimum": 0,
-                  "description": "The provider cost, in USD, those credits were priced from."
                 },
                 "requests": {
                   "type": "integer",
@@ -3464,7 +3447,6 @@
               },
               "required": [
                 "creditsCharged",
-                "usdCost",
                 "requests",
                 "inputTokens",
                 "outputTokens",
@@ -3483,11 +3465,6 @@
                   "type": "number",
                   "minimum": 0,
                   "description": "Credits the ledger recorded for these requests: the same amount each `settled` stream event reported."
-                },
-                "usdCost": {
-                  "type": "number",
-                  "minimum": 0,
-                  "description": "The provider cost, in USD, those credits were priced from."
                 },
                 "requests": {
                   "type": "integer",
@@ -3516,7 +3493,6 @@
               },
               "required": [
                 "creditsCharged",
-                "usdCost",
                 "requests",
                 "inputTokens",
                 "outputTokens",
@@ -3535,11 +3511,6 @@
                   "type": "number",
                   "minimum": 0,
                   "description": "Credits the ledger recorded for these requests: the same amount each `settled` stream event reported."
-                },
-                "usdCost": {
-                  "type": "number",
-                  "minimum": 0,
-                  "description": "The provider cost, in USD, those credits were priced from."
                 },
                 "requests": {
                   "type": "integer",
@@ -3578,7 +3549,6 @@
               },
               "required": [
                 "creditsCharged",
-                "usdCost",
                 "requests",
                 "inputTokens",
                 "outputTokens",
@@ -3587,7 +3557,11 @@
                 "role"
               ]
             },
-            "description": "One entry per distinct role, `taskId` and `attemptId` sent; absent ids are their own entry."
+            "description": "One entry per distinct role, `taskId` and `attemptId` sent; absent ids are their own entry. At most 500, largest spend first."
+          },
+          "byAttemptTruncated": {
+            "type": "boolean",
+            "description": "True when the run has more attempts than `byAttempt` lists; `settled` still counts all of them."
           }
         },
         "required": [
@@ -3597,7 +3571,8 @@
           "byRole",
           "byPurpose",
           "byModel",
-          "byAttempt"
+          "byAttempt",
+          "byAttemptTruncated"
         ],
         "example": {
           "runId": "0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80",
@@ -3605,7 +3580,6 @@
           "createdAt": "2026-11-10T12:00:00.000Z",
           "settled": {
             "creditsCharged": 412,
-            "usdCost": 0.0412,
             "requests": 9,
             "inputTokens": 18200,
             "outputTokens": 4100,
@@ -3616,7 +3590,6 @@
             {
               "role": "root",
               "creditsCharged": 412,
-              "usdCost": 0.0412,
               "requests": 9,
               "inputTokens": 18200,
               "outputTokens": 4100,
@@ -3628,7 +3601,6 @@
             {
               "purpose": "turn",
               "creditsCharged": 412,
-              "usdCost": 0.0412,
               "requests": 9,
               "inputTokens": 18200,
               "outputTokens": 4100,
@@ -3640,7 +3612,6 @@
             {
               "model": "claude-sonnet-5-5",
               "creditsCharged": 412,
-              "usdCost": 0.0412,
               "requests": 9,
               "inputTokens": 18200,
               "outputTokens": 4100,
@@ -3652,14 +3623,14 @@
             {
               "role": "root",
               "creditsCharged": 412,
-              "usdCost": 0.0412,
               "requests": 9,
               "inputTokens": 18200,
               "outputTokens": 4100,
               "cacheReadTokens": 52000,
               "cacheWriteTokens": 6400
             }
-          ]
+          ],
+          "byAttemptTruncated": false
         }
       },
       "getCompletionRunUsageResponse404": {

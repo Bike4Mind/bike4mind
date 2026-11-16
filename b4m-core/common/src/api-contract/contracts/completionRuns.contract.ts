@@ -52,7 +52,6 @@ export const createCompletionRunContract = defineEndpoint({
 
 const EXAMPLE_SPEND = {
   creditsCharged: 412,
-  usdCost: 0.0412,
   requests: 9,
   inputTokens: 18200,
   outputTokens: 4100,
@@ -95,6 +94,7 @@ export const getCompletionRunUsageContract = defineEndpoint({
         byPurpose: [{ purpose: 'turn', ...EXAMPLE_SPEND }],
         byModel: [{ model: 'claude-sonnet-5-5', ...EXAMPLE_SPEND }],
         byAttempt: [{ role: 'root', ...EXAMPLE_SPEND }],
+        byAttemptTruncated: false,
       },
     },
     404: {

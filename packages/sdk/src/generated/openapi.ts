@@ -3409,7 +3409,6 @@ export interface components {
      *       "createdAt": "2026-11-10T12:00:00.000Z",
      *       "settled": {
      *         "creditsCharged": 412,
-     *         "usdCost": 0.0412,
      *         "requests": 9,
      *         "inputTokens": 18200,
      *         "outputTokens": 4100,
@@ -3420,7 +3419,6 @@ export interface components {
      *         {
      *           "role": "root",
      *           "creditsCharged": 412,
-     *           "usdCost": 0.0412,
      *           "requests": 9,
      *           "inputTokens": 18200,
      *           "outputTokens": 4100,
@@ -3432,7 +3430,6 @@ export interface components {
      *         {
      *           "purpose": "turn",
      *           "creditsCharged": 412,
-     *           "usdCost": 0.0412,
      *           "requests": 9,
      *           "inputTokens": 18200,
      *           "outputTokens": 4100,
@@ -3444,7 +3441,6 @@ export interface components {
      *         {
      *           "model": "claude-sonnet-5-5",
      *           "creditsCharged": 412,
-     *           "usdCost": 0.0412,
      *           "requests": 9,
      *           "inputTokens": 18200,
      *           "outputTokens": 4100,
@@ -3456,14 +3452,14 @@ export interface components {
      *         {
      *           "role": "root",
      *           "creditsCharged": 412,
-     *           "usdCost": 0.0412,
      *           "requests": 9,
      *           "inputTokens": 18200,
      *           "outputTokens": 4100,
      *           "cacheReadTokens": 52000,
      *           "cacheWriteTokens": 6400
      *         }
-     *       ]
+     *       ],
+     *       "byAttemptTruncated": false
      *     }
      */
     getCompletionRunUsageResponse200: {
@@ -3479,8 +3475,6 @@ export interface components {
       settled: {
         /** @description Credits the ledger recorded for these requests: the same amount each `settled` stream event reported. */
         creditsCharged: number;
-        /** @description The provider cost, in USD, those credits were priced from. */
-        usdCost: number;
         /** @description Settled requests counted. */
         requests: number;
         inputTokens: number;
@@ -3491,8 +3485,6 @@ export interface components {
       byRole: {
         /** @description Credits the ledger recorded for these requests: the same amount each `settled` stream event reported. */
         creditsCharged: number;
-        /** @description The provider cost, in USD, those credits were priced from. */
-        usdCost: number;
         /** @description Settled requests counted. */
         requests: number;
         inputTokens: number;
@@ -3505,8 +3497,6 @@ export interface components {
       byPurpose: {
         /** @description Credits the ledger recorded for these requests: the same amount each `settled` stream event reported. */
         creditsCharged: number;
-        /** @description The provider cost, in USD, those credits were priced from. */
-        usdCost: number;
         /** @description Settled requests counted. */
         requests: number;
         inputTokens: number;
@@ -3522,8 +3512,6 @@ export interface components {
       byModel: {
         /** @description Credits the ledger recorded for these requests: the same amount each `settled` stream event reported. */
         creditsCharged: number;
-        /** @description The provider cost, in USD, those credits were priced from. */
-        usdCost: number;
         /** @description Settled requests counted. */
         requests: number;
         inputTokens: number;
@@ -3532,12 +3520,10 @@ export interface components {
         cacheWriteTokens: number;
         model: string;
       }[];
-      /** @description One entry per distinct role, `taskId` and `attemptId` sent; absent ids are their own entry. */
+      /** @description One entry per distinct role, `taskId` and `attemptId` sent; absent ids are their own entry. At most 500, largest spend first. */
       byAttempt: {
         /** @description Credits the ledger recorded for these requests: the same amount each `settled` stream event reported. */
         creditsCharged: number;
-        /** @description The provider cost, in USD, those credits were priced from. */
-        usdCost: number;
         /** @description Settled requests counted. */
         requests: number;
         inputTokens: number;
@@ -3549,6 +3535,8 @@ export interface components {
         taskId?: string;
         attemptId?: string;
       }[];
+      /** @description True when the run has more attempts than `byAttempt` lists; `settled` still counts all of them. */
+      byAttemptTruncated: boolean;
     };
     getCompletionRunUsageResponse404: {
       error: string;

@@ -4,6 +4,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { CreditTransaction, creditTransactionRepository } from './CreditTransactionModel';
 import {
+  COMPLETION_RUN_USAGE_MAX_ATTEMPTS,
   CreditHolderType,
   GenericCreditDeductTransaction,
   GenericDeductReasons,
@@ -761,7 +762,7 @@ describe('CreditTransactionRepository.completionRunSpend', () => {
     outputTokens: 10,
     cacheReadTokens: 1000,
     cacheWriteTokens: 50,
-    metadata: { requestId: `req-${credits}`, usdCost: credits / 1000, run: { runId: RUN, ...run } },
+    metadata: { requestId: `req-${credits}`, run: { runId: RUN, ...run } },
     ...extra,
   });
 
@@ -780,7 +781,6 @@ describe('CreditTransactionRepository.completionRunSpend', () => {
 
     expect(spend.settled).toEqual({
       creditsCharged: 100,
-      usdCost: expect.closeTo(0.1, 10),
       requests: 5,
       inputTokens: 500,
       outputTokens: 50,
@@ -807,6 +807,7 @@ describe('CreditTransactionRepository.completionRunSpend', () => {
       ['worker', 'task-b', 'b1', 0, 1],
     ]);
     expect(spend.byAttempt[0]).not.toHaveProperty('taskId');
+    expect(spend.byAttemptTruncated).toBe(false);
   });
 
   it("counts only this owner's completion rows for this run", async () => {
@@ -835,7 +836,6 @@ describe('CreditTransactionRepository.completionRunSpend', () => {
     expect(spend).toEqual({
       settled: {
         creditsCharged: 0,
-        usdCost: 0,
         requests: 0,
         inputTokens: 0,
         outputTokens: 0,
@@ -846,7 +846,23 @@ describe('CreditTransactionRepository.completionRunSpend', () => {
       byPurpose: [],
       byModel: [],
       byAttempt: [],
+      byAttemptTruncated: false,
     });
+  });
+
+  it('lists the largest attempts up to the cap and flags the rest, while settled counts them all', async () => {
+    await seed(
+      Array.from({ length: COMPLETION_RUN_USAGE_MAX_ATTEMPTS + 2 }, (_, index) =>
+        completionRow(index + 1, { role: 'worker', taskId: 'task', attemptId: `attempt-${index}` })
+      )
+    );
+
+    const spend = await creditTransactionRepository.completionRunSpend(RUN, OWNER);
+
+    expect(spend.byAttempt).toHaveLength(COMPLETION_RUN_USAGE_MAX_ATTEMPTS);
+    expect(spend.byAttempt[0].attemptId).toBe(`attempt-${COMPLETION_RUN_USAGE_MAX_ATTEMPTS + 1}`);
+    expect(spend.byAttemptTruncated).toBe(true);
+    expect(spend.settled.requests).toBe(COMPLETION_RUN_USAGE_MAX_ATTEMPTS + 2);
   });
 
   it('is served by the partial run index', async () => {

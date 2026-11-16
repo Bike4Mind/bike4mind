@@ -357,6 +357,9 @@ export const CompletionRunSchema = z.object({
 
 export type CompletionRun = z.infer<typeof CompletionRunSchema>;
 
+/** How many attempts a run's usage lists before byAttempt is cut off (byAttemptTruncated). */
+export const COMPLETION_RUN_USAGE_MAX_ATTEMPTS = 500;
+
 export const CompletionRunIdParamSchema = z.object({ runId: CompletionRunIdSchema });
 
 const TokenCountSchema = z.number().int().nonnegative();
@@ -367,7 +370,6 @@ export const CompletionRunSpendSchema = z.object({
     .number()
     .nonnegative()
     .describe('Credits the ledger recorded for these requests: the same amount each `settled` stream event reported.'),
-  usdCost: z.number().nonnegative().describe('The provider cost, in USD, those credits were priced from.'),
   requests: z.number().int().nonnegative().describe('Settled requests counted.'),
   inputTokens: TokenCountSchema,
   outputTokens: TokenCountSchema,
@@ -397,7 +399,12 @@ export const CompletionRunUsageSchema = z.object({
         attemptId: z.string().optional(),
       })
     )
-    .describe('One entry per distinct role, `taskId` and `attemptId` sent; absent ids are their own entry.'),
+    .describe(
+      `One entry per distinct role, \`taskId\` and \`attemptId\` sent; absent ids are their own entry. At most ${COMPLETION_RUN_USAGE_MAX_ATTEMPTS}, largest spend first.`
+    ),
+  byAttemptTruncated: z
+    .boolean()
+    .describe('True when the run has more attempts than `byAttempt` lists; `settled` still counts all of them.'),
 });
 
 export type CompletionRunUsage = z.infer<typeof CompletionRunUsageSchema>;

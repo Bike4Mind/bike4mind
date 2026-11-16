@@ -40,7 +40,6 @@ const ORG_KEY = {
 
 const SPEND = {
   creditsCharged: 70,
-  usdCost: 0.07,
   requests: 2,
   inputTokens: 200,
   outputTokens: 20,
@@ -54,6 +53,7 @@ const BREAKDOWN = {
   byPurpose: [{ purpose: 'turn', ...SPEND }],
   byModel: [{ model: 'claude-sonnet-5-5', ...SPEND }],
   byAttempt: [{ role: 'worker', taskId: 'task-a', attemptId: 'a1', ...SPEND }],
+  byAttemptTruncated: false,
 };
 
 const storedRun = (overrides: Record<string, unknown> = {}) => ({

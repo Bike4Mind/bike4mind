@@ -21,6 +21,7 @@ import {
   type CompletionRunRole,
   type CompletionRunSpend,
   type CompletionRunUsage,
+  COMPLETION_RUN_USAGE_MAX_ATTEMPTS,
   type CreditTransactionType,
   type PurchaseReversalReason,
 } from '@bike4mind/common';
@@ -227,7 +228,6 @@ export type CompletionRunSpendBreakdown = Omit<CompletionRunUsage, 'runId' | 'ro
 const RUN_SPEND_ACCUMULATORS = {
   // Usage is stored negative; report the spend magnitude.
   creditsCharged: { $sum: { $abs: '$credits' } },
-  usdCost: { $sum: { $ifNull: ['$metadata.usdCost', 0] } },
   requests: { $sum: 1 },
   inputTokens: { $sum: { $ifNull: ['$inputTokens', 0] } },
   outputTokens: { $sum: { $ifNull: ['$outputTokens', 0] } },
@@ -245,7 +245,6 @@ type RunSpendRow<K> = CompletionRunSpend & { _id: K };
 
 const EMPTY_RUN_SPEND: CompletionRunSpend = {
   creditsCharged: 0,
-  usdCost: 0,
   requests: 0,
   inputTokens: 0,
   outputTokens: 0,
@@ -753,27 +752,33 @@ export class CreditTransactionRepository
           // Stored as sent; a request sent without a purpose was a turn (UsageEventRun).
           byPurpose: groupRunSpendBy({ $ifNull: ['$metadata.run.purpose', 'turn'] }),
           byModel: groupRunSpendBy({ $ifNull: ['$model', 'unknown'] }),
-          byAttempt: groupRunSpendBy({
-            role: '$metadata.run.role',
-            taskId: '$metadata.run.taskId',
-            attemptId: '$metadata.run.attemptId',
-          }),
+          // One more than the cap, so a cut-off list can be told apart from one that fits exactly.
+          byAttempt: [
+            ...groupRunSpendBy({
+              role: '$metadata.run.role',
+              taskId: '$metadata.run.taskId',
+              attemptId: '$metadata.run.attemptId',
+            }),
+            { $limit: COMPLETION_RUN_USAGE_MAX_ATTEMPTS + 1 },
+          ],
         },
       },
     ]);
 
     const [settled] = facets?.settled ?? [];
+    const attempts = facets?.byAttempt ?? [];
     return {
       settled: settled ? toRunSpend(settled) : EMPTY_RUN_SPEND,
       byRole: (facets?.byRole ?? []).map(row => ({ role: row._id, ...toRunSpend(row) })),
       byPurpose: (facets?.byPurpose ?? []).map(row => ({ purpose: row._id, ...toRunSpend(row) })),
       byModel: (facets?.byModel ?? []).map(row => ({ model: row._id, ...toRunSpend(row) })),
-      byAttempt: (facets?.byAttempt ?? []).map(row => ({
+      byAttempt: attempts.slice(0, COMPLETION_RUN_USAGE_MAX_ATTEMPTS).map(row => ({
         role: row._id.role,
         ...(row._id.taskId !== undefined && { taskId: row._id.taskId }),
         ...(row._id.attemptId !== undefined && { attemptId: row._id.attemptId }),
         ...toRunSpend(row),
       })),
+      byAttemptTruncated: attempts.length > COMPLETION_RUN_USAGE_MAX_ATTEMPTS,
     };
   }
 
