@@ -219,7 +219,7 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
           ...(escalation.trigger === 'manual' ? { escalatedBy: escalation.by } : {}),
         },
       },
-      { new: true }
+      { new: true, runValidators: true }
     );
   }
 
