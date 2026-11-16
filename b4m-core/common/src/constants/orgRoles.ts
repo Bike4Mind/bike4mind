@@ -29,7 +29,7 @@ export const ORG_PERMISSIONS = [
   'manageBilling',
   /** The team's credit spend, ledger and per-session usage. */
   'viewUsage',
-  /** Team-wide policy: the custom MCP connector policy, member credit budgets and team branding. */
+  /** Team-wide policy: the custom MCP connector policy, member credit budgets, data retention and team branding. */
   'managePolicies',
   /** Team-wide integration wiring and its secrets: Slack, the team GitHub connection, webhooks. */
   'manageIntegrations',
@@ -64,11 +64,12 @@ export type AssignableOrgRole = (typeof ASSIGNABLE_ORG_ROLES)[number];
 
 /**
  * The built-in role table. Manager and Owner reproduce the two tiers the gates enforced before roles
- * existed (owner-or-manager vs owner-only), so introducing the table changed nobody's access.
+ * existed (owner-or-manager vs owner-only), so introducing the table changed nobody's access. Usage
+ * and ledger reads (`viewUsage`) are open to managers too; spending (`manageBilling`) is not.
  */
 export const ORG_ROLE_PERMISSIONS: Readonly<Record<OrganizationMemberRole, readonly OrgPermission[]>> = {
   owner: ORG_PERMISSIONS,
-  manager: ['manageMembers', 'managePolicies', 'manageKeys', 'manageContent', 'viewAudit'],
+  manager: ['manageMembers', 'viewUsage', 'managePolicies', 'manageKeys', 'manageContent', 'viewAudit'],
   billingManager: ['manageBilling', 'viewUsage'],
   member: [],
 };

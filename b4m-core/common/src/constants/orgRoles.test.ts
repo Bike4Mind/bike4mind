@@ -47,7 +47,8 @@ const LEGACY_TIER: Record<OrgPermission, (actor: Actor) => boolean> = {
   // The audit routes call orgMemberHasPermission (no admin arm); hasOrgPermission adds one uniformly.
   viewAudit: legacyManagerTier,
   manageBilling: legacyOwnerTier,
-  viewUsage: legacyOwnerTier,
+  // Usage and ledger reads moved from verifyOrgOwner to verifyOrgAccess just before roles landed.
+  viewUsage: legacyManagerTier,
   manageIntegrations: legacyOwnerTier,
 };
 
@@ -96,7 +97,7 @@ describe('hasOrgPermission', () => {
   it('pins the built-in role table', () => {
     expect(ORG_ROLE_PERMISSIONS).toEqual({
       owner: ORG_PERMISSIONS,
-      manager: ['manageMembers', 'managePolicies', 'manageKeys', 'manageContent', 'viewAudit'],
+      manager: ['manageMembers', 'viewUsage', 'managePolicies', 'manageKeys', 'manageContent', 'viewAudit'],
       billingManager: ['manageBilling', 'viewUsage'],
       member: [],
     });

@@ -1,6 +1,6 @@
 // PATCH /api/organizations/:id/api-keys/:keyId
 // Changes a live org-owned key's scopes and/or reach grants (IUserApiKey.orgOwned.grants) in place;
-// the secret is unchanged. Owner, current manager or platform admin (verifyOrgAccess). Product scopes
+// the secret is unchanged. Owner, current manager or platform admin (`manageKeys`). Product scopes
 // are judged on the org's entitlement, and every change is audited as org.api_key.access_updated.
 
 import { OrgApiKeyGrantsSchema, type IOrgApiKeyView, type OrgApiKeyGrant } from '@bike4mind/common';
@@ -19,7 +19,7 @@ import {
   toOrgApiKeyView,
 } from '@server/organizations/orgApiKeys';
 import { endKeyRealtimeConnections } from '@server/utils/adminApiKeyActions';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { z } from 'zod';
 
 const UpdateOrgApiKeyBodySchema = z
@@ -42,7 +42,7 @@ const grantKeys = (grants: readonly { resourceType: string; resourceId: string }
 const handler = baseApi({ auth: 'jwtOnly' }).patch(
   asyncHandler<{}, unknown, unknown, { id?: string; keyId?: string }>(async (req, res) => {
     const user = req.user!;
-    const org = await verifyOrgAccess(user, stringParam(req.query.id));
+    const org = await verifyOrgPermission(user, stringParam(req.query.id), 'manageKeys');
     const body = parseOrBadRequest(UpdateOrgApiKeyBodySchema, req.body);
     const { serviceAccount, apiKey } = await loadOrgOwnedKey(org.id, stringParam(req.query.keyId));
     assertOrgApiKeyLive(apiKey, 'changed');
