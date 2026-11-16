@@ -109,6 +109,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.Approvals]: 'approvals',
   [AdminTab.Tutorials]: 'tutorials',
   [AdminTab.AiOperations]: 'ai-operations',
+  [AdminTab.Roles]: 'roles',
 };
 
 /**
