@@ -70,6 +70,12 @@ describe('StudioModelPicker', () => {
     expect(screen.queryByTestId('pick-model-panel')).not.toBeInTheDocument();
   });
 
+  it('describes the row by its name alone when there is no note to render', () => {
+    renderPicker('x', [card('x', { pickedFor: null })]);
+    const describedBy = screen.getByTestId('pick-model-change-btn').getAttribute('aria-describedby');
+    expect(describedBy).toBe(screen.getByTestId('pick-model-row-name').id);
+  });
+
   it('shows the why-not reason in the row when the picked model does not fit the request', () => {
     renderPicker('g');
     expect(screen.getByTestId('pick-model-row-reason')).toHaveTextContent('takes no aspect ratio');

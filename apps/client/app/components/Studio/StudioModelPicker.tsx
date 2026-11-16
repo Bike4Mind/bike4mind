@@ -353,6 +353,7 @@ const StudioModelPicker = ({ testIdPrefix, cards, selectedId, onSelect }: Studio
   const noteId = useId();
   const selected = cards.find(card => card.id === selectedId);
   const reason = selected ? reasonOf(selected) : null;
+  const hasNote = Boolean(reason || selected?.pickedFor);
 
   return (
     <StudioThemeScope inline testId={`${testIdPrefix}-model-scope`}>
@@ -360,7 +361,7 @@ const StudioModelPicker = ({ testIdPrefix, cards, selectedId, onSelect }: Studio
         <RowButton
           type="button"
           aria-label="Change model"
-          aria-describedby={`${nameId} ${noteId}`}
+          aria-describedby={hasNote ? `${nameId} ${noteId}` : nameId}
           aria-haspopup="dialog"
           onClick={() => setOpen(true)}
           data-testid={`${testIdPrefix}-model-change-btn`}
