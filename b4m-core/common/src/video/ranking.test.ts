@@ -11,13 +11,16 @@ const TEXT: VideoRankingRequest = {
 };
 
 describe('rankVideoModels', () => {
-  it('opens on the first preferred model and never offers a retired one as fitting', () => {
+  it('opens on the newest flagship and never offers a retired one as fitting', () => {
     const ranked = rankVideoModels(VIDEO_MODEL_IDS, TEXT);
-    expect(ranked[0]).toMatchObject({
-      id: 'gemini-omni-1.1-flash',
-      status: 'fits',
-      pickedFor: ['quick clips with sound'],
-    });
+    expect(ranked.map(model => model.id)).toEqual([
+      'flux-3-video',
+      'grok-imagine-video-1.5',
+      'gemini-omni-1.1-flash',
+      'test-video',
+      'veo-3.1-fast-generate-preview',
+    ]);
+    expect(ranked[0]).toMatchObject({ status: 'fits', pickedFor: ['detailed scenes'] });
     expect(ranked.find(model => model.id === 'veo-3.1-fast-generate-preview')).toMatchObject({
       status: 'unavailable',
       whyNot: { code: MODEL_UNAVAILABLE_CODE },
