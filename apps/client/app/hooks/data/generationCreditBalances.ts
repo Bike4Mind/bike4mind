@@ -14,13 +14,12 @@ export async function invalidateGenerationCreditBalances(queryClient: QueryClien
   ]);
 }
 
-// Invalidating refetches the balance only where a query already holds it; ensureQueryData fetches it otherwise (the
-// Studio page has no balance query of its own). A failed pull leaves the `users` push to deliver the balance.
+// Always a fresh read (staleTime 0), never the cached pre-charge balance, and it throws when the pull fails: a failed
+// pull leaves the `users` push to deliver the balance. Matches syncCreditBalance in CreditBalanceSyncListener.
 async function refreshPersonalBalance(queryClient: QueryClient): Promise<void> {
-  await queryClient.invalidateQueries({ queryKey: CREDITS_BALANCE_KEY, refetchType: 'all' });
   try {
     writeBilledBalance(
-      await queryClient.ensureQueryData({ queryKey: CREDITS_BALANCE_KEY, queryFn: fetchCreditsBalance })
+      await queryClient.fetchQuery({ queryKey: CREDITS_BALANCE_KEY, queryFn: fetchCreditsBalance, staleTime: 0 })
     );
   } catch (error) {
     console.warn('Credit balance sync failed:', error);

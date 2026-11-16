@@ -26,7 +26,7 @@ describe('invalidateGenerationCreditBalances', () => {
         queryClient.fetchQuery({ queryKey: organizationsKey, queryFn: fetchOrganizations }),
         queryClient.fetchQuery({ queryKey: searchKey, queryFn: searchOrganizations }),
       ]);
-      fetchPersonalBalance.mockResolvedValue({ currentCredits: 90 });
+      apiGet.mockResolvedValue({ data: { currentCredits: 90 } });
       fetchOrganizations.mockResolvedValue([{ id: 'team-1', currentCredits: 180 }]);
 
       await invalidateGenerationCreditBalances(queryClient);
@@ -50,6 +50,26 @@ describe('invalidateGenerationCreditBalances', () => {
       expect(apiGet).toHaveBeenCalledWith('/api/credits/balance');
       expect(useUser.getState().currentUser?.currentCredits).toBe(52);
     } finally {
+      queryClient.clear();
+      useUser.getState().setCurrentUser(null);
+    }
+  });
+
+  it('leaves the current user alone when the pull fails, even with a cached pre-charge balance', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    queryClient.setQueryData(CREDITS_BALANCE_KEY, { currentCredits: 100 });
+    useUser.getState().setCurrentUser({ id: 'user-1', currentCredits: 90 } as unknown as IUserDocument);
+    apiGet.mockRejectedValue(new Error('network down'));
+
+    try {
+      await invalidateGenerationCreditBalances(queryClient);
+
+      expect(apiGet).toHaveBeenCalledWith('/api/credits/balance');
+      expect(useUser.getState().currentUser?.currentCredits).toBe(90);
+      expect(warn).toHaveBeenCalledWith('Credit balance sync failed:', expect.any(Error));
+    } finally {
+      warn.mockRestore();
       queryClient.clear();
       useUser.getState().setCurrentUser(null);
     }
