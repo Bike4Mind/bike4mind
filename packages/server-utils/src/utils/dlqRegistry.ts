@@ -203,7 +203,7 @@ const DLQ_REGISTRY = [
     description: 'Writes release notes or weekly highlights and announces them in Slack.',
     replay: 'unsafe',
     replayNote:
-      'Nothing records that the Slack announcement went out, so a replay regenerates the note and posts again. Only a human-edited note is left alone.',
+      'Nothing records that the Slack announcement went out, so a replay regenerates the release note or highlights and posts again. Only a human-edited release note is left alone.',
     owner: 'Release notes',
     // One DLQ for both kinds of whatsNewJob message: a release names its tag, a highlights run its correlation id.
     describe: firstEntity(entityAt('Release', 'releaseTag'), entityAt('Highlights run', 'correlationId')),
