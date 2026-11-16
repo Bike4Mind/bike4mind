@@ -26,10 +26,13 @@ import {
   type UsersListParams,
 } from '../usersTabSearch';
 import { PLAN_LABELS, SIGNUP_METHOD_LABELS } from './usersColumns';
+import { useAdminRoleList } from '../useAdminRoleList';
 
 const capitalize = (value: string) => value[0].toUpperCase() + value.slice(1);
 
-const SINGLE_FILTERS: { key: Exclude<UsersFilterKey, 'emailDomain'>; label: string; options: FilterChipOption[] }[] = [
+type SingleFilter = { key: Exclude<UsersFilterKey, 'emailDomain'>; label: string; options: FilterChipOption[] };
+
+const SINGLE_FILTERS: SingleFilter[] = [
   { key: 'status', label: 'Status', options: USER_STATUS_FILTERS.map(value => ({ value, label: capitalize(value) })) },
   { key: 'plan', label: 'Plan', options: USER_PLAN_FILTERS.map(value => ({ value, label: PLAN_LABELS[value] })) },
   { key: 'risk', label: 'Risk', options: USER_RISK_FILTERS.map(value => ({ value, label: capitalize(value) })) },
@@ -104,6 +107,18 @@ export function UsersToolbar({
   const [revealed, setRevealed] = useState<ReadonlySet<ExtraFilter>>(new Set());
   const organizations = useGetAllOrganizations({ filters: { personal: false } });
   const userTags = useGetUserTags();
+  const adminRoles = useAdminRoleList();
+
+  // Offered once roles exist; a role id from a link stays removable even when it no longer resolves.
+  const singleFilters = useMemo<SingleFilter[]>(() => {
+    const roles = adminRoles.data ?? [];
+    if (roles.length === 0 && !params.adminRole) return SINGLE_FILTERS;
+    const options = roles.map(role => ({ value: role.id, label: role.name }));
+    if (params.adminRole && !options.some(option => option.value === params.adminRole)) {
+      options.push({ value: params.adminRole, label: adminRoles.isLoading ? '...' : 'Deleted role' });
+    }
+    return [...SINGLE_FILTERS, { key: 'adminRole', label: 'Admin role', options }];
+  }, [adminRoles.data, adminRoles.isLoading, params.adminRole]);
 
   const organizationOptions = useMemo<FilterChipOption[]>(
     () => [
@@ -130,7 +145,7 @@ export function UsersToolbar({
         ? params.tags.length > 0
         : params[key] !== undefined;
   const hidden: { key: ExtraFilter; label: string }[] = [
-    ...SINGLE_FILTERS.filter(filter => !isShown(filter.key) && !isSet(filter.key)),
+    ...singleFilters.filter(filter => !isShown(filter.key) && !isSet(filter.key)),
     ...(isShown('organization') || isSet('organization')
       ? []
       : [{ key: 'organization' as const, label: 'Organization' }]),
@@ -165,17 +180,19 @@ export function UsersToolbar({
         </Stack>
       </Stack>
       <Stack direction="row" alignItems="center" flexWrap="wrap" gap={0.75} data-testid="admin-users-filters">
-        {SINGLE_FILTERS.filter(filter => isShown(filter.key) || isSet(filter.key)).map(filter => (
-          <FilterChip
-            key={filter.key}
-            id={filter.key}
-            label={filter.label}
-            options={filter.options}
-            value={params[filter.key]}
-            // The chip's options are this filter's own values, so the key and value stay paired.
-            onChange={value => update({ [filter.key]: value } as Partial<UsersListParams>)}
-          />
-        ))}
+        {singleFilters
+          .filter(filter => isShown(filter.key) || isSet(filter.key))
+          .map(filter => (
+            <FilterChip
+              key={filter.key}
+              id={filter.key}
+              label={filter.label}
+              options={filter.options}
+              value={params[filter.key]}
+              // The chip's options are this filter's own values, so the key and value stay paired.
+              onChange={value => update({ [filter.key]: value } as Partial<UsersListParams>)}
+            />
+          ))}
         {(isShown('organization') || isSet('organization')) && (
           <FilterChip
             multiple

@@ -226,6 +226,24 @@ describe('AI advisory link', () => {
   });
 });
 
+describe('admin role filter', () => {
+  const ROLE_ID = '0123456789ABCDEF01234567';
+
+  it('accepts only an ObjectId, lowercased', () => {
+    expect(USERS_SEARCH_PARSERS.role(ROLE_ID)).toBe(ROLE_ID.toLowerCase());
+    expect(USERS_SEARCH_PARSERS.role('support')).toBeUndefined();
+  });
+
+  it('round-trips through the URL as `role` and counts as one filter', () => {
+    const search = usersTabLinkSearch({ adminRole: ROLE_ID.toLowerCase() });
+    expect(search).toMatchObject({ role: ROLE_ID.toLowerCase() });
+    const view = usersViewFromSearch(search);
+    expect(view).toMatchObject({ adminRole: ROLE_ID.toLowerCase() });
+    expect(countActiveFilters(view!)).toBe(1);
+    expect(CLEARED_FILTER_PARAMS).toHaveProperty('adminRole', undefined);
+  });
+});
+
 describe('analytics drill-down params', () => {
   const drillDown = {
     createdFrom: '2026-10-01T00:00:00.000Z',

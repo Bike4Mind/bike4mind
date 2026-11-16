@@ -66,6 +66,7 @@ export const USERS_FILTER_PARAMS = {
   activeTo: 'activeTo',
   funnelStep: 'funnelStep',
   aiVerdict: 'aiVerdict',
+  adminRole: 'role',
 } as const satisfies Partial<Record<keyof UsersListView, string>>;
 export type UsersFilterKey = keyof typeof USERS_FILTER_PARAMS;
 export const USERS_FILTER_KEYS = Object.keys(USERS_FILTER_PARAMS) as UsersFilterKey[];
@@ -125,6 +126,7 @@ export type UsersSearch = {
   activeTo?: string;
   funnelStep?: UsersListView['funnelStep'];
   aiVerdict?: UsersListView['aiVerdict'];
+  role?: string;
 };
 
 const parseLimit = (value: unknown): number | undefined => {
@@ -197,6 +199,7 @@ export const USERS_SEARCH_PARSERS: {
   activeTo: parseUtcDay,
   funnelStep: oneOf(USER_FUNNEL_STEP_FILTERS),
   aiVerdict: oneOf(USER_AI_VERDICT_FILTERS),
+  role: parseObjectId,
 };
 
 function filtersFromSearch(search: Record<string, unknown>): Pick<UsersListView, UsersFilterKey> {
@@ -218,6 +221,7 @@ function filtersFromSearch(search: Record<string, unknown>): Pick<UsersListView,
     activeTo: parseUtcDay(search.activeTo),
     funnelStep: USERS_SEARCH_PARSERS.funnelStep(search.funnelStep),
     aiVerdict: USERS_SEARCH_PARSERS.aiVerdict(search.aiVerdict),
+    adminRole: parseObjectId(search.role),
   };
 }
 
@@ -294,6 +298,7 @@ export function usersViewToSearch(params: UsersListView): Omit<UsersSearch, type
     activeTo: parseUtcDay(params.activeTo),
     funnelStep: params.funnelStep,
     aiVerdict: params.aiVerdict,
+    role: parseObjectId(params.adminRole),
   };
 }
 

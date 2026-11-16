@@ -3,7 +3,7 @@ import { Box, Chip, Stack, Typography } from '@mui/joy';
 import {
   USER_TIMELINE_CATEGORIES,
   isFullAdmin,
-  sortAdminPermissions,
+  sortAdminRoleIds,
   resolveUserStorageLimit,
   storageLimitToBytes,
   type AuditEntry,
@@ -19,6 +19,8 @@ import { typesOfCategories } from '../activitySearch';
 import { CATEGORY_OPTIONS } from './ActivityTab';
 import type { ProfileAction } from '../actions/profileActions';
 import { RiskEvidenceCard } from '../RiskEvidenceCard';
+import { useAdminRoleList } from '../../useAdminRoleList';
+import { describeProvenance, permissionProvenance } from '../adminAccessModel';
 import { SignupClassificationCard } from '../SignupClassificationCard';
 import { DetectionLinkedAccountsCard } from '../DetectionLinkedAccountsCard';
 import { UserNotesCard } from './UserNotesCard';
@@ -150,7 +152,10 @@ const AccessCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileA
   const held = access.data?.entitlements.filter(row => row.held) ?? [];
   const customTags = (user.tags ?? []).filter(tag => !isManagedTag(tag));
   const { currentUser } = useUser();
-  const adminPermissions = sortAdminPermissions(user.adminPermissions ?? []);
+  const roles = useAdminRoleList();
+  const roleIds = sortAdminRoleIds(user.adminRoleIds ?? []);
+  const heldRoles = (roles.data ?? []).filter(role => roleIds.includes(role.id.toLowerCase()));
+  const effective = permissionProvenance(user.adminPermissions ?? [], roleIds, roles.data ?? []);
   // The endpoint is full-admin only and never edits a Super Admin or the viewer's own account.
   const canEditPermissions = isFullAdmin(currentUser) && !user.isAdmin && currentUser?.id !== user.id;
 
@@ -167,14 +172,30 @@ const AccessCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileA
       <Fact label="Role" data-testid="user-profile-fact-role">
         {USER_ROLE_LABELS[userRole(user)]}
       </Fact>
+      {!user.isAdmin && roleIds.length > 0 && (
+        <Fact label="Admin roles" data-testid="user-profile-fact-admin-roles">
+          <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+            {roles.isLoading
+              ? '...'
+              : heldRoles.length === 0
+                ? 'None'
+                : heldRoles.map(role => <StatusChip key={role.id} tone="neutral" label={role.name} />)}
+          </Stack>
+        </Fact>
+      )}
       <Fact label="Admin permissions" data-testid="user-profile-fact-admin-permissions">
         <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
           {user.isAdmin
             ? 'All (Super Admin)'
-            : adminPermissions.length === 0
+            : effective.length === 0
               ? 'None'
-              : adminPermissions.map(id => (
-                  <StatusChip key={id} tone="neutral" label={ADMIN_PERMISSION_LABELS[id].label} />
+              : effective.map(entry => (
+                  <StatusChip
+                    key={entry.id}
+                    tone="neutral"
+                    label={`${ADMIN_PERMISSION_LABELS[entry.id].label} (${describeProvenance(entry)})`}
+                    data-testid={`user-profile-admin-permission-${entry.id.replace(':', '-')}`}
+                  />
                 ))}
           {canEditPermissions && (
             <RowAction onClick={() => onAction('permissions')} data-testid="user-profile-admin-permissions-btn">

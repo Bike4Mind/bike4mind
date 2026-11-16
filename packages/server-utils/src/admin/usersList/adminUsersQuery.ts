@@ -135,6 +135,7 @@ export function buildAdminUsersMatch(filter: AdminUsersFilter, context: AdminUse
   }
   if (filter.funnelStep) conditions.push(resolvedIdsCondition(context, 'funnelStepUserIds', 'funnelStep'));
   if (filter.aiVerdict) conditions.push(resolvedIdsCondition(context, 'aiAbuseUserIds', 'aiVerdict'));
+  if (filter.adminRole) conditions.push({ adminRoleIds: context.toObjectId(filter.adminRole) });
   return conditions.length > 0 ? { $and: conditions } : {};
 }
 
