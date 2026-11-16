@@ -98,6 +98,20 @@ const applyAdminCreditEdit = async (req: Request, orgId: string, requestedBalanc
   });
 };
 
+const AUDITED_SETTINGS_FIELDS = [
+  'name',
+  'description',
+  'billingContact',
+  'systemPrompt',
+  'redactPushContent',
+  'maxCreditsPerMember',
+  'storageLimit',
+] as const;
+
+// The system prompt can run to 10,000 characters, so the entry records its length, not its text.
+const settingsAuditValue = (field: (typeof AUDITED_SETTINGS_FIELDS)[number], value: unknown) =>
+  field === 'systemPrompt' ? { characters: typeof value === 'string' ? value.length : 0 } : (value ?? null);
+
 const handler = baseApi()
   .get(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
@@ -149,6 +163,9 @@ const handler = baseApi()
           }
         );
 
+      const auditedFields = AUDITED_SETTINGS_FIELDS.filter(field => profile[field] !== undefined);
+      const before = auditedFields.length > 0 ? await organizationRepository.findById(orgId) : null;
+
       const profileSent =
         loopsGreenCiMergeDisabled === undefined ||
         currentCredits !== undefined ||
@@ -173,7 +190,26 @@ const handler = baseApi()
       if (loopsGreenCiMergeDisabled !== undefined) {
         await organizationRepository.update({ id: orgId, loopsGreenCiMergeDisabled });
         updatedOrganization = await organizationRepository.findById(orgId);
-        if (!updatedOrganization) throw new NotFoundError('Organization not found');
+      }
+      if (!updatedOrganization) throw new NotFoundError('Organization not found');
+
+      const changes = before
+        ? auditedFields
+            .filter(field => (before[field] ?? null) !== (updatedOrganization[field] ?? null))
+            .map(field => ({
+              field,
+              before: settingsAuditValue(field, before[field]),
+              after: settingsAuditValue(field, updatedOrganization[field]),
+            }))
+        : [];
+      if (changes.length > 0) {
+        await recordAdminActionFromRequest(req, {
+          action: 'org.settings.updated',
+          actorScope: 'organization',
+          target: { kind: 'organization', id: updatedOrganization.id, displayName: updatedOrganization.name },
+          summary: `updated team settings (${changes.map(change => change.field).join(', ')})`,
+          changes,
+        });
       }
 
       const [safeOrganization] = await attachOrganizationLogos([
@@ -197,6 +233,7 @@ const handler = baseApi()
     // never actually deletes.
     // Repositories join the session automatically via transactionAsyncLocalStorage.
     const { revokedApiKeyIds } = await withTransaction(async () => {
+      const organization = await organizationRepository.findById(id);
       const result = await organizationService.deleteOrganization(
         req.user!,
         { id },
@@ -227,6 +264,13 @@ const handler = baseApi()
         }
       );
       await orgDomainClaimRepository.deleteByOrganization(id);
+      await recordAdminActionFromRequest(req, {
+        action: 'org.deleted',
+        actorScope: 'organization',
+        target: { kind: 'organization', id, displayName: organization?.name ?? id },
+        summary: 'deleted the team',
+        details: { revokedApiKeyCount: result.revokedApiKeyIds.length },
+      });
       return result;
     });
 

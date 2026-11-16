@@ -27,7 +27,6 @@ import AdminSubscriptions from './Subscriptions';
 import AdminRevenue from './Revenue';
 import OrganizationsTab from './OrganizationsTab';
 import CreditAnalyticsTab from './CreditAnalysis';
-import SecretsRotationTab from './SecretsRotationTab';
 import InviteCenter from './InviteCenter';
 import { ModelLogsTab } from './ModelLogsTab';
 import IdentityProvidersTab from './IdentityProvidersTab';
@@ -252,9 +251,6 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           </TabPanel>
           <TabPanel value={AdminTab.CreditAnalytics}>
             {activeTab === AdminTab.CreditAnalytics && <CreditAnalyticsTab />}
-          </TabPanel>
-          <TabPanel value={AdminTab.SecretsRotation}>
-            {activeTab === AdminTab.SecretsRotation && <SecretsRotationTab />}
           </TabPanel>
           <TabPanel value={AdminTab.SystemSecrets}>
             {activeTab === AdminTab.SystemSecrets && <SystemSecretsTab />}

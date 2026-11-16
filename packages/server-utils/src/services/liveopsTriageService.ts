@@ -30,11 +30,9 @@ import {
   adminSettingsRepository,
   ILiveopsTriageConfigDocument,
 } from '@bike4mind/database';
-import type {
-  IssueTrackerService,
-  ExistingIssue as TrackerExistingIssue,
-  CreateIssueParams,
-} from './issueTrackers/index';
+import type { IssueTrackerService, ExistingIssue as TrackerExistingIssue } from './issueTrackers/index';
+import type { KnownBlock } from '@slack/web-api';
+import { createLiveopsProposalBlocks } from '../integrations/slack/liveopsTriageApproval';
 import { SlackClient, SlackMessage } from '@bike4mind/slack';
 import { GitHubService } from './githubService';
 import { getDefaultTemplateString, interpolateTemplate, PRIORITY_GUIDELINES } from './liveopsTriagePrompt';
@@ -82,7 +80,7 @@ interface SlackContextBlock {
   elements: SlackTextObject[];
 }
 
-type SlackBlock = SlackHeaderBlock | SlackDividerBlock | SlackSectionBlock | SlackContextBlock;
+type SlackBlock = SlackHeaderBlock | SlackDividerBlock | SlackSectionBlock | SlackContextBlock | KnownBlock;
 
 // Token estimation constants
 const CHARS_PER_TOKEN = 4;
@@ -218,6 +216,7 @@ const DEFAULT_CONFIG: LiveopsTriageConfig = {
   regressionLookbackDays: LIVEOPS_TRIAGE_VALIDATION_LIMITS.regressionLookbackDays.default,
   regressionGracePeriodHours: LIVEOPS_TRIAGE_VALIDATION_LIMITS.regressionGracePeriodHours.default,
   autoCreateIssues: false,
+  approverIds: '',
   runIntervalHours: LIVEOPS_TRIAGE_VALIDATION_LIMITS.runIntervalHours.default,
   postWhenNoErrors: true,
 };
@@ -1555,7 +1554,8 @@ export class LiveopsTriageService {
     }>,
     matchedExistingIssues: Array<{ issueNumber: number; title: string; priority: string; repoFullName: string }>,
     lookbackHours: number,
-    nextScheduledRun: Date
+    nextScheduledRun: Date,
+    proposalBlocks: KnownBlock[] = []
   ): Promise<void> {
     if (!this.slackClient) {
       throw new Error('Slack client not initialized');
@@ -1776,11 +1776,18 @@ export class LiveopsTriageService {
       ? `CRITICAL: ${p0Issues.length} P0 issues - LiveOps Triage Summary`
       : `LiveOps Triage Summary: ${createdIssues.length} new issues`;
 
-    await this.slackClient.sendMessage({
-      channel: channelId,
-      text: fallbackText,
-      blocks,
-    });
+    const pages: SlackBlock[][] = [blocks];
+    for (let offset = 0; offset < proposalBlocks.length; offset += 2) {
+      if (pages[pages.length - 1].length + 2 > 50) pages.push([]);
+      pages[pages.length - 1].push(...proposalBlocks.slice(offset, offset + 2));
+    }
+    for (const page of pages) {
+      await this.slackClient.sendMessage({
+        channel: channelId,
+        text: fallbackText,
+        blocks: page,
+      });
+    }
 
     this.logger.info('Posted triage summary to Slack');
   }
@@ -2063,6 +2070,7 @@ export class LiveopsTriageService {
       }> = [];
       const p0Issues: number[] = [];
       const p1Issues: number[] = [];
+      const proposalBlocks: KnownBlock[] = [];
 
       for (const result of triageResponse.triageResults) {
         // Track matched existing issues for Slack summary
@@ -2087,35 +2095,17 @@ export class LiveopsTriageService {
           continue;
         }
 
-        // Only create issues if auto-create is enabled
         if (config.autoCreateIssues) {
-          const issueNumber = await this.createGitHubIssue(repoFullName, result);
-
-          if (issueNumber) {
-            createdIssues.push({
-              number: issueNumber,
+          proposalBlocks.push(
+            ...(await createLiveopsProposalBlocks(config, {
               title: result.title,
+              body: this.formatIssueBody(result),
               priority: result.priority,
-              url: `https://github.com/${repoFullName}/issues/${issueNumber}`,
+              labels: result.labels,
+              fingerprint: result.fingerprint || '',
               isRegression: result.isRegression,
-              matchedClosedIssue: result.matchedClosedIssue,
-            });
-
-            if (result.priority === 'P0') {
-              p0Issues.push(issueNumber);
-            } else if (result.priority === 'P1') {
-              p1Issues.push(issueNumber);
-            }
-          } else {
-            // Issue creation failed - likely due to repo not in whitelist
-            this.logger.warn('[LIVEOPS-TRIAGE] Issue creation failed - check repo whitelist', {
-              action: 'issue_creation_failed',
-              title: result.title,
-              priority: result.priority,
-              repo: repoFullName,
-              hint: 'Ensure repo is in GitHub connection allowedRepositories list',
-            });
-          }
+            }))
+          );
         }
       }
 
@@ -2128,7 +2118,8 @@ export class LiveopsTriageService {
         createdIssues,
         matchedExistingIssues,
         effectiveLookbackHours,
-        nextScheduledRun
+        nextScheduledRun,
+        proposalBlocks
       );
 
       // Update last run info
@@ -2663,6 +2654,7 @@ export class LiveopsTriageService {
         regressionLookbackDays: config.regressionLookbackDays,
         regressionGracePeriodHours: config.regressionGracePeriodHours ?? DEFAULT_REGRESSION_GRACE_PERIOD_HOURS,
         autoCreateIssues: config.autoCreateIssues,
+        approverIds: config.approverIds || '',
         runIntervalHours: config.runIntervalHours,
         postWhenNoErrors: config.postWhenNoErrors,
         promptTemplate: config.promptTemplate,
@@ -2814,6 +2806,7 @@ export class LiveopsTriageService {
       }> = [];
       const p0Issues: number[] = [];
       const p1Issues: number[] = [];
+      const proposalBlocks: KnownBlock[] = [];
 
       // Build tracker identifier for logging
       const trackerIdentifier =
@@ -2844,65 +2837,21 @@ export class LiveopsTriageService {
           continue;
         }
 
-        // Only create issues if auto-create is enabled
         if (config.autoCreateIssues) {
-          // The tracker's createIssue appends the fingerprint, so don't duplicate it here
-          const createParams: CreateIssueParams = {
-            title: result.title,
-            body: result.body,
-            priority: result.priority,
-            labels: result.labels,
-            fingerprint: result.fingerprint || '',
-            isRegression: result.isRegression,
-          };
-
-          const createdIssue = await issueTracker.createIssue(createParams);
-
-          if (createdIssue) {
-            // Extract issue number from key for internal tracking
-            let issueNumber = -1;
-            const githubMatch = createdIssue.key.match(/#(\d+)$/);
-            if (githubMatch) {
-              issueNumber = parseInt(githubMatch[1], 10);
-            } else {
-              const jiraMatch = createdIssue.key.match(/-(\d+)$/);
-              if (jiraMatch) {
-                issueNumber = parseInt(jiraMatch[1], 10);
-              }
-            }
-
-            createdIssues.push({
-              number: issueNumber,
-              title: result.title,
-              priority: result.priority,
-              url: createdIssue.url,
-              isRegression: result.isRegression,
-              matchedClosedIssue: result.matchedClosedIssue,
-            });
-
-            if (result.priority === 'P0') {
-              p0Issues.push(issueNumber);
-            } else if (result.priority === 'P1') {
-              p1Issues.push(issueNumber);
-            }
-
-            this.logger.info('[LIVEOPS-TRIAGE-AUDIT] Issue created', {
-              action: 'issue_created',
-              configName: config.name,
-              tracker: issueTracker.type,
-              issueKey: createdIssue.key,
-              issueUrl: createdIssue.url,
-              priority: result.priority,
-              isRegression: result.isRegression,
-            });
-          } else {
-            this.logger.warn('[LIVEOPS-TRIAGE] Issue creation failed', {
-              configName: config.name,
-              title: result.title,
-              priority: result.priority,
-              tracker: issueTracker.type,
-            });
-          }
+          proposalBlocks.push(
+            ...(await createLiveopsProposalBlocks(
+              config,
+              {
+                title: result.title,
+                body: result.body,
+                priority: result.priority,
+                labels: result.labels,
+                fingerprint: result.fingerprint || '',
+                isRegression: result.isRegression,
+              },
+              config.id
+            ))
+          );
         }
       }
 
@@ -2915,7 +2864,8 @@ export class LiveopsTriageService {
         createdIssues,
         matchedExistingIssues,
         effectiveLookbackHours,
-        nextScheduledRun
+        nextScheduledRun,
+        proposalBlocks
       );
 
       this.logger.info('[LIVEOPS-TRIAGE] Triage completed successfully', {
@@ -3092,6 +3042,7 @@ export class LiveopsTriageService {
         regressionLookbackDays: config.regressionLookbackDays,
         regressionGracePeriodHours: config.regressionGracePeriodHours ?? DEFAULT_REGRESSION_GRACE_PERIOD_HOURS,
         autoCreateIssues: config.autoCreateIssues,
+        approverIds: config.approverIds || '',
         runIntervalHours: config.runIntervalHours,
         postWhenNoErrors: config.postWhenNoErrors,
         promptTemplate: config.promptTemplate,

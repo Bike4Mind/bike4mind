@@ -70,7 +70,7 @@ async function uploadFile(api: LakeRagApi, doc: CorpusDoc): Promise<string> {
   // Presigned: the signature is the credential, so no Authorization header goes to storage.
   const put = await resolved(api).fetch(stringField(created, 'upload_url', label), {
     method: 'PUT',
-    headers: { 'Content-Type': MARKDOWN_MIME },
+    headers: { 'Content-Type': MARKDOWN_MIME, 'If-None-Match': '*' },
     body: doc.body,
   });
   if (!put.ok) throw new Error(`${label}: upload PUT -> ${put.status}`);

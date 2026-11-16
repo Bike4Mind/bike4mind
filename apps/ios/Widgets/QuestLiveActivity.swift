@@ -5,8 +5,10 @@ import WidgetKit
 
 /// The Live Activity for a quest (a chat turn or an agent run): lock screen banner and Dynamic Island.
 /// The app starts and updates it (`QuestActivityManager`); the server's pushes update it while the app is
-/// closed. A tap opens the session; approvals are read-only in the app for now, so an approval tap opens the
-/// same place.
+/// closed. A tap opens the session, whose transcript opens scrolled to the latest turn: for an approval that is
+/// the pending-approval card, where the tool and its arguments are shown before the user answers. There is
+/// deliberately no approve button here: the activity's content state carries no pending-action id, so a button
+/// could not tell which request it answers, and approving without seeing the tool call is the wrong default.
 struct QuestLiveActivity: Widget {
   var body: some WidgetConfiguration {
     ActivityConfiguration(for: QuestActivityAttributes.self) { context in
@@ -161,7 +163,7 @@ struct QuestLockScreenView: View {
         ProgressView(value: progress).tint(tint)
       }
       if presentation.isUrgent {
-        Label("Tap to review in Bike4Mind", systemImage: "arrow.up.forward.app")
+        Label("Tap to review and approve in Bike4Mind", systemImage: "arrow.up.forward.app")
           .font(.caption.weight(.semibold))
           .foregroundStyle(tint)
       }

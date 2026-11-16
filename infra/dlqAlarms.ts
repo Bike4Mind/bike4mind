@@ -33,7 +33,6 @@ import {
   generationCallbackQueueDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
-  whatsNewHighlightsQueueDLQ,
   notebookCurationQueueDLQ,
   agentProactiveMessageQueueDLQ,
   githubWebhookQueueDLQ,
@@ -312,13 +311,6 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'ReleaseNotes',
     sourceQueue: 'whatsNewGenerationQueue',
     queue: whatsNewGenerationQueueDLQ,
-  },
-  {
-    label: 'whats-new-highlights',
-    displayName: "What's New Highlights",
-    application: 'WhatsNewGeneration',
-    sourceQueue: 'whatsNewHighlightsQueue',
-    queue: whatsNewHighlightsQueueDLQ,
   },
   {
     label: 'notebook-curation',
