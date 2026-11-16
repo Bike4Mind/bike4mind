@@ -28,7 +28,7 @@ type RequestAuditActor = AuditActor & { userId: string };
 // Typed routes pass Request<unknown, ...>; this accepts those as well as the express default. The
 // extra fields are a structural slice of the Express augmentation in apps/client/global.d.ts,
 // which a program outside apps/client does not load.
-type AuditRequest = Request<unknown, unknown, unknown, unknown, Record<string, unknown>> & {
+export type AuditRequest = Request<unknown, unknown, unknown, unknown, Record<string, unknown>> & {
   user?: ActorIdentity;
   apiKeyInfo?: { keyId: string };
   logger?: { error: (message: string, meta?: Record<string, unknown>) => void };

@@ -67,6 +67,7 @@ export const USER_SECRET_FIELDS = [
   'stripeCustomerId',
   // Server-side lease against an export racing account cleanup; never client state.
   'accountDataExportLease',
+  'accountFilePurge',
   // The provider-facing end-user id: admin lookup only, never client state.
   'providerEndUserId',
 ] as const;

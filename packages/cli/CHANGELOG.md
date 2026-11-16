@@ -1,5 +1,21 @@
 # @bike4mind/cli
 
+## 4.6.0
+
+### Minor Changes
+
+- [#7479](https://github.com/Bike4Mind/bike4mind/pull/7479) [`7159763`](https://github.com/Bike4Mind/bike4mind/commit/7159763ebef29dc8fd6987fdbefae6dc0245555c) Thanks [@onoya](https://github.com/onoya)! - add an api-keys:manage scope for the user API key routes
+
+- [#7493](https://github.com/Bike4Mind/bike4mind/pull/7493) [`26b8b3c`](https://github.com/Bike4Mind/bike4mind/commit/26b8b3c644315d0928ee7e085fc171c62c9c4fd6) Thanks [@vinchi777](https://github.com/vinchi777)! - pull-based notebook mirror feed and b4m mirror command
+
+### Patch Changes
+
+- [#7281](https://github.com/Bike4Mind/bike4mind/pull/7281) [`75b38d8`](https://github.com/Bike4Mind/bike4mind/commit/75b38d872011560872cca26cd71f7bd0e5e1882c) Thanks [@ken-b4m](https://github.com/ken-b4m)! - require skills:write for API keys on the skill routes
+
+- [#7373](https://github.com/Bike4Mind/bike4mind/pull/7373) [`e78ee5e`](https://github.com/Bike4Mind/bike4mind/commit/e78ee5e321a9a3a27351bc8d266c0c0bee302b1c) Thanks [@poysama](https://github.com/poysama)! - map the direct Sonnet 4.5 id to Sonnet 5.5 before its retirement
+
+- [#7392](https://github.com/Bike4Mind/bike4mind/pull/7392) [`c01cde3`](https://github.com/Bike4Mind/bike4mind/commit/c01cde3f4b9a59e2eb92efd0e25b771ebf297276) Thanks [@onoya](https://github.com/onoya)! - remove the dead WebSocket completion path
+
 ## 4.5.0
 
 ### Minor Changes

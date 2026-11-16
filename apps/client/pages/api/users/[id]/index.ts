@@ -1,4 +1,5 @@
 import { Project, Session, User, organizationRepository, readAccessArms } from '@bike4mind/database';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
   ApiKeyScope,
@@ -74,6 +75,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMI
   const isSelf = req.user.id === userId;
 
   if (isSelf || isAdmin) {
+    // The sign-in bootstrap reads the caller's own profile here, so it must carry the role permissions too.
+    await resolveRoleAdminPermissions(user);
     // Self/admin-gated profile view. securityQuestions belong to the subject, so a self view
     // keeps them. userNotes are admin-authored notes ABOUT the subject and are gated on the
     // VIEWER: ProfileDataForm excludes them from its save payload (see its field allowlist
