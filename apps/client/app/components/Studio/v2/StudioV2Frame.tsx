@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react';
 import { styled } from '@mui/system';
-import { useNavigate } from '@tanstack/react-router';
 import StudioSegmentedControl, { type StudioSegmentOption } from '../design/StudioSegmentedControl';
 import StudioThemeScope from '../design/StudioThemeScope';
 import { studioColor, studioRadius } from '../design/studioTokens';
@@ -51,7 +50,7 @@ const AreaSwitcher = styled('div')({
     order: 3,
     flexBasis: '100%',
     '& > nav': { display: 'flex', width: '100%' },
-    '& > nav > button': { flex: 1 },
+    '& > nav > a': { flex: 1 },
   },
 });
 
@@ -88,26 +87,28 @@ type StudioV2FrameProps = {
 
 /** The Studio stage every v2 area sits on: the header (title, area switcher, balance), an optional rail, then the area. */
 const StudioV2Frame = ({ area, testId, rail, children }: StudioV2FrameProps) => {
-  const navigate = useNavigate();
   const isImageOpen = useStudioFeature('image');
   const isProductionsOpen = useStudioFeature('productions');
 
   const areas: StudioSegmentOption<StudioArea>[] = [
-    { value: 'create', label: 'Create', testId: 'studio-area-create' },
+    {
+      value: 'create',
+      label: 'Create',
+      testId: 'studio-area-create',
+      link: { to: '/studio/$modality', params: { modality: isImageOpen ? 'image' : 'video' } },
+    },
     ...(isProductionsOpen
-      ? [{ value: 'productions' as const, label: 'Productions', testId: 'studio-area-productions' }]
+      ? [
+          {
+            value: 'productions' as const,
+            label: 'Productions',
+            testId: 'studio-area-productions',
+            link: { to: '/studio/productions' as const },
+          },
+        ]
       : []),
-    { value: 'library', label: 'Library', testId: 'studio-area-library' },
+    { value: 'library', label: 'Library', testId: 'studio-area-library', link: { to: '/studio/library' as const } },
   ];
-
-  const goTo = (target: StudioArea) => {
-    if (target === area) return;
-    if (target === 'create') {
-      void navigate({ to: '/studio/$modality', params: { modality: isImageOpen ? 'image' : 'video' } });
-      return;
-    }
-    void navigate({ to: target === 'productions' ? '/studio/productions' : '/studio/library' });
-  };
 
   return (
     <Stage testId={testId}>
@@ -119,7 +120,6 @@ const StudioV2Frame = ({ area, testId, rail, children }: StudioV2FrameProps) => 
             semantics="nav"
             options={areas}
             value={area}
-            onChange={goTo}
             testId="studio-area-nav"
           />
         </AreaSwitcher>

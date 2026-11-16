@@ -1,5 +1,6 @@
 import { useRef, type KeyboardEvent, type ReactNode } from 'react';
 import { styled } from '@mui/system';
+import { createLink, type LinkComponentProps } from '@tanstack/react-router';
 import { STUDIO_FOCUS_VISIBLE, studioColor, studioFont, studioRadius } from './studioTokens';
 
 const Track = styled('div')({
@@ -14,7 +15,7 @@ const Track = styled('div')({
   backgroundColor: studioColor('raised'),
 });
 
-const Segment = styled('button')({
+const segmentStyles = {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -28,6 +29,7 @@ const Segment = styled('button')({
   font: `500 13px/1 ${studioFont('ui')}`,
   whiteSpace: 'nowrap',
   cursor: 'pointer',
+  textDecoration: 'none',
   transition: 'background-color 120ms ease, color 120ms ease',
   '&:hover': { color: studioColor('text') },
   '&:focus-visible': STUDIO_FOCUS_VISIBLE,
@@ -37,22 +39,27 @@ const Segment = styled('button')({
     color: studioColor('text'),
   },
   '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
-});
+} as const;
+
+const Segment = styled('button')(segmentStyles);
+const SegmentLink = createLink(styled('a')(segmentStyles));
 
 export type StudioSegmentOption<Value extends string> = {
   value: Value;
   label: ReactNode;
   testId?: string;
+  /** `nav` mode: render the segment as a link to this route, so open-in-new-tab works. */
+  link?: LinkComponentProps<typeof SegmentLink>;
 };
 
 type StudioSegmentedControlProps<Value extends string> = {
   options: readonly StudioSegmentOption<Value>[];
   value: Value;
-  onChange: (value: Value) => void;
+  onChange?: (value: Value) => void;
   'aria-label': string;
   /**
    * `radio` picks a value (role=radio, aria-checked). `tabs` switches in-page panels (role=tab, aria-selected).
-   * `nav` switches routes: a nav of plain buttons, the current one marked aria-current="page".
+   * `nav` switches routes: a nav of links (options carrying `link`), the current one marked aria-current="page".
    */
   semantics?: 'tabs' | 'radio' | 'nav';
   testId?: string;
@@ -60,7 +67,7 @@ type StudioSegmentedControlProps<Value extends string> = {
 
 const NEXT_KEYS: Record<string, 1 | -1> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
 
-const focusedIndex = (segments: (HTMLButtonElement | null)[], fallback: number): number => {
+const focusedIndex = (segments: (HTMLElement | null)[], fallback: number): number => {
   const index = segments.findIndex(segment => segment !== null && segment === document.activeElement);
   return index === -1 ? fallback : index;
 };
@@ -78,7 +85,7 @@ const StudioSegmentedControl = <Value extends string>({
   semantics = 'radio',
   testId = 'studio-segmented-control',
 }: StudioSegmentedControlProps<Value>) => {
-  const segmentRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const segmentRefs = useRef<(HTMLElement | null)[]>([]);
   const isTabs = semantics === 'tabs';
   const isNav = semantics === 'nav';
   const segmentRole = isNav ? undefined : isTabs ? 'tab' : 'radio';
@@ -103,7 +110,7 @@ const StudioSegmentedControl = <Value extends string>({
     const next = targetIndex(event.key);
     if (next === null) return;
     event.preventDefault();
-    if (!isTabs) onChange(options[next].value);
+    if (!isTabs) onChange?.(options[next].value);
     segmentRefs.current[next]?.focus();
   };
 
@@ -117,6 +124,22 @@ const StudioSegmentedControl = <Value extends string>({
     >
       {options.map((option, index) => {
         const isSelected = option.value === value;
+        if (isNav && option.link) {
+          return (
+            <SegmentLink
+              key={option.value}
+              {...option.link}
+              ref={(element: HTMLAnchorElement | null) => {
+                segmentRefs.current[index] = element;
+              }}
+              aria-current={isSelected ? 'page' : undefined}
+              data-selected={isSelected}
+              data-testid={option.testId ?? `${testId}-${option.value}`}
+            >
+              {option.label}
+            </SegmentLink>
+          );
+        }
         return (
           <Segment
             key={option.value}
@@ -131,7 +154,7 @@ const StudioSegmentedControl = <Value extends string>({
             tabIndex={isNav || isSelected ? 0 : -1}
             data-selected={isSelected}
             onClick={() => {
-              if (!isSelected) onChange(option.value);
+              if (!isSelected) onChange?.(option.value);
             }}
             data-testid={option.testId ?? `${testId}-${option.value}`}
           >

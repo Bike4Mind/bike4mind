@@ -1,5 +1,5 @@
 import { styled } from '@mui/system';
-import { useNavigate } from '@tanstack/react-router';
+import { createLink } from '@tanstack/react-router';
 import { STUDIO_FOCUS_VISIBLE, studioColor, studioFont, studioRadius } from '../design/studioTokens';
 import { useStudioFeature } from '../useStudioFeature';
 import type { StudioMedium } from '../studioModality';
@@ -45,34 +45,36 @@ const Glyph = styled('span')({
   '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
 });
 
-const MediumButton = styled('button')({
-  flex: '0 0 auto',
-  minWidth: '64px',
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  gap: '6px',
-  padding: '8px 4px',
-  borderRadius: studioRadius('md'),
-  border: '1px solid transparent',
-  backgroundColor: 'transparent',
-  color: studioColor('text-secondary'),
-  font: `500 12px/1.2 ${studioFont('ui')}`,
-  whiteSpace: 'nowrap',
-  cursor: 'pointer',
-  '&:hover': { color: studioColor('text'), '& .studio-rail-glyph': { backgroundColor: studioColor('hover') } },
-  '&:focus-visible': STUDIO_FOCUS_VISIBLE,
-  '&[aria-current="page"]': {
-    borderColor: studioColor('accent-border'),
-    backgroundColor: studioColor('accent-soft'),
-    color: studioColor('text-strong'),
-    '& .studio-rail-glyph': { backgroundColor: studioColor('accent'), color: studioColor('accent-contrast') },
-  },
-});
+const MediumButton = createLink(
+  styled('a')({
+    flex: '0 0 auto',
+    minWidth: '64px',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '6px',
+    padding: '8px 4px',
+    borderRadius: studioRadius('md'),
+    border: '1px solid transparent',
+    backgroundColor: 'transparent',
+    color: studioColor('text-secondary'),
+    font: `500 12px/1.2 ${studioFont('ui')}`,
+    whiteSpace: 'nowrap',
+    cursor: 'pointer',
+    textDecoration: 'none',
+    '&:hover': { color: studioColor('text'), '& .studio-rail-glyph': { backgroundColor: studioColor('hover') } },
+    '&:focus-visible': STUDIO_FOCUS_VISIBLE,
+    '&[aria-current="page"]': {
+      borderColor: studioColor('accent-border'),
+      backgroundColor: studioColor('accent-soft'),
+      color: studioColor('text-strong'),
+      '& .studio-rail-glyph': { backgroundColor: studioColor('accent'), color: studioColor('accent-contrast') },
+    },
+  })
+);
 
 /** Create's medium picker: icon tiles in a column beside the stage on desktop, a scrolling row above it on narrow screens. */
 const StudioMediumRail = ({ medium }: { medium: StudioMedium }) => {
-  const navigate = useNavigate();
   const isImageOpen = useStudioFeature('image');
   const media = STUDIO_CREATE_MEDIA.filter(candidate => candidate !== 'image' || isImageOpen);
 
@@ -81,11 +83,9 @@ const StudioMediumRail = ({ medium }: { medium: StudioMedium }) => {
       {media.map(candidate => (
         <MediumButton
           key={candidate}
-          type="button"
+          to="/studio/$modality"
+          params={{ modality: candidate }}
           aria-current={candidate === medium ? 'page' : undefined}
-          onClick={() => {
-            if (candidate !== medium) void navigate({ to: '/studio/$modality', params: { modality: candidate } });
-          }}
           data-testid={`studio-rail-${candidate}`}
         >
           <Glyph className="studio-rail-glyph" aria-hidden="true">

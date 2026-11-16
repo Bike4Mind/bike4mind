@@ -2,6 +2,12 @@ import type { ReactNode } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@tanstack/react-router', async () => {
+  const { createLinkStub } = await import('@client/app/components/Studio/testUtils/routerLinkMock');
+  return { createLink: createLinkStub };
+});
+
 import { getThemeConfig } from '@client/app/utils/themes';
 import StudioChip from './StudioChip';
 import StudioCostPill from './StudioCostPill';
@@ -120,22 +126,21 @@ describe('StudioSegmentedControl', () => {
     expect(screen.getByRole('tab', { name: '16:9' })).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('as nav, is a navigation landmark of buttons with the current one marked as the page', () => {
-    const onChange = vi.fn();
-    renderInStudio(
-      <StudioSegmentedControl aria-label="Areas" semantics="nav" options={options} value="wide" onChange={onChange} />
-    );
+  it('as nav, renders each option as a link with the current one marked as the page', () => {
+    const linked = [
+      { value: 'square', label: '1:1', link: { to: '/studio/$modality', params: { modality: 'image' } } },
+      { value: 'wide', label: '16:9', link: { to: '/studio/library' } },
+    ] as const;
+    renderInStudio(<StudioSegmentedControl aria-label="Areas" semantics="nav" options={linked} value="wide" />);
     expect(screen.getByRole('navigation', { name: 'Areas' })).toBeInTheDocument();
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
     const wide = screen.getByTestId('studio-segmented-control-wide');
+    expect(wide).toHaveAttribute('href', '/studio/library');
     expect(wide).toHaveAttribute('aria-current', 'page');
     expect(wide).not.toHaveAttribute('role');
-    expect(screen.getByTestId('studio-segmented-control-square')).not.toHaveAttribute('aria-current');
-    expect(screen.getByTestId('studio-segmented-control-square')).toHaveAttribute('tabindex', '0');
-    fireEvent.keyDown(screen.getByRole('navigation'), { key: 'ArrowRight' });
-    expect(onChange).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId('studio-segmented-control-square'));
-    expect(onChange).toHaveBeenCalledWith('square');
+    const square = screen.getByTestId('studio-segmented-control-square');
+    expect(square).toHaveAttribute('href', '/studio/image');
+    expect(square).not.toHaveAttribute('aria-current');
   });
 
   it('changes on click, but not when the picked option is clicked again', () => {

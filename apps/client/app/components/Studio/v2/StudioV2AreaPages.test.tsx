@@ -1,15 +1,17 @@
 import type { ReactNode } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const h = vi.hoisted(() => ({
-  navigate: vi.fn(),
   studioFeatures: {} as Record<string, boolean>,
 }));
 
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => h.navigate }));
+vi.mock('@tanstack/react-router', async () => {
+  const { createLinkStub } = await import('@client/app/components/Studio/testUtils/routerLinkMock');
+  return { createLink: createLinkStub };
+});
 // The header balance reads the live account; StudioCreditsBalance.test.tsx covers it.
 vi.mock('./StudioCreditsBalance', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: vi.fn() }));
@@ -42,16 +44,14 @@ describe('Studio Productions', () => {
     expect(screen.getByTestId('studio-productions-coming-soon')).toHaveTextContent('coming soon');
   });
 
-  it('returns to Create on the Image medium when it is open, else Video', () => {
+  it('links back to Create on the Image medium when it is open, else Video', () => {
     h.studioFeatures = { createV2: true, productions: true, image: true };
     const { unmount } = render(<StudioProductionsPage />, { wrapper: TestWrapper });
-    fireEvent.click(screen.getByTestId('studio-area-create'));
-    expect(h.navigate).toHaveBeenCalledWith({ to: '/studio/$modality', params: { modality: 'image' } });
+    expect(screen.getByTestId('studio-area-create')).toHaveAttribute('href', '/studio/image');
     unmount();
     h.studioFeatures = { createV2: true, productions: true };
     render(<StudioProductionsPage />, { wrapper: TestWrapper });
-    fireEvent.click(screen.getByTestId('studio-area-create'));
-    expect(h.navigate).toHaveBeenLastCalledWith({ to: '/studio/$modality', params: { modality: 'video' } });
+    expect(screen.getByTestId('studio-area-create')).toHaveAttribute('href', '/studio/video');
   });
 });
 
