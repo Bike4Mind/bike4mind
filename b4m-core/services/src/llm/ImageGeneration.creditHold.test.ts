@@ -147,7 +147,7 @@ describe('ImageGenerationService credit hold', () => {
     });
     const { run } = makeService(wallet, assertAdmission);
     await run('paid-only', true);
-    expect(assertAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), MODEL, true);
+    expect(assertAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), MODEL, true, undefined);
     expect(wallet.state.balance).toBe(10_000);
     expect(wallet.users.incrementCredits).not.toHaveBeenCalled();
     expect(mockGeminiGenerate).not.toHaveBeenCalled();
@@ -172,7 +172,7 @@ describe('ImageGenerationService credit hold', () => {
         },
       })
     ).rejects.toBe(refusal);
-    expect(assertAdmission).toHaveBeenCalledWith('user1', ImageModels.GPT_IMAGE_1_5, true);
+    expect(assertAdmission).toHaveBeenCalledWith('user1', ImageModels.GPT_IMAGE_1_5, true, undefined);
   });
 
   it('lets only as many concurrent generations through as the balance covers', async () => {

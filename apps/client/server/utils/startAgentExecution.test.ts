@@ -381,6 +381,38 @@ describe('startAgentExecution', () => {
       expect(dispatchedPayload()).toMatchObject({ organizationId: KEY_ORG });
     });
 
+    it('refuses tools the billing org disallows with org_tool_not_allowed and creates nothing', async () => {
+      mockOrgFindById.mockResolvedValue({
+        id: KEY_ORG,
+        userId: 'owner',
+        users: [{ userId: 'holder' }],
+        modelPolicy: { allowedTools: [] },
+      });
+      const result = await startAgentExecution(
+        input({ userId: 'holder', apiKeyInfo: orgKey, enabledTools: ['web_search'] }),
+        logger
+      );
+
+      expect(result).toMatchObject({ ok: false, reason: 'org_tool_not_allowed' });
+      expect(result.ok ? '' : result.message).toContain('web_search');
+      expect(mockCreateExecution).not.toHaveBeenCalled();
+    });
+
+    it('starts with tools the billing org allows', async () => {
+      mockOrgFindById.mockResolvedValue({
+        id: KEY_ORG,
+        userId: 'owner',
+        users: [{ userId: 'holder' }],
+        modelPolicy: { allowedTools: ['web_search'] },
+      });
+      const result = await startAgentExecution(
+        input({ userId: 'holder', apiKeyInfo: orgKey, enabledTools: ['web_search'] }),
+        logger
+      );
+
+      expect(result).toMatchObject({ ok: true });
+    });
+
     it("accepts the key's own org", async () => {
       const result = await startAgentExecution(
         input({ userId: 'holder', apiKeyInfo: orgKey, organizationId: KEY_ORG }),
