@@ -6322,6 +6322,44 @@ describe('ChatCompletionProcess', () => {
       expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('[Account refusal]'));
     });
 
+    it('bills delivered tool charges when a later tool call is refused for account standing', async () => {
+      const { complete } = reservationOrgSetup();
+      complete.mockImplementation(
+        async (
+          _model: string,
+          _messages: unknown,
+          _options: unknown,
+          callback: (texts: string[], info: { inputTokens: number; outputTokens: number }) => Promise<void>
+        ) => {
+          await callback(['partial answer'], { inputTokens: 10, outputTokens: 1000 });
+          const billing = service as unknown as {
+            toolCreditsMap: Map<string, number[]>;
+            toolCreditModels: Set<string>;
+          };
+          billing.toolCreditsMap.set('image_generation', [18]);
+          billing.toolCreditModels.add('image-model');
+          throw new AiAccessRefusedError('Your account has been suspended.');
+        }
+      );
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+
+      await expect(service.process({ body: reservationBody(), logger: mockLogger })).resolves.toBeUndefined();
+
+      const charged = mockDb.creditTransactions.createTransaction.mock.calls.reduce(
+        (total: number, [, row]: [string, { credits: number }]) => total - row.credits,
+        0
+      );
+      expect(charged).toBeGreaterThan(18);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenCalledTimes(2);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', expectedHold - charged);
+      expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
+        'tool_usage',
+        expect.objectContaining({ credits: -18, model: 'image-model' })
+      );
+      expect(mockQuest.creditsUsed).toBe(charged);
+    });
+
     // A Stop that lands after a cross-model failover bills the model that was answering, not the
     // requested one that failed.
     it('bills a thrown abort after a failover on the fallback model', async () => {

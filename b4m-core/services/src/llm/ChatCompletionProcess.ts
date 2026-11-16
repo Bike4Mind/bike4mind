@@ -7797,14 +7797,16 @@ export class ChatCompletionProcess {
         );
       }
 
-      // A Stop or disconnect that threw, or a later tool call refused for credits, still bills what
-      // streamed and the tools already delivered; the rollback below then has nothing left to refund.
-      // Any other failure refunds the whole hold. Keyed on the basis, not the hold: a hold the caller
-      // already released (a stuck turn) still bills the full actual.
+      // A Stop or disconnect that threw, or a later tool call refused for credits or account standing,
+      // still bills what streamed and the tools already delivered; the rollback below then has nothing
+      // left to refund. Any other failure refunds the whole hold. Keyed on the basis, not the hold: a
+      // hold the caller already released (a stuck turn) still bills the full actual.
       if (
         this.reservationBasis &&
         this.reservedCreditsOwnerId &&
-        (isAbortError(err) || resolveQuestErrorCode(err) === 'insufficient_credits')
+        (isAbortError(err) ||
+          resolveQuestErrorCode(err) === 'insufficient_credits' ||
+          err instanceof AiAccessRefusedError)
       ) {
         await this.settleAbortedReservation(quest, processStartTime, logger).catch(settleError =>
           logger.error(`Failed to settle the aborted turn for quest ${questId}; refunding its hold`, settleError)
