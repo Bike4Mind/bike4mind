@@ -65,6 +65,8 @@ const updateUserResponseSchema = selfUserProfileResponseSchema.extend({
       failed: z.array(z.object({ customerId: z.string(), subscriptionId: z.string().nullable(), reason: z.string() })),
     })
     .optional(),
+  // Present only when this request ran the telemetry opt-out deletion.
+  telemetryDeletion: z.object({ verified: z.boolean(), remainingCount: z.number().int().optional() }).optional(),
 });
 
 /** Fields that change how the account signs in; see the credential gates in the handler. */
@@ -115,39 +117,25 @@ function logConsentToggle(
 }
 
 /**
- * Handle telemetry consent changes: log the toggle and trigger deletion if opted out.
- * Deletion is awaited (GDPR Article 17 requires verified deletion).
- * On failure, preference is still set to 'none' (stops future collection) and failure is audited.
+ * Handle telemetry consent changes: log the toggle and run the opt-out deletion.
+ * The deletion runs when the level moves to 'none', and again on request (`rerunDeletion`) while it
+ * already is 'none', so an incomplete run can be repeated without leaving the tier.
+ * The preference is saved before this runs, so collection stops whatever the deletion outcome.
+ * Returns what the response reports, or undefined when no deletion ran.
  */
 async function handleTelemetryConsentChange(
   userId: string,
   previousLevel: string | undefined,
   newLevel: string,
-  req: { ip?: string; headers: Record<string, unknown> }
-) {
-  if (!previousLevel || previousLevel === newLevel) return;
-  logConsentToggle(userId, previousLevel, newLevel, req);
-  if (newLevel === 'none') {
-    try {
-      await triggerTelemetryDeletion(userId, req);
-    } catch (err) {
-      console.error(
-        '[Telemetry] Deletion failed, user preference still set to none:',
-        err instanceof Error ? err.message : 'Unknown error'
-      );
-      // Audit the failure so admins can monitor and manually retry
-      await TelemetryAuditLogModel.create({
-        action: 'delete',
-        userId,
-        questId: 'bulk-opt-out',
-        sourceIp: truncateIp(getClientIp(req as Parameters<typeof getClientIp>[0])),
-        userAgent: (req.headers['user-agent'] as string) ?? 'unknown',
-        outcome: 'failure',
-        durationMs: 0,
-        metadata: { error: err instanceof Error ? err.message : 'Unknown error', reason: 'user_opt_out' },
-      }).catch(() => {}); // Audit failure is truly non-blocking
-    }
-  }
+  req: { ip?: string; headers: Record<string, unknown> },
+  rerunDeletion: boolean
+): Promise<{ verified: boolean; remainingCount?: number } | undefined> {
+  if (!previousLevel) return undefined;
+  const changed = previousLevel !== newLevel;
+  if (changed) logConsentToggle(userId, previousLevel, newLevel, req);
+  if (newLevel !== 'none' || (!changed && !rerunDeletion)) return undefined;
+  const { verified, remainingCount } = await triggerTelemetryDeletion(userId, req);
+  return { verified, ...(remainingCount !== undefined && { remainingCount }) };
 }
 
 type AccountStateSnapshot = Parameters<typeof userService.entersBlockedState>[0] & {
@@ -271,9 +259,10 @@ const handler = baseApi().put(
       }
 
       // Parse with the admin schema -- includes email, tags, credits, etc.
-      // Request flags, not user fields: deferLinkPropagation (see linked-suspend-propagation.ts) and
-      // undoSuspension (an Undo of the admin's own suspend; see gradeDetectionsForStatusChange).
-      const { deferLinkPropagation, undoSuspension, ...adminBody } = rawBody;
+      // Request flags, not user fields: deferLinkPropagation (see linked-suspend-propagation.ts),
+      // undoSuspension (an Undo of the admin's own suspend; see gradeDetectionsForStatusChange) and
+      // rerunTelemetryDeletion (see handleTelemetryConsentChange).
+      const { deferLinkPropagation, undoSuspension, rerunTelemetryDeletion, ...adminBody } = rawBody;
       // Zod strips unknown keys, so a misnamed admin field (e.g. `adminNote` instead of
       // `creditReason`) parses away
       // and the 200 reads as "fully applied" when a credit grant, tag, or role
@@ -487,9 +476,15 @@ const handler = baseApi().put(
       }
 
       // Log consent change only after successful update
-      if (incomingTelemetryLevel) {
-        await handleTelemetryConsentChange(userId, previousTelemetryLevel, incomingTelemetryLevel, req);
-      }
+      const telemetryDeletion = incomingTelemetryLevel
+        ? await handleTelemetryConsentChange(
+            userId,
+            previousTelemetryLevel,
+            incomingTelemetryLevel,
+            req,
+            rerunTelemetryDeletion === true
+          )
+        : undefined;
 
       const subscriptionCancellationBody = subscriptionCancellationResponse(cancellation);
 
@@ -508,13 +503,15 @@ const handler = baseApi().put(
             ...(appliedCreditDelta !== undefined && { appliedCreditDelta }),
             ...(ignoredFields.length > 0 && { ignoredFields }),
             ...subscriptionCancellationBody,
+            ...(telemetryDeletion && { telemetryDeletion }),
           }
         : null;
       return respond(res, updateUserResponseSchema.nullable(), responseBody);
     } else {
       // Parse with the self-service schema -- excludes isAdmin, tags, email, etc.
       // secureParameters inside the service strips any keys not in this allowlist.
-      const rawBody = (req.body ?? {}) as Record<string, unknown>;
+      // rerunTelemetryDeletion is a request flag, not a user field (see handleTelemetryConsentChange).
+      const { rerunTelemetryDeletion, ...rawBody } = (req.body ?? {}) as Record<string, unknown>;
       // A non-admin key here (creditDelta, tags, isAdmin, ...) parses away silently
       // below -- surface it in the response so a 200 can't read as "fully applied"
       // when part of the request was discarded.
@@ -559,9 +556,15 @@ const handler = baseApi().put(
       }
 
       // Log consent change only after successful update
-      if (incomingTelemetryLevel) {
-        await handleTelemetryConsentChange(userId, previousTelemetryLevel, incomingTelemetryLevel, req);
-      }
+      const telemetryDeletion = incomingTelemetryLevel
+        ? await handleTelemetryConsentChange(
+            userId,
+            previousTelemetryLevel,
+            incomingTelemetryLevel,
+            req,
+            rerunTelemetryDeletion === true
+          )
+        : undefined;
 
       // Non-admin self-update: symmetric with the self view of GET /users/[id], which means
       // no userNotes. This branch's own schema cannot write them either, so nothing is lost.
@@ -572,7 +575,11 @@ const handler = baseApi().put(
       return respond(
         res,
         updateUserResponseSchema.nullable(),
-        safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser
+        safeUser && {
+          ...safeUser,
+          ...(ignoredFields.length > 0 && { ignoredFields }),
+          ...(telemetryDeletion && { telemetryDeletion }),
+        }
       );
     }
   })

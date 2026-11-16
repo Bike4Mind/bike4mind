@@ -39,6 +39,8 @@ export default function ExperimentalFeatureToggle() {
   const [showNoneConfirm, setShowNoneConfirm] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportStatus, setExportStatus] = useState<'idle' | 'error' | 'empty'>('idle');
+  const [deletionStatus, setDeletionStatus] = useState<'idle' | 'incomplete' | 'complete'>('idle');
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const handleExportTelemetry = useCallback(async () => {
     if (!currentUserId) return;
@@ -70,7 +72,20 @@ export default function ExperimentalFeatureToggle() {
       setShowNoneConfirm(true);
       return;
     }
+    setDeletionStatus('idle');
     updatePreferences({ contextTelemetryLevel: level });
+  };
+
+  // Always asks for the deletion to run, so confirming again while already on None repeats it.
+  const stopAndDeleteTelemetry = async () => {
+    setIsDeleting(true);
+    try {
+      const saved = await updatePreferences({ contextTelemetryLevel: 'none' }, { rerunTelemetryDeletion: true });
+      const outcome = saved?.telemetryDeletion;
+      setDeletionStatus(!outcome ? 'idle' : outcome.verified ? 'complete' : 'incomplete');
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   const handleToggle = (feature: ExperimentalFeature) => {
@@ -294,6 +309,37 @@ export default function ExperimentalFeatureToggle() {
               files, use Export All on the Notebooks and Knowledge Files cards in General settings.
             </Typography>
           )}
+          {telemetryLevel === 'none' && isDeleting && deletionStatus !== 'incomplete' && (
+            <Typography data-testid="telemetry-deletion-pending" level={TYPE.caption} sx={{ mt: 0.5 }}>
+              Deleting your existing telemetry data...
+            </Typography>
+          )}
+          {telemetryLevel === 'none' && !isDeleting && deletionStatus === 'complete' && (
+            <Typography data-testid="telemetry-deletion-complete" level={TYPE.caption} color="success" sx={{ mt: 0.5 }}>
+              Your existing telemetry data was deleted.
+            </Typography>
+          )}
+          {telemetryLevel === 'none' && deletionStatus === 'incomplete' && (
+            <Box
+              data-testid="telemetry-deletion-incomplete"
+              role="alert"
+              sx={{ mt: 0.5, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}
+            >
+              <Typography level={TYPE.caption} color="danger">
+                Collection is stopped, but we could not confirm that all of your existing telemetry data was deleted.
+              </Typography>
+              <Button
+                data-testid="telemetry-deletion-retry-btn"
+                size="sm"
+                variant="outlined"
+                color="danger"
+                loading={isDeleting}
+                onClick={stopAndDeleteTelemetry}
+              >
+                Retry deletion
+              </Button>
+            </Box>
+          )}
           {!telemetryAdminEnabled && (
             <Typography level={TYPE.caption} sx={{ mt: 0.5, color: 'warning.500', fontStyle: 'italic' }}>
               Sharing with us is off (your administrator has not enabled it). Your level still controls whether you can
@@ -420,7 +466,7 @@ export default function ExperimentalFeatureToggle() {
         open={showNoneConfirm}
         onClose={() => setShowNoneConfirm(false)}
         onConfirm={() => {
-          updatePreferences({ contextTelemetryLevel: 'none' });
+          void stopAndDeleteTelemetry();
           setShowNoneConfirm(false);
         }}
         title="Stop Telemetry Collection"

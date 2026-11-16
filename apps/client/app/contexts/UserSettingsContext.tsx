@@ -70,10 +70,27 @@ export interface UserSettings {
   promptCacheTtl: PromptCacheTtl;
 }
 
+/** What a preference save reports back beyond the stored preferences. */
+export interface PreferencesSaveResult {
+  /** Present when the save ran the telemetry opt-out deletion; `verified` is false when data may remain. */
+  telemetryDeletion?: { verified: boolean; remainingCount?: number };
+}
+
+export interface UpdatePreferencesOptions {
+  /** Run the telemetry opt-out deletion with this save even when the level is already `none`. */
+  rerunTelemetryDeletion?: boolean;
+}
+
 interface UserSettingsContextProps {
   settings: UserSettings;
-  /** Update local state optimistically and persist to the server. Single source of truth. */
-  updatePreferences: (diff: Partial<IUserPreferences>) => void;
+  /**
+   * Update local state optimistically and persist to the server. Single source of truth.
+   * Resolves with what the server reported, or undefined when the write did not land.
+   */
+  updatePreferences: (
+    diff: Partial<IUserPreferences>,
+    options?: UpdatePreferencesOptions
+  ) => Promise<PreferencesSaveResult | undefined>;
   /** True once a user record has been written into the UserContext store (from
    *  /api/identify, refreshUser, or a WebSocket push). Backed by an explicit,
    *  latched store flag - never derived from field presence. Consumers that
@@ -183,10 +200,19 @@ function writeFailureMessage(error: unknown, fallback: string): string {
 async function persistPreferences(
   userId: string,
   preferences: IUserPreferences,
-  { logLabel, fallbackMessage, rollback }: { logLabel: string; fallbackMessage: string; rollback: () => void }
-): Promise<void> {
+  {
+    logLabel,
+    fallbackMessage,
+    rollback,
+    rerunTelemetryDeletion,
+  }: { logLabel: string; fallbackMessage: string; rollback: () => void; rerunTelemetryDeletion?: boolean }
+): Promise<PreferencesSaveResult | undefined> {
   try {
-    await updateUserToServer(userId, { preferences });
+    const saved = (await updateUserToServer(userId, {
+      preferences,
+      ...(rerunTelemetryDeletion && { rerunTelemetryDeletion: true }),
+    })) as PreferencesSaveResult | null | undefined;
+    return { telemetryDeletion: saved?.telemetryDeletion };
   } catch (error) {
     // The console stays the only place the two write paths are told apart, so keep them named.
     console.warn(`[UserSettings] Failed to write ${logLabel} to server`, error);
@@ -195,6 +221,7 @@ async function persistPreferences(
     if (shouldNotifyWriteFailure(error)) {
       toast.error(writeFailureMessage(error, fallbackMessage), { id: SETTINGS_WRITE_TOAST_ID });
     }
+    return undefined;
   }
 }
 
@@ -308,7 +335,7 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
 
   // Single entry point: update local state optimistically, then persist to server
   const updatePreferences = useCallback(
-    (diff: Partial<IUserPreferences>) => {
+    async (diff: Partial<IUserPreferences>, options?: UpdatePreferencesOptions) => {
       // Optimistic local update - apply diff to local settings immediately
       setSettings(prev => {
         const next = { ...prev };
@@ -335,7 +362,7 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
       }
 
       // Persist to server
-      if (!currentUser?.id) return;
+      if (!currentUser?.id) return undefined;
       // Known race: concurrent toggles may clobber each other if both writes are in-flight
       // simultaneously (second write reads stale currentUser.preferences). Pre-existing behavior,
       // less severe with per-key writes. Fix tracked separately.
@@ -363,9 +390,10 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
       // the `users` socket is silent. See useGetIdentify initialData guard.
       const previousPreferences = currentUser.preferences;
       useUser.getState().setCurrentUser({ ...currentUser, preferences: fullPreferences });
-      void persistPreferences(currentUser.id, fullPreferences, {
+      return persistPreferences(currentUser.id, fullPreferences, {
         logLabel: 'preferences',
         fallbackMessage: 'Could not save your preference change. Please try again.',
+        rerunTelemetryDeletion: options?.rerunTelemetryDeletion,
         rollback: () => {
           const store = useUser.getState();
           // The store holds the very object this write set, so a different reference means a
