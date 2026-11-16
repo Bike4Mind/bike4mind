@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { processAttachments } from './processAttachments';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { resolveSupportedMimeType } from '@bike4mind/utils';
 import type { ParsedEmailObject, EmailIngestionAdapters } from './types';
 
@@ -393,5 +394,58 @@ describe('emailIngestionService - processAttachments', () => {
       expect.not.objectContaining({ organizationId: expect.anything() }),
       expect.anything()
     );
+  });
+
+  describe('per-email caps', () => {
+    const att = (name: string, size = 5000) => ({
+      filename: name,
+      contentType: 'application/pdf',
+      size,
+      content: Buffer.from('x'),
+    });
+    const run = (attachments: ReturnType<typeof att>[]) => {
+      vi.mocked(createFabFile).mockResolvedValue({ id: 'ff' } as never);
+      return processAttachments({ ...mockParsedEmail, attachments }, 'user123', 'Test Email', mockAdapters);
+    };
+
+    it('stops after 20 attachments', async () => {
+      const result = await run(Array.from({ length: 25 }, (_, i) => att(`f${i}.pdf`)));
+
+      expect(result).toHaveLength(20);
+      expect(createFabFile).toHaveBeenCalledTimes(20);
+      expect(result.map(r => r.filename)).toEqual(Array.from({ length: 20 }, (_, i) => `f${i}.pdf`));
+    });
+
+    it('stops before the attachment that would exceed 25MB total', async () => {
+      const mb = 1024 * 1024;
+      const result = await run([att('a.pdf', 10 * mb), att('b.pdf', 10 * mb), att('c.pdf', 6 * mb)]);
+
+      expect(result.map(r => r.filename)).toEqual(['a.pdf', 'b.pdf']);
+      expect(createFabFile).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not resume after a cap is hit, even for a small later attachment', async () => {
+      const mb = 1024 * 1024;
+      const result = await run([att('a.pdf', 20 * mb), att('big.pdf', 10 * mb), att('small.pdf', 5000)]);
+
+      expect(result.map(r => r.filename)).toEqual(['a.pdf']);
+    });
+
+    it('does not count phantom parts toward the count cap', async () => {
+      const phantoms = Array.from({ length: 30 }, (_, i) => att(`tiny${i}.pdf`, 100));
+      const result = await run([...phantoms, ...Array.from({ length: 20 }, (_, i) => att(`f${i}.pdf`))]);
+
+      expect(result).toHaveLength(20);
+      expect(createFabFile).toHaveBeenCalledTimes(20);
+    });
+
+    it('logs one warning with the skipped count', async () => {
+      const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
+      await run(Array.from({ length: 23 }, (_, i) => att(`f${i}.pdf`)));
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain('3 remaining');
+      warn.mockRestore();
+    });
   });
 });

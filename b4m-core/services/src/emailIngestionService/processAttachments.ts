@@ -12,6 +12,10 @@ import { BadRequestError } from '@bike4mind/utils';
 import { createFabFile } from '../fabFileService/create';
 import { ParsedEmailObject, ProcessedAttachment, IStorageAdapter } from './types';
 
+const MAX_FILE_SIZE = 20 * 1024 * 1024; // bytes, per attachment
+const MAX_ATTACHMENTS_PER_EMAIL = 20; // count of real attachments (phantom MIME parts excluded)
+const MAX_TOTAL_ATTACHMENT_BYTES_PER_EMAIL = 25 * 1024 * 1024; // bytes, summed across attachments
+
 /**
  * Maps the one alias spelling email clients use to its supported type. Every other claim is
  * passed through as-is so `createFabFile` decides: an unknown or binary claim is never relabeled
@@ -99,8 +103,10 @@ export async function processAttachments(
   }
 
   const processedAttachments: ProcessedAttachment[] = [];
+  let acceptedCount = 0;
+  let acceptedBytes = 0;
 
-  for (const attachment of parsedEmail.attachments) {
+  for (const [index, attachment] of parsedEmail.attachments.entries()) {
     try {
       // Skip unwanted MIME parts:
       // 1. Inline images/content < 50KB
@@ -123,6 +129,21 @@ export async function processAttachments(
         continue;
       }
 
+      // Parser order, stop at the first cap hit so a later small file never resumes ingestion.
+      const overCount = acceptedCount >= MAX_ATTACHMENTS_PER_EMAIL;
+      const overBytes = acceptedBytes + (attachment.size || 0) > MAX_TOTAL_ATTACHMENT_BYTES_PER_EMAIL;
+      if (overCount || overBytes) {
+        Logger.warn(
+          `Skipping ${parsedEmail.attachments.length - index} remaining attachment part(s): ` +
+            (overCount
+              ? `per-email limit of ${MAX_ATTACHMENTS_PER_EMAIL} attachments reached`
+              : `per-email limit of ${MAX_TOTAL_ATTACHMENT_BYTES_PER_EMAIL} total bytes reached`)
+        );
+        break;
+      }
+      acceptedCount++;
+      acceptedBytes += attachment.size || 0;
+
       const filename = attachment.filename || 'unnamed';
       const mimeType = attachment.contentType || 'application/octet-stream';
       const size = attachment.size || 0;
@@ -132,7 +153,6 @@ export async function processAttachments(
         throw new BadRequestError(`Attachment filename exceeds 255 characters: ${filename.substring(0, 50)}...`);
       }
 
-      const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
       if (size > MAX_FILE_SIZE) {
         Logger.warn(`Attachment too large: ${filename} (${size} bytes)`);
         throw new BadRequestError(`Attachment ${filename} exceeds 20MB size limit`);
