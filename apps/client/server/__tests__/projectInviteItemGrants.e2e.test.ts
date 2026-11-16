@@ -90,32 +90,35 @@ const accept = (accepterId: string, inviteId: string) =>
 
 describe('Project invite accept: grants on attached files, prompts and notebooks', () => {
   const memberGrant = [Permission.read, Permission.share];
+  const readOnly = [Permission.read];
 
   /**
-   * A project whose member holds [read, share] on it, with one attached item of each kind per case:
-   * `shared` items carry the member's project-tagged [read, share] row, `readOnly` items a read row,
-   * `unheld` items no row for the member at all.
+   * A project whose member holds [read, share] on it. `shared` items carry project-tagged rows that
+   * give the member [read, share]; `readOnly` items give the owner and the member read; `unheld` items
+   * belong to a third user and carry no row for either; `ownedByMember` is the member's own file, on
+   * which the owner holds [read, update], as when a member attaches it.
    */
   const seed = async () => {
     const owner = await makeUser('owner');
     const member = await makeUser('member');
+    const outsider = await makeUser('outsider');
     const accepter = await makeUser('accepter');
     const projectId = new mongoose.Types.ObjectId().toString();
-    const viaProject = (permissions: Permission[]): Share[] => [{ userId: member.id, permissions, projectId }];
+    const tagged = (userId: string, permissions: Permission[]): Share => ({ userId, permissions, projectId });
 
     const files = {
-      shared: await makeFile(owner.id, 'shared.txt', viaProject(memberGrant)),
-      readOnly: await makeFile(owner.id, 'read-only.txt', viaProject([Permission.read])),
-      unheld: await makeFile(owner.id, 'unheld.txt'),
-      ownedByMember: await makeFile(member.id, 'mine.txt'),
+      shared: await makeFile(owner.id, 'shared.txt', [tagged(member.id, memberGrant)]),
+      readOnly: await makeFile(outsider.id, 'read-only.txt', [tagged(owner.id, readOnly), tagged(member.id, readOnly)]),
+      unheld: await makeFile(outsider.id, 'unheld.txt'),
+      ownedByMember: await makeFile(member.id, 'mine.txt', [tagged(owner.id, [Permission.read, Permission.update])]),
     };
     const prompts = {
-      shared: await makeFile(owner.id, 'prompt-shared.txt', viaProject(memberGrant)),
-      unheld: await makeFile(owner.id, 'prompt-unheld.txt'),
+      shared: await makeFile(owner.id, 'prompt-shared.txt', [tagged(member.id, memberGrant)]),
+      unheld: await makeFile(outsider.id, 'prompt-unheld.txt'),
     };
     const sessions = {
-      shared: await makeSession(owner.id, 'shared', viaProject(memberGrant)),
-      unheld: await makeSession(owner.id, 'unheld'),
+      shared: await makeSession(owner.id, 'shared', [tagged(member.id, memberGrant)]),
+      unheld: await makeSession(outsider.id, 'unheld'),
     };
 
     await Project.create({
@@ -129,13 +132,13 @@ describe('Project invite accept: grants on attached files, prompts and notebooks
       users: [{ userId: member.id, permissions: memberGrant }],
     });
 
-    const mint = async (inviterId: string) =>
+    const mint = async (inviterId?: string) =>
       String(
         (
           await Invite.create({
             type: InviteType.Project,
             documentId: projectId,
-            inviterId,
+            ...(inviterId ? { inviterId } : {}),
             isLinkOnly: true,
             permissions: memberGrant,
             remaining: 1,
@@ -146,34 +149,52 @@ describe('Project invite accept: grants on attached files, prompts and notebooks
     return { owner, member, accepter, projectId, files, prompts, sessions, mint };
   };
 
-  it('grants only the items the minting member can share, capped to what they hold on each', async () => {
+  const projectRows = async (projectId: string, userId: string) =>
+    rowsFor(await Project.findById(projectId).lean<{ users: Share[] }>(), userId);
+
+  it('caps a member-minted invite on each item to what the member holds there', async () => {
     const { member, accepter, projectId, files, prompts, sessions, mint } = await seed();
 
     await accept(accepter.id, await mint(member.id));
 
-    const granted = [{ permissions: memberGrant, projectId }];
-    expect(rowsFor(await Project.findById(projectId).lean<{ users: Share[] }>(), accepter.id)).toEqual([
-      { permissions: memberGrant, projectId: undefined },
-    ]);
-    expect(await fileRows(files.shared, accepter.id)).toEqual(granted);
-    expect(await fileRows(files.ownedByMember, accepter.id)).toEqual(granted);
-    expect(await fileRows(files.readOnly, accepter.id)).toEqual([]);
+    const full = [{ permissions: memberGrant, projectId }];
+    expect(await projectRows(projectId, accepter.id)).toEqual([{ permissions: memberGrant, projectId: undefined }]);
+    expect(await fileRows(files.shared, accepter.id)).toEqual(full);
+    expect(await fileRows(files.ownedByMember, accepter.id)).toEqual(full);
+    expect(await fileRows(files.readOnly, accepter.id)).toEqual([{ permissions: readOnly, projectId }]);
     expect(await fileRows(files.unheld, accepter.id)).toEqual([]);
-    expect(await fileRows(prompts.shared, accepter.id)).toEqual(granted);
+    expect(await fileRows(prompts.shared, accepter.id)).toEqual(full);
     expect(await fileRows(prompts.unheld, accepter.id)).toEqual([]);
-    expect(await sessionRows(sessions.shared, accepter.id)).toEqual(granted);
+    expect(await sessionRows(sessions.shared, accepter.id)).toEqual(full);
     expect(await sessionRows(sessions.unheld, accepter.id)).toEqual([]);
   });
 
-  it('grants every attached item at the invite permissions when the project owner minted it', async () => {
+  it('caps an owner-minted invite on each item to what the owner holds there', async () => {
     const { owner, accepter, projectId, files, prompts, sessions, mint } = await seed();
 
     await accept(accepter.id, await mint(owner.id));
 
-    const granted = [{ permissions: memberGrant, projectId }];
+    const full = [{ permissions: memberGrant, projectId }];
+    expect(await projectRows(projectId, accepter.id)).toEqual([{ permissions: memberGrant, projectId: undefined }]);
+    expect(await fileRows(files.shared, accepter.id)).toEqual(full);
+    expect(await fileRows(files.ownedByMember, accepter.id)).toEqual([{ permissions: readOnly, projectId }]);
+    expect(await fileRows(files.readOnly, accepter.id)).toEqual([{ permissions: readOnly, projectId }]);
+    expect(await fileRows(files.unheld, accepter.id)).toEqual([]);
+    expect(await fileRows(prompts.shared, accepter.id)).toEqual(full);
+    expect(await fileRows(prompts.unheld, accepter.id)).toEqual([]);
+    expect(await sessionRows(sessions.shared, accepter.id)).toEqual(full);
+    expect(await sessionRows(sessions.unheld, accepter.id)).toEqual([]);
+  });
+
+  it('grants every attached item at the invite permissions when the invite records no inviter', async () => {
+    const { accepter, projectId, files, prompts, sessions, mint } = await seed();
+
+    await accept(accepter.id, await mint());
+
+    const full = [{ permissions: memberGrant, projectId }];
     for (const id of [...Object.values(files), ...Object.values(prompts)]) {
-      expect(await fileRows(id, accepter.id)).toEqual(granted);
+      expect(await fileRows(id, accepter.id)).toEqual(full);
     }
-    for (const id of Object.values(sessions)) expect(await sessionRows(id, accepter.id)).toEqual(granted);
+    for (const id of Object.values(sessions)) expect(await sessionRows(id, accepter.id)).toEqual(full);
   });
 });

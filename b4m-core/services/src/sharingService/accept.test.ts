@@ -1328,22 +1328,22 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
 
   describe('Project items', () => {
     const itemOwnerId = 'item-owner-1';
-    // What the minter holds on an attached item: 'owner', a users[] row, or nothing (null).
-    const item = (id: string, minter: Permission[] | 'owner' | null) => ({
+    // What `holderId` holds on an attached item: 'owner', a users[] row, or nothing (null).
+    const item = (id: string, held: Permission[] | 'owner' | null, holderId = sharerId) => ({
       id,
-      userId: minter === 'owner' ? sharerId : itemOwnerId,
-      users: Array.isArray(minter) ? [{ userId: sharerId, permissions: minter }] : [],
+      userId: held === 'owner' ? holderId : itemOwnerId,
+      users: Array.isArray(held) ? [{ userId: holderId, permissions: held }] : [],
       groups: [],
     });
     const propagated = (permissions: Permission[]) => ({ add: [{ userId, permissions, projectId: docId }] });
 
     const acceptProjectInvite = async (
-      minterOnProject: Permission[],
+      sharerOnProject: Permission[],
       items: { file: unknown; prompt: unknown; session: unknown },
-      minter: { inviterId?: string; groups?: string[] } = { inviterId: sharerId }
+      minter: { inviterId?: string; groups?: string[]; deleted?: boolean } = { inviterId: sharerId }
     ) => {
       const project = {
-        ...makeDoc(minterOnProject),
+        ...makeDoc(sharerOnProject),
         fileIds: ['file-1'],
         systemPrompts: [{ fileId: 'prompt-1' }],
         sessionIds: ['session-1'],
@@ -1351,6 +1351,11 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
       const adapters = makeAdapters(InviteType.Project, fullLink, project, minter.inviterId, minter.groups);
       adapters.db.fabFiles.findAllByIds.mockResolvedValue([items.file, items.prompt] as never);
       adapters.db.sessions.findAllByIds.mockResolvedValue([items.session] as never);
+      if (minter.deleted) {
+        adapters.db.users.findById.mockImplementation(async (id: string) =>
+          id === userId ? { id: userId, email: 'a@x.com', username: 'a' } : (null as never)
+        );
+      }
 
       await acceptInvite(userId, { id: inviteId }, adapters as never);
 
@@ -1382,16 +1387,16 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
     it('caps each item grant to what the minter holds on that item', async () => {
       const calls = await acceptProjectInvite(fullLink, {
         file: item('file-1', shareLink),
-        prompt: item('prompt-1', shareLink),
-        session: item('session-1', shareLink),
+        prompt: item('prompt-1', [Permission.read, Permission.update]),
+        session: item('session-1', [Permission.read]),
       });
 
       expect(calls.project).toStrictEqual([granted(fullLink)]);
       expect(calls.files).toStrictEqual([
         ['file-1', propagated(shareLink)],
-        ['prompt-1', propagated(shareLink)],
+        ['prompt-1', propagated([Permission.read, Permission.update])],
       ]);
-      expect(calls.sessions).toStrictEqual([['session-1', propagated(shareLink)]]);
+      expect(calls.sessions).toStrictEqual([['session-1', propagated([Permission.read])]]);
     });
 
     it('caps an item grant at the project grant when the minter holds more on the item', async () => {
@@ -1421,19 +1426,19 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
       expect(calls.sessions).toStrictEqual([]);
     });
 
-    it('skips items the minter can read or update but not share', async () => {
-      const calls = await acceptProjectInvite(fullLink, {
-        file: item('file-1', [Permission.read]),
-        prompt: item('prompt-1', [Permission.read, Permission.update]),
-        session: item('session-1', [Permission.read]),
+    it('skips an item where nothing the minter holds is in the project grant', async () => {
+      const calls = await acceptProjectInvite(shareLink, {
+        file: item('file-1', [Permission.update]),
+        prompt: item('prompt-1', [Permission.delete]),
+        session: item('session-1', [Permission.update]),
       });
 
-      expect(calls.project).toStrictEqual([granted(fullLink)]);
+      expect(calls.project).toStrictEqual([granted(shareLink)]);
       expect(calls.files).toStrictEqual([]);
       expect(calls.sessions).toStrictEqual([]);
     });
 
-    it('counts share the minter holds on an item through a group', async () => {
+    it('counts what the minter holds on an item through a group', async () => {
       const viaGroup = (id: string) => ({
         ...item(id, null),
         groups: [{ groupId: 'group-1', permissions: shareLink }],
@@ -1448,14 +1453,86 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
       expect(calls.sessions).toStrictEqual([['session-1', propagated(shareLink)]]);
     });
 
-    it.each([
-      ['owner-minted', ownerId],
-      ['legacy (no inviterId)', undefined],
-    ])('propagates a %s invite at face value to every item', async (_label, inviterId) => {
+    describe('minted by the project owner', () => {
+      const ownerHolds = (id: string, held: Permission[] | 'owner' | null) => item(id, held, ownerId);
+      const memberAttached = [Permission.read, Permission.update];
+
+      it('propagates the invite permissions to items the owner owns', async () => {
+        const calls = await acceptProjectInvite(
+          shareLink,
+          {
+            file: ownerHolds('file-1', 'owner'),
+            prompt: ownerHolds('prompt-1', 'owner'),
+            session: ownerHolds('session-1', 'owner'),
+          },
+          { inviterId: ownerId }
+        );
+
+        expect(calls.project).toStrictEqual([granted(fullLink)]);
+        expect(calls.files).toStrictEqual([
+          ['file-1', propagated(fullLink)],
+          ['prompt-1', propagated(fullLink)],
+        ]);
+        expect(calls.sessions).toStrictEqual([['session-1', propagated(fullLink)]]);
+      });
+
+      it('caps the grant on an item someone else owns to what the owner holds on it', async () => {
+        const calls = await acceptProjectInvite(
+          shareLink,
+          {
+            file: ownerHolds('file-1', memberAttached),
+            prompt: ownerHolds('prompt-1', [Permission.read]),
+            session: ownerHolds('session-1', memberAttached),
+          },
+          { inviterId: ownerId }
+        );
+
+        expect(calls.project).toStrictEqual([granted(fullLink)]);
+        expect(calls.files).toStrictEqual([
+          ['file-1', propagated(memberAttached)],
+          ['prompt-1', propagated([Permission.read])],
+        ]);
+        expect(calls.sessions).toStrictEqual([['session-1', propagated(memberAttached)]]);
+      });
+
+      it('skips items the owner holds nothing on and still grants the rest', async () => {
+        const calls = await acceptProjectInvite(
+          shareLink,
+          {
+            file: ownerHolds('file-1', null),
+            prompt: ownerHolds('prompt-1', 'owner'),
+            session: ownerHolds('session-1', null),
+          },
+          { inviterId: ownerId }
+        );
+
+        expect(calls.project).toStrictEqual([granted(fullLink)]);
+        expect(calls.files).toStrictEqual([['prompt-1', propagated(fullLink)]]);
+        expect(calls.sessions).toStrictEqual([]);
+      });
+
+      it('grants the project but no items when the owner account no longer exists', async () => {
+        const calls = await acceptProjectInvite(
+          shareLink,
+          {
+            file: ownerHolds('file-1', 'owner'),
+            prompt: ownerHolds('prompt-1', 'owner'),
+            session: ownerHolds('session-1', 'owner'),
+          },
+          { inviterId: ownerId, deleted: true }
+        );
+
+        expect(calls.project).toStrictEqual([granted(fullLink)]);
+        expect(calls.files).toStrictEqual([]);
+        expect(calls.sessions).toStrictEqual([]);
+      });
+    });
+
+    it('propagates an invite with no recorded inviter at face value to every item', async () => {
       const calls = await acceptProjectInvite(
         shareLink,
         { file: item('file-1', null), prompt: item('prompt-1', null), session: item('session-1', null) },
-        { inviterId }
+        { inviterId: undefined }
       );
 
       expect(calls.project).toStrictEqual([granted(fullLink)]);

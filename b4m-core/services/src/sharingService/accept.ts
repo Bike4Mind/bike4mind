@@ -35,6 +35,7 @@ import { pendingOrgInviteRecipients } from './orgSeatReservations';
 import { resolveRedeemableInvite } from './resolveRedeemableInvite';
 import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import { assertContentInvitePolicy } from './organizationPolicy';
+import { grantCap } from '../projectService/addFiles';
 
 const acceptInviteSchema = z.object({
   id: z.string(),
@@ -509,13 +510,14 @@ const acceptProject = async (
   ]);
   const sessions = await db.sessions.findAllByIds(project.sessionIds);
 
-  // A non-owner's invite re-shares each attached item as well as the project, so every item goes
-  // through the same gate-then-cap as a notebook's knowledge files: nothing where the minter holds
-  // no share, otherwise only what they hold there. Owner-minted and legacy invites pass through.
-  const isReshare = !!invite.inviterId && invite.inviterId !== project.userId;
+  // Whoever minted the invite passes each attached item on, so the item grant is capped at what they
+  // hold on that item: the rule projectService/addFiles.ts applies to whoever attaches one. A legacy
+  // invite records no minter to cap against and grants the project permissions on every item.
+  const grantOf = (granted: Permission[]) => ({ add: [{ userId: user.id, permissions: granted, projectId }] });
   const grantOn = (item: IShareableDocument & { userId: string }) => {
-    const granted = isReshare ? reshareableBy(item, inviter, permissions).granted : permissions;
-    return isReshare && granted.length === 0 ? null : { add: [{ userId: user.id, permissions: granted, projectId }] };
+    if (!invite.inviterId) return grantOf(permissions);
+    const granted = inviter ? grantCap(item as ShareableAccessShape, inviter)(permissions) : [];
+    return granted.length > 0 ? grantOf(granted) : null;
   };
 
   for (const file of files) {
