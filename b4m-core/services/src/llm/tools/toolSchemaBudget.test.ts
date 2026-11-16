@@ -63,6 +63,15 @@ const REPRESENTATIVE_MUSIC_CONFIG = {
   usableModels: MUSIC_MODEL_IDS,
   createJob: vi.fn(),
 };
+// The audio tool is not offered without the host's job functions (see hasAudioToolJobs).
+const REPRESENTATIVE_AUDIO_CONFIG = {
+  jobs: {
+    createSpeechJob: vi.fn(),
+    createSoundEffectJob: vi.fn(),
+    runInline: vi.fn(),
+    readOutput: vi.fn(),
+  },
+};
 
 function buildSchemas(enabledTools: string[]) {
   const builder = new ToolBuilder({
@@ -84,7 +93,11 @@ function buildSchemas(enabledTools: string[]) {
       quest: {} as never,
       saveQuest: vi.fn() as never,
       llm: {} as never,
-      config: { video_generation: REPRESENTATIVE_VIDEO_CONFIG, music_generation: REPRESENTATIVE_MUSIC_CONFIG },
+      config: {
+        video_generation: REPRESENTATIVE_VIDEO_CONFIG,
+        music_generation: REPRESENTATIVE_MUSIC_CONFIG,
+        audio_generation: REPRESENTATIVE_AUDIO_CONFIG,
+      },
     } as unknown as BuildToolsArgs) ?? []
   );
 }
