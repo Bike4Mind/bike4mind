@@ -1,6 +1,6 @@
 import { RuleTester } from 'eslint';
 import tseslint from 'typescript-eslint';
-import { afterAll, describe, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import rule from '../../eslint-rules/no-workers-server-bridge.mjs';
 
 RuleTester.describe = describe;
@@ -27,6 +27,11 @@ tester.run('no-workers-server-bridge', rule, {
     "type A = typeof import('@bike4mind/server-utils');",
     "const a = require('./a');",
     "requireLike('@server/a');",
+    'vi.mock(modulePath);',
+    'const a = require(modulePath);',
+    "import a from '@client/app/a';",
+    "import a from '@client/serverless/a';",
+    "import a from '@/serverish/a';",
     "const s = '@server/a';",
   ],
   invalid: [
@@ -50,6 +55,10 @@ tester.run('no-workers-server-bridge', rule, {
     invalid("const a = await vi.importMock('@server/a');"),
     invalid("vi.mock(import('@server/a'));"),
     invalid("import a from '@server';", '@server'),
+    invalid("import { a } from '@client/server/a';", '@client/server/a'),
+    invalid("vi.mock('@client/server/a');", '@client/server/a'),
+    invalid("import { a } from '@/server/a';", '@/server/a'),
+    invalid("const m = await import('@/server/a');", '@/server/a'),
     {
       code: "import { a } from '@server/a';\nvi.mock('@server/b/c');",
       errors: [
@@ -58,4 +67,16 @@ tester.run('no-workers-server-bridge', rule, {
       ],
     },
   ],
+});
+
+// typescript-eslint parsers before `TSImportType.source` existed carry the specifier only in
+// `argument.literal`; the installed parser never produces that shape, so drive the visitor directly.
+describe('TSImportType on a parser without `source`', () => {
+  it('reads the specifier from argument.literal', () => {
+    const reports = [];
+    const visitors = rule.create({ report: r => reports.push(r) });
+    const literal = { type: 'Literal', value: '@server/a' };
+    visitors.TSImportType({ type: 'TSImportType', argument: { type: 'TSLiteralType', literal } });
+    expect(reports).toEqual([{ node: literal, messageId: 'bridge', data: { specifier: '@server/a' } }]);
+  });
 });

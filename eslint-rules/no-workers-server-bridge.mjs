@@ -4,8 +4,10 @@
  * one more thing blocking that removal. Covers static, type-only, dynamic and require imports, and
  * the module argument of vitest's vi.mock family, since a mocked path needs the alias as much as an
  * import does. Existing uses are baselined per file in eslint-suppressions.json.
+ * `@client/server/*` and `@/server/*` are matched too: apps/workers/tsconfig.json maps `@client/*`
+ * and `@/*` onto apps/client, so they reach the same files as `@server/*`.
  */
-const BRIDGE = /^@server(?:\/|$)/;
+const BRIDGE = /^(?:@server|@client\/server|@\/server)(?:\/|$)/;
 const VI_MODULE_METHODS = new Set(['mock', 'doMock', 'unmock', 'doUnmock', 'importActual', 'importMock']);
 
 /** The string value of a literal or an expression-free template literal, else undefined. */

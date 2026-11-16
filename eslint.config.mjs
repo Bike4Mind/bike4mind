@@ -786,7 +786,7 @@ export default defineConfig([
   // Freezes the interim @server/* bridge into apps/client: existing uses are baselined in
   // eslint-suppressions.json, so only new ones fail. Tests are included because vi.mock needs the alias too.
   {
-    files: ['apps/workers/**/*.ts'],
+    files: ['apps/workers/**/*.ts', 'apps/workers/src/**/*.{mts,cts}'],
     plugins: { b4m: localRulesPlugin },
     rules: { 'b4m/no-workers-server-bridge': 'error' },
   },
