@@ -3082,7 +3082,10 @@ export class ChatCompletionProcess {
       await assertSpendNotFrozen(
         spendFreezeSubjectForHold({
           userId: this.user.id,
-          organizationId: organizationId ?? null,
+          organizationId:
+            parsedBody.spendFreezeOrganizationId !== undefined
+              ? parsedBody.spendFreezeOrganizationId
+              : (organizationId ?? null),
           apiKeyId: this.turnApiKeyId,
           apiKeyBillingOwnerType: parsedBody.apiKeyBillingOwnerType,
         }),

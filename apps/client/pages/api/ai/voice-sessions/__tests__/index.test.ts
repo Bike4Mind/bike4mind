@@ -101,7 +101,7 @@ import { VOICE_SESSION_ERROR } from '@client/shared/voiceSessionErrors';
 async function callRoute(body: Record<string, unknown> = {}, currentCredits = 1_000_000) {
   const { req, res } = createMocks({ method: 'POST', body });
   const logger = { warn: vi.fn(), error: vi.fn() };
-  (req as any).user = { id: 'user-1', currentCredits };
+  (req as any).user = { id: 'user-1', currentCredits, organizationId: 'home-org' };
   (req as any).logger = logger;
   try {
     await (voiceSessionsHandler as any)(req, res);
@@ -546,5 +546,14 @@ describe('POST /api/ai/voice-sessions spend freeze', () => {
     expect(mockPost).not.toHaveBeenCalled();
     expect(mockOpenVoiceHold).not.toHaveBeenCalled();
     expect(mockIncrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('allows a member whose only frozen scope is their home organization', async () => {
+    mockFindActiveFreeze.mockImplementation(async (subject: { organizationId: string | null }) =>
+      subject.organizationId === 'home-org' ? { scopeType: 'Organization', frozenAt: new Date() } : null
+    );
+    const { res } = await callRoute();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'user-1', organizationId: null, apiKeyId: null });
   });
 });

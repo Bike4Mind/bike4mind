@@ -20,3 +20,13 @@ export function spendFreezeSubjectForRequest(
     apiKeyId: req.apiKeyInfo?.keyId ?? null,
   };
 }
+
+/**
+ * The organization a request spends the money of, for the freeze check: only an org-billed API key's own
+ * organization. Everyone else spends personally, so the user's home organization is never the subject.
+ */
+export function billedOrganizationIdForFreeze(
+  apiKeyInfo: { billingOwnerType?: CreditHolderType; organizationId?: string | null } | undefined
+): string | null {
+  return apiKeyInfo?.billingOwnerType === CreditHolderType.Organization ? (apiKeyInfo.organizationId ?? null) : null;
+}

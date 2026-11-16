@@ -272,6 +272,33 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
     );
   });
 
+  it("checks the freeze against the token's billed org, and null (never the user's home org) without one", async () => {
+    const base = {
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: 'home-org',
+      reasoningModelId: 'test-model',
+      voiceHoldStartedAt: recentHold(),
+    };
+    mockVerifyVoiceSessionToken.mockReturnValueOnce({ ...base, authOrigin: 'session' });
+    await handler(makeReq() as never, makeRes() as never);
+    expect((mockProcess.mock.calls[0][0] as { body: { spendFreezeOrganizationId?: string | null } }).body).toEqual(
+      expect.objectContaining({ spendFreezeOrganizationId: null })
+    );
+
+    mockProcess.mockClear();
+    mockVerifyVoiceSessionToken.mockReturnValueOnce({
+      ...base,
+      authOrigin: 'apiKey',
+      apiKeyId: 'key-1',
+      billingOrganizationId: 'key-org',
+    });
+    await handler(makeReq() as never, makeRes() as never);
+    expect((mockProcess.mock.calls[0][0] as { body: { spendFreezeOrganizationId?: string | null } }).body).toEqual(
+      expect.objectContaining({ spendFreezeOrganizationId: 'key-org' })
+    );
+  });
+
   it('leaves the billing owner type unset for a token minted without it', async () => {
     mockVerifyVoiceSessionToken.mockReturnValue({
       userId: 'user-1',

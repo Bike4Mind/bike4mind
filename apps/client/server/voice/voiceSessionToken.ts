@@ -29,6 +29,9 @@ export const VoiceSessionContextSchema = z
     apiKeyId: z.string().min(1).optional(),
     // Who that key bills, from the minting request's verified key info. The proxy's spend freeze check drops
     // the creator for an org-billed key. Optional: a token minted before the claim checks the user too.
+    // The organization an org-billed key spends (absent otherwise): the proxy's freeze subject org, never the
+    // user's home org, since voice bills the user personally.
+    billingOrganizationId: z.string().min(1).optional(),
     apiKeyBillingOwnerType: z.enum([CreditHolderType.User, CreditHolderType.Organization]).optional(),
     // That key lacks the admin scope, so the proxy withholds the owner's admin role on its reload.
     adminRoleWithheld: z.boolean().optional(),

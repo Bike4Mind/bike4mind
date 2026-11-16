@@ -1,6 +1,6 @@
 import { CreditHolderType } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
-import { spendFreezeSubjectForRequest } from './spendFreezeSubject';
+import { billedOrganizationIdForFreeze, spendFreezeSubjectForRequest } from './spendFreezeSubject';
 
 const user = { id: 'u1' };
 
@@ -37,5 +37,21 @@ describe('spendFreezeSubjectForRequest', () => {
       organizationId: 'org1',
       apiKeyId: 'k1',
     });
+  });
+});
+
+describe('billedOrganizationIdForFreeze', () => {
+  it('is the key org for an org-billed key', () => {
+    expect(
+      billedOrganizationIdForFreeze({ billingOwnerType: CreditHolderType.Organization, organizationId: 'org-9' })
+    ).toBe('org-9');
+  });
+
+  it.each([
+    ['no key', undefined],
+    ['a user-billed key', { billingOwnerType: CreditHolderType.User, organizationId: 'org-9' }],
+    ['a key of unknown type', { organizationId: 'org-9' }],
+  ])('is null for %s, never a home org', (_label, info) => {
+    expect(billedOrganizationIdForFreeze(info)).toBeNull();
   });
 });

@@ -256,15 +256,16 @@ describe('reserveVoiceHold', () => {
   });
 
   it.each([
-    ['a frozen user', {}, { userId: 'u1', organizationId: 'org-1', apiKeyId: null }],
-    ['a frozen API key', { apiKeyId: 'key-1' }, { userId: 'u1', organizationId: 'org-1', apiKeyId: 'key-1' }],
+    ['a frozen user', {}, { userId: 'u1', organizationId: null, apiKeyId: null }],
+    ['a frozen API key', { apiKeyId: 'key-1' }, { userId: 'u1', organizationId: null, apiKeyId: 'key-1' }],
   ])('refuses %s with nothing moved, credits enforced or not', async (_label, extra, subject) => {
     findActiveForSubject.mockResolvedValue({ scopeType: 'User', frozenAt: new Date(), reason: 'test freeze' });
 
     for (const reservedCredits of [600, null]) {
-      await expect(
-        reserveVoiceHold({ ...RESERVE, ...extra, organizationId: 'org-1', reservedCredits })
-      ).rejects.toMatchObject({ statusCode: 403, additionalInfo: { errorCode: 'spend_frozen' } });
+      await expect(reserveVoiceHold({ ...RESERVE, ...extra, reservedCredits })).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { errorCode: 'spend_frozen' },
+      });
     }
     expect(findActiveForSubject).toHaveBeenCalledWith(subject);
     expect(openVoiceHold).not.toHaveBeenCalled();
