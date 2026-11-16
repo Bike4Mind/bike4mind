@@ -4,7 +4,7 @@ import { isFullAdmin } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminRoles, type AdminRoleRow } from '@client/app/hooks/data/adminRoles';
 import { getErrorMessage } from '@client/app/utils/error';
-import { AdminPageHeader, DataTable, EmptyState, RowActionsMenu, type DataColumn } from '../shared';
+import { AdminDialog, AdminPageHeader, DataTable, EmptyState, RowActionsMenu, type DataColumn } from '../shared';
 import { ADMIN_REGION_GAP } from '../shared/adminStyles';
 import { RoleDeleteDialog } from './RoleDeleteDialog';
 import { RoleFormDialog } from './RoleFormDialog';
@@ -17,7 +17,7 @@ export default function AdminRolesTab() {
   const canEdit = isFullAdmin(currentUser);
   const roles = useAdminRoles();
   const [dialog, setDialog] = useState<DialogState>(null);
-  const close = () => setDialog(null);
+  const close = () => setDialog(current => (current === dialog ? null : current));
   const activeRole =
     dialog && dialog.kind !== 'create' ? roles.data?.find(role => role.id === dialog.roleId) : undefined;
 
@@ -135,11 +135,21 @@ export default function AdminRolesTab() {
         }
       />
 
-      {dialog?.kind === 'create' && <RoleFormDialog mode="create" onClose={close} />}
+      {dialog?.kind === 'create' && <RoleFormDialog key="create" mode="create" onClose={close} />}
       {activeRole && (dialog?.kind === 'edit' || dialog?.kind === 'view') && (
-        <RoleFormDialog mode={dialog.kind} role={activeRole} onClose={close} />
+        <RoleFormDialog key={dialog.kind + ':' + activeRole.id} mode={dialog.kind} role={activeRole} onClose={close} />
       )}
       {activeRole && dialog?.kind === 'delete' && <RoleDeleteDialog role={activeRole} onClose={close} />}
+      {dialog && dialog.kind !== 'create' && roles.data && !activeRole && (
+        <AdminDialog title="Role no longer available" onClose={close} data-testid="admin-role-unavailable-dialog">
+          <Typography>
+            This role was deleted or is no longer available. Close this dialog to select another role.
+          </Typography>
+          <Button onClick={close} data-testid="admin-role-unavailable-close-btn">
+            Close
+          </Button>
+        </AdminDialog>
+      )}
     </Stack>
   );
 }

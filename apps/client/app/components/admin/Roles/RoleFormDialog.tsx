@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, Box, Button, Checkbox, FormControl, FormLabel, Input, Stack, Textarea, Typography } from '@mui/joy';
 import {
   ADMIN_PERMISSIONS,
@@ -37,6 +37,20 @@ export function RoleFormDialog({ mode, role, onClose }: RoleFormDialogProps) {
   const [error, setError] = useState<string | null>(null);
   const create = useCreateAdminRole();
   const update = useUpdateAdminRole();
+  const writing = useRef(false);
+  const mounted = useRef(true);
+  const busy = create.isPending || update.isPending;
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  const close = () => {
+    if (!writing.current) onClose();
+  };
 
   const trimmedName = name.trim();
   const trimmedDescription = description.trim();
@@ -54,32 +68,43 @@ export function RoleFormDialog({ mode, role, onClose }: RoleFormDialogProps) {
     null;
 
   const pickTemplate = (template: AdminRoleTemplate) => {
+    if (writing.current) return;
     setTemplateId(template.id);
     setName(template.name);
     setDescription(template.description);
     setPermissions(sortAdminPermissions(template.permissions));
   };
 
-  const togglePermission = (id: AdminPermissionId) =>
+  const togglePermission = (id: AdminPermissionId) => {
+    if (writing.current) return;
     setPermissions(current =>
       sortAdminPermissions(current.includes(id) ? current.filter(each => each !== id) : [...current, id])
     );
+  };
 
   const fieldPatch = () => ({
     ...(nameChanged && { name: trimmedName }),
     ...(descriptionChanged && { description: trimmedDescription }),
   });
 
-  const submit = async () => {
-    if (blocked || readOnly) return;
+  const performWrite = async (write: () => Promise<unknown>) => {
+    if (writing.current) return;
+    writing.current = true;
     setError(null);
+    try {
+      await write();
+      if (mounted.current) onClose();
+    } catch (caught) {
+      if (mounted.current && !isStepUpCancelled(caught)) setError(getErrorMessage(caught));
+    } finally {
+      writing.current = false;
+    }
+  };
+
+  const submit = async () => {
+    if (blocked || readOnly || writing.current) return;
     if (mode === 'create') {
-      try {
-        await create.mutateAsync({ name: trimmedName, description: trimmedDescription, permissions });
-        onClose();
-      } catch (caught) {
-        setError(getErrorMessage(caught));
-      }
+      await performWrite(() => create.mutateAsync({ name: trimmedName, description: trimmedDescription, permissions }));
       return;
     }
     if (!role) return;
@@ -88,35 +113,25 @@ export function RoleFormDialog({ mode, role, onClose }: RoleFormDialogProps) {
       setReviewing(true);
       return;
     }
-    try {
-      await update.mutateAsync({ id: role.id, patch: fieldPatch() });
-      onClose();
-    } catch (caught) {
-      if (!isStepUpCancelled(caught)) setError(getErrorMessage(caught));
-    }
+    await performWrite(() => update.mutateAsync({ id: role.id, patch: fieldPatch() }));
   };
 
   const closeReview = () => {
+    if (writing.current) return;
     setReviewing(false);
     setAcknowledged(false);
   };
 
   const confirmPermissionChange = async (reason: string) => {
     if (!role) return;
-    setError(null);
-    try {
-      await update.mutateAsync({ id: role.id, patch: { ...fieldPatch(), permissions, reason } });
-      onClose();
-    } catch (caught) {
-      if (!isStepUpCancelled(caught)) setError(getErrorMessage(caught));
-    }
+    await performWrite(() => update.mutateAsync({ id: role.id, patch: { ...fieldPatch(), permissions, reason } }));
   };
 
   const title = mode === 'create' ? 'Create role' : mode === 'edit' ? 'Edit role' : (role?.name ?? 'Role');
 
   return (
     <>
-      <AdminDialog title={title} onClose={onClose} width={680} data-testid="admin-role-form-dialog">
+      <AdminDialog title={title} onClose={close} closeDisabled={busy} width={680} data-testid="admin-role-form-dialog">
         <Stack
           gap={2}
           component="form"
@@ -126,107 +141,112 @@ export function RoleFormDialog({ mode, role, onClose }: RoleFormDialogProps) {
             void submit();
           }}
         >
-          {mode === 'create' && (
-            <Stack gap={1} data-testid="admin-role-templates">
-              <Typography level="title-md" sx={{ color: 'admin.ink' }}>
-                Start from template
-              </Typography>
-              <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}>
-                {ADMIN_ROLE_TEMPLATES.map(template => (
-                  <Button
-                    key={template.id}
-                    type="button"
-                    variant="outlined"
-                    color="neutral"
-                    aria-pressed={templateId === template.id}
-                    onClick={() => pickTemplate(template)}
-                    data-testid={`admin-role-template-${template.id}`}
-                    sx={{
-                      display: 'block',
-                      height: 'auto',
-                      p: 1.5,
-                      textAlign: 'left',
-                      whiteSpace: 'normal',
-                      ...(templateId === template.id && {
-                        bgcolor: 'admin.selection.background',
-                        borderColor: 'admin.selection.border',
-                      }),
-                    }}
-                  >
-                    <Typography component="span" level="title-sm" sx={{ display: 'block', color: 'admin.ink' }}>
-                      {template.name}
-                    </Typography>
-                    <Typography component="span" level="body-xs" sx={{ display: 'block', color: 'admin.inkMuted' }}>
-                      {template.description}
-                    </Typography>
-                    <Typography
-                      component="span"
-                      level="body-xs"
-                      sx={{ display: 'block', mt: 0.5, color: 'admin.inkSecondary' }}
-                      data-testid={`admin-role-template-${template.id}-permissions`}
+          <Stack component="fieldset" disabled={busy} gap={2} sx={{ border: 0, m: 0, p: 0, minWidth: 0 }}>
+            {mode === 'create' && (
+              <Stack gap={1} data-testid="admin-role-templates">
+                <Typography level="title-md" sx={{ color: 'admin.ink' }}>
+                  Start from template
+                </Typography>
+                <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}>
+                  {ADMIN_ROLE_TEMPLATES.map(template => (
+                    <Button
+                      key={template.id}
+                      type="button"
+                      variant="outlined"
+                      color="neutral"
+                      aria-pressed={templateId === template.id}
+                      onClick={() => pickTemplate(template)}
+                      data-testid={`admin-role-template-${template.id}`}
+                      sx={{
+                        display: 'block',
+                        height: 'auto',
+                        p: 1.5,
+                        textAlign: 'left',
+                        whiteSpace: 'normal',
+                        ...(templateId === template.id && {
+                          bgcolor: 'admin.selection.background',
+                          borderColor: 'admin.selection.border',
+                        }),
+                      }}
                     >
-                      {permissionLabels(template.permissions)}
-                    </Typography>
-                  </Button>
-                ))}
-              </Box>
-            </Stack>
-          )}
-
-          <FormControl required={!readOnly}>
-            <FormLabel>Name</FormLabel>
-            <Input
-              value={name}
-              onChange={event => setName(event.target.value)}
-              readOnly={readOnly}
-              slotProps={{ input: { maxLength: ADMIN_ROLE_NAME_MAX_LENGTH, 'data-testid': 'admin-role-name-input' } }}
-            />
-          </FormControl>
-          <FormControl>
-            <FormLabel>Description</FormLabel>
-            <Textarea
-              minRows={2}
-              maxRows={4}
-              value={description}
-              onChange={event => setDescription(event.target.value)}
-              readOnly={readOnly}
-              slotProps={{
-                textarea: {
-                  maxLength: ADMIN_ROLE_DESCRIPTION_MAX_LENGTH,
-                  'data-testid': 'admin-role-description-input',
-                },
-              }}
-            />
-          </FormControl>
-
-          <Stack gap={1} role="group" aria-label="Permissions" data-testid="admin-role-permissions">
-            <Typography level="title-md" sx={{ color: 'admin.ink' }}>
-              Permissions
-            </Typography>
-            {ADMIN_PERMISSIONS.map(id => (
-              <Checkbox
-                key={id}
-                checked={permissions.includes(id)}
-                disabled={readOnly}
-                onChange={() => togglePermission(id)}
-                data-testid={`admin-role-permission-${id}`}
-                label={
-                  <Stack component="span" gap={0.25}>
-                    <Stack component="span" direction="row" alignItems="center" gap={1}>
-                      <Typography component="span" level="body-md" sx={{ color: 'admin.ink' }}>
-                        {permissionLabel(id)}
+                      <Typography component="span" level="title-sm" sx={{ display: 'block', color: 'admin.ink' }}>
+                        {template.name}
                       </Typography>
-                      {isSensitivePermission(id) && <StatusChip tone="neutral" label="Sensitive" />}
-                    </Stack>
-                    <Typography component="span" level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-                      {permissionDescription(id)}
-                    </Typography>
-                  </Stack>
-                }
-              />
-            ))}
-          </Stack>
+                      <Typography component="span" level="body-xs" sx={{ display: 'block', color: 'admin.inkMuted' }}>
+                        {template.description}
+                      </Typography>
+                      <Typography
+                        component="span"
+                        level="body-xs"
+                        sx={{ display: 'block', mt: 0.5, color: 'admin.inkSecondary' }}
+                        data-testid={`admin-role-template-${template.id}-permissions`}
+                      >
+                        {permissionLabels(template.permissions)}
+                      </Typography>
+                    </Button>
+                  ))}
+                </Box>
+              </Stack>
+            )}
 
+            <FormControl required={!readOnly}>
+              <FormLabel>Name</FormLabel>
+              <Input
+                value={name}
+                onChange={event => {
+                  if (!writing.current) setName(event.target.value);
+                }}
+                readOnly={readOnly}
+                slotProps={{ input: { maxLength: ADMIN_ROLE_NAME_MAX_LENGTH, 'data-testid': 'admin-role-name-input' } }}
+              />
+            </FormControl>
+            <FormControl>
+              <FormLabel>Description</FormLabel>
+              <Textarea
+                minRows={2}
+                maxRows={4}
+                value={description}
+                onChange={event => {
+                  if (!writing.current) setDescription(event.target.value);
+                }}
+                readOnly={readOnly}
+                slotProps={{
+                  textarea: {
+                    maxLength: ADMIN_ROLE_DESCRIPTION_MAX_LENGTH,
+                    'data-testid': 'admin-role-description-input',
+                  },
+                }}
+              />
+            </FormControl>
+
+            <Stack gap={1} role="group" aria-label="Permissions" data-testid="admin-role-permissions">
+              <Typography level="title-md" sx={{ color: 'admin.ink' }}>
+                Permissions
+              </Typography>
+              {ADMIN_PERMISSIONS.map(id => (
+                <Checkbox
+                  key={id}
+                  checked={permissions.includes(id)}
+                  disabled={readOnly}
+                  onChange={() => togglePermission(id)}
+                  data-testid={`admin-role-permission-${id}`}
+                  label={
+                    <Stack component="span" gap={0.25}>
+                      <Stack component="span" direction="row" alignItems="center" gap={1}>
+                        <Typography component="span" level="body-md" sx={{ color: 'admin.ink' }}>
+                          {permissionLabel(id)}
+                        </Typography>
+                        {isSensitivePermission(id) && <StatusChip tone="neutral" label="Sensitive" />}
+                      </Stack>
+                      <Typography component="span" level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                        {permissionDescription(id)}
+                      </Typography>
+                    </Stack>
+                  }
+                />
+              ))}
+            </Stack>
+          </Stack>
           {error && !reviewing && (
             <Alert color="danger" data-testid="admin-role-form-error">
               {error}
@@ -247,7 +267,8 @@ export function RoleFormDialog({ mode, role, onClose }: RoleFormDialogProps) {
               type="button"
               variant="plain"
               color="neutral"
-              onClick={onClose}
+              onClick={close}
+              disabled={busy}
               data-testid="admin-role-form-cancel-btn"
             >
               {readOnly ? 'Close' : 'Cancel'}
@@ -255,7 +276,7 @@ export function RoleFormDialog({ mode, role, onClose }: RoleFormDialogProps) {
             {!readOnly && (
               <Button
                 type="submit"
-                disabled={!!blocked}
+                disabled={!!blocked || busy}
                 loading={create.isPending || (update.isPending && !reviewing)}
                 data-testid="admin-role-form-save-btn"
               >
@@ -292,7 +313,10 @@ export function RoleFormDialog({ mode, role, onClose }: RoleFormDialogProps) {
               <Alert color="warning" data-testid="admin-role-sensitive-alert">
                 <Checkbox
                   checked={acknowledged}
-                  onChange={event => setAcknowledged(event.target.checked)}
+                  disabled={busy}
+                  onChange={event => {
+                    if (!writing.current) setAcknowledged(event.target.checked);
+                  }}
                   data-testid="admin-role-sensitive-confirm"
                   label={`I understand this gives ${pluralUsers(role.memberCount)} ${permissionLabels(sensitiveGranted)}.`}
                 />

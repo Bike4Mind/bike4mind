@@ -57,16 +57,9 @@ async function actsOnLocalPage(context: ToolContext): Promise<boolean> {
   return !current || isLocalUrl(current);
 }
 
-/**
- * Whether the page carries cookies the USER imported from their own Chrome.
- *
- * Reaching a site as the signed-in person is not the act that 'auto' and 'full' are a decision
- * about, so everything that touches such a page is asked about in every mode and keyed apart
- * from the same action on the same origin anonymously. See cookies/CookieImporter: a tool can
- * only read this flag, never set one.
- */
+/** Imported-cookie origins need explicit consent; standing consent covers later reads and actions. */
 function onUserSession(context: ToolContext, url: string): boolean {
-  return !!url && (context.browser?.usesImportedCookies(url) ?? false);
+  return !!url && !isLocalUrl(url) && (context.browser?.usesImportedCookies(url) ?? false);
 }
 
 /** Added to an approval the user has to answer themselves, whatever mode they set. */
@@ -80,7 +73,7 @@ function originOf(url: string): string {
   }
 }
 
-/** Shared by browser_navigate, browser_snapshot, browser_screenshot and a tab switch: one "always" covers all. */
+/** Opening a signed-in site: the one card for it, shared by browser_navigate and a new tab. */
 function readAsYouApproval(url: string, verb: string): ApprovalPrompt {
   return {
     detail: `${verb} ${url} as your signed-in ${new URL(url).hostname} session`,
@@ -112,10 +105,10 @@ function mayRead(context: ToolContext, url: string): boolean {
 }
 
 /** Drains the page's events too: they came from the page being withheld. */
-function withheld(page: BrowserPage, lead: string, url: string): string {
+function withheld(page: BrowserPage, url: string): string {
   page.drainEvents();
   return (
-    `${lead}\nThe page is now on ${originOf(url)}, a site the user is signed in to with cookies imported ` +
+    `The page is now on ${originOf(url)}, a site the user is signed in to with cookies imported ` +
     "from their own browser, so its content is not shown without the user's say-so. Call " +
     'browser_snapshot to read it, which asks them.'
   );
@@ -141,7 +134,7 @@ function withheldFrame(page: BrowserPage, url: string): string {
 
 /** Reading the open page as the signed-in user is asked about as opening it would have been. */
 const gatedRead: Pick<ToolDefinition, 'needsApproval' | 'approval'> = {
-  needsApproval: async (_input, context) => onUserSession(context, (await requireBrowser(context).page()).currentUrl()),
+  needsApproval: async (_input, context) => !mayRead(context, (await requireBrowser(context).page()).currentUrl()),
   approval: async (_input, context) => readAsYouApproval((await requireBrowser(context).page()).currentUrl(), 'Read'),
 };
 
@@ -153,20 +146,13 @@ async function actionApproval(
   const current = (await requireBrowser(context).page()).currentUrl();
   const origin = new URL(current).origin;
   const target = typeof input.ref === 'string' ? ` (element ${input.ref})` : '';
-  if (onUserSession(context, current)) {
-    return {
-      detail: `${verb} on ${origin}${target}, signed in as you`,
-      key: `browser-act-as-you:${origin}`,
-      ...AS_THE_USER,
-    };
-  }
+  if (!mayRead(context, current)) return readAsYouApproval(current, verb);
   return { detail: `${verb} on ${origin}${target}`, key: `browser-act:${origin}` };
 }
 
-/** True for a page that is neither a local dev server nor carrying the user's own session. */
+/** True for a page that is not a local dev server; only "Ask for approval" asks. */
 async function actionNeedsApproval(context: ToolContext): Promise<boolean> {
-  if (!(await actsOnLocalPage(context))) return true;
-  return onUserSession(context, (await requireBrowser(context).page()).currentUrl());
+  return !(await actsOnLocalPage(context));
 }
 
 const gatedAction = (verb: string): Pick<ToolDefinition, 'needsApproval' | 'approval'> => ({
@@ -174,37 +160,16 @@ const gatedAction = (verb: string): Pick<ToolDefinition, 'needsApproval' | 'appr
   approval: (input, context) => actionApproval(verb, input, context),
 });
 
-/**
- * Running a script on a page that is not the user's own dev server, which is asked about in
- * EVERY mode - 'full' included.
- *
- * The browser's cookie jar used to hold nothing but dev-server logins the agent had created
- * itself, and on that reading an ungated `browser_evaluate` was a script running against the
- * agent's own work. The pane's url bar ends that reading: the user can browse anywhere and sign
- * in by hand, in this jar, and a script in that page reads `document.cookie` and calls the
- * site's API as them - with the result going into the model's context and so to the provider.
- *
- * Keyed apart from the other actions on purpose. Clicking a button on a site is a thing the user
- * can see the shape of; "always allow" for that must not quietly also mean "and run whatever
- * JavaScript you like there".
- *
- * Gated on the origin the script would RUN in, rather than on whether this page has ever left a
- * local origin. Navigating back to localhost is not a way around it: a script in a localhost
- * page is in localhost's origin, so the same-origin policy is what stops it reading the other
- * site's cookies or responses, not this check. A sticky rule would ask about every later
- * `document.querySelector` on the dev server the agent is there to test, which is the kind of
- * friction that gets a gate switched off wholesale.
- */
+/** Anonymous or consented-origin scripts follow the mode; an unread imported origin still asks. */
 const gatedScript: Pick<ToolDefinition, 'needsApproval' | 'approval'> = {
   needsApproval: (_input, context) => actionNeedsApproval(context),
   async approval(_input, context) {
     const current = (await requireBrowser(context).page()).currentUrl();
+    if (!mayRead(context, current)) return readAsYouApproval(current, 'Run a script');
     const origin = new URL(current).origin;
     return {
       detail: `Run a script on ${origin}, with that site's cookies`,
-      key: `browser-script${onUserSession(context, current) ? '-as-you' : ''}:${origin}`,
-      askInAuto: true,
-      askInFull: true,
+      key: `browser-script:${origin}`,
     };
   },
 };
@@ -225,8 +190,10 @@ async function describePage(
   inView = false
 ): Promise<string> {
   await page.settle(SETTLE_MS);
+  if (!mayRead(context, page.currentUrl())) return withheld(page, page.currentUrl());
   const snap = inView ? await page.snapshot(maxChars, true) : await page.snapshot(maxChars);
-  if (!mayRead(context, snap.url)) return withheld(page, lead, snap.url);
+  if (!mayRead(context, snap.url)) return withheld(page, snap.url);
+  if (!mayRead(context, page.currentUrl())) return withheld(page, page.currentUrl());
   const header = `${lead}\nPage: ${snap.title || '(untitled)'} - ${snap.url}`;
   const note = snap.truncated
     ? '\n[Snapshot cut at the size limit. Use browser_evaluate to read a specific part of the page.]'
@@ -327,25 +294,24 @@ function newTabUrl(input: Record<string, unknown>): string {
   return typeof input.url === 'string' && input.url.trim() ? normalizeUrl(input.url) : '';
 }
 
-/** '' for an id that is not open, which `selectTab` then refuses. */
+/** The browser pane may contain a signed-in tab the model has never been allowed to read. */
 function selectedTabUrl(input: Record<string, unknown>, context: ToolContext): string {
-  const id = tabId(input);
   return (
     requireBrowser(context)
       .tabs()
-      .find(tab => tab.id === id)?.url ?? ''
+      .find(tab => tab.id === tabId(input))?.url ?? ''
   );
 }
 
-const tabName = (tab: BrowserTabInfo) => tab.title || (tab.url ? hostOf(tab.url) : 'New tab');
+const tabName = (tab: BrowserTabInfo, context: ToolContext) =>
+  mayRead(context, tab.url) ? tab.title || (tab.url ? hostOf(tab.url) : 'New tab') : originOf(tab.url);
 
-/** A signed-in tab's title and path are its content too: an inbox title carries the address and unread count. */
 function listTabs(context: ToolContext, tabs: readonly BrowserTabInfo[]): string {
   if (tabs.length === 0) return 'No tabs are open. browser_navigate or browser_tabs with action "new" opens one.';
   const lines = tabs.map(tab => {
     const shown = mayRead(context, tab.url)
       ? `${tab.title || '(untitled)'} - ${tab.url || '(no page yet)'}`
-      : `(signed in as the user; select it to read it, which asks them) - ${originOf(tab.url)}`;
+      : `(signed in as the user; select it to ask for access) - ${originOf(tab.url)}`;
     return `- tab ${tab.id}${tab.active ? ' (active)' : ''}: ${shown}`;
   });
   return `${tabs.length} of at most ${MAX_BROWSER_TABS} tabs open:\n${lines.join('\n')}`;
@@ -375,7 +341,7 @@ export const browserTabs: ToolDefinition = {
   },
   needsApproval(input, context) {
     const action = tabAction(input);
-    if (action === 'select') return onUserSession(context, selectedTabUrl(input, context));
+    if (action === 'select') return !mayRead(context, selectedTabUrl(input, context));
     if (action !== 'new' || !newTabUrl(input)) return false;
     return browserNavigate.needsApproval!({ url: newTabUrl(input) }, context);
   },
@@ -401,11 +367,11 @@ export const browserTabs: ToolDefinition = {
     const id = tabId(input);
     if (action === 'close') {
       const closed = await browser.closeTab(id);
-      context.report?.label(`Closed tab: ${tabName(closed)}`);
+      context.report?.label(`Closed tab: ${tabName(closed, context)}`);
       return `Closed tab ${id}.\n\n${listTabs(context, browser.tabs())}`;
     }
     const selected = await browser.selectTab(id);
-    context.report?.label(`Switched to tab: ${tabName(selected)}`);
+    context.report?.label(`Switched to tab: ${tabName(selected, context)}`);
     if (!selected.url) return `Switched to tab ${id}, which has no page yet.`;
     return onPage(context, page => describePage(context, page, SNAPSHOT_CHARS, `Switched to tab ${id}.`));
   },
@@ -445,7 +411,9 @@ export const browserClick: ToolDefinition = {
     const ref = String(input.ref ?? '').replace(/^\[|\]$/g, '');
     if (!ref) throw new Error('The "ref" argument is required.');
     return onPage(context, async page => {
+      if (!mayRead(context, page.currentUrl())) return withheld(page, page.currentUrl());
       const clicked = await page.click(ref);
+      if (!mayRead(context, page.currentUrl())) return withheld(page, page.currentUrl());
       context.report?.label(`Clicked ${clicked}`);
       return describePage(context, page, ACTION_SNAPSHOT_CHARS, `Clicked [${ref}] ${clicked}.`);
     });
@@ -474,7 +442,9 @@ export const browserType: ToolDefinition = {
     if (!ref) throw new Error('The "ref" argument is required.');
     const text = typeof input.text === 'string' ? input.text : String(input.text ?? '');
     return onPage(context, async page => {
+      if (!mayRead(context, page.currentUrl())) return withheld(page, page.currentUrl());
       const filled = await page.fill(ref, text);
+      if (!mayRead(context, page.currentUrl())) return withheld(page, page.currentUrl());
       if (input.submit === true) await page.press('Enter');
       context.report?.label(`Typed into [${ref}]`);
       return describePage(
@@ -502,6 +472,7 @@ export const browserPress: ToolDefinition = {
   async run(input, context) {
     const key = requireString(input, 'key');
     return onPage(context, async page => {
+      if (!mayRead(context, page.currentUrl())) return withheld(page, page.currentUrl());
       await page.press(key);
       return describePage(context, page, ACTION_SNAPSHOT_CHARS, `Pressed ${key}.`);
     });
@@ -565,7 +536,9 @@ export const browserScroll: ToolDefinition = {
     const target = scrollTarget(input);
     return onPage(context, async page => {
       if (!page.currentUrl()) throw new Error('No page is open yet. Call browser_navigate first.');
+      if (!mayRead(context, page.currentUrl())) return withheld(page, page.currentUrl());
       const outcome = await page.scroll(target);
+      if (!mayRead(context, page.currentUrl())) return withheld(page, page.currentUrl());
       let lead: string;
       if ('ref' in target) {
         context.report?.label(`Scrolled to ${outcome}`);
@@ -618,13 +591,14 @@ export const browserScreenshot: ToolDefinition = {
       if (!page.currentUrl()) throw new Error('No page is open yet. Call browser_navigate first.');
       await page.settle(SETTLE_MS);
       const before = page.currentUrl();
+      if (!mayRead(context, before)) return withheld(page, before);
       const framedBefore = unreadableFrame(context, page);
+      if (framedBefore) return withheldFrame(page, framedBefore);
       const bytes = await page.screenshot();
       const url = page.currentUrl();
-      if (!mayRead(context, before)) return withheld(page, 'Took no screenshot.', before);
-      if (!mayRead(context, url)) return withheld(page, 'Took no screenshot.', url);
-      const framed = framedBefore ?? unreadableFrame(context, page);
-      if (framed) return withheldFrame(page, framed);
+      if (!mayRead(context, url)) return withheld(page, url);
+      const framedAfter = unreadableFrame(context, page);
+      if (framedAfter) return withheldFrame(page, framedAfter);
       const caption = typeof input.caption === 'string' && input.caption.trim() ? input.caption.trim() : url;
       const kept = await browser.keepScreenshot(bytes, caption);
       if (kept) context.report?.media(kept);
@@ -665,14 +639,14 @@ export const browserEvaluate: ToolDefinition = {
     const expression = requireString(input, 'expression');
     return onPage(context, async page => {
       if (!page.currentUrl()) throw new Error('No page is open yet. Call browser_navigate first.');
+      if (!mayRead(context, page.currentUrl())) return withheld(page, page.currentUrl());
       const value = await page.evaluate(expression).catch((error: unknown) => {
         throw withNullHint(error);
       });
-      const rendered = value === undefined ? 'undefined' : JSON.stringify(value, null, 1);
-      // The value was computed in the origin the gate judged; only what the page did after can be elsewhere.
       const after = page.currentUrl();
-      const events = mayRead(context, after) ? eventsSection(page) : `\n\n${withheld(page, '', after).trim()}`;
-      return capOutput(`${rendered ?? String(value)}${events}`);
+      if (!mayRead(context, after)) return withheld(page, after);
+      const rendered = value === undefined ? 'undefined' : JSON.stringify(value, null, 1);
+      return capOutput(`${rendered ?? String(value)}${eventsSection(page)}`);
     });
   },
 };

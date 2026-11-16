@@ -1,10 +1,11 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ADMIN_ROLE_TEMPLATES } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 import AdminRolesTab from './AdminRolesTab';
+import { ADMIN_ROLES_QUERY_KEY } from '@client/app/hooks/data/adminRoles';
 
 const { getMock, postMock, patchMock, deleteMock } = vi.hoisted(() => ({
   getMock: vi.fn(),
@@ -51,6 +52,7 @@ function renderTab() {
       </CssVarsProvider>
     </QueryClientProvider>
   );
+  return queryClient;
 }
 
 beforeEach(() => {
@@ -302,5 +304,137 @@ describe('AdminRolesTab for a delegate', () => {
     renderTab();
     expect(await screen.findByText('No roles yet')).toBeInTheDocument();
     expect(screen.queryByTestId('admin-roles-create-btn')).not.toBeInTheDocument();
+  });
+});
+
+describe('AdminRolesTab pending writes', () => {
+  it.each(['create', 'rename'] as const)('holds the %s form and accepts only one write', async mode => {
+    const held = Promise.withResolvers<{ data: (typeof roles)[number] }>();
+    const request = mode === 'create' ? postMock : patchMock;
+    request.mockReturnValueOnce(held.promise);
+    renderTab();
+    await screen.findByTestId('admin-roles-row-' + SUPPORT_ID);
+    if (mode === 'create') {
+      fireEvent.click(screen.getByTestId('admin-roles-create-btn'));
+      fireEvent.click(await screen.findByTestId('admin-role-template-billing'));
+    } else {
+      await openRow(SUPPORT_ID);
+      fireEvent.change(await screen.findByTestId('admin-role-name-input'), { target: { value: 'Support team' } });
+    }
+    const dialog = screen.getByTestId('admin-role-form-dialog');
+    const form = dialog.querySelector('form');
+    expect(form).not.toBeNull();
+    act(() => {
+      fireEvent.submit(form!);
+      fireEvent.submit(form!);
+    });
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    const name = screen.getByTestId('admin-role-name-input');
+    expect(name).toBeDisabled();
+    expect(screen.getByTestId('admin-role-description-input')).toBeDisabled();
+    expect(permission('support:read')).toBeDisabled();
+    fireEvent.change(name, { target: { value: 'Late edit' } });
+    expect(name).toHaveValue(mode === 'create' ? 'Billing' : 'Support team');
+    if (mode === 'create') {
+      expect(screen.getByTestId('admin-role-template-billing')).toBeDisabled();
+    }
+    fireEvent.click(screen.getByTestId('admin-role-form-dialog-close-btn'));
+    fireEvent.click(screen.getByTestId('admin-role-form-cancel-btn'));
+    fireEvent.keyDown(dialog, { key: 'Escape', code: 'Escape' });
+    const backdrop = dialog.closest('.MuiModal-root')?.querySelector('.MuiModal-backdrop');
+    expect(backdrop).not.toBeNull();
+    fireEvent.click(backdrop!);
+    expect(dialog).toBeInTheDocument();
+    expect(request).toHaveBeenCalledTimes(1);
+    await act(async () => held.resolve({ data: roles[0] }));
+    await waitFor(() => expect(screen.queryByTestId('admin-role-form-dialog')).not.toBeInTheDocument());
+  });
+
+  it('keeps a refused rename draft and allows a retry', async () => {
+    const held = Promise.withResolvers<{ data: (typeof roles)[number] }>();
+    patchMock.mockReturnValueOnce(held.promise);
+    renderTab();
+    await openRow(SUPPORT_ID);
+    fireEvent.change(await screen.findByTestId('admin-role-name-input'), { target: { value: 'Support team' } });
+    fireEvent.click(screen.getByTestId('admin-role-form-save-btn'));
+    await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(1));
+    await act(async () => held.reject(new Error('Save refused')));
+    expect(await screen.findByTestId('admin-role-form-error')).toHaveTextContent('Save refused');
+    expect(screen.getByTestId('admin-role-name-input')).toHaveValue('Support team');
+    expect(screen.getByTestId('admin-role-name-input')).toBeEnabled();
+    fireEvent.click(screen.getByTestId('admin-role-form-save-btn'));
+    await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByTestId('admin-role-form-dialog')).not.toBeInTheDocument());
+  });
+
+  it.each(['resolve', 'reject'] as const)('ignores an old form response after true unmount: %s', async outcome => {
+    const held = Promise.withResolvers<{ data: (typeof roles)[number] }>();
+    patchMock.mockReturnValueOnce(held.promise);
+    const queryClient = renderTab();
+    await openRow(SUPPORT_ID);
+    fireEvent.change(await screen.findByTestId('admin-role-name-input'), { target: { value: 'Support team' } });
+    fireEvent.click(screen.getByTestId('admin-role-form-save-btn'));
+    await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(1));
+    getMock.mockResolvedValue({ data: { roles: [roles[1]] } });
+    act(() => queryClient.setQueryData(ADMIN_ROLES_QUERY_KEY, [roles[1]]));
+    await screen.findByTestId('admin-role-unavailable-dialog');
+    fireEvent.click(screen.getByTestId('admin-role-unavailable-close-btn'));
+    await openRow(BILLING_ID);
+    fireEvent.change(await screen.findByTestId('admin-role-name-input'), { target: { value: 'New billing draft' } });
+    await act(async () => {
+      if (outcome === 'resolve') held.resolve({ data: roles[0] });
+      else held.reject(new Error('Old request failed'));
+    });
+    await waitFor(() => expect(queryClient.isMutating()).toBe(0));
+    expect(screen.getByTestId('admin-role-form-dialog')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-role-name-input')).toHaveValue('New billing draft');
+    expect(screen.queryByTestId('admin-role-form-error')).not.toBeInTheDocument();
+  });
+});
+
+describe('AdminRolesTab refetched role lifetime', () => {
+  it.each(['edit', 'view', 'delete'] as const)('explains a vanished role while %s is open', async mode => {
+    if (mode === 'view') user.currentUser = { isAdmin: false, adminPermissions: ['support:read'] };
+    const queryClient = renderTab();
+    if (mode === 'delete') {
+      fireEvent.click(await screen.findByTestId('admin-roles-actions-' + SUPPORT_ID));
+      fireEvent.click(await screen.findByTestId('admin-roles-delete-' + SUPPORT_ID));
+      await screen.findByTestId('admin-role-delete-dialog');
+    } else {
+      await openRow(SUPPORT_ID);
+      await screen.findByTestId('admin-role-form-dialog');
+    }
+    act(() => queryClient.setQueryData(ADMIN_ROLES_QUERY_KEY, [roles[1]]));
+    const notice = await screen.findByTestId('admin-role-unavailable-dialog');
+    expect(notice).toHaveTextContent('deleted or is no longer available');
+    fireEvent.click(screen.getByTestId('admin-role-unavailable-close-btn'));
+    await waitFor(() => expect(screen.queryByTestId('admin-role-unavailable-dialog')).not.toBeInTheDocument());
+  });
+
+  it('preserves the open draft on a failed refetch', async () => {
+    const queryClient = renderTab();
+    await openRow(SUPPORT_ID);
+    fireEvent.change(await screen.findByTestId('admin-role-name-input'), { target: { value: 'Unsaved support' } });
+    getMock.mockRejectedValue(new Error('Refetch unavailable'));
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ADMIN_ROLES_QUERY_KEY });
+    });
+    expect(screen.getByTestId('admin-role-name-input')).toHaveValue('Unsaved support');
+    expect(screen.queryByTestId('admin-role-unavailable-dialog')).not.toBeInTheDocument();
+  });
+
+  it('closes its own successful delete without leaving an unavailable-role notice', async () => {
+    getMock.mockResolvedValueOnce({ data: { roles } }).mockResolvedValue({ data: { roles: [roles[0]] } });
+    const queryClient = renderTab();
+    fireEvent.click(await screen.findByTestId('admin-roles-actions-' + BILLING_ID));
+    fireEvent.click(await screen.findByTestId('admin-roles-delete-' + BILLING_ID));
+    fireEvent.change(await screen.findByTestId('admin-role-delete-dialog-typed-input'), {
+      target: { value: 'Billing' },
+    });
+    fireEvent.click(screen.getByTestId('admin-role-delete-dialog-confirm-btn'));
+    await waitFor(() => expect(deleteMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(queryClient.isMutating()).toBe(0));
+    expect(screen.queryByTestId('admin-role-delete-dialog')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('admin-role-unavailable-dialog')).not.toBeInTheDocument();
   });
 });

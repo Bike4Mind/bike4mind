@@ -3,7 +3,7 @@ import { Box, Button } from '@mui/joy';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization } from '@client/app/hooks/data/organizations';
-import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
+import { useGetSeatPlan, useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
 import { isCancellableSubscriptionStatus } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { getBrandName } from '@client/config/general';
 import { trackUpsell, type UpsellSurface } from '@client/app/utils/funnelEvents';
@@ -83,7 +83,7 @@ interface CreditOfferActionsProps {
 
 /** Which remediation the account gets; see CreditOfferActions for how it is decided. */
 export type CreditOfferKind =
-  { kind: 'org'; organizationId: string } | { kind: 'subscriber' } | { kind: 'unsubscribed' };
+  { kind: 'org'; organizationId: string } | { kind: 'pending' } | { kind: 'subscriber' } | { kind: 'unsubscribed' };
 
 /**
  * The actions for one kind of account, with no data of its own beyond the org lookup inside Ask
@@ -102,7 +102,7 @@ export function CreditOfferActionsView({
     return <AskAdminButton organizationId={account.organizationId} secondary={moment === 'low'} />;
   }
 
-  if (account.kind === 'subscriber') {
+  if (account.kind === 'subscriber' || account.kind === 'pending') {
     return (
       <Box data-testid="credit-offer-actions" sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
         <SessionCreditsButton label="Top up" secondary={moment === 'low'} onClick={trackClick(CREDIT_PACK)} />
@@ -128,26 +128,30 @@ export function CreditOfferActions({ moment, surface }: CreditOfferActionsProps 
   const selectedAccount = useSelectedAccount(s => s.selectedAccount);
   const isOrgAccount = !!selectedAccount && !selectedAccount.personal;
   const subscriptions = useGetSubscriptions({ enabled: !isOrgAccount });
-  // Same "has a plan" test CreditsModal uses; a subscriber is offered a top-up, never the plan they hold.
-  const hasPlan = (subscriptions.data ?? []).some(sub => isCancellableSubscriptionStatus(sub.status));
+  const seatPlan = useGetSeatPlan({ enabled: !isOrgAccount });
+  // A subscriber is offered a top-up, never the plan they hold; a Team seat counts as holding one.
+  const hasPlan =
+    (subscriptions.data ?? []).some(sub => isCancellableSubscriptionStatus(sub.status)) || !!seatPlan.data;
 
+  // Credits remain available while the lookups settle; a plan offer must wait until eligibility is known.
+  const accountResolved = isOrgAccount || (!subscriptions.isPending && !seatPlan.isLoading);
   const account: CreditOfferKind = isOrgAccount
     ? { kind: 'org', organizationId: selectedAccount.id }
-    : hasPlan
-      ? { kind: 'subscriber' }
-      : { kind: 'unsubscribed' };
-  // Wait for the subscription lookup, or a subscriber would first be counted as seeing the Pro offer.
-  const accountResolved = isOrgAccount || !subscriptions.isPending;
+    : !accountResolved
+      ? { kind: 'pending' }
+      : hasPlan
+        ? { kind: 'subscriber' }
+        : { kind: 'unsubscribed' };
 
   useEffect(() => {
     // Ask your admin sells nothing, so an org member's prompt is not an upsell impression.
-    if (!accountResolved || account.kind === 'org') return;
+    if (account.kind === 'pending' || account.kind === 'org') return;
     trackUpsell('impression', {
       surface,
       trigger: CREDIT_OFFER_TRIGGERS[moment],
       plan: account.kind === 'unsubscribed' ? PRO_PLAN : CREDIT_PACK,
     });
-  }, [accountResolved, account.kind, surface, moment]);
+  }, [account.kind, surface, moment]);
 
   return <CreditOfferActionsView moment={moment} surface={surface} account={account} />;
 }
