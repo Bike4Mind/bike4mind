@@ -68,11 +68,13 @@ describe('DataLakeLakePicker - the no-lake scope', () => {
     expect(screen.queryByTestId('datalake-lake-picker-count')).not.toBeInTheDocument();
   });
 
-  it('leaves the all-lakes row unselected, so the menu agrees with the trigger', () => {
+  it('leaves every lake unticked, so the menu agrees with the trigger', () => {
     renderPicker({ lakes, selectedLakeIds: [], noLakeScope: true });
     openMenu();
 
-    expect(screen.getByTestId('datalake-lake-picker-all')).not.toHaveClass(menuItemClasses.selected);
+    lakes.forEach(l =>
+      expect(screen.getByTestId(`datalake-lake-picker-lake-${l.id}`)).not.toHaveClass(menuItemClasses.selected)
+    );
   });
 });
 
@@ -83,25 +85,30 @@ describe('DataLakeLakePicker', () => {
       lakeFileCounts: { 'datalake:a': 128 },
       totalFileCount: 170,
     });
+    expect(screen.getByTestId('datalake-lake-picker-label')).toHaveTextContent('2 lakes, 170 files');
+    expect(screen.queryByTestId('datalake-lake-picker-count')).not.toBeInTheDocument();
     openMenu();
 
-    expect(screen.getByTestId('datalake-lake-picker-lake-count')).toHaveTextContent('2 lakes');
     expect(screen.getByTestId('datalake-lake-picker-lake-a')).toHaveTextContent('Research Corpus');
     expect(screen.getByTestId('datalake-lake-picker-lake-a')).toHaveTextContent('128');
-    expect(screen.getByTestId('datalake-lake-picker-all')).toHaveTextContent('170');
   });
 
-  it('selects a lake, and clears the scope from the all-lakes row', () => {
+  it('selects a lake, and returns to the all-lakes scope when the last one is unticked', () => {
     const onChange = vi.fn();
-    renderPicker({ onChange, lakes: [lake({ id: 'a', name: 'Research Corpus' })] });
+    const lakes = [lake({ id: 'a', name: 'Research Corpus' })];
+    const { unmount } = renderPicker({ onChange, lakes });
 
     openMenu();
     fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-a'));
     expect(onChange).toHaveBeenCalledWith(['a']);
+    unmount();
 
-    fireEvent.click(screen.getByTestId('datalake-lake-picker-all'));
+    renderPicker({ onChange, lakes, selectedLakeIds: ['a'] });
+    openMenu();
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-a'));
     // The empty set is the explicit all-lakes scope, not an absence of choice.
     expect(onChange).toHaveBeenLastCalledWith([]);
+    expect(screen.queryByTestId('datalake-lake-picker-all')).not.toBeInTheDocument();
   });
 
   it('adds to the selection rather than replacing it, so a second lake joins the first', () => {
@@ -203,27 +210,29 @@ describe('DataLakeLakePicker', () => {
     const trigger = screen.getByTestId('datalake-lake-picker-btn');
     expect(trigger).toHaveTextContent('Research Corpus');
     // The scoped lake's own count, not the all-lakes total.
-    expect(screen.getByTestId('datalake-lake-picker-count')).toHaveTextContent('128');
+    expect(screen.getByTestId('datalake-lake-picker-count')).toHaveTextContent('(128 files)');
   });
 
-  it('renders a retry instead of an empty list when the read failed, and withholds the count', () => {
+  it('renders a retry instead of an empty list when the read failed, and withholds the lake count', () => {
     const onRetry = vi.fn();
     // An empty list beside a "create your first lake" tree is exactly the lie #1645 removed.
     renderPicker({ isError: true, onRetry, lakes: undefined });
     openMenu();
 
     expect(screen.getByTestId('datalake-lake-picker-error')).toBeInTheDocument();
-    expect(screen.queryByTestId('datalake-lake-picker-lake-count')).not.toBeInTheDocument();
+    // The file total is its own figure; it is the lake count that is unknown here.
+    expect(screen.getByTestId('datalake-lake-picker-btn')).not.toHaveTextContent(/\d+ lakes?/);
     fireEvent.click(screen.getByTestId('datalake-lake-picker-retry-btn'));
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
-  it('withholds the count while loading, so it never reads as a confident zero', () => {
+  it('withholds the lake count while loading, so it never reads as a confident zero', () => {
     renderPicker({ isLoading: true, lakes: undefined });
     openMenu();
 
     expect(screen.getByTestId('datalake-lake-picker-loading')).toBeInTheDocument();
-    expect(screen.queryByTestId('datalake-lake-picker-lake-count')).not.toBeInTheDocument();
+    // The file total is its own figure; it is the lake count that is unknown here.
+    expect(screen.getByTestId('datalake-lake-picker-btn')).not.toHaveTextContent(/\d+ lakes?/);
   });
 
   it('marks a lake owned by someone else, so an admin cannot mistake it for their own', () => {
@@ -254,19 +263,17 @@ describe('DataLakeLakePicker', () => {
     expect(fallback.querySelector('title')).toBeNull();
   });
 
-  it('names the unit on file counts, so they never read as the footer lake count', () => {
+  it('names the unit on every count, so a file count never reads as a lake count', () => {
     renderPicker({
       lakes: [lake({ id: 'a', name: 'Mine' }), lake({ id: 'b', name: 'Also mine' })],
       lakeFileCounts: { 'datalake:a': 1 },
       totalFileCount: 255,
     });
 
-    expect(screen.getByTestId('datalake-lake-picker-count')).toHaveTextContent('255 files');
+    expect(screen.getByTestId('datalake-lake-picker-label')).toHaveTextContent('2 lakes, 255 files');
     openMenu();
-    expect(screen.getByTestId('datalake-lake-picker-all-count')).toHaveTextContent('255 files');
     expect(screen.getByTestId('datalake-lake-picker-group-own')).toHaveTextContent('files');
     expect(screen.getByLabelText('1 file')).toHaveTextContent('1');
-    expect(screen.getByTestId('datalake-lake-picker-lake-count')).toHaveTextContent('2 lakes');
   });
 
   it('groups lakes by owner, own first, then other owners by name, unresolved owners last', () => {
@@ -372,6 +379,16 @@ describe('DataLakeLakePicker', () => {
     expect(screen.getByTestId('datalake-lake-picker-search')).toBeInTheDocument();
   });
 
+  it('shows the filter box for a short list too when Create sits beside it', () => {
+    renderPicker({ lakes: [lake({ id: 'a', name: 'Mine' })], onCreate: vi.fn() });
+    openMenu();
+
+    expect(screen.getByTestId('datalake-lake-picker-search')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-lake-picker-create-btn').closest('li')).toBe(
+      screen.getByTestId('datalake-lake-picker-search').closest('li')
+    );
+  });
+
   it('offers Create and Discover from the lake list, the only home Discover has (#1943)', () => {
     const onCreate = vi.fn();
     const onDiscover = vi.fn();
@@ -380,10 +397,13 @@ describe('DataLakeLakePicker', () => {
     openMenu();
     fireEvent.click(screen.getByTestId('datalake-lake-picker-discover-btn'));
     expect(onDiscover).toHaveBeenCalledTimes(1);
+    // Icon buttons beside the filter, not rows: each closes the list itself.
+    expect(screen.queryByTestId('datalake-lake-picker-search')).not.toBeInTheDocument();
 
     openMenu();
     fireEvent.click(screen.getByTestId('datalake-lake-picker-create-btn'));
     expect(onCreate).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('datalake-lake-picker-search')).not.toBeInTheDocument();
   });
 
   it('hides Create and Discover when the caller may not use them', () => {
@@ -402,20 +422,6 @@ describe('DataLakeLakePicker', () => {
     // "No all data lakes yet" on the first-run path.
     expect(screen.getByTestId('datalake-lake-picker-menu')).toHaveTextContent('No data lakes yet');
     expect(screen.getByTestId('datalake-lake-picker-menu')).not.toHaveTextContent('No all data lakes yet');
-  });
-
-  it('counts the filtered rows against the total while a filter narrows the list', () => {
-    // 8 lakes is the threshold at which the filter box appears.
-    const lakes = Array.from({ length: 8 }, (_, i) => lake({ id: `l${i}`, name: `Lake ${i}` }));
-    renderPicker({ lakes });
-    openMenu();
-
-    expect(screen.getByTestId('datalake-lake-picker-lake-count')).toHaveTextContent('8 lakes');
-
-    fireEvent.change(screen.getByTestId('datalake-lake-picker-search'), { target: { value: 'Lake 3' } });
-
-    // A bare total under a single visible row reads as a stale count.
-    expect(screen.getByTestId('datalake-lake-picker-lake-count')).toHaveTextContent('1 of 8 lakes');
   });
 
   // menuItemListSx reaches these rows through a `[role="menuitem"]` selector and marks the
@@ -439,13 +445,9 @@ describe('DataLakeLakePicker', () => {
     renderPicker({ lakes });
     openMenu();
 
-    // Joy gives a ListItem inside a Menu role="none"; the filter box and the count chip ride on
-    // those, so the [role="menuitem"] rule never reaches them.
-    const chrome = [
-      screen.getByTestId('datalake-lake-picker-search').closest('li'),
-      screen.getByTestId('datalake-lake-picker-lake-count').closest('li'),
-    ];
-    chrome.forEach(el => expect(el).toHaveAttribute('role', 'none'));
+    // Joy gives a ListItem inside a Menu role="none"; the filter box rides on one, so the
+    // [role="menuitem"] rule never reaches it.
+    expect(screen.getByTestId('datalake-lake-picker-search').closest('li')).toHaveAttribute('role', 'none');
   });
 
   it('lets the trigger label inherit the button color, which the themed body-sm default does not', () => {

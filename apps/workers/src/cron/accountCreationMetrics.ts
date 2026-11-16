@@ -19,6 +19,8 @@ export function accountCreationQueries(since: Date, until: Date) {
   const externalAccount = { $or: [{ isSynthetic: { $ne: true } }, { isPersona: true }], isSystem: { $ne: true } };
   return {
     signups: { ...externalAccount, createdAt: { $gte: since, $lt: until } },
+    // Point-in-time snapshot of accounts in debt, not a window count. Banned and suspended accounts stay counted.
+    negativeBalances: { ...externalAccount, deletedAt: { $exists: false }, currentCredits: { $lt: 0 } },
     keys: [
       { $match: { createdAt: { $gte: since, $lt: until } } },
       { $addFields: { ownerId: { $convert: { input: '$userId', to: 'objectId', onError: null, onNull: null } } } },
@@ -49,13 +51,15 @@ export function accountCreationQueries(since: Date, until: Date) {
   };
 }
 
-export function accountCreationMetricData(time: string, signups: number, keys: number) {
-  const { since } = accountCreationWindow(time);
+export function accountCreationMetricData(time: string, signups: number, keys: number, negativeBalances: number) {
+  const { since, until } = accountCreationWindow(time);
   return [
-    { MetricName: 'SuccessfulSignups', Value: signups },
-    { MetricName: 'NewAccountApiKeys', Value: keys },
-    { MetricName: 'CensusCompleted', Value: 1 },
-  ].map(metric => ({ ...metric, Unit: 'Count' as const, Timestamp: since }));
+    { MetricName: 'SuccessfulSignups', Value: signups, Timestamp: since },
+    { MetricName: 'NewAccountApiKeys', Value: keys, Timestamp: since },
+    // Stamped with the hour boundary because it is read at ~:05, not accumulated over the window.
+    { MetricName: 'NegativeBalances', Value: negativeBalances, Timestamp: until },
+    { MetricName: 'CensusCompleted', Value: 1, Timestamp: since },
+  ].map(metric => ({ ...metric, Unit: 'Count' as const }));
 }
 
 export async function handler(event: ScheduledEvent): Promise<void> {
@@ -65,15 +69,16 @@ export async function handler(event: ScheduledEvent): Promise<void> {
     autoCreate: false,
   });
   const queries = accountCreationQueries(since, until);
-  const [signups, keys] = await Promise.all([
+  const [signups, keys, negativeBalances] = await Promise.all([
     User.countDocuments(queries.signups).maxTimeMS(60_000),
     UserApiKey.aggregate<{ count: number }>(queries.keys).option({ maxTimeMS: 60_000 }),
+    User.countDocuments(queries.negativeBalances).maxTimeMS(60_000),
   ]);
   // Maximum, not Sum, makes a redelivered scheduled window idempotent at the alarm boundary.
   await new CloudWatchClient({}).send(
     new PutMetricDataCommand({
       Namespace: `${Resource.App.name}/${Resource.App.stage}/AccountCreation`,
-      MetricData: accountCreationMetricData(event.time, signups, keys[0]?.count ?? 0),
+      MetricData: accountCreationMetricData(event.time, signups, keys[0]?.count ?? 0, negativeBalances),
     })
   );
 }

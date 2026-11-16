@@ -115,6 +115,13 @@ final class StudioInputsViewModelTests: XCTestCase {
     XCTAssertNotNil(model.paramsNote)
   }
 
+  func testBranchFromARetiredModelSaysWhichModelIsUsed() async throws {
+    let (model, _) = await make()
+    await model.apply(StudioSeed(kind: .video, prompt: "waves", inputs: [], modelID: "retired"))
+    XCTAssertEqual(model.selectedModel?.id, "text")
+    XCTAssertEqual(model.paramsNote, "The original model isn't available, so this uses \(textOnly.name).")
+  }
+
   func testEndFrameAloneCannotSubmitUntilAStartFrameIsAdded() async throws {
     let (model, _) = await make()
     await model.apply(try XCTUnwrap(TurnInto.seed(.arriveAt, from: image("end"))))

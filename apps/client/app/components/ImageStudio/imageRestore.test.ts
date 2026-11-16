@@ -7,6 +7,7 @@ const MODELS = [
   { id: ImageModels.GPT_IMAGE_2, name: 'GPT Image 2' },
   { id: ImageModels.GEMINI_3_1_FLASH_IMAGE, name: 'Nano Banana 2' },
   { id: ImageModels.FLUX_PRO_ULTRA, name: 'FLUX Ultra' },
+  { id: ImageModels.FLUX_KONTEXT_PRO, name: 'FLUX Kontext' },
 ];
 const CAT = 'a'.repeat(24);
 const DOG = 'b'.repeat(24);
@@ -69,13 +70,21 @@ describe('restoreImageForm', () => {
       `${ImageModels.GPT_IMAGE_1_5} is no longer one of your image models, so the default model is picked.`,
     ]);
 
-    // BFL models run in Create now, so a stored FLUX Ultra comes back as itself.
-    const flux = restoreImageForm(restoreOf({ model: ImageModels.FLUX_PRO_ULTRA, prompt: 'x' }), MODELS);
-    expect(flux.value.modelId).toBe(ImageModels.FLUX_PRO_ULTRA);
+    const editOnly = restoreImageForm(restoreOf({ model: ImageModels.FLUX_KONTEXT_PRO, prompt: 'x' }), MODELS);
+    expect(editOnly.value.modelId).toBeUndefined();
+    expect(editOnly.notices).toEqual([
+      expect.stringMatching(/^FLUX Kontext cannot run in Create \(.+\), so the default model is picked\.$/),
+    ]);
 
     expect(restoreImageForm(restoreOf({ prompt: 'x' }), MODELS).notices).toEqual([
       'The take did not record its model, so the default model is picked.',
     ]);
+  });
+
+  it('restores a listed FLUX model as itself', () => {
+    const flux = restoreImageForm(restoreOf({ model: ImageModels.FLUX_PRO_ULTRA, prompt: 'x' }), MODELS);
+    expect(flux.value.modelId).toBe(ImageModels.FLUX_PRO_ULTRA);
+    expect(flux.notices).toEqual([]);
   });
 
   it('brings an edit source back as a reference and names what Create cannot take', () => {

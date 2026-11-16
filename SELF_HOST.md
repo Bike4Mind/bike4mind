@@ -1405,7 +1405,8 @@ Covered shapes (inventory kind in brackets):
 - `sst.aws.Cron`, including shared Function `job` targets (`schedule`)
 - `sst.aws.Bus` `subscribe()` / `subscribeQueue()` (`event`)
 - bucket `notify()` notifications to a Function or queue (`notification`)
-- `aws.cloudwatch.EventRule` with its `aws.cloudwatch.EventTarget`s (`eventRule`)
+- `aws.cloudwatch.EventRule` with its `aws.cloudwatch.EventTarget`s (`eventRule`); a target that is a
+  not-covered storage resource such as a log group delivers to no function
 - `aws.ses.ReceiptRule` (`sesRule`)
 - `aws.cloudwatch.LogSubscriptionFilter` (`logSubscription`)
 - `aws.sns.TopicSubscription` and `sst.aws.SnsTopic` `subscribe()` (`snsSubscription`)
@@ -1422,7 +1423,8 @@ in `b4mContributions.infraResources`: their constructors are listed by name expr
 Not covered: every other `sst.aws.*` / `aws.<ns>.*` constructor must be listed, with a one-line
 reason, in the `NOT_COVERED` constant in `packages/scripts/src/selfhostParityInventory.ts`
 (HTTP Functions, web/router/WebSocket surfaces, CDN origin request policies, topics and buses whose subscriptions are
-covered, alarms, dashboards, outbound SES metric destinations, IAM policies, deploy-time invocations, network and WAF plumbing,
+covered, alarms, dashboards, outbound SES metric destinations, IAM policies, KMS keys and aliases, Secrets Manager secrets and
+their resource policies, log groups and their resource policies, deploy-time invocations, network and WAF plumbing,
 and infrastructure contributed by private overlays). A constructor that is neither covered nor
 listed fails the guard.
 
