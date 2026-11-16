@@ -9,12 +9,7 @@ vi.mock('aws-jwt-verify', () => ({
 
 import { SimpleJwksCache } from 'aws-jwt-verify/jwk';
 import { SimpleFetcher } from 'aws-jwt-verify/https';
-import {
-  verifyFederatedIdToken,
-  FederatedIdTokenError,
-  __clearVerifierCache,
-  JWKS_USER_AGENT,
-} from './verifyFederatedIdToken';
+import { verifyFederatedIdToken, FederatedIdTokenError, __clearVerifierCache } from './verifyFederatedIdToken';
 
 const IDP = {
   issuer: 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_pool',
@@ -73,8 +68,7 @@ describe('verifyFederatedIdToken', () => {
     expect(jwksCache).toBeInstanceOf(SimpleJwksCache);
     const fetcher = (jwksCache as unknown as { fetcher: SimpleFetcher }).fetcher;
     expect(fetcher).toBeInstanceOf(SimpleFetcher);
-    expect(fetcher.defaultRequestOptions.headers).toMatchObject({ 'User-Agent': JWKS_USER_AGENT });
-    expect(JWKS_USER_AGENT).not.toBe('');
+    expect(fetcher.defaultRequestOptions.headers).toMatchObject({ 'User-Agent': 'Lumina5-JwksFetcher/1.0' });
   });
 
   it('throws when signature/claim verification fails', async () => {

@@ -375,7 +375,7 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
   it('logs the verification cause on rejection without leaking it in the response', async () => {
     mockVerifyIdToken.mockRejectedValue(
       new FederatedIdTokenError('ID token failed signature/claim verification', {
-        cause: new Error('Status code is 403, expected 200'),
+        cause: new Error('jwks fetch failed: connection reset'),
       })
     );
     const { req, res } = makeReq();
@@ -383,8 +383,20 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
 
     expect(res._getStatusCode()).toBe(401);
     expect(res._getJSONData().error).toBe('invalid_grant');
-    expect(JSON.stringify(res._getJSONData())).not.toContain('403');
-    expect(req.logger.warn).toHaveBeenCalledWith(expect.stringContaining('Status code is 403'));
+    expect(JSON.stringify(res._getJSONData())).not.toContain('connection reset');
+    expect(req.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('(cause: jwks fetch failed: connection reset)')
+    );
+  });
+
+  it('logs a rejection with no cause without a cause suffix', async () => {
+    mockVerifyIdToken.mockRejectedValue(new FederatedIdTokenError('bad signature'));
+    const { req, res } = makeReq();
+    await handler(req as never, res as never);
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(req.logger.warn).toHaveBeenCalledWith(expect.not.stringContaining('(cause:'));
+    expect(req.logger.warn).toHaveBeenCalledWith(expect.stringContaining('bad signature'));
   });
 
   it('AC3: token subject resolves to no B4M user → 401 invalid_grant', async () => {
