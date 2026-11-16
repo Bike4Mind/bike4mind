@@ -1349,7 +1349,7 @@ async function runExecution(
     }
 
     // Spend freezes stop new spend, so this applies to every invocation of a run, aggregation wakes included.
-    // A failed read throws, so SQS retries the message rather than the run starting unchecked.
+    // A failed read throws into the outer catch, which fails the run and acks the message: it never starts unchecked.
     const readSpendFreezeDenial = createSpendFreezeDenialReader(
       { userId: execution.userId, organizationId: execution.organizationId, apiKeyId: execution.apiKeyId },
       spendFreezeReadDeps
@@ -4487,7 +4487,7 @@ async function processSubagentDispatch(
       });
     };
     // The child's own subject: its key, its billed org and, unless an org-billed key spends, its user. A failed
-    // read throws, so SQS retries the dispatch rather than the child running unchecked.
+    // read throws into the outer catch, which fails the child: it never runs unchecked.
     const readSpendFreezeDenial = createSpendFreezeDenialReader(
       { userId: child.userId, organizationId: child.organizationId, apiKeyId: child.apiKeyId },
       spendFreezeReadDeps

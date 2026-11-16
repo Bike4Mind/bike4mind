@@ -225,7 +225,7 @@ describe('stopSpendFrozenIteration', () => {
     expect(deps.markFailed).not.toHaveBeenCalled();
   });
 
-  it('propagates a failed freeze read so the message is retried rather than the run stopped', async () => {
+  it('propagates a failed freeze read to the caller instead of stopping the run itself', async () => {
     const deps = makeDeps();
 
     await expect(

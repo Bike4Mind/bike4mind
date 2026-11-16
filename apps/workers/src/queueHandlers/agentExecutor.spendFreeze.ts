@@ -19,7 +19,7 @@ export type SpendFreezeDenialDeps = {
  * Reads whether any scope the run spends under is frozen: the refusal message, or null when spend is allowed.
  * Always a live read (a freeze lands mid-run). The key's billing owner type is resolved once per reader, since
  * an org-billed key spends the organization's money and must not be stopped by a frozen creator. A failed read
- * propagates so the caller decides: the loop lets SQS retry, subagent checks fail closed.
+ * propagates so the caller decides: the run fails closed (the outer catch marks it failed and acks), like the account gate; subagent checks fail closed too.
  */
 export function createSpendFreezeDenialReader(
   run: SpendFreezeRun,
