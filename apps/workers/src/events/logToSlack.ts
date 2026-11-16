@@ -32,6 +32,14 @@ function generateSreFingerprint(errorMessage: string): string {
   return createHash('sha1').update(source).digest('hex');
 }
 
+function stripRequestPrefix(message: string): string {
+  return message.replace(/^[A-Z]+\s+[^\r\n]*?\s+(?:\u2192|->)\s+\d{3}:\s*/, '');
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
 export const ingest = async (event: CloudWatchLogsEvent, _context: Context) => {
   // Existing Slack notification, always runs first.
   // All errors (including ThrottlingException) route to SLACK_ERROR_REPORTING_WEBHOOK_URL.
@@ -86,18 +94,28 @@ export const ingest = async (event: CloudWatchLogsEvent, _context: Context) => {
       const rawMessage = parts.length > 1 ? parts[3] || line : line;
 
       // Try to parse structured JSON for richer metadata
-      let errorMessage = rawMessage;
+      let errorMessage = stripRequestPrefix(rawMessage);
+      let stackTrace = errorMessage;
       let functionName: string | undefined;
       try {
-        const parsed = JSON.parse(rawMessage);
-        errorMessage = parsed.message || parsed.errorMessage || rawMessage;
-        functionName = parsed.functionName;
+        const parsed = asRecord(JSON.parse(rawMessage));
+        const message = [parsed.message, parsed.errorMessage].find(
+          value => typeof value === 'string' && value.length > 0
+        );
+        errorMessage = typeof message === 'string' ? stripRequestPrefix(message) : '';
+        const error = asRecord(parsed.error);
+        const err = asRecord(parsed.err);
+        stackTrace = [errorMessage, parsed.stack, parsed.stackTrace, error.stack, err.stack]
+          .filter((value): value is string => typeof value === 'string' && value.length > 0)
+          .map(stripRequestPrefix)
+          .join('\n');
+        functionName = typeof parsed.functionName === 'string' ? parsed.functionName : undefined;
       } catch {
-        // Not JSON - use raw message as-is
+        // Unstructured logs retain their text after request-prefix normalization.
       }
 
       // Classify via heuristics
-      const classification = classifyError(rawMessage);
+      const classification = classifyError(stackTrace);
       if (classification === SreClassification.SKIP) {
         continue;
       }
@@ -111,7 +129,7 @@ export const ingest = async (event: CloudWatchLogsEvent, _context: Context) => {
         repoSlug: targetRepoSlug,
         classification,
         errorMessage,
-        stackTrace: rawMessage,
+        stackTrace,
         functionName,
         logGroup,
       };

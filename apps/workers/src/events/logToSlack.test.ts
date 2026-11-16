@@ -7,7 +7,6 @@ const mockSendToQueue = vi.fn();
 const mockGetSettingsValue = vi.fn();
 const mockGetConfiguredRepoSlugs = vi.fn();
 const mockResolveFullConfig = vi.fn();
-const mockClassifyError = vi.fn();
 const mockNotifyEventLogsToSlack = vi.fn();
 
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
@@ -43,10 +42,6 @@ vi.mock('@bike4mind/utils', () => ({
 vi.mock('@bike4mind/server-utils/services/liveopsFingerprint', () => ({
   extractErrorType: vi.fn(() => 'TypeError'),
   normalizeErrorMessage: vi.fn((m: string) => m),
-}));
-
-vi.mock('./logToSlackClassify', () => ({
-  classifyError: (...args: unknown[]) => mockClassifyError(...args),
 }));
 
 vi.mock('@bike4mind/common', () => ({
@@ -90,7 +85,6 @@ describe('logToSlack.ingest — SRE dispatch', () => {
       dryRun: false,
       sources: { cloudwatch: { enabled: true } },
     });
-    mockClassifyError.mockReturnValue('MEDIUM');
   });
 
   it('dispatches a classified CloudWatch error to sreJobQueue tagged jobType: analysis', async () => {
@@ -111,6 +105,7 @@ describe('logToSlack.ingest — SRE dispatch', () => {
     const fargateLine = JSON.stringify({
       severity: 'error',
       message: 'Drain window expired with in-flight quests',
+      stack: 'Error: Drain window expired\n    at drain (worker.ts:10:2)',
       functionName: 'chatCompletion',
     });
 
@@ -149,11 +144,88 @@ describe('logToSlack.ingest — SRE dispatch', () => {
   });
 
   it('does not dispatch when the error classifies as SKIP', async () => {
-    mockClassifyError.mockReturnValue('SKIP');
+    await ingest(makeCwEvent('Request aborted'), ctx);
+
+    expect(mockSendToQueue).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('ignores a request prefix when structured=%s', async structured => {
+    const message = 'GET /TypeError/ZodError \u2192 500: Not available';
+    const line = structured ? JSON.stringify({ message, path: '/ReferenceError' }) : message;
+
+    await ingest(makeCwEvent(line), ctx);
+
+    expect(mockSendToQueue).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['ZodError: invalid input', 'HIGH'],
+    ['TypeError: invalid value', 'MEDIUM'],
+  ])('dispatches %s with only message and stack context', async (message, classification) => {
+    const stack = `${message}\n    at handle (handler.ts:10:2)`;
+    const line = JSON.stringify({
+      message: `POST /request-metadata \u2192 500: ${message}`,
+      error: { stack, path: '/nested-metadata', headers: { note: 'nested context' } },
+      path: '/request-metadata',
+      headers: { note: 'request context' },
+    });
+
+    await ingest(makeCwEvent(line), ctx);
+
+    expect(mockSendToQueue).toHaveBeenCalledTimes(1);
+    const [, payload] = mockSendToQueue.mock.calls[0] as [string, Record<string, unknown>];
+    expect(payload).toMatchObject({ errorMessage: message, classification, stackTrace: `${message}\n${stack}` });
+    const fingerprint = payload.fingerprint;
+    mockSendToQueue.mockClear();
+    await ingest(makeCwEvent(JSON.stringify({ message, error: { stack } })), ctx);
+    expect(mockSendToQueue.mock.calls[0][1].fingerprint).toBe(fingerprint);
+  });
+
+  it.each([
+    { path: '/TypeError', message: 'Not available' },
+    { path: '/ZodError' },
+    { message: { detail: 'TypeError' }, stack: { detail: 'ZodError' } },
+    null,
+    ['TypeError'],
+    'TypeError',
+  ])('does not classify non-error JSON fields: %j', async value => {
+    await ingest(makeCwEvent(JSON.stringify(value)), ctx);
+
+    expect(mockSendToQueue).not.toHaveBeenCalled();
+  });
+
+  it.each(['stack', 'stackTrace'])('includes a top-level %s string', async field => {
+    const stack = 'ReferenceError: missing\n    at handle (handler.ts:10:2)';
+    await ingest(makeCwEvent(JSON.stringify({ errorMessage: 'Handler failed', [field]: stack })), ctx);
+
+    expect(mockSendToQueue).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        errorMessage: 'Handler failed',
+        classification: 'MEDIUM',
+        stackTrace: `Handler failed\n${stack}`,
+      })
+    );
+  });
+
+  it('includes a serialized err stack without its other fields', async () => {
+    const stack = 'TypeError: failed\n    at handle (handler.ts:10:2)';
+    await ingest(makeCwEvent(JSON.stringify({ message: 'Failed', err: { stack, path: '/metadata' } })), ctx);
+
+    expect(mockSendToQueue).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ stackTrace: `Failed\n${stack}`, classification: 'MEDIUM' })
+    );
+  });
+
+  it.each([undefined, {}, { repos: [] }])('does not dispatch with unset or empty config: %j', async config => {
+    mockGetSettingsValue.mockResolvedValue(config);
+    mockGetConfiguredRepoSlugs.mockReturnValue([]);
 
     await ingest(makeCwEvent(errorLine), ctx);
 
     expect(mockSendToQueue).not.toHaveBeenCalled();
+    expect(mockResolveFullConfig).not.toHaveBeenCalled();
   });
 
   it('does not dispatch when no repo has CloudWatch intake enabled', async () => {
