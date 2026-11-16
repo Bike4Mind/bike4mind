@@ -13,7 +13,7 @@ const OrgSeatSummary: FC<{ organizationId: string }> = ({ organizationId }) => {
   const activeSeats = currentSeats - pendingSeats;
 
   return (
-    <Card variant="outlined" data-testid="organization-members-seats-card" sx={{ mx: { xs: 0, sm: '20px' }, gap: 1.5 }}>
+    <Card variant="outlined" data-testid="organization-members-seats-card" sx={{ gap: 1.5 }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
         <Typography level="title-sm">Seats</Typography>
         {maxSeats === 0 ? (

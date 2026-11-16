@@ -87,8 +87,8 @@ const OrgBudgetAlertsCard: FC<{ organizationId: string }> = ({ organizationId })
   };
 
   return (
-    <Card variant="outlined" sx={{ mx: { xs: 0, sm: '20px' } }} data-testid="org-budget-alerts-card">
-      <Stack spacing={2} p={2}>
+    <Card variant="outlined" data-testid="org-budget-alerts-card">
+      <Stack spacing={2}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" gap={2}>
           <Stack spacing={0.5} sx={{ minWidth: 0 }}>
             <Typography level="title-sm">Budget alerts</Typography>

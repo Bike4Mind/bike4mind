@@ -241,7 +241,6 @@ const MemberRoster: FC<MemberRosterProps> = ({
     <Stack
       spacing={1.5}
       flexGrow={1}
-      mx={{ xs: 0, sm: '20px' }}
       minHeight={0}
       sx={{ minWidth: 0, containerType: 'inline-size', containerName: 'organization-members-roster' }}
     >
@@ -318,7 +317,11 @@ const MemberRoster: FC<MemberRosterProps> = ({
         </Stack>
       )}
 
-      <Stack className="organization-members-list-container" flexGrow={1} sx={{ overflow: 'auto' }} gap="10px">
+      <Stack
+        className="organization-members-list-container"
+        flexGrow={1}
+        sx={{ overflow: 'auto', border: '1px solid', borderColor: 'divider', borderRadius: 'lg' }}
+      >
         <Box
           className="organization-members-list-header"
           data-testid="organization-members-list-header"
@@ -332,7 +335,7 @@ const MemberRoster: FC<MemberRosterProps> = ({
             borderColor: 'divider',
             color: 'text.secondary',
             fontSize: '14px',
-            pb: '12px',
+            py: '10px',
             px: '16px',
           }}
         >

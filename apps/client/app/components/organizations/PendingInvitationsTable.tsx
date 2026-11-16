@@ -55,7 +55,7 @@ const PendingInvitationsTable: FC<PendingInvitationsTableProps> = ({
 
   if (isError) {
     return (
-      <Typography color="danger" data-testid="organization-pending-invites-error" mx={{ xs: 0, sm: '20px' }}>
+      <Typography color="danger" data-testid="organization-pending-invites-error">
         Pending invitations could not be loaded. Try again.
       </Typography>
     );
@@ -77,7 +77,7 @@ const PendingInvitationsTable: FC<PendingInvitationsTableProps> = ({
     });
 
   return (
-    <Card variant="outlined" data-testid="organization-pending-invites" sx={{ mx: { xs: 0, sm: '20px' } }}>
+    <Card variant="outlined" data-testid="organization-pending-invites">
       <Typography level="title-sm" startDecorator={<MailOutlineIcon />}>
         Pending invitations ({rows.length})
       </Typography>

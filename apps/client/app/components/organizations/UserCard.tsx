@@ -53,6 +53,23 @@ interface OrganizationUserCardProps {
   onToggleSelect?: () => void;
 }
 
+/** Rows are table rows inside MemberRoster's framed list: hairline between rows, no per-row card. */
+const rowSurface = {
+  borderBottom: '1px solid',
+  borderColor: 'divider',
+  '&:last-of-type': { borderBottom: 'none' },
+  '&:hover': { backgroundColor: 'background.level1' },
+} as const;
+
+const AVATAR_COLORS = ['primary', 'success', 'warning', 'neutral'] as const;
+
+/** A stable avatar colour per user, so a person keeps theirs across visits. */
+const avatarColorFor = (seed: string): (typeof AVATAR_COLORS)[number] => {
+  let hash = 0;
+  for (const character of seed) hash = (hash * 31 + character.charCodeAt(0)) | 0;
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+};
+
 const ExplainedDash: FC<{ explanation: string; testId: string }> = ({ explanation, testId }) => (
   <Tooltip title={explanation} size="sm">
     <Typography level="body-sm" component="span" sx={{ color: 'text.tertiary' }} data-testid={testId} tabIndex={0}>
@@ -165,6 +182,8 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
       size="sm"
       variant="soft"
       color={isOwner ? 'primary' : isManager ? 'success' : 'neutral'}
+      // The neutral soft fill is close to the surface in both themes; one step up keeps the chip visible.
+      sx={!isOwner && !isManager ? { bgcolor: 'neutral.softHoverBg' } : undefined}
       data-testid={`organization-user-card-${user.role}-chip`}
     >
       {t(`organization.roles.${user.role}`)}
@@ -260,7 +279,14 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   );
 
   const avatar = (
-    <Avatar className="organization-user-card-avatar" size="sm" variant="soft" src={avatarUrl}>
+    <Avatar
+      className="organization-user-card-avatar"
+      size="sm"
+      variant="solid"
+      color={avatarColorFor(user.id)}
+      src={avatarUrl}
+      sx={{ fontWeight: 600 }}
+    >
       {user.name.charAt(0).toUpperCase()}
     </Avatar>
   );
@@ -271,13 +297,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         className="organization-user-card-container"
         data-testid="organization-user-card"
         data-user-id={user.id}
-        sx={theme => ({
-          borderRadius: '8px',
-          border: '1px solid',
-          borderColor: 'divider',
-          backgroundColor: theme.palette.primary.softBg,
-          padding: '10px 12px',
-        })}
+        sx={{ ...rowSurface, padding: '8px 12px' }}
       >
         <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
           {selectCell}
@@ -317,14 +337,14 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
       className="organization-user-card-container"
       data-testid="organization-user-card"
       data-user-id={user.id}
-      sx={theme => ({
-        borderRadius: '8px',
+      sx={{
+        ...rowSurface,
         display: 'grid',
         gridTemplateColumns: `${selectable ? '32px ' : ''}minmax(0, 1fr) 48px`,
         gridTemplateAreas: selectable
           ? '"select name actions" ". email email" ". role role" ". credits credits" ". active active"'
           : '"name actions" "email email" "role role" "credits credits" "active active"',
-        rowGap: 1,
+        rowGap: 0.5,
         [ROSTER_TABLE_QUERY]: {
           gridTemplateColumns: rosterGridColumns(selectable),
           gridTemplateAreas: 'none',
@@ -332,13 +352,10 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         },
         columnGap: '12px',
         width: '100%',
-        border: '1px solid',
-        borderColor: 'divider',
-        backgroundColor: theme.palette.primary.softBg,
         alignItems: 'center',
-        padding: '12px 15px',
+        padding: '8px 16px',
         position: 'relative',
-      })}
+      }}
     >
       {selectCell}
       <Stack

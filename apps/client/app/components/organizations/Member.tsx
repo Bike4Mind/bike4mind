@@ -17,7 +17,7 @@ import { useShareDocument } from '@client/app/hooks/data/invites';
 import { useGetOrganizationUsers, useGetUsers } from '@client/app/hooks/data/user';
 import { canViewOrgBilling, OrganizationTabs } from '@client/app/routes/organizations/orgTabAccess';
 import { IGetUsersParams } from '@client/app/utils/userAPICalls';
-import { Box, Button, Card, Link, Stack, Typography } from '@mui/joy';
+import { Button, Link, Stack, Typography } from '@mui/joy';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import debounce from 'lodash/debounce';
@@ -161,6 +161,9 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
     !organization.personal &&
     isOrgOwnerOrCurrentAdmin({ id: currentUser.id, isAdmin: false }, organization);
 
+  // Mirrors OrganizationMfaPolicy's own gate, so the policies heading never shows over nothing.
+  const canManageMfa = !!currentUser && !organization.personal && isOrgOwnerOrCurrentAdmin(currentUser, organization);
+
   // Mirrors the owner-only gate on the manager route (organizationService.setOrganizationManager).
   const canManageManagers =
     !!currentUser && !organization.personal && isOrgOwnerOrPlatformAdmin(currentUser, organization);
@@ -262,33 +265,18 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
     [getInviteStatus]
   );
 
+  const showPolicies =
+    canManageCreditBudgets || organization.maxCreditsPerMember != null || canManageMfa || isOrgAlertRecipient;
+
+  // Regions follow the admin design guide: 24px between regions, 16px between cards, and no
+  // wrapper card around the tab (each section is its own card).
   return (
-    <Card
-      className="organization-members-container"
-      variant="outlined"
-      sx={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: { xs: '12px', sm: '20px' },
-        p: { xs: 1.5, sm: '20px' },
-        height: '100%',
-      }}
-    >
-      <OrgSeatSummary organizationId={organization.id} />
-
-      <MemberCreditBudgetCard organization={organization} canManage={canManageCreditBudgets} />
-      {canManageBudgetAlerts && <OrgBudgetAlertsCard organizationId={organization.id} />}
-      {isOrgAlertRecipient && <MyOrgNotificationPrefsCard organizationId={organization.id} />}
-      <OrganizationMfaPolicy
-        key={`${organization.id}:${organization.mfaPolicy?.required}:${organization.mfaPolicy?.graceEndsAt}`}
-        organization={organization}
-      />
-
-      {/* Add members */}
-      <Stack className="organization-members-search-container" spacing={1} mx={{ xs: 0, sm: '20px' }}>
-        <Box display="flex" gap="10px">
-          {canInviteMembers &&
-            (hasAvailableSeats ? (
+    <Stack spacing={3} data-testid="organization-members-tab" sx={{ minWidth: 0 }}>
+      <Stack spacing={2}>
+        <OrgSeatSummary organizationId={organization.id} />
+        {canInviteMembers && (
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap alignItems="center">
+            {hasAvailableSeats ? (
               <GenericAddItemsModal
                 title={t('organizations.modals.members.title', 'Add Members to Team')}
                 subtitle={t(
@@ -298,6 +286,7 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
                 buttonLabel={t('organizations.modals.members.button_label', 'Add Member')}
                 buttonIcon={<AddIcon />}
                 triggerTestId="organization-members-add-btn"
+                triggerSize="sm"
                 items={modalUsers}
                 selectedIds={selectedUserIds}
                 onSelectIds={ids => {
@@ -367,39 +356,39 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
                   )}
                 </Typography>
               </Stack>
-            ))}
-          {canInviteMembers && hasAvailableSeats && (
-            <Button
-              data-testid="organization-members-bulk-invite-btn"
-              size="sm"
-              variant="outlined"
-              startDecorator={<GroupAddIcon />}
-              onClick={() => setBulkInviteOpen(true)}
-            >
-              {t('organizations.modals.bulk_invite.button_label', 'Bulk invite')}
-            </Button>
-          )}
-          {bulkInviteOpen && (
-            <BulkInviteModal
-              organizationId={organization.id}
-              availableSeats={availableSeats}
-              canGrantAdmin={canGrantAdmin}
-              onDone={() => setBulkInviteOpen(false)}
-            />
-          )}
-        </Box>
+            )}
+            {hasAvailableSeats && (
+              <Button
+                data-testid="organization-members-bulk-invite-btn"
+                size="sm"
+                variant="outlined"
+                startDecorator={<GroupAddIcon />}
+                onClick={() => setBulkInviteOpen(true)}
+              >
+                {t('organizations.modals.bulk_invite.button_label', 'Bulk invite')}
+              </Button>
+            )}
+            {bulkInviteOpen && (
+              <BulkInviteModal
+                organizationId={organization.id}
+                availableSeats={availableSeats}
+                canGrantAdmin={canGrantAdmin}
+                onDone={() => setBulkInviteOpen(false)}
+              />
+            )}
+          </Stack>
+        )}
+        {canInviteMembers && <InviteLinksPanel organizationId={organization.id} isOwnerTier={canGrantAdmin} />}
+        <PendingInvitationsTable
+          organizationId={organization.id}
+          invites={pendingInvites}
+          isError={pendingInvitesError}
+          canManage={canInviteMembers}
+          canGrantAdmin={canGrantAdmin}
+          currentUserId={currentUser?.id}
+        />
       </Stack>
 
-      {canInviteMembers && <InviteLinksPanel organizationId={organization.id} isOwnerTier={canGrantAdmin} />}
-
-      <PendingInvitationsTable
-        organizationId={organization.id}
-        invites={pendingInvites}
-        isError={pendingInvitesError}
-        canManage={canInviteMembers}
-        canGrantAdmin={canGrantAdmin}
-        currentUserId={currentUser?.id}
-      />
       <MemberRoster
         organization={organization}
         members={members}
@@ -412,7 +401,22 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
         canManageCreditBudgets={canManageCreditBudgets}
         canManageManagers={canManageManagers}
       />
-    </Card>
+
+      {showPolicies && (
+        <Stack spacing={2} component="section" aria-labelledby="organization-members-policies-title">
+          <Typography id="organization-members-policies-title" level="title-md" component="h3">
+            Policies and alerts
+          </Typography>
+          <MemberCreditBudgetCard organization={organization} canManage={canManageCreditBudgets} />
+          <OrganizationMfaPolicy
+            key={`${organization.id}:${organization.mfaPolicy?.required}:${organization.mfaPolicy?.graceEndsAt}`}
+            organization={organization}
+          />
+          {canManageBudgetAlerts && <OrgBudgetAlertsCard organizationId={organization.id} />}
+          {isOrgAlertRecipient && <MyOrgNotificationPrefsCard organizationId={organization.id} />}
+        </Stack>
+      )}
+    </Stack>
   );
 };
 
