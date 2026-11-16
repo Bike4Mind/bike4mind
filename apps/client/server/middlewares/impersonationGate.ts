@@ -49,7 +49,7 @@ export function impersonationDecision(
   }
   if (/^\/api\/auth\/impersonation$/.test(path)) return 'allow';
   if (
-    /^\/api\/(auth|oauth|otc|admin|email|stripe|subscriptions|api-keys|user-api-keys|credits|websocket|google-drive|mcp|mcp-connections|mcp-servers|integrations|secret-rotations|cc-bridge|ai|chat|tools|agent-executions|deep-agent)(\/|$)/i.test(
+    /^\/api\/(auth|oauth|otc|admin|email|stripe|subscriptions|api-keys|user-api-keys|credits|websocket|google-drive|mcp|mcp-connections|mcp-servers|integrations|cc-bridge|ai|chat|tools|agent-executions|deep-agent)(\/|$)/i.test(
       path
     ) ||
     /^\/api\/users\/[^/]+\/(update|delete|loginAs|revoke-sessions|email-settings)$/i.test(path) ||
