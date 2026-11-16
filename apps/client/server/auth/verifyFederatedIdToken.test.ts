@@ -141,11 +141,14 @@ describe('verifyFederatedIdToken - B4M-issued ID token (subjectSource: sub)', ()
     const result = await verifyFederatedIdToken('tok', B4M_IDP);
 
     expect(result.b4mUserId).toBe('b4m-user-777');
-    expect(mockCreate).toHaveBeenCalledWith({
-      issuer: B4M_IDP.issuer,
-      audience: B4M_IDP.audience,
-      jwksUri: B4M_IDP.jwksUri,
-    });
+    expect(mockCreate).toHaveBeenCalledWith(
+      {
+        issuer: B4M_IDP.issuer,
+        audience: B4M_IDP.audience,
+        jwksUri: B4M_IDP.jwksUri,
+      },
+      expect.objectContaining({ jwksCache: expect.anything() })
+    );
   });
 
   it('accepts a refreshed, scope-limited id_token with no nonce (OIDC Core 12.2)', async () => {
