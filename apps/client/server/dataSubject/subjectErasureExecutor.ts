@@ -1,6 +1,6 @@
 import type { AdminErasureCollection } from '@bike4mind/common';
 import { mongoose } from '@bike4mind/database';
-import { findPersonalOrganizationIds } from '@bike4mind/server-utils/users/purgeAccountContent';
+import { findPersonalOrganizationIds, personalFilter } from '@bike4mind/server-utils/users/purgeAccountContent';
 import { DATA_HOLDER_REGISTRY } from './registry';
 import { valuesAt } from './documentPaths';
 import { DELETED_USER_NAME, DELETED_USER_OBJECT_ID, deletedUserValue } from './placeholder';
@@ -92,8 +92,9 @@ export class SubjectErasureExecutor {
 
   private async write(model: string, entries: readonly ErasureEntry[]): Promise<void> {
     const skipped = await this.skippedIds(model);
+    const workspaces = [...(await this.workspaceIds())];
     const operations = entries.flatMap(entry =>
-      skipped.has(String(entry.document._id)) ? [] : this.operationsFor(model, entry)
+      skipped.has(String(entry.document._id)) ? [] : this.operationsFor(model, entry, workspaces)
     );
     if (!this.parents.has(model)) return this.apply(model, operations);
     this.deferred.set(model, [...(this.deferred.get(model) ?? []), ...operations]);
@@ -113,19 +114,31 @@ export class SubjectErasureExecutor {
     const ids = new Set<string>();
     if (this.registry[model]?.kind === 'subject') ids.add(this.subject.userId);
     if (model === PERSONAL_WORKSPACE_MODEL) {
-      this.personalWorkspaces ??= findPersonalOrganizationIds(this.subject.userId).then(found => new Set(found));
-      for (const id of await this.personalWorkspaces) ids.add(id);
+      for (const id of await this.workspaceIds()) ids.add(id);
     }
     return ids;
   }
 
-  private operationsFor(model: string, { outcome, matched, document }: ErasureEntry): Operation[] {
+  private workspaceIds(): Promise<ReadonlySet<string>> {
+    this.personalWorkspaces ??= findPersonalOrganizationIds(this.subject.userId).then(found => new Set(found));
+    return this.personalWorkspaces;
+  }
+
+  private operationsFor(
+    model: string,
+    { outcome, matched, document }: ErasureEntry,
+    workspaces: readonly string[]
+  ): Operation[] {
     // Each write re-checks the match it was planned from, so a row reassigned since the read is left alone.
     const stillMatching = (references: readonly UserReference[]) => {
       // The values as read, not filterFor's forms: those miss a mixed-case stored email.
-      const clauses = references.flatMap(reference => {
+      const clauses = references.flatMap((reference): Plain[] => {
         const values = valuesAt(document, reference.path).filter(this.matcher.isSubject(reference));
-        return values.length > 0 ? [{ ...reference.where, [reference.path]: { $in: values } }] : [];
+        if (values.length === 0) return [];
+        const clause = { ...reference.where, [reference.path]: { $in: values } };
+        // A personal row moved into an organization since the read is no longer the person's to delete.
+        if (reference.scope !== 'personal') return [clause];
+        return [{ $and: [clause, personalFilter(this.subject.userId, workspaces, reference.path)] }];
       });
       return {
         _id: document._id,

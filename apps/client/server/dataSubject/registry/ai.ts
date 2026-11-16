@@ -195,7 +195,10 @@ export const aiHolders = {
   },
   LatticeModel: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+    ],
     // A list of attribute names to group by, not people.
     unrelatedPaths: ['views.views.config.grouping.groupBy'],
   },

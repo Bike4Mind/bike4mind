@@ -60,6 +60,7 @@ async function insert(model: string, doc: Record<string, unknown>) {
 const TEAM_SCOPED_MODELS = [
   Session.modelName,
   'AgentExecution',
+  'LatticeModel',
   'QuestExternalLink',
   'ResearchData',
   'ResearchTask',

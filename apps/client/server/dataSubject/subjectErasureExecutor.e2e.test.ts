@@ -36,6 +36,7 @@ const Page = mongoose.model(
 );
 const Ledger = mongoose.model('DsxLedger', new Schema({ ownerId: ObjectId, campaign: String, watcherIds: [ObjectId] }));
 const Organization = mongoose.model('Organization');
+const Draft = mongoose.model('DsxDraft', new Schema({ userId: String, organizationId: String }));
 
 const retention = { expiresBy: 'policy', years: 7, from: 'the transaction date' } as const;
 
@@ -263,6 +264,45 @@ describe('SubjectErasureExecutor', () => {
 
     expect(await Note.collection.findOne({ _id: note._id })).toMatchObject({ ownerId: other._id });
     expect(await Event.collection.findOne({ _id: event._id })).toMatchObject({ actorId: other._id, actorName: 'Me' });
+  });
+
+  it('leaves a personal row moved into an organization between the read and the write', async () => {
+    const { me, subject } = await seedPerson();
+    const moved = await Draft.create({ userId: me.id });
+    const stayed = await Draft.create({ userId: me.id });
+    const team = new mongoose.Types.ObjectId().toString();
+    const personalRegistry: DataHolderRegistry = {
+      DsxPerson: registry.DsxPerson,
+      DsxDraft: {
+        kind: 'holder',
+        references: [
+          { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+          { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+        ],
+      },
+    };
+    const collections = SubjectErasurePlan.prototype.collections;
+    const spy = vi.spyOn(SubjectErasurePlan.prototype, 'collections').mockImplementation(function (
+      this: SubjectErasurePlan,
+      checkpoint,
+      sink
+    ) {
+      return collections.call(this, checkpoint, async (model, entries) => {
+        if (model === 'DsxDraft') {
+          expect(entries.map(({ outcome }) => outcome)).toEqual(['deleted', 'deleted']);
+          await Draft.collection.updateOne({ _id: moved._id }, { $set: { organizationId: team } });
+        }
+        await sink?.(model, entries);
+      });
+    });
+    try {
+      await new SubjectErasureExecutor(subject, noLease, personalRegistry).run();
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(await Draft.collection.findOne({ _id: moved._id })).toMatchObject({ userId: me.id, organizationId: team });
+    expect(await Draft.collection.countDocuments({ _id: stayed._id })).toBe(0);
   });
 
   it('changes nothing on a second run', async () => {

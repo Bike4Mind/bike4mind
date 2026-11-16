@@ -132,15 +132,20 @@ describe('account purge reconciliation', () => {
     ]);
   });
 
-  it.each(['SessionModel', 'AgentExecution', 'QuestExternalLink', 'ResearchData', 'ResearchTask', 'WorkItem'] as const)(
-    'deletes only a personal %s and anonymizes the owner of an organization one',
-    model => {
-      const holder = DATA_HOLDER_REGISTRY[model];
-      if (holder.kind !== 'holder') throw new Error(`${model} must be a holder`);
-      expect(holder.references.filter(reference => reference.path === 'userId')).toEqual([
-        { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
-        { path: 'userId', matchBy: 'userId', action: 'anonymize' },
-      ]);
-    }
-  );
+  it.each([
+    'SessionModel',
+    'AgentExecution',
+    'LatticeModel',
+    'QuestExternalLink',
+    'ResearchData',
+    'ResearchTask',
+    'WorkItem',
+  ] as const)('deletes only a personal %s and anonymizes the owner of an organization one', model => {
+    const holder = DATA_HOLDER_REGISTRY[model];
+    if (holder.kind !== 'holder') throw new Error(`${model} must be a holder`);
+    expect(holder.references.filter(reference => reference.path === 'userId')).toEqual([
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+    ]);
+  });
 });
