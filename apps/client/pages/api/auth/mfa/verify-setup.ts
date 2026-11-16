@@ -4,6 +4,7 @@ import { mfaService } from '@bike4mind/services';
 import { userRepository, passkeyCredentialRepository } from '@bike4mind/database';
 import { readSignInOrigin } from '@server/auth/signInSecondFactor';
 import { completeMfaEnrollment } from '@server/auth/completeMfaEnrollment';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { APP_ENROLLMENT_REFUSAL, refuseAppEnrollmentBeforeSecondFactor } from '@server/auth/appEnrollment';
 import { redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
@@ -71,7 +72,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
         );
       }
 
-      let setupBody: unknown;
+      let setupBody: { success: boolean; accessToken: string };
+      let enrolledUser: Awaited<ReturnType<typeof mfaService.verifyMFASetup>>['user'];
       try {
         // verifyMFASetup clears any failed-attempt/lockout state as part of its single
         // secret-preserving write - a separate clear here (built from the not-+selected
@@ -79,11 +81,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
         const result = await mfaService.verifyMFASetup(freshUser, cleanToken, userRepository);
         const tokens = await completeMfaEnrollment(req, res, freshUser);
 
-        setupBody = {
-          success: result.success,
-          ...tokens,
-          user: redactUserSecretsForSelf(result.user),
-        };
+        enrolledUser = result.user;
+        setupBody = { success: result.success, ...tokens };
       } catch (error: unknown) {
         // A code checked by mfaService was counted before it was compared; anything else is counted now.
         const updatedUser = await mfaService.recordFailedMfaAttempt(error, freshUser.id, userRepository);
@@ -106,9 +105,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
         });
       }
 
-      // Outside the try: a response-boundary failure is our bug and must not be booked as a
-      // failed MFA attempt by the catch above.
-      return respond(res, verifySetupResponseSchema, setupBody);
+      // Outside the try: a response-boundary or role-lookup failure is our bug and must not be
+      // booked as a failed MFA attempt by the catch above.
+      return respond(res, verifySetupResponseSchema, {
+        ...setupBody,
+        user: redactUserSecretsForSelf(await resolveRoleAdminPermissions(enrolledUser)),
+      });
     })
   );
 
