@@ -1,5 +1,5 @@
 /* eslint-disable react-hooks/rules-of-hooks */
-import { test as base, expect, type Browser, type Page } from '@playwright/test';
+import { test as base, expect, type Browser, type BrowserContextOptions, type Page } from '@playwright/test';
 import { TIMEOUTS } from './constants';
 import { ConsoleTracker } from './helpers/console-tracker';
 import { LoginPage } from './pages/LoginPage';
@@ -151,9 +151,10 @@ async function prepareAppPage(page: Page, getAuth: () => SpecAuth | null): Promi
 export async function openPageAs(
   browser: Browser,
   baseURL: string | undefined,
-  auth: SpecAuth
+  auth: SpecAuth,
+  contextOptions: BrowserContextOptions = {}
 ): Promise<{ page: Page; close: () => Promise<void> }> {
-  const context = await browser.newContext({ baseURL });
+  const context = await browser.newContext({ ...contextOptions, baseURL });
   const page = await context.newPage();
   await prepareAppPage(page, () => auth);
   return { page, close: () => context.close() };
