@@ -19,7 +19,7 @@
 #
 # Usage: check-no-account-ids.sh [--staged]
 #   (no flag)  every tracked and untracked, non-ignored file under SCAN_DIRS (CI runs this)
-#   --staged   only the staged copies of staged files (the pre-commit hook runs this)
+#   --staged   only the files staged for commit, read from the working tree (the pre-commit hook runs this)
 
 set -euo pipefail
 
@@ -41,8 +41,8 @@ EXCLUDE_FILES=('*.test.ts' '*.test.tsx' '*.spec.ts' '*.spec.tsx' '*.test.js' '*.
 
 EXCLUDE_DIRS=(node_modules dist build .next .turbo coverage __tests__ seeders out)
 
-# The same scope as git pathspecs, so git grep reads the index instead of walking every build
-# artifact on disk (a full filesystem walk took over a minute in a built worktree).
+# The same scope as git pathspecs, so git lists files from the index instead of grep walking every
+# build artifact on disk (a full filesystem walk took over a minute in a built worktree).
 PATHSPECS=()
 for dir in "${SCAN_DIRS[@]}"; do
   for ext in "${EXTENSIONS[@]}"; do PATHSPECS+=(":(glob)$dir/**/*.$ext"); done
@@ -109,7 +109,8 @@ if [ "$STAGED" = true ]; then
 else
   list_files() { git ls-files --cached --others --exclude-standard -z -- "${PATHSPECS[@]}"; }
 fi
-# grep exits 1 on no match; anything above that is a real failure and must stay loud.
+# grep exits 1 on no match; anything above that is a real failure and must stay loud. xargs folds
+# every 1-125 grep exit into 123, so a per-file read error only surfaces on stderr.
 scan_status=0
 raw_findings=$(list_files | xargs -0 grep -HnE -e "$ALWAYS_PATTERN" -e "$FALLBACK_PATTERN" --) || scan_status=$?
 if [ "$scan_status" -gt 1 ] && [ "$scan_status" -ne 123 ]; then
