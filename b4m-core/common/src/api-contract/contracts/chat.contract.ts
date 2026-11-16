@@ -11,6 +11,7 @@ import {
   ChatWaitUnprocessableErrorSchema,
   ChatWaitUpstreamErrorSchema,
   ApiErrorSchema,
+  ChatForbiddenErrorSchema,
 } from '../../schemas/chat';
 
 /**
@@ -129,6 +130,14 @@ export const chatContract = defineEndpoint({
         'The request was rejected before a turn was created: a supplied `model` is unknown, disabled ' +
         'or not a chat model; or no usable default chat model is configured and none was supplied.',
       schema: ApiErrorSchema,
+    },
+    403: {
+      description:
+        'The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), ' +
+        'a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), ' +
+        'the caller\'s organization policy does not allow the model (`errorCode: "org_model_not_allowed"`), or an API-key ' +
+        'caller named a built-in tool the organization does not allow (`errorCode: "org_tool_not_allowed"`).',
+      schema: ChatForbiddenErrorSchema,
     },
     404: { description: 'No notebook/session exists to attach the message to.', schema: ApiErrorSchema },
     422: {

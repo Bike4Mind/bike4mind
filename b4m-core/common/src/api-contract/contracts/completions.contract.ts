@@ -5,6 +5,7 @@ import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 import { CompletionRequestSchema, CompletionStreamEventSchema } from '../../schemas/cliCompletions';
 import {
   ApiErrorSchema,
+  ModelPolicyForbiddenErrorSchema,
   InsufficientCreditsErrorSchema,
   ProviderNotConfiguredErrorSchema,
   CompletionsBadRequestErrorSchema,
@@ -19,8 +20,8 @@ import {
  * resolveContractAuth, but owns the stream itself. See the api-contract README:
  * an SSE transport adapter is deferred until a second streaming endpoint exists.
  *
- * 401, the scope 403 and 405 are injected by registerContract; 405 cannot be declared
- * here because it is outside the conventions' status table.
+ * 401 and 405 are injected by registerContract; 405 cannot be declared here because
+ * it is outside the conventions' status table.
  */
 export const createCompletionContract = defineEndpoint({
   method: 'post',
@@ -112,6 +113,13 @@ export const createCompletionContract = defineEndpoint({
         'here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and ' +
         '`unknown_tool_reference` (a changed tool not in `tools`).',
       schema: CompletionsBadRequestErrorSchema,
+    },
+    403: {
+      description:
+        'The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), ' +
+        'a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), ' +
+        'or the caller\'s organization policy does not allow the model (`errorCode: "org_model_not_allowed"`).',
+      schema: ModelPolicyForbiddenErrorSchema,
     },
     404: {
       description:
