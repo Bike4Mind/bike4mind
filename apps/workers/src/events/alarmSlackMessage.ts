@@ -31,8 +31,8 @@ export type AlarmCategory = 'cost' | 'abuse' | 'jobs' | 'infra' | 'security';
 
 export const ALARM_CATEGORIES: readonly AlarmCategory[] = ['cost', 'abuse', 'jobs', 'infra', 'security'];
 
-/** Extra data the relay loads before posting; see youngAccountSpendDetail.ts. */
-export type AlarmDetailKind = 'young-account-spend';
+/** Extra data the relay loads before posting; see youngAccountSpendDetail.ts and providerSpendDetail.ts. */
+export type AlarmDetailKind = 'young-account-spend' | 'provider-spend';
 
 export type AlarmLinkKey =
   | 'ai-advisory'
@@ -67,6 +67,8 @@ export interface AlarmCatalogEntry {
   linkPaths?: Partial<Record<AlarmLinkKey, string>>;
   /** Data the relay fetches for the breaching window and passes in as FormatOptions.details. */
   detail?: AlarmDetailKind;
+  /** Who triages it and what the other on-call does; defaults to CATEGORY_OWNER for the category. */
+  owner?: string;
 }
 
 export interface FormatOptions {
@@ -111,6 +113,9 @@ const SIGNUP_ACTION =
   'Check the admin signup activity for the last hour and the WAF block list. If the senders are bots, block their IPs or email domains.';
 const SIGNUP_LINKS: AlarmLinkKey[] = ['signup-activity', 'waf-block-list'];
 const BLOCKER_LOG_ACTION = 'Check the blocker Lambda log and its dead-letter queue.';
+/** One rule for the ledger spend alarms, read against the breakdown the provider-spend detail adds. */
+const LEDGER_SPEND_DECISION =
+  'Read the breakdown above. If accounts under 7 days old carry little of it, the young-account spend alarm is quiet, and the spend sits with established, paying or internal accounts, it is heavy use: acknowledge in this thread and move on. Escalate to the abuse owner, and suspend suspicious accounts from their admin pages, when new accounts carry a third or more of it, the young-account spend alarm is red too, or this stays red for 2 hours or more. One account with many calls on one model is often a runaway agent: check Agent executions.';
 
 export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'signup-code-send-rate': {
@@ -439,36 +444,49 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     links: ['signup-activity'],
   },
   'llm-spend-rate': {
-    title: 'AI provider spend is spiking',
+    title: 'AI spend at {provider} is spiking',
     level: 'warn',
     category: 'abuse',
     unit: 'USD',
     meaning:
-      'Estimated spend at one provider in five minutes is at or above the ceiling. A runaway agent or a credit farm are the usual causes.',
-    action:
-      'Open the LLM spend dashboard for the provider and model, then check the agent executions and signup activity.',
+      'Estimated spend at {provider} in five minutes is at or above the burst ceiling. A runaway agent, a credit farm or one heavy user are the usual causes.',
+    action: LEDGER_SPEND_DECISION,
     links: ['agent-executions', 'signup-activity'],
+    detail: 'provider-spend',
+  },
+  'llm-spend-hourly-warn': {
+    title: 'AI spend at {provider} is higher than usual',
+    level: 'warn',
+    category: 'abuse',
+    unit: 'USD',
+    meaning:
+      'Estimated spend at {provider} over one hour is at or above the warn line. This is the heads-up tier; the page tier is the llm-spend-hourly alarm at a higher line. Heavy use by an established account crosses this now and then.',
+    action: `${LEDGER_SPEND_DECISION} This tier only pages when spend reaches the higher line.`,
+    links: ['agent-executions', 'signup-activity'],
+    detail: 'provider-spend',
   },
   'llm-spend-hourly': {
-    title: 'AI provider spend is running hot',
+    title: 'AI spend at {provider} is running hot',
     level: 'page',
     category: 'abuse',
     unit: 'USD',
     meaning:
-      'Estimated spend at one provider over the last hour is at or above the ceiling. A sustained drain from a credit farm, a stolen card, or a runaway agent are the usual causes.',
-    action:
-      'Open the LLM spend dashboard for the provider and top models, check the young-account spend post in LiveOps, then review signup activity and the WAF block list.',
+      'Estimated spend at {provider} over one hour is at or above the page line, well past the warn line. A credit farm, a stolen card, a runaway agent or an unusually heavy paying account are the usual causes.',
+    action: LEDGER_SPEND_DECISION,
     links: ['agent-executions', 'signup-activity', 'waf-block-list'],
+    detail: 'provider-spend',
   },
   'provider-reported-spend-hourly': {
-    title: 'A provider reports unusual AI spend',
+    title: 'Unusual AI spend reported by {provider}',
     level: 'page',
     category: 'cost',
     unit: 'USD',
     meaning:
-      "The provider's own usage report for the last hour, priced with our model rates, is at or above the ceiling. This counts every call billed to the organization, including ones that never reached our ledger.",
+      "{provider}'s own usage report for the last hour, priced with our model rates, is at or above the ceiling. This counts every call billed to the organization, including ones that never reached our ledger.",
     action:
-      'Open the LLM spend dashboard and the provider console usage page for the top models, then check the young-account spend post, signup activity and the WAF block list.',
+      'Compare with the ledger alarms for {provider} (AI spend at {provider} is running hot, or higher than usual). If one of them is red too, the spend went through the app: follow that alarm and its breakdown. If only this one is red, the spend did not pass through our ledger: open the provider console usage page, group by API key, and if a key you do not recognise is spending, rotate it. A one-hour blip that clears on the next report is usually a report lag; acknowledge it.',
+    owner:
+      'Owner: the abuse/LiveOps owner triages this in the thread. Devops: no infrastructure action unless the provider console shows an unknown key spending, which is a key rotation.',
     links: ['agent-executions', 'signup-activity', 'waf-block-list'],
   },
   'provider-usage-poll-errors': {
@@ -583,6 +601,46 @@ export function dlqCatalogEntry(suffix: string): AlarmCatalogEntry | undefined {
 export const DEFAULT_ALARM_LEVEL: AlarmLevel = 'warn';
 export const DEFAULT_ALARM_CATEGORY: AlarmCategory = 'infra';
 
+/**
+ * Who a category's alarms belong to, so whoever the page reaches can tell whether it is theirs.
+ * An entry's own owner (or handoff) replaces it.
+ */
+export const CATEGORY_OWNER: Partial<Record<AlarmCategory, string>> = {
+  abuse:
+    'Owner: the abuse/LiveOps owner triages this in the thread. Devops: no infrastructure action is needed; leave it to them unless they ask, or it stays red for 2 hours or more with nobody on it.',
+};
+
+/** Must stay in sync with LLM_SPEND_PROVIDERS in infra/llmSpend.ts and the provider-reported alarms. */
+export const ALARM_PROVIDERS = ['anthropic', 'openai', 'bedrock', 'google', 'other'] as const;
+export type AlarmProvider = (typeof ALARM_PROVIDERS)[number];
+
+const PROVIDER_LABELS: Record<AlarmProvider, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  bedrock: 'Bedrock',
+  google: 'Google',
+  other: 'other providers',
+};
+const UNKNOWN_PROVIDER_LABEL = 'an AI provider';
+
+const isAlarmProvider = (value: string | undefined): value is AlarmProvider =>
+  (ALARM_PROVIDERS as readonly string[]).includes(value ?? '');
+
+/** The provider a per-provider alarm watches: its Provider dimension, else the name's last segment. */
+export function alarmProvider(alarm: CloudWatchAlarmPayload): AlarmProvider | undefined {
+  const dimension = alarm.Trigger?.Dimensions?.find(d => d.name === 'Provider')?.value;
+  if (isAlarmProvider(dimension)) return dimension;
+  const last = /-([a-z]+)$/.exec(alarm.AlarmName ?? '')?.[1];
+  return isAlarmProvider(last) ? last : undefined;
+}
+
+/** Fills the {provider} placeholder; a sentence that now opens with the fallback is capitalised. */
+function fillProvider(text: string, label: string): string {
+  if (!text.includes('{provider}')) return text;
+  const filled = text.replace(/\{provider\}/g, label);
+  return filled.charAt(0).toUpperCase() + filled.slice(1);
+}
+
 const COLOR = {
   page: '#E01E5A',
   warn: '#ECB22E',
@@ -689,6 +747,8 @@ export type ParsedReason =
       /** Epoch ms of the newest and oldest breaching datapoint windows. */
       latestStart: number;
       earliestStart: number;
+      /** Breaching datapoints the reason lists. */
+      datapoints: number;
       period?: number;
     }
   | { kind: 'missing'; minutes?: number }
@@ -720,6 +780,7 @@ export function parseReason(alarm: CloudWatchAlarmPayload): ParsedReason {
       limit: /less than/i.test(reason) ? 'floor' : 'ceiling',
       latestStart: latest.start,
       earliestStart: earliest.start,
+      datapoints: points.length,
       period: trigger?.Period,
     };
   }
@@ -761,6 +822,15 @@ export function describeReason(
   return `${what}${when}${threshold}.`;
 }
 
+/** Periods from an hour up are sums over the whole window, so no crossing time can be read from them. */
+const LONG_PERIOD_SECONDS = 3600;
+
+function describeBreachingWindows(count: number, periodSeconds: number): string {
+  const phrase = periodPhrase(periodSeconds);
+  if (count <= 1) return `just crossed (${phrase === 'hour' ? 'an' : 'a'} ${phrase}-long sum, so no exact start time)`;
+  return `${count} consecutive ${phrase === 'hour' ? 'hours' : phrase === 'day' ? 'days' : `${phrase} windows`}`;
+}
+
 /** Field cells for the numbers-at-a-glance block; empty when the reason carries no numbers. */
 export function describeFields(
   alarm: CloudWatchAlarmPayload,
@@ -791,6 +861,12 @@ export function describeFields(
         ? `*Window*\n${periodPhrase(parsed.period)} ending ${formatClock(new Date(parsed.latestStart + parsed.period * 1000))} UTC`
         : `*At*\n${formatClock(new Date(parsed.latestStart))} UTC`
     );
+    if (parsed.period && parsed.period >= LONG_PERIOD_SECONDS) {
+      // A datapoint this long is a sum over its whole window; its start is not when the line was
+      // crossed, so a start time plus duration would read as an hour-long breach.
+      fields.push(`*Breaching for*\n${describeBreachingWindows(parsed.datapoints, parsed.period)}`);
+      return fields;
+    }
     sinceMs = parsed.earliestStart;
   } else if (parsed.kind === 'missing') {
     if (parsed.minutes !== undefined) {
@@ -810,8 +886,18 @@ export function describeFields(
 
 function resolveEntry(alarm: CloudWatchAlarmPayload, stage: string) {
   const suffix = alarmSuffix(alarm.AlarmName, stage);
-  const entry = lookupCatalog(suffix);
-  if (entry) return { entry, title: entry.title, level: entry.level, category: entry.category };
+  const found = lookupCatalog(suffix);
+  if (found) {
+    const provider = alarmProvider(alarm);
+    const label = provider ? PROVIDER_LABELS[provider] : UNKNOWN_PROVIDER_LABEL;
+    const entry: AlarmCatalogEntry = {
+      ...found,
+      title: fillProvider(found.title, label),
+      meaning: fillProvider(found.meaning, label),
+      action: fillProvider(found.action, label),
+    };
+    return { entry, title: entry.title, level: entry.level, category: entry.category };
+  }
   const words = suffix.replace(/-/g, ' ');
   return {
     entry: undefined,
@@ -991,6 +1077,8 @@ export function formatAlarmSlackMessage(
   const happened = describeReason(alarm, entry?.unit, entry?.measurement);
   const why = entry?.meaning ?? alarm.AlarmDescription;
   const sections = [`*What happened*\n${escapeMrkdwn(happened)}`];
+  const owner = entry?.owner ?? (entry?.handoff ? undefined : CATEGORY_OWNER[category]);
+  if (owner) sections.push(`*Whose it is*\n${escapeMrkdwn(owner)}`);
   if (why) sections.push(`*Why it matters*\n${escapeMrkdwn(why)}`);
   sections.push(...(options.details ?? []));
   if (entry?.coverage) sections.push(`*Scope and freshness*\n${escapeMrkdwn(entry.coverage)}`);

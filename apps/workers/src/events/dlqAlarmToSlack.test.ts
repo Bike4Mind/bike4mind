@@ -15,6 +15,13 @@ const detail = vi.hoisted(() => ({
 }));
 vi.mock('./youngAccountSpendDetail', () => detail);
 
+const providerDetail = vi.hoisted(() => ({
+  providerSpendSection: vi.fn(
+    async () => '*Where the spend went*\nAccounts under 7 days old: *0.00 of 21.34 USD (0%)*'
+  ),
+}));
+vi.mock('./providerSpendDetail', () => providerDetail);
+
 import { handler } from './dlqAlarmToSlack';
 
 const makeEvent = (message: string): SNSEvent => ({
@@ -65,6 +72,7 @@ describe('dlqAlarmToSlack handler', () => {
     resource.SLACK_COST_ALARMS_WEBHOOK_URL = undefined;
     resource.App.stage = 'production';
     detail.youngAccountSpendSection.mockClear();
+    providerDetail.providerSpendSection.mockClear();
     fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, statusText: 'OK' });
     vi.stubGlobal('fetch', fetchMock);
   });
@@ -77,8 +85,23 @@ describe('dlqAlarmToSlack handler', () => {
     const sections = (body.attachments[0].blocks as { type: string; text?: { text: string } }[])
       .filter(b => b.type === 'section' && b.text)
       .map(b => b.text!.text.split('\n')[0]);
-    expect(sections).toEqual(['*What happened*', '*Why it matters*', '*Top accounts in the window*', '*What to do*']);
+    expect(sections).toEqual([
+      '*What happened*',
+      '*Whose it is*',
+      '*Why it matters*',
+      '*Top accounts in the window*',
+      '*What to do*',
+    ]);
     expect(JSON.stringify(body.attachments)).toContain('`u1` 1.52 USD in 36 calls');
+    expect(providerDetail.providerSpendSection).not.toHaveBeenCalled();
+  });
+
+  it('breaks down the spend on a ledger provider spend alarm', async () => {
+    await handler(makeEvent(alarmPayload('ALARM', 'bike4mind-production-llm-spend-hourly-openai')));
+    expect(providerDetail.providerSpendSection).toHaveBeenCalledOnce();
+    expect(detail.youngAccountSpendSection).not.toHaveBeenCalled();
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(JSON.stringify(body.attachments)).toContain('*Where the spend went*');
   });
 
   it('does not look accounts up for other alarms, resolutions, or alarms this stage drops', async () => {
@@ -87,6 +110,7 @@ describe('dlqAlarmToSlack handler', () => {
     resource.App.stage = 'dev';
     await handler(makeEvent(alarmPayload('ALARM', 'bike4mind-dev-test-alarm')));
     expect(detail.youngAccountSpendSection).not.toHaveBeenCalled();
+    expect(providerDetail.providerSpendSection).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 

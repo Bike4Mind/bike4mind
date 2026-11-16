@@ -1,8 +1,9 @@
 /**
  * Estimated upstream LLM spend from the `llm-usage-settled` log line
  * (b4m-core/services/src/llm/llmUsageSettledLog.ts) of the ChatCompletion service: metric filters,
- * a dashboard, and a 5-minute spend-rate alarm and an hourly spend alarm per provider (LLM_SPEND_ALARM_USD_PER_5MIN,
- * LLM_SPEND_ALARM_USD_PER_HOUR, LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC) plus hourly and 5-minute
+ * a dashboard, and a 5-minute spend-rate alarm and hourly warn and page spend alarms per provider
+ * (LLM_SPEND_ALARM_USD_PER_5MIN; page LLM_SPEND_ALARM_USD_PER_HOUR, LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC;
+ * warn LLM_SPEND_WARN_USD_PER_HOUR, LLM_SPEND_WARN_USD_PER_HOUR_ANTHROPIC) plus hourly and 5-minute
  * ceilings on young-account spend (YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR, YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR,
  * LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN), and a count of completions that cost more than the balance could pay.
  * See infra/signup-code-send-alarm.md.
@@ -20,8 +21,12 @@ const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process
 export const LLM_SPEND_PROVIDERS = ['anthropic', 'openai', 'bedrock', 'google', 'other'] as const;
 export const llmSpendNamespace = () => `${$app.name}/${$app.stage}/LLMSpend`;
 export const LLM_SPEND_ALARM_USD_PER_5MIN_DEFAULT = 25;
-export const LLM_SPEND_ALARM_USD_PER_HOUR_DEFAULT = 20;
-export const LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC_DEFAULT = 75;
+// Hourly provider spend: the warn line is where heavy days by established accounts top out, so it
+// posts without a mention; the page line is twice that.
+export const LLM_SPEND_ALARM_USD_PER_HOUR_DEFAULT = 40;
+export const LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC_DEFAULT = 150;
+export const LLM_SPEND_WARN_USD_PER_HOUR_DEFAULT = 20;
+export const LLM_SPEND_WARN_USD_PER_HOUR_ANTHROPIC_DEFAULT = 75;
 // 2 is where ordinary new-user hours top out (warn); 5 is credit-farm territory (page).
 export const YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR_DEFAULT = 5;
 export const YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR_DEFAULT = 2;
@@ -64,6 +69,31 @@ const hourlyAnthropicSpendThreshold = parseAlarmThreshold(
   'LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC',
   process.env.LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC,
   LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC_DEFAULT
+);
+
+/**
+ * The warn line under a page line. Unset, it is the default capped at the page line, so lowering only
+ * the page line still deploys; set above the page line, it is a contradiction and fails the deploy.
+ */
+export function hourlySpendWarnThreshold(name: string, raw: string | undefined, fallback: number, page: number) {
+  const warn = parseAlarmThreshold(name, raw);
+  if (warn === undefined) return Math.min(fallback, page);
+  if (warn > page) throw new Error(`${name} (${warn}) must not exceed the hourly page line (${page})`);
+  return warn;
+}
+
+const hourlySpendWarnLine = hourlySpendWarnThreshold(
+  'LLM_SPEND_WARN_USD_PER_HOUR',
+  process.env.LLM_SPEND_WARN_USD_PER_HOUR,
+  LLM_SPEND_WARN_USD_PER_HOUR_DEFAULT,
+  hourlySpendThreshold
+);
+
+const hourlyAnthropicSpendWarnLine = hourlySpendWarnThreshold(
+  'LLM_SPEND_WARN_USD_PER_HOUR_ANTHROPIC',
+  process.env.LLM_SPEND_WARN_USD_PER_HOUR_ANTHROPIC,
+  LLM_SPEND_WARN_USD_PER_HOUR_ANTHROPIC_DEFAULT,
+  hourlyAnthropicSpendThreshold
 );
 
 const youngAccountSpendThreshold = parseAlarmThreshold(
@@ -198,7 +228,7 @@ if (isMonitoredStage) {
     spendAlarms.push(
       new aws.cloudwatch.MetricAlarm(`llmSpendHourly-${provider}`, {
         name: `${prefix}-llm-spend-hourly-${provider}`,
-        alarmDescription: `Estimated ${provider} LLM spend in one hour at or above the configured USD ceiling`,
+        alarmDescription: `Estimated ${provider} LLM spend in one hour at or above the configured USD page line`,
         comparisonOperator: 'GreaterThanOrEqualToThreshold',
         evaluationPeriods: 1,
         metricName: 'EstimatedUsd',
@@ -211,6 +241,25 @@ if (isMonitoredStage) {
         alarmActions: actions,
         okActions: actions,
         tags: { Application: 'LLMSpend', Severity: 'Critical' },
+      })
+    );
+    // The provider stays the last name segment: the Slack relay reads it from there as a fallback.
+    spendAlarms.push(
+      new aws.cloudwatch.MetricAlarm(`llmSpendHourlyWarn-${provider}`, {
+        name: `${prefix}-llm-spend-hourly-warn-${provider}`,
+        alarmDescription: `Estimated ${provider} LLM spend in one hour at or above the configured USD warn line`,
+        comparisonOperator: 'GreaterThanOrEqualToThreshold',
+        evaluationPeriods: 1,
+        metricName: 'EstimatedUsd',
+        namespace: LLM_SPEND_NAMESPACE,
+        dimensions: { Provider: provider },
+        period: 3600,
+        statistic: 'Sum',
+        threshold: provider === 'anthropic' ? hourlyAnthropicSpendWarnLine : hourlySpendWarnLine,
+        treatMissingData: 'notBreaching',
+        alarmActions: actions,
+        okActions: actions,
+        tags: { Application: 'LLMSpend', Severity: 'Medium' },
       })
     );
   }
@@ -364,8 +413,10 @@ if (isMonitoredStage) {
               yAxis: { left: { min: 0, label: 'USD' } },
               annotations: {
                 horizontal: [
-                  { label: 'Hourly alarm (anthropic)', value: hourlyAnthropicSpendThreshold },
-                  { label: 'Hourly alarm (other providers)', value: hourlySpendThreshold },
+                  { label: 'Hourly page (anthropic)', value: hourlyAnthropicSpendThreshold },
+                  { label: 'Hourly warn (anthropic)', value: hourlyAnthropicSpendWarnLine },
+                  { label: 'Hourly page (other providers)', value: hourlySpendThreshold },
+                  { label: 'Hourly warn (other providers)', value: hourlySpendWarnLine },
                 ],
               },
             },

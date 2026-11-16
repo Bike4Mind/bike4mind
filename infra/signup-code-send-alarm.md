@@ -17,21 +17,23 @@ All thresholds are read from the deployer's environment, are listed in
 `infra/deploy-contract.json`, and must be integers of at least 1. Invalid values
 fail deployment (or, for the scheduled worker, fail the run).
 
-| Variable                                 | Default                | Alarm                                                               |
-| ---------------------------------------- | ---------------------- | ------------------------------------------------------------------- |
-| `SIGNUP_CODE_SEND_ALARM_PER_HOUR`        | unset: no hourly alarm | Sign-in code sends, hourly `Sum`                                    |
-| `SIGNUP_CODE_SEND_ALARM_PER_5MIN`        | 15                     | Sign-in code sends, 5-minute `Sum`                                  |
-| `API_KEY_CREATE_ALARM_PER_5MIN`          | 10                     | User API key creations, 5-minute `Sum`                              |
-| `SIGNUP_EDGE_SIGNAL_ALARM_PER_5MIN`      | 5                      | WAF-labelled `/api/otc/` requests, 5-minute `Sum`                   |
-| `YOUNG_ACCOUNT_SPEND_ALERT_CREDITS`      | 5000                   | Hourly credits spent by accounts under 7 days old                   |
-| `YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS`     | 25                     | Hourly count of distinct accounts under 7 days old that spent       |
-| `LLM_SPEND_ALARM_USD_PER_5MIN`           | 25                     | Estimated LLM USD per provider, 5-minute `Sum`                      |
-| `LLM_SPEND_ALARM_USD_PER_HOUR`           | 20                     | Estimated LLM USD per provider except Anthropic, hourly `Sum`       |
-| `LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC` | 75                     | Estimated LLM USD for Anthropic, hourly `Sum`                       |
-| `YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR` | 5                      | Estimated LLM USD per hour by accounts under 7 days old             |
-| `YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR`  | 2                      | Same metric, warn tier (heads-up below the page)                    |
-| `SIGNUP_ALARM_PER_HOUR`                  | 8                      | Accounts created per hour (hourly census)                           |
-| `NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR`     | 5                      | User API keys created within 24h of signup per hour (hourly census) |
+| Variable                                 | Default                | Alarm                                                                |
+| ---------------------------------------- | ---------------------- | -------------------------------------------------------------------- |
+| `SIGNUP_CODE_SEND_ALARM_PER_HOUR`        | unset: no hourly alarm | Sign-in code sends, hourly `Sum`                                     |
+| `SIGNUP_CODE_SEND_ALARM_PER_5MIN`        | 15                     | Sign-in code sends, 5-minute `Sum`                                   |
+| `API_KEY_CREATE_ALARM_PER_5MIN`          | 10                     | User API key creations, 5-minute `Sum`                               |
+| `SIGNUP_EDGE_SIGNAL_ALARM_PER_5MIN`      | 5                      | WAF-labelled `/api/otc/` requests, 5-minute `Sum`                    |
+| `YOUNG_ACCOUNT_SPEND_ALERT_CREDITS`      | 5000                   | Hourly credits spent by accounts under 7 days old                    |
+| `YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS`     | 25                     | Hourly count of distinct accounts under 7 days old that spent        |
+| `LLM_SPEND_ALARM_USD_PER_5MIN`           | 25                     | Estimated LLM USD per provider, 5-minute `Sum`                       |
+| `LLM_SPEND_ALARM_USD_PER_HOUR`           | 40                     | Estimated LLM USD per provider except Anthropic, hourly `Sum` (page) |
+| `LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC` | 150                    | Estimated LLM USD for Anthropic, hourly `Sum` (page)                 |
+| `LLM_SPEND_WARN_USD_PER_HOUR`            | 20, capped at the page | Same metric except Anthropic, warn tier                              |
+| `LLM_SPEND_WARN_USD_PER_HOUR_ANTHROPIC`  | 75, capped at the page | Same metric for Anthropic, warn tier                                 |
+| `YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR` | 5                      | Estimated LLM USD per hour by accounts under 7 days old              |
+| `YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR`  | 2                      | Same metric, warn tier (heads-up below the page)                     |
+| `SIGNUP_ALARM_PER_HOUR`                  | 8                      | Accounts created per hour (hourly census)                            |
+| `NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR`     | 5                      | User API keys created within 24h of signup per hour (hourly census)  |
 
 Monitoring runs on `dev` and `production`; another stage also needs
 `ENABLE_MONITORING=true`. The WAF edge alarm and the young-account spend worker
@@ -209,12 +211,24 @@ Lines logged before `userId` was added are skipped. The relay has `logs:StartQue
 on those log groups only and a 60-second timeout; a query that fails or runs past
 its 25-second budget leaves a one-line note in the post instead of blocking it.
 
-A second alarm per provider pages when `EstimatedUsd` sums to at least
-`LLM_SPEND_ALARM_USD_PER_HOUR` (whole USD, default 20) in one hour, or
-`LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC` (default 75) for `anthropic`. It catches
-a sustained drain that stays under the 5-minute ceiling, routes to the same Slack
-DLQ topic, is listed in the alarm-status widget, and has its own "Estimated USD
-per hour by provider" widget with both ceilings drawn.
+Two hourly alarms per provider catch a sustained drain that stays under the
+5-minute ceiling. The warn tier (`llm-spend-hourly-warn-<provider>`) posts without
+a mention when `EstimatedUsd` sums to at least `LLM_SPEND_WARN_USD_PER_HOUR`
+(whole USD, default 20) in one hour, or `LLM_SPEND_WARN_USD_PER_HOUR_ANTHROPIC`
+(default 75) for `anthropic`. The page tier (`llm-spend-hourly-<provider>`) fires
+at `LLM_SPEND_ALARM_USD_PER_HOUR` (default 40) or
+`LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC` (default 150). An unset warn line is its
+default capped at the page line; a warn line set above the page line fails the
+deploy. Both route to the same Slack DLQ topic, are listed in the alarm-status
+widget, and the "Estimated USD per hour by provider" widget draws all four lines.
+
+The Slack post for these and the 5-minute alarm names the provider, says who owns
+it (the abuse/LiveOps owner; devops has nothing to do unless it stays red), gives a
+decision rule, and adds a "Where the spend went" section from one Logs Insights
+query over the same log groups and window: the share from accounts under 7 days
+old, spend by source and model, and the top three accounts with their age. The
+query has a 20-second budget and no re-read; on failure the post carries a
+one-line note instead.
 
 The figures are estimates from our price table, not provider invoices. Paths
 outside those log groups are not counted: the agent executor, image, video and

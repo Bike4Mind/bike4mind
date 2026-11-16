@@ -194,7 +194,13 @@ describe('formatAlarmSlackMessage on production', () => {
     const labels = bodyOf(message)
       .filter(b => b.type === 'section' && b.text)
       .map(b => b.text!.text.split('\n')[0]);
-    expect(labels).toEqual(['*What happened*', '*Why it matters*', '*Top accounts in the window*', '*What to do*']);
+    expect(labels).toEqual([
+      '*What happened*',
+      '*Whose it is*',
+      '*Why it matters*',
+      '*Top accounts in the window*',
+      '*What to do*',
+    ]);
   });
 
   it('omits admin buttons without an app url and the CloudWatch button without a Region', () => {
@@ -418,16 +424,20 @@ describe('formatAlarmNumber', () => {
 });
 
 describe('ALARM_CATALOG', () => {
-  it('asks for the account list on the young-account spend alarms only', () => {
-    const withDetail = Object.entries(ALARM_CATALOG)
-      .filter(([, entry]) => entry.detail !== undefined)
-      .map(([key]) => key)
-      .sort();
-    expect(withDetail).toEqual([
-      'llm-spend-young-accounts',
-      'young-account-spend-rate',
-      'young-account-spend-rate-warn',
-    ]);
+  it('asks for the account list on the young-account alarms and the breakdown on the ledger provider alarms', () => {
+    const withDetail = Object.fromEntries(
+      Object.entries(ALARM_CATALOG)
+        .filter(([, entry]) => entry.detail !== undefined)
+        .map(([key, entry]) => [key, entry.detail])
+    );
+    expect(withDetail).toEqual({
+      'llm-spend-young-accounts': 'young-account-spend',
+      'young-account-spend-rate': 'young-account-spend',
+      'young-account-spend-rate-warn': 'young-account-spend',
+      'llm-spend-rate': 'provider-spend',
+      'llm-spend-hourly': 'provider-spend',
+      'llm-spend-hourly-warn': 'provider-spend',
+    });
     expect(ALARM_CATALOG['young-account-spend-rate'].action).toContain('listed above');
     expect(alarmCatalogEntry({ ...sample, AlarmName: 'bike4mind-dev-young-account-spend-rate' }, 'dev')?.detail).toBe(
       'young-account-spend'
@@ -490,6 +500,7 @@ describe('ALARM_CATALOG', () => {
     // Ledger spend alarms catch credit farms, so they stay with the abuse signals.
     for (const key of [
       'llm-spend-hourly',
+      'llm-spend-hourly-warn',
       'llm-spend-rate',
       'llm-spend-young-accounts',
       'young-account-spend-rate',
@@ -529,11 +540,106 @@ describe('ALARM_CATALOG', () => {
     expect(ALARM_CATALOG['young-account-spend-rate'].level).toBe('page');
     expect(ALARM_CATALOG['young-account-spend-rate-warn'].level).toBe('warn');
     expect(ALARM_CATALOG['llm-spend-hourly'].level).toBe('page');
+    expect(ALARM_CATALOG['llm-spend-hourly-warn'].level).toBe('warn');
     expect(ALARM_CATALOG['llm-spend-rate'].level).toBe('warn');
     expect(ALARM_CATALOG['provider-reported-spend-hourly'].level).toBe('page');
     expect(ALARM_CATALOG['provider-usage-poll-errors'].level).toBe('warn');
     expect(ALARM_CATALOG['llm-spend-young-accounts'].level).toBe('page');
     expect(ALARM_CATALOG['completion-credit-overdraft'].level).toBe('warn');
+  });
+});
+
+describe('provider spend alarms', () => {
+  const hourlyOpenAi: CloudWatchAlarmPayload = {
+    ...sample,
+    AlarmName: 'bike4mind-production-llm-spend-hourly-openai',
+    NewStateReason:
+      'Threshold Crossed: 1 datapoint [21.34 (27/10/26 18:08:00)] was greater than or equal to the threshold (20.0).',
+    StateChangeTime: '2026-10-27T19:09:12.000+0000',
+    Trigger: { Period: 3600, EvaluationPeriods: 1, Threshold: 20, Dimensions: [{ name: 'Provider', value: 'openai' }] },
+  };
+
+  it('names the provider in the header, the meaning and the resolved line', () => {
+    const message = formatAlarmSlackMessage(hourlyOpenAi, 'production');
+    expect(header(message)).toBe(':rotating_light: PRODUCTION ALARM: AI spend at OpenAI is running hot');
+    expect(sectionText(message, 'Why it matters')).toContain('Estimated spend at OpenAI over one hour');
+    const resolved = formatAlarmSlackMessage(
+      { ...hourlyOpenAi, NewStateValue: 'OK', OldStateValue: 'ALARM' },
+      'production'
+    );
+    expect(resolved?.text).toBe(':white_check_mark: Resolved: AI spend at OpenAI is running hot');
+  });
+
+  it('reads the provider from the alarm name when the trigger carries no dimension', () => {
+    const message = formatAlarmSlackMessage(
+      { ...hourlyOpenAi, AlarmName: 'bike4mind-production-llm-spend-hourly-warn-anthropic', Trigger: { Period: 3600 } },
+      'production'
+    );
+    expect(header(message)).toBe(':warning: Production warning: AI spend at Anthropic is higher than usual');
+  });
+
+  it('falls back to a generic provider and keeps a sentence-opening placeholder capitalised', () => {
+    const message = formatAlarmSlackMessage(
+      { ...hourlyOpenAi, AlarmName: 'bike4mind-production-provider-reported-spend-hourly', Trigger: { Period: 3600 } },
+      'production'
+    );
+    expect(header(message)).toContain('Unusual AI spend reported by an AI provider');
+    expect(sectionText(message, 'Why it matters')).toContain("*Why it matters*\nAn AI provider's own usage report");
+  });
+
+  it('tells devops whose alarm it is and gives a decision rule instead of a to-do list', () => {
+    const message = formatAlarmSlackMessage(hourlyOpenAi, 'production');
+    expect(sectionText(message, 'Whose it is')).toContain('abuse/LiveOps owner');
+    expect(sectionText(message, 'Whose it is')).toContain('Devops: no infrastructure action is needed');
+    const action = sectionText(message, 'What to do') ?? '';
+    expect(action).toContain('acknowledge in this thread and move on');
+    expect(action).toContain('stays red for 2 hours or more');
+    expect(action).toContain('a third or more');
+  });
+
+  it('gives provider-reported spend its own owner line and the ledger comparison', () => {
+    const message = formatAlarmSlackMessage(
+      { ...hourlyOpenAi, AlarmName: 'bike4mind-production-provider-reported-spend-hourly-openai' },
+      'production'
+    );
+    expect(sectionText(message, 'Whose it is')).toContain('key rotation');
+    expect(sectionText(message, 'What to do')).toContain('Compare with the ledger alarms for OpenAI');
+  });
+
+  it('adds no owner line where the entry has its own handoff or the category has no owner', () => {
+    const census = formatAlarmSlackMessage({ ...sample, AlarmName: 'NewAccountApiKeys' }, 'production');
+    expect(sectionText(census, 'Whose it is')).toBeUndefined();
+    const jobs = formatAlarmSlackMessage(
+      { ...sample, AlarmName: 'bike4mind-production-provider-usage-poll-errors' },
+      'production'
+    );
+    expect(sectionText(jobs, 'Whose it is')).toBeUndefined();
+  });
+
+  it('does not read an hourly sum as an hour-long breach', () => {
+    const fields = fieldsOf(formatAlarmSlackMessage(hourlyOpenAi, 'production'));
+    expect(fields).toContain('*Window*\nhour ending 19:08 UTC');
+    expect(fields).toContain('*Breaching for*\njust crossed (an hour-long sum, so no exact start time)');
+    expect(fields.some(f => f.startsWith('*Breaching since*'))).toBe(false);
+  });
+
+  it('counts consecutive breaching hours when the reason lists several', () => {
+    const fields = describeFields(
+      {
+        ...hourlyOpenAi,
+        NewStateReason:
+          'Threshold Crossed: 2 datapoints [25.0 (27/10/26 19:08:00), 22.0 (27/10/26 18:08:00)] were greater than or equal to the threshold (20.0).',
+        Trigger: { Period: 3600, EvaluationPeriods: 2 },
+      },
+      'USD',
+      new Date('2026-10-27T20:09:00.000Z')
+    );
+    expect(fields).toContain('*Breaching for*\n2 consecutive hours');
+  });
+
+  it('keeps the breaching-since time on short periods', () => {
+    const fields = describeFields(burst, 'sign-in code emails', new Date('2026-10-27T12:39:58.488Z'));
+    expect(fields).toContain('*Breaching since*\n12:34 UTC (6 min)');
   });
 });
 
@@ -646,6 +752,7 @@ describe('lookupCatalog', () => {
     expect(lookupCatalog('NewAccountApiKeys')).toBe(ALARM_CATALOG.NewAccountApiKeys);
     expect(lookupCatalog('llm-spend-rate-anthropic')).toBe(ALARM_CATALOG['llm-spend-rate']);
     expect(lookupCatalog('llm-spend-hourly-anthropic')).toBe(ALARM_CATALOG['llm-spend-hourly']);
+    expect(lookupCatalog('llm-spend-hourly-warn-openai')).toBe(ALARM_CATALOG['llm-spend-hourly-warn']);
     expect(lookupCatalog('young-account-spend-rate')).toBe(ALARM_CATALOG['young-account-spend-rate']);
     expect(lookupCatalog('young-account-spend-rate-warn')).toBe(ALARM_CATALOG['young-account-spend-rate-warn']);
     expect(lookupCatalog('llm-spend-young-accounts')).toBe(ALARM_CATALOG['llm-spend-young-accounts']);

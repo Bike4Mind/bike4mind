@@ -11,7 +11,8 @@
  * without it, go to SLACK_ALARMS_WEBHOOK_URL when set, otherwise the error-reporting channel.
  * Production page-level alarms carry the mention token from the per-stage SSM parameter.
  * Alarms whose catalog entry asks for a detail get it loaded first (young-account spend lists
- * the accounts behind the breach); a failed load posts the alarm with a note instead.
+ * the accounts behind the breach; provider spend breaks the window down by account age, source,
+ * model and account); a failed load posts the alarm with a note instead.
  */
 
 import type { SNSEvent } from 'aws-lambda';
@@ -28,6 +29,7 @@ import {
   type FormatOptions,
 } from './alarmSlackMessage';
 import { readAlarmMention } from './alarmSlackMention';
+import { providerSpendSection } from './providerSpendDetail';
 import { youngAccountSpendSection } from './youngAccountSpendDetail';
 import type { CloudWatchAlarmPayload } from './cloudwatchAlarmTypes';
 
@@ -39,6 +41,7 @@ async function loadDetails(
   if (alarm.NewStateValue !== 'ALARM') return [];
   const detail = alarmCatalogEntry(alarm, stage)?.detail;
   if (detail === 'young-account-spend') return [await youngAccountSpendSection(alarm, { appUrl })];
+  if (detail === 'provider-spend') return [await providerSpendSection(alarm, { appUrl })];
   return [];
 }
 
