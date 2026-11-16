@@ -35,8 +35,13 @@ export function redactedValue(path: string, instance: string): unknown {
   return REDACTED_VALUE;
 }
 
+const uniquePathsBySchema = new WeakMap<mongoose.Schema, ReadonlySet<string>>();
+
 /** Paths that are a key of some unique index of `schema`, field-level `unique` included. */
 export function uniqueIndexPaths(schema: mongoose.Schema): ReadonlySet<string> {
+  // The executor asks once per anonymized row, and indexes() walks the whole schema.
+  const cached = uniquePathsBySchema.get(schema);
+  if (cached) return cached;
   const paths = new Set<string>();
   for (const [fields, options] of schema.indexes()) {
     if (options?.unique) Object.keys(fields).forEach(path => paths.add(path));
@@ -44,5 +49,6 @@ export function uniqueIndexPaths(schema: mongoose.Schema): ReadonlySet<string> {
   schema.eachPath((path, type) => {
     if ((type.options as { unique?: boolean } | undefined)?.unique) paths.add(path);
   });
+  uniquePathsBySchema.set(schema, paths);
   return paths;
 }
