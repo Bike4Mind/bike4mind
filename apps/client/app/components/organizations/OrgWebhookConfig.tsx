@@ -28,9 +28,6 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import ReplayIcon from '@mui/icons-material/Replay';
 import GitHubIcon from '@mui/icons-material/GitHub';
-import EditIcon from '@mui/icons-material/Edit';
-import CheckIcon from '@mui/icons-material/Check';
-import CloseIcon from '@mui/icons-material/Close';
 import { IOrganizationDocument } from '@bike4mind/common';
 import { useConfirmationModal } from '@client/app/hooks/useConfirmation';
 import {
@@ -43,6 +40,7 @@ import {
   useReplayDLQ,
 } from '@client/app/hooks/data/useOrgWebhooks';
 import { toast } from 'sonner';
+import OrgFormSaveBar from './OrgFormSaveBar';
 
 // Common GitHub webhook events
 const GITHUB_EVENTS = [
@@ -64,8 +62,9 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
   const setConfirmationModal = useConfirmationModal.setState;
   const [showSecret, setShowSecret] = useState(false);
   const [selectedEvents, setSelectedEvents] = useState<string[]>([]);
-  const [isEditingEvents, setIsEditingEvents] = useState(false);
-  const [editedEvents, setEditedEvents] = useState<string[]>([]);
+  // Staged edit of the subscribed events; null while it still matches what is stored.
+  const [editedEvents, setEditedEvents] = useState<string[] | null>(null);
+  const [eventsSaving, setEventsSaving] = useState(false);
   const [testTargetUrl, setTestTargetUrl] = useState('');
 
   // Data hooks
@@ -192,36 +191,40 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
     setSelectedEvents(prev => (prev.includes(event) ? prev.filter(e => e !== event) : [...prev, event]));
   }, []);
 
-  // Event edit handlers (for existing config)
-  const handleStartEditEvents = useCallback(() => {
-    if (config?.subscribedEvents) {
-      setEditedEvents(config.subscribedEvents);
-    }
-    setIsEditingEvents(true);
-  }, [config]);
-
-  const handleCancelEditEvents = useCallback(() => {
-    setIsEditingEvents(false);
-    setEditedEvents([]);
-  }, []);
+  const savedEvents = config?.subscribedEvents ?? [];
+  const draftEvents = editedEvents ?? savedEvents;
+  // Keep saved custom events visible even when staged for removal, so they can be toggled back.
+  const knownEvents = new Set(GITHUB_EVENTS.map(event => event.value));
+  const customEvents = [...new Set([...savedEvents, ...draftEvents])].filter(event => !knownEvents.has(event));
+  const editableEvents = [
+    ...GITHUB_EVENTS,
+    ...customEvents.map(value => ({ value, label: value, description: 'Configured GitHub event' })),
+  ];
+  const eventChangeCount =
+    draftEvents.filter(e => !savedEvents.includes(e)).length + savedEvents.filter(e => !draftEvents.includes(e)).length;
 
   const handleSaveEvents = useCallback(async () => {
-    if (editedEvents.length === 0) {
-      toast.error('Please select at least one event');
-      return;
+    if (!editedEvents) return;
+    setEventsSaving(true);
+    try {
+      await updateConfig.mutateAsync({
+        orgId: organization.id,
+        data: { subscribedEvents: editedEvents },
+      });
+    } finally {
+      setEventsSaving(false);
     }
-    await updateConfig.mutateAsync({
-      orgId: organization.id,
-      data: { subscribedEvents: editedEvents },
-    });
-    setIsEditingEvents(false);
-    setEditedEvents([]);
+    setEditedEvents(null);
     toast.success('Subscribed events updated');
   }, [editedEvents, organization.id, updateConfig]);
 
-  const handleEditEventToggle = useCallback((event: string) => {
-    setEditedEvents(prev => (prev.includes(event) ? prev.filter(e => e !== event) : [...prev, event]));
-  }, []);
+  const handleEditEventToggle = useCallback(
+    (event: string) => {
+      const base = editedEvents ?? config?.subscribedEvents ?? [];
+      setEditedEvents(base.includes(event) ? base.filter(e => e !== event) : [...base, event]);
+    },
+    [editedEvents, config?.subscribedEvents]
+  );
 
   // Loading state
   if (isLoading) {
@@ -397,69 +400,32 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
 
         {/* Event Types */}
         <Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-            <Typography level="title-sm">Subscribed Events</Typography>
-            {!isEditingEvents ? (
-              <IconButton variant="plain" size="sm" onClick={handleStartEditEvents} data-testid="edit-events-btn">
-                <EditIcon fontSize="small" />
-              </IconButton>
-            ) : (
-              <Box sx={{ display: 'flex', gap: 0.5 }}>
-                <IconButton
-                  variant="soft"
-                  color="success"
-                  size="sm"
-                  onClick={handleSaveEvents}
-                  disabled={updateConfig.isPending}
-                  data-testid="save-events-btn"
-                >
-                  <CheckIcon fontSize="small" />
-                </IconButton>
-                <IconButton
-                  variant="soft"
-                  color="neutral"
-                  size="sm"
-                  onClick={handleCancelEditEvents}
-                  data-testid="cancel-edit-events-btn"
-                >
-                  <CloseIcon fontSize="small" />
-                </IconButton>
-              </Box>
-            )}
-          </Box>
+          <Typography level="title-sm" sx={{ mb: 1 }}>
+            Subscribed Events
+          </Typography>
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-            {isEditingEvents ? (
-              // Edit mode - show all events as toggleable chips
-              GITHUB_EVENTS.map(event => (
+            {editableEvents.map(event => {
+              const selected = draftEvents.includes(event.value);
+              return (
                 <Chip
                   key={event.value}
-                  variant={editedEvents.includes(event.value) ? 'solid' : 'outlined'}
-                  color={editedEvents.includes(event.value) ? 'primary' : 'neutral'}
+                  variant={selected ? 'solid' : 'outlined'}
+                  color={selected ? 'primary' : 'neutral'}
                   size="sm"
                   onClick={() => handleEditEventToggle(event.value)}
                   sx={{ cursor: 'pointer' }}
+                  data-testid={`webhook-event-chip-${event.value}`}
                 >
                   {event.label}
                 </Chip>
-              ))
-            ) : config.subscribedEvents && config.subscribedEvents.length > 0 ? (
-              // View mode - show only subscribed events
-              config.subscribedEvents.map(event => (
-                <Chip key={event} variant="soft" color="primary" size="sm">
-                  {GITHUB_EVENTS.find(e => e.value === event)?.label || event}
-                </Chip>
-              ))
-            ) : (
-              <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-                All events enabled
-              </Typography>
-            )}
+              );
+            })}
           </Box>
-          {isEditingEvents && (
-            <FormHelperText sx={{ mt: 1 }}>
-              Click events to toggle. {editedEvents.length} event(s) selected.
-            </FormHelperText>
-          )}
+          <FormHelperText sx={{ mt: 1 }}>
+            {draftEvents.length === 0
+              ? 'All events enabled. Click events to subscribe to specific ones.'
+              : `${draftEvents.length} of ${editableEvents.length} event(s) selected. Click events to toggle.`}
+          </FormHelperText>
         </Box>
 
         <Divider />
@@ -521,6 +487,15 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
           </Typography>
         )}
       </Stack>
+      <OrgFormSaveBar
+        count={eventChangeCount}
+        pending={eventsSaving}
+        // The server reads an empty list as "all events", so clearing a specific selection would
+        // silently widen it; the change is refused rather than reinterpreted.
+        blockedReason={editedEvents && editedEvents.length === 0 ? 'Select at least one event.' : undefined}
+        onSave={() => handleSaveEvents().catch(() => undefined)}
+        onDiscard={() => setEditedEvents(null)}
+      />
     </Card>
   );
 };
