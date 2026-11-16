@@ -67,4 +67,34 @@ describe('RuntimeInfo', () => {
     expect(view.querySelector('[data-testid="runtime-info-app-row"]')?.textContent).toContain('0.203.0');
     expect(view.querySelector('[data-testid="runtime-info-version-basis-row"]')).toBeNull();
   });
+
+  it('copies the full version on click, however long it is', async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const canary = '0.203.0-canary.20261116045321.083d26f9ca44.dirty';
+    const view = await renderWith({ ...info, appVersion: canary });
+    const value = view.querySelector<HTMLButtonElement>('[data-testid="runtime-info-app-row-value"]');
+    expect(value?.textContent).toBe(canary);
+
+    await act(async () => value?.click());
+
+    expect(writeText).toHaveBeenCalledWith(canary);
+    expect(value?.dataset.copyState).toBe('copied');
+  });
+
+  it('reports a failed copy instead of swallowing it', async () => {
+    const writeText = vi.fn(async () => {
+      throw new Error('denied');
+    });
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const view = await renderWith(info);
+    const value = view.querySelector<HTMLButtonElement>('[data-testid="runtime-info-app-row-value"]');
+
+    await act(async () => value?.click());
+
+    expect(value?.dataset.copyState).toBe('failed');
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
 });
