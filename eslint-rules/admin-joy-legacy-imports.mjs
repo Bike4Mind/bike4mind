@@ -25,7 +25,6 @@ export default {
   'ModelMetrics/components/RawDataTab.tsx': [[2, '75a9a9612e03580f']],
   'ModelMetrics/components/SpendTab.tsx': [[2, 'c909d4ea5a207560']],
   'OrganizationProfile.tsx': [[2, '86700e7e9f5ffef4']],
-  'PartnerSignupRulesTab.tsx': [[2, '4d25dd633956e08a']],
   'PrReport/PrReportDialog.tsx': [[2, '42e1900e98b7aac9']],
   'RateLimits/components/OverviewTab.tsx': [[2, '39e3228c2b9fa22a']],
   'RateLimits/index.tsx': [[2, 'e1c3c0708902ccc5']],

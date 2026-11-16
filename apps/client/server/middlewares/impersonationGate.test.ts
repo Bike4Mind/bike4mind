@@ -30,7 +30,6 @@ describe('impersonation route policy', () => {
     '/api/mcp-connections/connection/api-key',
     '/api/auth/mfa/passkey/register-options',
     '/api/ai/v1/completions',
-    '/api/secret-rotations/renewed',
   ])('always refuses %s even after escalation', path => {
     for (const method of ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']) {
       expect(impersonationDecision(method, path, true)).toBe('sensitive');

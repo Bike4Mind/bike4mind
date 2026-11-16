@@ -12421,6 +12421,38 @@ describe('ChatCompletionProcess', () => {
       expect(updateCall?.reply).toMatch(/too large for/);
     });
 
+    it('logs the refusal once at warn with structured, content-free fields and never at error', async () => {
+      const { updateCall } = await runRecoveryScenario({
+        recoveryTokenCounts: [50_000, 40_000, 50_000, 40_000],
+      });
+
+      expect(updateCall?.reply).toMatch(/too large for/);
+      expect(updateCall?.reply).toMatch(/larger context window/);
+
+      const overflowErrors = mockLogger.error.mock.calls.filter((call: unknown[]) =>
+        /context overflow/i.test(String(call[0]))
+      );
+      expect(overflowErrors).toEqual([]);
+
+      const overflowWarns = mockLogger.warn.mock.calls.filter((call: unknown[]) =>
+        String(call[0]).startsWith('[Context Overflow]')
+      );
+      expect(overflowWarns).toHaveLength(1);
+      const [message, fields] = overflowWarns[0];
+      expect(message).not.toContain(startQuestParams.questId);
+      expect(fields).toMatchObject({
+        questId: startQuestParams.questId,
+        modelId: expect.any(String),
+        inputTokens: expect.any(Number),
+        maxSafeInputTokens: expect.any(Number),
+        contextLimit: expect.any(Number),
+        tokenBreakdown: expect.objectContaining({ toolSchemas: expect.any(Number) }),
+      });
+      expect(fields.inputTokens).toBeGreaterThan(fields.maxSafeInputTokens);
+      // No prompt or attachment text rides along in the log.
+      expect(JSON.stringify(fields)).not.toMatch(/Hello|turn one|reply one/);
+    });
+
     it('never attempts a rebuild once tool schemas alone already exceed the safe budget', async () => {
       // When toolSchemaTokens >= maxSafeInputTokens, the reserved budget (maxSafeInputTokens -
       // toolSchemaTokens) is <= 0, so a rebuild attempt would call buildAndSortMessages with an
