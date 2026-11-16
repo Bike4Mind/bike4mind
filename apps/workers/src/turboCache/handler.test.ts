@@ -109,6 +109,29 @@ describe('turboCache handler', () => {
     expect(mockGetSignedUrl).not.toHaveBeenCalled();
   });
 
+  it('logs each refused credential without the token', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await handler(
+      makeEvent({ method: 'GET', path: '/v8/artifacts/abc123', headers: { authorization: 'Bearer wrong-token' } })
+    );
+    await handler(
+      makeEvent({
+        method: 'OPTIONS',
+        path: '/v8/artifacts/abc123',
+        headers: { authorization: 'Bearer read-token-abc123', 'access-control-request-method': 'PUT' },
+      })
+    );
+    const lines = warn.mock.calls.map(call => JSON.parse(String(call[0])));
+    expect(lines).toEqual([
+      expect.objectContaining({ statusCode: 401, method: 'GET', path: '/v8/artifacts/abc123', sourceIp: '127.0.0.1' }),
+      expect.objectContaining({ statusCode: 403, method: 'OPTIONS', path: '/v8/artifacts/abc123' }),
+    ]);
+    const logged = warn.mock.calls.flat().join(' ');
+    expect(logged).not.toContain('wrong-token');
+    expect(logged).not.toContain('read-token-abc123');
+    warn.mockRestore();
+  });
+
   it('rejects requests with a wrong token', async () => {
     const event = makeEvent({
       method: 'GET',

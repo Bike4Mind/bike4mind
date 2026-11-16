@@ -25,7 +25,23 @@ function artifactKey(hash: string, team?: string): string {
   return `${prefix}${hash}`;
 }
 
-function unauthorized(): APIGatewayProxyStructuredResultV2 {
+// One structured line per refused credential, so a metric filter can count 401/403s on this public
+// URL. Never includes the Authorization header or any part of the token.
+function logRejected(event: APIGatewayProxyEventV2, statusCode: 401 | 403, reason: string): void {
+  console.warn(
+    JSON.stringify({
+      msg: 'turbo cache request rejected',
+      statusCode,
+      reason,
+      method: event.requestContext.http.method,
+      path: event.rawPath,
+      sourceIp: event.requestContext.http.sourceIp,
+    })
+  );
+}
+
+function unauthorized(event: APIGatewayProxyEventV2): APIGatewayProxyStructuredResultV2 {
+  logRejected(event, 401, 'invalid or missing token');
   return { statusCode: 401, body: JSON.stringify({ error: 'Unauthorized' }) };
 }
 
@@ -118,7 +134,7 @@ async function createUploadPreflight(hash: string, team?: string): Promise<APIGa
 // Protocol: https://turbo.build/repo/docs/core-concepts/remote-caching
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyStructuredResultV2> {
   const permission = verifyToken(event);
-  if (!permission) return unauthorized();
+  if (!permission) return unauthorized(event);
 
   const method = event.requestContext.http.method;
   const preflightMethod = requestMethodSchema.safeParse(event.headers['access-control-request-method']);
@@ -153,6 +169,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const hash = hashMatch[1];
 
   if (requestedMethod === 'PUT' && permission !== 'write') {
+    logRejected(event, 403, 'read-only token used for upload');
     return { statusCode: 403, body: JSON.stringify({ error: 'Read-only cache token' }) };
   }
   if (method === 'OPTIONS') {
