@@ -24,6 +24,7 @@ import {
   supportsPromptCache,
   withCacheBreakpoints,
   withRunFallback,
+  RunBudgetExhaustedError,
 } from './completions';
 import type { CompletionStreamEvent } from './streamEvents';
 
@@ -537,6 +538,53 @@ describe('run attribution and request ids', () => {
     const send = vi.fn().mockRejectedValue(new Error('boom'));
     await expect(withRunFallback(RUN, send, vi.fn())).rejects.toThrow('boom');
     expect(send).toHaveBeenCalledOnce();
+  });
+});
+
+describe('run budget refusals', () => {
+  const RUN: CompletionRunAttribution = {
+    runId: '7d0c8f3e-2b1a-4c5d-9e8f-0a1b2c3d4e5f',
+    role: 'root',
+    purpose: 'turn',
+  };
+  const REQUEST = { model: 'm', messages: [{ role: 'user' as const, content: 'hi' }] };
+  const refusal = (status: number, body: unknown) =>
+    vi.fn().mockRejectedValue(
+      Object.assign(new Error('Request failed'), {
+        isAxiosError: true,
+        response: { status, data: Readable.from([Buffer.from(JSON.stringify(body))]) },
+      })
+    );
+  const caught = (post: ReturnType<typeof vi.fn>) =>
+    streamCompletion({ post } as unknown as AxiosInstance, '/c', { ...REQUEST, run: RUN }, () => {})
+      .then(() => null)
+      .catch((error: unknown) => error);
+
+  it('raises RunBudgetExhaustedError for a 422 that names run_budget_exhausted', async () => {
+    const err = await caught(refusal(422, { error: 'Run budget used', errorCode: 'run_budget_exhausted' }));
+    expect(err).toBeInstanceOf(RunBudgetExhaustedError);
+  });
+
+  it('keeps a 422 for the account balance an ordinary request error', async () => {
+    const err = await caught(refusal(422, { error: 'Not enough credits', errorCode: 'insufficient_credits' }));
+    expect(err).not.toBeInstanceOf(RunBudgetExhaustedError);
+  });
+
+  it('never resends a budgeted run without it', async () => {
+    const send = vi
+      .fn<(run: CompletionRunAttribution | undefined) => Promise<string>>()
+      .mockRejectedValue(new RunNotFoundError());
+    const onRejected = vi.fn();
+    await expect(withRunFallback(RUN, send, onRejected, { budgeted: true })).rejects.toBeInstanceOf(RunNotFoundError);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes a budget refusal straight through, with no resend', async () => {
+    const send = vi
+      .fn<(run: CompletionRunAttribution | undefined) => Promise<string>>()
+      .mockRejectedValue(new RunBudgetExhaustedError());
+    await expect(withRunFallback(RUN, send, vi.fn())).rejects.toBeInstanceOf(RunBudgetExhaustedError);
+    expect(send).toHaveBeenCalledTimes(1);
   });
 });
 
