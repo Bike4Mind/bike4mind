@@ -13,7 +13,8 @@ import { blankStringLiterals } from './scopeCoverageHelpers';
  * - No route gates on the raw flag unless it checks a permission (`adminApi(`, or
  *   `requireAdminPermission(` / `hasAdminPermission(` on the admin branch of a route that also serves
  *   non-admins), or is listed in OWNER_OR_ADMIN, FULL_ADMIN_ONLY or OUTSIDE_ADMIN_GATE with its reason.
- * - No route built with `adminApi()` also reads the caller's raw flag (`req.user.isAdmin`), which would
+ * - No route built with `adminApi()` also reads the caller's raw flag (`req.user.isAdmin`, directly or
+ *   through a local bound to `req.user`), which would
  *   silently refuse the delegates its declared permission admits, unless it is listed the same way.
  * - Every `pages/api/admin` route, and every route anywhere that calls `adminApi(`, declares a
  *   non-empty `adminPermissions` map, unless it is in OUTSIDE_ADMIN_GATE or PERMISSION_CHECKED_IN_HANDLER.
@@ -134,6 +135,10 @@ const OWNER_OR_ADMIN = new Map<string, string>([
   ['organizations/[id]/mfa-policy.ts', 'isAdmin only passed to toSafeOrganization for response shaping'],
   ['organizations/[id]/pendingUsers.ts', 'isAdmin only widens projection of returned users'],
   ['organizations/[id]/retention.ts', ORG_MANAGER_REASON],
+  [
+    'organizations/[id]/storage-usage.ts',
+    'owner, manager or appointed admin reads storage; verifyOrgAdminRead lets an admin through',
+  ],
   ['organizations/[id]/upload-logo.ts', ORG_MANAGER_REASON],
   ['organizations/[id]/webhooks/github.ts', 'org owner manages the org; verifyOrgOwner lets an admin through'],
   [
@@ -185,6 +190,10 @@ const OWNER_OR_ADMIN = new Map<string, string>([
   ['skills/market/versions/[vid]/review.ts', 'reviewer is super-admin or org admin of owning org; org admins allowed'],
   ['slack/events.ts', 'webhook; isAdmin is Slack workspace admin status or copied into actor object'],
   ['stripe/webhook.ts', 'webhook; user.isAdmin read from dispute subject only to pick a Slack message'],
+  [
+    'subscriptions/[ownerType]/[ownerId]/index.ts',
+    'org member or manager reads the plan; verifyOrgMemberOrManager lets an admin through',
+  ],
   ['usage/index.ts', 'org owner, self, or admin (support:read delegate) reads usage'],
   ['user-api-keys/index.ts', 'user mints own keys; org-billed minting allows org admin or platform admin'],
   ['users/[id]/agents.ts', 'self-or-admin: users act on own data, admin override'],
@@ -257,7 +266,7 @@ const FULL_ADMIN_ONLY = new Map<string, string>([
 // Helpers that gate on the raw flag internally, so a route calling them is raw-gated even
 // though its own source never names isAdmin. Add any new helper that wraps isAdmin here.
 const RAW_GATE_HELPER =
-  /\b(?:verifyOrgOwner|verifyOrgAccess|isFullAdmin|assertFullAdmin|assertFullAdminForMembership|requireFullAdmin|isCoreAdmin)\s*\(/;
+  /\b(?:verifyOrgOwner|verifyOrgAccess|verifyOrgAdminRead|verifyOrgMemberOrManager|verifyOrgMembership|isFullAdmin|assertFullAdmin|assertFullAdminForMembership|requireFullAdmin|isCoreAdmin)\s*\(/;
 // A user-like binding (`req.user`, `user`, `currentUser`) that is not followed by a further member access.
 const USER_BINDING = String.raw`(?:req\.)?\w*[uU]ser\b(?!\s*[?!]*\s*\.)`;
 const RAW_GATE = new RegExp(
@@ -277,6 +286,21 @@ const CALLER_RAW_FLAG = new RegExp(
     String.raw`\{[^;=]*\buser\s*:\s*\{[^}]*\bisAdmin\b[^}]*\}[^;=]*\}\s*=\s*req\b(?!\s*[?!]*\s*\.)`,
   ].join('|')
 );
+// Locals bound to the caller (`const actor = req.user`, `const { user } = req`, `const { user: actor } = req`),
+// so a read through the alias counts as the caller's flag too.
+const CALLER_ALIAS = new RegExp(
+  [
+    String.raw`\b(?:const|let)\s+(\w+)\s*=\s*req\.user\b(?!\s*[?!]*\s*\.)`,
+    String.raw`\b(?:const|let)\s*\{[^}]*\buser\b(?:\s*:\s*(\w+))?[^}]*\}\s*=\s*req\b(?!\s*[?!]*\s*\.)`,
+  ].join('|'),
+  'g'
+);
+const callerAliases = (code: string): string[] =>
+  [...code.matchAll(CALLER_ALIAS)].map(match => match[1] ?? match[2] ?? 'user');
+const readsFlagThrough = (code: string, alias: string): boolean =>
+  new RegExp(
+    String.raw`\b${alias}\s*[?!]*\s*\.\s*isAdmin\b|\{[^}]*\bisAdmin\b[^}]*\}\s*=\s*${alias}\b(?!\s*[?!]*\s*\.)`
+  ).test(code);
 const ADMIN_API_CALL = /\badminApi\s*(?:<[^>]*>)?\s*\(/;
 const PERMISSION_GATE_CALL = /\b(?:adminApi\s*(?:<[^>]*>)?|requireAdminPermission|hasAdminPermission)\s*\(/;
 // `adminPermissions:` followed by anything but an empty object literal.
@@ -300,7 +324,8 @@ export function usesRawIsAdminGate(source: string): boolean {
 /** True when an `adminApi()` route also reads the caller's raw `isAdmin`, overriding its declared permission. */
 export function readsRawFlagBesideAdminApi(source: string): boolean {
   const code = codeOf(source);
-  return ADMIN_API_CALL.test(code) && CALLER_RAW_FLAG.test(code);
+  if (!ADMIN_API_CALL.test(code)) return false;
+  return CALLER_RAW_FLAG.test(code) || callerAliases(code).some(alias => readsFlagThrough(code, alias));
 }
 
 /** True when the route is built with `adminApi()` and names at least one per-method permission. */
@@ -348,6 +373,8 @@ describe('usesRawIsAdminGate', () => {
   it.each([
     ['verifyOrgOwner(', 'await verifyOrgOwner(req.user, organizationId);'],
     ['verifyOrgAccess(', 'await verifyOrgAccess(req.user, organizationId);'],
+    ['verifyOrgAdminRead(', 'await verifyOrgAdminRead(req.user, organizationId);'],
+    ['verifyOrgMemberOrManager(', 'await verifyOrgMemberOrManager(req.user, organizationId);'],
     ['isFullAdmin(', 'if (!isFullAdmin(req.user)) throw new Error();'],
     ['assertFullAdmin(', 'assertFullAdmin(req.user);'],
   ])('flags a route gated through the raw-flag helper %s', (_label, code) => {
@@ -409,12 +436,16 @@ describe('readsRawFlagBesideAdminApi', () => {
     ['req.user.isAdmin as data', 'const viewer = { isAdmin: req.user.isAdmin === true };'],
     ['isAdmin destructured from req.user', 'const { isAdmin } = req.user;'],
     ['a nested destructured isAdmin', 'const { user: { isAdmin } } = req;'],
+    ['an alias of req.user', 'const adminUser = req.user; if (!adminUser.isAdmin) throw new ForbiddenError();'],
+    ['a destructured user', 'const { user } = req; if (!user?.isAdmin) throw new ForbiddenError();'],
+    ['a renamed destructured user', 'const { user: actor } = req; const { isAdmin } = actor;'],
   ])('flags %s', (_label, body) => {
     expect(readsRawFlagBesideAdminApi(route(body))).toBe(true);
   });
 
   it.each([
     ['the target account flag', 'const user = await load(id); return user.isAdmin;'],
+    ['a member of an alias', 'const actor = req.user; const target = await load(actor.id); return target.isAdmin;'],
     ['a deliberate full-admin helper', 'if (!isFullAdmin(req.user)) throw new ForbiddenError();'],
     ['a permission check', "requireAdminPermission(req, 'users:moderate');"],
   ])('does not flag %s', (_label, body) => {
