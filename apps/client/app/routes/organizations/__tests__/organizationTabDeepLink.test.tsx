@@ -80,7 +80,6 @@ vi.mock('@client/app/components/organizations/OrgCustomMcpPolicySection', () => 
 vi.mock('@client/app/components/organizations/OrgApiKeysSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgMemberApiKeysSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationAuditSection', () => ({ default: () => null }));
-vi.mock('@client/app/components/organizations/OrganizationLibrarySection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgDomainsTab', () => ({ default: () => null }));
 
 // A real i18next over en.json, so assertions pin the wording, plurals and interpolation users get.
