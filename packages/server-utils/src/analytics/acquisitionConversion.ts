@@ -160,6 +160,7 @@ export type ActivationStep = 'signedUp' | 'firstAction' | 'cameBack';
 export function activationStep(signupAt: Date, activeDays: Iterable<string>, now: Date): ActivationStep | null {
   if (signupAt.getTime() > now.getTime() - ACTIVATION_MIN_AGE_MS) return null;
   const step = funnelStepOf({ signupAt, activeDays, paid: false });
+  // With paid: false the funnel never returns 'paid'; this check only narrows the type to ActivationStep.
   return step === 'paid' ? 'cameBack' : step;
 }
 
