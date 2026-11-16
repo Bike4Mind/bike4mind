@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   toggle: vi.fn(),
   remove: vi.fn(),
   env: vi.fn(),
+  toggleState: {} as Record<string, unknown>,
   highlights: vi.fn(),
 }));
 
@@ -19,7 +20,7 @@ const idleMutation = (mutate = vi.fn()) => ({ mutate, mutateAsync: vi.fn(), isPe
 vi.mock('@client/app/hooks/data/whatsNewModals', () => ({
   useGetWhatsNewModals: mocks.modals,
   useDeleteWhatsNewModal: () => idleMutation(mocks.remove),
-  useToggleWhatsNewModal: () => idleMutation(mocks.toggle),
+  useToggleWhatsNewModal: () => ({ ...idleMutation(mocks.toggle), ...mocks.toggleState }),
   useCreateWhatsNewModal: () => idleMutation(),
   useUpdateWhatsNewModal: () => idleMutation(),
   useUpdateWhatsNewModalVariants: () => idleMutation(),
@@ -65,6 +66,7 @@ describe('AdminWhatsNewModalsTab', () => {
     mocks.modals.mockReset();
     mocks.toggle.mockReset();
     mocks.remove.mockReset();
+    mocks.toggleState = {};
     // A fork stage hides the weekly highlights section; only the last test shows it.
     mocks.env.mockReturnValue({ data: { stage: 'production', isForkProduction: true } });
     mocks.highlights.mockReturnValue({ data: undefined, isLoading: false, refetch: vi.fn() });
@@ -105,6 +107,15 @@ describe('AdminWhatsNewModalsTab', () => {
     await userEvent.click(screen.getByTestId('whats-new-row-toggle-a'));
 
     expect(mocks.toggle).toHaveBeenCalledWith({ modalId: 'a', enabled: false });
+  });
+
+  it('marks only the row being toggled as pending', () => {
+    mocks.toggleState = { isPending: true, variables: { modalId: 'a', enabled: false } };
+    mocks.modals.mockReturnValue(listResult([modal('a'), modal('b')]));
+    renderTab();
+
+    expect(screen.getByTestId('whats-new-row-actions-a')).toBeDisabled();
+    expect(screen.getByTestId('whats-new-row-actions-b')).toBeEnabled();
   });
 
   it('asks before deleting a modal from its row menu', async () => {

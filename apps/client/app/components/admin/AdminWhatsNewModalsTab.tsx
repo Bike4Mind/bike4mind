@@ -541,8 +541,9 @@ function ModalsSection({
       onEdit={handleOpenEditDialog}
       onToggle={handleToggleModal}
       onDelete={setDeleteConfirmModal}
-      isTogglePending={toggleModal.isPending}
-      isDeletePending={deleteModal.isPending}
+      // The mutations are shared by every row, so only the row they act on shows as pending.
+      isTogglePending={toggleModal.isPending && toggleModal.variables?.modalId === modal._id?.toString()}
+      isDeletePending={deleteModal.isPending && deleteModal.variables === modal._id?.toString()}
     />
   );
 
