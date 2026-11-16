@@ -42,13 +42,14 @@ export const FUNNEL_COHORT_MAX = 20_000;
 export const COHORT_MAX_TIME_MS = 10_000;
 
 /** Rejects with a handled 504 once `expiresAt` (epoch ms) passes; the queries' own time limits stop the reads. */
-export async function withinBudget<T>(work: Promise<T>, expiresAt: number): Promise<T> {
+export async function withinBudget<T>(
+  work: Promise<T>,
+  expiresAt: number,
+  message = 'The funnel took too long.'
+): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const timedOut = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new GatewayTimeoutError('The funnel took too long.')),
-      Math.max(0, expiresAt - Date.now())
-    );
+    timer = setTimeout(() => reject(new GatewayTimeoutError(message)), Math.max(0, expiresAt - Date.now()));
   });
   return Promise.race([work, timedOut]).finally(() => clearTimeout(timer));
 }

@@ -25,6 +25,7 @@ import { loadCountingContext } from './signupCohort';
 
 /** ms. One acquisition request, summary or Users drill-down, kept well inside the 60s API Lambda. */
 export const ACQUISITION_BUDGET_MS = 40_000;
+export const ACQUISITION_TIMEOUT_MESSAGE = 'The acquisition cohort took too long.';
 
 export type AttributedSignup = { id: string; signupAt: Date; touch: AttributedTouch | null };
 
@@ -178,7 +179,11 @@ export async function acquisitionCohortUserIds(
   { now, expiresAt }: { now: Date; expiresAt: number }
 ): Promise<string[]> {
   const maxTimeMS = () => Math.max(1, Math.min(COHORT_MAX_TIME_MS, expiresAt - Date.now()));
-  return withinBudget(cohortUserIds(window, { touch, key, converted, windowDays }, { now, maxTimeMS }), expiresAt);
+  return withinBudget(
+    cohortUserIds(window, { touch, key, converted, windowDays }, { now, maxTimeMS }),
+    expiresAt,
+    ACQUISITION_TIMEOUT_MESSAGE
+  );
 }
 
 async function cohortUserIds(

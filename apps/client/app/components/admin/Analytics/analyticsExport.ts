@@ -49,8 +49,8 @@ function topAccountsFile(name: string, idLabel: string, rows: readonly TopAccoun
 type AcquisitionOk = Extract<AcquisitionConversion, { status: 'ok' }>;
 
 function acquisitionFile(acquisition: AcquisitionOk): AnalyticsCsvFile {
-  const window = `Converted within (days)`;
-  const followUp = `Follow-up (days)`;
+  const windowColumn = 'Converted within (days)';
+  const followUpColumn = 'Follow-up (days)';
   const columns = [
     'Row',
     'Source',
@@ -74,8 +74,8 @@ function acquisitionFile(acquisition: AcquisitionOk): AnalyticsCsvFile {
     'Renewals due',
     'Renewed',
     'Renewal unknown',
-    window,
-    followUp,
+    windowColumn,
+    followUpColumn,
     'Renewal basis',
     'Attributed signups (%)',
   ];
@@ -102,8 +102,8 @@ function acquisitionFile(acquisition: AcquisitionOk): AnalyticsCsvFile {
     'Renewals due': row.renewalDue,
     Renewed: row.renewed,
     'Renewal unknown': row.renewalUnavailable,
-    [window]: acquisition.conversionWindowDays,
-    [followUp]: acquisition.followUpDays,
+    [windowColumn]: acquisition.conversionWindowDays,
+    [followUpColumn]: acquisition.followUpDays,
     'Renewal basis': acquisition.renewalBasis,
     'Attributed signups (%)': acquisition.coverage.pct === null ? null : share(acquisition.coverage.pct),
   });

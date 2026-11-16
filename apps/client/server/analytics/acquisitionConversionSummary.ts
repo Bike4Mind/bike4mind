@@ -2,6 +2,7 @@ import { COHORT_WINDOW_MAX_DAYS } from '@bike4mind/server-utils/app/utils/adminU
 import { COHORT_MAX_TIME_MS, withinBudget } from '@bike4mind/server-utils/analytics/activationFunnel';
 import {
   ACQUISITION_BUDGET_MS,
+  ACQUISITION_TIMEOUT_MESSAGE,
   attributedSignups,
   conversionOutcomes,
   type AttributedSignup,
@@ -152,7 +153,8 @@ export async function getAcquisitionConversion(query: AcquisitionQuery, now: Dat
         ? signupVerdictUserIds({ ...window, verdict: 'legit' }, { deadlineMs: timeLeft() })
         : undefined,
     ]),
-    expiresAt
+    expiresAt,
+    ACQUISITION_TIMEOUT_MESSAGE
   );
   const legit = legitIds && new Set(legitIds);
   const members = legit ? cohort.filter(member => legit.has(member.id)) : cohort;
@@ -161,7 +163,8 @@ export async function getAcquisitionConversion(query: AcquisitionQuery, now: Dat
   const followUpDays = Number(query.followUp);
   const outcomes = await withinBudget(
     conversionOutcomes(members, { windowDays: conversionWindowDays, followUpDays, now, maxTimeMS: timeLeft }),
-    expiresAt
+    expiresAt,
+    ACQUISITION_TIMEOUT_MESSAGE
   );
   const { rows, totals, truncated } = groupAcquisitionRows(members, outcomes);
   return {
