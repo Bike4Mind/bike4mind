@@ -13,6 +13,7 @@ import {
   refusesUnrunnableModel,
   shouldGateIteration,
   stopBlockedAccountIteration,
+  stopSpendFrozenIteration,
   stopUnfundedIteration,
 } from './agentExecutor.iterationCreditGate';
 
@@ -187,6 +188,58 @@ describe('stopBlockedAccountIteration', () => {
   });
 });
 
+describe('stopSpendFrozenIteration', () => {
+  const denial = 'Spending is paused for this account. Contact support.';
+  const gateArgs = (readFreezeDenial: () => Promise<string | null>) => ({
+    executionId: 'exec-1',
+    readFreezeDenial,
+    snapshot: vi.fn().mockReturnValue({ steps, partialAnswer: 'partial answer' }),
+  });
+
+  it('stops a run frozen since it was admitted, terminally and with the spend_frozen reason', async () => {
+    const deps = makeDeps();
+
+    await expect(
+      stopSpendFrozenIteration(
+        gateArgs(async () => denial),
+        deps
+      )
+    ).resolves.toBe(true);
+
+    expect(deps.markFailed).toHaveBeenCalledWith('exec-1', { message: denial });
+    expect(deps.sendWs).toHaveBeenCalledWith('failed', {
+      executionId: 'exec-1',
+      reason: 'spend_frozen',
+      partialResult: steps,
+    });
+    expect(deps.persistRunAsQuest).toHaveBeenCalledWith('exec-1', `Stopped: ${denial}`);
+  });
+
+  it('lets an unfrozen run continue, without snapshotting the agent', async () => {
+    const deps = makeDeps();
+    const args = gateArgs(async () => null);
+
+    await expect(stopSpendFrozenIteration(args, deps)).resolves.toBe(false);
+
+    expect(args.snapshot).not.toHaveBeenCalled();
+    expect(deps.markFailed).not.toHaveBeenCalled();
+  });
+
+  it('propagates a failed freeze read so the message is retried rather than the run stopped', async () => {
+    const deps = makeDeps();
+
+    await expect(
+      stopSpendFrozenIteration(
+        gateArgs(async () => {
+          throw new Error('connection reset');
+        }),
+        deps
+      )
+    ).rejects.toThrow('connection reset');
+    expect(deps.markFailed).not.toHaveBeenCalled();
+  });
+});
+
 describe('aggregationWakeStartIteration', () => {
   it('exempts the resuming iteration of an aggregation wake and nothing else', () => {
     expect(aggregationWakeStartIteration(true, 4)).toBe(4);
@@ -263,6 +316,22 @@ describe('processExecution iteration-gate wiring', () => {
       /readAccessDenial: latchedAccountDenial\(\s*\(\) => inProcessAccountDenial,\s*\(\) => readUserAccessDenial\(\(user as IUserDocument\)\.id\)\s*\),/
     );
     expect(loopSource).toMatch(/if \(blocked\) return;/);
+  });
+
+  it('refuses a frozen run at start, ahead of the credit pre-flight, with the spend_frozen reason', () => {
+    const start = source.indexOf('const spendFreezeDenial = await readSpendFreezeDenial();');
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(start).toBeLessThan(source.indexOf('// Pre-flight credit check.'));
+    expect(source.slice(start, start + 450)).toMatch(
+      /markFailed\(executionId, \{ message: spendFreezeDenial \}\);\s+await sendWs\('failed', \{ executionId, reason: SPEND_FROZEN_STOP_REASON \}\);\s+return;/
+    );
+  });
+
+  it('re-reads the spend freeze before every iteration, ahead of the account and credit gates', () => {
+    const freezeGate = loopSource.indexOf('const frozen = await stopSpendFrozenIteration(');
+    expect(freezeGate).toBeGreaterThanOrEqual(0);
+    expect(freezeGate).toBeLessThan(loopSource.indexOf('const blocked = await stopBlockedAccountIteration('));
+    expect(loopSource).toMatch(/if \(frozen\) return;/);
   });
 
   it('grows the next estimate from the iteration that just ran', () => {
