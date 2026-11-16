@@ -1,3 +1,4 @@
+import { GatewayTimeoutError } from '@bike4mind/common';
 import {
   ACQUISITION_UNATTRIBUTED_KEY,
   attributedTouch,
@@ -206,7 +207,11 @@ export async function acquisitionCohortUserIds(
   }: { touch: AcquisitionTouchKind; key: string; converted: boolean; windowDays: number },
   { now, expiresAt }: { now: Date; expiresAt: number }
 ): Promise<string[]> {
-  const maxTimeMS = () => Math.max(1, Math.min(COHORT_MAX_TIME_MS, expiresAt - Date.now()));
+  const maxTimeMS = () => {
+    const remaining = expiresAt - Date.now();
+    if (remaining <= 0) throw new GatewayTimeoutError(ACQUISITION_TIMEOUT_MESSAGE);
+    return Math.min(COHORT_MAX_TIME_MS, remaining);
+  };
   return withinBudget(
     cohortUserIds(window, { touch, key, converted, windowDays }, { now, maxTimeMS }),
     expiresAt,

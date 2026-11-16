@@ -1,3 +1,4 @@
+import { ACQUISITION_FOLDED_FIELD_LIMIT } from '@bike4mind/server-utils/lib/subscriptions/acquisitionLimits';
 import { ADMIN_TAB_PARAM, ADMIN_USERS_TAB_SLUG, USER_ID_PARAM } from '@bike4mind/common';
 import {
   ADMIN_USERS_PAGE_SIZES,
@@ -190,7 +191,7 @@ const parseFlag = oneOf(['true'] as const);
 const parseAcquisitionPart = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined;
   const part = value.trim();
-  return part.length > 0 && part.length <= 200 ? part : undefined;
+  return part.length > 0 && part.length <= ACQUISITION_FOLDED_FIELD_LIMIT ? part : undefined;
 };
 
 export const USERS_SEARCH_PARSERS: {

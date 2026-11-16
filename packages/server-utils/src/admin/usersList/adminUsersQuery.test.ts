@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AdminUsersQuerySchema } from '../../app/utils/adminUsersFilter';
+import { ACQUISITION_FOLDED_FIELD_LIMIT } from '../../lib/subscriptions/acquisitionLimits';
 import {
   adminUsersSort,
   buildAdminUsersMatch,
@@ -288,9 +289,16 @@ describe('AdminUsersQuerySchema', () => {
     );
   });
 
+  it.each(['acqSource', 'acqMedium', 'acqCampaign'] as const)('bounds a folded %s without truncation', key => {
+    const value = 'i̇'.repeat(128);
+    const query = { ...month, acqSource: 'ads', [key]: value };
+    expect(AdminUsersQuerySchema.parse(query)[key]).toBe(value);
+    expect(issuesOf({ ...query, [key]: value + 'x' })).toHaveLength(1);
+  });
+
   it('rejects an empty or over-long part, a stray acq key and an unattributed row with a source', () => {
     expect(issuesOf({ ...month, acqSource: '   ' })).toHaveLength(1);
-    expect(issuesOf({ ...month, acqSource: 'a'.repeat(201) })).toHaveLength(1);
+    expect(issuesOf({ ...month, acqSource: 'a'.repeat(ACQUISITION_FOLDED_FIELD_LIMIT + 1) })).toHaveLength(1);
     expect(issuesOf({ ...month, acqMedium: 'cpc' })).toEqual(['acqMedium needs acqSource or acqUnattributed']);
     expect(issuesOf({ ...month, acqUnattributed: 'true', acqSource: 'ads' })).toEqual([
       'acqUnattributed excludes acqSource',

@@ -219,8 +219,9 @@ export async function findEligibleSignups<T extends object = object>(
 /**
  * Every active-eligible user created in [start, end), old enough to judge at `now`, with the furthest step
  * they reached. `withTooNew` also returns the ids of the active-eligible users in the window who are not old
- * enough yet; they are read separately so they never count toward the FUNNEL_COHORT_MAX of the judged window. A window holding more than FUNNEL_COHORT_MAX judgeable
- * signups is refused. `needsPayments: false` skips the payment lookups, so `paid` members read as `cameBack`.
+ * enough yet; they are read separately so they never count toward the FUNNEL_COHORT_MAX of the judged window.
+ * A window holding more than FUNNEL_COHORT_MAX judgeable signups is refused. `needsPayments: false` skips the
+ * payment lookups, so `paid` members read as `cameBack`.
  * Past `expiresAt` (epoch ms) it stops with a 504.
  */
 export async function classifyFunnelCohort(

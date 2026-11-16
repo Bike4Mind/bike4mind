@@ -84,9 +84,9 @@ function resolvedIdsCondition(context: AdminUsersQueryContext, key: ResolvedIdsK
 
 /**
  * The `$match` for a filter. Every condition is on a User field, so it also serves `find()` callers.
- * `hasApiKey`, `verdict`, the active window, `funnelStep` and the acquisition row match `_id` against ids resolved up front
- * rather than a per-user `$lookup`: the lookup cost one subquery per filtered user, and the DocumentDB
- * converter dropped its `status` condition.
+ * `hasApiKey`, `verdict`, the active window, `funnelStep` and the acquisition row match `_id` against ids
+ * resolved up front rather than a per-user `$lookup`: the lookup cost one subquery per filtered user,
+ * and the DocumentDB converter dropped its `status` condition.
  */
 export function buildAdminUsersMatch(filter: AdminUsersFilter, context: AdminUsersQueryContext): Condition {
   const conditions: Condition[] = [];

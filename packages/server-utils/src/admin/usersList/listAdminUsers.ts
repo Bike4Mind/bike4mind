@@ -1,4 +1,9 @@
-import { AI_USAGE_TRANSACTION_TYPES, CreditHolderType, UnprocessableEntityError } from '@bike4mind/common';
+import {
+  AI_USAGE_TRANSACTION_TYPES,
+  CreditHolderType,
+  GatewayTimeoutError,
+  UnprocessableEntityError,
+} from '@bike4mind/common';
 import {
   AnalyticsUserDay,
   CreditTransaction,
@@ -19,7 +24,7 @@ import type {
 } from '../../app/utils/adminUsersFilter';
 import { withSafeOrganization } from '../../utils/toSafeOrganizationSubdocument';
 import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '../../users/signupAnomaly';
-import { COHORT_MAX_TIME_MS, funnelStepUserIds } from '../../analytics/activationFunnel';
+import { COHORT_MAX_TIME_MS, funnelStepUserIds, withinBudget } from '../../analytics/activationFunnel';
 import { ACQUISITION_BUDGET_MS, acquisitionCohortUserIds } from '../../analytics/acquisitionConversion';
 import { ACQUISITION_UNATTRIBUTED_KEY, acquisitionKeyOf } from '../../app/utils/acquisitionTouch';
 import { signupVerdictUserIds } from '../../analytics/realSignup';
@@ -45,12 +50,12 @@ function cohortWindow(filter: AdminUsersFilter, key: 'verdict' | 'funnelStep' | 
  * Users with a rolled-up day of first-party AI activity (the active flag) in [fromDay, toDay],
  * served by the { day, active, userId } index.
  */
-async function activeUserIds(fromDay: string, toDay: string): Promise<string[]> {
+async function activeUserIds(fromDay: string, toDay: string, maxTimeMS = LIST_MAX_TIME_MS): Promise<string[]> {
   const rows = await AnalyticsUserDay.aggregate<{ _id: string }>([
     { $match: { day: { $gte: fromDay, $lte: toDay }, active: true } },
     { $group: { _id: '$userId' } },
     { $limit: ACTIVE_USERS_MAX + 1 },
-  ]).option({ maxTimeMS: LIST_MAX_TIME_MS });
+  ]).option({ maxTimeMS });
   if (rows.length > ACTIVE_USERS_MAX) {
     throw new UnprocessableEntityError(
       `More than ${ACTIVE_USERS_MAX.toLocaleString('en-US')} active users in this window. Narrow the active range.`
@@ -66,22 +71,30 @@ async function activeUserIds(fromDay: string, toDay: string): Promise<string[]> 
  */
 export async function adminUsersPipeline(
   filter: AdminUsersFilter,
-  now = new Date()
+  now = new Date(),
+  options: { expiresAt?: number } = {}
 ): Promise<mongoose.PipelineStage[]> {
+  const queryOptions = () =>
+    options.expiresAt === undefined ? {} : { maxTimeMS: remainingExportTime(options.expiresAt, LIST_MAX_TIME_MS) };
   const names = organizationNamesOf(filter);
   const organizationIds =
     names && names.length > 0
       ? (
           await Organization.find({ name: { $in: names } })
+            .setOptions(queryOptions())
             .select('_id')
             .lean()
         ).map(org => org._id)
       : [];
   // Key rows store userId as a string. One id per keyed user, which stays far below the 16 MB result cap.
   const liveApiKeyUserIds = filter.hasApiKey
-    ? ((await UserApiKey.distinct('userId', { status: LIVE_API_KEY_STATUS })) as unknown[]).map(String)
+    ? (
+        (await UserApiKey.distinct('userId', { status: LIVE_API_KEY_STATUS }).setOptions(queryOptions())) as unknown[]
+      ).map(String)
     : undefined;
-  const cohortOptions = { now, deadlineMs: LIST_MAX_TIME_MS };
+  const cohortMaxTimeMS =
+    options.expiresAt === undefined ? LIST_MAX_TIME_MS : remainingExportTime(options.expiresAt, LIST_MAX_TIME_MS);
+  const cohortOptions = { now, deadlineMs: cohortMaxTimeMS };
   const acquisitionCohort = filter.acqUnattributed
     ? ACQUISITION_UNATTRIBUTED_KEY
     : filter.acqSource
@@ -91,7 +104,9 @@ export async function adminUsersPipeline(
     filter.verdict
       ? signupVerdictUserIds({ ...cohortWindow(filter, 'verdict'), verdict: filter.verdict }, cohortOptions)
       : undefined,
-    filter.activeFrom && filter.activeTo ? activeUserIds(filter.activeFrom, filter.activeTo) : undefined,
+    filter.activeFrom && filter.activeTo
+      ? activeUserIds(filter.activeFrom, filter.activeTo, cohortMaxTimeMS)
+      : undefined,
     filter.funnelStep
       ? funnelStepUserIds({ ...cohortWindow(filter, 'funnelStep'), step: filter.funnelStep }, cohortOptions)
       : undefined,
@@ -109,7 +124,7 @@ export async function adminUsersPipeline(
             converted: filter.acqConverted === 'true',
             windowDays: Number(filter.acqWindow ?? '30'),
           },
-          { now, expiresAt: Date.now() + ACQUISITION_BUDGET_MS }
+          { now, expiresAt: Math.min(Date.now() + ACQUISITION_BUDGET_MS, options.expiresAt ?? Infinity) }
         )
       : undefined,
   ]);
@@ -223,6 +238,15 @@ function withOrganizationIdentityOnly<T extends { organizationId?: unknown }>(ro
 export const USERS_EXPORT_MAX_ROWS = 15_000;
 // ms. Reads more rows than a page, but must finish inside the 60 s server Lambda timeout.
 const EXPORT_MAX_TIME_MS = 45_000;
+// Leave response serialization and delivery headroom inside the 60-second Lambda limit.
+const EXPORT_BUDGET_MS = 50_000;
+const EXPORT_TIMEOUT_MESSAGE = 'The Users export took too long. Narrow the date range or filters.';
+
+function remainingExportTime(expiresAt: number, limitMs = EXPORT_MAX_TIME_MS): number {
+  const remaining = expiresAt - Date.now();
+  if (remaining <= 0) throw new GatewayTimeoutError(EXPORT_TIMEOUT_MESSAGE);
+  return Math.min(limitMs, remaining);
+}
 
 export type AdminUsersExportRow = Pick<
   IUserObject,
@@ -235,8 +259,15 @@ export type AdminUsersExportRow = Pick<
 
 /** The CSV columns for every user the filter matches, newest first, up to USERS_EXPORT_MAX_ROWS. */
 export async function exportAdminUsers(filter: AdminUsersFilter, now = new Date()) {
+  const expiresAt = Date.now() + EXPORT_BUDGET_MS;
+  return withinBudget(readAdminUsersExport(filter, now, expiresAt), expiresAt, EXPORT_TIMEOUT_MESSAGE);
+}
+
+async function readAdminUsersExport(filter: AdminUsersFilter, now: Date, expiresAt: number) {
+  const pipeline = await adminUsersPipeline(filter, now, { expiresAt });
+  const maxTimeMS = remainingExportTime(expiresAt);
   const rows: (AdminUsersExportRow & { organizationId?: unknown })[] = await User.aggregate([
-    ...(await adminUsersPipeline(filter, now)),
+    ...pipeline,
     { $sort: { createdAt: -1, _id: -1 } },
     { $limit: USERS_EXPORT_MAX_ROWS + 1 },
     {
@@ -253,11 +284,16 @@ export async function exportAdminUsers(filter: AdminUsersFilter, now = new Date(
         lastLoginAt: { $max: '$loginRecords.loginTime' },
       },
     },
-  ]).option({ maxTimeMS: EXPORT_MAX_TIME_MS, allowDiskUse: true });
+  ]).option({ maxTimeMS, allowDiskUse: true });
   const organizationIds = [...new Set(rows.flatMap(row => (row.organizationId ? [String(row.organizationId)] : [])))];
-  const organizations = await Organization.find({ _id: { $in: organizationIds } })
-    .select('name')
-    .lean();
+  const organizationMaxTimeMS = remainingExportTime(expiresAt, LIST_MAX_TIME_MS);
+  const organizations =
+    organizationIds.length > 0
+      ? await Organization.find({ _id: { $in: organizationIds } })
+          .maxTimeMS(organizationMaxTimeMS)
+          .select('name')
+          .lean()
+      : [];
   const names = new Map(organizations.map(organization => [String(organization._id), organization.name]));
   return {
     truncated: rows.length > USERS_EXPORT_MAX_ROWS,

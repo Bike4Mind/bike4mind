@@ -14,6 +14,9 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import type { ActivationFunnel } from '@client/app/utils/activationFunnel';
 import type { AnalyticsOverview, AnalyticsTopAccounts } from '@client/app/utils/analyticsOverview';
 import { adminSearchForTab, parseAdminSearch } from '../adminTabParams';
+import { acquisitionTouchSchema } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
+import { acquisitionKeyOf, attributedTouch } from '@bike4mind/server-utils/app/utils/acquisitionTouch';
+import { AdminUsersFilterSchema } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 
 const mocks = vi.hoisted(() => {
   const overview = vi.fn();
@@ -908,57 +911,83 @@ describe('acquisition controls', () => {
     expect(router.state.location.search).toMatchObject({ acquisitionTouch: 'last' });
   });
 
-  it('drills a converted row to the Users list with the matching acquisition filter', async () => {
-    const metrics = {
-      signups: 3,
-      matureSignups: 3,
-      converted: 1,
-      provisionalConverted: 0,
-      provisional: false,
-      activationSignups: 3,
-      firstAction: 2,
-      cameBack: 1,
-    };
-    const row = {
-      ...metrics,
-      kind: 'touch',
-      key: 'ads|(none)|spring',
-      source: 'ads',
-      medium: '(none)',
-      campaign: 'spring',
-    };
-    mocks.acquisition.mockResolvedValueOnce({
-      data: {
-        status: 'ok',
-        signups: 'legit',
-        touch: 'last',
-        window: { createdFrom: '2026-05-19T00:00:00.000Z', createdTo: '2026-06-16T00:00:00.000Z' },
-        coverage: { signups: 3, attributed: 3, pct: 100 },
-        conversionWindowDays: 7,
-        followUpDays: 90,
-        renewalBasis: 'subscription-state',
-        totals: row,
-        rows: [row],
-        truncated: false,
-      },
-    } as never);
-    const router = await renderPage('/admin?tab=analytics');
-    fireEvent.click(await screen.findByTestId('acquisition-row-ads|(none)|spring-drill-converted-btn'));
-    await waitFor(() =>
-      expect(router.state.location.search).toMatchObject({
+  it.each([null, 'source', 'medium', 'campaign'] as const)(
+    'round-trips a converted row from stored touch to Users, including Unicode expansion in %s',
+    async expandedPart => {
+      const metrics = {
+        signups: 3,
+        matureSignups: 3,
+        converted: 1,
+        provisionalConverted: 0,
+        provisional: false,
+        activationSignups: 3,
+        firstAction: 2,
+        cameBack: 1,
+      };
+      const stored = acquisitionTouchSchema.parse({
+        source: 'ads',
+        campaign: 'spring',
+        ...(expandedPart ? { [expandedPart]: 'İ'.repeat(128) } : {}),
+      });
+      const touch = attributedTouch({ firstTouch: stored }, 'first');
+      if (!touch) throw new Error('Expected a normalized campaign touch');
+      if (expandedPart) {
+        expect(stored[expandedPart]).toHaveLength(128);
+        expect(touch[expandedPart]).toHaveLength(256);
+      }
+      const row = { ...metrics, kind: 'touch', ...touch };
+      mocks.acquisition.mockResolvedValueOnce({
+        data: {
+          status: 'ok',
+          signups: 'legit',
+          touch: 'last',
+          window: { createdFrom: '2026-05-19T00:00:00.000Z', createdTo: '2026-06-16T00:00:00.000Z' },
+          coverage: { signups: 3, attributed: 3, pct: 100 },
+          conversionWindowDays: 7,
+          followUpDays: 90,
+          renewalBasis: 'subscription-state',
+          totals: row,
+          rows: [row],
+          truncated: false,
+        },
+      } as never);
+      const router = await renderPage('/admin?tab=analytics');
+      fireEvent.click(await screen.findByTestId('acquisition-row-' + row.key + '-drill-converted-btn'));
+      await waitFor(() =>
+        expect(router.state.location.search).toMatchObject({
+          tab: 'users',
+          createdFrom: '2026-05-19T00:00:00.000Z',
+          createdTo: '2026-06-16T00:00:00.000Z',
+          acqTouch: 'last',
+          acqSource: row.source,
+          acqCampaign: row.campaign,
+          acqConverted: 'true',
+          acqWindow: '7',
+          verdict: 'legit',
+        })
+      );
+      expect(router.state.location.search.acqMedium).toBe(row.medium === '(none)' ? undefined : row.medium);
+      const filter = AdminUsersFilterSchema.parse(router.state.location.search);
+      expect(
+        acquisitionKeyOf({ source: filter.acqSource ?? '', medium: filter.acqMedium, campaign: filter.acqCampaign })
+      ).toBe(row.key);
+    }
+  );
+
+  it.each(['acqSource', 'acqMedium', 'acqCampaign'] as const)(
+    'refuses an overlong %s in both the route and server filter',
+    key => {
+      const search = {
         tab: 'users',
-        createdFrom: '2026-05-19T00:00:00.000Z',
-        createdTo: '2026-06-16T00:00:00.000Z',
-        acqTouch: 'last',
+        createdFrom: '2026-05-01T00:00:00Z',
+        createdTo: '2026-06-01T00:00:00Z',
         acqSource: 'ads',
-        acqCampaign: 'spring',
-        acqConverted: 'true',
-        acqWindow: '7',
-        verdict: 'legit',
-      })
-    );
-    expect(router.state.location.search.acqMedium).toBeUndefined();
-  });
+        [key]: 'i̇'.repeat(128) + 'x',
+      };
+      expect(parseAdminSearch(search)[key]).toBeUndefined();
+      expect(AdminUsersFilterSchema.safeParse(search).success).toBe(false);
+    }
+  );
 
   it('drops the acquisition controls on a switch to another tab', () => {
     const switched = adminSearchForTab(

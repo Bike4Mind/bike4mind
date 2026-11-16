@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ACQUISITION_FOLDED_FIELD_LIMIT } from '../../lib/subscriptions/acquisitionLimits';
 import type { AdminUserListItem } from './adminUserProjection';
 import type { EmailDomainGroup } from './signupAnomaly';
 import { USER_AI_VERDICT_FILTERS } from './aiAdvisory';
@@ -23,7 +24,7 @@ export const USER_FUNNEL_STEP_FILTERS = ['signedUp', 'firstAction', 'cameBack', 
 export type UserFunnelStep = (typeof USER_FUNNEL_STEP_FILTERS)[number];
 export const USER_ACQUISITION_TOUCH_FILTERS = ['first', 'last'] as const;
 export const USER_ACQUISITION_WINDOW_FILTERS = ['7', '30', '90'] as const;
-const acquisitionPart = z.string().trim().min(1).max(200);
+const acquisitionPart = z.string().trim().min(1).max(ACQUISITION_FOLDED_FIELD_LIMIT);
 
 export const ADMIN_USERS_SORT_FIELDS = ['createdAt', 'name', 'currentCredits', 'lastActiveAt'] as const;
 export type AdminUsersSortField = (typeof ADMIN_USERS_SORT_FIELDS)[number];
