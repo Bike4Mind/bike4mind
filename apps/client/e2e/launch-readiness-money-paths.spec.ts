@@ -25,7 +25,9 @@ test.describe('A6.1 money paths on a short screen and a slow link', { tag: ['@la
     });
     expect(resp.ok(), 'settings fetch succeeds').toBe(true);
     const rows = (await resp.json()) as { settingName: string; settingValue: unknown }[];
-    return rows.some(row => row.settingName === 'enforceCredits' && row.settingValue === true);
+    const row = rows.find(r => r.settingName === 'enforceCredits');
+    // No stored row resolves to the hosted default, which is on (same as credits.spec.ts).
+    return row ? row.settingValue === true : true;
   }
 
   // A user lands on the app first and clears whatever greets them, then opens billing. Anything that
@@ -52,7 +54,7 @@ test.describe('A6.1 money paths on a short screen and a slow link', { tag: ['@la
     const user = await apiCreateThrowawayUser(request, 'a61buy', { initialCredits: 1, includePredefinedTags: false });
     test.skip(
       !(await isCreditsEnforced(request, user.accessToken)),
-      'enforceCredits is off on this stage, so there is no credit purchase surface'
+      'enforceCredits is stored as off on this stage, so there is no credit purchase surface'
     );
     const { page, goto, close } = await openShortScreenPageAs(browser, baseURL, user);
     try {
