@@ -157,8 +157,7 @@ const StudioSegmentedControl = <Value extends string>({
             aria-selected={isTabs ? isSelected : undefined}
             aria-controls={isTabs ? option.panelId : undefined}
             aria-checked={segmentRole === 'radio' ? isSelected : undefined}
-            aria-current={isNav && isSelected ? 'page' : undefined}
-            tabIndex={isNav || isSelected ? 0 : -1}
+            tabIndex={isSelected ? 0 : -1}
             data-selected={isSelected}
             onClick={() => {
               if (!isSelected) onChange?.(option.value);
