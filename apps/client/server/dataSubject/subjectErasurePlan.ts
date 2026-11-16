@@ -23,18 +23,22 @@ import type { DataHolder, DataHolderRegistry, UserReference } from './types';
  * What the data holder registry says an erasure does to each document naming a person, per the
  * rules in `types.ts`: deleted, the person removed (anonymized or pulled from an array), or kept with
  * the reason. Read only: it is the admin dry run, and the check after the account purge that records
- * what still names the person. The purge (completeAccountDeletion.ts) does the erasing.
+ * what still names the person. Given a sink, it also hands each model's decisions to the writer
+ * (subjectErasureExecutor.ts).
  *
  * Decisions are made parents first, so each `viaParent` child knows what happens to its parent. The
  * subject's own `User` row is counted as deleted. Reads are projected to the paths a decision needs,
  * and children are read only under parents whose outcome decides theirs.
  */
 
-type Outcome = 'deleted' | 'anonymized' | 'retained';
+export type Outcome = 'deleted' | 'anonymized' | 'retained';
 
 type Decision = {
   outcome: Outcome;
   reasons: readonly string[];
+  /** The references that name the person on this document; empty for a child decided by its parent. */
+  matched: readonly UserReference[];
+  document?: LeanDocument;
   /**
    * How `viaParent` children treat this parent, or null when it is not about the person (they were
    * only pulled from an array) and children ignore it. Must stay in step with the parent buckets in
@@ -49,10 +53,20 @@ type Decision = {
 type KeysByPath = Map<string, Map<string, unknown>>;
 type ParentKeys = Record<Outcome, KeysByPath>;
 
-const DELETED: Decision = { outcome: 'deleted', reasons: [], childBucket: 'deleted' };
+const DELETED: Decision = { outcome: 'deleted', reasons: [], matched: [], childBucket: 'deleted' };
 
 /** Called before each model; throw to stop (a lost purge lease). */
 export type ErasureCheckpoint = () => Promise<void>;
+
+export type ErasureEntry = {
+  outcome: Outcome;
+  matched: readonly UserReference[];
+  /** Projected to the paths the decision read, with values as stored. */
+  document: LeanDocument;
+};
+
+/** Receives each model's decisions as soon as they are made, before the next model is read. */
+export type ErasureSink = (model: string, entries: readonly ErasureEntry[]) => Promise<void>;
 
 const keptWithParentReason = (parent: string) => `Kept with its ${parent} record`;
 
@@ -71,13 +85,19 @@ export class SubjectErasurePlan {
   }
 
   /** Per collection with any document naming the person, sorted by model name. */
-  async collections(checkpoint?: ErasureCheckpoint): Promise<AdminErasureCollection[]> {
+  async collections(checkpoint?: ErasureCheckpoint, sink?: ErasureSink): Promise<AdminErasureCollection[]> {
     const parentKeys = new Map<string, ParentKeys>();
     const collections: AdminErasureCollection[] = [];
     for (const model of this.models) {
       await checkpoint?.();
       const decisions = await this.decideModel(model, this.registry[model], parentKeys);
       this.rememberParentKeys(model, decisions, parentKeys);
+      if (sink && decisions.length > 0) {
+        await sink(
+          model,
+          decisions.flatMap(({ outcome, matched, document }) => (document ? [{ outcome, matched, document }] : []))
+        );
+      }
       if (decisions.length > 0) collections.push(summarise(model, decisions));
     }
     return collections.sort((a, b) => a.model.localeCompare(b.model));
@@ -148,11 +168,11 @@ export class SubjectErasurePlan {
     if (retains.length > 0) {
       const party = retains.some(reference => reference.exportScope !== 'reference');
       const reasons = [...new Set(retains.map(reference => reference.reason))];
-      return { outcome: 'retained', reasons, childBucket: party ? 'retained' : 'anonymized' };
+      return { outcome: 'retained', reasons, matched, childBucket: party ? 'retained' : 'anonymized' };
     }
-    if (matched.some(({ action }) => action === 'deleteDocument')) return DELETED;
+    if (matched.some(({ action }) => action === 'deleteDocument')) return { ...DELETED, matched };
     const anonymized = matched.some(({ action }) => action === 'anonymize');
-    return { outcome: 'anonymized', reasons: [], childBucket: anonymized ? 'anonymized' : null };
+    return { outcome: 'anonymized', reasons: [], matched, childBucket: anonymized ? 'anonymized' : null };
   }
 
   private async decideChildren(
@@ -204,7 +224,9 @@ export class SubjectErasurePlan {
       }
       if (under(retainedParents)) {
         const reasons = [keptWithParentReason(holder.parent)];
-        decisions.push(this.keyed(model, document, { outcome: 'retained', reasons, childBucket: 'retained' }));
+        decisions.push(
+          this.keyed(model, document, { outcome: 'retained', reasons, matched: [], childBucket: 'retained' })
+        );
       }
     }
     return decisions;
@@ -217,14 +239,14 @@ export class SubjectErasurePlan {
 
   private keyed(model: string, document: LeanDocument, decision: Decision): Decision {
     const keyPaths = this.keyPathsByParent.get(model);
-    if (!keyPaths) return decision;
+    if (!keyPaths) return { ...decision, document };
     const keys = new Map<string, unknown[]>();
     for (const keyPath of keyPaths)
       keys.set(
         keyPath,
         valuesAt(document, keyPath).filter(value => value != null)
       );
-    return { ...decision, keys };
+    return { ...decision, document, keys };
   }
 
   private rememberParentKeys(model: string, decisions: readonly Decision[], parentKeys: Map<string, ParentKeys>) {

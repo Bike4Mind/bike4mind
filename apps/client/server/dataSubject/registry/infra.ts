@@ -403,8 +403,8 @@ export const infraHolders = {
     secretPaths: ['routingToken', 'secret'],
   },
   // `userId` is the owner. Deleting a team organization would remove its members' workspace, so the owner link is
-  // anonymized here. Deleting the person's personal organizations (the `personal` flag, which
-  // `purgeAccountContent` filters on) is deferred to the erasure flow.
+  // anonymized here. The person's personal workspaces (the `personal` flag) are skipped by
+  // subjectErasureExecutor.ts and deleted by `hardDeleteUser` (completeAccountDeletion.ts).
   // `userDetails.email` and `.name` are removed with the element that `userDetails.id` pulls.
   // `serviceAccountUserId` names the org's system service account, never a person.
   Organization: {
