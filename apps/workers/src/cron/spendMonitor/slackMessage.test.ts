@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ISpendAlert } from '@bike4mind/common';
-import { buildSpendAlertMessage, type SpendAlertMessageInput } from './slackMessage';
+import { buildSpendAlertMessage, formatAccountAge, type SpendAlertMessageInput } from './slackMessage';
+import type { TopAccountContext } from './topAccountContext';
 
 const appUrl = 'https://app.example.com';
 const openedAt = new Date('2026-10-30T10:00:00Z');
@@ -363,5 +364,128 @@ describe('buildSpendAlertMessage', () => {
     expect(keyField?.length).toBeLessThanOrEqual(2000);
     expect(keyField).toMatch(/, \+\d+ more$/);
     expect(keyField).not.toMatch(/&(?:a|am|amp)?(?:,|$)/);
+  });
+});
+
+describe('top accounts on platform alarms', () => {
+  const MINUTE_MS = 60_000;
+  const DAY_MS = 24 * 60 * MINUTE_MS;
+  const NEW_USER_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+  const ORG_ID = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+  const PAID_USER_ID = 'cccccccccccccccccccccccc';
+  const platformAlert: ISpendAlert = { ...baseAlert, rule: 'platform_spike', scopeType: 'platform', scopeId: 'all' };
+  const platformScope = { label: 'Platform', payerType: 'unknown' as const, payerId: null, adminPath: null };
+
+  const newFreeUser: TopAccountContext = {
+    kind: 'user',
+    adminPath: `/admin/users/${NEW_USER_ID}`,
+    ageMs: 13 * MINUTE_MS,
+    creditBalance: 1000,
+    funding: 'granted',
+    topModel: { model: 'opus-x', calls: 3 },
+  };
+  const preFundedOrg: TopAccountContext = {
+    kind: 'org',
+    adminPath: `/admin?tab=organizations&orgId=${ORG_ID}`,
+    ageMs: 400 * DAY_MS,
+    creditBalance: 2_500_000,
+    funding: 'purchase',
+    topModel: { model: 'flux-3-video', calls: 42 },
+  };
+  const paidUser: TopAccountContext = {
+    kind: 'user',
+    adminPath: `/admin/users/${PAID_USER_ID}`,
+    ageMs: 3 * 365 * DAY_MS + DAY_MS,
+    creditBalance: 50_000,
+    funding: 'subscription',
+    topModel: null,
+  };
+
+  const buildPlatform = (topAccounts: NonNullable<SpendAlertMessageInput['breakdown']>['topAccounts'], url = appUrl) =>
+    build({
+      alert: platformAlert,
+      scope: platformScope,
+      appUrl: url,
+      breakdown: { topModels: [{ model: 'flux-3-video', credits: 3700 }], topAccounts },
+    });
+
+  /** The Top accounts section as Slack renders it, or null when the card has none. */
+  const topAccountsText = (message: ReturnType<typeof build>): string | null => {
+    const match = /"(\*Top accounts \(credits\)\*(?:[^"\\]|\\.)*)"/.exec(JSON.stringify(message));
+    return match ? (JSON.parse(`"${match[1]}"`) as string) : null;
+  };
+
+  it('flags a minutes-old free account with its model and admin link', () => {
+    const text = topAccountsText(
+      buildPlatform([{ label: 'new-signup@example.com', credits: 2400, account: newFreeUser }])
+    );
+    expect(text).toBe(
+      [
+        '*Top accounts (credits)*',
+        `new-signup@example.com: 2,400 - user, 13 min old, balance 1,000, free (granted credits only); opus-x x3 <${appUrl}/admin/users/${NEW_USER_ID}|admin>`,
+      ].join('\n')
+    );
+  });
+
+  it('shows an old pre-funded org as paid, with its org admin link', () => {
+    const text = topAccountsText(buildPlatform([{ label: 'Example Labs', credits: 3812, account: preFundedOrg }]));
+    expect(text).toBe(
+      [
+        '*Top accounts (credits)*',
+        `Example Labs: 3,812 - org, 1 y old, balance 2,500,000, paid (credit purchase); flux-3-video x42 <${appUrl}/admin?tab=organizations&orgId=${ORG_ID}|admin>`,
+      ].join('\n')
+    );
+  });
+
+  it('shows an old subscriber with no model activity and keeps every account on its own line', () => {
+    const text = topAccountsText(
+      buildPlatform([
+        { label: 'Example Labs', credits: 3812, account: preFundedOrg },
+        { label: 'subscriber@example.com', credits: 900, account: paidUser },
+      ])
+    );
+    const lines = text?.split('\n') ?? [];
+    expect(lines).toHaveLength(3);
+    expect(lines[2]).toBe(
+      `subscriber@example.com: 900 - user, 3 y old, balance 50,000, paid (subscription) <${appUrl}/admin/users/${PAID_USER_ID}|admin>`
+    );
+  });
+
+  it("falls back to today's label and credits when the lookup failed", () => {
+    const failed = buildPlatform([
+      { label: 'new-signup@example.com', credits: 2400 },
+      { label: 'Example Labs', credits: 3812 },
+    ]);
+    expect(topAccountsText(failed)).toBe(
+      ['*Top accounts (credits)*', 'new-signup@example.com: 2,400', 'Example Labs: 3,812'].join('\n')
+    );
+    expect(json(failed)).not.toContain('|admin>');
+  });
+
+  it('escapes the model name and leaves the link out without an app URL', () => {
+    const text = topAccountsText(
+      buildPlatform(
+        [
+          {
+            label: 'new-signup@example.com',
+            credits: 10,
+            account: { ...newFreeUser, creditBalance: null, ageMs: null, topModel: { model: '<!here>', calls: 1 } },
+          },
+        ],
+        ''
+      )
+    );
+    expect(text).toContain('user, age unknown, balance unknown, free (granted credits only); &lt;!here&gt; x1');
+    expect(text).not.toContain('|admin>');
+  });
+
+  it('formats account age coarsely', () => {
+    expect(formatAccountAge(0)).toBe('1 min old');
+    expect(formatAccountAge(59 * MINUTE_MS)).toBe('59 min old');
+    expect(formatAccountAge(60 * MINUTE_MS)).toBe('1 h old');
+    expect(formatAccountAge(2 * DAY_MS - 1)).toBe('47 h old');
+    expect(formatAccountAge(2 * DAY_MS)).toBe('2 d old');
+    expect(formatAccountAge(365 * DAY_MS)).toBe('1 y old');
+    expect(formatAccountAge(null)).toBe('age unknown');
   });
 });

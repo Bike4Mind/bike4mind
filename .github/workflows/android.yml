@@ -1,7 +1,7 @@
 name: Android
 
-# openapi.json is not a trigger: the job regenerates from the committed snapshot in apps/android/client, so it
-# cannot detect drift from the server spec. Same posture as ios.yml; spec sync is a tracked epic follow-up.
+# openapi.json is not a trigger: this job regenerates from the committed snapshot, so it cannot detect drift
+# from the server spec. native-openapi-drift.yml does that, as an advisory PR comment.
 on:
   pull_request:
     paths:

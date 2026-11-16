@@ -15,11 +15,21 @@ export function AgentStateChip({
   state,
   preparing = false,
   muted = false,
+  deciding = false,
 }: {
   state: AgentState;
   preparing?: boolean;
   muted?: boolean;
+  /** Waiting on a decision only the user can make. */
+  deciding?: boolean;
 }) {
+  if (deciding) {
+    return (
+      <Chip size="sm" color={STATE_COLOR['needs-you']} variant="solid" data-testid="orchestrator-state-chip-decision">
+        Needs your decision
+      </Chip>
+    );
+  }
   if (state === 'working' && preparing) {
     return (
       <Chip size="sm" color={STATE_COLOR.working} variant="outlined" data-testid="orchestrator-state-chip-preparing">

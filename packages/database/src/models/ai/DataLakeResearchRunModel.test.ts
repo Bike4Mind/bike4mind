@@ -8,6 +8,8 @@ import { setupMongoTest } from '../../__test__/utils';
 const LAKE = 'lake-1';
 
 const levers = (overrides: Partial<LegacyResearchRunLevers> = {}): LegacyResearchRunLevers => ({
+  source: 'search',
+  feedUrl: null,
   query: 'coastal erosion',
   maxResults: 10,
   maxProposals: 5,
@@ -397,5 +399,48 @@ describe('DataLakeResearchRunRepository', () => {
     expect(await repo.deleteForLake(LAKE)).toBe(2);
     expect(await repo.listByLake(LAKE)).toHaveLength(0);
     expect(await repo.listByLake('lake-2')).toHaveLength(1);
+  });
+  describe('feed runs', () => {
+    it('snapshots source and feedUrl on the levers', async () => {
+      const created = await repo.createRun(
+        input({ levers: levers({ source: 'feed', feedUrl: 'https://example.com/feed.xml' }) })
+      );
+
+      expect((await repo.findByIdInLake(created.id, LAKE))?.levers).toMatchObject({
+        source: 'feed',
+        feedUrl: 'https://example.com/feed.xml',
+      });
+    });
+
+    it('stores the backlog beside the totals at settle, and leaves it null for a search run', async () => {
+      const feedRun = await repo.createRun(input());
+      const searchRun = await repo.createRun(input());
+      const base = {
+        status: 'completed' as const,
+        completedAt: new Date(),
+        spentMicroUsd: 0,
+        totals: emptyResearchRunTotals(),
+      };
+
+      await repo.settleRun(feedRun.id, { ...base, feedBacklog: 7 });
+      await repo.settleRun(searchRun.id, base);
+
+      expect((await repo.findByIdInLake(feedRun.id, LAKE))?.feedBacklog).toBe(7);
+      expect((await repo.findByIdInLake(searchRun.id, LAKE))?.feedBacklog).toBeNull();
+    });
+
+    it('stores a zero backlog as zero, not null', async () => {
+      const run = await repo.createRun(input());
+
+      await repo.settleRun(run.id, {
+        status: 'completed',
+        completedAt: new Date(),
+        spentMicroUsd: 0,
+        totals: emptyResearchRunTotals(),
+        feedBacklog: 0,
+      });
+
+      expect((await repo.findByIdInLake(run.id, LAKE))?.feedBacklog).toBe(0);
+    });
   });
 });

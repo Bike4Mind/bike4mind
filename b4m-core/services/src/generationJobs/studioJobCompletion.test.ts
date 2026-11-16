@@ -8,7 +8,8 @@ import {
   type StudioJobCompletedEvent,
 } from '@bike4mind/common';
 import { createInMemoryGenerationJobRepository } from './__test__/inMemoryGenerationJobRepository';
-import { emitStudioJobCompletion, studioCompletionTitle } from './studioJobCompletion';
+import { announceGroupCompletion } from './groupCompletion';
+import { studioCompletionSubscriber, studioCompletionTitle } from './studioJobCompletion';
 
 const NOW = new Date('2026-11-12T10:00:00Z');
 const GROUP_ID = '6733a0000000000000000000';
@@ -33,7 +34,13 @@ const setup = () => {
   const publish = vi.fn(async (event: StudioJobCompletedEvent) => {
     published.push(event);
   });
-  const deps = { repository, publish, now: () => NOW };
+  const deps = {
+    repository,
+    subscribers: [studioCompletionSubscriber(publish)],
+    now: () => NOW,
+    logger: { error: vi.fn() },
+  };
+  const announce = (job: IGenerationJobDocument) => announceGroupCompletion(job, deps);
   let nextId = 0;
   const create = (overrides: Partial<IGenerationJob> = {}) =>
     repository.createJob({
@@ -57,18 +64,18 @@ const setup = () => {
     for (const state of states) jobs.push(await create({ state, payload: imagePayload(states.length), ...overrides }));
     return jobs;
   };
-  return { repository, deps, publish, published, create, createGroup };
+  return { repository, announce, publish, published, create, createGroup };
 };
 
-describe('emitStudioJobCompletion', () => {
+describe('studioCompletionSubscriber', () => {
   it('emits one event for a group whose takes all succeeded', async () => {
     const t = setup();
     const jobs = await t.createGroup(['succeeded', 'succeeded', 'succeeded', 'succeeded']);
 
     const outcomes = [];
-    for (const job of jobs) outcomes.push(await emitStudioJobCompletion(job, t.deps));
+    for (const job of jobs) outcomes.push(await t.announce(job));
 
-    expect(outcomes).toEqual(['emitted', 'already_emitted', 'already_emitted', 'already_emitted']);
+    expect(outcomes).toEqual(['announced', 'already_announced', 'already_announced', 'already_announced']);
     expect(t.published).toEqual([
       {
         version: 1,
@@ -91,7 +98,7 @@ describe('emitStudioJobCompletion', () => {
     const t = setup();
     const [last] = await t.createGroup(['failed', 'succeeded', 'blocked', 'succeeded']);
 
-    expect(await emitStudioJobCompletion(last, t.deps)).toBe('emitted');
+    expect(await t.announce(last)).toBe('announced');
     expect(t.published).toHaveLength(1);
     expect(t.published[0]).toMatchObject({ totalCount: 4, readyCount: 2, failedCount: 2, cancelledCount: 0 });
   });
@@ -100,7 +107,7 @@ describe('emitStudioJobCompletion', () => {
     const t = setup();
     const [last] = await t.createGroup(['failed', 'failed', 'blocked']);
 
-    expect(await emitStudioJobCompletion(last, t.deps)).toBe('emitted');
+    expect(await t.announce(last)).toBe('announced');
     expect(t.published[0]).toMatchObject({ totalCount: 3, readyCount: 0, failedCount: 3 });
   });
 
@@ -108,11 +115,11 @@ describe('emitStudioJobCompletion', () => {
     const t = setup();
     const [done, , running] = await t.createGroup(['succeeded', 'succeeded', 'running']);
 
-    expect(await emitStudioJobCompletion(done, t.deps)).toBe('group_pending');
+    expect(await t.announce(done)).toBe('group_pending');
     expect(t.publish).not.toHaveBeenCalled();
 
     t.repository.jobs.get(running.id)!.state = 'succeeded';
-    expect(await emitStudioJobCompletion(running, t.deps)).toBe('emitted');
+    expect(await t.announce(running)).toBe('announced');
     expect(t.published[0]).toMatchObject({ readyCount: 3 });
   });
 
@@ -120,7 +127,7 @@ describe('emitStudioJobCompletion', () => {
     const t = setup();
     const first = await t.create({ state: 'failed', payload: imagePayload(4) });
 
-    expect(await emitStudioJobCompletion(first, t.deps)).toBe('group_pending');
+    expect(await t.announce(first)).toBe('group_pending');
     expect(t.publish).not.toHaveBeenCalled();
   });
 
@@ -128,9 +135,9 @@ describe('emitStudioJobCompletion', () => {
     const t = setup();
     const [a, b] = await t.createGroup(['succeeded', 'failed']);
 
-    const outcomes = await Promise.all([emitStudioJobCompletion(a, t.deps), emitStudioJobCompletion(b, t.deps)]);
+    const outcomes = await Promise.all([t.announce(a), t.announce(b)]);
 
-    expect(outcomes.sort()).toEqual(['already_emitted', 'emitted']);
+    expect(outcomes.sort()).toEqual(['already_announced', 'announced']);
     expect(t.publish).toHaveBeenCalledTimes(1);
   });
 
@@ -138,7 +145,7 @@ describe('emitStudioJobCompletion', () => {
     const t = setup();
     const [last] = await t.createGroup(['cancelled', 'cancelled']);
 
-    expect(await emitStudioJobCompletion(last, t.deps)).toBe('all_cancelled');
+    expect(await t.announce(last)).toBe('all_cancelled');
     expect(t.publish).not.toHaveBeenCalled();
   });
 
@@ -146,7 +153,7 @@ describe('emitStudioJobCompletion', () => {
     const t = setup();
     const [last] = await t.createGroup(['succeeded', 'cancelled', 'failed']);
 
-    await emitStudioJobCompletion(last, t.deps);
+    await t.announce(last);
     expect(t.published[0]).toMatchObject({ readyCount: 1, failedCount: 1, cancelledCount: 1 });
   });
 
@@ -154,7 +161,7 @@ describe('emitStudioJobCompletion', () => {
     const t = setup();
     const [last] = await t.createGroup(['succeeded'], { source: 'api' });
 
-    expect(await emitStudioJobCompletion(last, t.deps)).toBe('not_studio');
+    expect(await t.announce(last)).toBe('no_audience');
     expect(t.publish).not.toHaveBeenCalled();
   });
 
@@ -162,7 +169,7 @@ describe('emitStudioJobCompletion', () => {
     const t = setup();
     const job = await t.create({ kind: 'video', state: 'succeeded', payload: videoPayload });
 
-    expect(await emitStudioJobCompletion(job, t.deps)).toBe('emitted');
+    expect(await t.announce(job)).toBe('announced');
     expect(t.published[0]).toMatchObject({
       groupId: job.id,
       medium: 'video',
@@ -178,7 +185,7 @@ describe('emitStudioJobCompletion', () => {
     await t.create({ state: 'succeeded', payload: imagePayload() });
     const last = await t.create({ state: 'failed', payload: imagePayload() });
 
-    expect(await emitStudioJobCompletion(last, t.deps)).toBe('emitted');
+    expect(await t.announce(last)).toBe('announced');
     expect(t.published[0]).toMatchObject({ totalCount: 2, readyCount: 1, failedCount: 1 });
   });
 });

@@ -146,7 +146,7 @@ export const NotificationEvents = {
 };
 
 /**
- * One per finished Studio group, published by emitStudioJobCompletion (b4m-core/services generationJobs). Consumed by
+ * One per finished Studio group, published by studioCompletionSubscriber (b4m-core/services generationJobs). Consumed by
  * apps/workers/src/events/studioJobCompleted.ts; a native notifier subscribes to the same detail-type.
  */
 export const StudioEvents = {
@@ -241,6 +241,20 @@ export const LLMEvents = {
       // true. See createMemento.
       enableMementos: z.boolean().optional(),
       enableMementosV2: z.boolean().optional(),
+    })
+  ),
+};
+
+export const SlackEvents = {
+  QuickAskRequested: event(
+    'slack.quickAsk.requested',
+    z.object({
+      requestId: z.string().min(1).max(200).optional(),
+      requestedAt: z.iso.datetime().optional(),
+      slackUserId: z.string(),
+      b4mUserId: z.string(),
+      question: z.string(),
+      workspaceId: z.string(),
     })
   ),
 };
@@ -351,6 +365,7 @@ export const JiraHistoryAnalysisEvents = {
       analysisJobId: z.string(),
       projectKey: z.string(), // Jira project key, e.g. "PROJ"
       userId: z.string(),
+      cloudId: z.string().optional(),
     })
   ),
   Progress: event(

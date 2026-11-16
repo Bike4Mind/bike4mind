@@ -13,6 +13,7 @@ import { generateMusicContract } from './music.contract';
 import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
 import { getClientConfigContract } from './clientConfig.contract';
+import { approvePendingActionContract, denyPendingActionContract } from './pendingActions.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
 import { mintPersonaContract, deletePersonaContract } from './personas.contract';
 import { getCreditBalanceContract } from './credits.contract';
@@ -28,6 +29,7 @@ import {
   chunkFileContract,
   searchFilesContract,
   getFilesByIdsContract,
+  getFileLineageContract,
   bulkDeleteFilesContract,
 } from './files.contract';
 import { createEmbeddingsContract, listEmbeddingModelsContract } from './embeddings.contract';
@@ -116,6 +118,8 @@ import {
   generateAgentDescriptionContract,
   generateAgentSystemPromptContract,
   enhanceAgentFieldContract,
+  transferAgentCreditsContract,
+  createAgentFromContextContract,
 } from './agents.contract';
 import {
   getClaudeBundleZipContract,
@@ -157,6 +161,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   generateSoundEffectContract,
   getMeContract,
   getClientConfigContract,
+  approvePendingActionContract,
+  denyPendingActionContract,
   registerPushTokenContract,
   unregisterPushTokenContract,
   getCreditBalanceContract,
@@ -171,6 +177,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   chunkFileContract,
   searchFilesContract,
   getFilesByIdsContract,
+  getFileLineageContract,
   bulkDeleteFilesContract,
   createEmbeddingsContract,
   listEmbeddingModelsContract,
@@ -247,6 +254,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   generateAgentDescriptionContract,
   generateAgentSystemPromptContract,
   enhanceAgentFieldContract,
+  transferAgentCreditsContract,
+  createAgentFromContextContract,
   getClaudeMarketplaceContract,
   getClaudePluginZipContract,
   getClaudeBundleZipContract,

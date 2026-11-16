@@ -65,6 +65,11 @@ export interface WatchSnapshot {
   pending: WatchPending[];
 }
 
+/** 1 while the orchestrating session itself waits on the user: countAgentStates' `parentsNeedingYou`. */
+export function rootNeedsYou(orchestration: Pick<WatchOrchestration, 'rootId' | 'statuses'>): number {
+  return orchestration.statuses[orchestration.rootId] === 'needs-action' ? 1 : 0;
+}
+
 export const EMPTY_WATCH_SNAPSHOT: WatchSnapshot = {
   overall: 'idle',
   needsYouCount: 0,
@@ -165,8 +170,9 @@ export function buildWatchSnapshot(input: WatchSnapshotInput): WatchSnapshot {
     for (const member of members) {
       const status = statuses.get(member.id);
       if (status === 'processing') working = true;
+      // The dock badge's rule (needsYouCount), so the menu-bar title and header count the same.
+      if (deriveTaskAgentState(member, status) === 'needs-you') needsYouCount += 1;
       if (status !== 'needs-action') continue;
-      needsYouCount += 1;
       const waitingSince = needsYouSince.get(member.id) ?? now;
       since = since === null ? waitingSince : Math.min(since, waitingSince);
       for (const call of pending.get(member.id) ?? []) {

@@ -54,6 +54,7 @@ import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLe
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
+import { organizationRetentionDeadLetter } from './organizationRetention';
 import { businessMetricAlertsDLQ } from './businessMetricAlerts';
 import { dlqAlarmHandlerDlq } from './dlqAlarmHandlerDeadLetter';
 import { mcpHandler } from './mcp';
@@ -292,6 +293,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
         'subscription-reconciliation': subscriptionReconciliationDeadLetter.queue.url,
       }),
       ...(accountDeletionSweepDeadLetter && { 'account-deletion-sweep': accountDeletionSweepDeadLetter.queue.url }),
+      ...(organizationRetentionDeadLetter && { 'organization-retention': organizationRetentionDeadLetter.queue.url }),
       ...(businessMetricAlertsDLQ && { 'business-metric-alerts': businessMetricAlertsDLQ.url }),
     }),
     // This raw AWS queue retains its existing provider-assigned physical name.
