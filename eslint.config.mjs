@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import noRawEntityResponse from './eslint-rules/no-raw-entity-response.mjs';
 import noRawAdminJoy from './eslint-rules/no-raw-admin-joy.mjs';
 import noContentInLogMessage from './eslint-rules/no-content-in-log-message.mjs';
+import noWorkersServerBridge from './eslint-rules/no-workers-server-bridge.mjs';
 
 /**
  * ESLint Flat Config for Bike4Mind Monorepo
@@ -387,6 +388,7 @@ const localRuleSources = [
   './eslint-rules/admin-joy-legacy.mjs',
   './eslint-rules/admin-joy-legacy-imports.mjs',
   './eslint-rules/no-content-in-log-message.mjs',
+  './eslint-rules/no-workers-server-bridge.mjs',
 ];
 const localRulesPlugin = {
   meta: {
@@ -400,6 +402,7 @@ const localRulesPlugin = {
     'no-raw-entity-response': noRawEntityResponse,
     'no-raw-admin-joy': noRawAdminJoy,
     'no-content-in-log-message': noContentInLogMessage,
+    'no-workers-server-bridge': noWorkersServerBridge,
   },
 };
 
@@ -778,6 +781,14 @@ export default defineConfig([
         },
       ],
     },
+  },
+
+  // Freezes the interim @server/* bridge into apps/client: existing uses are baselined in
+  // eslint-suppressions.json, so only new ones fail. Tests are included because vi.mock needs the alias too.
+  {
+    files: ['apps/workers/**/*.ts'],
+    plugins: { b4m: localRulesPlugin },
+    rules: { 'b4m/no-workers-server-bridge': 'error' },
   },
 
   // packages/server-utils - the server code apps/client and apps/workers share. Both apps depend on
