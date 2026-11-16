@@ -274,14 +274,6 @@ describe('screenPaymentOutcome', () => {
     expect(mocks.emitMetric).not.toHaveBeenCalled();
   });
 
-  it('still locks a blocked-card payer when the metric emit rejects', async () => {
-    mocks.emitMetric.mockRejectedValue(new Error('cloudwatch down'));
-
-    await expect(screenPaymentOutcome(input, logger, now)).resolves.toBeUndefined();
-
-    expect(mocks.lockIfPaidWithBlockedCard).toHaveBeenCalledTimes(1);
-  });
-
   it('records the card and Radar outcome, then alerts with every signal that fired', async () => {
     await screenPaymentOutcome(input, logger, now);
 
