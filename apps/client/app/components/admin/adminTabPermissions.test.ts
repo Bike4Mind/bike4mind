@@ -50,6 +50,12 @@ describe('canOpenAdminTab', () => {
     expect(canOpenAdminTab(delegate('users:moderate'), AdminTab.ToolDefinitions)).toBe(false);
   });
 
+  it('opens Roles to a support reader and not to other delegates', () => {
+    expect(canOpenAdminTab(delegate('support:read'), AdminTab.Roles)).toBe(true);
+    expect(canOpenAdminTab(delegate('settings:manage'), AdminTab.Roles)).toBe(false);
+    expect(canOpenAdminTab(delegate('credits:adjust', 'users:moderate'), AdminTab.Roles)).toBe(false);
+  });
+
   it('refuses everything to a user with no admin role', () => {
     expect(canOpenAdminTab({ isAdmin: false }, AdminTab.Modals)).toBe(false);
     expect(canOpenAdminTab(null, AdminTab.Modals)).toBe(false);
