@@ -325,6 +325,30 @@ describe('POST /api/v1/files/bulk-delete', () => {
     expect(JSON.stringify(body)).not.toContain('E11000');
   });
 
+  it('keeps every denied id in the public not_found bucket alongside mixed outcomes', async () => {
+    withScopes([ApiKeyScope.WRITE_FILES]);
+    const denied = '65a000000000000000000003';
+    const unshared = '65a000000000000000000004';
+    mockBulkDelete.mockResolvedValue({
+      deleted: [FILE_ID],
+      unshared: [unshared],
+      notFound: [OTHER_ID],
+      denied: [denied],
+      failed: [],
+    });
+    const res = await bulkDelete({ file_ids: [FILE_ID, OTHER_ID, denied, unshared, 'bad-id', denied] });
+    expect(res._getStatusCode()).toBe(200);
+    const body = res._getJSONData();
+    expect(body).toEqual({
+      deleted: [FILE_ID],
+      unshared: [unshared],
+      not_found: [OTHER_ID, denied, 'bad-id'],
+      failed: [],
+    });
+    const reported = [...body.deleted, ...body.unshared, ...body.not_found];
+    expect(new Set(reported).size).toBe(reported.length);
+  });
+
   it('reports a malformed id as not_found without deleting it', async () => {
     withScopes([ApiKeyScope.WRITE_FILES]);
     const res = await bulkDelete({ file_ids: [FILE_ID, 'not-an-id'] });

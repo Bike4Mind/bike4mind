@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   updateByStripeSubscriptionId: vi.fn(),
   markPastDue: vi.fn(),
   notifyPaymentFailed: vi.fn(),
+  notifyOrgEvent: vi.fn(),
   notifyCanceledForNonPayment: vi.fn(),
   sendToClient: vi.fn(),
   postMessageToSlack: vi.fn(),
@@ -152,6 +153,10 @@ vi.mock('@server/billing/paymentFailureNotice', () => ({
   notifyPaymentFailed: mocks.notifyPaymentFailed,
   notifyCanceledForNonPayment: mocks.notifyCanceledForNonPayment,
 }));
+vi.mock('@bike4mind/services/organizationService/orgEventObserver', () => ({
+  notifyOrgEvent: mocks.notifyOrgEvent,
+  setOrgEventObserver: vi.fn(),
+}));
 // The store itself (stage check, owner, projection) is covered in server/billing/billingEventStore.test.ts.
 vi.mock('@server/billing/billingEventStore', () => ({ recordBillingEvent: mocks.recordBillingEvent }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' }, App: { stage: 'test' } } }));
@@ -258,6 +263,38 @@ describe('signup unlock forfeits', () => {
 });
 
 describe('invoice.payment_failed', () => {
+  const orgRow = { ...userRow, ownerType: SubscriptionOwnerType.Organization, ownerId: 'org_1' };
+
+  it("alerts the org's admins once the owner's notice is claimed", async () => {
+    mocks.markPastDue.mockResolvedValue(orgRow);
+    mocks.notifyPaymentFailed.mockResolvedValue(true);
+
+    await deliver(failedInvoice());
+
+    expect(mocks.notifyOrgEvent).toHaveBeenCalledExactlyOnceWith({
+      type: 'payment_failed',
+      organizationId: 'org_1',
+      invoiceId: 'in_1',
+    });
+  });
+
+  it('does not alert org admins on a redelivery whose notice was already claimed', async () => {
+    mocks.markPastDue.mockResolvedValue(orgRow);
+    mocks.notifyPaymentFailed.mockResolvedValue(false);
+
+    await deliver(failedInvoice());
+
+    expect(mocks.notifyOrgEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not raise an org alert for a personal subscription', async () => {
+    mocks.notifyPaymentFailed.mockResolvedValue(true);
+
+    await deliver(failedInvoice());
+
+    expect(mocks.notifyOrgEvent).not.toHaveBeenCalled();
+  });
+
   it('marks the row past_due and emails its owner', async () => {
     const res = await deliver(failedInvoice());
 

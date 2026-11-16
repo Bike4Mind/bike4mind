@@ -5,9 +5,9 @@ const LEGACY_SEED = `
 0014144d7a31 00459418c5d4 0082e20e5e16 012943bc9f1f 015fe5574654 019613c66472 01e76397a5b1 025026e73656
 02a9a8784972 02db23b9c09d 02eb81a2d4be 03ae80759d70 0499f2fb2938 04c2eb056241 059f95b85ce8
 069c0fd3979b 0788614b3938 07c79827305e 07dcf88475fe 080ed3e0d392 085a16311592 085f7b671c0e 08e7e98a46ea
-0a251cf95f46 0aabf881da2b 0b337074c70f 0c88b6367241 0d6ae17c640a 0e4aea3f65e2 0f41949eaec1
+0aabf881da2b 0b337074c70f 0c88b6367241 0d6ae17c640a 0e4aea3f65e2 0f41949eaec1
 1072c65e46a4 10dbc40ebbe9 10f24ae25362 115f3f769671 12482b7e1ad0 129566209214 1321a72682a9
-1684e10bfdb3 174f292b2c5d 17e8900be450 194285aca1ba 1aaca6dce28e 1bb806fd997f
+1684e10bfdb3 17e8900be450 194285aca1ba 1aaca6dce28e 1bb806fd997f
 1bc6f6451909 1fb1f3fc424e 206ac1b5c273 21d0bb0f522a 22394c3ae59f 23c5dbe38c62
 243cad0a8ac5 24eadc5b33cc 25067d35251b 258fbe859b6d 25bcdf101b50 25ce8ddf9d2b
 29051873ed26 2920ec150470 2a04f7bff6fe 2bf7b61bed84 2bff116a55f5 2c025eb3b73c
@@ -28,15 +28,15 @@ const LEGACY_SEED = `
 76467e0ca19b 7754cd457960 777dd2c3b707 77d0050dc89d 792b8f3b724e 793331087f34 795061ea8886 7962d46a3446
 79b8cbfc6191 79ea94f9b88b 7a0b85223940 7a50ea2ea194 7ce094888133
 80c347fac5c3 83165b5eba40 87151090a57a 887df910134d 888d16d5150f 8a6e6e9471e0 8ad42d260760
-8c0e1bee2b84 8cba600510be 8f30f4df4e00 9010936ef52e 9055466fcd66 915da41cefea 915f3bafe4aa
+8cba600510be 8f30f4df4e00 9010936ef52e 9055466fcd66 915da41cefea 915f3bafe4aa
 91e44cbba12e 9254086e6ed4 94bbfbdc2d93 964d26f17aa0
-9753176e5bb6 979461b1272f 983d9ce4696f 98fb4183f353 99069dcdd917 994a7f7c9794
+9753176e5bb6 979461b1272f 983d9ce4696f 98fb4183f353 994a7f7c9794
 99fa0c084e36 9a026e700cfa 9a1ff7e1d12e 9a4341780250 9cfe2eb5678c 9e33e2f983fb 9e52b5b6346b 9edad7f1553a
 9f37736e6fd4 9f3c722a7f67 9f3d3f1ad7fd 9fe9a48f4854 a16323739af9 a18d2ff783bc a280c00afed4 a2a7c12f14d5
 a3f668fd4337 a506d4524398 a55e1ffa0a01 a5c186a4566f a60937820a10 a71db4c94101
 a72eeda922cd a83f1d351296 a85ea22e23aa a8d5a258a0c1 a8ff7ea266a0 a9971548b046 aada9ea4dafb ab12e849ff49
 ab42063db17b acd55bc542a0 adacd7acc19b ae16bf8273b5 b1697044be20 b23231a84d81
-b353e60d17ba b40ffa3a1dbf b41b44ce4353 b4a4a2b7ffc8 b6b845a3bc97 b7b08bbdbe5a b7b736e1f21b b82d70b355a2
+b40ffa3a1dbf b41b44ce4353 b4a4a2b7ffc8 b6b845a3bc97 b7b08bbdbe5a b7b736e1f21b b82d70b355a2
 b874bdda5f71 baf01b51e4b7 bb2d0b43d52a beef1bc8cb2d bf09f35f0f2e c0adb9f551c2
 c4fae3cb4fe3 c540d14fc295 c791ba46d0aa c85527a2a3c4
 c87f0ad2714d c93de48dc431 c9e85a6882b7 cb023f64b05c cd0d66e9428d
@@ -64,13 +64,11 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/ai/classify-intent',
     '/api/ai/test-realtime-voice',
     '/api/ai/voice-sessions',
-    '/api/analytics/aggregate',
     '/api/analytics/log-event',
     '/api/api-keys',
     '/api/api-keys/[id]/delete',
     '/api/api-keys/[id]/set-active',
     '/api/api-keys/create',
-    '/api/app-files',
     '/api/app-files/[id]/upload',
     '/api/app-files/delete',
     '/api/app-files/generate-presigned-url',
@@ -308,11 +306,9 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/slack/workspace/[workspaceId]',
     '/api/stripe/portal',
     '/api/stripe/start-payment',
-    '/api/subscriptions',
     '/api/subscriptions/[ownerType]/[ownerId]',
     '/api/subscriptions/checkout-session',
     '/api/subscriptions/own',
-    '/api/subscriptions/stats',
     '/api/subscriptions/subscribe',
     '/api/system-prompts/activatable',
     '/api/transforms/batch',
@@ -332,7 +328,6 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/users/[id]/organization',
     '/api/users/[id]/organizations',
     '/api/users/[id]/projects',
-    '/api/users/[id]/recalculate-storage',
     '/api/users/[id]/slack-settings',
     '/api/users/[id]/telemetry-export',
     '/api/users/[id]/update',

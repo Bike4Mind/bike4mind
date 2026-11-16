@@ -10,6 +10,7 @@ import { CreditHolderType, UnprocessableEntityError, type IUserDocument } from '
 import type { ILogger } from '@bike4mind/observability';
 import { reserveRequestCredits, type CreditLedgerEntry } from '@bike4mind/server-utils/billing/reserveRequestCredits';
 import { attributeToRequestApiKey } from '@bike4mind/server-utils/billing/attributeToRequestApiKey';
+import { notifyOrgEvent } from '@bike4mind/services/organizationService/orgEventObserver';
 
 // A billing state, not a bug. Each caller maps it onto its own established
 // response (422 `insufficient_credits` or 400) so this change does not
@@ -71,6 +72,7 @@ export async function assertPreflightCredits({
   // (deductCreditsWithOrgSupport reserves the cap for pre-reserved routes - see creditHold.ts).
   if (organization) {
     if (creditService.isMemberCreditCapExceeded(organization, userId, requiredCredits)) {
+      await notifyOrgEvent({ type: 'member_cap_check', organizationId: organization.id, userId, refused: true });
       throw new InsufficientCreditsPreflightError(
         `Your organization member credit limit has been reached for ${featureLabel}. Contact your organization administrator.`
       );

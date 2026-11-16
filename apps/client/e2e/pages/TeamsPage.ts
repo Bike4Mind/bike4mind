@@ -10,15 +10,12 @@ export type TeamTab =
   | 'Groups'
   | 'Usage'
   | 'Analysis'
-  | 'Billing'
   | 'Integrations'
-  | 'GitHub API'
-  | 'Webhooks'
-  | 'Connectors'
-  | 'API Keys'
   | 'Domains'
-  | 'Settings'
-  | 'Audit';
+  | 'Billing'
+  | 'API keys'
+  | 'Audit'
+  | 'Settings';
 
 export const ALL_TEAM_TABS: TeamTab[] = [
   'Overview',
@@ -27,15 +24,12 @@ export const ALL_TEAM_TABS: TeamTab[] = [
   'Groups',
   'Usage',
   'Analysis',
-  'Billing',
   'Integrations',
-  'GitHub API',
-  'Webhooks',
-  'Connectors',
-  'API Keys',
   'Domains',
-  'Settings',
+  'Billing',
+  'API keys',
   'Audit',
+  'Settings',
 ];
 
 /**
