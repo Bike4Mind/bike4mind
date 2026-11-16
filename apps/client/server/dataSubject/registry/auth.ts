@@ -147,6 +147,11 @@ export const authHolders = {
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
     secretPaths: ['tokenHash'],
   },
+  OrgDomainClaim: {
+    kind: 'holder',
+    references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
+    secretPaths: ['verificationToken'],
+  },
   PartnerSignupRule: {
     kind: 'holder',
     references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],

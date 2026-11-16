@@ -178,7 +178,8 @@ const handler = baseApi({ auth: false })
 
     // 5. Load the user; a sub that resolves to no B4M user is an invalid grant.
     const user = await userRepository.findById(b4mUserId);
-    if (!user) {
+    // A system account (e.g. an org service account) cannot sign in, so it gets no token here either.
+    if (!user || user.isSystem) {
       logError('invalid_grant', 401);
       return res
         .status(401)
@@ -212,7 +213,7 @@ const handler = baseApi({ auth: false })
     }
 
     // 6.5. The admin paid-only switch; the same gate re-runs on every use of the key.
-    if (!(await isApiKeyAccessAllowed(user, undefined, req))) {
+    if (!(await isApiKeyAccessAllowed(user, { oauthExchangeClientId: client_id }, req))) {
       logError(SUBSCRIPTION_REQUIRED_ERROR, 403);
       return res
         .status(403)

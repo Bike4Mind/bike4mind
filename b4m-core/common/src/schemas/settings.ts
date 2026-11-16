@@ -335,6 +335,9 @@ export const SettingKeySchema = z.enum([
   'EnableLattice',
   'EnableLatticeDefault',
   'EnableDataLakes',
+  'EnableSpaces',
+  'SpaceCreationRequiresPaidStanding',
+  'SpaceMaxMembers',
   'EnableDataLakeSlackAdd',
   'EnableDataLakeGroundingMode',
   'EnableLakeMemory',
@@ -3513,6 +3516,39 @@ export const settingsMap = {
     // so Lake is the meaningful rung and the wider rungs are operator escape hatches.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
+  EnableSpaces: makeBooleanSetting({
+    key: 'EnableSpaces',
+    name: 'Enable Spaces',
+    defaultValue: false,
+    description:
+      'Server-side gate for Spaces (user-owned groups with invites and join links). Off by default; turn on to expose the Spaces APIs.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 303,
+  }),
+  SpaceCreationRequiresPaidStanding: makeBooleanSetting({
+    key: 'SpaceCreationRequiresPaidStanding',
+    name: 'Spaces: Creation requires paid standing',
+    defaultValue: true,
+    description:
+      'When on, only accounts with an active paid subscription or a credit purchase can create a Space. Admins and developer-tagged accounts are exempt. A verified email is required either way.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 304,
+    dependsOn: 'EnableSpaces',
+  }),
+  SpaceMaxMembers: makeNumberSetting({
+    key: 'SpaceMaxMembers',
+    name: 'Spaces: Max members',
+    defaultValue: 1000,
+    min: 1,
+    int: true,
+    description: 'Most members one Space may hold, not counting its owner. Lowering it never removes existing members.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 305,
+    dependsOn: 'EnableSpaces',
+  }),
   EnableBriefcase: makeBooleanSetting({
     key: 'EnableBriefcase',
     name: 'Enable Briefcase',
@@ -4270,7 +4306,7 @@ export const settingsMap = {
     // defaults to paid-only so the gate is live without an admin write.
     defaultValue: process.env.B4M_SELF_HOST === 'true' ? 'all' : 'paid',
     description:
-      'Who may use personal API keys and CLI/desktop cloud access. "all": anyone. "paid": active paid subscribers (including standalone plans and org seats), users who have bought credits, or org-billed keys whose org has a paid plan. Admins, developer-tagged users and admin-provisioned keys are exempt. "disabled": only those exemptions pass. Covers key minting, rotation, use and CLI/desktop device login, refresh and use. Also applies to federated AI-token exchanges (subscription_required on refusal). Changes apply within 30 seconds. Defaults to "paid" on hosted and "all" on self-host.',
+      'Who may use personal API keys and CLI/desktop cloud access. "all": anyone. "paid": active paid subscribers (including standalone plans and org seats), users who have bought credits, or org-billed keys whose org has a paid plan. Admins, developer-tagged users and admin-provisioned keys are exempt. "disabled": only those exemptions pass. Covers key minting, rotation, use and CLI/desktop device login, refresh and use. Also applies to federated AI-token exchanges (subscription_required on refusal), except that keys from an exchange are admitted for any usable account unless the app\'s OAuth client turns off "Starter and free accounts may use this app"; personal keys and CLI/desktop login stay paid-only, and "disabled" refuses exchange keys too. Changes apply within 30 seconds. Defaults to "paid" on hosted and "all" on self-host.',
     options: ['all', 'paid', 'disabled'],
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,

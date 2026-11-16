@@ -8,7 +8,7 @@ import { approvalAuditWriter } from '@server/admin/approvals/auditWriter';
 import type { ApprovalExecutor } from '@server/admin/approvals/executors';
 import { selfIdsOf } from './actor';
 import { usersBulkExecuteDepsFor } from '@bike4mind/server-utils/admin/usersBulk/adapters';
-import { assertCanRunUsersBulkAction } from './authorize';
+import { assertCanRunUsersBulkAction, tagsAddedBy } from './authorize';
 import { executeAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/execute';
 
 /**
@@ -18,7 +18,10 @@ import { executeAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/e
 export const executeApprovedUsersBulk: ApprovalExecutor = async (params, { req, approval }) => {
   const request = AdminUsersBulkExecuteRequestSchema.parse(params);
   if (!req.user) throw new ForbiddenError('Unauthorized. Admin access required.');
-  assertCanRunUsersBulkAction(req, request.action.type, { blocks: blocksEmailDomains(request.action) });
+  assertCanRunUsersBulkAction(req, request.action.type, {
+    blocks: blocksEmailDomains(request.action),
+    tags: tagsAddedBy(request.action),
+  });
   const selfIds = [...new Set([...selfIdsOf(req.user), ...approval.requestedBy.selfIds])];
   // Delegated-admin accounts stay in the cohort only when both admins could act on them; a cohort the
   // requester's preview resolved differently is then a 409, as for any cohort that changed.

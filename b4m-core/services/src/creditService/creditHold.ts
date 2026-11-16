@@ -15,6 +15,7 @@ import {
   type DeductCreditsAdapters,
   type DeductCreditsParams,
 } from './deductCreditsWithOrgSupport';
+import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import { isMemberCreditCapExceeded } from './memberCreditCap';
 import { assertNewAccountSpendWithinCap, type NewAccountSpendCapAdapters } from './newAccountSpendCap';
 
@@ -104,6 +105,7 @@ export async function holdCredits(
   // re-check the cap, so this is the only enforcement point for held requests.
   if (organization && isMemberCreditCapExceeded(organization, userId, requiredCredits)) {
     await notifyInsufficientCredits(adapters, { userId, reason: 'member_cap', featureLabel, requiredCredits }, logger);
+    await notifyOrgEvent({ type: 'member_cap_check', organizationId: organization.id, userId, refused: true });
     throw insufficientCreditsError(
       `Your organization member credit limit has been reached for ${featureLabel}. Contact your organization administrator.`
     );

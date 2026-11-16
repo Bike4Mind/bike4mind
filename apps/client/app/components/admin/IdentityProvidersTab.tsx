@@ -6,14 +6,11 @@ import {
   Chip,
   DialogContent,
   Divider,
-  Dropdown,
   FormControl,
   FormHelperText,
   FormLabel,
   Input,
   ListDivider,
-  Menu,
-  MenuButton,
   MenuItem,
   Option,
   Select,
@@ -24,7 +21,6 @@ import {
   IconButton,
 } from '@mui/joy';
 import Add from '@mui/icons-material/Add';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import { toast } from 'sonner';
@@ -41,7 +37,8 @@ import {
   StatusChip,
   type DataColumn,
 } from './shared';
-import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import { RowActionsMenu } from './shared/RowActionsMenu';
 
 interface IdentityProvider {
   id: string;
@@ -90,36 +87,20 @@ function ProviderRowMenu({
   onDelete: () => void;
 }) {
   return (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: {
-            size: 'sm',
-            variant: 'plain',
-            'aria-label': `Actions for ${idp.name}`,
-            sx: { ...adminFocus, color: 'admin.inkMuted' },
-          },
-        }}
-        data-testid={`identity-provider-actions-${idp.id}`}
-      >
-        <MoreHorizIcon sx={{ fontSize: 18 }} />
-      </MenuButton>
-      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
-        {idp.type === 'saml' && (
-          <MenuItem onClick={onSpMetadata} data-testid={`identity-provider-sp-metadata-${idp.id}`}>
-            View SP metadata
-          </MenuItem>
-        )}
-        <MenuItem onClick={onEdit} data-testid={`identity-provider-edit-${idp.id}`}>
-          Edit provider
+    <RowActionsMenu testId={`identity-provider-actions-${idp.id}`} ariaLabel={`Actions for ${idp.name}`}>
+      {idp.type === 'saml' && (
+        <MenuItem onClick={onSpMetadata} data-testid={`identity-provider-sp-metadata-${idp.id}`}>
+          View SP metadata
         </MenuItem>
-        <ListDivider />
-        <MenuItem color="danger" onClick={onDelete} data-testid={`identity-provider-delete-${idp.id}`}>
-          Delete provider
-        </MenuItem>
-      </Menu>
-    </Dropdown>
+      )}
+      <MenuItem onClick={onEdit} data-testid={`identity-provider-edit-${idp.id}`}>
+        Edit provider
+      </MenuItem>
+      <ListDivider />
+      <MenuItem color="danger" onClick={onDelete} data-testid={`identity-provider-delete-${idp.id}`}>
+        Delete provider
+      </MenuItem>
+    </RowActionsMenu>
   );
 }
 

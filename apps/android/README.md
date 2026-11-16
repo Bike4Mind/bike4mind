@@ -32,6 +32,27 @@ Sign-in is the server's own OAuth 2.0 + PKCE web flow in a Custom Tab, so email 
 
 A production build needs the server to register `b4m-android-app` and publish `/.well-known/assetlinks.json` first.
 
+## Push notifications (FCM)
+
+The app registers its FCM token through `POST /api/v1/push-tokens` (`platform: android`) while signed in and notifications
+are allowed, and withdraws it on sign-out or when the user turns notifications off (`kit/push`, twin of the iOS
+`PushRegistrationCoordinator`). The server sends through FCM HTTP v1 when its `FCM_SERVICE_ACCOUNT` secret is set (see the
+deployment secrets reference).
+
+Firebase is configured from Gradle properties, not a `google-services.json` and not the google-services plugin, so nothing
+project-specific is committed. Take the four values from the Firebase console (Project settings -> Your apps -> the
+`com.bike4mind.app` Android app; they are the fields of its `google-services.json`) and put them in
+`~/.gradle/gradle.properties` or pass them with `-P`:
+
+| Property | `google-services.json` field |
+| --- | --- |
+| `b4m.fcm.applicationId` | `client[0].client_info.mobilesdk_app_id` |
+| `b4m.fcm.apiKey` | `client[0].api_key[0].current_key` |
+| `b4m.fcm.projectId` | `project_info.project_id` |
+| `b4m.fcm.senderId` | `project_info.project_number` |
+
+With any of them unset the app builds and runs normally and simply never gets a push token (CI builds this way).
+
 ## Client identity
 
 Every request carries `X-Client-Name: b4m-android` and `X-Client-Version` (the app's `versionName`, padded to
@@ -48,6 +69,11 @@ to one to three integers; anything else sends neither header.
   the generator. CI regenerates from the snapshot and fails on any diff.
 - **Snapshot.** `client/openapi.json` is a copy of `apps/client/public/openapi.json` with overlay-only enum values
   stripped (`scripts/strip_overlay_literals.py`). Refresh it with `make generate-client SPEC_REF=origin/main`.
+- **Drift signal.** The snapshot is not refreshed by server changes. `native-openapi-drift.yml` compares it (after the
+  overlay-literal stripping above) with `apps/client/public/openapi.json` on every PR that touches the spec or a
+  snapshot, and keeps one PR comment up to date with the per-client difference. It **warns and never blocks**: the
+  check stays green so an API change does not have to regenerate Swift and Kotlin in the same PR. Additive changes
+  still decode; regenerate before shipping a removed, renamed or retyped field.
 - **Open enums.** `scripts/open_enums.py` drops every string `enum` before generation, so a value the server adds later
   decodes as a plain string instead of failing the whole response on every installed build. A test guards it.
 - **Filter.** `client/operations.txt` lists the operations the app uses; `scripts/filter_operations.py` prunes the rest

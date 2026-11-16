@@ -65,7 +65,8 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // The status query is the authority, not currentUser.mfa: the persisted user store drops `mfa`,
   // so a reload rehydrates without it until /api/identify lands, and reading it here fired a
   // step-up-gated setup call at an enrolled user, which then 409'd.
-  const needsEnrollment = !mfaStatus?.enabled;
+  // `required: false` is the server exempting this user (a test persona); an older server omits it.
+  const needsEnrollment = !mfaStatus?.enabled && mfaStatus?.required !== false;
 
   // A user this browser last saw enrolled skips the loader; the check still runs behind the app.
   // A server refusal withdraws the pass, and a status saying "not enrolled" reaches the

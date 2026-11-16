@@ -53,6 +53,9 @@ const row = (id: string, overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const openActions = (id: string) => fireEvent.click(screen.getByTestId(`admin-approval-actions-${id}`));
+const isDisabled = (testId: string) => screen.getByTestId(testId).getAttribute('aria-disabled') === 'true';
+
 describe('Approvals queue', () => {
   beforeEach(() => {
     rows.length = 0;
@@ -69,6 +72,7 @@ describe('Approvals queue', () => {
 
     expect(screen.getByTestId('admin-approvals-queue')).toBeTruthy();
     expect(screen.getByTestId('admin-approval-row-a1')).toBeTruthy();
+    openActions('a1');
     fireEvent.click(screen.getByTestId('admin-approve-btn'));
     expect(mockApprove).toHaveBeenCalledWith('a1');
   });
@@ -79,25 +83,42 @@ describe('Approvals queue', () => {
     );
     renderQueue();
 
-    expect((screen.getByTestId('admin-approve-btn') as HTMLButtonElement).disabled).toBe(true);
+    openActions('own');
+    expect(isDisabled('admin-approve-btn')).toBe(true);
     expect(screen.getByTestId('admin-withdraw-btn').textContent).toBe('Withdraw');
   });
 
-  it('keeps withdraw enabled on your own request but disables reject on one you cannot decide', () => {
+  it('keeps withdraw enabled on your own request', () => {
     rows.push(
       row('own', { requestedBy: { id: 'me', name: 'Me', email: 'me@example.com' }, canDecide: false, own: true })
     );
+    renderQueue();
+
+    openActions('own');
+    expect(isDisabled('admin-withdraw-btn')).toBe(false);
+  });
+
+  it('disables reject on a request you cannot decide', () => {
     rows.push(row('other', { canDecide: false }));
     renderQueue();
 
-    expect((screen.getByTestId('admin-withdraw-btn') as HTMLButtonElement).disabled).toBe(false);
-    expect((screen.getByTestId('admin-reject-btn') as HTMLButtonElement).disabled).toBe(true);
+    openActions('other');
+    expect(isDisabled('admin-reject-btn')).toBe(true);
+  });
+
+  it('shows no actions menu on a settled request with nothing to inspect', () => {
+    rows.push(row('done', { status: 'rejected', params: null, canDecide: false }));
+    renderQueue();
+
+    expect(screen.getByTestId('admin-approval-row-done')).toBeTruthy();
+    expect(screen.queryByTestId('admin-approval-actions-done')).toBeNull();
   });
 
   it('asks for a reason before rejecting', () => {
     rows.push(row('a2'));
     renderQueue();
 
+    openActions('a2');
     fireEvent.click(screen.getByTestId('admin-reject-btn'));
     expect(screen.getByTestId('admin-approval-reject-dialog-confirm-btn')).toHaveProperty('disabled', true);
     expect(mockReject).not.toHaveBeenCalled();
@@ -115,6 +136,7 @@ describe('Approvals queue', () => {
     );
     renderQueue();
 
+    openActions('imp');
     expect(screen.getByTestId('admin-approval-start-impersonation-btn')).toBeTruthy();
     expect(screen.queryByTestId('admin-approve-btn')).toBeNull();
   });
@@ -135,10 +157,28 @@ describe('Approvals queue', () => {
     rows.push(row('bare', { params: null }));
     renderQueue();
 
+    openActions('bulk');
     expect(screen.getAllByTestId('admin-approval-details-btn')).toHaveLength(1);
     fireEvent.click(screen.getByTestId('admin-approval-details-btn'));
     const list = screen.getByTestId('admin-approval-details-user-ids');
     expect(Array.from(list.querySelectorAll('li')).map(li => li.textContent)).toEqual(['u-a', 'u-b']);
+  });
+
+  it('offers no details item on a pending request with no parameters', () => {
+    rows.push(row('bare', { params: null }));
+    renderQueue();
+
+    openActions('bare');
+    expect(screen.queryByTestId('admin-approval-details-btn')).toBeNull();
+    expect(screen.getByTestId('admin-approve-btn')).toBeTruthy();
+  });
+
+  it('says why a decision is unavailable inside the disabled item', () => {
+    rows.push(row('other', { canDecide: false }));
+    renderQueue();
+
+    openActions('other');
+    expect(screen.getByTestId('admin-approve-btn').textContent).toContain('permission');
   });
   it('offers the next page when the server returned a cursor', () => {
     queryFlags.hasNextPage = true;
@@ -163,6 +203,7 @@ describe('Approvals queue', () => {
     rows.push(row('partial', { params: { target: { userIds: ['u-a'] } } }));
     mockApprove.mockResolvedValue({ approval: { id: 'partial', status: 'executed' }, result });
     renderQueue();
+    openActions('partial');
     fireEvent.click(screen.getByTestId('admin-approve-btn'));
     await waitFor(() => expect(mockBulkResult).toHaveBeenCalledWith(result));
     expect(screen.getByTestId('admin-approval-details-result').textContent).toContain('cancel failed');

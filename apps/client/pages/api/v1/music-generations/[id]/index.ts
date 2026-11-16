@@ -4,7 +4,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { findOwnGenerationJob } from '@server/generations/findOwnGenerationJob';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
-import { toPublicMusicGeneration } from '@server/musicGenerations/toPublicMusicGeneration';
+import { MUSIC_GENERATION_PROJECTION, toPublicGenerationJob } from '@server/generations/toPublicGenerationJob';
 
 const handler = nextRouteForContract(getMusicGenerationContract, {
   // Clients poll this until the job is terminal; polling must not drain the daily request budget.
@@ -13,7 +13,7 @@ const handler = nextRouteForContract(getMusicGenerationContract, {
 }).get(async (req, res) => {
   const job = await findOwnGenerationJob(req.validatedParams.id, req.user.id, 'music');
   if (!job) throw new NotFoundError('Music generation not found');
-  return res.json(await toPublicMusicGeneration(job, mapperDeps));
+  return res.json(await toPublicGenerationJob(job, mapperDeps, MUSIC_GENERATION_PROJECTION));
 });
 
 export const config = {

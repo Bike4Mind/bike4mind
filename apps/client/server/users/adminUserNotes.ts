@@ -25,7 +25,9 @@ export const noteSubject = async (req: Request, permission: 'support:read' | 'us
   requireAdminPermission(req, permission);
   const parsed = AdminNoteIdSchema.safeParse(req.query.userId);
   if (!parsed.success) throw new BadRequestError('Invalid user id');
-  const user = await User.findById(parsed.data).select('name username isAdmin adminPermissions tags').lean();
+  const user = await User.findById(parsed.data)
+    .select('name username isAdmin adminPermissions adminRoleIds tags')
+    .lean();
   if (!user) throw new NotFoundError('User not found');
   return { userId: parsed.data, user };
 };

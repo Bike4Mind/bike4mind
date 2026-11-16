@@ -1,21 +1,6 @@
-import React, { useCallback, useEffect, useRef } from 'react';
-import {
-  Button,
-  Chip,
-  Dropdown,
-  IconButton,
-  ListDivider,
-  Menu,
-  MenuButton,
-  MenuItem,
-  Option,
-  Select,
-  Stack,
-  Tooltip,
-  Typography,
-} from '@mui/joy';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Button, Chip, ListDivider, MenuItem, Option, Select, Stack, Tooltip, Typography } from '@mui/joy';
 import DownloadIcon from '@mui/icons-material/Download';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import Papa from 'papaparse';
 import { toast } from 'sonner';
@@ -44,6 +29,7 @@ import {
   FilterChip,
   StatusChip,
   UpdatingBar,
+  ViewTabs,
   type DataColumn,
 } from '../shared';
 import { ADMIN_REGION_GAP, adminFocus, adminFocusScope } from '../shared/adminStyles';
@@ -59,7 +45,7 @@ import { useFeedbackKeyboard } from './hooks/useFeedbackKeyboard';
 import { copyFeedbackRecordLink, feedbackConversationPath, feedbackReporterMailto } from './feedbackLinks';
 import HelpContextChip from './HelpContextChip';
 import FeedbackTrendStrip from './FeedbackTrendStrip';
-import { FEEDBACK_RECEIVED_LABELS, FEEDBACK_RECEIVED_WINDOWS } from './feedbackTrends';
+import { FEEDBACK_OPEN_STATUSES, FEEDBACK_RECEIVED_LABELS, FEEDBACK_RECEIVED_WINDOWS } from './feedbackTrends';
 import {
   FEEDBACK_STATUS_LABELS,
   FEEDBACK_STATUS_ORDER,
@@ -70,9 +56,17 @@ import {
   feedbackTypeOf,
   toSubjectFilter,
 } from './constants';
-import { checkedStatuses, toStatusFilters } from './feedbackTabSearch';
+import {
+  checkedStatuses,
+  FEEDBACK_COMMENT_FILTERS,
+  hasCreatedRange,
+  toStatusFilters,
+  type FeedbackCommentFilter,
+} from './feedbackTabSearch';
+import { FeedbackCreatedRangeDialog, formatCreatedRange } from './FeedbackCreatedRangeDialog';
 import { useFeedbackSelection } from './hooks/useFeedbackSelection';
 import FeedbackBulkActions from './FeedbackBulkActions';
+import { RowActionsMenu } from '../shared/RowActionsMenu';
 
 type FeedbackRow = IExtendedFeedbackDocument;
 
@@ -92,6 +86,20 @@ const RECEIVED_FILTER_OPTIONS = FEEDBACK_RECEIVED_WINDOWS.map(range => ({
   value: range,
   label: FEEDBACK_RECEIVED_LABELS[range],
 }));
+const CUSTOM_RANGE = 'custom';
+const COMMENT_FILTER_LABELS: Record<FeedbackCommentFilter, string> = { with: 'Has comment', without: 'No comment' };
+const COMMENT_FILTER_OPTIONS = FEEDBACK_COMMENT_FILTERS.map(comment => ({
+  value: comment,
+  label: COMMENT_FILTER_LABELS[comment],
+}));
+
+// Built-in status views above the list. New is the default; a view lights when the status filter
+// matches it exactly, and picking one leaves every other filter alone.
+const STATUS_VIEWS = [
+  { id: 'new', label: 'New', statuses: [FeedbackStatus.New] },
+  { id: 'open', label: 'Open', statuses: [...FEEDBACK_OPEN_STATUSES] },
+  { id: 'all', label: 'All', statuses: [...FEEDBACK_STATUS_ORDER] },
+] as const;
 
 // Tags the producers add that only restate the type chip; the rest (help, slash command,
 // marketing...) still say where a report came from.
@@ -219,50 +227,34 @@ const FeedbackRowMenu = ({ row, onDelete }: { row: FeedbackRow; onDelete: (row: 
   const conversationPath = feedbackConversationPath(row);
   const reporterMailto = feedbackReporterMailto(row);
   return (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: {
-            size: 'sm',
-            variant: 'plain',
-            'aria-label': `Actions for the report from ${reporterName(row)}`,
-            sx: { ...adminFocus, color: 'admin.inkMuted' },
-          },
-        }}
-        data-testid={`feedback-row-actions-${row._id}`}
-      >
-        <MoreHorizIcon sx={{ fontSize: 18 }} />
-      </MenuButton>
-      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+    <RowActionsMenu
+      testId={`feedback-row-actions-${row._id}`}
+      ariaLabel={`Actions for the report from ${reporterName(row)}`}
+    >
+      <MenuItem onClick={() => void copyFeedbackRecordLink(row._id)} data-testid={`feedback-row-copy-link-${row._id}`}>
+        Copy link to this report
+      </MenuItem>
+      {conversationPath && (
         <MenuItem
-          onClick={() => void copyFeedbackRecordLink(row._id)}
-          data-testid={`feedback-row-copy-link-${row._id}`}
+          component="a"
+          href={conversationPath}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-testid={`feedback-row-open-conversation-${row._id}`}
         >
-          Copy link to this report
+          {row.questId ? 'Open the conversation at this turn' : 'Open the conversation'}
         </MenuItem>
-        {conversationPath && (
-          <MenuItem
-            component="a"
-            href={conversationPath}
-            target="_blank"
-            rel="noopener noreferrer"
-            data-testid={`feedback-row-open-conversation-${row._id}`}
-          >
-            {row.questId ? 'Open the conversation at this turn' : 'Open the conversation'}
-          </MenuItem>
-        )}
-        {reporterMailto && (
-          <MenuItem component="a" href={reporterMailto} data-testid={`feedback-row-email-reporter-${row._id}`}>
-            Email reporter
-          </MenuItem>
-        )}
-        <ListDivider />
-        <MenuItem onClick={() => onDelete(row)} data-testid={`feedback-row-delete-${row._id}`}>
-          Delete feedback
+      )}
+      {reporterMailto && (
+        <MenuItem component="a" href={reporterMailto} data-testid={`feedback-row-email-reporter-${row._id}`}>
+          Email reporter
         </MenuItem>
-      </Menu>
-    </Dropdown>
+      )}
+      <ListDivider />
+      <MenuItem onClick={() => onDelete(row)} data-testid={`feedback-row-delete-${row._id}`}>
+        Delete feedback
+      </MenuItem>
+    </RowActionsMenu>
   );
 };
 
@@ -283,6 +275,8 @@ const FeedbackTab: React.FC = () => {
     setResolution,
     setTypes,
     setReceived,
+    setCreatedRange,
+    setComment,
     showOnly,
     toggleSortDirection,
     filterParams,
@@ -452,6 +446,29 @@ const FeedbackTab: React.FC = () => {
     label: name,
   }));
 
+  const activeStatusView = STATUS_VIEWS.find(
+    view =>
+      view.statuses.length === selectedStatuses.length &&
+      view.statuses.every(status => selectedStatuses.includes(status))
+  )?.id;
+
+  const createdRange = { createdFrom: filters.createdFrom, createdTo: filters.createdTo };
+  const customRangeSet = hasCreatedRange(createdRange);
+  const receivedOptions = [
+    ...RECEIVED_FILTER_OPTIONS,
+    // The menu entry keeps saying what it does (reopen the picker); the chip shows the range itself.
+    {
+      value: CUSTOM_RANGE,
+      label: 'Custom range\u2026',
+      chipLabel: customRangeSet ? formatCreatedRange(createdRange) : undefined,
+    },
+  ];
+  const [rangeDialogOpen, setRangeDialogOpen] = useState(false);
+  const setReceivedFilter = (value: string | undefined) => {
+    if (value === CUSTOM_RANGE) return setRangeDialogOpen(true);
+    setReceived(FEEDBACK_RECEIVED_WINDOWS.find(range => range === value));
+  };
+
   const hasFilters =
     filters.area !== undefined ||
     filters.severity !== undefined ||
@@ -461,6 +478,8 @@ const FeedbackTab: React.FC = () => {
     filters.resolution !== undefined ||
     filters.types.length > 0 ||
     filters.received !== undefined ||
+    customRangeSet ||
+    filters.comment !== undefined ||
     filters.selectedOrganizations.length > 0;
   const clearFilters = () => showOnly({ statusFilters: toStatusFilters(FEEDBACK_STATUS_ORDER) });
 
@@ -543,6 +562,17 @@ const FeedbackTab: React.FC = () => {
 
       <FeedbackTrendStrip showOnly={showOnly} />
 
+      <ViewTabs
+        views={STATUS_VIEWS}
+        activeId={activeStatusView}
+        onSelect={id => {
+          const view = STATUS_VIEWS.find(candidate => candidate.id === id);
+          if (view) setStatusFilters(toStatusFilters(view.statuses));
+        }}
+        aria-label="Status views"
+        data-testid="feedback-status-views"
+      />
+
       <Stack
         direction="row"
         flexWrap="wrap"
@@ -597,9 +627,16 @@ const FeedbackTab: React.FC = () => {
         <FilterChip
           id="feedback-received"
           label="Received"
-          value={filters.received}
-          options={RECEIVED_FILTER_OPTIONS}
-          onChange={value => setReceived(FEEDBACK_RECEIVED_WINDOWS.find(range => range === value))}
+          value={customRangeSet ? CUSTOM_RANGE : filters.received}
+          options={receivedOptions}
+          onChange={setReceivedFilter}
+        />
+        <FilterChip
+          id="feedback-comment"
+          label="Comment"
+          value={filters.comment}
+          options={COMMENT_FILTER_OPTIONS}
+          onChange={value => setComment(FEEDBACK_COMMENT_FILTERS.find(comment => comment === value))}
         />
         {/* Single-select, because GET /api/feedback takes one subject or none. */}
         <FilterChip
@@ -684,6 +721,13 @@ const FeedbackTab: React.FC = () => {
         />
       </Stack>
 
+      {rangeDialogOpen && (
+        <FeedbackCreatedRangeDialog
+          initial={createdRange}
+          onApply={setCreatedRange}
+          onClose={() => setRangeDialogOpen(false)}
+        />
+      )}
       <FeedbackBulkActions
         key={`${selectionScope}:${JSON.stringify(selection.selection)}`}
         selection={selection.selection}

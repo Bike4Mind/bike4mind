@@ -5,7 +5,8 @@ import { invalidatePartnerRuleCache } from '../entitlements/partnerRules';
 /**
  * Drops the references that outlive a deleted organization. Partner signup rules keep their
  * entitlements and credits and lose only the organization, so no future signup resolves to a deleted
- * one. Integration requests are the members' own votes and stay. Pending organization invites are closed.
+ * one. Domain claims are released in the caller's deletion transaction. Integration
+ * requests are the members' own votes and stay. Pending organization invites are closed.
  * Run after the delete commits. The integration-request and invite steps are best-effort: the org is
  * already gone, so a failure there must not turn the committed delete into an error a retry cannot fix.
  */

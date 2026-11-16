@@ -300,6 +300,7 @@ export const TRUST_AND_SAFETY_GUIDE: readonly AdminGuideEntry[] = [
     howTo: [
       'Register: click Register client, enter a unique Name and one https Redirect URI per line (http only for localhost). The client secret is shown once; copy it then.',
       'Edit changes redirect URIs and scopes. Removing a scope or turning off federation asks for confirmation; it applies to every user of the client, and turning off federation stops their AI-token exchange.',
+      'Starter and free accounts may use this app (federated clients, on by default): under the paid-only API key switch, keys minted through the AI-token exchange work for accounts without a paid plan. Turn it off to keep that app paid-only. It never opens personal API keys or CLI login.',
       'Rotate secret (confidential clients only) makes the current secret stop working immediately. Deactivate client stops sign-ins and code exchanges without deleting it; the row toggle reactivates it.',
       'Full admin access is required in the console.',
     ],

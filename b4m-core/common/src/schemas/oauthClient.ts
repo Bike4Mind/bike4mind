@@ -146,6 +146,7 @@ export const createOAuthClientSchema = z
     clientType: z.enum(OAUTH_CLIENT_TYPES).default('relying-party'),
     federatedIdp: oauthFederatedIdpInputSchema.optional(),
     rateLimit: oauthClientRateLimitSchema.optional(),
+    unpaidAccountsAllowed: z.boolean().optional(),
   })
   .strict()
   .refine(data => !data.rateLimit || !!data.federatedIdp, 'A rate-limit profile requires a federated client');
@@ -175,6 +176,7 @@ export const updateOAuthClientSchema = z
     allowedScopes: allowedScopesSchema.optional(),
     federatedIdp: oauthFederatedIdpInputSchema.nullable().optional(),
     rateLimit: oauthClientRateLimitSchema.nullable().optional(),
+    unpaidAccountsAllowed: z.boolean().optional(),
     // null removes it: the client's new sign-ups stop being credited to a product.
     overwatchProductId: oauthOverwatchProductIdSchema.nullable().optional(),
     expectedUpdatedAt: z.string().datetime().nullable().optional(),
@@ -200,6 +202,8 @@ export interface OAuthClientView {
   isActive: boolean;
   federatedIdp?: OAuthFederatedIdpConfig;
   rateLimit?: IUserApiKeyRateLimit;
+  /** Unset means allowed. False keeps the app's exchange keys paid-only under the paid API key switch. */
+  unpaidAccountsAllowed?: boolean;
   overwatchProductId?: string;
   // Null for legacy documents written before timestamps were enabled.
   createdAt: string | null;

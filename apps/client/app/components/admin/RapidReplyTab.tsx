@@ -3,14 +3,10 @@ import {
   Box,
   Button,
   DialogContent,
-  Dropdown,
   FormControl,
   FormHelperText,
   FormLabel,
-  IconButton,
   Input,
-  Menu,
-  MenuButton,
   MenuItem,
   Option,
   Select,
@@ -24,7 +20,6 @@ import {
   Typography,
 } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { useQuery } from '@tanstack/react-query';
 import { useExperimentalFeatureSettings, useUpdateSettings } from '@client/app/hooks/data/settings';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
@@ -55,7 +50,8 @@ import {
   StatusChip,
   type DataColumn,
 } from './shared';
-import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP, adminFocus, adminTabStrip } from './shared/adminStyles';
+import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP, adminTabStrip } from './shared/adminStyles';
+import { RowActionsMenu } from './shared/RowActionsMenu';
 
 const defaultPrompt = `IMPORTANT: DO NOT ANSWER THE QUESTION. You are providing a quick, friendly acknowledgment that shows you understand the topic while the full response is being prepared. Keep it to ONE sentence only and reference the subject matter.
 
@@ -330,30 +326,17 @@ const MappingRowActions: React.FC<{ mapping: IRapidReplyMapping; onEdit: () => v
   onEdit,
   onDelete,
 }) => (
-  <Dropdown>
-    <MenuButton
-      slots={{ root: IconButton }}
-      slotProps={{
-        root: {
-          size: 'sm',
-          variant: 'plain',
-          'aria-label': `Actions for the ${mapping.mainModelId} mapping`,
-          sx: { ...adminFocus, color: 'admin.inkMuted' },
-        },
-      }}
-      data-testid={`rapid-reply-mapping-actions-${mapping.id}`}
-    >
-      <MoreHorizIcon sx={{ fontSize: 18 }} />
-    </MenuButton>
-    <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
-      <MenuItem onClick={onEdit} data-testid={`rapid-reply-edit-mapping-${mapping.id}`}>
-        Edit mapping
-      </MenuItem>
-      <MenuItem color="danger" onClick={onDelete} data-testid={`rapid-reply-delete-mapping-${mapping.id}`}>
-        Delete mapping
-      </MenuItem>
-    </Menu>
-  </Dropdown>
+  <RowActionsMenu
+    testId={`rapid-reply-mapping-actions-${mapping.id}`}
+    ariaLabel={`Actions for the ${mapping.mainModelId} mapping`}
+  >
+    <MenuItem onClick={onEdit} data-testid={`rapid-reply-edit-mapping-${mapping.id}`}>
+      Edit mapping
+    </MenuItem>
+    <MenuItem color="danger" onClick={onDelete} data-testid={`rapid-reply-delete-mapping-${mapping.id}`}>
+      Delete mapping
+    </MenuItem>
+  </RowActionsMenu>
 );
 
 const DeleteMappingDialog: React.FC<{ mapping: IRapidReplyMapping; onClose: () => void }> = ({ mapping, onClose }) => {

@@ -7,7 +7,10 @@ const { mockReadEnforceMfa, mockLogEvent } = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/services', () => ({
-  mfaService: { userHasMFAConfigured: (user: IUserDocument) => !!user.mfa?.totpEnabled },
+  mfaService: {
+    isMfaEnforcementExempt: (user: IUserDocument) => user.isPersona === true,
+    userHasMFAConfigured: (user: IUserDocument) => !!user.mfa?.totpEnabled,
+  },
 }));
 vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
   readEnforceMfa: (...a: unknown[]) => mockReadEnforceMfa(...a),
@@ -47,6 +50,12 @@ describe('forcedEnrollmentSurface', () => {
   it('is not forced for a user who already has a factor, or an impersonating admin', async () => {
     expect(await forcedEnrollmentSurface(enrolled, { mfaPending: true })).toBeNull();
     expect(await forcedEnrollmentSurface(unenrolled, { impersonatedBy: 'admin', mfaPending: true })).toBeNull();
+  });
+
+  it('is not forced for a test persona, which is exempt from enforcement', async () => {
+    const persona = { id: 'p1', mfa: null, isPersona: true } as unknown as IUserDocument;
+    expect(await forcedEnrollmentSurface(persona, {})).toBeNull();
+    expect(mockReadEnforceMfa).not.toHaveBeenCalled();
   });
 });
 

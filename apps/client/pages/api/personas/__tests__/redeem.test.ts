@@ -1,11 +1,12 @@
 // @vitest-environment node
-/** GET/POST /api/personas/redeem: the single-use login code is the only credential. */
+/** POST /api/personas/redeem: the single-use login code is the only credential. */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { PERSONA_ENDPOINT_OFF_CODE } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   routes: {} as Record<string, (req: unknown, res: unknown) => unknown>,
+  baseApiOptions: undefined as unknown,
   settings: { enabled: true },
   redeemPersonaLoginCode: vi.fn(),
   issueBrowserSession: vi.fn(),
@@ -16,7 +17,8 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
     const chain: Record<string, unknown> = {};
     chain.use = () => chain;
     chain.get = (fn: (req: unknown, res: unknown) => unknown) => ((h.routes.GET = fn), chain);
@@ -82,12 +84,18 @@ beforeEach(() => {
   h.readAdminReturnCookie.mockReturnValue(undefined);
 });
 
-describe('GET /api/personas/redeem', () => {
-  it('signs the browser in and redirects 303 to /, with no-store and no-referrer', async () => {
-    const res = await run('GET', { query: { code: CODE } });
+describe('POST /api/personas/redeem with session: browser', () => {
+  const BROWSER = { code: CODE, session: 'browser' };
 
-    expect(res._getStatusCode()).toBe(303);
-    expect(res._getRedirectUrl()).toBe('/');
+  it('is configured POST-only, with no GET handler that could redeem a code from the query string', () => {
+    expect(h.baseApiOptions).toMatchObject({ allowedMethods: ['POST'] });
+    expect(h.routes.GET).toBeUndefined();
+  });
+
+  it('signs the browser in and answers 204, with no-store and no-referrer', async () => {
+    const res = await run('POST', { body: BROWSER });
+
+    expect(res._getStatusCode()).toBe(204);
     expect(res.getHeader('Cache-Control')).toBe('no-store');
     expect(res.getHeader('Referrer-Policy')).toBe('no-referrer');
     expect(h.redeemPersonaLoginCode).toHaveBeenCalledWith(
@@ -101,6 +109,7 @@ describe('GET /api/personas/redeem', () => {
       PERSONA.id,
       expect.objectContaining({ createdVia: 'persona-mint', tokenVersion: 3 })
     );
+    expect(h.issueSessionForRequest).not.toHaveBeenCalled();
     expect(h.logSignInSuccess).toHaveBeenCalledWith(expect.anything(), {
       userId: PERSONA.id,
       strategy: 'persona',
@@ -113,7 +122,7 @@ describe('GET /api/personas/redeem', () => {
     ['an admin-return cookie', () => h.readAdminReturnCookie.mockReturnValue('ar')],
   ])('answers 409 on a browser carrying %s, and leaves the code unspent', async (_label, arrange) => {
     arrange();
-    const res = await run('GET', { query: { code: CODE } });
+    const res = await run('POST', { body: BROWSER });
 
     expect(res._getStatusCode()).toBe(409);
     expect(h.redeemPersonaLoginCode).not.toHaveBeenCalled();
@@ -122,23 +131,40 @@ describe('GET /api/personas/redeem', () => {
 
   it('answers 400 for an invalid, expired or used code, and issues no session', async () => {
     h.redeemPersonaLoginCode.mockResolvedValue(null);
-    const res = await run('GET', { query: { code: CODE } });
+    const res = await run('POST', { body: BROWSER });
 
     expect(res._getStatusCode()).toBe(400);
     expect(h.issueBrowserSession).not.toHaveBeenCalled();
     expect(res.getHeader('Cache-Control')).toBe('no-store');
   });
 
-  it('treats a missing code as invalid', async () => {
-    h.redeemPersonaLoginCode.mockResolvedValue(null);
-    const res = await run('GET');
-    expect(h.redeemPersonaLoginCode).toHaveBeenCalledWith('', expect.any(Date), expect.anything());
+  it('answers 403 for a cross-site browser sign-in, without redeeming', async () => {
+    const { req, res } = fire('POST', { body: BROWSER });
+    req.headers['sec-fetch-site'] = 'cross-site';
+    await h.routes.POST(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(h.redeemPersonaLoginCode).not.toHaveBeenCalled();
+    expect(h.issueBrowserSession).not.toHaveBeenCalled();
+  });
+
+  it('answers 400 for a browser session with no code, without redeeming', async () => {
+    const res = await run('POST', { body: { session: 'browser' } });
+
     expect(res._getStatusCode()).toBe(400);
+    expect(h.redeemPersonaLoginCode).not.toHaveBeenCalled();
+  });
+
+  it('answers 400 for an unknown session kind, without redeeming', async () => {
+    const res = await run('POST', { body: { code: CODE, session: 'cookie' } });
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(h.redeemPersonaLoginCode).not.toHaveBeenCalled();
   });
 
   it('answers 404 with the endpoint-off code while PersonaMintEnabled is off', async () => {
     h.settings = { enabled: false };
-    const res = await run('GET', { query: { code: CODE } });
+    const res = await run('POST', { body: BROWSER });
 
     expect(res._getStatusCode()).toBe(404);
     expect(res._getJSONData()).toEqual({ error: 'Not found', errorCode: PERSONA_ENDPOINT_OFF_CODE });
@@ -178,6 +204,14 @@ describe('POST /api/personas/redeem', () => {
       PERSONA.id,
       expect.objectContaining({ createdVia: 'persona-mint' })
     );
+  });
+
+  it('still answers a headless code with tokens when the caller holds a session cookie', async () => {
+    h.readRefreshCookie.mockReturnValue('rt');
+    const res = await run('POST', { body: { code: CODE } });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.issueBrowserSession).not.toHaveBeenCalled();
   });
 
   it('caps the refresh token at the persona expiry when that is sooner than the idle TTL', async () => {

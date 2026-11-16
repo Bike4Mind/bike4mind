@@ -3,7 +3,7 @@
  * GET  /api/v1/video-generations - list the caller's jobs.
  *
  * Auth, scope and body validation come from the contracts; the job lifecycle lives in createVideoJob and the
- * generation-job engine. Every response renders through toPublicVideoGeneration.
+ * generation-job engine. Every response renders through toPublicGenerationJob.
  */
 import {
   createVideoGenerationContract,
@@ -28,7 +28,7 @@ import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminSc
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
-import { toPublicVideoGeneration } from '@server/videoGenerations/toPublicVideoGeneration';
+import { VIDEO_GENERATION_PROJECTION, toPublicGenerationJob } from '@server/generations/toPublicGenerationJob';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 const CURSOR_SCOPE = 'v1.video-generations';
@@ -100,7 +100,7 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
     getCreateVideoJobDeps()
   );
   if (!result.ok) throw toHttpError(result);
-  return res.status(202).json(await toPublicVideoGeneration(result.job, mapperDeps));
+  return res.status(202).json(await toPublicGenerationJob(result.job, mapperDeps, VIDEO_GENERATION_PROJECTION));
 });
 
 const listRouter = nextRouteForContract(listVideoGenerationsContract, {
@@ -113,7 +113,7 @@ const listRouter = nextRouteForContract(listVideoGenerationsContract, {
     kind: 'video',
     cursorScope: CURSOR_SCOPE,
   });
-  const data = await Promise.all(jobs.map(job => toPublicVideoGeneration(job, mapperDeps)));
+  const data = await Promise.all(jobs.map(job => toPublicGenerationJob(job, mapperDeps, VIDEO_GENERATION_PROJECTION)));
   return res.json({ data, next_cursor: nextCursor });
 });
 

@@ -2,20 +2,15 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Button,
   DialogContent,
-  Dropdown,
   FormControl,
   FormHelperText,
   FormLabel,
-  IconButton,
   Input,
-  Menu,
-  MenuButton,
   MenuItem,
   Stack,
   Tooltip,
   Typography,
 } from '@mui/joy';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
@@ -37,6 +32,7 @@ import {
   type DataColumn,
 } from './shared';
 import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
+import { RowActionsMenu } from './shared/RowActionsMenu';
 
 dayjs.extend(relativeTime);
 
@@ -106,30 +102,14 @@ function RotationRowMenu({
   onEdit: (secret: SafeSecretRotation) => void;
 }) {
   return (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: {
-            size: 'sm',
-            variant: 'plain',
-            'aria-label': `Actions for ${secret.keyName}`,
-            sx: { ...adminFocus, color: 'admin.inkMuted' },
-          },
-        }}
-        data-testid={`secrets-rotation-row-actions-${secret.id}`}
-      >
-        <MoreHorizIcon sx={{ fontSize: 18 }} />
-      </MenuButton>
-      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
-        <MenuItem onClick={() => onRenew(secret)} data-testid={`secrets-rotation-row-renew-${secret.id}`}>
-          Mark renewed
-        </MenuItem>
-        <MenuItem onClick={() => onEdit(secret)} data-testid={`secrets-rotation-row-edit-${secret.id}`}>
-          Edit rotation
-        </MenuItem>
-      </Menu>
-    </Dropdown>
+    <RowActionsMenu testId={`secrets-rotation-row-actions-${secret.id}`} ariaLabel={`Actions for ${secret.keyName}`}>
+      <MenuItem onClick={() => onRenew(secret)} data-testid={`secrets-rotation-row-renew-${secret.id}`}>
+        Mark renewed
+      </MenuItem>
+      <MenuItem onClick={() => onEdit(secret)} data-testid={`secrets-rotation-row-edit-${secret.id}`}>
+        Edit rotation
+      </MenuItem>
+    </RowActionsMenu>
   );
 }
 
