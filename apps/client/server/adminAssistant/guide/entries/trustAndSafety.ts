@@ -165,6 +165,21 @@ export const TRUST_AND_SAFETY_GUIDE: readonly AdminGuideEntry[] = [
     ],
   },
   {
+    id: 'access-review',
+    title: 'Access review',
+    summary:
+      'Quarterly review of everyone who holds admin access: permissions, who granted them and when, last admin action, last sign-in and MFA. Dormant admins and admins without MFA are flagged.',
+    views: ['admin.access_review'],
+    settings: [],
+    howTo: [
+      'Set the dormant threshold in days (90 by default) to change which admins are flagged as dormant.',
+      'Confirm keeps an admin as they are. Revoke asks for a reason, removes their admin access through the audited permission change, then records the decision.',
+      'You cannot confirm or revoke your own row; another full admin has to review it. The review completes once every admin has a decision.',
+      'Export CSV downloads the quarter with each admin and decision. An overdue banner shows in the admin console when the quarter passes its grace period with no completed review. Only full admins can open this tab.',
+    ],
+    keywords: ['access review', 'admin access', 'dormant admin', 'revoke admin', 'quarterly review', 'who has admin'],
+  },
+  {
     id: 'admin-approvals',
     title: 'Approvals',
     summary:
