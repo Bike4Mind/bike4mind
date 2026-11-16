@@ -1,6 +1,6 @@
 // GET  /api/organizations/:id/domains - list the org's domain claims
 // POST /api/organizations/:id/domains - add a pending claim { domain }
-// Owner, manager or platform admin (canAdministerOrganization); session routes, not public API contract.
+// Org `manageMembers` permission, or platform admin; session routes, not public API contract.
 
 import { addOrgDomainSchema, orgDomainPathIdSchema } from '@bike4mind/common';
 import { orgDomainClaimRepository } from '@bike4mind/database';

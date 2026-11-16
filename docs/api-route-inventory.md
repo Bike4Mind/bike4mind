@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1230 routes: 110 contracted, 11 aliases of another route, 325 with no static caller in `apps/client/app`.
+1231 routes: 110 contracted, 11 aliases of another route, 325 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -140,7 +140,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | spaces | 13 | 0 | 0 | 13 | 0 | 0 | 13 |
 | sre | 12 | 0 | 11 | 0 | 0 | 1 | 1 |
 | stripe | 5 | 0 | 2 | 2 | 0 | 1 | 1 |
-| studio | 5 | 0 | 0 | 5 | 0 | 0 | 0 |
+| studio | 6 | 0 | 0 | 6 | 0 | 0 | 0 |
 | subscribers | 5 | 0 | 4 | 0 | 0 | 1 | 0 |
 | subscriptions | 10 | 0 | 6 | 4 | 0 | 0 | 2 |
 | system-prompts | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
@@ -1678,6 +1678,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `/api/studio/compositions` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/studioCompositions.ts` |
 | `/api/studio/compositions/[id]` | GET, PATCH, DELETE | jwt | - | - | no | - | 1: `hooks/data/studioCompositions.ts` |
+| `/api/studio/compositions/[id]/renders` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/studioRenders.ts` |
 | `/api/studio/files/[id]/lineage` | GET | jwt | - | - | no | - | 1: `hooks/data/fileLineage.ts` |
 | `/api/studio/image-jobs` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/studioImageJobs.ts` |
 | `/api/studio/image-jobs/cutouts` | POST | jwt | - | - | no | - | 1: `hooks/data/studioImageJobs.ts` |
