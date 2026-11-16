@@ -3,6 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
 import { completeMfaLogin } from '@server/auth/completeMfaLogin';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import * as z from 'zod';
@@ -51,7 +52,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
         });
       }
 
-      let loginBody: unknown;
+      let loginBody: { deviceRemembered: boolean; accessToken: string };
+      let loggedInUser: Awaited<ReturnType<typeof mfaService.verifyMFA>>['user'];
       try {
         if (!mfaService.userHasMFAConfigured(freshUser)) {
           return res.status(400).json({ error: 'MFA is not enabled for this user.' });
@@ -64,12 +66,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
         const { accessToken, deviceRemembered } = await completeMfaLogin(req, res, result.user, { rememberDevice });
 
-        loginBody = {
-          verified: true,
-          deviceRemembered,
-          accessToken,
-          user: redactUserSecretsForSelf(result.user),
-        };
+        loggedInUser = result.user;
+        loginBody = { deviceRemembered, accessToken };
       } catch (error: unknown) {
         // A code checked by mfaService was counted before it was compared; anything else is counted now.
         const updatedUser = await mfaService.recordFailedMfaAttempt(error, freshUser.id, userRepository);
@@ -92,9 +90,13 @@ const handler = baseApi({ auth: 'jwtOnly' })
         });
       }
 
-      // Outside the try: a response-boundary failure is our bug and must not be booked as a
-      // failed MFA attempt by the catch above.
-      return respond(res, verifyResponseSchema, loginBody);
+      // Outside the try: a response-boundary or role-lookup failure is our bug and must not be
+      // booked as a failed MFA attempt by the catch above.
+      return respond(res, verifyResponseSchema, {
+        verified: true,
+        ...loginBody,
+        user: redactUserSecretsForSelf(await resolveRoleAdminPermissions(loggedInUser)),
+      });
     })
   );
 
