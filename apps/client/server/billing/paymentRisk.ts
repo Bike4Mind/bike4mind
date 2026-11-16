@@ -414,7 +414,7 @@ export async function screenPaymentOutcome(
       1,
       { outcome: input.outcome, kind: input.kind, Stage: Config.STAGE },
       StandardUnit.Count
-    ).catch(() => undefined);
+    );
 
     if (attempt.outcome === 'succeeded') {
       await lockIfPaidWithBlockedCard(
