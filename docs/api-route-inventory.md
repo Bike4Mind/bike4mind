@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1188 routes: 102 contracted, 11 aliases of another route, 309 with no static caller in `apps/client/app`.
+1189 routes: 102 contracted, 11 aliases of another route, 309 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -44,7 +44,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | [type] | 5 | 0 | 4 | 1 | 0 | 0 | 0 |
 | account | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | activities | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| admin | 344 | 0 | 202 | 135 | 0 | 7 | 64 |
+| admin | 345 | 0 | 202 | 136 | 0 | 7 | 64 |
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
@@ -336,6 +336,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/partner-signup-rules` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `utils/partnerSignupRuleAPICalls.ts` |
 | `/api/admin/partner-signup-rules/[id]` | PUT, DELETE | jwt+key | `admin:*` | PUT: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `utils/partnerSignupRuleAPICalls.ts` |
 | `/api/admin/partner-signup-rules/backfill` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `utils/partnerSignupRuleAPICalls.ts` |
+| `/api/admin/payment-fulfillment` | GET | jwt | - | GET: ? | no | - | 1: `components/admin/Revenue/PaymentFulfillmentReview.tsx` |
 | `/api/admin/payments` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/Revenue/payments/useAdminPayments.ts` |
 | `/api/admin/payments/export` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/Revenue/payments/useAdminPayments.ts` |
 | `/api/admin/payments/summary` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/Revenue/payments/useAdminPayments.ts` |
@@ -616,7 +617,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `/api/app-files` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/appFile.ts` |
 | `/api/app-files/[id]/upload` | PUT | jwt+key | - | - | no | - | 0 |
-| `/api/app-files/delete` | DELETE | jwt+key | - | - | no | - | 1: `components/admin/FilesTab/index.tsx` |
+| `/api/app-files/delete` | DELETE | jwt+key | - | - | no | - | 2: `components/admin/FilesTab/index.tsx`, `utils/filesAPICalls.ts` |
 | `/api/app-files/generate-presigned-url` | POST | jwt+key | - | - | no | - | 2: `components/ProfileModal/SettingsTabContent/DocxTemplateSection.tsx`, `utils/filesAPICalls.ts` |
 | `/api/app-files/get-file-url` | POST | jwt+key | - | - | no | - | 0 |
 | `/api/app-files/serve/[...key]` | GET | handler | - | - | no | - | 0 |
