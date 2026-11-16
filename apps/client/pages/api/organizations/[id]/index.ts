@@ -106,6 +106,7 @@ const AUDITED_SETTINGS_FIELDS = [
   'redactPushContent',
   'maxCreditsPerMember',
   'storageLimit',
+  'loopsGreenCiMergeDisabled',
 ] as const;
 
 // The system prompt can run to 10,000 characters, so the entry records its length, not its text.
@@ -163,7 +164,8 @@ const handler = baseApi()
           }
         );
 
-      const auditedFields = AUDITED_SETTINGS_FIELDS.filter(field => profile[field] !== undefined);
+      const sent = { ...profile, loopsGreenCiMergeDisabled };
+      const auditedFields = AUDITED_SETTINGS_FIELDS.filter(field => sent[field] !== undefined);
       const before = auditedFields.length > 0 ? await organizationRepository.findById(orgId) : null;
 
       const profileSent =

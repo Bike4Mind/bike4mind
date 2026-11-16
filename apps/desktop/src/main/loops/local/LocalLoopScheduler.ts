@@ -234,7 +234,10 @@ export class LocalLoopScheduler {
     const live = new Set(this.lanes.keys());
     for (const run of this.deps.store.openRuns()) {
       if (live.has(run.id)) continue;
-      this.endRun(run, { stopReason: 'requeued', reason: 'The app stopped while this run was working' });
+      const reason = 'The app stopped while this run was working';
+      this.endRun(run, { stopReason: 'requeued', reason });
+      const loop = this.deps.store.loop(run.loopId);
+      if (loop) this.raise(loop, { kind: 'requeued', reason, ticketId: run.ticketId, runId: run.id });
       // Its session outlived the old process; a run that opened no PR has nothing in its worktree to keep.
       if (run.sessionId && !run.prUrl) void this.removeSessionWorktree(run.sessionId);
     }
@@ -961,8 +964,16 @@ export class LocalLoopScheduler {
 
   /** powerMonitor 'resume': the sleep does not count as silence or a lost tick; check the lanes, then tick at once. */
   resume(): void {
+    const asleepAt = this.asleepAt;
     this.asleepAt = undefined;
     const now = this.now();
+    // The asleep label is gone once awake, so Activity keeps the stretch.
+    if (this.running && asleepAt !== undefined) {
+      const slept = `${clockTime(new Date(asleepAt))}-${clockTime(new Date(now))}`;
+      for (const loop of this.deps.store.loops())
+        if (loop.status === 'live')
+          this.raise(loop, { kind: 'auto_resumed', reason: `Resumed after the machine slept ${slept}` });
+    }
     this.resumedAt = now;
     this.lastTickAt = now;
     this.tickStartedAt = now;

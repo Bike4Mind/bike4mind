@@ -115,8 +115,8 @@ export function registerLocalLoops(
     github: new PrGithub(runGh),
     powerSaveBlocker,
     alert: (loop, event) => {
-      // A lifted cap is good news: the board and Activity show it, no notice.
-      if (event.kind === 'auto_resumed') return;
+      // A lifted cap, a wake or a relaunch re-queue: the board and Activity show it, no notice.
+      if (event.kind === 'auto_resumed' || event.kind === 'requeued') return;
       if (!Notification.isSupported() || appWindows().some(window => window.isFocused())) return;
       new Notification({ title: `${loop.name}: ${event.kind}`, body: event.reason, silent: true }).show();
     },
@@ -250,6 +250,11 @@ export function registerLocalLoops(
       ...checkedFields(request, current, pickedFolders, loopIds()),
       updatedAt: new Date().toISOString(),
     };
+    // A new budget answers a budget cap: lift it, and the next pass caps again if spend is still over.
+    if (request.budgetCreditsPerDay !== undefined && next.capReason === 'loop_budget') {
+      delete next.cappedUntil;
+      delete next.capReason;
+    }
     if (request.directory !== undefined) {
       if (repo) next.repo = repo;
       else delete next.repo;

@@ -331,6 +331,9 @@ describe('LocalLoopScheduler', () => {
     scheduler.start();
     await settle();
     expect(store.run('cut-off')).toMatchObject({ stopReason: 'requeued', endedAt: expect.any(String) });
+    expect(store.events('loop-1')).toContainEqual(
+      expect.objectContaining({ kind: 'requeued', ticketId: t.id, runId: 'cut-off' })
+    );
     expect(chat.turns).toHaveLength(1);
     expect(chat.turns[0].automatic).toMatchObject({ ticketId: t.id });
     // Taken again: the cut-off run was not counted, this one is.
@@ -731,6 +734,12 @@ describe('LocalLoopScheduler', () => {
       scheduler.resume();
       await settle();
       expect(chat.turns).toHaveLength(1);
+      expect(store.events('loop-1')).toContainEqual(
+        expect.objectContaining({
+          kind: 'auto_resumed',
+          reason: expect.stringMatching(/^Resumed after the machine slept \d{2}:\d{2}-\d{2}:\d{2}$/),
+        })
+      );
     });
 
     it('re-queues a run that errors just after a wake, without feeding the error streak', async () => {

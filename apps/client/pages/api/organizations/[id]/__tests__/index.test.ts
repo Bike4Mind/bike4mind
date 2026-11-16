@@ -383,6 +383,24 @@ describe('PUT /api/organizations/[id] - settings audit', () => {
     );
   });
 
+  it('records a change to the loop merge setting sent alone', async () => {
+    const org = { id: 'org1', name: 'Acme', userId: 'owner1' };
+    credits.findById
+      .mockResolvedValueOnce({ ...org, loopsGreenCiMergeDisabled: false } as never)
+      .mockResolvedValueOnce({ ...org, loopsGreenCiMergeDisabled: true } as never);
+    const { req, res } = mocks({ id: 'owner1', isAdmin: false }, 'PUT');
+    Object.assign(req, { body: { loopsGreenCiMergeDisabled: true } });
+    await mockRefs.putHandler!(req, res);
+
+    expect(credits.recordAdminAction).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'org.settings.updated',
+        changes: [{ field: 'loopsGreenCiMergeDisabled', before: false, after: true }],
+      })
+    );
+  });
+
   it('writes no entry when nothing changed', async () => {
     update.mockResolvedValueOnce({ id: 'org1', userId: 'owner1', name: 'Acme', systemPrompt: 'old' } as never);
     const { req, res } = mocks({ id: 'owner1', isAdmin: false }, 'PUT');

@@ -99,6 +99,22 @@ describe('registerLocalLoops handlers', () => {
     });
   });
 
+  it('lifts a budget cap when the owner changes the budget, but not another cap', async () => {
+    const { store } = register();
+    const capped = { cappedUntil: new Date(Date.now() + 3_600_000).toISOString() };
+    store.putLoop({ ...testLoop({ id: 'by-budget' }), ...capped, capReason: 'loop_budget' });
+    store.putLoop({ ...testLoop({ id: 'by-all' }), ...capped, capReason: 'all_loops' });
+    expect(await call(IPC_CHANNELS.localLoopsUpdateLoop, { id: 'by-budget', name: 'renamed' })).toMatchObject({
+      ok: true,
+    });
+    expect(store.loop('by-budget')).toMatchObject({ capReason: 'loop_budget' });
+    await call(IPC_CHANNELS.localLoopsUpdateLoop, { id: 'by-budget', budgetCreditsPerDay: 500 });
+    expect(store.loop('by-budget')).not.toHaveProperty('cappedUntil');
+    expect(store.loop('by-budget')).not.toHaveProperty('capReason');
+    await call(IPC_CHANNELS.localLoopsUpdateLoop, { id: 'by-all', budgetCreditsPerDay: 500 });
+    expect(store.loop('by-all')).toMatchObject({ capReason: 'all_loops' });
+  });
+
   it('creates a loop only in a folder chosen in the picker', async () => {
     register();
     const directory = mkdtempSync(join(tmpdir(), 'b4m-repo-'));
