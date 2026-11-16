@@ -1,4 +1,5 @@
 import { issueSessionForRequest } from '@server/auth/issueSession';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { User, userRepository, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { secretRotationRepository } from '@bike4mind/database/infra';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
@@ -101,7 +102,7 @@ const handler = baseApi({ auth: false })
         {
           // Redact before returning: the bootstrap refresh feeds this straight into the client's
           // currentUser, so it must carry the same self-view shape as the login endpoints.
-          user: redactUserSecretsForSelf(rotated.user),
+          user: redactUserSecretsForSelf(await resolveRoleAdminPermissions(rotated.user)),
           accessToken: rotated.accessToken,
           impersonating: !!rotated.impersonatedBy,
         },
@@ -151,7 +152,7 @@ const handler = baseApi({ auth: false })
 
     return sendSession(
       {
-        user: redactUserSecretsForSelf(user),
+        user: redactUserSecretsForSelf(await resolveRoleAdminPermissions(user)),
         accessToken: migrated.accessToken,
         impersonating: !!decoded.impersonatedBy,
       },

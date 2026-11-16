@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyStatus, sortAdminPermissions } from '@bike4mind/common';
 import {
   AuthSessionModel,
   CcBridgeDevice,
@@ -7,6 +7,7 @@ import {
   OAuthRefreshTokenModel,
   PasskeyCredentialModel,
   SupportAccess,
+  adminRoleRepository,
   TrustedDeviceModel,
   User,
   UserApiKey,
@@ -35,6 +36,7 @@ interface AdminDoc {
   username?: string | null;
   isAdmin?: boolean;
   adminPermissions?: string[];
+  adminRoleIds?: unknown[];
   isBanned?: boolean;
   deletedAt?: Date | null;
   lastActiveAt?: Date | null;
@@ -83,7 +85,23 @@ export interface CollectAccessReviewOptions {
   allApiKeys?: boolean;
 }
 
-const ADMIN_FILTER = { $or: [{ isAdmin: true }, { 'adminPermissions.0': { $exists: true } }] };
+const ADMIN_FILTER = {
+  $or: [{ isAdmin: true }, { 'adminPermissions.0': { $exists: true } }, { 'adminRoleIds.0': { $exists: true } }],
+};
+
+/** Each admin's effective permissions: direct grants plus every role they hold that still exists. */
+async function effectivePermissionsOf(docs: AdminDoc[]): Promise<Map<AdminDoc, string[]>> {
+  const roleIds = [...new Set(docs.flatMap(doc => (doc.adminRoleIds ?? []).map(String)))].filter(id =>
+    OBJECT_ID_RE.test(id)
+  );
+  const roles = new Map((await adminRoleRepository.findByIds(roleIds)).map(role => [role.id, role.permissions]));
+  return new Map(
+    docs.map(doc => {
+      const fromRoles = (doc.adminRoleIds ?? []).flatMap(id => roles.get(String(id)) ?? []);
+      return [doc, sortAdminPermissions([...(doc.adminPermissions ?? []), ...fromRoles])];
+    })
+  );
+}
 
 const collections = () => ({
   sessions: AuthSessionModel.collection,
@@ -229,6 +247,7 @@ export async function collectAccessReview(options: CollectAccessReviewOptions = 
     username: 1,
     isAdmin: 1,
     adminPermissions: 1,
+    adminRoleIds: 1,
     isBanned: 1,
     deletedAt: 1,
     lastActiveAt: 1,
@@ -237,6 +256,7 @@ export async function collectAccessReview(options: CollectAccessReviewOptions = 
     .read('secondaryPreferred')
     .lean<AdminDoc[]>();
   const adminIds = adminDocs.map(doc => String(doc._id));
+  const permissionsByDoc = await effectivePermissionsOf(adminDocs);
 
   const [sessions, trustedDevices, passkeys, oauthRefreshTokens, bridgeDevices, adminKeys] = await Promise.all([
     countByUser(c.sessions, f.sessions, adminIds),
@@ -253,7 +273,7 @@ export async function collectAccessReview(options: CollectAccessReviewOptions = 
       email: doc.email ?? null,
       username: doc.username ?? null,
       fullAdmin: doc.isAdmin === true,
-      permissions: doc.adminPermissions ?? [],
+      permissions: permissionsByDoc.get(doc) ?? [],
       status: accountStatus(doc),
       lastActiveAt: iso(doc.lastActiveAt),
       activeSessions: sessions.get(id) ?? 0,
