@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ADMIN_ERASURE_COMPLETED_ACTION } from '@bike4mind/common';
 import { AdminAuditLogModel, Session, mongoose } from '@bike4mind/database';
+import { inboxRepository } from '@bike4mind/database/social';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 // Registered outside the `@bike4mind/database` barrel, so they register only when imported.
 import '@bike4mind/server-utils/models/Subscription';
@@ -167,7 +168,7 @@ async function seedAccount(source: 'self' | 'admin' = 'admin') {
   // Soft-deleted rows still name the person and must go too.
   await insert('Project', { name: 'Trashed project', userId, deletedAt: new Date() });
   await insert('DeepAgentEpisode', { agentId, deletedAt: new Date() });
-  return { userId, email: `erase-${userId}@example.test`, sharedNotebook, teamRows };
+  return { userId, email: `erase-${userId}@example.test`, sharedNotebook, teamRows, other: String(other) };
 }
 
 describe('admin erasure against the real data holder registry', () => {
@@ -199,6 +200,15 @@ describe('admin erasure against the real data holder registry', () => {
       expect(kept, model).not.toBeNull();
       expect(String(kept!.userId), model).not.toBe(userId);
     }
+  });
+
+  it('deletes the messages the person sent, which no receiver could be shown once the sender is gone', async () => {
+    const { userId, other } = await seedAccount();
+    await expect(completeAccountDeletion(userId, { logger: logger as never, erasureRegistry })).resolves.toEqual({
+      deleted: true,
+    });
+    expect(await inboxRepository.findByReceiverId(other)).toEqual([]);
+    expect(await mongoose.model('Inbox').collection.countDocuments({ receiverId: other })).toBe(0);
   });
 });
 
