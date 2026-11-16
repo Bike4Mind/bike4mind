@@ -15,8 +15,10 @@ import { rowToObject, runLogsInsightsQuery, type LogsClient } from '../utils/log
 import { alarmProvider, escapeMrkdwn, type AlarmProvider } from './alarmSlackMessage';
 import type { CloudWatchAlarmPayload } from './cloudwatchAlarmTypes';
 import {
+  adminUserUrl,
   alarmWindow,
   formatAccountAge,
+  formatUsd,
   LLM_SPEND_LOG_GROUPS_ENV,
   measuredWindowUsd,
   type SpendWindow,
@@ -148,13 +150,8 @@ export async function fetchProviderSpend(
   return aggregateProviderSpend(rows);
 }
 
-const formatUsd = (usd: number) => (usd >= 0.01 || usd === 0 ? usd.toFixed(2) : usd.toFixed(4));
 const percent = (part: number, whole: number) => (whole > 0 ? Math.round((100 * part) / whole) : 0);
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-
-/** Same path as the young-account spend post in LiveOps (apps/workers/src/cron/youngAccountSpendAlert.ts). */
-const adminUserUrl = (appUrl: string, userId: string) =>
-  `${appUrl.replace(/\/+$/, '')}/admin/users/${encodeURIComponent(userId)}`;
 
 function shareList(groups: ({ name: string } & SpendGroup)[], whole: number, limit: number): string {
   const shown = groups
