@@ -15,7 +15,7 @@ vi.mock('./CheckoutForm', () => ({
 const appTheme = extendTheme({ ...getThemeConfig() });
 
 describe('PaymentModal', () => {
-  it('scrolls inside the dialog so the form stays reachable in a short window', () => {
+  const renderModal = () =>
     render(
       <CssVarsProvider theme={appTheme}>
         <PaymentModal
@@ -29,8 +29,19 @@ describe('PaymentModal', () => {
       </CssVarsProvider>
     );
 
+  it('scrolls inside the dialog so the form stays reachable in a short window', () => {
+    renderModal();
+
     const dialog = screen.getByTestId('payment-modal-dialog');
     expect(getComputedStyle(dialog).overflowY).toBe('auto');
     expect(dialog).toContainElement(screen.getByTestId('checkout-form-pay-btn'));
+  });
+
+  it('never forces the dialog wider than a phone screen', () => {
+    renderModal();
+
+    const { minWidth } = getComputedStyle(screen.getByTestId('payment-modal-dialog'));
+    expect(minWidth).not.toBe('400px');
+    expect(minWidth).toContain('100vw');
   });
 });
