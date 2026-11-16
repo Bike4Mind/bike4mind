@@ -313,12 +313,15 @@ describe('getAcquisitionConversion', () => {
     await Promise.all([User.createIndexes(), AnalyticsUserDay.createIndexes()]);
     const weekOld = { createdAt: new Date('2026-06-02T10:00:00Z') };
     const ads = { firstTouch: { source: 'ads' } };
-    const [returning, oneDay, , lateOnly, fresh] = await Promise.all([
+    const [returning, oneDay, , lateOnly, fresh, lastWindowDay, pastWindow] = await Promise.all([
       seedSignup(ads, weekOld),
       seedSignup(ads, weekOld),
       seedSignup(ads, weekOld),
       seedSignup(ads, weekOld),
       seedSignup(ads),
+      seedSignup(ads, weekOld),
+      seedSignup(ads, weekOld),
+      seedSignup(ads, { createdAt: new Date(NOW.getTime() - 7 * 24 * 60 * 60 * 1000) }),
     ]);
     const activeOn = (user: { _id: unknown }, days: string[]) =>
       Promise.all(
@@ -331,15 +334,17 @@ describe('getAcquisitionConversion', () => {
       activeOn(oneDay, ['2026-06-02']),
       activeOn(lateOnly, ['2026-06-12']),
       activeOn(fresh, ['2026-06-10', '2026-06-11']),
+      activeOn(lastWindowDay, ['2026-06-02', '2026-06-09']),
+      activeOn(pastWindow, ['2026-06-02', '2026-06-10']),
     ]);
 
     const result = await rowsOf('first');
 
     expect(result.rows.find(row => row.key === 'ads|(none)|(none)')).toMatchObject({
-      signups: 5,
-      activationSignups: 4,
-      firstAction: 2,
-      cameBack: 1,
+      signups: 8,
+      activationSignups: 7,
+      firstAction: 4,
+      cameBack: 2,
     });
   });
 

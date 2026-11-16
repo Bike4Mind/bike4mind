@@ -97,8 +97,8 @@ const columnsOf = (onSelectRow: Props['onSelectRow'], updating: boolean): DataCo
     id: 'cameBack',
     label: 'Came back',
     numeric: true,
-    help: 'Of those week-old signups, the ones active again on a later day of their first week.',
-    render: row => formatCount(row.cameBack),
+    help: 'Of the signups with a first action, the ones active again on a later day of their first week.',
+    render: row => `${formatCount(row.cameBack)} of ${formatCount(row.firstAction)}`,
   },
   {
     id: 'converted',

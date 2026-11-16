@@ -200,7 +200,7 @@ export async function loadPaymentLedger(
     return at ? [{ sub, at }] : [];
   });
   // A user dispute names no subscription, so it is held against the latest one charged before it opened that
-  // no earlier dispute already took.
+  // no earlier dispute already took. A dispute with no such subscription left reverses nothing.
   const disputedSubscriptions = new Set<SubscriptionRow>();
   for (const [ownerId, openedDates] of userDisputesOpened) {
     for (const openedAt of [...openedDates].sort((a, b) => a.getTime() - b.getTime())) {

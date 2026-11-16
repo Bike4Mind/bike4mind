@@ -274,6 +274,17 @@ describe('loadPaymentLedger', () => {
       [at('2026-05-20'), true],
     ]);
   });
+
+  it('ignores a second user dispute when no undisputed subscription is left before it', async () => {
+    const owner = newId();
+    await seedSubscription('User', owner, { subscriptionId: `sub_only_${owner}`, createdAt: at('2026-05-10') });
+    await openDispute('dp_only_first', { subjectId: owner });
+    await openDispute('dp_only_second', { subjectId: owner });
+
+    const ledger = (await loadPaymentLedger([owner], opts)).get(owner)!;
+
+    expect(ledger.payments.map(p => [p.at, p.reversed])).toEqual([[at('2026-05-10'), true]]);
+  });
 });
 
 describe('classifyFirstPaid', () => {

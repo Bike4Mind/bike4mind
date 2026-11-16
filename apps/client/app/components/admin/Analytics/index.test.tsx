@@ -909,7 +909,16 @@ describe('acquisition controls', () => {
   });
 
   it('drills a converted row to the Users list with the matching acquisition filter', async () => {
-    const metrics = { signups: 3, matureSignups: 3, converted: 1, provisionalConverted: 0, provisional: false };
+    const metrics = {
+      signups: 3,
+      matureSignups: 3,
+      converted: 1,
+      provisionalConverted: 0,
+      provisional: false,
+      activationSignups: 3,
+      firstAction: 2,
+      cameBack: 1,
+    };
     const row = {
       ...metrics,
       kind: 'touch',

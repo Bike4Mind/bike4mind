@@ -126,11 +126,11 @@ describe('AcquisitionSection', () => {
     expect(screen.getByTestId('acquisition-row-unpaid|cpc|spring-drill-converted-btn')).toBeDisabled();
   });
 
-  it('shows first action out of the week-old signups and came back', () => {
+  it('shows first action out of the week-old signups and came back out of first action', () => {
     renderSection({ data: ok([touchRow('ads|cpc|spring')]) });
     const row = screen.getByTestId('acquisition-row-ads|cpc|spring');
     expect(within(row).getByText('6 of 10')).toBeInTheDocument();
-    expect(within(row).getByText('3')).toBeInTheDocument();
+    expect(within(row).getByText('3 of 6')).toBeInTheDocument();
   });
 
   it('reports a control change', () => {
