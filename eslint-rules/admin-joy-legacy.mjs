@@ -5,7 +5,7 @@ const componentsByFile = {
   'AdminLiveOpsTriageMultiConfigTab.tsx': ['Card', 'Modal'],
   'AdminModalTab.tsx': ['Card', 'Table'],
   'AdminModalTabNew.tsx': ['Modal', 'Card'],
-  'AdminWhatsNewModalsTab.tsx': ['Card', 'Modal', 'Table'],
+  'AdminWhatsNewModalsTab.tsx': ['Modal'],
   'CreateSlackAppModal.tsx': ['Modal'],
   'DiscoveryRunDetailModal.tsx': ['Modal', 'Table'],
   'EventMetrics/components/CurationBreakdownTab.tsx': ['Card'],
