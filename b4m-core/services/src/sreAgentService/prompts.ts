@@ -354,10 +354,11 @@ export function buildRevisionUserPrompt(
   }
 
   // Reviewer feedback from internal team members, treated as actionable requirements.
-  // TRUST ASSUMPTION: this repo is private with trusted collaborators only. If external
-  // contributors ever gain PR review access, re-add defensive framing (e.g., "[CONTEXT DATA]")
-  // to prevent prompt injection via review comments. The system prompt provides baseline
-  // anti-injection rules; the stronger framing here was removed to improve revision effectiveness.
+  // TRUST ASSUMPTION: only OWNER, MEMBER and COLLABORATOR reviews reach this prompt; the
+  // dispatch gate in packages/server-utils/src/integrations/github/sreRevisionDispatch.ts
+  // (SRE_TRUSTED_REVIEWER_ASSOCIATIONS) enforces it, so keep the two in sync. The system
+  // prompt provides baseline anti-injection rules; the stronger framing here was removed to
+  // improve revision effectiveness.
   const truncatedFeedback =
     reviewFeedback.length > MAX_REVIEW_FEEDBACK_LENGTH
       ? reviewFeedback.slice(0, MAX_REVIEW_FEEDBACK_LENGTH) + '\n[truncated]'

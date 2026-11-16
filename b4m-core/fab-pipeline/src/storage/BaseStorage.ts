@@ -11,6 +11,8 @@ export abstract class BaseStorage {
       ACL?: any;
       /** PUT only: the exact byte length the upload must have (see S3Storage.getSignedUrl). */
       ContentLength?: number;
+      /** PUT only: '*' makes the upload create-only (see S3Storage.getSignedUrl). */
+      IfNoneMatch?: '*';
       audience?: 'browser';
       /** GET only: overrides the stored object's Content-Type on the signed response. */
       ResponseContentType?: string;

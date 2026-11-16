@@ -23,6 +23,7 @@ import { Resource } from 'sst';
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '@bike4mind/observability';
 import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { classifyReplayability } from '@server/integrations/github/webhookReplayClassifier';
 
 // Rate limit: max 10 replays per second (for delivery throttling)
@@ -58,7 +59,7 @@ interface ReplayResponse {
 }
 
 const handler = baseApi().post(
-  asyncHandler<{}, ReplayResponse, ReplayRequest, { id?: string }>(async (req, res) => {
+  asyncHandler<{}, unknown, ReplayRequest, { id?: string }>(async (req, res) => {
     const orgId = req.query.id!;
     const user = req.user!;
     const { deliveryIds, all } = req.body || {};
@@ -76,7 +77,7 @@ const handler = baseApi().post(
       );
     }
 
-    await verifyOrgOwner(user, orgId);
+    const org = await verifyOrgOwner(user, orgId);
 
     const webhookConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
     if (!webhookConfig) {
@@ -133,7 +134,7 @@ const handler = baseApi().post(
         skipped: 0,
         failed: 0,
         message: 'No failed deliveries found to replay',
-      });
+      } satisfies ReplayResponse);
     }
 
     // Limit to prevent overwhelming the queue
@@ -166,7 +167,7 @@ const handler = baseApi().post(
         skipped: 0,
         failed: 0,
         message: 'DLQ replay is not available in this environment',
-      });
+      } satisfies ReplayResponse);
     }
 
     // Re-enqueue deliveries with rate limiting
@@ -254,6 +255,14 @@ const handler = baseApi().post(
       total: failedDeliveries.length,
     });
 
+    await recordAdminActionFromRequest(req, {
+      action: 'org.webhook.deliveries_replayed',
+      actorScope: 'organization',
+      target: { kind: 'organization', id: org.id, displayName: org.name },
+      summary: `replayed failed GitHub webhook deliveries (${replayed} queued)`,
+      details: { replayed, skipped, failed, all: all === true },
+    });
+
     // Per-skip-reason breakdown so admins know why a record wasn't replayed
     // (notification deliveries are never replayable here; legacy records may be).
     const parts: string[] = [];
@@ -283,7 +292,7 @@ const handler = baseApi().post(
         : isCompleteFailure
           ? `Failed to replay deliveries: ${parts.join(', ')}`
           : `Successfully queued ${replayed} deliveries for replay`,
-    });
+    } satisfies ReplayResponse);
   })
 );
 

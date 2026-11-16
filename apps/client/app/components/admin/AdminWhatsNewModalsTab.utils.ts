@@ -1,4 +1,5 @@
 import { IModalDocument } from '@bike4mind/common';
+import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 
 /**
  * True if a modal is archived: disabled, or its endDate has passed.
@@ -74,19 +75,17 @@ export function getModalPriorityStatus(modal: IModalDocument): ModalPriorityStat
   return 'active';
 }
 
-/**
- * Get status chip color based on priority status
- */
-export function getStatusChipColor(status: ModalPriorityStatus): 'danger' | 'warning' | 'success' | 'neutral' {
+/** The `StatusChip` tone for a priority status (DESIGN_GUIDE.md, Status tones). */
+export function getStatusTone(status: ModalPriorityStatus): AdminStatusTone {
   switch (status) {
     case 'expired':
-      return 'danger';
+      return 'bad';
     case 'disabled':
       return 'neutral';
     case 'expiring-soon':
-      return 'warning';
+      return 'warn';
     case 'active':
-      return 'success';
+      return 'good';
     default: {
       // Exhaustive check - TypeScript will error if a case is missed
       const _exhaustiveCheck: never = status;
@@ -105,7 +104,7 @@ export function getStatusLabel(status: ModalPriorityStatus): string {
     case 'disabled':
       return 'Disabled';
     case 'expiring-soon':
-      return 'Expiring Soon';
+      return 'Expiring soon';
     case 'active':
       return 'Active';
     default: {

@@ -43,7 +43,7 @@ const deleteOrganization = vi.hoisted(() =>
 );
 vi.mock('@bike4mind/services', () => ({ organizationService: { deleteOrganization } }));
 
-const organizationRepository = vi.hoisted(() => ({}));
+const organizationRepository = vi.hoisted(() => ({ findById: vi.fn(async () => ({ id: 'org1', name: 'Acme' })) }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository }));
 
 const groupRepository = vi.hoisted(() => ({}));
@@ -102,6 +102,16 @@ vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { findActiveSubscriptionsByOwner },
 }));
 vi.mock('@bike4mind/server-utils/auth/turnAuth', () => ({}));
+const recordAdminActionFromRequest = vi.hoisted(() =>
+  vi.fn(async () => {
+    expect(txn.depth).toBe(1);
+    return null;
+  })
+);
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  parseAdminActionReason: (value: unknown) => String(value),
+  recordAdminActionFromRequest,
+}));
 vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({
   SubscriptionOwnerType: { Organization: 'organization' },
 }));
@@ -118,6 +128,7 @@ describe('DELETE /api/organizations/[id]', () => {
     closeInvite.mockClear();
     invalidatePartnerRuleCache.mockClear();
     withTransaction.mockClear();
+    recordAdminActionFromRequest.mockClear();
     findActiveSubscriptionsByOwner.mockClear().mockResolvedValue([]);
     warn.mockClear();
     txn.depth = 0;
@@ -224,6 +235,20 @@ describe('DELETE /api/organizations/[id]', () => {
     expect(deleteDomainClaims).toHaveBeenCalledWith('aaaaaaaaaaaaaaaaaaaaaaaa');
   });
 
+  it('records the team delete in the admin audit trail inside the transaction', async () => {
+    await call();
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.deleted',
+        actorScope: 'organization',
+        target: { kind: 'organization', id: 'aaaaaaaaaaaaaaaaaaaaaaaa', displayName: 'Acme' },
+        details: { revokedApiKeyCount: 2 },
+      })
+    );
+  });
+
   it("drops the org from its members' integration requests after deleting", async () => {
     await call();
 
@@ -271,6 +296,7 @@ describe('DELETE /api/organizations/[id]', () => {
     expect(invalidatePartnerRuleCache).not.toHaveBeenCalled();
     expect(deleteDomainClaims).not.toHaveBeenCalled();
     expect(clearOrganization).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 
   it('still runs the active-subscriptions validation via canDeleteOrganization', async () => {
