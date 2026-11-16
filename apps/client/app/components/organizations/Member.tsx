@@ -7,6 +7,7 @@ import {
   IOrganizationDocument,
   isOrgMember,
   isOrgOwnerOrPlatformAdmin,
+  organizationMemberRole,
   ORG_INVITE_ROLES,
   OrgInviteRole,
 } from '@bike4mind/common';
@@ -29,6 +30,8 @@ import BulkInviteModal from './BulkInviteModal';
 import InviteLinksPanel from './InviteLinksPanel';
 import OrgInviteRoleSelect from './OrgInviteRoleSelect';
 import MemberCreditBudgetCard from './MemberCreditBudgetCard';
+import MyOrgNotificationPrefsCard from './MyOrgNotificationPrefsCard';
+import OrgBudgetAlertsCard from './OrgBudgetAlertsCard';
 import OrganizationMfaPolicy from './OrganizationMfaPolicy';
 import MemberRoster from './MemberRoster';
 import { getMemberCreditUsage } from './memberCreditBudget';
@@ -155,6 +158,13 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
 
   // Mirrors the server gate on the credit-budget routes.
   const canManageCreditBudgets = !!currentUser && canManageMemberCreditBudgets(currentUser, organization);
+
+  // Alerts live on this tab rather than Settings because an appointed manager with only a read
+  // row cannot open Settings. Prefs mirror the my-notification-prefs route: the Owner or Manager
+  // role only (a role, not a permission), never a platform admin, never a personal org.
+  const canManageBudgetAlerts = canManageCreditBudgets && !organization.personal;
+  const viewerRole = currentUser ? organizationMemberRole(organization, currentUser.id) : null;
+  const isOrgAlertRecipient = !organization.personal && (viewerRole === 'owner' || viewerRole === 'manager');
 
   // Mirrors the owner-only gate on the manager route (organizationService.setOrganizationManager).
   const canManageManagers =
@@ -386,6 +396,8 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
       )}
 
       <MemberCreditBudgetCard organization={organization} canManage={canManageCreditBudgets} />
+      {canManageBudgetAlerts && <OrgBudgetAlertsCard organizationId={organization.id} />}
+      {isOrgAlertRecipient && <MyOrgNotificationPrefsCard organizationId={organization.id} />}
       <OrganizationMfaPolicy
         key={`${organization.id}:${organization.mfaPolicy?.required}:${organization.mfaPolicy?.graceEndsAt}`}
         organization={organization}

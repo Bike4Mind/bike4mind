@@ -122,6 +122,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.invite_link.created': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.invite_link.revoked': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.member_budget.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.budget_alerts.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.domain.added': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.domain.verified': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.domain.policy_updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
@@ -136,6 +137,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.api_key.created': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.rotated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.api_key.callback_secret_rotated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.access_updated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.member_revoked': { category: 'access', severity: 'notice', write: 'strict' },
 

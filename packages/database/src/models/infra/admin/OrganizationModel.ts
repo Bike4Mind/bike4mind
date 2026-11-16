@@ -169,6 +169,18 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     maxCreditsPerMember: { type: Number, required: false },
     serviceAccountUserId: { type: String, required: false },
     redactPushContent: { type: Boolean, default: false },
+    budgetAlerts: {
+      type: new Schema(
+        {
+          enabled: { type: Boolean, default: false },
+          monthlyBudgetCredits: { type: Number, default: null },
+          percentThresholds: { type: [Number], default: [] },
+          lowBalanceCredits: { type: Number, default: null },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
     sharingPolicy: {
       type: new Schema(
         {
@@ -742,6 +754,20 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
         $or: [{ userId }, { 'users.userId': userId }],
       },
       { $set: { 'userDetails.$.maxCredits': maxCredits } }
+    );
+    return result.matchedCount > 0;
+  }
+
+  /**
+   * Stamps `updatedAt` on a live org and resolves false when it is soft-deleted or missing. Run inside
+   * a transaction, the write conflicts with a concurrent org delete (which writes `deletedAt`), so the
+   * two serialize: whichever commits second retries and sees the other's outcome.
+   */
+  async touchIfLive(organizationId: string): Promise<boolean> {
+    const result = await this.organizationModel.updateOne(
+      { _id: organizationId, deletedAt: null },
+      { $set: { updatedAt: new Date() } },
+      { timestamps: false }
     );
     return result.matchedCount > 0;
   }

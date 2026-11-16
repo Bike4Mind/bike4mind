@@ -16,6 +16,7 @@ import { orgMemberHasPermission } from '../constants/orgRoles';
  * - `billingContact` is kept only for a viewer whose role holds `manageBilling` or a site admin.
  * - Per-member credit fields in `userDetails` are kept for viewers `canViewOrgMemberCredits` admits
  *   (managePolicies or viewUsage, or a site admin); other viewers keep only their own row's.
+ * - `budgetAlerts` follows the same `canViewOrgMemberCredits` rule.
  * - Everything else (name/description/seats/systemPrompt/userDetails identity/currentCredits/
  *   model config/logo) is preserved: the single-org GET is access-gated to members
  *   and roster administrators, and the list routes scope non-admins to their own
@@ -72,6 +73,7 @@ export function toSafeOrganization(org: OrgLike, viewer: OrgViewer): Record<stri
   const canViewMemberCredits =
     !!viewer?.isAdmin ||
     (viewer?.userId != null && roles !== null && canViewOrgMemberCredits({ id: viewer.userId }, roles));
+  if (!canViewMemberCredits) delete o.budgetAlerts;
   if (!canViewMemberCredits && Array.isArray(o.userDetails)) {
     o.userDetails = o.userDetails.map(details => {
       // A member keeps their own row: the budget warning reads it from this response.

@@ -52,7 +52,13 @@ update-required screen (`ClientUpgradeStatus`) without signing out. "Try again" 
 
 - **Committed output, no build plugin.** `Sources/B4MClient/Generated` is checked in, so a regeneration is a
   reviewable diff and building the app never fetches or compiles the generator.
-- **Snapshot.** `Packages/B4MClient/openapi.json` is a copy of `apps/client/public/openapi.json`.
+- **Snapshot.** `Packages/B4MClient/openapi.json` is a copy of `apps/client/public/openapi.json` with overlay-only enum
+  values stripped (`Scripts/strip_overlay_literals.py`). Refresh it with `make generate-client SPEC_REF=origin/main`.
+- **Drift signal.** The snapshot is not refreshed by server changes. `native-openapi-drift.yml` compares it (after the
+  overlay-literal stripping above) with `apps/client/public/openapi.json` on every PR that touches the spec or a
+  snapshot, and keeps one PR comment up to date with the per-client difference. It **warns and never blocks**: the
+  check stays green so an API change does not have to regenerate Swift and Kotlin in the same PR. Additive changes
+  still decode; regenerate before shipping a removed, renamed or retyped field.
 - **Filter.** `openapi-generator-config.yaml` lists the operations the app uses. The full spec generates
   ~140k lines; add an operation to the `filter.operations` list when a screen needs it.
   `sendChatMessage` is excluded: its request schema has both `max_tokens` and `maxTokens`, which collide and do not compile,

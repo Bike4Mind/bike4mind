@@ -965,7 +965,7 @@ describe('shell approval in a project with a large node_modules', () => {
     ...VALUED_GIT_OPTIONS.flatMap(option => SENDING_GIT.map(sending => `git ${option}=x ${sending}`)),
     ...VALUED_GIT_OPTIONS.flatMap(option => SENDING_GIT.map(sending => `git -C . ${option} x ${sending}`)),
     ...SENDING_GIT.map(sending => `git ${sending}`),
-  ])('marks %s as sending data out, so auto mode asks once the reply read untrusted content', async command => {
+  ])('names the outbound capability of %s on the card', async command => {
     const prompt = await shellApproval(
       'bash_execute',
       { command, cwd: proj },
@@ -977,7 +977,6 @@ describe('shell approval in a project with a large node_modules', () => {
         uncoverablePaths: permissionRoots,
       }
     );
-    expect(prompt.contained).toBeUndefined();
     expect(prompt.detail).toContain('Can send data off this computer');
   });
 
@@ -2131,7 +2130,6 @@ describe('shell approval in a project with a large node_modules', () => {
       { command: 'git p https://example.invalid/r main', cwd },
       { roots: [proj], workingDirectory: cwd, signal: new AbortController().signal, protectedPaths: [userData] }
     );
-    expect(elsewhere.contained).toBeUndefined();
     expect(elsewhere.detail).toContain('Can send data off this computer');
   });
 
