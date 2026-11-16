@@ -1,9 +1,5 @@
 import { partitionEmailList } from '@bike4mind/common';
-import {
-  REVIEW_ESCALATION_TIMEOUT_HOURS,
-  REVIEW_REMINDER_INTERVAL_HOURS,
-  REVIEW_SWEEP_MIN_INCIDENT_AGE_MINUTES,
-} from '@bike4mind/infra';
+import { REVIEW_REMINDER_INTERVAL_HOURS, REVIEW_SWEEP_MIN_INCIDENT_AGE_MINUTES } from '@bike4mind/infra';
 import {
   deliverEscalationAlert,
   deliverEscalationReminderDigest,
@@ -28,6 +24,9 @@ export const REVIEW_SWEEP_SEND_TIMEOUT_MS = 20_000;
 // No new send starts past this, so one run stays inside the Lambda timeout (5 minutes) when SMTP
 // is slow; the rest is picked up by the next run.
 export const REVIEW_SWEEP_SEND_BUDGET_MS = 3 * MINUTE_MS;
+// An incident still awaiting a verdict this long after it was recorded moves to the second review
+// step. Kept here, not with the sweep specs, because no deployed resource reads it.
+export const REVIEW_ESCALATION_TIMEOUT_HOURS = 24;
 
 export interface IncidentReviewSweepDeps extends IncidentEscalationDelivery {
   incidents: {

@@ -3,7 +3,6 @@ import {
   IMAGE_MODERATION_REVIEW_METRICS,
   IMAGE_MODERATION_REVIEW_NAMESPACE,
   PENDING_INCIDENT_ALARM_MINUTES,
-  REVIEW_ESCALATION_TIMEOUT_HOURS,
   REVIEW_REMINDER_INTERVAL_HOURS,
   REVIEW_SWEEP_INTERVAL_MINUTES,
   REVIEW_SWEEP_MIN_INCIDENT_AGE_MINUTES,
@@ -22,11 +21,10 @@ describe('imageModerationReviewSpecs', () => {
     });
   });
 
-  it('pins the sweep cadence, grace period, reminder interval, escalation timeout and alarm thresholds', () => {
+  it('pins the sweep cadence, grace period, reminder interval and alarm thresholds', () => {
     expect(REVIEW_SWEEP_INTERVAL_MINUTES).toBe(15);
     expect(REVIEW_SWEEP_MIN_INCIDENT_AGE_MINUTES).toBe(15);
     expect(REVIEW_REMINDER_INTERVAL_HOURS).toBe(24);
-    expect(REVIEW_ESCALATION_TIMEOUT_HOURS).toBe(24);
     expect(UNALERTED_INCIDENT_ALARM_MINUTES).toBe(30);
     expect(PENDING_INCIDENT_ALARM_MINUTES).toBe(1440);
   });
