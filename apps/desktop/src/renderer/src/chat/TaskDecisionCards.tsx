@@ -104,6 +104,12 @@ export function TaskDecisionCard({
   );
 }
 
+/**
+ * The tallest the list grows before it scrolls. The thread or Orchestrate stage above it is a
+ * `minHeight: 0` flex item, so an uncapped stack of decisions would squeeze it to nothing.
+ */
+export const TASK_DECISION_LIST_MAX_HEIGHT = '40vh';
+
 /** Above the composer: decisions asked by agents under this conversation, and by this conversation itself. */
 export function TaskDecisionCards({
   sessionId,
@@ -118,7 +124,22 @@ export function TaskDecisionCards({
   const shown = decisions.filter(entry => entry.rootId === sessionId || entry.sessionId === sessionId);
   if (shown.length === 0) return null;
   return (
-    <Stack spacing={0.75} sx={{ ...contentColumnSx, pt: 1.5 }} data-testid="task-decision-list">
+    <Stack
+      spacing={0.75}
+      role="region"
+      aria-label="Decisions waiting on you"
+      // Focusable so the list can be scrolled from the keyboard once it overflows.
+      tabIndex={0}
+      sx={{
+        ...contentColumnSx,
+        pt: 1.5,
+        flexShrink: 0,
+        maxHeight: TASK_DECISION_LIST_MAX_HEIGHT,
+        overflowY: 'auto',
+        overscrollBehavior: 'contain',
+      }}
+      data-testid="task-decision-list"
+    >
       {shown.map(entry => (
         <TaskDecisionCard
           key={entry.decision.id}
