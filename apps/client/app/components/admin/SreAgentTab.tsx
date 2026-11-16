@@ -263,7 +263,7 @@ export function AutoDispatchSourcesField({
           />
         ))}
       </Stack>
-      <FormHelperText>Fixes from unchecked sources always wait for Slack approval.</FormHelperText>
+      <FormHelperText>Auto-band fixes from unchecked sources wait for Slack approval.</FormHelperText>
     </FormControl>
   );
 }
@@ -533,8 +533,8 @@ function RepoConfigCard({
                     }}
                   />
                   <FormHelperText>
-                    Comma-separated Slack user IDs authorized to approve/reject fixes. Leave empty to allow anyone in
-                    the channel.
+                    Comma-separated Slack user IDs authorized to approve/reject fixes. With no IDs configured, nobody
+                    can approve a fix.
                   </FormHelperText>
                 </FormControl>
               </Stack>
