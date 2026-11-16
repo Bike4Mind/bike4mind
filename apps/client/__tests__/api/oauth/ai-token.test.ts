@@ -379,12 +379,12 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
       })
     );
     const { req, res } = makeReq();
-    await handler(req as any, res as any);
+    await handler(req as never, res as never);
 
     expect(res._getStatusCode()).toBe(401);
     expect(res._getJSONData().error).toBe('invalid_grant');
     expect(JSON.stringify(res._getJSONData())).not.toContain('403');
-    expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('Status code is 403'));
+    expect(req.logger.warn).toHaveBeenCalledWith(expect.stringContaining('Status code is 403'));
   });
 
   it('AC3: token subject resolves to no B4M user → 401 invalid_grant', async () => {
