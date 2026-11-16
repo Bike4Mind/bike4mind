@@ -3,7 +3,7 @@ import { IRealtimeConnectionRepository, RealtimeConnectionFilter } from '@bike4m
 
 export interface EndRealtimeConnectionsAdapters {
   db: { realtimeConnections: Pick<IRealtimeConnectionRepository, 'endConnections'> };
-  logger?: Logger;
+  logger?: Pick<Logger, 'log' | 'warn'>;
 }
 
 /**
