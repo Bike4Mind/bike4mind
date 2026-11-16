@@ -499,6 +499,10 @@ const acceptProject = async (
     throw new NotFoundError('Project not found');
   }
 
+  // An invite minted before the inviter was recorded has nobody to cap its grants against, so it is
+  // refused with the expired-invite message the client already explains, and has to be re-sent.
+  if (!invite.inviterId) throw new UnprocessableEntityError('Invite has expired');
+
   const permissions = permissionsInviterCanStillGrant(project, invite, invite.permissions, inviter);
   await assertContentInvitePolicy(project, [user], db.organization);
 
@@ -511,13 +515,10 @@ const acceptProject = async (
   const sessions = await db.sessions.findAllByIds(project.sessionIds);
 
   // Whoever minted the invite passes each attached item on, so the item grant is capped at what they
-  // hold on that item: the rule projectService/addFiles.ts applies to whoever attaches one. A legacy
-  // invite records no minter to cap against and grants the project permissions on every item.
-  const grantOf = (granted: Permission[]) => ({ add: [{ userId: user.id, permissions: granted, projectId }] });
+  // hold on that item: the rule projectService/addFiles.ts applies to whoever attaches one.
   const grantOn = (item: IShareableDocument & { userId: string }) => {
-    if (!invite.inviterId) return grantOf(permissions);
     const granted = inviter ? grantCap(item as ShareableAccessShape, inviter)(permissions) : [];
-    return granted.length > 0 ? grantOf(granted) : null;
+    return granted.length > 0 ? { add: [{ userId: user.id, permissions: granted, projectId }] } : null;
   };
 
   for (const file of files) {

@@ -1093,6 +1093,7 @@ describe('sharingService - acceptInvite (addressing)', () => {
 describe('sharingService - acceptInvite (Project)', () => {
   const userId = 'user-1';
   const projectId = 'project-1';
+  const ownerId = 'owner-1';
   const inviteId = '65a1f77bcf86cd7994390001';
 
   it('records the accept and grants the project and each attached file and session', async () => {
@@ -1103,6 +1104,7 @@ describe('sharingService - acceptInvite (Project)', () => {
           type: InviteType.Project,
           documentId: projectId,
           isLinkOnly: true,
+          inviterId: ownerId,
           permissions: [Permission.read],
           remaining: 3,
           accepted: 0,
@@ -1115,6 +1117,7 @@ describe('sharingService - acceptInvite (Project)', () => {
       projects: {
         findById: vi.fn(async () => ({
           id: projectId,
+          userId: ownerId,
           users: [],
           fileIds: ['file-1'],
           systemPrompts: [{ fileId: 'prompt-1' }],
@@ -1126,17 +1129,22 @@ describe('sharingService - acceptInvite (Project)', () => {
       fabFiles: {
         shareable: shares(),
         findAllByIds: vi.fn(async () => [
-          { id: 'file-1', users: [] },
-          { id: 'prompt-1', users: [] },
+          { id: 'file-1', userId: ownerId, users: [] },
+          { id: 'prompt-1', userId: ownerId, users: [] },
         ]),
         update: vi.fn(),
       },
       sessions: {
         shareable: shares(),
-        findAllByIds: vi.fn(async () => [{ id: 'session-1', users: [] }]),
+        findAllByIds: vi.fn(async () => [{ id: 'session-1', userId: ownerId, users: [] }]),
         update: vi.fn(),
       },
-      users: { findById: vi.fn(async () => ({ id: userId, email: 'a@x.com', username: 'a' })), update: vi.fn() },
+      users: {
+        findById: vi.fn(async (id: string) =>
+          id === userId ? { id: userId, email: 'a@x.com', username: 'a' } : { id, groups: [] }
+        ),
+        update: vi.fn(),
+      },
     };
 
     await acceptInvite(userId, { id: inviteId }, { db } as never);
@@ -1340,7 +1348,7 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
     const acceptProjectInvite = async (
       sharerOnProject: Permission[],
       items: { file: unknown; prompt: unknown; session: unknown },
-      minter: { inviterId?: string; groups?: string[]; deleted?: boolean } = { inviterId: sharerId }
+      minter: { inviterId: string; groups?: string[]; deleted?: boolean } = { inviterId: sharerId }
     ) => {
       const project = {
         ...makeDoc(sharerOnProject),
@@ -1528,19 +1536,28 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
       });
     });
 
-    it('propagates an invite with no recorded inviter at face value to every item', async () => {
-      const calls = await acceptProjectInvite(
-        shareLink,
-        { file: item('file-1', null), prompt: item('prompt-1', null), session: item('session-1', null) },
-        { inviterId: undefined }
-      );
+    it('refuses an invite with no recorded inviter as expired, and grants nothing', async () => {
+      const project = {
+        ...makeDoc(shareLink),
+        fileIds: ['file-1'],
+        systemPrompts: [{ fileId: 'prompt-1' }],
+        sessionIds: ['session-1'],
+      };
+      const adapters = makeAdapters(InviteType.Project, fullLink, project, undefined);
+      adapters.db.fabFiles.findAllByIds.mockResolvedValue([
+        item('file-1', 'owner', ownerId),
+        item('prompt-1', 'owner', ownerId),
+      ] as never);
+      adapters.db.sessions.findAllByIds.mockResolvedValue([item('session-1', 'owner', ownerId)] as never);
 
-      expect(calls.project).toStrictEqual([granted(fullLink)]);
-      expect(calls.files).toStrictEqual([
-        ['file-1', propagated(fullLink)],
-        ['prompt-1', propagated(fullLink)],
-      ]);
-      expect(calls.sessions).toStrictEqual([['session-1', propagated(fullLink)]]);
+      const accept = acceptInvite(userId, { id: inviteId }, adapters as never);
+
+      await expect(accept).rejects.toThrow(UnprocessableEntityError);
+      await expect(accept).rejects.toThrow('Invite has expired');
+      expect(adapters.db.projects.shareable.updateUserShares).not.toHaveBeenCalled();
+      expect(adapters.db.fabFiles.shareable.updateUserShares).not.toHaveBeenCalled();
+      expect(adapters.db.sessions.shareable.updateUserShares).not.toHaveBeenCalled();
+      expect(adapters.db.invites.acceptRecipient).not.toHaveBeenCalled();
     });
   });
 

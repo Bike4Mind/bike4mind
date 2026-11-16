@@ -186,15 +186,17 @@ describe('Project invite accept: grants on attached files, prompts and notebooks
     expect(await sessionRows(sessions.unheld, accepter.id)).toEqual([]);
   });
 
-  it('grants every attached item at the invite permissions when the invite records no inviter', async () => {
+  it('refuses an invite that records no inviter and writes nothing', async () => {
     const { accepter, projectId, files, prompts, sessions, mint } = await seed();
+    const inviteId = await mint();
 
-    await accept(accepter.id, await mint());
+    await expect(accept(accepter.id, inviteId)).rejects.toThrow('Invite has expired');
 
-    const full = [{ permissions: memberGrant, projectId }];
+    expect(await projectRows(projectId, accepter.id)).toEqual([]);
     for (const id of [...Object.values(files), ...Object.values(prompts)]) {
-      expect(await fileRows(id, accepter.id)).toEqual(full);
+      expect(await fileRows(id, accepter.id)).toEqual([]);
     }
-    for (const id of Object.values(sessions)) expect(await sessionRows(id, accepter.id)).toEqual(full);
+    for (const id of Object.values(sessions)) expect(await sessionRows(id, accepter.id)).toEqual([]);
+    expect((await Invite.findById(inviteId).lean())?.remaining).toBe(1);
   });
 });
