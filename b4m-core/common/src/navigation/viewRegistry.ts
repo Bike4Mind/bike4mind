@@ -834,6 +834,17 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.access_review',
+    section: 'admin',
+    label: 'Access review',
+    description:
+      'Quarterly review of who holds admin access: confirm or revoke each admin, flag dormant and no-MFA accounts, export the signed-off review as CSV',
+    navigationType: 'tab',
+    target: '81', // AdminTab.AccessReview
+    keywords: ['access review', 'quarterly review', 'admin access', 'dormant admins', 'least privilege', 'compliance'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.approvals',
     section: 'admin',
     label: 'Approvals',

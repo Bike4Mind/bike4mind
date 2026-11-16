@@ -37,6 +37,7 @@ import VoiceSettingsTab from './VoiceSettingsTab';
 import DocumentationTab from './DocumentationTab';
 import KnowledgeModal from '../Knowledge/KnowledgeModal';
 import { AdminCommandPalette } from './shared/AdminCommandPalette';
+import { AccessReviewOverdueBanner } from './AccessReview/AccessReviewOverdueBanner';
 import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
 import ToolDefinitionsTab from './ToolDefinitionsTab';
 import EmailMarketingTab from './EmailMarketingTab';
@@ -60,6 +61,7 @@ const AdminLiveOpsTriageMultiConfigTab = dynamic(() => import('./AdminLiveOpsTri
 });
 const WebhookAuditLogsTab = dynamic(() => import('./WebhookAuditLogs'), { ssr: false });
 const AuditLogTab = dynamic(() => import('./AuditLog'), { ssr: false });
+const AccessReviewTab = dynamic(() => import('./AccessReview'), { ssr: false });
 const ApprovalsTab = dynamic(() => import('./Approvals'), { ssr: false });
 
 // The shell gives every tab panel the page frame. These tabs still pad themselves while open work on
@@ -159,6 +161,10 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           onNavigate={setActiveTab}
           canOpenTab={isAdminTabRenderable}
           onOpenHelp={openHelpPanel}
+        />
+        <AccessReviewOverdueBanner
+          isFullAdmin={!!currentUser?.isAdmin}
+          onOpen={() => setActiveTab(AdminTab.AccessReview)}
         />
         <Tabs
           aria-label="Admin tabs"
@@ -325,6 +331,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
             {activeTab === AdminTab.WebhookAuditLogs && <WebhookAuditLogsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.AuditLog}>{activeTab === AdminTab.AuditLog && <AuditLogTab />}</TabPanel>
+          <TabPanel value={AdminTab.AccessReview}>
+            {activeTab === AdminTab.AccessReview && <AccessReviewTab />}
+          </TabPanel>
           <TabPanel value={AdminTab.Approvals}>{activeTab === AdminTab.Approvals && <ApprovalsTab />}</TabPanel>
           <TabPanel value={AdminTab.Tutorials}>{activeTab === AdminTab.Tutorials && <TutorialsTab />}</TabPanel>
           <TabPanel value={AdminTab.GitHubConnection}>

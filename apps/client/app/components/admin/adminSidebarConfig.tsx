@@ -64,6 +64,7 @@ import {
   Tag,
   Timer,
   TrendingUp,
+  UserCheck,
   UserPlus,
   UserSearch,
   Users,
@@ -151,6 +152,7 @@ export enum AdminTab {
   Tutorials = 77,
   AiOperations = 78,
   LegacyApiKeys = 79,
+  AccessReview = 81,
 }
 
 /**
@@ -284,6 +286,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         testid: 'admin-audit-log-btn',
         badge: 'unreviewedAudit',
       },
+      { Icon: UserCheck, tab: AdminTab.AccessReview, label: 'Access review', testid: 'admin-access-review-btn' },
       {
         Icon: ClipboardCheck,
         tab: AdminTab.Approvals,
