@@ -1015,6 +1015,17 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.roles',
+    section: 'admin',
+    label: 'Roles',
+    description:
+      'Create admin roles from templates, edit the permissions each role grants, and delete roles nobody holds',
+    navigationType: 'tab',
+    target: '80', // AdminTab.Roles
+    keywords: ['roles', 'admin roles', 'permissions', 'role templates', 'delegated admin', 'access', 'support role'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.rate_limits',
     section: 'admin',
     label: 'Rate limits',
