@@ -13,8 +13,8 @@ import { createFabFile } from '../fabFileService/create';
 import { EmailAttachment, ParsedEmailObject, ProcessedAttachment, IStorageAdapter } from './types';
 
 export const MAX_FILE_SIZE = 20 * 1024 * 1024; // bytes, per attachment
-export const MAX_ATTACHMENTS_PER_EMAIL = 20; // count of real attachments (phantom MIME parts excluded)
-export const MAX_TOTAL_ATTACHMENT_BYTES_PER_EMAIL = 25 * 1024 * 1024; // bytes, summed across attachments
+export const MAX_ATTACHMENTS_PER_EMAIL = 20; // count of attachments that pass the per-file checks (phantoms and per-file rejects excluded)
+export const MAX_TOTAL_ATTACHMENT_BYTES_PER_EMAIL = 25 * 1024 * 1024; // bytes, summed over attachments that pass the per-file checks
 
 /**
  * Maps the one alias spelling email clients use to its supported type. Every other claim is

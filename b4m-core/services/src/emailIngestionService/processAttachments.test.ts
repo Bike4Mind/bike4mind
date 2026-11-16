@@ -472,6 +472,16 @@ describe('emailIngestionService - processAttachments', () => {
       expect(capWarnings(warn)).toHaveLength(0);
     });
 
+    it('per-file rejects do not consume the count budget', async () => {
+      const result = await run([
+        att('huge.pdf', 21 * MB),
+        ...names(MAX_ATTACHMENTS_PER_EMAIL).map(n => att(n, 1000 * 3)),
+      ]);
+
+      expect(result.filter(r => r.fabFileId).map(r => r.filename)).toEqual(names(MAX_ATTACHMENTS_PER_EMAIL));
+      expect(capWarnings(warn)).toHaveLength(0);
+    });
+
     it('a single attachment over the total limit does not stop later valid ones', async () => {
       const result = await run([att('huge.pdf', 30 * MB), att('small.pdf', 1 * MB)]);
 
