@@ -61,6 +61,11 @@ describe('by-design path-token routes', () => {
     [`/api/skills/market/by-token/${token}`, '/api/skills/market/by-token/[redacted]'],
     [`/api/file-links/${token}`, '/api/file-links/[redacted]'],
     [`/api/file-links/${token}?download=1`, '/api/file-links/[redacted]?download=1'],
+    [`/api/email/track/open/${token}`, '/api/email/track/open/[redacted]'],
+    [
+      `/api/email/track/click/${token}?url=https%3A%2F%2Fexample.com`,
+      '/api/email/track/click/[redacted]?url=https%3A%2F%2Fexample.com',
+    ],
     [`/api/webhooks/github/${token}`, '/api/webhooks/github/[redacted]'],
     [`/api/webhooks/jira/${token}`, '/api/webhooks/jira/[redacted]'],
     [`/API/File-Links/${token}`, '/API/File-Links/[redacted]'],

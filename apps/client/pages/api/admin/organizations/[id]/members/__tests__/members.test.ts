@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   revokeAccess: vi.fn(),
   audit: vi.fn(),
   keptShares: vi.fn(),
+  refreshSeatEntitlements: vi.fn(),
   logEvent: vi.fn(),
 }));
 
@@ -69,6 +70,9 @@ vi.mock('@bike4mind/server-utils/dataLakes/lakeConfigAuditDb', () => ({ lakeConf
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: mocks.logEvent }));
 vi.mock('@server/utils/keptPersonalLakeSharesNotifier', () => ({
   reportAndNotifyKeptPersonalLakeShares: mocks.keptShares,
+}));
+vi.mock('@server/organizations/refreshSeatEntitlements', () => ({
+  refreshSeatEntitlements: mocks.refreshSeatEntitlements,
 }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>();
@@ -285,7 +289,17 @@ describe('DELETE /api/admin/organizations/[id]/members/[userId]', () => {
       })
     );
     expect(mocks.keptShares).toHaveBeenCalledWith(USER, expect.objectContaining({ id: ORG }), expect.anything());
+    expect(mocks.refreshSeatEntitlements).toHaveBeenCalledWith(USER);
     expect(res._getJSONData()).toEqual({ organizationId: ORG, userId: USER, personalLakeSharesKept: 0 });
+  });
+
+  it('does not refresh seat entitlements when the removal fails', async () => {
+    mocks.findById.mockResolvedValue(buildOrg({ adminUserIds: [USER] }));
+    mocks.revokeAccess.mockRejectedValueOnce(new Error('boom'));
+
+    await expect(call('DELETE,PATCH', 'DELETE', { reason: 'Left the team' })).rejects.toThrow('boom');
+
+    expect(mocks.refreshSeatEntitlements).not.toHaveBeenCalled();
   });
 });
 
