@@ -7,7 +7,10 @@
  * captureEmailLinkToken MUST run at module load in router.tsx, before the visit beacon and before
  * createRouter: it moves the token out of the address into this module, so no request the page sends
  * (whose Referer is the full page URL, query included) carries it, and the router never builds a
- * location that holds it and could write it back. The page reads it with getEmailLinkToken. Same idea
+ * location that holds it and could write it back. It runs once more in TanStackRouterProvider's layout
+ * effect: Next's App Router writes the URL it read at boot back into the address on its first commit,
+ * which can come after router.tsx loaded. Running it again only clears the address; the token it took
+ * stays. The page reads it with getEmailLinkToken. Same idea
  * as the OAuth callback (utils/authParams.ts) and the persona redeem code (routes/personas/personaRedeemCode.ts).
  */
 export const VERIFY_EMAIL_PATH = '/verify-email';
@@ -25,7 +28,8 @@ let taken: { path: string; token: string } | undefined;
 export function captureEmailLinkToken(): void {
   if (typeof window === 'undefined') return;
   const { pathname, search, hash } = window.location;
-  const path = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
+  // Routes match case-insensitively, so /Verify-Email/ is the same page.
+  const path = (pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname).toLowerCase();
   if (!EMAIL_LINK_PATHS.includes(path)) return;
 
   const fragment = new URLSearchParams(hash.slice(1));

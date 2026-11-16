@@ -46,6 +46,23 @@ describe('captureEmailLinkToken', () => {
     expect(window.location.hash).toBe('');
   });
 
+  it('matches the path case-insensitively, as the routes do', async () => {
+    const { getEmailLinkToken } = await land('/Verify-Email#token=frag-5');
+
+    expect(getEmailLinkToken('/verify-email')).toBe('frag-5');
+    expect(window.location.hash).toBe('');
+  });
+
+  it('clears a token written back into the address again, keeping the one it took', async () => {
+    const { captureEmailLinkToken, getEmailLinkToken } = await land('/verify-email?token=query-6');
+    window.history.replaceState(null, '', '/verify-email?token=query-6');
+
+    captureEmailLinkToken();
+
+    expect(window.location.search).toBe('');
+    expect(getEmailLinkToken('/verify-email')).toBe('query-6');
+  });
+
   it('gives the token only to the page the link landed on', async () => {
     const { getEmailLinkToken } = await land('/verify-change#token=frag-4');
 
