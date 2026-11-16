@@ -4,6 +4,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const mockConnectDB = vi.fn();
 const mockAppend = vi.fn();
 const mockMonthlyCogsByProvider = vi.fn();
+const mockCloudWatchSend = vi.fn();
+
+vi.mock('@aws-sdk/client-cloudwatch', () => ({
+  CloudWatchClient: class {
+    send = mockCloudWatchSend;
+  },
+  PutMetricDataCommand: class {
+    constructor(public readonly input: unknown) {}
+  },
+}));
 
 vi.mock('@bike4mind/database', () => ({
   connectDB: (...args: unknown[]) => mockConnectDB(...args),
@@ -24,7 +34,7 @@ vi.mock('@bike4mind/observability', () => {
   return { Logger: MockLogger };
 });
 
-vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
+vi.mock('sst', () => ({ Resource: { App: { name: 'test-app', stage: 'test' } } }));
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
@@ -150,7 +160,7 @@ describe('spendReconciliation cron', () => {
   });
 
   describe('runSpendReconciliation', () => {
-    const logger = { log: vi.fn(), error: vi.fn() } as never;
+    const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
 
     it('skips every provider without connecting when no admin key is set', async () => {
       const configMod = await import('@bike4mind/server-utils/utils/config');
@@ -161,7 +171,7 @@ describe('spendReconciliation cron', () => {
         const { runSpendReconciliation } = await import('./spendReconciliation');
         const result = await runSpendReconciliation({ logger });
 
-        expect(result).toEqual({ reconciled: 0, skipped: 2, failed: 0 });
+        expect(result).toEqual({ reconciled: 0, skipped: 2, failed: 0, drifted: 0 });
         expect(mockAnthropicFetch).not.toHaveBeenCalled();
         expect(mockOpenAIFetch).not.toHaveBeenCalled();
         expect(mockAppend).not.toHaveBeenCalled();
@@ -181,9 +191,85 @@ describe('spendReconciliation cron', () => {
       const result = await runSpendReconciliation({ logger, now: new Date('2027-01-02T06:00:00Z') });
 
       expect(mockOpenAIFetch.mock.calls.map(c => c[1])).toEqual(['2026-12', '2027-01']);
-      expect(result).toEqual({ reconciled: 2, skipped: 2, failed: 0 });
+      // The closed month 2026-12 has no internal COGS row, so $1 billed reads as 100% drift.
+      expect(result).toEqual({ reconciled: 2, skipped: 2, failed: 0, drifted: 1 });
       expect(mockAppend).toHaveBeenCalledTimes(2);
       expect(mockConnectDB).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('drift and nothing-reconciled metrics', () => {
+    function publishedMetrics(): Record<string, number> {
+      expect(mockCloudWatchSend).toHaveBeenCalledTimes(1);
+      const { Namespace, MetricData } = mockCloudWatchSend.mock.calls[0][0].input as {
+        Namespace: string;
+        MetricData: { MetricName: string; Value: number }[];
+      };
+      expect(Namespace).toBe('test-app/test/LLMSpend');
+      return Object.fromEntries(MetricData.map(datum => [datum.MetricName, datum.Value]));
+    }
+
+    it('counts a closed month whose drift exceeds the error band', async () => {
+      // 2026-07: provider $600 vs internal $450 -> 25% drift.
+      mockAnthropicFetch.mockImplementation(async (_key: string, month: string) =>
+        month === '2026-07' ? { providerUsd: 600, breakdown: {} } : { providerUsd: 120, breakdown: {} }
+      );
+      mockOpenAIFetch.mockResolvedValue(null);
+
+      const body = JSON.parse((await runHandler()).body);
+
+      expect(body.drifted).toBe(1);
+      expect(publishedMetrics()).toEqual({ SpendReconciliationDrift: 1, SpendReconciliationNothingReconciled: 0 });
+    });
+
+    it('does not count a drift at or under the error band', async () => {
+      // 2026-07: provider $500 vs internal $450 -> exactly 10%, the top of the warning band.
+      mockAnthropicFetch.mockImplementation(async (_key: string, month: string) =>
+        month === '2026-07' ? { providerUsd: 500, breakdown: {} } : { providerUsd: 120, breakdown: {} }
+      );
+      mockOpenAIFetch.mockResolvedValue(null);
+
+      const body = JSON.parse((await runHandler()).body);
+
+      expect(body).toMatchObject({ reconciled: 2, drifted: 0 });
+      expect(publishedMetrics()).toEqual({ SpendReconciliationDrift: 0, SpendReconciliationNothingReconciled: 0 });
+    });
+
+    it('leaves the accruing month out of the drift count', async () => {
+      // 2026-08: provider $10 vs internal $120 -> 92% drift on a month still accruing.
+      mockAnthropicFetch.mockImplementation(async (_key: string, month: string) =>
+        month === '2026-07' ? { providerUsd: 450, breakdown: {} } : { providerUsd: 10, breakdown: {} }
+      );
+      mockOpenAIFetch.mockResolvedValue(null);
+
+      const body = JSON.parse((await runHandler()).body);
+
+      expect(body.drifted).toBe(0);
+      expect(publishedMetrics().SpendReconciliationDrift).toBe(0);
+    });
+
+    it('flags a run where every provider-month failed or was skipped', async () => {
+      mockAnthropicFetch.mockRejectedValue(new Error('Anthropic API 500'));
+      mockOpenAIFetch.mockResolvedValue(null);
+
+      const body = JSON.parse((await runHandler()).body);
+
+      expect(body).toMatchObject({ reconciled: 0, failed: 2, skipped: 2 });
+      expect(publishedMetrics()).toEqual({ SpendReconciliationDrift: 0, SpendReconciliationNothingReconciled: 1 });
+    });
+
+    it('flags a run where no provider admin key is configured', async () => {
+      const configMod = await import('@bike4mind/server-utils/utils/config');
+      const cfg = configMod.Config as Record<string, unknown>;
+      cfg.ANTHROPIC_ADMIN_API_KEY = 'not-configured';
+      cfg.OPENAI_ADMIN_API_KEY = undefined;
+      try {
+        await runHandler();
+        expect(publishedMetrics()).toEqual({ SpendReconciliationDrift: 0, SpendReconciliationNothingReconciled: 1 });
+      } finally {
+        cfg.ANTHROPIC_ADMIN_API_KEY = 'sk-ant-admin01-test';
+        cfg.OPENAI_ADMIN_API_KEY = 'sk-openai-test';
+      }
     });
   });
 });

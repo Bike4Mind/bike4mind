@@ -2,10 +2,11 @@
  * Provider-reported LLM spend: hourly alarms per provider on ProviderReportedUsd, which the
  * providerUsagePoll cron (infra/cron.ts) reads from each provider's own usage report, plus alarms
  * on the poller failing or skipping a provider, and a small dashboard. The ledger-derived twin is
- * infra/llmSpend.ts.
+ * infra/llmSpend.ts. Also alarms on the nightly spend reconciliation (spendReconciliationCron) drifting
+ * from the provider's billing or reconciling nothing.
  */
 
-import { providerUsagePollCron } from './cron';
+import { providerUsagePollCron, spendReconciliationCron } from './cron';
 import { dlqAlarmTopic, oobAlarmTopic } from './dlqAlarms';
 import { parseAlarmThreshold } from './signupAlarmThreshold';
 import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
@@ -97,6 +98,63 @@ if (isMonitoredStage) {
       threshold: 1,
       treatMissingData: 'notBreaching',
       dimensions: { FunctionName: providerUsagePollCron.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+  }
+
+  if (spendReconciliationCron) {
+    // SpendReconciliationDrift counts closed-month rows whose deltaPct exceeds
+    // SPEND_RECONCILIATION_DRIFT_ALERT_PCT (@bike4mind/common), the banner's error band.
+    new aws.cloudwatch.MetricAlarm('spendReconciliationDrift', {
+      name: `${prefix}-spend-reconciliation-drift`,
+      alarmDescription:
+        "Nightly spend reconciliation: a provider's billed spend for the closed month differs from our internal COGS by more than the error band",
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'SpendReconciliationDrift',
+      namespace: LLM_SPEND_NAMESPACE,
+      period: 86400,
+      statistic: 'Maximum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      // No okActions: the next day's empty bucket reads as OK before the 06:00 run, so a drift
+      // that persists would post a recovery every night and page again each morning.
+      alarmActions: actions,
+      tags: { Application: 'LLMSpend', Severity: 'Critical' },
+    });
+
+    // Separate from drift: every provider-month was skipped or failed, so the run checked nothing.
+    new aws.cloudwatch.MetricAlarm('spendReconciliationNothingReconciled', {
+      name: `${prefix}-spend-reconciliation-nothing-reconciled`,
+      alarmDescription:
+        'Nightly spend reconciliation reconciled no provider-month: every provider was skipped or failed',
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'SpendReconciliationNothingReconciled',
+      namespace: LLM_SPEND_NAMESPACE,
+      period: 86400,
+      statistic: 'Maximum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+
+    // A crash, timeout or failed publish never reaches the metrics above, so both would stay silent.
+    new aws.cloudwatch.MetricAlarm('spendReconciliationErrors', {
+      name: `${prefix}-spend-reconciliation-errors`,
+      alarmDescription:
+        'The nightly spend reconciliation Lambda failed, so the drift and nothing-reconciled alarms are blind',
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 86400,
+      statistic: 'Sum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: spendReconciliationCron.nodes.function.name },
       alarmActions: [dlqAlarmTopic.arn],
       tags: { Application: 'LLMSpend', Severity: 'Medium' },
     });

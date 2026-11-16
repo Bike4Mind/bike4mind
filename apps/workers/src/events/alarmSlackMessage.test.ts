@@ -481,12 +481,16 @@ describe('ALARM_CATALOG', () => {
     expect(dlqCatalogEntry('dlq-email-send-age')?.category).toBe('jobs');
   });
 
-  it('files only provider-reported spend and ungranted purchases under cost', () => {
+  it('files only provider-reported spend, reconciliation drift and ungranted purchases under cost', () => {
     const cost = Object.entries(ALARM_CATALOG)
       .filter(([, entry]) => entry.category === 'cost')
       .map(([key]) => key)
       .sort();
-    expect(cost).toEqual(['provider-reported-spend-hourly', 'ungranted-credit-purchases']);
+    expect(cost).toEqual([
+      'provider-reported-spend-hourly',
+      'spend-reconciliation-drift',
+      'ungranted-credit-purchases',
+    ]);
     // Ledger spend alarms catch credit farms, so they stay with the abuse signals.
     for (const key of [
       'llm-spend-hourly',
@@ -534,6 +538,14 @@ describe('ALARM_CATALOG', () => {
     expect(ALARM_CATALOG['provider-usage-poll-errors'].level).toBe('warn');
     expect(ALARM_CATALOG['llm-spend-young-accounts'].level).toBe('page');
     expect(ALARM_CATALOG['completion-credit-overdraft'].level).toBe('warn');
+  });
+
+  it('pages on reconciliation drift and warns, as a job, on a run that reconciled nothing', () => {
+    const entryFor = (suffix: string) =>
+      alarmCatalogEntry({ ...sample, AlarmName: `bike4mind-production-${suffix}` }, 'production');
+    expect(entryFor('spend-reconciliation-drift')).toMatchObject({ level: 'page', category: 'cost' });
+    expect(entryFor('spend-reconciliation-nothing-reconciled')).toMatchObject({ level: 'warn', category: 'jobs' });
+    expect(entryFor('spend-reconciliation-errors')).toMatchObject({ level: 'warn', category: 'jobs' });
   });
 });
 

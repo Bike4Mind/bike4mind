@@ -15,12 +15,17 @@ const resources = vi.hoisted(() => {
     topic: { arn: 'alarm-topic' } as { arn: string } | undefined,
     oobTopic: { arn: 'email-topic' } as { arn: string } | undefined,
     cron: { nodes: { function: { name: 'poller-function' } } } as { nodes: { function: { name: string } } } | undefined,
+    reconcileCron: { nodes: { function: { name: 'reconcile-function' } } } as
+      { nodes: { function: { name: string } } } | undefined,
   };
 });
 
 vi.mock('../cron', () => ({
   get providerUsagePollCron() {
     return resources.cron;
+  },
+  get spendReconciliationCron() {
+    return resources.reconcileCron;
   },
 }));
 vi.mock('../dlqAlarms', () => ({
@@ -75,6 +80,7 @@ beforeEach(() => {
   resources.topic = { arn: 'alarm-topic' };
   resources.oobTopic = { arn: 'email-topic' };
   resources.cron = { nodes: { function: { name: 'poller-function' } } };
+  resources.reconcileCron = { nodes: { function: { name: 'reconcile-function' } } };
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -159,6 +165,79 @@ describe('provider-reported spend alarms', () => {
   });
 });
 
+describe('spend reconciliation alarms', () => {
+  it('pages when the nightly reconcile finds a closed month drifting past the error band', async () => {
+    await load();
+    expect(resources.alarm).toHaveBeenCalledWith('spendReconciliationDrift', {
+      name: 'test-app-production-spend-reconciliation-drift',
+      alarmDescription: expect.any(String),
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'SpendReconciliationDrift',
+      namespace: 'test-app/production/LLMSpend',
+      period: 86400,
+      statistic: 'Maximum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic', 'email-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'Critical' },
+    });
+  });
+
+  it('warns, separately from drift, when a nightly run reconciles nothing', async () => {
+    await load();
+    expect(resources.alarm).toHaveBeenCalledWith('spendReconciliationNothingReconciled', {
+      name: 'test-app-production-spend-reconciliation-nothing-reconciled',
+      alarmDescription: expect.any(String),
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'SpendReconciliationNothingReconciled',
+      namespace: 'test-app/production/LLMSpend',
+      period: 86400,
+      statistic: 'Maximum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+  });
+
+  it('warns when the reconcile Lambda fails before it can publish', async () => {
+    await load();
+    expect(resources.alarm).toHaveBeenCalledWith('spendReconciliationErrors', {
+      name: 'test-app-production-spend-reconciliation-errors',
+      alarmDescription: expect.any(String),
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 86400,
+      statistic: 'Sum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: 'reconcile-function' },
+      alarmActions: ['alarm-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+  });
+
+  it('skips all three on a monitored preview, where the cron does not exist', async () => {
+    vi.stubEnv('ENABLE_MONITORING', 'true');
+    resources.reconcileCron = undefined;
+    await load('preview');
+    expect(callFor(resources.alarm, 'spendReconciliationDrift')).toBeUndefined();
+    expect(callFor(resources.alarm, 'spendReconciliationNothingReconciled')).toBeUndefined();
+    expect(callFor(resources.alarm, 'spendReconciliationErrors')).toBeUndefined();
+  });
+
+  it('publishes the metrics the alarms read, in the same namespace', () => {
+    const worker = readFileSync(new URL('../../apps/workers/src/cron/spendReconciliation.ts', import.meta.url), 'utf8');
+    expect(worker).toContain("MetricName: 'SpendReconciliationDrift'");
+    expect(worker).toContain("MetricName: 'SpendReconciliationNothingReconciled'");
+    expect(worker).toContain('Namespace: `${Resource.App.name}/${Resource.App.stage}/LLMSpend`');
+  });
+});
+
 describe('provider spend dashboard', () => {
   it('charts provider-reported USD and unpriced tokens per hour', async () => {
     await load();
@@ -183,7 +262,7 @@ describe('provider spend dashboard', () => {
 describe('provider spend stage gating', () => {
   it.each(['dev', 'production'])('creates resources on %s', async stage => {
     await load(stage);
-    expect(resources.alarm).toHaveBeenCalledTimes(5);
+    expect(resources.alarm).toHaveBeenCalledTimes(8);
     expect(resources.dashboard).toHaveBeenCalledTimes(1);
   });
 
@@ -196,6 +275,7 @@ describe('provider spend stage gating', () => {
   it('skips poller alarms on a monitored preview, where the cron does not exist', async () => {
     vi.stubEnv('ENABLE_MONITORING', 'true');
     resources.cron = undefined;
+    resources.reconcileCron = undefined;
     await load('preview');
     expect(callFor(resources.alarm, 'providerUsagePollErrors')).toBeUndefined();
     expect(callFor(resources.alarm, 'providerUsagePollSkipped-anthropic')).toBeUndefined();
