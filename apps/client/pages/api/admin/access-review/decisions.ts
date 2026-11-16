@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import {
   AccessReviewDecisionSchema,
   BadRequestError,
@@ -44,7 +45,12 @@ type AccessChangeEntry = {
   _id: unknown;
   action: string;
   changes?: { field: string; before?: unknown; after?: unknown }[];
+  details?: unknown;
 };
+
+const RemovedRolePermissionsSchema = z.object({
+  removedRolePermissions: z.array(z.object({ roleId: z.string().min(1), permissions: z.array(z.string()) })),
+});
 
 type Removal = { entry: AccessChangeEntry; fullAdmin: boolean; permissions: string[]; roleIds: string[] };
 
@@ -144,7 +150,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'settings:
           occurredAt: { $gte: quarterStart(now) },
         })
           .sort({ occurredAt: -1, _id: -1 })
-          .select('_id action changes')
+          .select('_id action changes details')
           .lean<AccessChangeEntry[]>();
         // A full admin loses the role and the direct permissions in two writes, so every removal since
         // the last grant together is what was revoked.
@@ -157,15 +163,28 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'settings:
         if (removals.length === 0) {
           throw new ConflictError('No admin access removal for this account is on the audit log this quarter.');
         }
-        const roleIds = [...new Set(removals.flatMap(removal => removal.roleIds))];
-        const roles = roleIds.length > 0 ? await adminRoleRepository.findByIds(roleIds) : [];
+        const removedRolePermissions = removals.flatMap(removal => {
+          if (removal.roleIds.length === 0) return [];
+          const snapshot = RemovedRolePermissionsSchema.safeParse(removal.entry.details);
+          if (
+            !snapshot.success ||
+            removal.roleIds.some(roleId => !snapshot.data.removedRolePermissions.some(role => role.roleId === roleId))
+          ) {
+            throw new ConflictError(
+              'The removal audit has no verified role-permission snapshot. Historical role access cannot be confirmed.'
+            );
+          }
+          return snapshot.data.removedRolePermissions
+            .filter(role => removal.roleIds.includes(role.roleId))
+            .flatMap(role => role.permissions);
+        });
         entry = {
           userId,
           email: target.email ?? null,
           fullAdmin: removals.some(removal => removal.fullAdmin),
           permissions: sortAdminPermissions([
             ...removals.flatMap(removal => removal.permissions),
-            ...roles.flatMap(role => role.permissions),
+            ...removedRolePermissions,
           ]),
           decision,
           reviewer,

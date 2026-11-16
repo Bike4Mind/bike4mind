@@ -120,9 +120,16 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:m
       if (update.matchedCount !== 1) {
         throw new ConflictError('Admin permissions changed. Reload the profile before trying again.');
       }
-      const storedRoleNames = new Map(
-        (await adminRoleRepository.findByIds(storedRoleIds)).map(role => [role.id, role.name])
-      );
+      const storedRoles = await adminRoleRepository.findByIds(storedRoleIds);
+      const storedRoleNames = new Map(storedRoles.map(role => [role.id, role.name]));
+      // Capture effective permissions while the membership removal and its audit share a transaction.
+      // A dangling role grants nothing, and must be distinguishable from a missing historical snapshot.
+      const removedRolePermissions = storedRoleIds
+        .filter(id => !nextRoleIds.includes(id))
+        .map(roleId => ({
+          roleId,
+          permissions: storedRoles.find(role => role.id === roleId)?.permissions ?? [],
+        }));
       const nameOf = (id: string) => storedRoleNames.get(id) ?? nextRoles.find(role => role.id === id)?.name ?? id;
       const changes = {
         granted: after.filter(id => !before.includes(id)),
@@ -141,7 +148,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:m
             ? []
             : [{ field: 'adminRoleIds', before: storedRoleIds, after: nextRoleIds }]),
         ],
-        details: changes,
+        details: { ...changes, ...(removedRolePermissions.length > 0 && { removedRolePermissions }) },
       });
       return { adminPermissions: after, adminRoleIds: nextRoleIds };
     });

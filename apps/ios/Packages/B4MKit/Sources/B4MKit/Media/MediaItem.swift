@@ -84,4 +84,13 @@ public protocol MediaAPI: Sendable {
   func listMedia(kind: MediaKind?, page: Int, limit: Int) async throws -> MediaPage
   /// One item with a freshly signed URL.
   func media(id: String) async throws -> MediaItem
+  /// What the file was made from and into.
+  func lineage(of id: String) async throws -> FileLineage
+}
+
+extension MediaAPI {
+  /// Backends without lineage report none rather than failing the detail view.
+  public func lineage(of id: String) async throws -> FileLineage {
+    FileLineage(fileID: id, ancestors: [], children: [], edges: [])
+  }
 }

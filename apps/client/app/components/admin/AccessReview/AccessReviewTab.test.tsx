@@ -45,14 +45,14 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 vi.mock('../Users/Profile/actions/useAdminUserPermissionsUpdate', () => ({
   useAdminUserPermissionsUpdate: () => async (input: unknown) => {
     mocks.calls.push('permissions');
-    mocks.updatePermissions(input);
+    return mocks.updatePermissions(input);
   },
 }));
 
 vi.mock('../Users/Profile/actions/useAdminUserRoleUpdate', () => ({
   useAdminUserRoleUpdate: () => async (input: unknown) => {
     mocks.calls.push('role');
-    mocks.updateRole(input);
+    return mocks.updateRole(input);
   },
 }));
 
@@ -182,6 +182,30 @@ describe('AccessReviewTab', () => {
     await revoke(OTHER_FULL);
     await waitFor(() => expect(mocks.calls).toEqual(['role', 'decision:revoked']));
     expect(mocks.updateRole).toHaveBeenCalledWith({ isAdmin: false, reason: 'left the team' });
+  });
+
+  it('reconciles a committed removal after its response was lost without replaying the stale write', async () => {
+    mocks.report = report([row({ userId: DELEGATE, fullAdmin: false, directPermissions: ['support:read'] })]);
+    mocks.updatePermissions.mockRejectedValueOnce(new Error('response lost after commit'));
+    renderWithTheme(<AccessReviewTab />);
+    await revoke(DELEGATE);
+    expect(await screen.findByTestId('admin-access-review-revoke-retry')).toHaveTextContent('could not be confirmed');
+    fireEvent.click(screen.getByTestId('admin-access-review-revoke-retry-btn'));
+    await waitFor(() => expect(mocks.calls).toEqual(['permissions', 'decision:revoked']));
+    expect(mocks.updatePermissions).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not replay an uncertain removal when server reconciliation also fails', async () => {
+    mocks.report = report([row({ userId: DELEGATE, fullAdmin: false, directPermissions: ['support:read'] })]);
+    mocks.updatePermissions.mockRejectedValueOnce(new Error('network'));
+    mocks.decisionFails = true;
+    renderWithTheme(<AccessReviewTab />);
+    await revoke(DELEGATE);
+    await screen.findByTestId('admin-access-review-revoke-retry');
+    fireEvent.click(screen.getByTestId('admin-access-review-revoke-retry-btn'));
+    await waitFor(() => expect(mocks.calls).toEqual(['permissions', 'decision:revoked']));
+    expect(mocks.updatePermissions).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('admin-access-review-revoke-dialog')).toBeInTheDocument();
   });
 
   it('offers a retry that records the decision without removing access again', async () => {

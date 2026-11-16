@@ -319,6 +319,31 @@ describe('PUT /api/admin/users/:userId/permissions', () => {
       expect(mocks.audit.mock.calls[0][1].details.rolesRemoved).toEqual(['Support']);
     });
 
+    it('records immutable removed-role permissions with the membership change', async () => {
+      target({ isAdmin: false, adminPermissions: [], adminRoleIds: [SUPPORT_ROLE] });
+      await call(roles([SUPPORT_ROLE], []));
+      expect(mocks.audit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          details: expect.objectContaining({
+            removedRolePermissions: [{ roleId: SUPPORT_ROLE, permissions: ['support:read', 'users:moderate'] }],
+          }),
+        })
+      );
+    });
+
+    it('records an explicit empty permission snapshot when removing a dangling role id', async () => {
+      const missingRole = '660000000000000000000009';
+      target({ isAdmin: false, adminPermissions: [], adminRoleIds: [missingRole] });
+      await call(roles([missingRole], []));
+      expect(mocks.audit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          details: expect.objectContaining({ removedRolePermissions: [{ roleId: missingRole, permissions: [] }] }),
+        })
+      );
+    });
+
     it('refuses an unknown role', async () => {
       await expect(call(roles([], ['660000000000000000000009']))).rejects.toMatchObject({ statusCode: 400 });
       expect(mocks.update).not.toHaveBeenCalled();

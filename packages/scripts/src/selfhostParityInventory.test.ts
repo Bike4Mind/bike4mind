@@ -511,6 +511,15 @@ describe('background trigger shapes', () => {
     ).toThrow(/unresolved target/);
   });
 
+  it('accepts a target that is storage rather than a function', () => {
+    const inventory = discoverParityInventory(
+      sources(
+        "const logs = new aws.cloudwatch.LogGroup('logs', {}); const rule = new aws.cloudwatch.EventRule('rule', {eventPattern:'{}'}); new aws.cloudwatch.EventTarget('target', {rule: rule.name, arn: logs.arn});"
+      )
+    );
+    expect(inventory.map(item => item.id)).toEqual(['eventRule:infra/test.ts:rule']);
+  });
+
   it('identifies a declaration built in a named factory by its site', () => {
     const [item] = discoverParityInventory(
       sources(

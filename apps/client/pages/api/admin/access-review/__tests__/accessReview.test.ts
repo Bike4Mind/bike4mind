@@ -406,14 +406,17 @@ describe('POST decisions', () => {
     const roleId = '660000000000000000000001';
     target({ isAdmin: false, adminPermissions: [], adminRoleIds: [] });
     auditRows([
-      permissionsChange('audit-1', [
-        { field: 'adminPermissions', before: ['support:read'], after: [] },
-        { field: 'adminRoleIds', before: [roleId], after: [] },
-      ]),
+      {
+        ...permissionsChange('audit-1', [
+          { field: 'adminPermissions', before: ['support:read'], after: [] },
+          { field: 'adminRoleIds', before: [roleId], after: [] },
+        ]),
+        details: { removedRolePermissions: [{ roleId, permissions: ['credits:adjust'] }] },
+      },
     ]);
     mocks.findRoles.mockResolvedValue([{ id: roleId, name: 'Billing', permissions: ['credits:adjust'] }]);
     await call(decisions, 'POST', { body: { userId: OTHER, decision: 'revoked' } });
-    expect(mocks.findRoles).toHaveBeenCalledWith([roleId]);
+    expect(mocks.findRoles).not.toHaveBeenCalled();
     expect(mocks.recordDecision).toHaveBeenCalledWith(
       QUARTER,
       90,
@@ -423,6 +426,44 @@ describe('POST decisions', () => {
         permissions: expect.arrayContaining(['support:read', 'credits:adjust']),
       })
     );
+  });
+
+  it.each([
+    ['edited', ['users:moderate']],
+    ['deleted', []],
+  ])('uses removal-time role permissions after the role is %s', async (_state, currentPermissions) => {
+    const roleId = '660000000000000000000001';
+    target({ isAdmin: false, adminPermissions: [], adminRoleIds: [] });
+    auditRows([
+      {
+        ...permissionsChange('audit-snapshot', [{ field: 'adminRoleIds', before: [roleId], after: [] }]),
+        details: { removedRolePermissions: [{ roleId, permissions: ['credits:adjust'] }] },
+      },
+    ]);
+    mocks.findRoles.mockResolvedValue(
+      currentPermissions.length ? [{ id: roleId, permissions: currentPermissions }] : []
+    );
+
+    await call(decisions, 'POST', { body: { userId: OTHER, decision: 'revoked' } });
+
+    expect(mocks.recordDecision).toHaveBeenCalledWith(
+      QUARTER,
+      90,
+      expect.anything(),
+      expect.objectContaining({ permissions: ['credits:adjust'] })
+    );
+    expect(mocks.findRoles).not.toHaveBeenCalled();
+  });
+
+  it('refuses historical role removals whose permission snapshot is unavailable', async () => {
+    target({ isAdmin: false, adminPermissions: [], adminRoleIds: [] });
+    auditRows([
+      permissionsChange('old-audit', [{ field: 'adminRoleIds', before: ['660000000000000000000001'], after: [] }]),
+    ]);
+    await expect(call(decisions, 'POST', { body: { userId: OTHER, decision: 'revoked' } })).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    expect(mocks.recordDecision).not.toHaveBeenCalled();
   });
 
   it.each([

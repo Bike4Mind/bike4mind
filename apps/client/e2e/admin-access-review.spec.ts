@@ -114,7 +114,7 @@ test.describe('Admin access review', () => {
     const csv = await res.text();
     const header = csv.split(/\r?\n/)[0];
     expect(header).toBe(
-      'quarter,userId,email,username,fullAdmin,permissions,grantedBy,grantedAt,lastAdminActionAt,lastSignInAt,mfaEnabled,dormant,decision,reviewerName,reviewerUserId,decidedAt,reviewCompletedAt'
+      '"quarter","userId","email","username","fullAdmin","permissions","grantedBy","grantedAt","lastAdminActionAt","lastSignInAt","mfaEnabled","dormant","decision","reviewerName","reviewerUserId","decidedAt","reviewCompletedAt"'
     );
     expect(csv).not.toMatch(/totpSecret|backupCodes|keyHash|apiKey/i);
     expect(csv).toContain(delegateC);
