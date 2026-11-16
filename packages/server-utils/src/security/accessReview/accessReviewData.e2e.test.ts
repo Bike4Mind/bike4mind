@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Logger } from '@bike4mind/observability';
 import mongoose from 'mongoose';
 import {
+  AdminAuditLogModel,
   AuthSessionModel,
   CcBridgeDevice,
   OAuthGrantModel,
@@ -11,6 +12,7 @@ import {
   TrustedDeviceModel,
   User,
   UserApiKey,
+  UserAuthAuditLogModel,
 } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../database/src/__test__/createMongoServer';
 import { collectAccessReview, collectAccessReviewCounts, sendAccessReviewReminder } from './accessReviewData';
@@ -151,6 +153,16 @@ afterAll(async () => {
   await server?.stop();
 });
 
+const noAuditTrail = {
+  directPermissions: [],
+  adminRoleIds: [],
+  lastAdminActionAt: null,
+  lastSignInAt: null,
+  mfaEnabled: false,
+  grantedBy: null,
+  grantedAt: null,
+};
+
 describe('collectAccessReview', () => {
   it('enumerates privileged access and counts every grant without reading secrets', async () => {
     const snapshot = await collectAccessReview({ now });
@@ -183,6 +195,7 @@ describe('collectAccessReview', () => {
         username: 'root',
         fullAdmin: true,
         permissions: [],
+        ...noAuditTrail,
         status: 'active',
         lastActiveAt: past.toISOString(),
         activeSessions: 1,
@@ -198,6 +211,8 @@ describe('collectAccessReview', () => {
         username: null,
         fullAdmin: false,
         permissions: ['support:read'],
+        ...noAuditTrail,
+        directPermissions: ['support:read'],
         status: 'banned',
         lastActiveAt: null,
         activeSessions: 0,
@@ -362,6 +377,87 @@ describe('collectAccessReview', () => {
   it('counts the same grants on the counts-only path', async () => {
     const snapshot = await collectAccessReview({ now });
     await expect(collectAccessReviewCounts(now)).resolves.toEqual(snapshot.counts);
+  });
+
+  it('reports last admin action, last sign-in, MFA and who granted access from the audit trail', async () => {
+    const daysAgo = (days: number) => new Date(now.getTime() - days * 86_400_000);
+    const [a, b, c, d] = [id(), id(), id(), id()];
+    const [aId, bId, cId, dId] = [a, b, c, d].map(String);
+    const actor = (userId: string, name: string) => ({
+      kind: 'user',
+      scope: 'platform',
+      userId,
+      name,
+      email: `${name}@example.org`,
+      wasAdmin: true,
+    });
+    const entry = (actorId: string, name: string, action: string, at: Date, targetId = 'settings') => ({
+      _id: id(),
+      action,
+      occurredAt: at,
+      actor: actor(actorId, name),
+      target: { kind: targetId === 'settings' ? 'settings' : 'user', id: targetId, displayName: targetId },
+    });
+    const auditIds: mongoose.Types.ObjectId[] = [];
+    const authIds: mongoose.Types.ObjectId[] = [];
+
+    await User.collection.insertMany([
+      {
+        _id: a,
+        username: 'alpha',
+        isAdmin: true,
+        mfa: { totpEnabled: true, totpSecret: 'TOTP_SECRET_NEVER_IN_REPORT', backupCodes: ['BACKUP_NEVER_IN_REPORT'] },
+      },
+      { _id: b, username: 'bravo', isAdmin: true },
+      { _id: c, username: 'charlie', isAdmin: false, adminPermissions: ['users:read'] },
+      { _id: d, username: 'delta', isAdmin: false, adminPermissions: ['support:read'], mfa: { passkeyEnabled: true } },
+    ]);
+    const audit = [
+      entry(bId, 'bravo', 'user.permissions.updated', daysAgo(150), cId),
+      entry(aId, 'alpha', 'user.permissions.updated', daysAgo(10), cId),
+      entry(aId, 'alpha', 'settings.updated', daysAgo(3)),
+      entry(aId, 'alpha', 'user.permissions.denied', daysAgo(1)),
+      entry(bId, 'bravo', 'settings.updated', daysAgo(120)),
+    ];
+    auditIds.push(...audit.map(row => row._id));
+    const auth = [
+      { _id: id(), userId: aId, event: 'login_success', createdAt: daysAgo(5) },
+      { _id: id(), userId: aId, event: 'login_success', createdAt: daysAgo(2) },
+      { _id: id(), userId: bId, event: 'login_failed', createdAt: daysAgo(1) },
+    ];
+    authIds.push(...auth.map(row => row._id));
+    await AdminAuditLogModel.collection.insertMany(audit);
+    await UserAuthAuditLogModel.collection.insertMany(auth);
+
+    try {
+      const { admins } = await collectAccessReview({ now });
+      const row = (userId: string) => admins.find(admin => admin.userId === userId);
+
+      expect(row(aId)).toMatchObject({
+        mfaEnabled: true,
+        lastAdminActionAt: daysAgo(3).toISOString(),
+        lastSignInAt: daysAgo(2).toISOString(),
+        grantedBy: null,
+      });
+      expect(row(bId)).toMatchObject({
+        mfaEnabled: false,
+        lastAdminActionAt: daysAgo(120).toISOString(),
+        lastSignInAt: null,
+      });
+      expect(row(cId)).toMatchObject({
+        directPermissions: ['users:read'],
+        grantedBy: { userId: aId, name: 'alpha', email: 'alpha@example.org' },
+        grantedAt: daysAgo(10).toISOString(),
+        lastAdminActionAt: null,
+      });
+      expect(row(dId)).toMatchObject({ mfaEnabled: true, directPermissions: ['support:read'] });
+      const serialized = JSON.stringify(admins);
+      expect(serialized).not.toMatch(/NEVER_IN_REPORT|totpSecret|backupCodes|"mfa"/);
+    } finally {
+      await User.collection.deleteMany({ _id: { $in: [a, b, c, d] } });
+      await AdminAuditLogModel.collection.deleteMany({ _id: { $in: auditIds } });
+      await UserAuthAuditLogModel.collection.deleteMany({ _id: { $in: authIds } });
+    }
   });
 
   it('defaults to the current time', async () => {

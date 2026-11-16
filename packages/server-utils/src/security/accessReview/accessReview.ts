@@ -10,14 +10,32 @@ export const STALE_API_KEY_DAYS = 90;
 
 export type AccessReviewAccountStatus = 'active' | 'banned' | 'deleted';
 
+export interface AccessReviewGrantor {
+  userId: string | null;
+  name: string;
+  email: string | null;
+}
+
 export interface AccessReviewAdmin {
   userId: string;
   email: string | null;
   username: string | null;
   fullAdmin: boolean;
+  /** Effective permissions: direct grants plus every role's. */
   permissions: string[];
+  /** The stored fields a revoke rewrites, as the `before` of the permissions update. */
+  directPermissions: string[];
+  adminRoleIds: string[];
   status: AccessReviewAccountStatus;
   lastActiveAt: string | null;
+  /** Newest admin audit entry this account performed, denied attempts excluded. */
+  lastAdminActionAt: string | null;
+  /** Newest successful sign-in; null means none within the 12-month auth audit retention. */
+  lastSignInAt: string | null;
+  mfaEnabled: boolean;
+  /** Who made the newest per-user admin grant; null when it predates the admin audit log. */
+  grantedBy: AccessReviewGrantor | null;
+  grantedAt: string | null;
   activeSessions: number;
   trustedDevices: number;
   passkeys: number;

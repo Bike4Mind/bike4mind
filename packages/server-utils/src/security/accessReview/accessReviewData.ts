@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { ApiKeyScope, ApiKeyStatus, sortAdminPermissions } from '@bike4mind/common';
 import {
+  AdminAuditLogModel,
   AuthSessionModel,
   CcBridgeDevice,
   OAuthGrantModel,
@@ -11,6 +12,7 @@ import {
   TrustedDeviceModel,
   User,
   UserApiKey,
+  UserAuthAuditLogModel,
 } from '@bike4mind/database';
 import {
   STALE_API_KEY_DAYS,
@@ -40,6 +42,7 @@ interface AdminDoc {
   isBanned?: boolean;
   deletedAt?: Date | null;
   lastActiveAt?: Date | null;
+  mfa?: { totpEnabled?: boolean; passkeyEnabled?: boolean };
 }
 
 interface KeyDoc {
@@ -66,6 +69,44 @@ async function countByUser(collection: mongoose.Collection, filter: Filter, user
     )
     .toArray();
   return new Map(rows.map(row => [row._id, row.n]));
+}
+
+const PER_USER_GRANT_ACTIONS = ['user.permissions.updated', 'user.role.admin_granted'];
+
+async function latestByUser(
+  collection: mongoose.Collection,
+  match: Filter,
+  userField: string,
+  timeField: string
+): Promise<Map<string, Date>> {
+  const rows = await collection
+    .aggregate<{ _id: string; at: Date }>(
+      [{ $match: match }, { $group: { _id: `$${userField}`, at: { $max: `$${timeField}` } } }],
+      { readPreference: 'secondaryPreferred' }
+    )
+    .toArray();
+  return new Map(rows.map(row => [row._id, row.at]));
+}
+
+type GrantRow = {
+  _id: string;
+  at: Date;
+  actor: { userId?: string | null; name?: string; email?: string | null };
+};
+
+/** Newest per-user admin grant for each id. Admin role definition edits are not per-user grants. */
+async function latestGrants(adminIds: string[]): Promise<Map<string, GrantRow>> {
+  const rows = await AdminAuditLogModel.collection
+    .aggregate<GrantRow>(
+      [
+        { $match: { 'target.kind': 'user', 'target.id': { $in: adminIds }, action: { $in: PER_USER_GRANT_ACTIONS } } },
+        { $sort: { occurredAt: -1 } },
+        { $group: { _id: '$target.id', at: { $first: '$occurredAt' }, actor: { $first: '$actor' } } },
+      ],
+      { readPreference: 'secondaryPreferred' }
+    )
+    .toArray();
+  return new Map(rows.map(row => [row._id, row]));
 }
 
 async function loadEmails(ids: string[]): Promise<Map<string, string | null>> {
@@ -251,6 +292,9 @@ export async function collectAccessReview(options: CollectAccessReviewOptions = 
     isBanned: 1,
     deletedAt: 1,
     lastActiveAt: 1,
+    // Only the two flags: the mfa subdocument also holds the TOTP secret and backup codes.
+    'mfa.totpEnabled': 1,
+    'mfa.passkeyEnabled': 1,
   })
     .sort({ _id: 1 })
     .read('secondaryPreferred')
@@ -258,24 +302,57 @@ export async function collectAccessReview(options: CollectAccessReviewOptions = 
   const adminIds = adminDocs.map(doc => String(doc._id));
   const permissionsByDoc = await effectivePermissionsOf(adminDocs);
 
-  const [sessions, trustedDevices, passkeys, oauthRefreshTokens, bridgeDevices, adminKeys] = await Promise.all([
+  const [
+    sessions,
+    trustedDevices,
+    passkeys,
+    oauthRefreshTokens,
+    bridgeDevices,
+    adminKeys,
+    lastAdminAction,
+    lastSignIn,
+    grants,
+  ] = await Promise.all([
     countByUser(c.sessions, f.sessions, adminIds),
     countByUser(c.trustedDevices, f.trustedDevices, adminIds),
     countByUser(c.passkeys, f.passkeys, adminIds),
     countByUser(c.oauthRefreshTokens, f.oauthRefreshTokens, adminIds),
     countByUser(c.bridgeDevices, f.bridgeDevices, adminIds),
     countByUser(c.apiKeys, f.activeKeys, adminIds),
+    latestByUser(
+      AdminAuditLogModel.collection,
+      { 'actor.kind': 'user', 'actor.userId': { $in: adminIds }, action: { $not: /\.denied$/ } },
+      'actor.userId',
+      'occurredAt'
+    ),
+    latestByUser(
+      UserAuthAuditLogModel.collection,
+      { userId: { $in: adminIds }, event: 'login_success' },
+      'userId',
+      'createdAt'
+    ),
+    latestGrants(adminIds),
   ]);
   const admins: AccessReviewAdmin[] = adminDocs.map((doc, index) => {
     const id = adminIds[index];
+    const grant = grants.get(id);
     return {
       userId: id,
       email: doc.email ?? null,
       username: doc.username ?? null,
       fullAdmin: doc.isAdmin === true,
       permissions: permissionsByDoc.get(doc) ?? [],
+      directPermissions: [...(doc.adminPermissions ?? [])],
+      adminRoleIds: (doc.adminRoleIds ?? []).map(String),
       status: accountStatus(doc),
       lastActiveAt: iso(doc.lastActiveAt),
+      lastAdminActionAt: iso(lastAdminAction.get(id)),
+      lastSignInAt: iso(lastSignIn.get(id)),
+      mfaEnabled: doc.mfa?.totpEnabled === true || doc.mfa?.passkeyEnabled === true,
+      grantedBy: grant
+        ? { userId: grant.actor.userId ?? null, name: grant.actor.name ?? 'Unknown', email: grant.actor.email ?? null }
+        : null,
+      grantedAt: iso(grant?.at),
       activeSessions: sessions.get(id) ?? 0,
       trustedDevices: trustedDevices.get(id) ?? 0,
       passkeys: passkeys.get(id) ?? 0,
