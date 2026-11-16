@@ -3,6 +3,7 @@ import mongoose, { Schema } from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { softDeletePlugin } from '../../../../packages/database/src/utils/mongo';
@@ -160,6 +161,7 @@ let mongoServer: MongoMemoryReplSet | undefined;
 beforeAll(async () => {
   mongoServer = await createMongoReplSet();
   await mongoose.connect(mongoServer.getUri());
+  await settleAutoIndexBuilds(mongoose);
 });
 
 afterEach(async () => {

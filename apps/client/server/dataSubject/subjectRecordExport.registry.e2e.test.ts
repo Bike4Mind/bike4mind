@@ -6,6 +6,7 @@ import '@bike4mind/server-utils/models/Subscription';
 import '@server/models/UserSubscription';
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { SubjectErasurePlan } from './subjectErasurePlan';
@@ -18,6 +19,7 @@ let mongoServer: MongoMemoryReplSet | undefined;
 beforeAll(async () => {
   mongoServer = await createMongoReplSet();
   await mongoose.connect(mongoServer.getUri());
+  await settleAutoIndexBuilds(mongoose);
 });
 
 afterAll(async () => {
