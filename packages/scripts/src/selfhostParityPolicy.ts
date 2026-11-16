@@ -251,19 +251,19 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'eventRule:infra/providerSpend.ts:ProviderAdminKeyChangeRule',
-    '776b11be6d201f693011535462c9ea17a9c983b3bc769d89ac7f4f8dc601d9c6',
+    'e328076166277ffd3a5b0f613c21a58d4b0702f4c234dbc8d4e7084195eb07ff',
     'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
     ['cloudwatch:PutMetricData']
   ),
   hostedOnly(
     'eventRule:infra/providerSpend.ts:ProviderAdminKeyKmsChangeRule',
-    '8affac1bcaf98ff7bcfbb3a9b1f4a47acd5e9952f33f9e1cd39f0be55473ddac',
+    '05121631419d2d44923ae27f0802b510498356aed77bd5d4e460434b6cbe5a36',
     'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
     ['cloudwatch:PutMetricData']
   ),
   hostedOnly(
     'eventRule:infra/providerSpend.ts:ProviderAdminKeyReadRule',
-    '0fedc96fa8565c36f07916d385b7323f812f333d7860c7a83c7a2d7e96d02b65',
+    '196fb966bed4c123fe7b1412bd0ac904b73d0d475c71f7b3da99be9b65d654dd',
     'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
     ['cloudwatch:PutMetricData']
   ),
@@ -1139,12 +1139,13 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'schedule:infra/cron.ts:spendReconciliation',
-    '84045e964c9c22ecaabdb78e1697912f100a252eb90f55f09cf7a448093238c8',
+    '6a96103f82cb2ef45a2792808a671cb33a37194c6f804478a5e902400ceffd60',
     {
       source: 'apps/workers/src/selfhost/spendReconciliation.ts',
       symbol: 'registerSpendReconciliation',
       fingerprint: 'ca9cbea76249daab2f0359e7faecad3f4dcd80c3269a0481a74e9a69a41a6d8b',
-    }
+    },
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
   wired(
     'schedule:infra/cron.ts:storageReconciliation',
@@ -1253,7 +1254,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'c173f5c5f2f4a79ed3d6c169bf10757ff97586a996ed409685bce280ca671ec7',
+    'fb9427f9a234d8c335c1f021c0cc7a9b7d2a21f5fd24e3e0ff8b8b896217e78f',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gap('service:infra/searxng.ts:Searxng', 'fef5f4ce5e094d32525bb4a13828a34b67ba75a38ab72c70e526ba908c31f049'),
