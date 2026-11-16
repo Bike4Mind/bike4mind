@@ -30,9 +30,8 @@ import { resolveActiveOrg } from './resolveActiveOrg';
 import type { Logger } from '@bike4mind/observability';
 
 /**
- * The one owner / manager / platform-admin predicate behind `verifyOrgAccess` (the write gate) and
- * `verifyOrgAdminRead`'s `canManage`, so the read tier's answer cannot drift from what the write
- * routes accept. Delegates to the common predicate the roster services also use.
+ * The one owner / manager / platform-admin predicate behind `verifyOrgAccess`. Delegates to the
+ * common predicate the roster services also use.
  */
 function canManageOrg(user: { id: string; isAdmin: boolean }, org: AdministrableOrg) {
   return canAdministerOrganization(user, org);
