@@ -56,7 +56,7 @@ fi
 
 # Check for account-tied IDs in shippable code (open-core readiness)
 echo "Running account-tied ID check..."
-if ! bash scripts/check-no-account-ids.sh; then
+if ! bash scripts/check-no-account-ids.sh --staged; then
   FINAL_EXIT_CODE=1
 fi
 

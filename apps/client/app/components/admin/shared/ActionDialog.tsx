@@ -1,8 +1,8 @@
-import React, { useId, useState } from 'react';
+import React, { useId, useRef, useState } from 'react';
 import { Button, DialogContent, FormControl, FormLabel, Input, Stack, Typography } from '@mui/joy';
 import { AdminDialog, AdminDialogFooter } from './AdminDialog';
 import {
-  ADMIN_REASON_HINT,
+  adminReasonHint,
   type AdminReasonDraft,
   EMPTY_ADMIN_REASON,
   composeAdminReason,
@@ -30,6 +30,8 @@ export type ActionDialogProps = {
   reasonPresets: readonly string[];
   /** False while the endpoint has no reason field; see ReasonPicker's `audited`. */
   reasonAudited?: boolean;
+  /** For an endpoint whose own note rule is looser than the shared admin reason; see isAdminReasonComplete. */
+  reasonMinLength?: number;
   reasonRequired?: boolean;
   /** Repeats the consequence where it helps: "Set balance to 0". */
   confirmLabel: string;
@@ -72,25 +74,18 @@ export type ActionDialogProps = {
  * The one dialog for audited admin writes (DESIGN_GUIDE.md section 4), built on the AdminDialog
  * shell, which supplies the focus trap, Esc to close and focus return to the opener.
  */
-export const ActionDialog: React.FC<ActionDialogProps> = props => (
-  <AdminDialog
-    open={props.open}
-    onClose={props.onClose}
-    title={props.title}
-    width={560}
-    data-testid={props['data-testid']}
-  >
-    <ActionDialogForm key={props.formKey} {...props} />
-  </AdminDialog>
-);
+export const ActionDialog: React.FC<ActionDialogProps> = props =>
+  props.open ? <ActionDialogForm key={props.formKey} {...props} /> : null;
 
-// Separate from ActionDialog so its state lives inside the Modal and resets on every open.
+// Mount a fresh form for each open so drafts and request ownership reset together.
 const ActionDialogForm: React.FC<ActionDialogProps> = ({
+  title,
   onClose,
   description,
   children,
   reasonPresets,
   reasonAudited = true,
+  reasonMinLength,
   reasonRequired = true,
   confirmLabel,
   onConfirm,
@@ -109,22 +104,25 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
   const [reason, setReason] = useState<AdminReasonDraft>(initialReason);
   const [typedValue, setTypedValue] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
 
   const typedMatches = !typedConfirm || typedValue.trim() === typedConfirm.expected;
   const hint =
     blockedReason ??
-    (reasonRequired && !isAdminReasonComplete(reason) ? ADMIN_REASON_HINT : null) ??
+    (reasonRequired && !isAdminReasonComplete(reason, reasonMinLength) ? adminReasonHint(reasonMinLength) : null) ??
     (!typedMatches && typedConfirm ? `Type the ${typedConfirm.noun} exactly to confirm.` : null);
   const busy = pending || submitting;
 
   const handleConfirm = async (confirm: (reason: string) => void | Promise<void> = onConfirm) => {
-    if (hint || busy) return;
+    if (hint || busy || submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
     try {
       await confirm(composeAdminReason(reason));
     } catch {
       // The caller reports its own failure (toast); a rejection only means the dialog stays open.
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };
@@ -136,105 +134,134 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
     void handleConfirm();
   };
 
+  const close = () => {
+    if ((pending || submittingRef.current) && !cancelStopsWrite) return;
+    onClose();
+  };
+  const blockPendingEdit = (event: React.SyntheticEvent) => {
+    if (pending || submittingRef.current) event.stopPropagation();
+  };
+
   return (
-    <Stack component="form" noValidate onSubmit={handleSubmit} gap={1}>
-      <DialogContent sx={{ gap: 2 }}>
-        {description && (
-          <Typography level="body-sm" component="div">
-            {description}
-          </Typography>
-        )}
-        {children}
-        {reasonRequired && (
-          <ReasonPicker
-            presets={reasonPresets}
-            value={reason}
-            onChange={setReason}
-            audited={reasonAudited}
-            data-testid={testIds.reason ?? `${testId}-reason-input`}
-          />
-        )}
-        {typedConfirm && (
-          <FormControl required>
-            {/* One inline span: FormLabel is a flex row, which drops bare space text nodes around the code and
+    <AdminDialog
+      open
+      onClose={close}
+      closeDisabled={busy && !cancelStopsWrite}
+      title={title}
+      width={560}
+      data-testid={testId}
+    >
+      <Stack component="form" noValidate onSubmit={handleSubmit} gap={1}>
+        <DialogContent sx={{ gap: 2 }}>
+          {description && (
+            <Typography level="body-sm" component="div">
+              {description}
+            </Typography>
+          )}
+          <fieldset
+            disabled={busy}
+            aria-busy={busy}
+            onChangeCapture={blockPendingEdit}
+            onClickCapture={blockPendingEdit}
+            onKeyDownCapture={blockPendingEdit}
+            style={{ display: 'contents' }}
+          >
+            {children}
+          </fieldset>
+          {reasonRequired && (
+            <ReasonPicker
+              presets={reasonPresets}
+              value={reason}
+              onChange={setReason}
+              disabled={busy}
+              audited={reasonAudited}
+              minLength={reasonMinLength}
+              data-testid={testIds.reason ?? `${testId}-reason-input`}
+            />
+          )}
+          {typedConfirm && (
+            <FormControl required>
+              {/* One inline span: FormLabel is a flex row, which drops bare space text nodes around the code and
                 wraps its own required star onto a line of its own after a long name. Typography renders as a
                 block, so the code is forced inline, and the star is drawn here on a non-breaking space. */}
-            <FormLabel htmlFor={typedInputId} slotProps={{ asterisk: { sx: { display: 'none' } } }}>
-              <span>
-                This cannot be undone. Type{' '}
-                <Typography
-                  component="code"
-                  fontFamily="code"
-                  sx={{ display: 'inline' }}
-                  data-testid={`${testId}-typed-expected`}
-                >
-                  {typedConfirm.expected}
-                </Typography>{' '}
-                to confirm.
-                <Typography
-                  component="span"
-                  aria-hidden="true"
-                  sx={{ display: 'inline', color: 'var(--FormLabel-asteriskColor)' }}
-                  data-testid={`${testId}-typed-required`}
-                >
-                  {'\u00a0*'}
-                </Typography>
-              </span>
-            </FormLabel>
-            <Input
-              value={typedValue}
-              onChange={event => setTypedValue(event.target.value)}
-              autoComplete="off"
-              slotProps={{ input: { id: typedInputId, 'data-testid': testIds.typed ?? `${testId}-typed-input` } }}
-            />
-          </FormControl>
-        )}
-      </DialogContent>
-      <AdminDialogFooter>
-        {hint ? (
-          <Typography id={hintId} level="body-sm" data-testid={`${testId}-hint`} sx={{ mr: 'auto' }}>
-            {hint}
-          </Typography>
-        ) : (
-          <Typography level="body-xs" sx={{ mr: 'auto', fontWeight: 400 }}>
-            <Kbd>Enter</Kbd> to apply
-          </Typography>
-        )}
-        {/* Held while the write is in flight (closing would not cancel it) unless the caller stops at close. */}
-        <Button
-          variant="plain"
-          color="neutral"
-          onClick={onClose}
-          disabled={busy && !cancelStopsWrite}
-          data-testid={`${testId}-cancel-btn`}
-        >
-          Cancel
-        </Button>
-        {secondaryAction && (
+              <FormLabel htmlFor={typedInputId} slotProps={{ asterisk: { sx: { display: 'none' } } }}>
+                <span>
+                  This cannot be undone. Type{' '}
+                  <Typography
+                    component="code"
+                    fontFamily="code"
+                    sx={{ display: 'inline' }}
+                    data-testid={`${testId}-typed-expected`}
+                  >
+                    {typedConfirm.expected}
+                  </Typography>{' '}
+                  to confirm.
+                  <Typography
+                    component="span"
+                    aria-hidden="true"
+                    sx={{ display: 'inline', color: 'var(--FormLabel-asteriskColor)' }}
+                    data-testid={`${testId}-typed-required`}
+                  >
+                    {'\u00a0*'}
+                  </Typography>
+                </span>
+              </FormLabel>
+              <Input
+                disabled={busy}
+                value={typedValue}
+                onChange={event => setTypedValue(event.target.value)}
+                autoComplete="off"
+                slotProps={{ input: { id: typedInputId, 'data-testid': testIds.typed ?? `${testId}-typed-input` } }}
+              />
+            </FormControl>
+          )}
+        </DialogContent>
+        <AdminDialogFooter>
+          {hint ? (
+            <Typography id={hintId} level="body-sm" data-testid={`${testId}-hint`} sx={{ mr: 'auto' }}>
+              {hint}
+            </Typography>
+          ) : (
+            <Typography level="body-xs" sx={{ mr: 'auto', fontWeight: 400 }}>
+              <Kbd>Enter</Kbd> to apply
+            </Typography>
+          )}
+          {/* Held while the write is in flight (closing would not cancel it) unless the caller stops at close. */}
           <Button
-            variant="outlined"
+            variant="plain"
             color="neutral"
-            disabled={!!hint || busy}
-            aria-describedby={hint ? hintId : undefined}
-            onClick={() => void handleConfirm(secondaryAction.onConfirm)}
-            data-testid={`${testId}-secondary-btn`}
+            onClick={close}
+            disabled={busy && !cancelStopsWrite}
+            data-testid={`${testId}-cancel-btn`}
           >
-            {secondaryAction.label}
+            Cancel
           </Button>
-        )}
-        <Button
-          variant="solid"
-          color={tone === 'danger' ? 'danger' : 'primary'}
-          disabled={!!hint}
-          loading={busy}
-          aria-describedby={hint ? hintId : undefined}
-          type="submit"
-          data-tone={tone}
-          data-testid={testIds.confirm ?? `${testId}-confirm-btn`}
-        >
-          {confirmLabel}
-        </Button>
-      </AdminDialogFooter>
-    </Stack>
+          {secondaryAction && (
+            <Button
+              variant="outlined"
+              color="neutral"
+              disabled={!!hint || busy}
+              aria-describedby={hint ? hintId : undefined}
+              onClick={() => void handleConfirm(secondaryAction.onConfirm)}
+              data-testid={`${testId}-secondary-btn`}
+            >
+              {secondaryAction.label}
+            </Button>
+          )}
+          <Button
+            variant="solid"
+            color={tone === 'danger' ? 'danger' : 'primary'}
+            disabled={!!hint}
+            loading={busy}
+            aria-describedby={hint ? hintId : undefined}
+            type="submit"
+            data-tone={tone}
+            data-testid={testIds.confirm ?? `${testId}-confirm-btn`}
+          >
+            {confirmLabel}
+          </Button>
+        </AdminDialogFooter>
+      </Stack>
+    </AdminDialog>
   );
 };

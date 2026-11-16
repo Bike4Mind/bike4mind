@@ -1,0 +1,646 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
+import { apiFailure, listResponse, modelRow, renderModelsRoute } from '../modelsTestUtils';
+import { isModelDetailTab, type ModelDetailTab } from '../modelDetailSearch';
+import { useModelsNavigation } from '../modelsNavigation';
+import {
+  ADMIN_MODEL_LOGS_TAB_SLUG,
+  ADMIN_MODEL_METRICS_TAB_SLUG,
+  ADMIN_SETTINGS_SEARCH_PARAM,
+  ADMIN_SETTINGS_TAB_SLUG,
+} from '../../adminTabParams';
+import { MODEL_LOGS_MODEL_PARAM } from '../../modelLogsTabSearch';
+import { MODEL_METRICS_SEARCH_KEYS } from '../../ModelMetrics/modelMetricsSearch';
+
+const { get, patch, user } = vi.hoisted(() => ({
+  get: vi.fn(),
+  patch: vi.fn(),
+  user: { current: { isAdmin: true } as Record<string, unknown> },
+}));
+
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get, patch, post: vi.fn() } }));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.current }) }));
+
+import { ModelDetailPage } from './ModelDetailPage';
+
+const IMAGE_ID = 'local-image/anime/foo v2.safetensors';
+const BEDROCK_ID = 'us.vendor.example-text-2-v1:0';
+
+const offRow = modelRow({
+  id: BEDROCK_ID,
+  name: 'Example Text 2 (US)',
+  status: 'hidden',
+  access: {
+    entry: {
+      enabled: false,
+      allowedUserTags: ['beta'],
+      allowedEntitlements: ['base'],
+      updatedAt: '2026-11-03T00:00:00.000Z',
+    },
+    everyone: true,
+    adminsOnly: false,
+    freeTierLocked: false,
+  },
+  reasons: [{ code: 'admin-off', message: 'Turned off by an admin', fixAction: 'turn-on' }],
+});
+
+const auditEntry = (id: string, at: string, summary: string) => ({
+  id,
+  source: 'admin',
+  occurredAt: at,
+  action: 'settings.update',
+  category: 'settings',
+  severity: 'info',
+  actor: { id: 'admin-1', name: 'Admin One' },
+  target: { kind: 'settings', id },
+  summary,
+  context: { source: 'console' },
+});
+
+const serve = (
+  rows: ReturnType<typeof modelRow>[],
+  audit: Record<string, unknown[]> = {},
+  entries: { id: string; enabled: boolean; allowedUserTags: string[] }[] = []
+) =>
+  get.mockImplementation(async (url: string, config?: { params?: Record<string, string> }) => {
+    if (url === '/api/admin/models') {
+      const search = config?.params?.search ?? '';
+      return { data: listResponse(rows.filter(row => row.id.startsWith(search))) };
+    }
+    if (url === '/api/admin/audit-log') {
+      return { data: { entries: audit[config?.params?.targetId ?? ''] ?? [], nextCursor: null } };
+    }
+    if (url === '/api/admin/users/tags') return { data: { tags: [{ tag: 'beta', count: 4 }] } };
+    if (url === '/api/admin/llm-models/configurations') return { data: { settingValue: entries }, headers: {} };
+    throw new Error(`unexpected GET ${url}`);
+  });
+
+function DetailRoute() {
+  const { _splat: modelId = '' } = useParams({ strict: false }) as { _splat?: string };
+  const search = useSearch({ strict: false }) as { tab?: string };
+  const navigate = useNavigate();
+  const tab: ModelDetailTab = isModelDetailTab(search.tab) ? search.tab : 'overview';
+  return (
+    <ModelDetailPage
+      modelId={modelId}
+      tab={tab}
+      onTabChange={next => void navigate({ to: '/admin/models/$', params: { _splat: modelId }, search: { tab: next } })}
+    />
+  );
+}
+
+function OpenButtons() {
+  const { openModel } = useModelsNavigation();
+  return (
+    <>
+      <button data-testid="open-image" onClick={() => void openModel(IMAGE_ID)} />
+      <button data-testid="open-bedrock" onClick={() => void openModel(BEDROCK_ID, 'access')} />
+    </>
+  );
+}
+
+beforeEach(() => {
+  get.mockReset();
+  patch.mockReset();
+  user.current = { isAdmin: true };
+});
+afterEach(cleanup);
+
+describe('model detail route', () => {
+  it.each([
+    ['open-image', IMAGE_ID, ''],
+    ['open-bedrock', BEDROCK_ID, 'access'],
+  ])('opens %s at its own id and the URL round-trips', async (button, id, tab) => {
+    const { router } = await renderModelsRoute('/admin?tab=models', OpenButtons);
+    fireEvent.click(screen.getByTestId(button));
+
+    const probe = await screen.findByTestId('probe-detail');
+    expect(probe).toHaveAttribute('data-id', id);
+    expect(probe).toHaveAttribute('data-tab', tab);
+
+    await router.navigate({ href: router.state.location.href });
+    await waitFor(() => expect(screen.getByTestId('probe-detail')).toHaveAttribute('data-id', id));
+  });
+});
+
+describe('ModelDetailPage', () => {
+  it('says so when no model has the id', async () => {
+    serve([]);
+    await renderModelsRoute('/admin/models/missing-model', () => null, { Detail: DetailRoute });
+
+    const notFound = await screen.findByTestId('model-detail-not-found');
+    expect(notFound).toHaveTextContent('No model with id missing-model');
+    fireEvent.click(screen.getByTestId('model-detail-not-found-back-btn'));
+    await waitFor(() => expect(screen.queryByTestId('model-detail-not-found')).not.toBeInTheDocument());
+  });
+
+  it('shows the error state with Retry when the first load fails, and the model once Retry loads it', async () => {
+    get.mockRejectedValue(apiFailure(503, { error: 'Model list unavailable' }));
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, { Detail: DetailRoute });
+
+    const failed = await screen.findByTestId('admin-error-state');
+    expect(failed).toHaveTextContent('This model could not be loaded. Model list unavailable');
+    expect(screen.queryByTestId('model-detail-not-found')).not.toBeInTheDocument();
+
+    serve([offRow]);
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(await screen.findByTestId('model-detail-status')).toHaveTextContent('Hidden');
+    expect(screen.queryByTestId('admin-error-state')).not.toBeInTheDocument();
+  });
+
+  it('keeps the loaded model on screen when a background refetch fails', async () => {
+    serve([offRow]);
+    const { queryClient } = await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, {
+      Detail: DetailRoute,
+    });
+    expect(await screen.findByTestId('model-detail-status')).toHaveTextContent('Hidden');
+
+    const reads = get.mock.calls.length;
+    get.mockRejectedValue(apiFailure(503, { error: 'Model list unavailable' }));
+    await queryClient.invalidateQueries();
+    expect(get.mock.calls.length).toBeGreaterThan(reads);
+
+    await waitFor(() => expect(screen.getByTestId('model-detail-toggle-btn')).toBeEnabled());
+    expect(screen.getByTestId('model-detail-status')).toHaveTextContent('Hidden');
+    expect(screen.getByTestId('model-detail-reason')).toHaveTextContent('Turned off by an admin');
+    expect(screen.queryByTestId('admin-error-state')).not.toBeInTheDocument();
+  });
+
+  it('shows the status, the reason with its fix action and the access summary', async () => {
+    serve([offRow]);
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, { Detail: DetailRoute });
+
+    expect(await screen.findByTestId('model-detail-status')).toHaveTextContent('Hidden');
+    expect(screen.getByTestId('model-detail-reason')).toHaveTextContent('Turned off by an admin');
+    expect(screen.getByTestId('model-detail-fix-btn')).toHaveTextContent('Turn on');
+    expect(screen.getByTestId('model-detail-toggle-btn')).toHaveTextContent('Turn on');
+  });
+
+  it('links Usage and Logs from the header meta line and keeps Turn on as the only action', async () => {
+    serve([offRow]);
+    const { router } = await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, { Detail: DetailRoute });
+
+    const metaLine = (await screen.findByTestId('model-detail-meta')).parentElement!;
+    const usage = within(metaLine).getByTestId('model-detail-usage-link');
+    expect(within(metaLine).getByTestId('model-detail-logs-link')).toHaveTextContent('Logs');
+    expect(within(metaLine).queryByTestId('model-detail-toggle-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('model-detail-toggle-btn')).toHaveTextContent('Turn on');
+
+    fireEvent.click(usage);
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({
+        tab: ADMIN_MODEL_METRICS_TAB_SLUG,
+        [MODEL_METRICS_SEARCH_KEYS.filters.model]: BEDROCK_ID,
+      })
+    );
+
+    await router.navigate({ to: '/admin/models/$', params: { _splat: BEDROCK_ID } });
+    fireEvent.click(await screen.findByTestId('model-detail-logs-link'));
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({
+        tab: ADMIN_MODEL_LOGS_TAB_SLUG,
+        [MODEL_LOGS_MODEL_PARAM]: BEDROCK_ID,
+      })
+    );
+  });
+
+  it('turns the model on from the fix action, sending the stamp it read', async () => {
+    serve([offRow]);
+    patch.mockResolvedValue({ data: { entry: null, changed: true, revision: 'r3' } });
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, { Detail: DetailRoute });
+
+    fireEvent.click(await screen.findByTestId('model-detail-fix-btn'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
+
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith(
+        '/api/admin/models/access',
+        expect.objectContaining({ change: { enabled: true }, expectedUpdatedAt: '2026-11-03T00:00:00.000Z' }),
+        { params: { id: BEDROCK_ID } }
+      )
+    );
+  });
+
+  it('opens the audit entry in place, keeping the toast and its Undo', async () => {
+    serve([offRow]);
+    patch.mockResolvedValue({ data: { entry: null, changed: true, revision: 'r3' } });
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, { Detail: DetailRoute });
+
+    fireEvent.click(await screen.findByTestId('model-detail-fix-btn'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
+
+    const audit = await screen.findByTestId('undo-toast-audit-btn');
+    expect(audit.tagName).toBe('BUTTON');
+    expect(audit).not.toHaveAttribute('target');
+    fireEvent.click(audit);
+
+    expect(await screen.findByTestId('model-admin-log')).toBeInTheDocument();
+    expect(screen.getByTestId('undo-toast-undo-btn')).toBeInTheDocument();
+  });
+
+  it('keeps an open toggle on the row it opened with when the row refetches', async () => {
+    serve([offRow]);
+    patch.mockResolvedValue({ data: { entry: null, changed: true, revision: 'r3' } });
+    const { queryClient } = await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, {
+      Detail: DetailRoute,
+    });
+
+    fireEvent.click(await screen.findByTestId('model-detail-fix-btn'));
+    const turnedOnElsewhere = modelRow({
+      ...offRow,
+      access: {
+        ...offRow.access,
+        entry: { ...offRow.access.entry!, enabled: true, updatedAt: '2026-11-04T00:00:00.000Z' },
+      },
+    });
+    serve([turnedOnElsewhere]);
+    await queryClient.invalidateQueries();
+    await waitFor(() => expect(screen.getByTestId('model-detail-toggle-btn')).toHaveTextContent('Turn off'));
+
+    expect(screen.getByTestId('model-access-dialog-confirm-btn')).toHaveTextContent('Turn on');
+    fireEvent.click(screen.getByTestId('model-access-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
+    await waitFor(() =>
+      expect(patch.mock.calls[0][1]).toMatchObject({
+        change: { enabled: true },
+        expectedUpdatedAt: '2026-11-03T00:00:00.000Z',
+      })
+    );
+  });
+
+  it('offers tags set only on model access entries in the tag picker', async () => {
+    serve([offRow], {}, [{ id: 'another-model', enabled: true, allowedUserTags: ['legacy'] }]);
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=access`, () => null, { Detail: DetailRoute });
+
+    fireEvent.click(await screen.findByTestId('model-access-audience-btn'));
+    const input = screen.getByTestId('model-access-tags-input');
+    fireEvent.mouseDown(input);
+    fireEvent.change(input, { target: { value: 'leg' } });
+
+    expect(await screen.findByRole('option', { name: 'legacy' })).toBeInTheDocument();
+  });
+
+  it('edits tags on the Access tab as one change, previewed before and after', async () => {
+    serve([offRow]);
+    patch.mockResolvedValue({ data: { entry: null, changed: true, revision: 'r3' } });
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=access`, () => null, { Detail: DetailRoute });
+
+    expect(await screen.findByTestId('model-access-tags')).toHaveTextContent('beta');
+    fireEvent.click(screen.getByTestId('model-access-audience-btn'));
+    const input = screen.getByTestId('model-access-tags-input');
+    fireEvent.change(input, { target: { value: 'pilot' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(screen.getByTestId('model-access-preview')).toHaveTextContent('Tags: beta');
+    expect(screen.getByTestId('model-access-preview')).toHaveTextContent('Tags: beta, pilot');
+    fireEvent.click(screen.getByTestId('model-access-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
+
+    await waitFor(() =>
+      expect(patch.mock.calls[0][1]).toMatchObject({ change: { allowedUserTags: ['beta', 'pilot'] } })
+    );
+  });
+
+  it('asks for confirmation when removing every tag and entitlement would leave the model to admins', async () => {
+    const onRow = modelRow({ id: 'only-one', name: 'Only one' });
+    serve([onRow]);
+    patch
+      .mockRejectedValueOnce(
+        apiFailure(422, { error: 'Only admins will see this model. Confirm to continue.', adminOnlyIds: ['only-one'] })
+      )
+      .mockResolvedValue({ data: { entry: null, changed: true, revision: 'r3' } });
+    await renderModelsRoute('/admin/models/only-one?tab=access', () => null, { Detail: DetailRoute });
+
+    fireEvent.click(await screen.findByTestId('model-access-audience-btn'));
+    const entitlements = screen.getByTestId('model-access-entitlements-input');
+    fireEvent.keyDown(entitlements, { key: 'Backspace' });
+
+    expect(await screen.findByTestId('model-access-admin-only')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('model-access-dialog-reason-input-preset-0'));
+    expect(screen.getByTestId('model-access-dialog-confirm-btn')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('model-access-admin-only-checkbox'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
+
+    await waitFor(() =>
+      expect(patch.mock.calls[0][1]).toMatchObject({ change: { allowedEntitlements: [] }, confirmAdminOnly: true })
+    );
+  });
+
+  it('asks for the admins-only confirm when the server answers 422 with the models it would leave to admins', async () => {
+    serve([offRow]);
+    patch
+      .mockRejectedValueOnce(
+        apiFailure(422, { error: 'Only admins will see this model. Confirm to continue.', adminOnlyIds: [BEDROCK_ID] })
+      )
+      .mockResolvedValue({ data: { entry: null, changed: true, revision: 'r3' } });
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, { Detail: DetailRoute });
+
+    fireEvent.click(await screen.findByTestId('model-detail-fix-btn'));
+    expect(screen.queryByTestId('model-access-admin-only')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('model-access-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
+
+    expect(await screen.findByTestId('model-access-admin-only')).toBeInTheDocument();
+    expect(screen.queryByTestId('model-access-error')).not.toBeInTheDocument();
+    expect(screen.getByTestId('model-access-dialog-confirm-btn')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('model-access-admin-only-checkbox'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
+    await waitFor(() => expect(patch.mock.calls[1]?.[1]).toMatchObject({ confirmAdminOnly: true }));
+  });
+
+  it('shows any other 422 as an error, without the admins-only confirm', async () => {
+    serve([offRow]);
+    patch.mockRejectedValueOnce(apiFailure(422, { error: 'This change cannot be saved for this model.' }));
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, { Detail: DetailRoute });
+
+    fireEvent.click(await screen.findByTestId('model-detail-fix-btn'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
+
+    expect(await screen.findByTestId('model-access-error')).toHaveTextContent(
+      'This change cannot be saved for this model.'
+    );
+    expect(screen.queryByTestId('model-access-admin-only')).not.toBeInTheDocument();
+  });
+
+  it('blocks a rank outside 0 to 100 and saves a valid one', async () => {
+    serve([offRow]);
+    patch.mockResolvedValue({ data: { entry: null, changed: true, revision: 'r3' } });
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=access`, () => null, { Detail: DetailRoute });
+
+    fireEvent.click(await screen.findByTestId('model-access-ranking-btn'));
+    const rank = screen.getByTestId('model-access-rank-input');
+    fireEvent.change(rank, { target: { value: '101' } });
+    fireEvent.click(screen.getByTestId('model-access-dialog-reason-input-preset-0'));
+    expect(screen.getByTestId('model-access-dialog-confirm-btn')).toBeDisabled();
+
+    fireEvent.change(rank, { target: { value: '3' } });
+    fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
+    await waitFor(() => expect(patch.mock.calls[0][1]).toMatchObject({ change: { rank: 3 } }));
+  });
+
+  it('offers only listed or limited models of the same type as a fallback, and still shows a saved one outside them', async () => {
+    const main = modelRow({
+      id: 'main-text',
+      name: 'Main',
+      access: {
+        entry: {
+          enabled: true,
+          allowedUserTags: [],
+          allowedEntitlements: ['base'],
+          fallbackModel: 'old-text',
+          updatedAt: '2026-11-01T00:00:00.000Z',
+        },
+        everyone: true,
+        adminsOnly: false,
+        freeTierLocked: false,
+      },
+    });
+    serve([
+      main,
+      modelRow({ id: 'old-text', name: 'Old', status: 'hidden' }),
+      modelRow({ id: 'good-text', name: 'Good', status: 'listed' }),
+      modelRow({ id: 'beta-text', name: 'Beta', status: 'limited' }),
+      modelRow({ id: 'review-text', name: 'Review', status: 'needs-review' }),
+    ]);
+    await renderModelsRoute('/admin/models/main-text?tab=access', () => null, { Detail: DetailRoute });
+
+    fireEvent.click(await screen.findByTestId('model-access-ranking-btn'));
+    await userEvent.click(screen.getByTestId('model-access-fallback-select'));
+
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Good (Listed)' })).toBeInTheDocument());
+    const names = screen.getAllByRole('option').map(option => option.textContent);
+    expect(names).toEqual(['Automatic', 'Old (Hidden)', 'Good (Listed)', 'Beta (Limited)']);
+  });
+
+  it('says in place when the fallback models fail to load, and asks again on Retry', async () => {
+    serve([offRow]);
+    const served = get.getMockImplementation()!;
+    let failTypes = true;
+    get.mockImplementation(async (url: string, config?: { params?: Record<string, string> }) => {
+      if (url === '/api/admin/models' && config?.params?.types && failTypes) throw apiFailure(500, { error: 'down' });
+      return served(url, config);
+    });
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=access`, () => null, { Detail: DetailRoute });
+
+    fireEvent.click(await screen.findByTestId('model-access-ranking-btn'));
+    expect(await screen.findByTestId('model-access-fallback-error')).toHaveTextContent(
+      'Could not load the text models'
+    );
+    failTypes = false;
+    fireEvent.click(screen.getByTestId('model-access-fallback-error-retry-btn'));
+
+    await waitFor(() => expect(screen.queryByTestId('model-access-fallback-error')).not.toBeInTheDocument());
+  });
+
+  it('says the fallback choices are cut short when the model lookup hit its page cap', async () => {
+    serve([offRow]);
+    const served = get.getMockImplementation()!;
+    get.mockImplementation(async (url: string, config?: { params?: Record<string, string> }) => {
+      if (url === '/api/admin/models' && config?.params?.types) {
+        const page = config.params.page;
+        return { data: { ...listResponse([modelRow({ id: `text-${page}`, name: `Text ${page}` })]), total: 6000 } };
+      }
+      return served(url, config);
+    });
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=access`, () => null, { Detail: DetailRoute });
+
+    fireEvent.click(await screen.findByTestId('model-access-ranking-btn'));
+    expect(await screen.findByTestId('model-access-fallback-truncated')).toHaveTextContent(
+      'Only the first 5,000 models are listed here.'
+    );
+  });
+
+  it('says in place when the user tags fail to load, and asks again on Retry', async () => {
+    serve([offRow]);
+    const served = get.getMockImplementation()!;
+    let failTags = true;
+    get.mockImplementation(async (url: string, config?: { params?: Record<string, string> }) => {
+      if (url === '/api/admin/users/tags' && failTags) throw apiFailure(500, { error: 'down' });
+      return served(url, config);
+    });
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=access`, () => null, { Detail: DetailRoute });
+
+    fireEvent.click(await screen.findByTestId('model-access-audience-btn'));
+    expect(await screen.findByTestId('model-access-tags-error')).toHaveTextContent('Could not load the existing tags');
+    failTags = false;
+    fireEvent.click(screen.getByTestId('model-access-tags-error-retry-btn'));
+
+    await waitFor(() => expect(screen.queryByTestId('model-access-tags-error')).not.toBeInTheDocument());
+  });
+
+  it('shows why the admin log could not be loaded', async () => {
+    serve([offRow]);
+    const served = get.getMockImplementation()!;
+    get.mockImplementation(async (url: string, config?: { params?: Record<string, string> }) => {
+      if (url === '/api/admin/audit-log') throw apiFailure(503, { error: 'Audit log is unavailable' });
+      return served(url, config);
+    });
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=admin`, () => null, { Detail: DetailRoute });
+
+    expect(await screen.findByText(/The admin log could not be loaded\. Audit log is unavailable/)).toBeInTheDocument();
+  });
+
+  it('merges the access, price and lifecycle audit trails newest first', async () => {
+    serve([offRow], {
+      [`llmModelConfigurations:${BEDROCK_ID}`]: [auditEntry('a1', '2026-11-01T00:00:00.000Z', 'Turned off')],
+      [`${BEDROCK_ID}:per_token`]: [auditEntry('p1', '2026-11-05T00:00:00.000Z', 'Repriced')],
+    });
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=admin`, () => null, { Detail: DetailRoute });
+
+    await waitFor(() => expect(screen.getAllByTestId('model-admin-log-row')).toHaveLength(2));
+    const rows = screen.getAllByTestId('model-admin-log-row');
+    expect(rows[0]).toHaveTextContent('Repriced');
+    expect(rows[1]).toHaveTextContent('Turned off');
+  });
+});
+
+describe('links from a model page into full-admin tabs', () => {
+  const keyRow = modelRow({
+    id: BEDROCK_ID,
+    status: 'hidden',
+    reasons: [{ code: 'no-credential', message: 'No API key', fixAction: 'open-key-settings' }],
+  });
+  const open = async () => {
+    serve([keyRow]);
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, { Detail: DetailRoute });
+    return screen.findByTestId('model-detail-fix-btn');
+  };
+
+  it('keeps Open key settings, Usage and Logs working for a full administrator', async () => {
+    serve([keyRow]);
+    const { router } = await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, { Detail: DetailRoute });
+    const goBack = () => router.navigate({ to: '/admin/models/$', params: { _splat: BEDROCK_ID } });
+
+    fireEvent.click(await screen.findByTestId('model-detail-fix-btn'));
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({
+        tab: ADMIN_SETTINGS_TAB_SLUG,
+        [ADMIN_SETTINGS_SEARCH_PARAM]: keyRow.backend,
+      })
+    );
+    await goBack();
+    fireEvent.click(await screen.findByTestId('model-detail-usage-link'));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: ADMIN_MODEL_METRICS_TAB_SLUG }));
+    await goBack();
+    fireEvent.click(await screen.findByTestId('model-detail-logs-link'));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: ADMIN_MODEL_LOGS_TAB_SLUG }));
+  });
+
+  it('disables them, with the reason, for a delegate whose permissions do not open those tabs', async () => {
+    user.current = { isAdmin: false, adminPermissions: ['support:read'] };
+    const fix = await open();
+
+    expect(fix).toBeDisabled();
+    expect(screen.getByTestId('model-detail-usage-link')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByTestId('model-detail-logs-link')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getAllByTestId('models-tab-blocked-action')).toHaveLength(3);
+  });
+
+  it('keeps Open key settings working for a settings manager, since General settings opens to them', async () => {
+    user.current = { isAdmin: false, adminPermissions: ['support:read', 'settings:manage'] };
+    const fix = await open();
+
+    expect(fix).not.toBeDisabled();
+    expect(screen.getByTestId('model-detail-usage-link')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByTestId('model-detail-logs-link')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getAllByTestId('models-tab-blocked-action')).toHaveLength(2);
+  });
+});
+
+describe('ModelDetailPage for a delegate with support:read', () => {
+  const requested = () => [...new Set(get.mock.calls.map(([url]) => url as string))];
+
+  it.each(['access', 'admin'])('reads the %s tab with no request a delegate would be refused', async tab => {
+    user.current = { isAdmin: false, adminPermissions: ['support:read'] };
+    serve([offRow]);
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=${tab}`, () => null, { Detail: DetailRoute });
+
+    await screen.findByTestId(`model-detail-panel-${tab}`);
+    await waitFor(() => expect(requested()).toContain(tab === 'admin' ? '/api/admin/audit-log' : '/api/admin/models'));
+    expect(requested().every(url => ['/api/admin/models', '/api/admin/audit-log'].includes(url))).toBe(true);
+  });
+
+  it('shows every Access tab write disabled and fetches no tag choices until a full admin opens the editor', async () => {
+    user.current = { isAdmin: false, adminPermissions: ['support:read', 'settings:manage'] };
+    serve([offRow]);
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=access`, () => null, { Detail: DetailRoute });
+
+    for (const id of ['model-access-toggle-btn', 'model-access-audience-btn', 'model-access-ranking-btn']) {
+      expect(await screen.findByTestId(id)).toBeDisabled();
+    }
+    expect(screen.getByTestId('model-detail-fix-btn')).toBeDisabled();
+    expect(requested()).not.toContain('/api/admin/users/tags');
+    expect(requested()).not.toContain('/api/admin/llm-models/configurations');
+  });
+});
+
+describe('access editor pending draft', () => {
+  it.each(['success', 'failure'] as const)('holds rank and fallback until deferred %s', async outcome => {
+    let resolveRequest: ((value: unknown) => void) | undefined;
+    let rejectRequest: ((error: Error) => void) | undefined;
+    patch.mockReturnValueOnce(
+      new Promise((resolve, reject) => {
+        resolveRequest = resolve;
+        rejectRequest = reject;
+      })
+    );
+    serve([offRow]);
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=access`, () => null, { Detail: DetailRoute });
+    fireEvent.click(await screen.findByTestId('model-access-ranking-btn'));
+    const rank = screen.getByTestId('model-access-rank-input');
+    fireEvent.change(rank, { target: { value: '3' } });
+    fireEvent.click(screen.getByTestId('model-access-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
+    await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+    expect(rank).toBeDisabled();
+    expect(screen.getByTestId('model-access-fallback-select')).toBeDisabled();
+    fireEvent.change(rank, { target: { value: '9' } });
+    fireEvent.click(screen.getByTestId('model-access-dialog-close-btn'));
+    expect(screen.getByTestId('model-access-dialog')).toBeInTheDocument();
+    expect(patch.mock.calls[0][1]).toMatchObject({ change: { rank: 3 } });
+    await act(async () => {
+      if (outcome === 'success') resolveRequest?.({ data: { entry: null, changed: true, revision: 'r3' } });
+      else rejectRequest?.(apiFailure(503, { error: 'Deferred access failure' }));
+    });
+    if (outcome === 'success')
+      await waitFor(() => expect(screen.queryByTestId('model-access-dialog')).not.toBeInTheDocument());
+    else {
+      expect(await screen.findByTestId('model-access-error')).toHaveTextContent('Deferred access failure');
+      expect(rank).toHaveValue('3');
+      expect(rank).toBeEnabled();
+    }
+  });
+
+  it('holds tag and entitlement edits while the submitted audience is pending', async () => {
+    let rejectRequest: ((error: unknown) => void) | undefined;
+    patch.mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        rejectRequest = reject;
+      })
+    );
+    serve([offRow]);
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=access`, () => null, { Detail: DetailRoute });
+    fireEvent.click(await screen.findByTestId('model-access-audience-btn'));
+    const tags = screen.getByTestId('model-access-tags-input');
+    fireEvent.change(tags, { target: { value: 'pilot' } });
+    fireEvent.keyDown(tags, { key: 'Enter' });
+    fireEvent.click(screen.getByTestId('model-access-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
+    await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+    expect(tags).toBeDisabled();
+    expect(screen.getByTestId('model-access-entitlements-input')).toBeDisabled();
+    await userEvent.type(tags, 'late{Enter}');
+    expect(patch.mock.calls[0][1]).toMatchObject({ change: { allowedUserTags: ['beta', 'pilot'] } });
+    await act(async () => {
+      rejectRequest?.(apiFailure(503, { error: 'Audience unavailable' }));
+    });
+    expect(await screen.findByTestId('model-access-error')).toHaveTextContent('Audience unavailable');
+    expect(screen.getByTestId('model-access-preview')).toHaveTextContent('Tags: beta, pilot');
+    expect(tags).toBeEnabled();
+  });
+});

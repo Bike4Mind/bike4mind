@@ -7,6 +7,7 @@ import { ISubscription, SubscriptionOwnerType } from '@bike4mind/server-utils/li
 import { subscriptionPlanSchema } from '@bike4mind/server-utils/lib/userSubscriptions/schemas';
 import { IUserSubscription } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import { ADMIN_GRANTS_KEY } from './adminOrganizations';
+import type { SeatPlan } from '@server/subscriptions/seatPlan';
 import { type OrgSubscriptionSubscribeRequest } from '@bike4mind/server-utils/lib/subscriptions/schema';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -132,6 +133,20 @@ export const useGetSubscriptions = (
     enabled,
   });
 };
+
+// Under ['entitlements'] so the server's entitlement pushes (seat removal, plan grants) refresh it too.
+export const SEAT_PLAN_QUERY_KEY = ['entitlements', 'seat-plan'] as const;
+
+/** The plan the user holds through an organization seat (e.g. Team), or null. */
+export const useGetSeatPlan = ({ enabled = true }: { enabled?: boolean } = {}) =>
+  useQuery({
+    queryKey: SEAT_PLAN_QUERY_KEY,
+    queryFn: async () => {
+      const response = await api.get<{ seatPlan: SeatPlan | null }>('/api/subscriptions/seat-plan');
+      return response.data.seatPlan;
+    },
+    enabled,
+  });
 
 /**
  * Hook for users to subscribe to a team plan. This will also create a new organization.
