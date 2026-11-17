@@ -5,13 +5,14 @@
  * infra/llmSpend.ts. Also alarms on the nightly spend reconciliation (spendReconciliationCron) drifting
  * from the provider's billing or reconciling nothing.
  *
- * Also holds the access policy and the access alarms for the provider admin key store
- * (infra/providerAdminKeys.ts) the two spend crons read.
+ * Also holds the access policy, the access alarms and the key age alarms for the provider admin key
+ * store (infra/providerAdminKeys.ts) the two spend crons read.
  */
 
 import { providerUsagePollCron, spendReconciliationCron } from './cron';
 import { dlqAlarmTopic, oobAlarmTopic } from './dlqAlarms';
 import {
+  PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS,
   PROVIDER_ADMIN_KEY_PROVIDERS,
   providerAdminKeyChangeEventPattern,
   providerAdminKeyKmsEventPattern,
@@ -297,6 +298,27 @@ if (isMonitoredStage) {
         treatMissingData: 'notBreaching',
         alarmActions: actions,
         tags: { Application: 'LLMSpend', Severity: 'Critical' },
+      });
+    }
+
+    // Fires on the ProviderAdminKeyAgeDays datum the poller publishes each hour for a key it read
+    // from the store. Writing a new secret version resets the age.
+    for (const provider of PROVIDER_ADMIN_KEY_PROVIDERS) {
+      const days = PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS[provider];
+      new aws.cloudwatch.MetricAlarm(`ProviderAdminKeyAgeAlarm-${provider}`, {
+        name: `${prefix}-provider-admin-key-age-${provider}`,
+        alarmDescription: `The current ${provider} admin key version is at least ${days} days old: write a new secret version before the key expires`,
+        comparisonOperator: 'GreaterThanOrEqualToThreshold',
+        evaluationPeriods: 1,
+        metricName: 'ProviderAdminKeyAgeDays',
+        namespace: LLM_SPEND_NAMESPACE,
+        dimensions: { Provider: provider },
+        period: 3600,
+        statistic: 'Maximum',
+        threshold: days,
+        treatMissingData: 'notBreaching',
+        alarmActions: actions,
+        tags: { Application: 'LLMSpend', Severity: 'Medium' },
       });
     }
   }

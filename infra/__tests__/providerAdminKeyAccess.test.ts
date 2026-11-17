@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 const resources = vi.hoisted(() => {
   class FakeOutput<T> {
@@ -339,12 +340,20 @@ describe('provider admin key access alarms', () => {
     );
   });
 
-  it('adds one alarm per rule to the existing provider spend alarms', async () => {
+  it('adds one alarm per rule and one age alarm per provider to the existing provider spend alarms', async () => {
     await load();
-    expect(callsOf(resources.alarm).filter(([logicalName]) => logicalName.startsWith('ProviderAdminKey'))).toHaveLength(
-      3
-    );
-    expect(resources.alarm).toHaveBeenCalledTimes(11);
+    expect(
+      callsOf(resources.alarm)
+        .map(([logicalName]) => logicalName)
+        .filter(logicalName => logicalName.startsWith('ProviderAdminKey'))
+    ).toEqual([
+      'ProviderAdminKeyReadAlarm',
+      'ProviderAdminKeyChangeAlarm',
+      'ProviderAdminKeyKmsChangeAlarm',
+      'ProviderAdminKeyAgeAlarm-anthropic',
+      'ProviderAdminKeyAgeAlarm-openai',
+    ]);
+    expect(resources.alarm).toHaveBeenCalledTimes(13);
   });
 
   it('creates nothing alarm-related on a stage that does not monitor', async () => {
@@ -356,5 +365,67 @@ describe('provider admin key access alarms', () => {
   it('fails loudly when alarm routing is missing', async () => {
     resources.topic = undefined;
     await expect(load()).rejects.toThrow('alarm routing requires dlqAlarmTopic and oobAlarmTopic');
+  });
+});
+
+describe('provider admin key age alarms', () => {
+  it.each([
+    ['anthropic', 45],
+    ['openai', 75],
+  ] as const)('warns when the %s key version is %i days old', async (provider, threshold) => {
+    await load();
+    expect(callFor(resources.alarm, `ProviderAdminKeyAgeAlarm-${provider}`)).toEqual({
+      name: `test-app-production-provider-admin-key-age-${provider}`,
+      alarmDescription: expect.stringContaining(`${provider} admin key version is at least ${threshold} days old`),
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'ProviderAdminKeyAgeDays',
+      namespace: 'test-app/production/LLMSpend',
+      dimensions: { Provider: provider },
+      period: 3600,
+      statistic: 'Maximum',
+      threshold,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic', 'email-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+  });
+
+  it('takes each threshold from the named constant next to the store', async () => {
+    await load();
+    const keys = await import('../providerAdminKeys');
+    expect(keys.PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS_OPENAI).toBe(75);
+    expect(keys.PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS_ANTHROPIC).toBe(45);
+    expect(keys.PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS).toEqual({ anthropic: 45, openai: 75 });
+  });
+
+  it('is created on dev as well, under the dev prefix and namespace', async () => {
+    await load('dev');
+    expect(callFor(resources.alarm, 'ProviderAdminKeyAgeAlarm-openai')).toMatchObject({
+      name: 'test-app-dev-provider-admin-key-age-openai',
+      namespace: 'test-app/dev/LLMSpend',
+    });
+  });
+
+  it('is not created on a stage that does not monitor', async () => {
+    await load('preview');
+    expect(callFor(resources.alarm, 'ProviderAdminKeyAgeAlarm-anthropic')).toBeUndefined();
+    expect(callFor(resources.alarm, 'ProviderAdminKeyAgeAlarm-openai')).toBeUndefined();
+  });
+
+  it('is not created where the store does not exist', async () => {
+    resources.runsScheduledJobs = false;
+    resources.pollerCron = undefined;
+    resources.reconCron = undefined;
+    await load();
+    expect(callFor(resources.alarm, 'ProviderAdminKeyAgeAlarm-anthropic')).toBeUndefined();
+    expect(callFor(resources.alarm, 'ProviderAdminKeyAgeAlarm-openai')).toBeUndefined();
+  });
+
+  it('reads the metric the poller publishes, with the same dimension', () => {
+    const poller = readFileSync(new URL('../../apps/workers/src/cron/providerUsagePoll.ts', import.meta.url), 'utf8');
+    expect(poller).toContain("MetricName: 'ProviderAdminKeyAgeDays'");
+    expect(poller).toContain("Dimensions: [{ Name: 'Provider', Value: provider }]");
+    expect(poller).toContain('Namespace: `${Resource.App.name}/${Resource.App.stage}/LLMSpend`');
   });
 });

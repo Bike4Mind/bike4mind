@@ -17,6 +17,19 @@ export type ProviderAdminKeyProvider = (typeof PROVIDER_ADMIN_KEY_PROVIDERS)[num
 export const providerAdminKeyEnvName = (provider: ProviderAdminKeyProvider) =>
   `PROVIDER_ADMIN_KEY_SECRET_${provider.toUpperCase()}`;
 
+/**
+ * Age of the current key version, in days, at which its age alarm in infra/providerSpend.ts fires.
+ * An OpenAI admin key lasts 90 days. An Anthropic admin key ends on a date fixed when it is issued,
+ * not after a set lifetime, so its value is provisional until it is set from that date.
+ */
+export const PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS_OPENAI = 75;
+export const PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS_ANTHROPIC = 45;
+
+export const PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS: Record<ProviderAdminKeyProvider, number> = {
+  anthropic: PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS_ANTHROPIC,
+  openai: PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS_OPENAI,
+};
+
 export const providerAdminKeySecretName = (appName: string, stage: string, provider: ProviderAdminKeyProvider) =>
   `${appName}/${stage}/provider-admin-key/${provider}`;
 
