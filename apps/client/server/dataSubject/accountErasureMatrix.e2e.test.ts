@@ -182,6 +182,8 @@ const SEED_DEFAULTS: Record<string, Doc> = {
     source: { kind: 'reply' },
   },
   MemoryPrincipalKey: { dek: 'seed-dek' },
+  // A row without an owner type is read as personal; the anonymized reference is a surviving org's.
+  UsageEvent: { ownerType: 'Organization', ownerId: 'seed-surviving-org' },
   DataLake: { datalakeTag: 'seed-lake', createdByUserId: 'seed-other-creator' },
   DataLakeAccessGrant: { principalType: 'user', role: 'owner', dataLakeId: '0123456789abcdef01234567' },
   ImportHistoryJob: { s3Bucket: 'test-historyImportBucket', s3Key: 'seed/archive.zip' },
@@ -201,6 +203,8 @@ type Seeded = {
   model: string;
   id: unknown;
   reference: string;
+  /** The registry reference that seeded this row; absent for a child. */
+  ref?: UserReference;
   /** What the registry action on the seeding reference does to this row; absent for a child. */
   outcome?: Outcome;
   under?: { parent: string; parentId: string; deleteWhenParentAnonymized: boolean };
@@ -211,10 +215,17 @@ async function seedFromRegistry(subject: { userId: string; email: string }): Pro
   const seeded: Seeded[] = [];
   const parentDocs = new Map<string, Doc[]>();
   let uniqueKey = 0;
-  const insert = async (model: string, doc: Doc, reference: string, outcome?: Outcome, under?: Seeded['under']) => {
-    const _id = (doc._id as unknown) ?? new ObjectId();
+  const insert = async (
+    model: string,
+    doc: Doc,
+    reference: string,
+    ref?: UserReference,
+    outcome?: Outcome,
+    under?: Seeded['under']
+  ) => {
+    const _id = (doc._id as mongoose.Types.ObjectId | undefined) ?? new ObjectId();
     await raw(model).insertOne({ ...SEED_DEFAULTS[model], ...doc, _id, createdAt: new Date(), updatedAt: new Date() });
-    seeded.push({ model, id: _id, reference, outcome, under });
+    seeded.push({ model, id: _id, reference, ref, outcome, under });
     parentDocs.set(model, [...(parentDocs.get(model) ?? []), { ...doc, _id }]);
   };
   const parentKeys = new Map<string, Set<string>>();
@@ -242,6 +253,7 @@ async function seedFromRegistry(subject: { userId: string; email: string }): Pro
           model,
           documentFor(model, reference, subject),
           `${reference.path} (other user)`,
+          reference,
           OUTCOME_OF_ACTION[reference.action]
         );
       }
@@ -251,6 +263,7 @@ async function seedFromRegistry(subject: { userId: string; email: string }): Pro
           model,
           withParentKeys(model, documentFor(model, reference, subject)),
           reference.path,
+          reference,
           OUTCOME_OF_ACTION[reference.action]
         );
       }
@@ -266,14 +279,14 @@ async function seedFromRegistry(subject: { userId: string; email: string }): Pro
       const found = schemaPathFor(model, holder.foreignKey.split('.'));
       const fk = (found?.type as SchemaType | undefined)?.instance;
       const stored = fk === 'ObjectId' ? new ObjectId(String(value)) : String(value);
-      await insert(model, { [holder.foreignKey]: stored }, `child of ${holder.parent}`, undefined, {
+      await insert(model, { [holder.foreignKey]: stored }, `child of ${holder.parent}`, undefined, undefined, {
         parent: holder.parent,
         parentId: String(parent._id),
         deleteWhenParentAnonymized: holder.deleteWhenParentAnonymized === true,
       });
     }
     for (const reference of holder.attribution ?? []) {
-      await insert(model, documentFor(model, reference, subject), `${reference.path} (attribution)`, 'anonymized');
+      await insert(model, documentFor(model, reference, subject), `${reference.path} (attribution)`, reference, 'anonymized');
     }
   }
   return seeded;
@@ -347,6 +360,48 @@ async function seedSubject(source: 'self' | 'admin') {
   return { subject, adminId: String(adminId), seeded };
 }
 
+// Models where the purge deletes a row the registry only anonymizes, which erases more: it removes every
+// page the person still owns (any tier), where the registry anonymizes the owner of a non-personal one. A child of such a page goes with it.
+const DELETED_INSTEAD_OF_ANONYMIZED = new Set(['PublishedArtifact']);
+
+/**
+ * Walks every seeded row by _id on the raw collection (soft-deleted rows count as present), so an
+ * executor that anonymizes what it should delete, or deletes a retained or foreign-owned row, fails.
+ */
+async function expectSeededOutcomes(subject: { userId: string; email: string }, seeded: Seeded[]) {
+  const outcomeOf = new Map(
+    seeded.filter(row => row.outcome).map(row => [`${row.model}:${String(row.id)}`, row.outcome!])
+  );
+  const violations: string[] = [];
+  for (const row of seeded) {
+    const label = `${row.model} ${row.reference}`;
+    const found = await raw(row.model).findOne({ _id: row.id as mongoose.Types.ObjectId });
+    let outcome = row.outcome;
+    if (row.under) {
+      const parent = outcomeOf.get(`${row.under.parent}:${row.under.parentId}`)!;
+      outcome = parent === 'anonymized' ? (row.under.deleteWhenParentAnonymized ? 'deleted' : 'retained') : parent;
+    }
+    if (outcome === 'deleted' && row.model === 'MemoryPrincipalKey') {
+      // The purge crypto-shreds a live key and leaves a tombstone (no dek) as the erasure fence.
+      if (found?.dek) violations.push(`${label} still holds a key`);
+    } else if (outcome === 'deleted') {
+      if (found) violations.push(`${label} should be deleted`);
+    } else if (!found) {
+      const emptied = row.ref?.action === 'pullFromArray'; // seeded with only the subject, so nothing is left
+      const purgedWithParent = row.under && DELETED_INSTEAD_OF_ANONYMIZED.has(row.under.parent);
+      const stronger = DELETED_INSTEAD_OF_ANONYMIZED.has(row.model) || purgedWithParent;
+      if (!emptied && !stronger)
+        violations.push(`${label} should remain (${outcome})`);
+    } else if (row.ref) {
+      const wanted = row.ref.matchBy === 'email' ? subject.email : subject.userId;
+      const names = valuesAt(found, row.ref.path).some(value => String(value) === wanted);
+      if (names !== (outcome === 'retained'))
+        violations.push(`${label} should ${outcome === 'retained' ? 'still' : 'no longer'} name the subject`);
+    }
+  }
+  expect(violations).toEqual([]);
+}
+
 const touchedCustomers = () =>
   [effects.stripe.update, effects.stripe.deleteTaxId].flatMap(mock => mock.mock.calls.map(call => String(call[0])));
 
@@ -393,6 +448,7 @@ describe.each(['self', 'admin'] as const)('account erasure matrix, %s path', sou
     });
 
     expect(await erasureRegistry.audit(subject)).toEqual(EMPTY_AUDIT);
+    await expectSeededOutcomes(subject, seeded);
     expect(await raw('User').countDocuments({ _id: new ObjectId(subject.userId) })).toBe(0);
 
     const records = await raw('ErasureRecord')
@@ -429,7 +485,7 @@ describe.each(['self', 'admin'] as const)('account erasure matrix, %s path', sou
   });
 
   it('resumes after a failed Stripe step and completes once', async () => {
-    const { subject, adminId } = await seedSubject(source);
+    const { subject, adminId, seeded } = await seedSubject(source);
     effects.stripe.update.mockRejectedValueOnce(new Error('stripe unavailable'));
 
     await expect(completeAccountDeletion(subject.userId, { logger, erasureRegistry })).rejects.toThrow(
@@ -443,6 +499,7 @@ describe.each(['self', 'admin'] as const)('account erasure matrix, %s path', sou
       deleted: true,
     });
     expect(await erasureRegistry.audit(subject)).toEqual(EMPTY_AUDIT);
+    await expectSeededOutcomes(subject, seeded);
     const records = await raw('ErasureRecord')
       .find({ idHash: erasureIdHash(subject.userId) })
       .toArray();
