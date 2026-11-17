@@ -14,6 +14,8 @@ import {
   usdToCredits,
   validateImageRequest,
   type ImageCapabilityRequest,
+  type ImageInputRole,
+  type ImageMode,
   type ImageRequestField,
   type OpenAIImageQuality,
 } from '@bike4mind/common';
@@ -23,16 +25,27 @@ import { rankedCardFit, type StudioModelCard } from '@client/app/components/Stud
 
 /**
  * What the form asks for besides the prompt. size, aspectRatio and quality are absent when left on the model's
- * default. Kept across a model switch: a value the new model does not take is marked, never dropped.
+ * default. Kept across a model switch: a value the new model does not take is marked, never dropped. editSource and
+ * mask are only sent in edit mode, and kept across a switch back to generate so returning to edit restores them.
  */
 export type ImageIntent = {
+  mode: ImageMode;
   size?: string;
   aspectRatio?: string;
   quality?: OpenAIImageQuality;
   references: readonly ReferenceFile[];
+  editSource?: ReferenceFile;
+  mask?: ReferenceFile;
 };
 
-export const EMPTY_IMAGE_INTENT: ImageIntent = { references: [] };
+export const EMPTY_IMAGE_INTENT: ImageIntent = { mode: 'generate', references: [] };
+
+/** The role-tagged files the intent sends, in the order the job takes them: the source first, then mask, references. */
+export const imageIntentInputs = (intent: ImageIntent): { role: ImageInputRole; file: ReferenceFile }[] => [
+  ...(intent.mode === 'edit' && intent.editSource ? [{ role: 'edit_source' as const, file: intent.editSource }] : []),
+  ...(intent.mode === 'edit' && intent.mask ? [{ role: 'mask' as const, file: intent.mask }] : []),
+  ...intent.references.map(file => ({ role: 'reference' as const, file })),
+];
 
 // Offered on a model that takes any ratio within a range; the validator keeps the ones inside it.
 const COMMON_ASPECT_RATIOS = ['1:1', '4:3', '3:4', '3:2', '2:3', '16:9', '9:16', '21:9', '9:21'] as const;
@@ -40,14 +53,21 @@ const COMMON_ASPECT_RATIOS = ['1:1', '4:3', '3:4', '3:2', '2:3', '16:9', '9:16',
 export const isCatalogImageModel = (id: string): id is ImageModels => Object.hasOwn(IMAGE_MODEL_CATALOG, id);
 
 // Count 1, as createImageJobs validates: "make N" is N one-image jobs, bounded by STUDIO_IMAGE_COUNT_MAX.
-const toCapabilityRequest = ({ size, aspectRatio, quality, references }: ImageIntent): ImageCapabilityRequest => ({
-  mode: 'generate',
-  count: 1,
-  ...(size && { size }),
-  ...(aspectRatio && { aspectRatio }),
-  ...(quality && { quality }),
-  ...(references.length > 0 && { inputs: references.map(() => ({ role: 'reference' as const })) }),
-});
+// An edit with no source yet is checked as if it had one, so the cards rank by what the model can edit, and the
+// missing source is the form's own prompt to pick one rather than a reason against every model.
+const toCapabilityRequest = (intent: ImageIntent): ImageCapabilityRequest => {
+  const { mode, size, aspectRatio, quality } = intent;
+  const roles = imageIntentInputs(intent).map(({ role }) => role);
+  if (mode === 'edit' && !intent.editSource) roles.unshift('edit_source');
+  return {
+    mode,
+    count: 1,
+    ...(size && { size }),
+    ...(aspectRatio && { aspectRatio }),
+    ...(quality && { quality }),
+    ...(roles.length > 0 && { inputs: roles.map(role => ({ role })) }),
+  };
+};
 
 const failuresOf = (model: ImageModels, intent: ImageIntent) => {
   const result = validateImageRequest(toCapabilityRequest(intent), getImageModelCatalogEntry(model));
@@ -60,21 +80,29 @@ export const imageModelWhyNot = (model: ImageModels, intent: ImageIntent): strin
   return failures.length === 0 ? null : failures.map(failure => failure.reason).join(' ');
 };
 
-/** Why `model` cannot run in Create at all, whatever the request, or null when it can. */
-export const imageModelUnavailableReason = (model: ImageModels): string | null => {
+/** Why `model` cannot run in `mode` at all, whatever else is asked, or null when it can. */
+export const imageModelUnavailableReason = (model: ImageModels, mode: ImageMode): string | null => {
   // The job route serves a retired id under its successor only, so the retired id itself never runs.
   if (resolveLegacyImageModel(model) !== model) return 'Retired. Pick its successor instead.';
-  const generateOnly = failuresOf(model, EMPTY_IMAGE_INTENT);
-  return generateOnly.length > 0 ? generateOnly.map(failure => failure.reason).join(' ') : null;
+  const unsupported = failuresOf(model, { ...EMPTY_IMAGE_INTENT, mode }).filter(
+    failure => failure.code === 'unsupported_mode'
+  );
+  return unsupported.length > 0 ? unsupported.map(failure => failure.reason).join(' ') : null;
 };
 
-export type ImageProblemField = 'size' | 'aspect' | 'quality' | 'references';
+export type ImageProblemField = 'size' | 'aspect' | 'quality' | 'references' | 'editSource' | 'mask';
 
 const PROBLEM_FIELD: Partial<Record<ImageRequestField, ImageProblemField>> = {
   size: 'size',
   aspectRatio: 'aspect',
   quality: 'quality',
   inputs: 'references',
+};
+
+const INPUT_PROBLEM_FIELD: Record<ImageInputRole, ImageProblemField> = {
+  edit_source: 'editSource',
+  mask: 'mask',
+  reference: 'references',
 };
 
 /** The why-not reason for each form value `model` does not take, keyed by the field that holds it. */
@@ -84,7 +112,7 @@ export const imageFieldProblems = (
 ): Partial<Record<ImageProblemField, string>> => {
   const problems: Partial<Record<ImageProblemField, string>> = {};
   for (const failure of failuresOf(model, intent)) {
-    const field = PROBLEM_FIELD[failure.field];
+    const field = failure.role ? INPUT_PROBLEM_FIELD[failure.role] : PROBLEM_FIELD[failure.field];
     if (field) problems[field] = problems[field] ? `${problems[field]} ${failure.reason}` : failure.reason;
   }
   return problems;
@@ -98,22 +126,29 @@ export const imageSizeOptions = (model: ImageModels): readonly string[] => {
     : [];
 };
 
-/** The aspect ratios `model` takes when generating; empty when it takes none. */
-export const imageAspectRatioOptions = (model: ImageModels): readonly string[] => {
-  const ratios = getImageModelCatalogEntry(model).modes.generate?.aspectRatios;
+/** The aspect ratios `model` takes in `mode`; empty when it takes none. */
+export const imageAspectRatioOptions = (model: ImageModels, mode: ImageMode): readonly string[] => {
+  const ratios = getImageModelCatalogEntry(model).modes[mode]?.aspectRatios;
   if (!ratios) return [];
   if (ratios.kind === 'discrete') return ratios.values;
   return COMMON_ASPECT_RATIOS.filter(
-    aspectRatio => imageModelWhyNot(model, { ...EMPTY_IMAGE_INTENT, aspectRatio }) === null
+    aspectRatio => imageModelWhyNot(model, { ...EMPTY_IMAGE_INTENT, mode, aspectRatio }) === null
   );
 };
 
 export const imageQualityOptions = (model: ImageModels): readonly OpenAIImageQuality[] =>
   getImageModelCatalogEntry(model).qualities;
 
-/** The most reference images `model` takes when generating; 0 when it takes none. */
-export const imageReferenceMax = (model: ImageModels): number =>
-  getImageModelCatalogEntry(model).modes.generate?.inputs.reference?.max ?? 0;
+/** The most reference images `model` takes in `mode`; 0 when it takes none. */
+export const imageReferenceMax = (model: ImageModels, mode: ImageMode): number =>
+  getImageModelCatalogEntry(model).modes[mode]?.inputs.reference?.max ?? 0;
+
+/** Whether `model` takes a mask when editing, and whether it needs one (FLUX Fill only fills a masked area). */
+export const imageMaskSupport = (model: ImageModels): 'none' | 'optional' | 'required' => {
+  const mask = getImageModelCatalogEntry(model).modes.edit?.inputs.mask;
+  if (!mask) return 'none';
+  return mask.required ? 'required' : 'optional';
+};
 
 /**
  * Credits for one image from `model` at `intent` (its own defaults where the intent does not fit it), priced as the
@@ -122,7 +157,8 @@ export const imageReferenceMax = (model: ImageModels): number =>
 export const imageCreditsPerImage = (model: ImageModels, intent: ImageIntent): number | null => {
   const fits = imageModelWhyNot(model, intent) === null;
   const quality = resolveBilledImageQuality(model, fits ? intent.quality : undefined);
-  const references = fits ? intent.references.length : 0;
+  // A mask is not billed as an input image (imageJobCost); the edit source and each reference are.
+  const references = fits ? imageIntentInputs(intent).filter(({ role }) => role !== 'mask').length : 0;
   try {
     // The cost input is a per-provider union keyed on narrower model types than ImageModels; the calculators
     // dispatch on the model id, as CostPreviewChip does.
@@ -152,7 +188,7 @@ export const imageModelCards = (
   const ids = [...names.keys()];
   const unavailable = Object.fromEntries(
     ids.flatMap(id => {
-      const reason = imageModelUnavailableReason(id);
+      const reason = imageModelUnavailableReason(id, intent.mode);
       return reason === null ? [] : [[id, reason]];
     })
   );

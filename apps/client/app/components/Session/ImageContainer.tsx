@@ -30,6 +30,8 @@ import ImageMaskerFlux from './ImageMaskerFlux';
 import { ImageModerationPlaceholder } from './ImageModerationPlaceholder';
 import { SendMessageOptions } from '@client/app/utils/llm';
 import { useSessionReadOnly } from './SessionReadOnlyContext';
+import { useStudioFeature } from '@client/app/components/Studio/useStudioFeature';
+import { useOpenStudioImageEdit } from '@client/app/components/ImageStudio/useOpenStudioImageEdit';
 import { blackAlpha, whiteAlpha } from '@client/app/utils/themes/colors';
 
 // Add FabAPI interface
@@ -135,6 +137,9 @@ const ImageContainer: FC<ImageContainerProps> = ({
   const [downloading, setDownloading] = useState<boolean>(false);
   const [currentIndex, setCurrentIndex] = useState<number>(index);
   const [editing, setEditing] = useState<boolean>(false);
+  const [openingInStudio, setOpeningInStudio] = useState<boolean>(false);
+  const studioImageEnabled = useStudioFeature('image');
+  const openStudioImageEdit = useOpenStudioImageEdit();
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   // Read-only hides Edit: the masker uploads a mask file before the (no-op) send.
   const readOnly = useSessionReadOnly();
@@ -236,6 +241,32 @@ const ImageContainer: FC<ImageContainerProps> = ({
       toast.error(`Failed to copy image: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setEditing(false);
+    }
+  };
+
+  // Studio edits Files images, so a generated chat image is saved to Files first; anything else (or Studio off) keeps
+  // the in-chat masker.
+  const handleEditClick = async () => {
+    const s3Key = studioImageEnabled && isGeneratedImage(src) ? extractS3KeyFromUrl(src) : null;
+    if (!s3Key) {
+      setEditing(true);
+      return;
+    }
+    setOpeningInStudio(true);
+    try {
+      const fileName = `image_${Date.now()}.png`;
+      const file = await copyGeneratedImageToFabFile(s3Key, fileName);
+      // The copy starts 'pending' until its upload scan; an edit job refuses a pending input, so scan it now.
+      if ((await moderateFabFileNow(file.id)) === 'blocked') {
+        toast.error('This image cannot be edited.');
+        return;
+      }
+      openStudioImageEdit({ fileId: file.id, fileName: file.fileName || fileName });
+    } catch (error) {
+      console.error('Failed to open the image in Studio: ', error);
+      toast.error('The image could not be opened in Studio. Please try again.');
+    } finally {
+      setOpeningInStudio(false);
     }
   };
 
@@ -418,18 +449,18 @@ const ImageContainer: FC<ImageContainerProps> = ({
         </IconButton>
       </Tooltip>
       {!readOnly && (
-        <Tooltip title="Edit Image">
+        <Tooltip title={studioImageEnabled && isGeneratedImage(src) ? 'Edit in Studio' : 'Edit Image'}>
           <Box component="span" sx={{ display: 'inline-block' }}>
             <IconButton
-              onClick={() => setEditing(true)}
-              disabled={editing}
+              onClick={() => void handleEditClick()}
+              disabled={editing || openingInStudio}
               size="sm"
               variant="outlined"
               color="neutral"
               sx={{ borderRadius: '50%' }}
               data-testid="image-edit-btn"
             >
-              {editing ? <CircularProgress size="sm" /> : <EditIcon fontSize="small" />}
+              {editing || openingInStudio ? <CircularProgress size="sm" /> : <EditIcon fontSize="small" />}
             </IconButton>
           </Box>
         </Tooltip>

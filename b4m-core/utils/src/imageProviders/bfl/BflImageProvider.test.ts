@@ -17,6 +17,15 @@ import {
 import type { ImageInputs } from '../types';
 import { BflImageProvider } from './BflImageProvider';
 
+// Mask redrawing is editMask's (tested there on real images); here it passes inputs through and records the convention.
+const maskConventions = vi.hoisted(() => [] as string[]);
+vi.mock('../editMask', () => ({
+  withProviderMask: async (inputs: unknown, convention: string) => {
+    maskConventions.push(convention);
+    return inputs;
+  },
+}));
+
 const BASE = 'https://api.bfl.ai/v1';
 const POLLING_URL = 'https://api.us1.bfl.ai/v1/get_result?id=task-1';
 const SAMPLE_URL = 'https://delivery-us1.bfl.ai/results/task-1/sample.png';
@@ -124,6 +133,7 @@ describe('BflImageProvider.submit: request mapping', () => {
     await provider.submit(request({ model: ImageModels.FLUX_PRO_FILL, mode: 'edit' }), inputs, context());
     expect(submittedUrl()).toBe(`${BASE}/${ImageModels.FLUX_PRO_FILL}`);
     expect(submittedBody()).toMatchObject({ image: b64('src'), mask: b64('msk') });
+    expect(maskConventions.at(-1)).toBe('white');
   });
 
   it('sends no mask field when a Fill edit carries no mask', async () => {

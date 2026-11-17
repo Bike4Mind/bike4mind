@@ -9,6 +9,7 @@ import {
   raceAbort,
   toDataUrl,
 } from '../shared';
+import { withProviderMask } from '../editMask';
 import type { ImageInputs, SyncImageProvider } from '../types';
 
 export type OpenAIImageProviderOptions = {
@@ -39,7 +40,10 @@ export class OpenAIImageProvider implements SyncImageProvider {
     const service = new OpenAIImageService(ctx.apiKey, ctx.logger, this.options.imageProcessorLambdaName?.());
     let dataUrl: string;
     try {
-      dataUrl = await raceAbort(() => this.render(service, request, inputs), ctx.signal);
+      dataUrl = await raceAbort(async () => {
+        const prepared = request.mode === 'edit' ? await withProviderMask(inputs, 'transparent') : inputs;
+        return this.render(service, request, prepared);
+      }, ctx.signal);
     } catch (error) {
       if (ctx.signal.aborted) throw error;
       const classified = classifyImageProviderError(error);

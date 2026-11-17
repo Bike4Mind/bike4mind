@@ -5,6 +5,7 @@ import {
   Button,
   Chip,
   FormControl,
+  FormHelperText,
   FormLabel,
   Option,
   Select,
@@ -26,6 +27,7 @@ import {
   type ReferencesField,
   type TextField,
 } from './capabilityFields';
+import ImageFieldPreview from './ImageFieldPreview';
 import { insertSnippet } from './insertSnippet';
 import ReferenceChip from './ReferenceChip';
 import StudioModelPicker from './StudioModelPicker';
@@ -368,9 +370,12 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
       );
     case 'image':
       return (
-        <FormControl disabled={field.disabled}>
+        <FormControl disabled={field.disabled} error={field.invalidReason !== undefined}>
           <FormLabel>{field.label}</FormLabel>
-          <Stack direction="row" gap={1} alignItems="center">
+          <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+            {field.previewFileId !== undefined && (
+              <ImageFieldPreview fileId={field.previewFileId} alt={field.fileName ?? field.label} testId={testId} />
+            )}
             <Button
               size="sm"
               variant="outlined"
@@ -378,14 +383,27 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
               onClick={field.onPick}
               data-testid={`${testId}-pick-btn`}
             >
-              {field.fileName !== null ? 'Change image' : 'Choose image'}
+              {field.pickLabel ?? (field.fileName !== null ? 'Change image' : 'Choose image')}
             </Button>
             {field.fileName !== null && (
               <Typography level="body-sm" data-testid={`${testId}-name`}>
                 {field.fileName}
               </Typography>
             )}
+            {field.fileName !== null && field.onClear && (
+              <Button
+                size="sm"
+                variant="plain"
+                color="neutral"
+                disabled={field.disabled}
+                onClick={field.onClear}
+                data-testid={`${testId}-clear-btn`}
+              >
+                Remove
+              </Button>
+            )}
           </Stack>
+          {field.hint && <FormHelperText data-testid={`${testId}-hint`}>{field.hint}</FormHelperText>}
         </FormControl>
       );
     default: {
@@ -401,9 +419,9 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
 /**
  * The Studio form for any modality: a model picker, the fields the selected model's capabilities produce, the credit
  * estimate and the submit button. Field test ids are `<prefix>-<id>` plus a per-kind suffix: `-input` (text),
- * `-toggle` and `-<value>-btn` (segmented), `-select`, `-slider` (range), `-switch`, `-note`, `-pick-btn` and
- * `-name` (image), `-<value>-btn` (aspect), `-add-btn`, `-file-<id>` and `-remove-<id>-btn` (references), `-chips` and
- * `-<value>-chip` (chips). A field holding a value the model does not take adds `-invalid` and, with a fix,
+ * `-toggle` and `-<value>-btn` (segmented), `-select`, `-slider` (range), `-switch`, `-note`, `-pick-btn`, `-name`,
+ * `-preview`, `-clear-btn` and `-hint` (image), `-<value>-btn` (aspect), `-add-btn`, `-file-<id>` and
+ * `-remove-<id>-btn` (references), `-chips` and `-<value>-chip` (chips). A field holding a value the model does not take adds `-invalid` and, with a fix,
  * `-fix-btn`, and holds submit.
  */
 const CapabilityForm = ({

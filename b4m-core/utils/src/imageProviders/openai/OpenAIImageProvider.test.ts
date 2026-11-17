@@ -7,6 +7,15 @@ import type { ProviderContext } from '../../generationProviders/types';
 import type { ImageInputs } from '../types';
 import { OpenAIImageProvider } from './OpenAIImageProvider';
 
+// Mask redrawing is editMask's (tested there on real images); here it passes inputs through and records the convention.
+const maskConventions = vi.hoisted(() => [] as string[]);
+vi.mock('../editMask', () => ({
+  withProviderMask: async (inputs: unknown, convention: string) => {
+    maskConventions.push(convention);
+    return inputs;
+  },
+}));
+
 const { generate, edit, constructed } = vi.hoisted(() => ({
   generate: vi.fn(),
   edit: vi.fn(),
@@ -137,6 +146,7 @@ describe('OpenAIImageProvider', () => {
       });
       expect(generate).not.toHaveBeenCalled();
       expect(result).toMatchObject({ status: 'succeeded', output: { kind: 'inline', base64: PNG_BASE64 } });
+      expect(maskConventions.at(-1)).toBe('transparent');
     });
 
     it('omits the mask and references when there are none', async () => {
