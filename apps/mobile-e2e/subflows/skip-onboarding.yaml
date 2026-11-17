@@ -1,0 +1,17 @@
+appId: com.bike4mind.app
+---
+# A fresh iOS install shows the two-page intro before sign-in; Android has none.
+- runFlow:
+    when:
+      visible:
+        id: onboarding-next-btn
+    commands:
+      - tapOn:
+          id: onboarding-next-btn
+- runFlow:
+    when:
+      visible:
+        id: onboarding-next-btn
+    commands:
+      - tapOn:
+          id: onboarding-next-btn

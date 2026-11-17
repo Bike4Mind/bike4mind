@@ -56,13 +56,13 @@ function makeCheck(
 }
 
 describe('integrationCircuitBreaker', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    clearCache(); // Always start with a clean cache
+    await clearCache();
   });
 
-  afterEach(() => {
-    clearCache();
+  afterEach(async () => {
+    await clearCache();
   });
 
   describe('manual override priority', () => {
@@ -133,7 +133,7 @@ describe('integrationCircuitBreaker', () => {
       const available = await isAvailable('github');
       expect(available).toBe(false);
 
-      clearCache();
+      await clearCache();
       const reason = await getUnavailableReason('github');
       expect(reason).toContain('consecutive failures');
       expect(reason).toContain('HTTP 500');
@@ -247,7 +247,7 @@ describe('integrationCircuitBreaker', () => {
 
     it('should refresh after clearCache is called', async () => {
       await isAvailable('github');
-      clearCache('github');
+      await clearCache('github');
       await isAvailable('github');
 
       expect(mockOverrideRepo.getOverride).toHaveBeenCalledTimes(2);
@@ -256,12 +256,28 @@ describe('integrationCircuitBreaker', () => {
     it('should clear all integrations when clearCache is called without args', async () => {
       await isAvailable('github');
       await isAvailable('slack');
-      clearCache();
+      await clearCache();
       await isAvailable('github');
       await isAvailable('slack');
 
       expect(mockOverrideRepo.getOverride).toHaveBeenCalledTimes(4);
     });
+
+    it.skipIf(process.env.B4M_CACHE_BACKEND !== 'redis-http')(
+      'propagates an override invalidation to an independent module instance',
+      async () => {
+        vi.resetModules();
+        const replica = await import('./integrationCircuitBreaker');
+        expect(await isAvailable('github')).toBe(true);
+        expect(await replica.isAvailable('github')).toBe(true);
+        expect(mockOverrideRepo.getOverride).toHaveBeenCalledTimes(1);
+        mockOverrideRepo.getOverride.mockResolvedValue({ mode: 'force_block' });
+        await clearCache('github');
+        expect(await replica.isAvailable('github')).toBe(false);
+        expect(await isAvailable('github')).toBe(false);
+        expect(mockOverrideRepo.getOverride).toHaveBeenCalledTimes(2);
+      }
+    );
   });
 
   describe('getStatus', () => {
