@@ -17,7 +17,7 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import { useTheme } from '@mui/joy/styles';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import type { ChatFileView } from '@shared/chat';
+import type { ChatFilePathOpenResult, ChatFileView } from '@shared/chat';
 import { CloseIcon, ExternalLinkIcon, ReloadIcon } from './icons';
 import { thinScrollbarSx } from './layout';
 import { SYNTAX_THEMES } from './markdown/syntaxTheme';
@@ -192,7 +192,7 @@ export function FilePane({
   view: TextFileView;
   refreshKey?: unknown;
   conversation: RefObject<HTMLElement | null>;
-  onOpenExternally: (requested: string) => void;
+  onOpenExternally: (requested: string) => Promise<ChatFilePathOpenResult>;
   onClose: () => void;
 }) {
   const mode = useTheme().palette.mode === 'dark' ? 'dark' : 'light';
@@ -313,7 +313,12 @@ export function FilePane({
             variant="plain"
             color="neutral"
             aria-label="Open in default app"
-            onClick={() => onOpenExternally(requested)}
+            onClick={() =>
+              void onOpenExternally(requested).then(
+                result => setProblem(result.ok ? null : result.error),
+                (error: unknown) => setProblem(error instanceof Error ? error.message : String(error))
+              )
+            }
             data-testid="file-pane-open-external-btn"
           >
             <ExternalLinkIcon />

@@ -468,9 +468,10 @@ export function ChatShell({
   );
   const closeFile = useCallback(() => setOpenFile(null), []);
   const openFileExternally = useCallback(
-    (requested: string) => {
-      if (activeId) void window.b4m.chat.openFilePath(activeId, requested);
-    },
+    (requested: string) =>
+      activeId
+        ? window.b4m.chat.openFilePath(activeId, requested)
+        : Promise.resolve({ ok: false as const, error: 'No conversation is open.' }),
     [activeId]
   );
   const toggleBrowser = useCallback(() => {

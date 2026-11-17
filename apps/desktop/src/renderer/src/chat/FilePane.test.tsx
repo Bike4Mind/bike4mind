@@ -3,7 +3,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import { act, createRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatFileView } from '@shared/chat';
+import type { ChatFilePathOpenResult, ChatFileView } from '@shared/chat';
 import { desktopTheme } from '../theme';
 import { FilePane, languageFor, type TextFileView } from './FilePane';
 
@@ -33,7 +33,10 @@ const readFilePath = vi.fn(async (_sessionId: string, _path: string): Promise<Ch
 
 let root: Root;
 let container: HTMLDivElement;
-const onOpenExternally = vi.fn();
+const onOpenExternally = vi.fn(async (_requested: string): Promise<ChatFilePathOpenResult> => ({
+  ok: true,
+  opened: 'opened',
+}));
 const onClose = vi.fn();
 const conversation = createRef<HTMLElement>();
 
@@ -114,6 +117,14 @@ describe('FilePane', () => {
 
     expect(onOpenExternally).toHaveBeenCalledWith('src/app.ts:2');
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('says why when the file cannot be opened in another app', async () => {
+    onOpenExternally.mockResolvedValueOnce({ ok: false, error: 'No app can open this file.' });
+    await render(VIEW);
+    await act(async () => byTestId('file-pane-open-external-btn')!.click());
+
+    expect(byTestId('file-pane-error')?.textContent).toContain('No app can open this file.');
   });
 
   it('reads the file again when a turn settles, and on Reload', async () => {
