@@ -112,4 +112,10 @@ describe('artifact readers', () => {
       expect(body.artifact).not.toHaveProperty(k);
     expect((await run(versions, 'stranger')).data[0]).not.toHaveProperty('createdBy');
   });
+
+  it('a stranger reading a private artifact gets the same 404 as a missing one, not a 401', async () => {
+    mockRefs.doc = { ...stored, visibility: 'private' };
+    const { byId } = await load();
+    await expect(run(byId, 'stranger')).rejects.toThrow('Artifact not found');
+  });
 });

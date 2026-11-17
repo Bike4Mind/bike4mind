@@ -5,7 +5,11 @@ import { QUEST_GENERATION_JOB_KINDS } from '@bike4mind/common';
 import { createMongoServer } from '../../../__test__/createMongoServer';
 import { Quest, questRepository } from '../QuestModel';
 
-const counterField = { video: 'agentVideoClipsClaimed', music: 'agentMusicTracksClaimed' } as const;
+const counterField = {
+  video: 'agentVideoClipsClaimed',
+  music: 'agentMusicTracksClaimed',
+  image: 'agentImagesClaimed',
+} as const satisfies Record<(typeof QUEST_GENERATION_JOB_KINDS)[number], string>;
 
 // Real Mongo: the cap only holds if the conditional $inc is atomic and the counter path survives
 // Mongoose strict mode.

@@ -8,14 +8,20 @@ import { escapeHtml } from '@bike4mind/utils/escapeHtml';
 export { escapeHtml };
 
 /**
- * Generates a verification link for email verification
+ * Generates a verification link for email verification. The email-change mailer reuses it with the
+ * path swapped to /verify-change.
+ *
+ * The token rides in the URL fragment, not the query: a browser never sends the fragment to a server,
+ * so the token stays out of access logs, edge logs and Referer headers. The client route takes it out
+ * of the address before it calls the API (apps/client/app/utils/emailLinkToken.ts), and still accepts
+ * the older `?token=` form from links already sent.
  * @param token - The verification token
  * @returns The full verification link URL
  */
 export const generateVerificationLink = (token: string): string => {
   // APP_URL is set per-deployment by infra; no brand fallback.
   const baseUrl = requireEnv('APP_URL', process.env.APP_URL);
-  return `${baseUrl}/verify-email?token=${token}`;
+  return `${baseUrl}/verify-email#token=${encodeURIComponent(token)}`;
 };
 
 /**

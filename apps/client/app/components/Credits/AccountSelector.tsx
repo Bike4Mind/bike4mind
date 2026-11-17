@@ -5,41 +5,16 @@ import { useGetUserOrganizations } from '@client/app/hooks/data/organizations';
 import { Box, Chip, Option, Radio, Select, Tooltip } from '@mui/joy';
 import { useTheme } from '@mui/joy/styles';
 import { useMemo, useEffect, useCallback } from 'react';
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 import { green, greenAlpha } from '@client/app/utils/themes/colors';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
+import { type Account, useSelectedAccount } from './selectedAccountStore';
 
-type Account = {
-  id: string;
-  name: string;
-  personal: boolean;
-  credits: number;
-  /** Team accounts only. */
-  seats?: number;
-};
+export { useSelectedAccount };
 
 // Strip only the trailing " (Personal)" suffix this component appends - anchored so a real
 // name that happens to contain "(Personal)" isn't mangled.
 const stripPersonalSuffix = (name: string) => name.replace(/ \(Personal\)$/, '');
-
-interface SelectedAccountStore {
-  selectedAccount: Account | null;
-  setSelectedAccount: (account: Account | null) => void;
-}
-
-export const useSelectedAccount = create<SelectedAccountStore>()(
-  persist(
-    set => ({
-      selectedAccount: null,
-      setSelectedAccount: account => set({ selectedAccount: account }),
-    }),
-    {
-      name: 'selected-account-storage',
-    }
-  )
-);
 
 /**
  * Account list + selection logic shared by the AccountSelector dropdown (still used in tests

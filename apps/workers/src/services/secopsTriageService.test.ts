@@ -5,10 +5,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { mockGitHubService, mockSlackClient, mockLogger, mockLlmComplete } = vi.hoisted(() => ({
   mockGitHubService: {
-    searchIssues: vi.fn(),
+    listIssues: vi.fn(),
     createIssue: vi.fn(),
     addIssueComment: vi.fn(),
     closeIssue: vi.fn(),
+    reopenIssue: vi.fn(),
   },
   mockSlackClient: {
     sendMessage: vi.fn(),
@@ -121,6 +122,25 @@ const makeFakeIssueBody = (fp: string, stage: string | null = 'dev') =>
 const fingerprintFor = (id: string, stage = 'dev') =>
   createHash('sha1').update(`secops-owasp-zap:${id}:${stage}`).digest('hex');
 
+type FakeIssue = { number: number; title: string; body: string; state?: string; state_reason?: string | null };
+
+// Serves the issues as successive listIssues pages, then an empty page.
+const mockIssuePages = (...pages: FakeIssue[][]) => {
+  mockGitHubService.listIssues.mockImplementation(async (_repo: string, params: { page: number }) =>
+    (pages[params.page - 1] ?? []).map(issue => ({ state: 'open', ...issue }))
+  );
+};
+
+const mockOpenIssues = (issues: FakeIssue[]) => mockIssuePages(issues);
+
+const closedIssue = (number: number, id: string, stateReason: string | null): FakeIssue => ({
+  number,
+  title: `[SecOps OWASP ZAP][P1] Finding ${id}`,
+  body: makeFakeIssueBody(fingerprintFor(id)),
+  state: 'closed',
+  state_reason: stateReason,
+});
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('createSecopsTriageService', () => {
@@ -130,13 +150,17 @@ describe('createSecopsTriageService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     service = createSecopsTriageService(logger);
-    mockGitHubService.searchIssues.mockResolvedValue([]);
+    mockOpenIssues([]);
     mockGitHubService.createIssue.mockResolvedValue({
       number: 1,
       html_url: 'https://github.com/test-org/test-repo/issues/1',
     });
     mockGitHubService.addIssueComment.mockResolvedValue(undefined);
     mockGitHubService.closeIssue.mockResolvedValue(undefined);
+    mockGitHubService.reopenIssue.mockImplementation(async (_repo: string, number: number) => ({
+      number,
+      state: 'open',
+    }));
   });
 
   // ── New finding creates a GitHub issue ──────────────────────────────────────
@@ -171,9 +195,7 @@ describe('createSecopsTriageService', () => {
     // The fingerprint is sha1('secops-owasp-zap:xss-1:dev') - label:alertId:stage
     const crypto = await import('crypto');
     const fp = crypto.createHash('sha1').update('secops-owasp-zap:xss-1:dev').digest('hex');
-    mockGitHubService.searchIssues.mockResolvedValue([
-      { number: 42, title: '[SecOps OWASP ZAP][P1] Finding xss-1', body: makeFakeIssueBody(fp) },
-    ]);
+    mockOpenIssues([{ number: 42, title: '[SecOps OWASP ZAP][P1] Finding xss-1', body: makeFakeIssueBody(fp) }]);
 
     const result = await service.run(makePayload([makeHighFinding('xss-1')]), mockGitHubService as never, baseConfig);
 
@@ -184,14 +206,249 @@ describe('createSecopsTriageService', () => {
     expect(result.issuesCreated).toBe(0);
   });
 
+  // -- Issue listing and closed issues ---------------------------------------------
+
+  describe('closed issues', () => {
+    const writes = () => [
+      mockGitHubService.createIssue,
+      mockGitHubService.addIssueComment,
+      mockGitHubService.closeIssue,
+      mockGitHubService.reopenIssue,
+    ];
+
+    it('lists open and closed triage issues for the source through the Issues API, page by page', async () => {
+      mockIssuePages(
+        [{ number: 1, title: 'Unrelated', body: makeFakeIssueBody(fingerprintFor('other')) }],
+        [{ number: 2, title: 'Unrelated 2', body: makeFakeIssueBody(fingerprintFor('other-2')) }]
+      );
+
+      await service.run(makePayload([]), mockGitHubService as never, baseConfig);
+
+      expect(mockGitHubService.listIssues.mock.calls.map(([, params]) => params.page)).toEqual([1, 2, 3]);
+      expect(mockGitHubService.listIssues).toHaveBeenCalledWith('test-org/test-repo', {
+        state: 'all',
+        labels: 'secops-owasp-zap,auto-triage',
+        per_page: 100,
+        sort: 'created',
+        direction: 'desc',
+        page: 1,
+      });
+    });
+
+    it('finds an open issue that is only on the second page', async () => {
+      mockIssuePages(
+        [{ number: 1, title: 'Unrelated', body: makeFakeIssueBody(fingerprintFor('other')) }],
+        [
+          {
+            number: 42,
+            title: '[SecOps OWASP ZAP][P1] Finding xss-1',
+            body: makeFakeIssueBody(fingerprintFor('xss-1')),
+          },
+        ]
+      );
+
+      const result = await service.run(makePayload([makeHighFinding('xss-1')]), mockGitHubService as never, baseConfig);
+
+      expect(mockGitHubService.createIssue).not.toHaveBeenCalled();
+      expect(mockGitHubService.addIssueComment).toHaveBeenCalledWith('test-org/test-repo', 42, expect.any(String));
+      expect(result.issuesUpdated).toBe(1);
+    });
+
+    it('stops listing at ten pages and warns once', async () => {
+      const page = [{ number: 1, title: 'Unrelated', body: makeFakeIssueBody(fingerprintFor('other')) }];
+      mockIssuePages(...Array.from({ length: 12 }, () => page));
+
+      await service.run(makePayload([]), mockGitHubService as never, baseConfig);
+
+      expect(mockGitHubService.listIssues).toHaveBeenCalledTimes(10);
+      const capWarnings = mockLogger.warn.mock.calls.filter(([message]) => String(message).includes('page cap'));
+      expect(capWarnings).toHaveLength(1);
+    });
+
+    it.each(['completed', 'reopened', null])(
+      'reopens a closed issue (state reason %s) and comments instead of filing a new one',
+      async stateReason => {
+        mockIssuePages([closedIssue(30, 'xss-1', stateReason)]);
+
+        const result = await service.run(
+          makePayload([makeHighFinding('xss-1')]),
+          mockGitHubService as never,
+          baseConfig
+        );
+
+        expect(mockGitHubService.createIssue).not.toHaveBeenCalled();
+        expect(mockGitHubService.reopenIssue).toHaveBeenCalledWith('test-org/test-repo', 30);
+        expect(mockGitHubService.addIssueComment).toHaveBeenCalledWith(
+          'test-org/test-repo',
+          30,
+          expect.stringMatching(/^\*\*Detected again\*\* in ZAP scan on .+ GMT\. Reopened\.$/)
+        );
+        expect(mockGitHubService.reopenIssue.mock.invocationCallOrder[0]).toBeLessThan(
+          mockGitHubService.addIssueComment.mock.invocationCallOrder[0]
+        );
+        expect(result).toMatchObject({ issuesReopened: 1, issuesCreated: 0, issuesSuppressed: 0 });
+        expect(result.reopenedIssueLinks).toEqual([
+          { title: '[SecOps OWASP ZAP][P1] Finding xss-1', url: 'https://github.com/test-org/test-repo/issues/30' },
+        ]);
+      }
+    );
+
+    it('does not enrich a reopened issue with the LLM', async () => {
+      mockLlmComplete.mockReset();
+      const prompts: string[] = [];
+      mockLlmComplete.mockImplementation(
+        async (
+          _mid: string,
+          messages: Array<{ content: string }>,
+          _opts: unknown,
+          cb: (texts: string[]) => Promise<void>
+        ) => {
+          prompts.push(messages[0].content);
+          await cb([JSON.stringify({ assessment: 'ok' })]);
+        }
+      );
+      mockIssuePages([closedIssue(30, 'xss-1', 'completed')]);
+
+      const result = await service.run(makePayload([makeHighFinding('xss-1')]), mockGitHubService as never, {
+        ...baseConfig,
+        llmEnrichment: true,
+        modelId: 'claude-3-5-haiku-20241022',
+      });
+
+      expect(result.issuesReopened).toBe(1);
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toContain('Issues reopened (closed earlier, detected again): 1');
+      expect(prompts[0]).not.toContain('whatThisMeans');
+    });
+
+    it('leaves an issue closed as not planned alone, with no GitHub writes', async () => {
+      mockIssuePages([closedIssue(30, 'xss-1', 'not_planned')]);
+
+      const result = await service.run(makePayload([makeHighFinding('xss-1')]), mockGitHubService as never, baseConfig);
+
+      for (const write of writes()) expect(write).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ issuesSuppressed: 1, issuesReopened: 0, issuesCreated: 0, issuesUpdated: 0 });
+    });
+
+    it('leaves an issue closed as a duplicate alone, with no GitHub writes', async () => {
+      mockIssuePages([closedIssue(30, 'xss-1', 'duplicate')]);
+
+      const result = await service.run(makePayload([makeHighFinding('xss-1')]), mockGitHubService as never, baseConfig);
+
+      for (const write of writes()) expect(write).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ issuesSuppressed: 1, issuesReopened: 0, issuesCreated: 0 });
+    });
+
+    it('comments on the open issue when the same finding also has a closed one', async () => {
+      mockIssuePages([
+        { number: 50, title: 'Open one', body: makeFakeIssueBody(fingerprintFor('xss-1')) },
+        closedIssue(40, 'xss-1', 'not_planned'),
+        closedIssue(60, 'xss-1', 'completed'),
+      ]);
+
+      const result = await service.run(makePayload([makeHighFinding('xss-1')]), mockGitHubService as never, baseConfig);
+
+      expect(mockGitHubService.addIssueComment).toHaveBeenCalledTimes(1);
+      expect(mockGitHubService.addIssueComment).toHaveBeenCalledWith('test-org/test-repo', 50, expect.any(String));
+      expect(mockGitHubService.reopenIssue).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ issuesUpdated: 1, issuesSuppressed: 0, issuesReopened: 0 });
+    });
+
+    it('goes by the highest-numbered closed issue, wherever it is listed', async () => {
+      mockIssuePages([closedIssue(10, 'xss-1', 'not_planned')], [closedIssue(20, 'xss-1', 'completed')]);
+      const reopened = await service.run(
+        makePayload([makeHighFinding('xss-1')]),
+        mockGitHubService as never,
+        baseConfig
+      );
+      expect(mockGitHubService.reopenIssue).toHaveBeenCalledWith('test-org/test-repo', 20);
+      expect(reopened).toMatchObject({ issuesReopened: 1, issuesSuppressed: 0 });
+
+      vi.clearAllMocks();
+      mockIssuePages([closedIssue(20, 'xss-1', 'not_planned'), closedIssue(10, 'xss-1', 'completed')]);
+      const suppressed = await service.run(
+        makePayload([makeHighFinding('xss-1')]),
+        mockGitHubService as never,
+        baseConfig
+      );
+      expect(mockGitHubService.reopenIssue).not.toHaveBeenCalled();
+      expect(suppressed).toMatchObject({ issuesReopened: 0, issuesSuppressed: 1 });
+    });
+
+    it('does not count findings left closed toward maxIssuesPerScan', async () => {
+      mockIssuePages([closedIssue(30, 'critical-1', 'not_planned')]);
+      const findings = [makeHighFinding('critical-1', { severity: 'critical' }), makeHighFinding('high-1')];
+
+      const result = await service.run(makePayload(findings), mockGitHubService as never, {
+        ...baseConfig,
+        maxIssuesPerScan: 1,
+      });
+
+      expect(mockGitHubService.createIssue).toHaveBeenCalledTimes(1);
+      expect(mockGitHubService.createIssue.mock.calls[0][1].title).toContain('high-1');
+      expect(result).toMatchObject({ issuesSuppressed: 1, issuesCreated: 1, skippedRateLimit: 0 });
+    });
+
+    it('makes no GitHub writes in dry run and logs what it would reopen and leave closed', async () => {
+      mockIssuePages([
+        closedIssue(30, 'reopen-me', 'completed'),
+        closedIssue(31, 'leave-me', 'not_planned'),
+        { number: 32, title: 'Open one', body: makeFakeIssueBody(fingerprintFor('still-here')) },
+        { number: 33, title: 'Gone one', body: makeFakeIssueBody(fingerprintFor('gone')) },
+      ]);
+      const findings = ['reopen-me', 'leave-me', 'still-here', 'brand-new'].map(id => makeHighFinding(id));
+
+      const result = await service.run(makePayload(findings), mockGitHubService as never, {
+        ...baseConfig,
+        dryRun: true,
+      });
+
+      for (const write of writes()) expect(write).not.toHaveBeenCalled();
+      const logged = mockLogger.info.mock.calls.map(([message]) => String(message));
+      expect(logged).toContainEqual(expect.stringContaining('DRY RUN - would reopen issue #30'));
+      expect(logged).toContainEqual(expect.stringContaining('DRY RUN - would leave issue #31 closed (not_planned)'));
+      expect(result).toMatchObject({ issuesReopened: 0, issuesSuppressed: 1, issuesCreated: 0, issuesClosed: 0 });
+    });
+
+    it('adds the reopened and left-closed lines to the Slack summary', async () => {
+      mockIssuePages([closedIssue(30, 'reopen-me', 'completed'), closedIssue(31, 'leave-me', 'not_planned')]);
+
+      await service.run(
+        makePayload([makeHighFinding('reopen-me'), makeHighFinding('leave-me')]),
+        mockGitHubService as never,
+        { ...baseConfig, slackChannelId: 'C12345' },
+        'xoxb-fake-token'
+      );
+
+      const [{ blocks }] = mockSlackClient.sendMessage.mock.calls[0];
+      const posted = JSON.stringify(blocks);
+      expect(posted).toContain('1 issue reopened');
+      expect(posted).toContain(
+        '<https://github.com/test-org/test-repo/issues/30|[SecOps OWASP ZAP][P1] Finding reopen-me>'
+      );
+      expect(posted).toContain('1 finding left closed (issue closed as not planned or duplicate)');
+    });
+
+    it('omits the left-closed line from the Slack summary when nothing was left closed', async () => {
+      await service.run(
+        makePayload([makeHighFinding('xss-1')]),
+        mockGitHubService as never,
+        { ...baseConfig, slackChannelId: 'C12345' },
+        'xoxb-fake-token'
+      );
+
+      const posted = JSON.stringify(mockSlackClient.sendMessage.mock.calls[0][0].blocks);
+      expect(posted).toContain('0 issues reopened');
+      expect(posted).not.toContain('left closed');
+    });
+  });
+
   // ── Auto-close ──────────────────────────────────────────────────────────────
 
   it('auto-closes an open issue whose finding is not in the current scan', async () => {
     const crypto = await import('crypto');
     const fp = crypto.createHash('sha1').update('secops-owasp-zap:old-finding:dev').digest('hex');
-    mockGitHubService.searchIssues.mockResolvedValue([
-      { number: 99, title: '[SecOps OWASP ZAP][P1] Old Finding', body: makeFakeIssueBody(fp) },
-    ]);
+    mockOpenIssues([{ number: 99, title: '[SecOps OWASP ZAP][P1] Old Finding', body: makeFakeIssueBody(fp) }]);
 
     const result = await service.run(
       makePayload([makeHighFinding('new-finding')]),
@@ -207,9 +464,7 @@ describe('createSecopsTriageService', () => {
     // 3 eligible findings but cap is 2 - finding-3 is capped, its issue must NOT be closed
     const crypto = await import('crypto');
     const fp3 = crypto.createHash('sha1').update('secops-owasp-zap:finding-3:dev').digest('hex');
-    mockGitHubService.searchIssues.mockResolvedValue([
-      { number: 3, title: '[SecOps OWASP ZAP][P1] Finding 3', body: makeFakeIssueBody(fp3) },
-    ]);
+    mockOpenIssues([{ number: 3, title: '[SecOps OWASP ZAP][P1] Finding 3', body: makeFakeIssueBody(fp3) }]);
 
     const config: SecopsTriageConfig = { ...baseConfig, maxIssuesPerScan: 2 };
     const result = await service.run(
@@ -224,7 +479,7 @@ describe('createSecopsTriageService', () => {
   });
 
   it('does NOT auto-close or comment on an open issue that belongs to a different stage', async () => {
-    mockGitHubService.searchIssues.mockResolvedValue([
+    mockOpenIssues([
       {
         number: 55,
         title: '[SecOps OWASP ZAP][P1] Prod Finding',
@@ -244,7 +499,7 @@ describe('createSecopsTriageService', () => {
   });
 
   it('does NOT auto-close an open issue whose body has no stage row', async () => {
-    mockGitHubService.searchIssues.mockResolvedValue([
+    mockOpenIssues([
       {
         number: 56,
         title: '[SecOps OWASP ZAP][P1] Legacy Finding',
@@ -264,7 +519,7 @@ describe('createSecopsTriageService', () => {
   });
 
   it('closes only the same-stage issue when open issues exist for several stages', async () => {
-    mockGitHubService.searchIssues.mockResolvedValue([
+    mockOpenIssues([
       {
         number: 60,
         title: '[SecOps OWASP ZAP][P1] Gone dev',
@@ -305,7 +560,7 @@ describe('createSecopsTriageService', () => {
 
   it('does NOT auto-close an issue whose finding is still reported below the severity threshold', async () => {
     const config: SecopsTriageConfig = { ...baseConfig, severityThreshold: 'critical' };
-    mockGitHubService.searchIssues.mockResolvedValue([
+    mockOpenIssues([
       {
         number: 70,
         title: '[SecOps OWASP ZAP][P1] Finding high-1',
@@ -329,7 +584,7 @@ describe('createSecopsTriageService', () => {
   });
 
   it('skips auto-close entirely when the scan reports an incomplete findings list', async () => {
-    mockGitHubService.searchIssues.mockResolvedValue([
+    mockOpenIssues([
       {
         number: 80,
         title: '[SecOps OWASP ZAP][P1] Gone Finding',
@@ -354,7 +609,7 @@ describe('createSecopsTriageService', () => {
   });
 
   it('keeps issues for unverified finding ids open without processing them as findings', async () => {
-    mockGitHubService.searchIssues.mockResolvedValue([
+    mockOpenIssues([
       {
         number: 90,
         title: '[SecOps OWASP ZAP][P1] Unverified Finding',

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({
   resolveThinkingVisibility: vi.fn(async () => 'raw'),
 }));
@@ -14,7 +14,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/d
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
-const h = vi.hoisted(() => ({ deductCredits: vi.fn() }));
+const h = vi.hoisted(() => ({ deductCredits: vi.fn(), complete: vi.fn(), getLlmByModel: vi.fn() }));
 
 vi.mock('sst', () => ({
   Resource: new Proxy({} as Record<string, unknown>, {
@@ -57,20 +57,24 @@ vi.mock('@bike4mind/llm-adapters', async () => {
         contextWindow: 200_000,
         pricing: { 1_000_000: { input: 0.003, output: 0.015 } },
       },
-    ]),
-    getLlmByModel: () => ({
-      currentModel: 'test-model',
-      getModelInfo: async () => [],
-      pushToolMessages: () => undefined,
-      complete: async (
-        _model: string,
-        _messages: IMessage[],
-        _options: Partial<ICompletionOptions>,
-        callback: (text: (string | null | undefined)[], info?: CompletionInfo) => Promise<void>
-      ) => {
-        await callback(['Done'], { inputTokens: 1000, outputTokens: 500, toolsUsed: [] });
+      {
+        id: 'cheap-denied',
+        type: 'text',
+        name: 'Denied cheap',
+        backend: 'gemini',
+        contextWindow: 200_000,
+        pricing: { 1_000_000: { input: 0.001, output: 0.002 } },
       },
-    }),
+      {
+        id: 'cheap-allowed',
+        type: 'text',
+        name: 'Allowed cheap',
+        backend: 'anthropic',
+        contextWindow: 200_000,
+        pricing: { 1_000_000: { input: 0.001, output: 0.002 } },
+      },
+    ]),
+    getLlmByModel: h.getLlmByModel,
   };
 });
 
@@ -93,6 +97,37 @@ vi.mock('@bike4mind/database', async () => {
   return { ...actual, connectDB: vi.fn().mockResolvedValue(undefined) };
 });
 
+vi.mock('./agentExecutorDag', async importOriginal => ({
+  ...(await importOriginal<typeof import('./agentExecutorDag')>()),
+  onDagNodeTerminal: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('./agentExecutor.latticeTools', async importOriginal => ({
+  ...(await importOriginal<typeof import('./agentExecutor.latticeTools')>()),
+  buildSubagentLatticeToolPool: vi.fn().mockReturnValue([]),
+}));
+
+beforeEach(() => {
+  h.complete
+    .mockReset()
+    .mockImplementation(
+      async (
+        _model: string,
+        _messages: IMessage[],
+        _options: Partial<ICompletionOptions>,
+        callback: (text: (string | null | undefined)[], info?: CompletionInfo) => Promise<void>
+      ) => {
+        await callback(['Done'], { inputTokens: 1000, outputTokens: 500, toolsUsed: [] });
+      }
+    );
+  h.getLlmByModel.mockReset().mockImplementation(() => ({
+    currentModel: '',
+    getModelInfo: async () => [],
+    pushToolMessages: () => undefined,
+    complete: h.complete,
+  }));
+  h.deductCredits.mockReset().mockResolvedValue(undefined);
+});
+
 const lambdaContext = { getRemainingTimeInMillis: () => 600_000 } as never;
 
 let server: MongoMemoryServer;
@@ -103,6 +138,13 @@ beforeAll(async () => {
   // The seeded user has no paid plan and test-model is not on the free-tier allowlist.
   const { AdminSettings } = await import('@bike4mind/database');
   await AdminSettings.create({ settingName: 'freeTierModelGateEnabled', settingValue: 'false' });
+  await AdminSettings.create([
+    { settingName: 'shadowTierModelAllowlist', settingValue: '["cheap-denied","cheap-allowed"]' },
+    { settingName: 'shadowTierDailyTokenCap', settingValue: '20000' },
+    { settingName: 'shadowTierRequestsPerMin', settingValue: '3' },
+  ]);
+  const { invalidateSettingsCache } = await import('@bike4mind/utils');
+  invalidateSettingsCache();
 });
 
 afterAll(async () => {
@@ -110,7 +152,155 @@ afterAll(async () => {
   await server.stop();
 });
 
+async function seedShadowRun(kind: 'main' | 'child', modelPolicy: unknown) {
+  const { agentExecutionRepository, User, Session, Organization } = await import('@bike4mind/database');
+  const userId = new mongoose.Types.ObjectId();
+  const sessionId = new mongoose.Types.ObjectId();
+  await User.collection.insertOne({
+    _id: userId,
+    username: `shadow-${userId}`,
+    email: `${userId}@e2e.test`,
+    currentCredits: 1e6,
+    isAdmin: false,
+    tags: [],
+    throttle: { tier: 'shadow' },
+  });
+  const organization = await Organization.create({
+    name: 'Shadow policy',
+    userId: userId.toHexString(),
+    personal: false,
+    currentCredits: 1e6,
+    users: [{ userId: userId.toHexString(), permissions: ['read'] }],
+    modelPolicy,
+  });
+  await Session.collection.insertOne({
+    _id: sessionId,
+    userId: userId.toHexString(),
+    name: 'Shadow run',
+    disableUserIntegrations: true,
+  });
+  const base = {
+    userId: userId.toHexString(),
+    sessionId: sessionId.toHexString(),
+    questId: sessionId.toHexString(),
+    organizationId: organization.id,
+    query: 'Say done',
+    model: 'test-model',
+    connectionId: 'conn-shadow',
+    approvedTools: [],
+    deniedTools: [],
+    iterationBilling: [],
+    totalCreditsUsed: 0,
+    lambdaInvocationCount: 1,
+    childExecutionIds: [],
+  };
+  const parent = await agentExecutionRepository.create({ ...base, status: kind === 'main' ? 'pending' : 'running' });
+  const execution =
+    kind === 'main'
+      ? parent
+      : await agentExecutionRepository.create({
+          ...base,
+          status: 'pending',
+          parentExecutionId: parent.id,
+          dagNodeId: 'policy-node',
+          subagentConfig: { agentName: 'researcher', thoroughness: 'quick', maxIterations: 3 },
+        });
+  return { execution, organization, userId: userId.toHexString(), sessionId: sessionId.toHexString() };
+}
+
+async function dispatchShadowRun(kind: 'main' | 'child', run: Awaited<ReturnType<typeof seedShadowRun>>) {
+  const { handler } = await import('./agentExecutor');
+  if (kind === 'main') {
+    await handler(
+      {
+        executionId: run.execution.id,
+        userId: run.userId,
+        sessionId: run.sessionId,
+        query: 'Say done',
+        model: 'test-model',
+        connectionId: 'conn-shadow',
+      } as never,
+      lambdaContext
+    );
+  } else {
+    await handler(
+      {
+        Records: [
+          {
+            messageId: 'policy-node',
+            body: JSON.stringify({
+              kind: 'dag_node_dispatch',
+              childExecutionId: run.execution.id,
+              connectionId: 'conn-shadow',
+              dagNodeId: 'policy-node',
+            }),
+          },
+        ],
+      } as never,
+      lambdaContext
+    );
+  }
+}
+
 describe('agent run billing, end to end', () => {
+  it.each([
+    ['main', 'provider'],
+    ['main', 'model'],
+    ['child', 'provider'],
+    ['child', 'model'],
+  ] as const)(
+    'runs the allowed shadow backend through real %s execution under a %s restriction',
+    async (kind, restriction) => {
+      const run = await seedShadowRun(
+        kind,
+        restriction === 'provider'
+          ? { allowedProviders: ['anthropic'] }
+          : { allowedModels: ['test-model', 'cheap-allowed'] }
+      );
+      await dispatchShadowRun(kind, run);
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      const completedExecution = await agentExecutionRepository.findById(run.execution.id);
+      expect(completedExecution?.status, JSON.stringify(completedExecution?.error)).toBe('completed');
+      expect(h.complete.mock.calls.length).toBeGreaterThan(0);
+      expect(h.complete.mock.calls.every(call => call[0] === 'cheap-allowed')).toBe(true);
+      expect(h.getLlmByModel.mock.calls.some(call => call[1].modelInfo.id === 'cheap-allowed')).toBe(true);
+      expect(h.getLlmByModel.mock.calls.some(call => call[1].modelInfo.id === 'cheap-denied')).toBe(false);
+      expect(h.deductCredits).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: 'test-model',
+          organization: expect.objectContaining({ id: run.organization.id }),
+        }),
+        expect.anything()
+      );
+    }
+  );
+
+  it.each(['main', 'child'] as const)(
+    'keeps the requested model when %s has no allowed cheap candidate',
+    async kind => {
+      const run = await seedShadowRun(kind, { allowedModels: ['test-model'] });
+      await dispatchShadowRun(kind, run);
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      const completedExecution = await agentExecutionRepository.findById(run.execution.id);
+      expect(completedExecution?.status, JSON.stringify(completedExecution?.error)).toBe('completed');
+      expect(h.complete.mock.calls.length).toBeGreaterThan(0);
+      expect(h.complete.mock.calls.every(call => call[0] === 'test-model')).toBe(true);
+    }
+  );
+
+  it.each(['main', 'child'] as const)(
+    'refuses invalid organization policy before %s invokes a provider',
+    async kind => {
+      const run = await seedShadowRun(kind, { allowedProviders: [] });
+      await dispatchShadowRun(kind, run);
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      const refusedExecution = await agentExecutionRepository.findById(run.execution.id);
+      expect(refusedExecution?.status).toBe('failed');
+      expect(refusedExecution?.error?.message).toContain('not allowed by your organization');
+      expect(h.complete).not.toHaveBeenCalled();
+    }
+  );
+
   it("stamps the run's API key on its iteration text charge", async () => {
     const { agentExecutionRepository, User, Session } = await import('@bike4mind/database');
     const userId = new mongoose.Types.ObjectId();

@@ -44,9 +44,9 @@ export const MAX_ORG_IDS_TO_RESOLVE = 20;
  * suppress a lake's notifications, since the caller treats `[]` as a stable, keep-the-claim
  * outcome.
  *
- * Org-owned lake: the org's billing owner (`userId`) + `adminUserIds` - the
- * SAME field set `administeredOrgIds` is built from (see OrganizationModel.findIdsWithAdminRights)
- * - covers `canManageLake`'s org-admin rung. Also folds in any org-principal owner/curator GRANT
+ * Org-owned lake: the org's billing owner (`userId`) + `adminUserIds` without the roster-row check, a
+ * superset of `administeredOrgIds` (see OrganizationModel.findIdsWithAdminRights) - covers
+ * `canManageLake`'s org-admin rung. Also folds in any org-principal owner/curator GRANT
  * on this specific lake (canManageLake's org-grant rung) - each such grant's `principalId` is
  * itself an ORG id, resolved through the same org-admin-fields lookup, never pushed directly
  * into the user-id lookup (an org id can never match a user, which would otherwise silently

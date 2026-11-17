@@ -27,6 +27,7 @@ import { AdminPermissionAction } from './shared/MissingPermission';
 import { ADMIN_REASON_PRESETS } from './shared/adminReason';
 import { REPLAY_CHIP, UNKNOWN_REPLAY_CHIP } from './DlqMessageDrawer';
 import { DlqRecommendation } from './DlqRecommendation';
+import { DlqTriageRecommendation } from './DlqTriageRecommendation';
 import { DLQ_SEARCH_KEYS } from './dlqSearch';
 import { formatDuration, formatExpiresIn, getDlqExpiry } from './dlqExpiry';
 
@@ -155,7 +156,12 @@ const COLUMNS: readonly DataColumn<Row>[] = [
     label: 'Next step',
     width: '14rem',
     help: 'Advisory only, from the recorded failure and replay attempts; review before acting.',
-    render: row => <DlqRecommendation message={row} />,
+    render: row => (
+      <Stack gap={1}>
+        <DlqRecommendation message={row} />
+        <DlqTriageRecommendation queueLabel={row.queueLabel} messageId={row.messageId} />
+      </Stack>
+    ),
   },
   { id: 'age', label: 'Age', width: '6rem', render: row => <AgeCell row={row} /> },
   { id: 'expires', label: 'Expires in', width: '7rem', render: row => <ExpiresCell row={row} /> },
@@ -394,8 +400,7 @@ export const DlqMessagesTable: React.FC<{
         </Stack>
         {replayNeedsReason && (
           <Typography level="body-sm" data-testid="dlq-replay-reason-note">
-            A reason is required because replay can have side effects or its safety is unknown for some of these
-            queues.
+            A reason is required because replay can have side effects or its safety is unknown for some of these queues.
           </Typography>
         )}
         {selectedRows.length > replayableRows.length && (

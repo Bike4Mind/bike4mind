@@ -399,6 +399,80 @@ const RAW_HANDLER = "export const handler = async () => ({ statusCode: 200, body
 const ROUTED_HANDLER =
   "import { defineLambdaRoute } from './defineLambdaRoute';\nexport const handler = defineLambdaRoute(c, f);";
 
+describe('fixed third-party protocol exception', () => {
+  const cacheSource = 'apps/workers/src/turboCache/handler.ts';
+  const cacheHandler = 'apps/workers/src/turboCache/handler.handler';
+  const declaration = handler => fnDeclaration([`  handler: '${handler}',`, '  url: { cors: false },']);
+
+  it('permits the reviewed cache declaration without importing an app contract', () => {
+    const dir = writeTree({
+      'infra/turborepoCache.ts': declaration(cacheHandler),
+      [cacheSource]: RAW_HANDLER,
+    });
+    expect(run(dir)).toEqual({ status: 0, stdout: '', stderr: '' });
+  });
+
+  it.each([
+    ['another infra file', 'infra/other.ts', cacheHandler],
+    ['a similar infra filename', 'infra/turborepoCacheExtra.ts', cacheHandler],
+    ['another export in the same source', 'infra/turborepoCache.ts', 'apps/workers/src/turboCache/handler.other'],
+    ['another source in the cache directory', 'infra/turborepoCache.ts', 'apps/workers/src/turboCache/other.handler'],
+  ])('still rejects %s', (_label, infraFile, handler) => {
+    const dir = writeTree({
+      [infraFile]: declaration(handler),
+      [cacheSource]: RAW_HANDLER,
+      'apps/workers/src/turboCache/other.ts': RAW_HANDLER,
+    });
+    const result = run(dir);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(handler.slice(0, handler.lastIndexOf('.')) + '.ts');
+  });
+
+  it('still rejects another raw function beside the exempt declaration', () => {
+    const dir = writeTree({
+      'infra/turborepoCache.ts': declaration(cacheHandler) + declaration('apps/workers/src/other.handler'),
+      [cacheSource]: RAW_HANDLER,
+      'apps/workers/src/other.ts': RAW_HANDLER,
+    });
+    expect(run(dir)).toEqual({ status: 1, stdout: 'apps/workers/src/other.ts\n', stderr: '' });
+  });
+
+  it('rejects a second declaration of the exempt handler, whatever its settings', () => {
+    const dir = writeTree({
+      'infra/turborepoCache.ts':
+        declaration(cacheHandler) + declaration(cacheHandler).replace('url: { cors: false }', 'url: true'),
+      [cacheSource]: RAW_HANDLER,
+    });
+    const result = run(dir);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain(
+      `::error::infra/turborepoCache.ts: 2 declarations use the protocol exception for '${cacheHandler}'; it covers exactly one`
+    );
+  });
+
+  it('still fails closed when the exempt handler source is missing', () => {
+    const dir = writeTree({ 'infra/turborepoCache.ts': declaration(cacheHandler) });
+    const result = run(dir);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('no source file for handler');
+  });
+
+  it('still fails closed on malformed options in the exempt infra file', () => {
+    const dir = writeTree({
+      'infra/turborepoCache.ts': declaration(cacheHandler).replace('url: { cors: false }', 'url'),
+      [cacheSource]: RAW_HANDLER,
+    });
+    expect(run(dir).status).toBe(2);
+  });
+
+  it('pins the exception to a declaration that still exists in the real repo', () => {
+    const file = 'infra/turborepoCache.ts';
+    const text = fs.readFileSync(path.join(REPO_ROOT, file), 'utf8');
+    expect(findUrlFunctions([{ file, text }]).exposed).toContainEqual({ file, handler: cacheHandler });
+  });
+});
+
 describe('main', () => {
   it('exits 0 on a clean tree', () => {
     const dir = writeTree({ 'infra/fn.ts': fnDeclaration([HANDLER, '  url: false,']) });
@@ -515,7 +589,7 @@ describe('main', () => {
 
   it('passes the CliToolHandler shape: the wrapper imports the routed module', () => {
     const dir = writeTree({
-      'infra/fn.ts': fnDeclaration(ROUTER_URL.map((l) => l.replace('thing.handler', 'thing.handler.handler'))),
+      'infra/fn.ts': fnDeclaration(ROUTER_URL.map(l => l.replace('thing.handler', 'thing.handler.handler'))),
       'apps/workers/src/thing.handler.ts': "import { run } from './thing';\nexport const handler = run;",
       'apps/workers/src/thing.ts': ROUTED_HANDLER,
       [ADAPTER_FILE]: 'export function defineLambdaRoute(c, f) { return f; }',

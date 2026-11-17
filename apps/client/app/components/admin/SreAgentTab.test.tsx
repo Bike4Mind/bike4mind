@@ -1,10 +1,11 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import SreAgentTab from './SreAgentTab';
+import { SreSourceType } from '@bike4mind/common';
+import SreAgentTab, { AutoDispatchSourcesField } from './SreAgentTab';
 
 vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: () => undefined,
@@ -39,5 +40,37 @@ describe('SreAgentTab', () => {
       expect(getComputedStyle(panel).paddingLeft).toBe('0px');
       expect(getComputedStyle(panel).paddingRight).toBe('0px');
     }
+  });
+});
+
+describe('AutoDispatchSourcesField', () => {
+  function renderField(sources: SreSourceType[]) {
+    const onChange = vi.fn();
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <AutoDispatchSourcesField sources={sources} onChange={onChange} />
+      </CssVarsProvider>
+    );
+    const checkbox = (source: SreSourceType) =>
+      screen.getByTestId(`sre-auto-dispatch-source-${source}`).querySelector('input') as HTMLInputElement;
+    return { onChange, checkbox };
+  }
+
+  it('leaves every source unchecked for an empty list', () => {
+    const { checkbox } = renderField([]);
+    expect(checkbox(SreSourceType.CLOUDWATCH).checked).toBe(false);
+    expect(checkbox(SreSourceType.GITHUB_ISSUE).checked).toBe(false);
+  });
+
+  it('adds a source when it is checked', () => {
+    const { onChange, checkbox } = renderField([SreSourceType.CLOUDWATCH]);
+    fireEvent.click(checkbox(SreSourceType.GITHUB_ISSUE));
+    expect(onChange).toHaveBeenCalledWith([SreSourceType.CLOUDWATCH, SreSourceType.GITHUB_ISSUE]);
+  });
+
+  it('removes a source when it is unchecked', () => {
+    const { onChange, checkbox } = renderField([SreSourceType.CLOUDWATCH, SreSourceType.GITHUB_ISSUE]);
+    fireEvent.click(checkbox(SreSourceType.CLOUDWATCH));
+    expect(onChange).toHaveBeenCalledWith([SreSourceType.GITHUB_ISSUE]);
   });
 });
