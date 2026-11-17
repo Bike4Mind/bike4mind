@@ -5,26 +5,22 @@ import {
   STUDIO_FEATURE_AUDIENCE_SETTING,
   studioFeatureAudience,
   studioFeatureSettingKeys,
-  type SettingKey,
   type StudioFeature,
   type StudioFeatureAccess,
 } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
-import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 
-// Features with no audience setting read this key, whose default is a harmless 'admins' that studioFeatureAudience ignores.
-const NO_AUDIENCE_SETTING: SettingKey = 'StudioProductionsAudience';
-
 const useStudioAudience = (feature: StudioFeature) => {
   const isAdmin = useUser(s => s.isAdmin ?? false);
   const tags = useUser(s => s.currentUser?.tags);
+  // Same cache as the feature flags, so useStudioFeaturesLoading's wait on it covers the audience too.
+  const { getSetting } = useAdminSettingsCache();
   const audienceKey = STUDIO_FEATURE_AUDIENCE_SETTING[feature];
-  const audienceValue = useGetSettingsValue(audienceKey ?? NO_AUDIENCE_SETTING);
-  const audience = studioFeatureAudience(feature, audienceKey ? audienceValue : undefined);
+  const audience = studioFeatureAudience(feature, audienceKey ? getSetting(audienceKey) : undefined);
   const viewer = { isAdmin, tags };
   // Only a paid audience needs the plan, and an exempt viewer never does (the server skips the read the same way).
   return { viewer, audience, needsPlan: audience === 'paid' && !isFreeTierExempt(viewer) };

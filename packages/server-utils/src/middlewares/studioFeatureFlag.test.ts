@@ -62,7 +62,9 @@ describe('isStudioFeatureEnabled', () => {
 
     it('opens for a paid user', async () => {
       getRequestEntitlementsMock.mockResolvedValue(['plan:paid']);
-      await expect(isStudioFeatureEnabled('productions', reqFor({ isAdmin: false }))).resolves.toBe(true);
+      const req = reqFor({ isAdmin: false });
+      await expect(isStudioFeatureEnabled('productions', req)).resolves.toBe(true);
+      expect(getRequestEntitlementsMock).toHaveBeenCalledWith(req);
     });
 
     it('stays closed for a free user', async () => {
@@ -156,6 +158,7 @@ describe('requireStudioFeature', () => {
     const paid = mkCtx({ isAdmin: false });
     await requireStudioFeature('productions')(paid.req, paid.res, paid.next);
     expect(paid.next).toHaveBeenCalled();
+    expect(getRequestEntitlementsMock).toHaveBeenCalledWith(paid.req);
 
     getRequestEntitlementsMock.mockResolvedValueOnce([]);
     const free = mkCtx({ isAdmin: false });

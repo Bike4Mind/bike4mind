@@ -19,9 +19,6 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector: (state: { isAdmin: boolean; currentUser: { tags: string[] } }) => unknown) =>
     selector({ isAdmin: h.isAdmin, currentUser: { tags: h.tags } }),
 }));
-vi.mock('@client/app/hooks/data/settings', () => ({
-  useGetSettingsValue: (key: string) => (key === 'StudioProductionsAudience' ? (h.audience ?? 'admins') : undefined),
-}));
 vi.mock('@client/app/hooks/data/entitlements', () => ({
   useEntitlements: ({ enabled }: { enabled: boolean }) => {
     h.entitlementsEnabled.push(enabled);
@@ -35,7 +32,12 @@ vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   }),
 }));
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
-  useAdminSettingsCache: () => ({ authedSettingsLoaded: h.authedSettingsLoaded, error: h.settingsError }),
+  useAdminSettingsCache: () => ({
+    authedSettingsLoaded: h.authedSettingsLoaded,
+    error: h.settingsError,
+    getSetting: (key: string, fallback = '') =>
+      key === 'StudioProductionsAudience' ? (h.audience ?? 'admins') : fallback,
+  }),
 }));
 vi.mock('@client/app/hooks/useAccessToken', () => ({
   useAccessToken: (selector: (state: { accessToken: string | null }) => unknown) =>

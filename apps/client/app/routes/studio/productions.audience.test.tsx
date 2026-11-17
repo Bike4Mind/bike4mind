@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   tags: [] as string[],
   audience: 'paid' as string,
   entitlements: [] as string[] | undefined,
+  authedSettingsLoaded: true,
   enforceCredits: true,
   enabledSettings: new Set<string>(),
   openView: vi.fn(),
@@ -25,8 +26,7 @@ vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isAdminFeatureEnabled: (key: string) => h.enabledSettings.has(key), isLoading: false }),
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useGetSettingsValue: (key: string) =>
-    key === 'enforceCredits' ? h.enforceCredits : key === 'StudioProductionsAudience' ? h.audience : undefined,
+  useGetSettingsValue: (key: string) => (key === 'enforceCredits' ? h.enforceCredits : undefined),
 }));
 vi.mock('@client/app/hooks/data/entitlements', () => ({
   useEntitlements: ({ enabled }: { enabled: boolean }) => ({
@@ -38,7 +38,11 @@ vi.mock('@client/app/components/subscription/BillingDeepLinkModals', () => ({
   useBillingView: () => ({ openView: h.openView }),
 }));
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
-  useAdminSettingsCache: () => ({ authedSettingsLoaded: true, error: null }),
+  useAdminSettingsCache: () => ({
+    authedSettingsLoaded: h.authedSettingsLoaded,
+    error: null,
+    getSetting: (key: string, fallback = '') => (key === 'StudioProductionsAudience' ? h.audience : fallback),
+  }),
 }));
 vi.mock('@client/app/hooks/useAccessToken', () => ({
   useAccessToken: (selector: (state: { accessToken: string | null }) => unknown) => selector({ accessToken: 'token' }),
@@ -65,6 +69,7 @@ beforeEach(() => {
   h.tags = [];
   h.audience = 'paid';
   h.entitlements = [];
+  h.authedSettingsLoaded = true;
   h.enforceCredits = true;
   h.openView.mockClear();
   h.enabledSettings = new Set(['EnableStudioCreateV2', 'EnableStudioProductions']);
@@ -76,6 +81,20 @@ describe('Productions under the paid audience', () => {
     expect(screen.getByTestId('studio-upgrade-prompt')).toBeInTheDocument();
     expect(screen.queryByTestId('productions-list')).not.toBeInTheDocument();
     expect(screen.getByTestId('studio-area-productions')).toBeInTheDocument();
+  });
+
+  it('waits, with no upgrade prompt, while a free-tier viewer entitlements are pending', () => {
+    h.entitlements = undefined;
+    renderRoute();
+    expect(screen.getByTestId('studio-feature-gate-loading')).toBeInTheDocument();
+    expect(screen.queryByTestId('studio-upgrade-prompt')).not.toBeInTheDocument();
+  });
+
+  it('does not answer not found while the settings that carry the audience are still loading', () => {
+    h.authedSettingsLoaded = false;
+    renderRoute();
+    expect(screen.queryByTestId('not-found-stub')).not.toBeInTheDocument();
+    expect(screen.getByTestId('studio-feature-gate-loading')).toBeInTheDocument();
   });
 
   it('opens the billing plans view from the Upgrade button', () => {
