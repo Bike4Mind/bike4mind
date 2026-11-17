@@ -279,6 +279,7 @@ import { SkillsFeature, type QuestWithSkillCatalog } from './features/SkillsFeat
 import { StatusManager } from './StatusManager';
 import { DEFAULT_VERBATIM_WINDOW_FRACTION, SYSTEM_PROMPT_RESERVE_TOKENS } from './historyBudgetConstants';
 import { buildContextOverflowMessage, ContextOverflowError, isContextOverflowError } from './contextOverflowMessage';
+import { asUserApiKeyRejection, UserApiKeyRejectedError, userApiKeyRejectedReply } from './userApiKeyRejection';
 import {
   ALWAYS_ON_FLOOR_SOURCES,
   buildTaggedContextMessages,
@@ -727,6 +728,7 @@ export function isAbortError(error: unknown): boolean {
 export function isOperatorFault(error: unknown): boolean {
   if (resolveQuestErrorCode(error)) return false;
   if (isOutputBudgetExhaustedError(error)) return false;
+  if (error instanceof UserApiKeyRejectedError) return false;
   if (error instanceof HTTPError && error.statusCode >= 400 && error.statusCode < 500) return false;
   if (!(error instanceof Error)) return true;
   return !(
@@ -6190,8 +6192,13 @@ export class ChatCompletionProcess {
               break;
             }
             lastError = attemptError as Error;
+            // Same message and status, so the fallback classifiers below see the provider error unchanged.
+            lastError = asUserApiKeyRejection(lastError, currentModel, apiKeyTable) ?? lastError;
             // Recoverable interruptions keep their stack at warn; unexpected failures page.
-            if (isExpectedCompletionError(lastError)) {
+            if (lastError instanceof UserApiKeyRejectedError) {
+              // The user's own saved key, not ours: an expected user-side outcome, logged once here.
+              logger.warn('[User API Key] Provider rejected the user-supplied API key', lastError.logFields);
+            } else if (isExpectedCompletionError(lastError)) {
               // Already warned by the backend or the attempt summary below.
             } else if (
               isAbortError(lastError) ||
@@ -6254,15 +6261,18 @@ export class ChatCompletionProcess {
               isSafetyRefusalError(lastError) || isLlmTimeoutError(lastError)
                 ? logger.debug.bind(logger)
                 : logger.warn.bind(logger);
-            logAttempt(
-              `\u274C [${Date.now() - processStartTime}ms] LLM completion failed with ${
-                currentModel.id
-              } (attempt ${fallbackAttempt}):`,
-              {
-                error: lastError.message,
-                shouldRetry: isRetryableError,
-              }
-            );
+            // A rejected user key was logged once above; the summary would repeat the provider message.
+            if (!(lastError instanceof UserApiKeyRejectedError)) {
+              logAttempt(
+                `\u274C [${Date.now() - processStartTime}ms] LLM completion failed with ${
+                  currentModel.id
+                } (attempt ${fallbackAttempt}):`,
+                {
+                  error: lastError.message,
+                  shouldRetry: isRetryableError,
+                }
+              );
+            }
 
             // Tool pairing recovery: if this is a tool_use/tool_result pairing error,
             // strip all tool blocks from history and retry with the same model
@@ -8046,6 +8056,14 @@ export class ChatCompletionProcess {
       } else if (err instanceof Error && isOverloadedError(err)) {
         logger.error(`[Overloaded Error] Quest ${questId}: ${err.message}`);
         setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
+        quest.type = 'error';
+        setTerminalQuestStatus(quest, 'done');
+        finalQuest = await saveQuest(quest);
+        return;
+      } else if (err instanceof UserApiKeyRejectedError) {
+        // Expected user-side outcome, already warned once in the attempt loop. Settled rather than
+        // rethrown, so /process logs no processing failure and emits no ProcessingFailed metric.
+        setErrorReply(userApiKeyRejectedReply(err.provider));
         quest.type = 'error';
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
