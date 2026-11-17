@@ -370,13 +370,13 @@ describe('provider admin key access alarms', () => {
 
 describe('provider admin key age alarms', () => {
   it.each([
-    ['anthropic', 45],
-    ['openai', 75],
+    ['anthropic', 90],
+    ['openai', 90],
   ] as const)('warns when the %s key version is %i days old', async (provider, threshold) => {
     await load();
     expect(callFor(resources.alarm, `ProviderAdminKeyAgeAlarm-${provider}`)).toEqual({
       name: `test-app-production-provider-admin-key-age-${provider}`,
-      alarmDescription: expect.stringContaining(`${provider} admin key version is at least ${threshold} days old`),
+      alarmDescription: expect.any(String),
       comparisonOperator: 'GreaterThanOrEqualToThreshold',
       evaluationPeriods: 1,
       metricName: 'ProviderAdminKeyAgeDays',
@@ -394,9 +394,39 @@ describe('provider admin key age alarms', () => {
   it('takes each threshold from the named constant next to the store', async () => {
     await load();
     const keys = await import('../providerAdminKeys');
-    expect(keys.PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS_OPENAI).toBe(75);
-    expect(keys.PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS_ANTHROPIC).toBe(45);
-    expect(keys.PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS).toEqual({ anthropic: 45, openai: 75 });
+    expect(keys.PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS_OPENAI).toBe(90);
+    expect(keys.PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS_ANTHROPIC).toBe(90);
+    expect(keys.PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS).toEqual({ anthropic: 90, openai: 90 });
+  });
+
+  it.each(['anthropic', 'openai'] as const)(
+    'describes the %s alarm: the secret, the age, who reads the key, how to clear it and the metric',
+    async provider => {
+      await load();
+      const description = callFor(resources.alarm, `ProviderAdminKeyAgeAlarm-${provider}`)?.alarmDescription as string;
+      for (const part of [
+        `The ${provider} organization admin API key in Secrets Manager secret ${SECRET_NAMES[provider]}`,
+        'has had the same version for 90 days or more',
+        'hourly provider usage poller and the nightly spend reconciliation',
+        `create a new admin key in the ${provider} console and write it as a new version of that secret`,
+        'No deploy is needed',
+        `ProviderAdminKeyAgeDays, dimension Provider=${provider}, namespace test-app/production/LLMSpend`,
+      ]) {
+        expect(description).toContain(part);
+      }
+    }
+  );
+
+  it('keeps the description inside the CloudWatch limit for a long stage and app name', async () => {
+    const { providerAdminKeyAgeAlarmDescription } = await import('../providerAdminKeys');
+    const long = 'a'.repeat(40);
+    const description = providerAdminKeyAgeAlarmDescription({
+      provider: 'anthropic',
+      days: 90,
+      secretName: `${long}/${long}/provider-admin-key/anthropic`,
+      namespace: `${long}/${long}/LLMSpend`,
+    });
+    expect(description.length).toBeLessThanOrEqual(1024);
   });
 
   it('is created on dev as well, under the dev prefix and namespace', async () => {

@@ -14,10 +14,12 @@ import { dlqAlarmTopic, oobAlarmTopic } from './dlqAlarms';
 import {
   PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS,
   PROVIDER_ADMIN_KEY_PROVIDERS,
+  providerAdminKeyAgeAlarmDescription,
   providerAdminKeyChangeEventPattern,
   providerAdminKeyKmsEventPattern,
   providerAdminKeyLogsPolicy,
   providerAdminKeyReadEventPattern,
+  providerAdminKeySecretName,
   providerAdminKeySecretPolicy,
   providerAdminKeyStore,
   type ProviderAdminKeyStore,
@@ -307,7 +309,12 @@ if (isMonitoredStage) {
       const days = PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS[provider];
       new aws.cloudwatch.MetricAlarm(`ProviderAdminKeyAgeAlarm-${provider}`, {
         name: `${prefix}-provider-admin-key-age-${provider}`,
-        alarmDescription: `The current ${provider} admin key version is at least ${days} days old: write a new secret version before the key expires`,
+        alarmDescription: providerAdminKeyAgeAlarmDescription({
+          provider,
+          days,
+          secretName: providerAdminKeySecretName($app.name, $app.stage, provider),
+          namespace: LLM_SPEND_NAMESPACE,
+        }),
         comparisonOperator: 'GreaterThanOrEqualToThreshold',
         evaluationPeriods: 1,
         metricName: 'ProviderAdminKeyAgeDays',

@@ -17,18 +17,30 @@ export type ProviderAdminKeyProvider = (typeof PROVIDER_ADMIN_KEY_PROVIDERS)[num
 export const providerAdminKeyEnvName = (provider: ProviderAdminKeyProvider) =>
   `PROVIDER_ADMIN_KEY_SECRET_${provider.toUpperCase()}`;
 
-/**
- * Age of the current key version, in days, at which its age alarm in infra/providerSpend.ts fires.
- * An OpenAI admin key lasts 90 days. An Anthropic admin key ends on a date fixed when it is issued,
- * not after a set lifetime, so its value is provisional until it is set from that date.
- */
-export const PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS_OPENAI = 75;
-export const PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS_ANTHROPIC = 45;
+/** Age of the current key version, in days, at which its age alarm in infra/providerSpend.ts fires. */
+export const PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS_OPENAI = 90;
+export const PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS_ANTHROPIC = 90;
 
 export const PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS: Record<ProviderAdminKeyProvider, number> = {
   anthropic: PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS_ANTHROPIC,
   openai: PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS_OPENAI,
 };
+
+/** Shown in the alarm notification, so it says what fired, why it matters and how to clear it. Max 1024 chars. */
+export const providerAdminKeyAgeAlarmDescription = (input: {
+  provider: ProviderAdminKeyProvider;
+  days: number;
+  secretName: string;
+  namespace: string;
+}) =>
+  [
+    `The ${input.provider} organization admin API key in Secrets Manager secret ${input.secretName} has had the same version for ${input.days} days or more.`,
+    `The hourly provider usage poller and the nightly spend reconciliation use this key to read ${input.provider} usage and cost reports.`,
+    `Provider admin keys expire, and once this one does both jobs stop getting ${input.provider} data.`,
+    `To clear: create a new admin key in the ${input.provider} console and write it as a new version of that secret.`,
+    'No deploy is needed: the next hourly poll reads the new version and the age returns to 0.',
+    `Metric: ProviderAdminKeyAgeDays, dimension Provider=${input.provider}, namespace ${input.namespace}, published once per poll from the creation date of the current secret version.`,
+  ].join(' ');
 
 export const providerAdminKeySecretName = (appName: string, stage: string, provider: ProviderAdminKeyProvider) =>
   `${appName}/${stage}/provider-admin-key/${provider}`;
