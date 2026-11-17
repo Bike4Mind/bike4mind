@@ -2,9 +2,21 @@ import { chmod, mkdir, mkdtemp, realpath, stat, symlink, writeFile } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatFilePathOpenResult, ChatFileView } from '@shared/chat';
+import type {
+  AddAttachmentsResult,
+  ChatFilePathActionResult,
+  ChatFilePathOpenResult,
+  ChatFileView,
+} from '@shared/chat';
 import { IPC_CHANNELS } from '@shared/ipc';
-import { MAX_PATHS_PER_CHECK, MAX_VIEW_BYTES, registerFilePathLinkIpc, type FilePathScope } from './filePathLinks';
+import {
+  markdownFileLink,
+  MAX_PATHS_PER_CHECK,
+  MAX_VIEW_BYTES,
+  registerFilePathLinkIpc,
+  relativeTo,
+  type FilePathScope,
+} from './filePathLinks';
 
 const SESSION = 'session-1';
 
@@ -19,10 +31,14 @@ let deps: {
   stat: typeof stat;
   openPath: ReturnType<typeof vi.fn<(path: string) => Promise<string>>>;
   reveal: ReturnType<typeof vi.fn<(path: string) => void>>;
+  copyText: ReturnType<typeof vi.fn<(text: string) => Promise<void>>>;
+  attach: ReturnType<typeof vi.fn<(sessionId: string, path: string) => Promise<AddAttachmentsResult>>>;
 };
 let check: (sessionId: unknown, paths: unknown) => Promise<(string | null)[]>;
 let open: (sessionId: unknown, path: unknown) => Promise<ChatFilePathOpenResult>;
 let read: (sessionId: unknown, path: unknown) => Promise<ChatFileView>;
+let act: (sessionId: unknown, path: unknown, action: unknown) => Promise<ChatFilePathActionResult>;
+let attach: (sessionId: unknown, path: unknown) => Promise<AddAttachmentsResult>;
 
 beforeEach(async () => {
   // Real paths, so macOS's /var -> /private/var link does not make the roots look different.
@@ -51,6 +67,8 @@ beforeEach(async () => {
     stat,
     openPath: vi.fn(async (_path: string) => ''),
     reveal: vi.fn((_path: string) => {}),
+    copyText: vi.fn(async (_text: string) => {}),
+    attach: vi.fn(async (_sessionId: string, _path: string) => ({ attachments: [], rejected: [] })),
   };
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   registerFilePathLinkIpc(
@@ -66,6 +84,10 @@ beforeEach(async () => {
     handlers.get(IPC_CHANNELS.chatOpenFilePath)!({}, sessionId, path) as Promise<ChatFilePathOpenResult>;
   read = (sessionId, path) =>
     handlers.get(IPC_CHANNELS.chatReadFilePath)!({}, sessionId, path) as Promise<ChatFileView>;
+  act = (sessionId, path, action) =>
+    handlers.get(IPC_CHANNELS.chatFilePathAction)!({}, sessionId, path, action) as Promise<ChatFilePathActionResult>;
+  attach = (sessionId, path) =>
+    handlers.get(IPC_CHANNELS.chatAttachFilePath)!({}, sessionId, path) as Promise<AddAttachmentsResult>;
 });
 
 describe('checking the paths a reply names', () => {
@@ -147,6 +169,67 @@ describe('opening a path a reply names', () => {
       ok: false,
       error: 'No application knows how to open this file.',
     });
+  });
+});
+
+describe('the file link menu actions', () => {
+  it('copies the absolute path, the path relative to the working directory, and a Markdown link', async () => {
+    expect(await act(SESSION, 'reports/run.webm:3', 'copy-path')).toEqual({ ok: true });
+    expect(await act(SESSION, join(project, 'reports', 'run.webm'), 'copy-relative-path')).toEqual({ ok: true });
+    expect(await act(SESSION, 'notes.md', 'copy-markdown')).toEqual({ ok: true });
+    expect(deps.copyText.mock.calls.map(call => call[0])).toEqual([
+      join(project, 'reports', 'run.webm'),
+      join('reports', 'run.webm'),
+      `[notes.md](file://${join(project, 'notes.md')})`,
+    ]);
+  });
+
+  it('reveals any file it would link, a script included', async () => {
+    expect(await act(SESSION, 'build.command', 'reveal')).toEqual({ ok: true });
+    expect(deps.reveal).toHaveBeenCalledWith(join(project, 'build.command'));
+    expect(deps.openPath).not.toHaveBeenCalled();
+  });
+
+  it('touches nothing for a path it would not have linked, or an unknown action', async () => {
+    for (const path of [join(outside, 'secret.txt'), 'escape.txt', 'vault/token.json', 'missing.md', 42, '']) {
+      expect((await act(SESSION, path, 'copy-path')).ok).toBe(false);
+    }
+    expect((await act('other', 'notes.md', 'reveal')).ok).toBe(false);
+    expect((await act(SESSION, 'notes.md', 'open')).ok).toBe(false);
+    expect((await act(SESSION, 'notes.md', 42)).ok).toBe(false);
+    expect(deps.copyText).not.toHaveBeenCalled();
+    expect(deps.reveal).not.toHaveBeenCalled();
+  });
+
+  it('attaches the resolved file to the session draft', async () => {
+    await attach(SESSION, 'notes.md:4');
+    expect(deps.attach).toHaveBeenCalledWith(SESSION, join(project, 'notes.md'));
+  });
+
+  it('attaches nothing it would not have linked', async () => {
+    for (const path of [join(outside, 'secret.txt'), 'escape.txt', 'vault/token.json', 'missing.md', 42]) {
+      const result = await attach(SESSION, path);
+      expect(result.attachments).toEqual([]);
+      expect(result.rejected).toHaveLength(1);
+    }
+    expect((await attach('../../etc', 'notes.md')).rejected).toHaveLength(1);
+    expect(deps.attach).not.toHaveBeenCalled();
+  });
+});
+
+describe('relativeTo', () => {
+  it('prefers the working directory, then the root that holds the path', () => {
+    const scope = { roots: ['/work/a', '/work/b'], workingDirectory: '/work/a/app' };
+    expect(relativeTo('/work/a/app/src/x.ts', scope)).toBe(join('src', 'x.ts'));
+    expect(relativeTo('/work/a/lib/y.ts', scope)).toBe(join('lib', 'y.ts'));
+    expect(relativeTo('/work/b/z.ts', scope)).toBe('z.ts');
+    expect(relativeTo('/work/a/app', scope)).toBe('.');
+  });
+});
+
+describe('markdownFileLink', () => {
+  it('escapes brackets in the name and encodes the URL', () => {
+    expect(markdownFileLink('/work/my [draft].md')).toBe('[my \\[draft\\].md](file:///work/my%20%5Bdraft%5D.md)');
   });
 });
 

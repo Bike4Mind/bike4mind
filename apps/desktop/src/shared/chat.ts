@@ -502,6 +502,10 @@ export type ChatImageActionResult = { ok: true; done: boolean } | { ok: false; e
 /** `revealed` when the file would run rather than open, and was shown in its folder instead. */
 export type ChatFilePathOpenResult = { ok: true; opened: 'opened' | 'revealed' } | { ok: false; error: string };
 
+/** What a file link's context menu can do besides open and attach, each run in main. */
+export type ChatFilePathAction = 'copy-path' | 'copy-relative-path' | 'copy-markdown' | 'reveal';
+export type ChatFilePathActionResult = { ok: true } | { ok: false; error: string };
+
 /**
  * A path a reply names, as the Files pane shows it. `path` is absolute. `text` holds at most the
  * first MAX_VIEW_BYTES (main/chat/filePathLinks.ts), with `truncated` set when the file is longer;

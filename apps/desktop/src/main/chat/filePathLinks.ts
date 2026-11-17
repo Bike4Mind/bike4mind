@@ -1,8 +1,15 @@
 import type { Stats } from 'node:fs';
 import { open } from 'node:fs/promises';
-import { basename, extname, join, resolve } from 'node:path';
+import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { IpcMain } from 'electron';
-import type { ChatFilePathOpenResult, ChatFileView } from '@shared/chat';
+import type {
+  AddAttachmentsResult,
+  ChatFilePathAction,
+  ChatFilePathActionResult,
+  ChatFilePathOpenResult,
+  ChatFileView,
+} from '@shared/chat';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { isValidSessionId } from './SessionStore';
 import { realpathNearest, resolveWithinRoots, withinGuarded } from './tools/paths';
@@ -86,7 +93,37 @@ export interface FilePathLinkDeps {
   /** Electron's shell.openPath: resolves to an error message, empty on success. */
   openPath(path: string): Promise<string>;
   reveal(path: string): void;
+  copyText(text: string): Promise<void>;
+  /** Into the session's draft, through the same intake as the attachment picker. */
+  attach(sessionId: string, path: string): Promise<AddAttachmentsResult>;
   platform?: NodeJS.Platform;
+}
+
+const ACTIONS: ReadonlySet<string> = new Set<ChatFilePathAction>([
+  'copy-path',
+  'copy-relative-path',
+  'copy-markdown',
+  'reveal',
+]);
+
+/**
+ * `path` as the user would type it from the working directory, or from the shared folder that
+ * holds it when it is outside that; the absolute path when neither holds it.
+ */
+export function relativeTo(path: string, scope: FilePathScope): string {
+  const bases = [scope.workingDirectory, ...scope.roots].filter((base): base is string => Boolean(base));
+  for (const base of bases) {
+    const rel = relative(base, path);
+    if (rel === '') return '.';
+    if (!rel.startsWith('..') && !isAbsolute(rel)) return rel;
+  }
+  return path;
+}
+
+/** A Markdown link to the file. Square brackets in the name are escaped so the text stays one label. */
+export function markdownFileLink(path: string): string {
+  const label = basename(path).replace(/[\\[\]]/g, char => `\\${char}`);
+  return `[${label}](${pathToFileURL(path).href})`;
 }
 
 /** `file.ts:12` and `file.ts:12:5`, as a reply cites a line. */
@@ -214,6 +251,54 @@ export function registerFilePathLinkIpc(ipc: Pick<IpcMain, 'handle'>, deps: File
         return error ? { ok: false, error } : { ok: true, opened: 'opened' };
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
+  );
+
+  ipc.handle(
+    IPC_CHANNELS.chatFilePathAction,
+    async (_event, sessionId: unknown, value: unknown, action: unknown): Promise<ChatFilePathActionResult> => {
+      if (typeof value !== 'string' || !isPathText(value)) return { ok: false, error: GONE };
+      if (typeof action !== 'string' || !ACTIONS.has(action)) return { ok: false, error: GONE };
+      try {
+        const scope = await scopeOf(sessionId);
+        const found = scope && (await resolveOne(value, scope, deps));
+        if (!scope || !found) return { ok: false, error: GONE };
+        const path = resolve(found.path);
+        switch (action as ChatFilePathAction) {
+          case 'copy-path':
+            await deps.copyText(path);
+            break;
+          case 'copy-relative-path':
+            await deps.copyText(relativeTo(path, scope));
+            break;
+          case 'copy-markdown':
+            await deps.copyText(markdownFileLink(path));
+            break;
+          case 'reveal':
+            deps.reveal(path);
+            break;
+        }
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
+  );
+
+  ipc.handle(
+    IPC_CHANNELS.chatAttachFilePath,
+    async (_event, sessionId: unknown, value: unknown): Promise<AddAttachmentsResult> => {
+      const name = typeof value === 'string' ? basename(value) || 'file' : 'file';
+      const gone: AddAttachmentsResult = { attachments: [], rejected: [{ name, reason: GONE }] };
+      if (typeof value !== 'string' || !isPathText(value)) return gone;
+      try {
+        const scope = await scopeOf(sessionId);
+        const found = scope && (await resolveOne(value, scope, deps));
+        // scopeOf has already refused an id that is not a valid session id.
+        return found ? await deps.attach(sessionId as string, resolve(found.path)) : gone;
+      } catch {
+        return { attachments: [], rejected: [{ name, reason: 'That file could not be attached.' }] };
       }
     }
   );

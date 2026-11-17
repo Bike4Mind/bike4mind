@@ -1300,6 +1300,8 @@ export function registerChat(
     stat: path => stat(path),
     openPath: path => shell.openPath(path),
     reveal: path => shell.showItemInFolder(path),
+    copyText: async text => clipboard.writeText(text),
+    attach: (sessionId, path) => attachments.add(sessionId, [{ source: 'path', path }]),
   });
 
   registerSessionExportIpc(ipcMain, {

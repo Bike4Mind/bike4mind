@@ -3,7 +3,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatFilePathOpenResult, ChatFileView } from '@shared/chat';
+import type { ChatFilePathActionResult, ChatFilePathOpenResult, ChatFileView } from '@shared/chat';
 import { FilePathLinkProvider } from './FilePathLink';
 import { ReplyMarkdown } from './markdown/ReplyMarkdown';
 
@@ -47,6 +47,10 @@ const readFilePath = vi.fn(
     VIEWS[path] ?? { kind: 'error', error: 'That file no longer exists.' }
 );
 
+const filePathAction = vi.fn(
+  async (_sessionId: string, _path: string, _action: string): Promise<ChatFilePathActionResult> => ({ ok: true })
+);
+
 let root: Root;
 let container: HTMLDivElement;
 
@@ -64,7 +68,11 @@ beforeEach(() => {
   checkFilePaths.mockClear();
   openFilePath.mockClear();
   readFilePath.mockClear();
-  vi.stubGlobal('b4m', { chat: { checkFilePaths, openFilePath, readFilePath }, shell: { openExternal: vi.fn() } });
+  filePathAction.mockClear();
+  vi.stubGlobal('b4m', {
+    chat: { checkFilePaths, openFilePath, readFilePath, filePathAction },
+    shell: { openExternal: vi.fn() },
+  });
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
@@ -157,6 +165,127 @@ describe('file path links in a reply', () => {
     expect(checkFilePaths).not.toHaveBeenCalled();
     expect(links()).toHaveLength(0);
     expect(container.textContent).toContain('See reports/run.webm');
+  });
+});
+
+describe('the file link context menu', () => {
+  const onAttach = vi.fn(async (_path: string) => {});
+  const showFile = vi.fn();
+  beforeEach(() => {
+    onAttach.mockClear();
+    showFile.mockClear();
+  });
+
+  const byTestId = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+
+  async function openMenu(attach = true) {
+    await render(
+      <FilePathLinkProvider sessionId="s1" showFile={showFile} onAttach={attach ? onAttach : undefined}>
+        <ReplyMarkdown text="See `package.json:2`" />
+      </FilePathLinkProvider>
+    );
+    await act(async () => {
+      links()[0].dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 50 })
+      );
+    });
+  }
+
+  it('opens on right-click with every item', async () => {
+    EXISTING['package.json:2'] = '/work/project/package.json';
+    try {
+      await openMenu();
+      for (const id of [
+        'file-link-menu-open-btn',
+        'file-link-menu-open-external-btn',
+        'file-link-menu-attach-btn',
+        'file-link-menu-copy-submenu-btn',
+        'file-link-menu-reveal-btn',
+      ]) {
+        expect(byTestId(id), id).not.toBeNull();
+      }
+    } finally {
+      delete EXISTING['package.json:2'];
+    }
+  });
+
+  it('leaves Attach out where there is no composer', async () => {
+    EXISTING['package.json:2'] = '/work/project/package.json';
+    try {
+      await openMenu(false);
+      expect(byTestId('file-link-menu-open-btn')).not.toBeNull();
+      expect(byTestId('file-link-menu-attach-btn')).toBeNull();
+    } finally {
+      delete EXISTING['package.json:2'];
+    }
+  });
+
+  it('attaches, reveals and copies the path as the reply wrote it', async () => {
+    EXISTING['package.json:2'] = '/work/project/package.json';
+    try {
+      await openMenu();
+      await act(async () => byTestId('file-link-menu-attach-btn')!.click());
+      expect(onAttach).toHaveBeenCalledWith('package.json:2');
+
+      await openMenu();
+      await act(async () => byTestId('file-link-menu-reveal-btn')!.click());
+      expect(filePathAction).toHaveBeenCalledWith('s1', 'package.json:2', 'reveal');
+
+      await openMenu();
+      await act(async () => byTestId('file-link-menu-copy-submenu-btn')!.click());
+      await act(async () => byTestId('file-link-menu-copy-relative-path-btn')!.click());
+      expect(filePathAction).toHaveBeenCalledWith('s1', 'package.json:2', 'copy-relative-path');
+      expect(byTestId('file-link-menu-copy-submenu')).toBeNull();
+    } finally {
+      delete EXISTING['package.json:2'];
+    }
+  });
+
+  it('opens in the pane or in another app from the menu', async () => {
+    EXISTING['package.json:2'] = '/work/project/package.json';
+    VIEWS['package.json:2'] = VIEWS['package.json'];
+    try {
+      await openMenu();
+      await act(async () => byTestId('file-link-menu-open-btn')!.click());
+      expect(showFile).toHaveBeenCalledWith('package.json:2', VIEWS['package.json']);
+
+      await openMenu();
+      await act(async () => byTestId('file-link-menu-open-external-btn')!.click());
+      expect(openFilePath).toHaveBeenCalledWith('s1', 'package.json:2');
+    } finally {
+      delete EXISTING['package.json:2'];
+      delete VIEWS['package.json:2'];
+    }
+  });
+
+  it('says what went wrong when an action fails', async () => {
+    EXISTING['package.json:2'] = '/work/project/package.json';
+    filePathAction.mockResolvedValueOnce({ ok: false, error: 'That file no longer exists.' });
+    try {
+      await openMenu();
+      await act(async () => byTestId('file-link-menu-reveal-btn')!.click());
+      expect(byTestId('file-link-error-notice')?.textContent).toContain('That file no longer exists.');
+    } finally {
+      delete EXISTING['package.json:2'];
+    }
+  });
+
+  it('opens from the keyboard with Shift+F10', async () => {
+    EXISTING['package.json:2'] = '/work/project/package.json';
+    try {
+      await render(
+        <FilePathLinkProvider sessionId="s1">
+          <ReplyMarkdown text="See `package.json:2`" />
+        </FilePathLinkProvider>
+      );
+      await act(async () => {
+        links()[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true }));
+      });
+      expect(byTestId('file-link-menu-open-btn')).not.toBeNull();
+      expect(openFilePath).not.toHaveBeenCalled();
+    } finally {
+      delete EXISTING['package.json:2'];
+    }
   });
 });
 

@@ -1341,7 +1341,12 @@ export function ChatShell({
             should a switch ever skip the `opening` gate that unmounts this today. */}
             <ImageMenuProvider key={activeId ?? 'none'} onAttach={activeId ? draft.attachImage : undefined}>
               {/* A path not found yet is asked again once a turn settles: replies name files before writing them. */}
-              <FilePathLinkProvider sessionId={activeId} recheck={conversation.settledTurns} showFile={showFile}>
+              <FilePathLinkProvider
+                sessionId={activeId}
+                recheck={conversation.settledTurns}
+                showFile={showFile}
+                onAttach={activeId ? draft.attachFilePath : undefined}
+              >
                 <MessageThread
                   // Remounted per conversation, so its window and scroll start over and nothing it
                   // set going outlives the conversation it was for. Prefixed, as the session panel
