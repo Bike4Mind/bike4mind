@@ -403,7 +403,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         });
       }
 
-      // The ended plan's storage allowance goes (#7379): the user falls back to their manual override,
+      // The ended plan's storage allowance goes: the user falls back to their manual override,
       // or the default limit. Nothing stored is deleted; uploads over the new limit are refused.
       // Owner from the row, not metadata, as in customerSubscriptionUpdated.ts. Org-owned
       // subscriptions have no plan storage mapping yet. Before the invoice cleanup: a cancel-immediately
