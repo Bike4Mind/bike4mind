@@ -196,7 +196,7 @@ describe('owner-only access', () => {
 });
 
 describe('updateComposition', () => {
-  it('keeps files the composition already references valid, and checks only new ones', async () => {
+  it('keeps an inaccessible stored file valid while requiring access to new ones', async () => {
     const adapters = createFakeAdapters([FILE_MINE, FILE_NEW]);
     const created = await create(adapters, { title: 'Launch', timeline: videoTimeline(FILE_MINE) });
     // The stored file is no longer readable (deleted or unshared since).
@@ -208,7 +208,23 @@ describe('updateComposition', () => {
       shots: [{ id: 'shot-1', title: 'Open', fileIds: [FILE_NEW] }],
     });
     expect(updated.shots).toHaveLength(1);
-    expect(adapters.db.fabFiles.findAccessibleInIds).toHaveBeenLastCalledWith([FILE_NEW], { userId: OWNER });
+    expect(adapters.db.fabFiles.findAccessibleInIds).toHaveBeenLastCalledWith([FILE_NEW, FILE_MINE], { userId: OWNER });
+  });
+
+  it('checks the kind of a stored file moved into a slot that cannot play it', async () => {
+    const adapters = createFakeAdapters();
+    const created = await create(adapters, {
+      title: 'Launch',
+      shots: [{ id: 'shot-1', title: 'Open', fileIds: [FILE_PDF] }],
+    });
+
+    const codes = await issueCodes(
+      update(adapters, created.id, { timeline: videoTimeline(FILE_PDF), brandKit: { logoFileId: FILE_PDF } })
+    );
+    expect(codes).toEqual([
+      ['unsupported_file_kind', 'timeline.tracks.0.clips.0.fileId'],
+      ['unsupported_file_kind', 'brandKit.logoFileId'],
+    ]);
   });
 
   it('skips the file lookup for a content-free edit', async () => {

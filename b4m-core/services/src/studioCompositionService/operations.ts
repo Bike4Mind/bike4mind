@@ -38,9 +38,8 @@ const assertProjectOwned = async (
 };
 
 /**
- * Files already on the stored composition stay valid even if they have since been deleted or unshared, so an
- * unrelated edit never fails on them; only newly referenced files must be readable by the caller and of a kind
- * their slot plays. A stored id is not proof of access: whatever later reads the file (preview, render) re-checks.
+ * Access is required only for newly referenced files: a file already on the stored composition stays valid even if
+ * since deleted or unshared. The kind a slot plays is checked for every referenced file the caller can still read.
  */
 const assertContentValid = async (
   { db }: StudioCompositionServiceAdapters,
@@ -48,8 +47,8 @@ const assertContentValid = async (
   content: Pick<StudioCompositionContent, 'brandKit' | 'shots' | 'timeline'>,
   previouslyReferenced: ReadonlySet<string>
 ): Promise<void> => {
-  const newFileIds = studioCompositionFileIds(content).filter(id => !previouslyReferenced.has(id));
-  const accessible = newFileIds.length > 0 ? await db.fabFiles.findAccessibleInIds(newFileIds, { userId }) : [];
+  const fileIds = [...new Set(studioCompositionFileIds(content))];
+  const accessible = fileIds.length > 0 ? await db.fabFiles.findAccessibleInIds(fileIds, { userId }) : [];
   const knownFileIds = new Set([...previouslyReferenced, ...accessible.map(file => file.id)]);
   const fileKinds = new Map(accessible.map(file => [file.id, studioFileMediaKind(file.mimeType)]));
 
