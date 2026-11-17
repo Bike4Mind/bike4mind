@@ -21,6 +21,21 @@ const LATER = '2026-10-01T00:05:00.000Z';
 const ended = (id: string, state: AgentState, outcome: AgentView['outcome']) =>
   agent(id, state, { outcome, updatedAt: LATER });
 
+/** A worker task in the given state: only `state.status` and `accepted` matter to the board. */
+const withTask = (status: string, accepted?: boolean) =>
+  ({
+    workerTask: { state: { status, ...(accepted === undefined ? {} : { accepted }) } },
+  }) as unknown as Partial<AgentView>;
+/** A needs-you waiting on the user in the Task panel: the task already holds its own run's outcome. */
+const waiting = (id: string, outcome: AgentView['outcome'], status = 'completed') =>
+  agent(id, 'needs-you', {
+    outcome,
+    updatedAt: LATER,
+    ...withTask(status, status === 'completed' ? false : undefined),
+  });
+const accepted = (id: string) =>
+  agent(id, 'done', { outcome: 'finished', updatedAt: LATER, ...withTask('completed', true) });
+
 const withOutcome = (outcome: string) => ({ workerTask: { contract: { outcome } } }) as unknown as Partial<AgentView>;
 
 describe('questTitle', () => {
@@ -98,8 +113,8 @@ describe('trackQuests', () => {
   it('checks off a run the user accepts while it waits on them, even with its record unchanged', () => {
     const ledger = track([
       [agent('a', 'working', { outcome: 'finished' })],
-      [ended('a', 'needs-you', 'finished')],
-      [ended('a', 'done', 'finished')],
+      [waiting('a', 'finished')],
+      [accepted('a')],
     ]);
     expect(ledger.finished).toEqual(new Map([['a', 200]]));
     expect(ledger.open.size).toBe(0);
@@ -109,8 +124,8 @@ describe('trackQuests', () => {
     const ledger = track([
       [agent('a', 'working', { outcome: 'finished' })],
       [agent('a', 'done', { outcome: 'finished' })],
-      [ended('a', 'needs-you', 'finished')],
-      [ended('a', 'done', 'finished')],
+      [waiting('a', 'finished')],
+      [accepted('a')],
     ]);
     expect(ledger.finished).toEqual(new Map([['a', 300]]));
     expect(ledger.open.size).toBe(0);
@@ -128,8 +143,31 @@ describe('trackQuests', () => {
   });
 
   it('ends a run the user stops while it waits on them, even with its record unchanged', () => {
-    const ledger = track([[ended('a', 'needs-you', 'aborted')], [ended('a', 'stopped', 'aborted')]]);
+    const ledger = track([[waiting('a', 'aborted', 'blocked')], [ended('a', 'stopped', 'aborted')]]);
     expect(ledger.open.size).toBe(0);
+    expect(ledger.finished.size).toBe(0);
+  });
+
+  it('holds a re-run open at every step through a live approval and a stale done', () => {
+    for (const live of [{}, withTask('running')]) {
+      let ledger = EMPTY_LEDGER;
+      const steps = [
+        agent('a', 'working', { outcome: 'finished' }),
+        agent('a', 'needs-you', { outcome: 'finished', ...live }),
+        agent('a', 'done', { outcome: 'finished' }),
+        agent('a', 'working', { outcome: 'finished' }),
+      ];
+      steps.forEach((step, index) => {
+        ledger = trackQuests(ledger, [step], index * 100);
+        expect(ledger.finished.size).toBe(0);
+        expect(ledger.open.has('a')).toBe(true);
+      });
+    }
+  });
+
+  it('keeps a first run open when a live approval clears to idle with the record unchanged', () => {
+    const ledger = track([[agent('a', 'working')], [agent('a', 'needs-you')], [agent('a', 'idle')]]);
+    expect(ledger.open.has('a')).toBe(true);
     expect(ledger.finished.size).toBe(0);
   });
 

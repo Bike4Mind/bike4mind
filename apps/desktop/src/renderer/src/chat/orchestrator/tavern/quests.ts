@@ -30,10 +30,18 @@ export type QuestLedger = {
 
 /**
  * The session record as last seen on an open quest: until it changes, any stored outcome is a previous
- * run's. Only a run last seen `working` can be in that gap: one waiting on the user (`needs-you`) may
- * already hold its own outcome, so whatever it turns into next is real (accepted, stopped).
+ * run's. Only a run last seen in-run can be in that gap: a live approval mid-run still is, but a task
+ * waiting on the user in its Task panel holds its own outcome, so what it turns into next is real.
  */
-type OpenSnapshot = { outcome: ChildOutcome | undefined; updatedAt: string; working: boolean };
+type OpenSnapshot = { outcome: ChildOutcome | undefined; updatedAt: string; inRun: boolean };
+
+/** Working, or `needs-you` on a live approval (no task, or one still queued/running) rather than a Task panel wait. */
+function isInRun(agent: AgentView): boolean {
+  if (agent.state === 'working') return true;
+  if (agent.state !== 'needs-you') return false;
+  const status = agent.workerTask?.state.status;
+  return status === undefined || status === 'queued' || status === 'running';
+}
 
 export const EMPTY_LEDGER: QuestLedger = { open: new Map(), finished: new Map() };
 
@@ -43,14 +51,14 @@ export const EMPTY_LEDGER: QuestLedger = { open: new Map(), finished: new Map() 
  * failed or stopped on a re-run). The stored outcome lands with a record update, which ends the bridge.
  */
 function isAwaitingOutcome(agent: AgentView, snapshot: OpenSnapshot): boolean {
-  if (!snapshot.working || agent.outcome !== snapshot.outcome) return false;
+  if (!snapshot.inRun || agent.outcome !== snapshot.outcome) return false;
   return agent.updatedAt === snapshot.updatedAt || (agent.state === 'idle' && agent.outcome === undefined);
 }
 
 /** A re-run reading `done` from the previous run's stored outcome, before the new outcome lands. */
 function isStaleDone(agent: AgentView, snapshot: OpenSnapshot): boolean {
   return (
-    snapshot.working &&
+    snapshot.inRun &&
     agent.outcome !== undefined &&
     agent.outcome === snapshot.outcome &&
     agent.updatedAt === snapshot.updatedAt
@@ -68,7 +76,7 @@ export function trackQuests(ledger: QuestLedger, agents: readonly AgentView[], n
   const finished = new Map<string, number>();
   for (const agent of agents) {
     if (OPEN.has(agent.state)) {
-      open.set(agent.id, { outcome: agent.outcome, updatedAt: agent.updatedAt, working: agent.state === 'working' });
+      open.set(agent.id, { outcome: agent.outcome, updatedAt: agent.updatedAt, inRun: isInRun(agent) });
       continue;
     }
     if (agent.state === 'done') {
