@@ -2736,6 +2736,21 @@ describe('dispatchLoopNow', () => {
     expect(statuses.sort()).toEqual(['in_progress', 'in_progress', 'open']);
   });
 
+  it('opens a triage lane and a ticket lane in one call, as the tick does', async () => {
+    persistRuns();
+    const loop = await createLoop({ maxConcurrent: 2 });
+    const ticket = await createTicket(loop.id);
+    const untriaged = await createTicket(loop.id, { priority: undefined });
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(2);
+    expect(h.startAgentExecution.mock.calls[0][0]).toMatchObject({ loopRunKind: 'triage' });
+    expect(h.startAgentExecution.mock.calls[1][0]).toMatchObject({ workItemId: ticket.id });
+    expect((await ticketOf(untriaged.id)).status).toBe('open');
+    expect((await reload(loop.id)).activeExecutionIds).toHaveLength(2);
+  });
+
   it('splits the budget across the lanes one call opens, as the tick does', async () => {
     persistRuns();
     // At 12:00 a 24-credit budget's paced allowance is 13: two lanes get 6.5 each.
