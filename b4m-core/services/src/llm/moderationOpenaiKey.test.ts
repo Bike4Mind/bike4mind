@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 
+const PLACEHOLDER = 'sk-your-key-here';
+
 describe('resolveModerationOpenaiKey', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -39,5 +41,19 @@ describe('resolveModerationOpenaiKey', () => {
     vi.stubEnv('B4M_SELF_HOST', 'false');
     vi.stubEnv('OPENAI_API_KEY', 'env-key');
     expect(resolveModerationOpenaiKey('expired', '')).toBeNull();
+  });
+
+  it('ignores a placeholder shared key and falls back to the user key', () => {
+    expect(resolveModerationOpenaiKey('user-key', PLACEHOLDER)).toBe('user-key');
+  });
+
+  it('ignores a placeholder self-host env key and falls back to the user key', () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    vi.stubEnv('OPENAI_API_KEY', PLACEHOLDER);
+    expect(resolveModerationOpenaiKey('user-key', '')).toBe('user-key');
+  });
+
+  it('returns null for a placeholder user key with no shared or env key', () => {
+    expect(resolveModerationOpenaiKey(PLACEHOLDER, '')).toBeNull();
   });
 });
