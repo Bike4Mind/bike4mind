@@ -531,6 +531,20 @@ describe('check-contract-gate.sh', () => {
       expect(r.stdout).toContain('OK');
     });
 
+    it('permits the fixed Turbo protocol while rejecting a second raw handler beside it', () => {
+      const { dir } = makeTree();
+      writeWorker(dir, 'turboCache/handler.ts', RAW_WORKER_HANDLER);
+      const cache = fnDeclaration('apps/workers/src/turboCache/handler.handler', '{ cors: false }');
+      writeInfra(dir, 'turborepoCache.ts', cache);
+      expect(runGuard(dir).status).toBe(0);
+
+      const other = writeWorker(dir, 'other.ts', RAW_WORKER_HANDLER);
+      writeInfra(dir, 'turborepoCache.ts', cache + fnDeclaration('apps/workers/src/other.handler', 'true'));
+      const result = runGuard(dir);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain(other);
+    });
+
     it('passes a handler that calls defineLambdaRoute directly', () => {
       const { dir } = makeTree();
       writeWorker(dir, 'direct.ts', ROUTED_WORKER);

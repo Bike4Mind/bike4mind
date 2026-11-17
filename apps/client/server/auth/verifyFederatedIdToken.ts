@@ -20,7 +20,12 @@
  */
 
 import { JwtVerifier } from 'aws-jwt-verify';
+import { SimpleJwksCache } from 'aws-jwt-verify/jwk';
+import { SimpleFetcher } from 'aws-jwt-verify/https';
 import type { IOAuthClientFederatedIdp } from '@bike4mind/database/auth';
+
+/** The library's default JWKS fetcher sends no User-Agent; the public JWKS endpoint expects one. */
+export const JWKS_USER_AGENT = 'Lumina5-JwksFetcher/1.0';
 
 /** Thrown for any verification/extraction failure. The route maps this to `invalid_grant`. */
 export class FederatedIdTokenError extends Error {
@@ -45,11 +50,18 @@ function createVerifier(idp: IOAuthClientFederatedIdp) {
   // When jwksUri is omitted the verifier derives `${issuer}/.well-known/jwks.json`,
   // which is exactly Cognito's JWKS endpoint - so it's optional for Cognito pools and
   // required (at registration time) for a B4M issuer, which publishes at /api/oauth/jwks.
-  return JwtVerifier.create({
-    issuer: idp.issuer,
-    audience: idp.audience,
-    ...(idp.jwksUri ? { jwksUri: idp.jwksUri } : {}),
-  });
+  return JwtVerifier.create(
+    {
+      issuer: idp.issuer,
+      audience: idp.audience,
+      ...(idp.jwksUri ? { jwksUri: idp.jwksUri } : {}),
+    },
+    {
+      jwksCache: new SimpleJwksCache({
+        fetcher: new SimpleFetcher({ defaultRequestOptions: { headers: { 'User-Agent': JWKS_USER_AGENT } } }),
+      }),
+    }
+  );
 }
 
 const verifierCache = new Map<string, ReturnType<typeof createVerifier>>();

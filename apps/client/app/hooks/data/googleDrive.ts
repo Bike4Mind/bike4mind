@@ -99,9 +99,8 @@ export function useLakeDriveConnection(dataLakeId?: string, enabled = true) {
 }
 
 /**
- * Whether the caller may connect, re-sync or disconnect the lake's Drive folder. The status read also
- * admits an appointed org admin, who can see the connection but not operate it, so the controls key
- * off this. Shares useLakeDriveConnection's query; a payload without the flag reads as `false`, so a dropped field fails closed.
+ * Whether the caller may connect, re-sync or disconnect the lake's Drive folder.
+ * Shares useLakeDriveConnection's query; a payload without the flag reads as `false`, so a dropped field fails closed.
  */
 export function useLakeDriveCanManage(dataLakeId?: string, enabled = true) {
   const options = useLakeDriveConnectionOptions(dataLakeId, enabled);

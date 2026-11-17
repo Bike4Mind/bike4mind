@@ -19,6 +19,7 @@
  */
 
 import { secrets } from './secrets';
+import { lambdaVpc } from './vpc';
 import { dlqAlarmHandlerDlq } from './dlqAlarmHandlerDeadLetter';
 import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { llmSpendLogSources } from './llmSpendLogGroups';
@@ -94,6 +95,8 @@ import { organizationRetentionDeadLetter } from './organizationRetention';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
+import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
+import { dlqTriagePermissions } from './dlqTriagePermissions';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -150,11 +153,13 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
   });
   dlqAlarmTopic!.subscribe(
     {
+      vpc: lambdaVpc,
       handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
       link: [
         secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL,
         secrets.SLACK_ALARMS_WEBHOOK_URL,
         secrets.SLACK_COST_ALARMS_WEBHOOK_URL,
+        secrets.MONGODB_URI,
       ],
       // Room for the Logs Insights query (25 s budget) ahead of the Slack post.
       timeout: '60 seconds',
@@ -165,6 +170,8 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
       },
       permissions: [
         ...mentionArgs.permissions,
+        { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
+        dlqTriagePermissions(),
         { actions: ['logs:StartQuery'], resources: spendLogGroupArns },
         { actions: ['logs:GetQueryResults', 'logs:StopQuery'], resources: ['*'] },
       ],
@@ -610,6 +617,14 @@ function createDlqAlarms(dlq: Omit<InfraDlqDescriptor, 'sourceQueue'>) {
 }
 
 if (isMonitoredStage) {
+  if (dlqTriageSweepDeadLetter) {
+    createDlqAlarms({
+      label: 'dlq-triage-sweep',
+      displayName: 'DLQ Triage Sweep',
+      application: 'LiveOps',
+      queue: dlqTriageSweepDeadLetter.queue,
+    });
+  }
   for (const dlq of ALARMED_DLQS) {
     createDlqAlarms(dlq);
   }

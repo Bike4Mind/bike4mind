@@ -18,12 +18,12 @@ const read = (rel: string) => readFileSync(path.join(REPO_ROOT, rel), 'utf8');
 const OUTSIDE_VPC = [
   'apps/client/server/websocket/heartbeat.func',
   'apps/workers/src/cron/providerUsagePoll.handler',
-  'apps/workers/src/events/dlqAlarmToSlack.handler',
   'apps/workers/src/events/serviceHealthAlarmToSlack.handler',
   'apps/workers/src/events/wafAlarmToSlack.handler',
   'apps/workers/src/mcp/remoteMcpCall.handler',
   'apps/workers/src/media/imageProcessor.handler',
   'apps/workers/src/media/publishThumbnailRenderer.handler',
+  'apps/workers/src/turboCache/handler.handler',
 ];
 
 /** The object literal a `handler:` key sits in: the Lambda's own declaration. */

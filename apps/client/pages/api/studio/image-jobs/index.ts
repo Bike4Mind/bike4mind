@@ -7,8 +7,7 @@
  * model cannot honour answers 422 with every why-not reason, so Studio can show them next to the fields.
  */
 import { z } from 'zod';
-import type { IGenerationJobDocumentOf } from '@bike4mind/common';
-import { createImageJobs, type CreateImageJobsResult } from '@bike4mind/services/imageJobs';
+import { createImageJobs } from '@bike4mind/services/imageJobs';
 import { requireStudioFeature } from '@bike4mind/server-utils/middlewares/studioFeatureFlag';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -16,9 +15,9 @@ import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { getCreateImageJobsDeps } from '@bike4mind/server-utils/generationJobs/wiring';
-import { IMAGE_JOB_ERROR_COPY } from '@server/generations/generationJobErrorCopy';
 import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs';
 import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
+import { imageJobRefusalBody, toStudioImageJob } from '@bike4mind/server-utils/generationJobs/studioImageJobResponse';
 
 const CURSOR_SCOPE = 'studio.image-jobs';
 const LIST_LIMIT_MAX = 100;
@@ -32,32 +31,6 @@ const CreateBodySchema = z.strictObject({
 const ListQuerySchema = z.strictObject({
   limit: z.coerce.number().int().min(1).max(LIST_LIMIT_MAX).default(20),
   cursor: z.string().min(1).optional(),
-});
-
-type ImageJob = IGenerationJobDocumentOf<'image'>;
-
-/** The fields Studio reads; credit holds, provider errors and lease state stay server-side. */
-const toStudioImageJob = (job: ImageJob) => ({
-  id: job.id,
-  groupId: job.payload.groupId ?? null,
-  state: job.state,
-  request: job.payload.request,
-  error: job.error ? { code: job.error.code, message: IMAGE_JOB_ERROR_COPY[job.error.code] } : null,
-  output: job.payload.output
-    ? {
-        fileId: job.payload.output.fileId ?? null,
-        contentType: job.payload.output.contentType,
-        bytes: job.payload.output.bytes,
-      }
-    : null,
-  createdAt: job.createdAt,
-});
-
-const refusalBody = (refusal: Extract<CreateImageJobsResult, { ok: false }>) => ({
-  error: refusal.code,
-  message: refusal.message,
-  ...(refusal.code === 'unsupported_by_model' && { failures: refusal.failures }),
-  ...(refusal.code === 'storage_quota_exceeded' && { storage: refusal.storage }),
 });
 
 const handler = baseApi({ auth: 'jwtOnly' })
@@ -84,7 +57,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
         },
         getCreateImageJobsDeps()
       );
-      if (!result.ok) return res.status(result.status).json(refusalBody(result));
+      if (!result.ok) return res.status(result.status).json(imageJobRefusalBody(result));
       return res.status(result.created ? 202 : 200).json({
         groupId: result.groupId,
         jobs: result.jobs.map(toStudioImageJob),

@@ -40,8 +40,8 @@ describe('PaymentModal', () => {
   it('never forces the dialog wider than a phone screen', () => {
     renderModal();
 
-    const { minWidth } = getComputedStyle(screen.getByTestId('payment-modal-dialog'));
+    const { minWidth, maxWidth } = getComputedStyle(screen.getByTestId('payment-modal-dialog'));
     expect(minWidth).not.toBe('400px');
-    expect(minWidth).toContain('100vw');
+    expect(maxWidth).toContain('100vw');
   });
 });
