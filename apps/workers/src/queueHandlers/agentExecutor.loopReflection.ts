@@ -34,11 +34,15 @@ export interface LoopReflectRun {
   error?: unknown;
 }
 
-/** Tool name and whether it errored, from the observation steps (ReActAgent stamps `toolFailed`). */
+/**
+ * Tool name and whether it errored, from the observation steps: ReActAgent stamps `toolFailed` on a call that
+ * threw, and a tool that catches its own failure returns an `Error:` result (ReActAgent.scoreToolResult's rule).
+ */
 function toolSteps(steps: IAgentStep[]): { tool: string; ok: boolean }[] {
   return steps.flatMap(step => {
     if (step.type !== 'observation' || !step.metadata?.toolName) return [];
-    return [{ tool: step.metadata.toolName, ok: !(step.metadata as { toolFailed?: boolean }).toolFailed }];
+    const failed = (step.metadata as { toolFailed?: boolean }).toolFailed || step.content.startsWith('Error:');
+    return [{ tool: step.metadata.toolName, ok: !failed }];
   });
 }
 

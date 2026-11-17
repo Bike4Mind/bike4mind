@@ -181,12 +181,13 @@ describe('reflectLoopRun', () => {
     expect(db.agentExecutionRepository.incrementCreditsUsed).toHaveBeenCalledWith('run1', 2);
   });
 
-  it('labels a tool step an error only from its toolFailed flag', async () => {
+  it('labels a tool step an error from its toolFailed flag or an Error: result', async () => {
     await reflectLoopRun(
       {
         ...completedRun,
         steps: [
-          { type: 'observation', content: 'Error: none found', metadata: { toolName: 'grep', timestamp: 1 } },
+          { type: 'observation', content: 'No matches found', metadata: { toolName: 'grep', timestamp: 1 } },
+          { type: 'observation', content: 'Error: fetch failed', metadata: { toolName: 'web_fetch', timestamp: 1 } },
           {
             type: 'observation',
             content: 'boom',
@@ -198,6 +199,7 @@ describe('reflectLoopRun', () => {
     );
     const prompt = complete.mock.calls[0][1].at(-1).content as string;
     expect(prompt).toContain('- "grep": ok');
+    expect(prompt).toContain('- "web_fetch": error');
     expect(prompt).toContain('- "flaky": error');
   });
 
