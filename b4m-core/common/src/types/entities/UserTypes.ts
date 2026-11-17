@@ -359,6 +359,12 @@ export type AccountDeletionSource = (typeof ACCOUNT_DELETION_SOURCES)[number];
 /** Days between a deletion request and the purge; the user can cancel until then. */
 export const ACCOUNT_DELETION_GRACE_DAYS = 14;
 
+/**
+ * Days after a deletion request at which one still not completed raises the deadline alarm, leaving
+ * five days of margin inside the one-month erasure window.
+ */
+export const ACCOUNT_DELETION_DEADLINE_ALERT_DAYS = 25;
+
 export interface AccountDeletionRetainedRecord {
   category: string;
   reason: string;

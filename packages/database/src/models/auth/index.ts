@@ -11,6 +11,7 @@ export * from './CcBridgeDeviceModel';
 export * from './CcBridgePairingTokenModel';
 export * from './DeviceAuthorizationModel';
 export * from './DisposableDomainModel';
+export * from './AccountDeletionNoticeModel';
 export * from './ErasureRecordModel';
 export * from './IdentityProviderModel';
 export * from './networkMetaFields';

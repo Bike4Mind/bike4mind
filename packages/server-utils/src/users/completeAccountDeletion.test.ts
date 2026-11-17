@@ -13,6 +13,9 @@ const h = vi.hoisted(() => ({
   purgeContent: vi.fn(),
   endRealtimeConnections: vi.fn(),
   sendComplete: vi.fn(),
+  noticeRecord: vi.fn(),
+  noticeMarkFailed: vi.fn(),
+  noticeRemove: vi.fn(),
   recordAdminAction: vi.fn(),
   collections: vi.fn(),
   assertClassified: vi.fn(),
@@ -29,7 +32,13 @@ vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: {},
   mongoose: { modelNames: () => ['Alpha', 'Beta'] },
   adminAuditLogRepository: { append: vi.fn() },
+  accountDeletionNoticeRepository: {
+    record: h.noticeRecord,
+    markFailed: h.noticeMarkFailed,
+    remove: h.noticeRemove,
+  },
 }));
+vi.mock('../privacy/erasureHash', () => ({ erasureIdHash: (id: string) => `hash-${id}` }));
 vi.mock('@bike4mind/services', () => ({
   authSessionService: { endRealtimeConnections: h.endRealtimeConnections },
   adminAuditService: { recordAdminAction: h.recordAdminAction },
@@ -273,13 +282,36 @@ describe('completeAccountDeletion', () => {
     await expect(complete()).resolves.toEqual({ deleted: true });
     expect(users.delete).toHaveBeenCalledWith(USER_ID);
     expect(h.sendComplete).toHaveBeenCalledWith('leaving@example.com');
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('bus down'));
+    // The address stays in the outbox for the sweep's retry, and no log line carries it or the id.
+    expect(h.noticeMarkFailed).toHaveBeenCalledWith(`hash-${USER_ID}`, expect.any(Date));
+    expect(h.noticeRemove).not.toHaveBeenCalled();
+    for (const [message] of [...logger.warn.mock.calls, ...logger.error.mock.calls]) {
+      expect(String(message)).not.toContain('leaving@example.com');
+      expect(String(message)).not.toContain(USER_ID);
+    }
+  });
+
+  it('records the notice inside the delete transaction and clears it after a successful send', async () => {
+    h.hardDeleteUser.mockImplementation(async (_id: string, context: HardDeleteContext) => {
+      await context.recordInTransaction?.(deletedTarget);
+      h.order.push('committed');
+      return { result: undefined, subscriptionCancellation: null };
+    });
+    await complete();
+    expect(h.noticeRecord).toHaveBeenCalledWith({
+      idHash: `hash-${USER_ID}`,
+      email: 'leaving@example.com',
+      now: expect.any(Date),
+    });
+    expect(h.order).toEqual(['orgs', 'files', 'content', 'realtime', 'audit', 'committed', 'email']);
+    expect(h.noticeRemove).toHaveBeenCalledWith(`hash-${USER_ID}`);
   });
 
   it('sends no completion email without an address', async () => {
     h.claimUser.mockResolvedValue({ email: null });
     await expect(complete()).resolves.toEqual({ deleted: true });
     expect(h.sendComplete).not.toHaveBeenCalled();
+    expect(h.noticeRecord).not.toHaveBeenCalled();
   });
 
   it('records the completed deletion in the admin audit log inside the delete transaction', async () => {
@@ -481,6 +513,7 @@ describe('completeAccountDeletion for an admin data subject erasure', () => {
     await complete();
 
     expect(h.sendComplete).not.toHaveBeenCalled();
+    expect(h.noticeRecord).not.toHaveBeenCalled();
   });
 
   it('keeps the self path emailing and planning nothing', async () => {

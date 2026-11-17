@@ -926,6 +926,15 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return docs.map(d => String(d._id));
   }
 
+  /** Deletion requests made at or before `requestedBefore` whose row still exists, i.e. not yet erased or cancelled. */
+  async countOverdueDeletionRequests(requestedBefore: Date): Promise<number> {
+    // $type repeats the partial index's filter, without which the planner cannot use it.
+    return this.model.countDocuments({
+      'deletion.scheduledFor': { $type: 'date' },
+      'deletion.requestedAt': { $lte: requestedBefore },
+    });
+  }
+
   /** Stamps IUser.signupLanding once; a later call never overwrites it. */
   async recordSignupLanding(userId: string, notebookOwnerId: string, capturedAt: Date): Promise<void> {
     await this.model.updateOne(

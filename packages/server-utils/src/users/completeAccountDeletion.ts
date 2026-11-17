@@ -1,11 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { ADMIN_ERASURE_COMPLETED_ACTION, type AdminErasureCollection, type IUserDeletion } from '@bike4mind/common';
-import { Organization, User, adminAuditLogRepository, realtimeConnectionRepository } from '@bike4mind/database';
+import {
+  Organization,
+  User,
+  accountDeletionNoticeRepository,
+  adminAuditLogRepository,
+  realtimeConnectionRepository,
+} from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { adminAuditService, authSessionService } from '@bike4mind/services';
+import { erasureIdHash } from '../privacy/erasureHash';
 import { hardDeleteUser } from '../services/hardDeleteUser';
 import { systemAuditActor } from '../utils/adminAudit';
-import { sendAccountDeletionCompleteEmail } from './accountDeletionEmail';
+import { sendPendingDeletionNotice } from './accountDeletionNotice';
 import { classifyOwnedOrganizations, deleteSoleOwnedOrganizations } from './ownedOrganizations';
 import { purgeAccountContent } from './purgeAccountContent';
 import { purgeAccountFiles } from './purgeAccountFiles';
@@ -152,6 +159,14 @@ export async function completeAccountDeletion(
         // The admin audit entry commits with the delete, as the admin delete route's does.
         recordInTransaction: async target => {
           await Organization.deleteMany({ userId, personal: true }, { hardDelete: true });
+          // The address is unreadable once the row is gone, so the confirmation's outbox commits with the delete.
+          if (!erasure && user.email) {
+            await accountDeletionNoticeRepository.record({
+              idHash: erasureIdHash(userId),
+              email: user.email,
+              now: new Date(),
+            });
+          }
           await adminAuditService.recordAdminAction(
             {
               action: 'user.deletion.completed',
@@ -195,13 +210,7 @@ export async function completeAccountDeletion(
     return { deleted: true };
   }
   logger.info(`[AccountDeletion] Deleted user ${userId} whose deletion grace period ended`);
-  if (user.email) {
-    try {
-      await sendAccountDeletionCompleteEmail(user.email);
-    } catch (error) {
-      logger.error(`Failed to send the deletion-complete email for user ${userId}: ${String(error)}`);
-    }
-  }
+  if (user.email) await sendPendingDeletionNotice(erasureIdHash(userId), user.email, { logger });
   return { deleted: true };
 }
 

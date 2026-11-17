@@ -1,0 +1,38 @@
+# Account deletion deadline alarm
+
+Alarm `<app>-<stage>-account-deletion-deadline` (`infra/alarms.ts`, `accountDeletionDeadline`) pages
+the DLQ alarm topic when an account deletion request is 25 days old or more and still open. Erasure is
+due within one month, so this leaves about five days to act.
+
+The daily sweep (`apps/workers/src/cron/accountDeletionSweep.ts`) counts open requests whose
+`deletion.requestedAt` is at least 25 days old and emits it as `OverdueDeletionRequests` in
+`Lumina5/AccountDeletion`, dimension `Stage` only. It emits before it purges, so a run that later fails
+has still reported. An open request is a user row that still has `deletion` set; a completed one is gone
+and a cancelled one has `deletion: null`.
+
+**The alarm also fires when the metric is missing.** The window is two days, the expression is
+`FILL(m, 1)` and missing data counts as breaching, so a sweep that stopped running or emitting pages
+instead of silencing the alarm. Step 1 tells the two cases apart.
+
+## When it fires
+
+1. Did the sweep run and emit? Check the `accountDeletionSweep` Lambda logs and its dead-letter queue
+   (`accountDeletionSweepDlq`, alarmed in `infra/dlqAlarms.ts`). Look for an `OverdueDeletionRequests`
+   datapoint in the last two days. No datapoint means the sweep is down: fix that first (schedule,
+   deploy, `MONGODB_URI`), then re-run it.
+2. List the overdue users in the database: `deletion.requestedAt` older than 25 days with `deletion`
+   set. Newest request first is not needed; the oldest is the one closest to the deadline.
+3. For each, find why it was not purged:
+   - a live data export or purge lease (`accountDataExportLease`, `deletion.purgeLeaseExpiresAt`): `busy`
+   - the user still owns an organization with other members: the sweep refuses until ownership moves
+   - a thrown error: the sweep log line `Failed to delete user`
+4. Fix the cause and re-run the sweep, or complete the request by hand through the admin erasure path
+   before day 30. Once the row is gone the next run emits 0 and the alarm clears at the next evaluation.
+
+## Confirmation email retries
+
+The post-deletion confirmation is stored in the `AccountDeletionNotice` collection in the same
+transaction as the delete, sent once, and retried by each daily sweep up to five attempts in all. The
+address is removed once a send succeeds or after the last attempt (a 30-day TTL is the backstop). The
+sweep result carries `notices: { sent, failed, abandoned }`; an abandoned notice is logged at error.
+Nothing logs the address or the user id.
