@@ -60,10 +60,10 @@ const AdminLiveOpsTriageMultiConfigTab = dynamic(() => import('./AdminLiveOpsTri
 const WebhookAuditLogsTab = dynamic(() => import('./WebhookAuditLogs'), { ssr: false });
 const AuditLogTab = dynamic(() => import('./AuditLog'), { ssr: false });
 const ApprovalsTab = dynamic(() => import('./Approvals'), { ssr: false });
+const RolesTab = dynamic(() => import('./Roles'), { ssr: false });
 
-// The shell gives every tab panel the page frame. These tabs still pad themselves while open work on
-// their pages lands; each leaves this list in the change that drops its own outer padding, and no new
-// tab joins it (DESIGN_GUIDE section 3, "Page frame").
+// The shell gives every tab panel the page frame. A panel carrying this attribute pads itself instead:
+// every tab has left that list, and no new tab joins it (DESIGN_GUIDE section 3, "Page frame").
 const SELF_FRAMED_ATTR = 'data-admin-self-framed';
 
 const MigrateUsersTab = dynamic(() => import('./MigrateUsersTab'), { ssr: false });
@@ -316,6 +316,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           </TabPanel>
           <TabPanel value={AdminTab.AuditLog}>{activeTab === AdminTab.AuditLog && <AuditLogTab />}</TabPanel>
           <TabPanel value={AdminTab.Approvals}>{activeTab === AdminTab.Approvals && <ApprovalsTab />}</TabPanel>
+          <TabPanel value={AdminTab.Roles}>{activeTab === AdminTab.Roles && <RolesTab />}</TabPanel>
           <TabPanel value={AdminTab.Tutorials}>{activeTab === AdminTab.Tutorials && <TutorialsTab />}</TabPanel>
           <TabPanel value={AdminTab.GitHubConnection}>
             {activeTab === AdminTab.GitHubConnection && <GitHubConnectionTab />}

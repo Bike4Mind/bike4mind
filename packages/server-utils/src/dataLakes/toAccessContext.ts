@@ -21,7 +21,7 @@ import { getRequestMembershipOrgIds } from './requestMembership';
  * memoized per request (`req.entitlements`, via `getRequestEntitlements`), so calling this
  * from multiple handlers within one request costs a single subscription query.
  *
- * `administeredOrgIds` is the caller's org-admin set (billing owner / manager / appointed admin),
+ * `administeredOrgIds` is the caller's org-admin set (billing owner / manager with a users[] row),
  * the input to the org-manageable rung in `canManageLake`: an org admin may manage any lake scoped
  * to one of these orgs. Resolved once here (non-admins only) so every management gate agrees.
  */

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   STRUCTURED_SETTINGS,
   describeFields,
+  formatValue,
   getAtPath,
   setAtPath,
   validateConfig,
@@ -73,5 +74,14 @@ describe('schemaSettingForm', () => {
     expect(confirmations?.({ ...stored, mode: 'enforce', blockEmailDomains: true }, stored)).toHaveLength(2);
     const enforcing = { ...stored, mode: 'enforce' };
     expect(confirmations?.(enforcing, enforcing)).toEqual([]);
+  });
+
+  it('formats object defaults as JSON and keeps scalar formatting', () => {
+    expect(formatValue({})).toBe('{}');
+    expect(formatValue({ a: 'off' })).toBe('{"a":"off"}');
+    expect(formatValue(null)).toBe('None');
+    expect(formatValue(true)).toBe('On');
+    expect(formatValue(false)).toBe('Off');
+    expect(formatValue(3)).toBe('3');
   });
 });

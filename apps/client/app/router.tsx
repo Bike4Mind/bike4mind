@@ -26,6 +26,8 @@ import { billingLandingHref, parseBillingView } from '@client/app/utils/billingD
 import { enforceConsentRedirect } from '@client/app/utils/consentGuard';
 import { takeTicket } from './routes/partners/bedrocknewsClaimTicket';
 import { captureCodeFromFragment } from './routes/personas/personaRedeemCode';
+import { captureUnsubscribeToken } from './routes/email/unsubscribeToken';
+import { captureEmailLinkToken } from './utils/emailLinkToken';
 import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 
@@ -98,7 +100,8 @@ const AccountDataExportPage = lazy(() => import('./routes/account-data-export/$j
 const VerifyEmailPage = lazy(() => import('./routes/verify-email'));
 const VerifyEmailChangePage = lazy(() => import('./routes/verify-change'));
 const SubscribePage = lazy(() => import('./routes/subscribe'));
-const ArtifactsDemoPage = lazy(() => import('./routes/artifacts-demo'));
+const ArtifactsPage = lazy(() => import('./routes/artifacts/index'));
+const ArtifactPage = lazy(() => import('./routes/artifacts/$id'));
 const ComposerLabPage = lazy(() => import('./routes/composer-lab'));
 const AdminEmergencyPage = lazy(() => import('./routes/admin-emergency'));
 const GoogleDriveCallbackPage = lazy(() => import('./routes/google-drive/callback'));
@@ -1003,6 +1006,8 @@ const accountDataExportRoute = createRoute({
 });
 
 // Verify email route (replaces /verify-email.tsx)
+// The link's token is taken out of the address at module load (captureEmailLinkToken below), so the page
+// reads it from there, not from the search.
 const verifyEmailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/verify-email',
@@ -1011,14 +1016,11 @@ const verifyEmailRoute = createRoute({
       <VerifyEmailPage />
     </Suspense>
   ),
-  validateSearch: (search: Record<string, unknown>): { token?: string } => {
-    return {
-      token: optionalStringParam(search, 'token'),
-    };
-  },
 });
 
 // Verify email change route (replaces /verify-change.tsx)
+// The link's token is taken out of the address at module load (captureEmailLinkToken below), so the page
+// reads it from there, not from the search.
 const verifyEmailChangeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/verify-change',
@@ -1027,11 +1029,6 @@ const verifyEmailChangeRoute = createRoute({
       <VerifyEmailChangePage />
     </Suspense>
   ),
-  validateSearch: (search: Record<string, unknown>): { token?: string } => {
-    return {
-      token: optionalStringParam(search, 'token'),
-    };
-  },
 });
 
 // Admin emergency route (replaces /admin-emergency.tsx)
@@ -1106,15 +1103,34 @@ const subscribeRoute = createRoute({
   }),
 });
 
-// Artifacts demo route (replaces /artifacts-demo.tsx)
+// The signed-in user's artifacts library, and one artifact by id.
+const artifactsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/artifacts',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <ArtifactsPage />
+    </Suspense>
+  ),
+});
+
+const artifactRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/artifacts/$id',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <ArtifactPage />
+    </Suspense>
+  ),
+});
+
+// The old demo gallery's URL, kept so bookmarks land on the library.
 const artifactsDemoRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/artifacts-demo',
-  component: () => (
-    <Suspense fallback={<RouteLoadingFallback />}>
-      <ArtifactsDemoPage />
-    </Suspense>
-  ),
+  beforeLoad: () => {
+    throw redirect({ to: '/artifacts', replace: true });
+  },
 });
 
 // Composer status-line states with mock data, for design work (routes/composer-lab.tsx).
@@ -1328,11 +1344,7 @@ const emailUnsubscribeRoute = createRoute({
       <EmailUnsubscribePage />
     </Suspense>
   ),
-  validateSearch: (search: Record<string, unknown>): { token?: string } => {
-    return {
-      token: optionalStringParam(search, 'token'),
-    };
-  },
+  beforeLoad: () => captureUnsubscribeToken(),
 });
 
 // Desktop app download page - no layout, public, so it can be linked from anywhere.
@@ -1449,6 +1461,8 @@ const routeTree = rootRoute.addChildren([
     reportPublicRoute,
     organizationsRoute,
     organizationDetailRoute,
+    artifactsRoute,
+    artifactRoute,
     artifactsDemoRoute,
     composerLabRoute,
     dataLakesRoute,
@@ -1522,6 +1536,10 @@ if (captureUtmParams()) holdDiscoveryForCampaign(Date.now());
 // Same constraint for the data-lake GitHub App return: the router's first resolve rewrites its query.
 captureGitHubLakeCallbackSearch();
 captureMcpOAuthCallbackSearch();
+
+// An email verification link's token leaves the address before anything sends a request (the visit
+// beacon below carries the page URL as its Referer) and before the router builds its first location.
+captureEmailLinkToken();
 
 // Then tell the server a visit is happening. Order matters: the beacon is the request the
 // server reads the campaign cookie from, so it has to follow the line above. It also takes a

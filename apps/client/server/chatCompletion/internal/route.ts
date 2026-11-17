@@ -1,4 +1,4 @@
-import { isExpectedCompletionError } from '@bike4mind/utils';
+import { FlaggedContentError, isExpectedCompletionError } from '@bike4mind/utils';
 import { timingSafeEqual } from 'crypto';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { Resource } from 'sst';
@@ -102,13 +102,16 @@ export function registerInternalRoutes(app: Express, track: (p: Promise<void>) =
 
     const task = processQuest(params, logger).catch(async err => {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      // `error`/`errorCause` stay flat strings for alert sinks that print each field with `${value}`;
-      // `err` carries the stack and the full cause chain into the structured log.
-      if (!isExpectedCompletionError(err)) {
+      if (err instanceof FlaggedContentError) {
+        // A moderation refusal is an expected user outcome, already logged once at warn by the
+        // moderation service (promptModeration in @bike4mind/utils); logging it again here would page.
+      } else if (isExpectedCompletionError(err)) {
+        logger.warn('Quest processing ended with an expected provider error', { error: errorMessage });
+      } else {
+        // `error`/`errorCause` stay flat strings for alert sinks that print each field with `${value}`;
+        // `err` carries the stack and the full cause chain into the structured log.
         logger.error('Quest processing failed', { error: errorMessage, errorCause: describeErrorCause(err), err });
         track(emitProcessingFailed('/process', err));
-      } else {
-        logger.warn('Quest processing ended with an expected provider error', { error: errorMessage });
       }
 
       // Surface the failure to the client instead of leaving the quest 'running' forever - but only

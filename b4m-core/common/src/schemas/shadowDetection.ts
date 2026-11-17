@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { accountCampaignGroupSchema } from './accountCampaign';
 import { completionSynchronyEvidenceSchema } from './completionSynchrony';
 import { completionSequenceEvidenceSchema } from './completionSequence';
+import { assessmentAiDecisionSchema } from './adminAi';
 
 /**
  * Shadow detections: what an abuse detector WOULD have done to an actor, recorded next to its alert
@@ -289,6 +290,8 @@ export const shadowDetectionVerdictRequestSchema = z.object({
   expectedRevision: z.number().int().min(0),
   verdict: z.enum(SHADOW_DETECTION_VERDICTS),
   reason: z.unknown(),
+  /** Set when the grade was taken from the detection's assessment suggestion (accepted or overridden). */
+  aiDecision: assessmentAiDecisionSchema.optional(),
 });
 export type ShadowDetectionVerdictRequest = z.infer<typeof shadowDetectionVerdictRequestSchema>;
 

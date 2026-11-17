@@ -7,11 +7,11 @@ import { useCircuitBreakerOverride } from './hooks/useCircuitBreakerOverride';
 import { ControlPanel } from './components/ControlPanel';
 import { IntegrationCard } from './components/IntegrationCard';
 import { exportDashboardCsv } from './utils/csvExport';
-import type { IntegrationName, TimeRange } from './types';
+import { useIntegrationHealthSearchParams } from './hooks/useIntegrationHealthSearchParams';
+import type { IntegrationName } from './types';
 
 const AdminIntegrationHealthTab: React.FC = () => {
-  const [timeRange, setTimeRange] = useState<TimeRange>('24h');
-  const [expandedIntegration, setExpandedIntegration] = useState<IntegrationName | null>(null);
+  const { timeRange, expandedIntegration, patch } = useIntegrationHealthSearchParams();
   const [exportError, setExportError] = useState<string | null>(null);
 
   const { data, isLoading, isRefetching, isError, error, runProbes, isRunningProbes, probeError, forceRefresh } =
@@ -19,7 +19,7 @@ const AdminIntegrationHealthTab: React.FC = () => {
   const { setOverride, isUpdating, updatingIntegration } = useCircuitBreakerOverride();
 
   const handleToggle = (name: IntegrationName) => {
-    setExpandedIntegration(prev => (prev === name ? null : name));
+    patch({ expandedIntegration: expandedIntegration === name ? null : name });
   };
 
   const handleExport = () => {
@@ -66,7 +66,12 @@ const AdminIntegrationHealthTab: React.FC = () => {
   } else {
     body = (
       <>
-        <ControlPanel timeRange={timeRange} onTimeRangeChange={setTimeRange} isRefetching={isRefetching} data={data} />
+        <ControlPanel
+          timeRange={timeRange}
+          onTimeRangeChange={range => patch({ timeRange: range })}
+          isRefetching={isRefetching}
+          data={data}
+        />
         {/* One surface for the list: rows are divided by hairlines, not stacked as separate cards. */}
         <Box
           data-testid="integration-health-list"

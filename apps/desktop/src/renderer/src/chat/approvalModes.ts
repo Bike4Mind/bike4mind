@@ -34,14 +34,14 @@ export const APPROVAL_MODE_OPTIONS: readonly ApprovalModeOption[] = [
     mode: 'auto',
     label: 'Approve for me',
     description:
-      'Runs everything except commands Desktop cannot follow, commands that write outside this project or write protected settings, reads of .env files, repeated calls, and calls that may send data after external content',
+      'Runs everything except commands Desktop cannot fully follow, commands that write outside this project or write protected settings, reads of .env files, and repeated calls',
     tone: 'neutral',
   },
   {
     mode: 'full',
     label: 'Full access',
     description:
-      'Runs commands and edits without asking, except commands Desktop cannot follow, deletes that cannot be undone, signed-in browser pages and changes to protected settings. Commands can read any file on this computer and reach the internet',
+      'Runs commands and edits without asking, except commands Desktop cannot parse or fully follow, deletes that cannot be undone, opening a site you are signed in to and changes to protected settings. Commands can read any file on this computer and reach the internet',
     tone: 'warning',
   },
 ];
@@ -62,11 +62,10 @@ export const APPROVAL_MODE_FOOTNOTES: readonly string[] = [
   'Commands run as you and are not confined to the folders you have shared; file edits are. "Approve for me" asks about the paths it can see a command name, which a script can still build at run time.',
   '"Approve for me" runs every other command and edit without asking, including builds, installs and downloads, as you.',
   '"Approve for me" asks before a command may write outside your folders, before a .env file is read, and when the same call is made three times in a row. A command that only reads outside your folders runs.',
-  '"Approve for me" and "Full access" ask before commands Desktop cannot fully follow or parse, including git forms it does not list as safe. Only the listed Git operations with understood reference changes keep their usual behavior.',
-  'After a reply reads web, MCP, browser, remote skill or other conversation content, "Approve for me" asks before calls that may send data off this computer or start work in another conversation. Unknown programs, builds and configured Git commands count as possible senders. Proven local commands keep their normal checks. Explicit user permission rules still apply. An unknown option or complex curl form asks in both modes.',
+  '"Approve for me" and "Full access" ask before a command Desktop cannot parse or fully follow. Explicit user permission rules still apply.',
   'Deleting a conversation always asks, in every mode, because it cannot be undone.',
   'File edits into this app\'s own data folder or your credential folders such as ~/.ssh are refused in every mode. A command that names one is a path outside your folders, so "Approve for me" asks.',
-  '"Full access" asks before an action that cannot be undone, acting in a browser page you are signed in to, and a command Desktop can see writes permission and hook settings or reaches this app\'s data or a credential folder. It also asks before a command that may reach a WSL distro this project has no folder in.',
+  '"Full access" asks before an action that cannot be undone, opening a browser page you are signed in to, and a command Desktop can see writes permission and hook settings or reaches this app\'s data or a credential folder. It also asks before a command that may reach a WSL distro this project has no folder in.',
   'Full access lasts until you quit: a conversation left on it reopens on "Ask for approval".',
   'A session the agent starts on its own never runs at full access; it inherits at most "Approve for me".',
   'A new conversation starts in the mode you picked last, except "Full access", which is never carried over.',
