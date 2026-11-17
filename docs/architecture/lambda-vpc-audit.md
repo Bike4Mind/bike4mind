@@ -154,7 +154,8 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/emailIngestion/emailAnalyzer.dispatch` | `infra/emailIngestion.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `fabFileBucket`, `generatedImagesBucket` | Yes | Connects to MongoDB. |
 | `apps/workers/src/emailIngestion/emailParser.dispatch` | `infra/emailIngestion.ts` | MongoDB; linked: `allSecrets`, `emailIngestionBucket`, `emailIngestionQueue`, `emailAnalysisQueue`, `fabFileBucket`, `generatedImagesBucket`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/createMemento.handler` | `infra/llm.ts` | MongoDB; linked: `allSecrets`, `eventBus` | Yes | Connects to MongoDB. |
-| `apps/workers/src/events/dlqAlarmToSlack.handler` | `infra/dlqAlarms.ts` | linked: `secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL`, `secrets.SLACK_ALARMS_WEBHOOK_URL`, `secrets.SLACK_COST_ALARMS_WEBHOOK_URL` | No | Already outside the VPC. SNS alarm to Slack relay. |
+| `apps/workers/src/events/dlqAlarmToSlack.handler` | `infra/dlqAlarms.ts` | MongoDB, CloudWatch, SQS and Slack | Yes | Reads DLQ triage configuration and records delivery claims before forwarding alarms. |
+| `apps/workers/src/cron/dlqTriage.handler` | `infra/cron.ts` | MongoDB, CloudWatch, SQS and Slack | Yes | Reads DLQ triage configuration and records delivery claims for the scheduled sweep. |
 | `apps/workers/src/events/logToSlack.ingest` | `infra/logMonitor.ts` | MongoDB; linked: `allSecrets`, `sreJobQueue` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/notebookCuration.handler` | `infra/eventBus.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `eventBus`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket`, `notebookCurationQueue` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/notebookCurationAnalytics.handler` | `infra/eventBus.ts` | MongoDB; linked: `allSecrets`, `eventBus` | Yes | Connects to MongoDB. |
