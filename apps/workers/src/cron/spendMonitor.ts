@@ -135,16 +135,21 @@ export async function handler(event: unknown): Promise<{ status: 'ok' | 'disable
   logger.log('spend-monitor-evaluated', { breaches, posted });
 
   if (isMarginCheckSlot(now) && getSettingsValue('spendMonitorMarginEnabled', settings)) {
-    const margin = await runMarginCheck(
-      {
-        rollups: spendRollupRepository,
-        post,
-        messageContext: { creditUsd: MIN_PRICE_PER_CREDIT_USD, stage: Resource.App.stage },
-        logger,
-      },
-      readMarginThresholds(settings)
-    );
-    logger.log('spend-monitor-margin-evaluated', margin);
+    const marginThresholds = readMarginThresholds(settings);
+    try {
+      const margin = await runMarginCheck(
+        {
+          rollups: spendRollupRepository,
+          post,
+          messageContext: { creditUsd: MIN_PRICE_PER_CREDIT_USD, stage: Resource.App.stage },
+          logger,
+        },
+        marginThresholds
+      );
+      logger.log('spend-monitor-margin-evaluated', margin);
+    } catch (error) {
+      logger.error('spend-monitor-margin-failed', { error });
+    }
   }
   return { status: 'ok', rolled: buckets.length };
 }

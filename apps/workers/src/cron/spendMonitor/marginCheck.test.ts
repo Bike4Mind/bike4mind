@@ -69,6 +69,18 @@ describe('findMarginShortfalls', () => {
     expect(findings).toEqual([]);
   });
 
+  it('checks a model whose cost equals the floor and flags it when under the ratio', () => {
+    const findings = findMarginShortfalls([row('floor-model', 5, 0)], thresholds, CREDIT_USD);
+
+    expect(findings.map(finding => finding.model)).toEqual(['floor-model']);
+  });
+
+  it('does not flag a model whose ratio equals the minimum', () => {
+    const findings = findMarginShortfalls([row('even-model', 8, 8)], { ...thresholds, minRatio: 1 }, 1);
+
+    expect(findings).toEqual([]);
+  });
+
   it('flags a model charged nothing at all', () => {
     const findings = findMarginShortfalls([row('uncharged-model', 8, 0)], thresholds, CREDIT_USD);
 

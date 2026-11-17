@@ -6073,7 +6073,7 @@ export const settingsMap = {
     name: 'Spend Monitor: Model Margin Check',
     defaultValue: true,
     description:
-      'Once a day (00:00 UTC), flag any model whose credits charged, converted to USD at the lowest per-credit price, fall below its provider cost over the margin window. Posts follow "Post Alerts to Slack".',
+      'Once a day, shortly after 00:00 UTC and only while Spend Monitor is enabled, flag any model whose credits charged, converted to USD at the lowest per-credit price, fall below its provider cost over the margin window. Posts follow "Post Alerts to Slack".',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),

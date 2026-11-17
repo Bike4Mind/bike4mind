@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   latestBucketStart: vi.fn(),
   log: vi.fn(),
   warn: vi.fn(),
+  error: vi.fn(),
   evaluateSpend: vi.fn(),
   postAlarmToSlack: vi.fn(),
   runMarginCheck: vi.fn(),
@@ -43,7 +44,7 @@ vi.mock('@bike4mind/utils', () => ({
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     withMetadata() {
-      return { log: mocks.log, warn: mocks.warn, error: vi.fn() };
+      return { log: mocks.log, warn: mocks.warn, error: mocks.error };
     }
   },
 }));
@@ -311,6 +312,15 @@ describe('spendMonitor handler margin check', () => {
 
     expect(mocks.postAlarmToSlack).not.toHaveBeenCalled();
     expect(mocks.log).toHaveBeenCalledWith('spend-monitor-slack-disabled', { text: 'margin digest' });
+  });
+
+  it('logs a failed margin check and still completes the handler', async () => {
+    const failure = new Error('rollup read failed');
+    mocks.runMarginCheck.mockRejectedValue(failure);
+
+    await expect(handler(midnightEvent)).resolves.toEqual({ status: 'ok', rolled: expect.any(Number) });
+
+    expect(mocks.error).toHaveBeenCalledWith('spend-monitor-margin-failed', { error: failure });
   });
 
   it('fails loudly when a margin threshold resolves to no value', async () => {

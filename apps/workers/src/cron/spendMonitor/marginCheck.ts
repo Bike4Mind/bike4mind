@@ -92,7 +92,7 @@ export function buildMarginMessage(
         `Charged USD = credits charged x ${context.creditUsd} (the lowest per-credit price), so a model listed here may still break even at list price.`
       ),
       escapeMrkdwn(
-        'Includes local-tokenizer settlements, free-tier usage, write-offs and absorbed timeouts; confirm against UsageEvent providerInputTokens/providerOutputTokens and settledBasis before repricing.'
+        'Free-tier usage, absorbed timeouts and local-tokenizer settlements add cost with few credits and can flag a model falsely; credits charged include write-offs that were never collected, which can hide a shortfall. Confirm against UsageEvent providerInputTokens/providerOutputTokens, settledBasis and writtenOffCredits before repricing.'
       ),
     ],
     summary: `${findings.length} model${plural} below ${thresholds.minRatio}x margin, ${usd(shortfall)} short in the last ${thresholds.windowHours}h`,
