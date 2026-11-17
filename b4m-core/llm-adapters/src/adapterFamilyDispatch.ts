@@ -46,6 +46,8 @@ export interface AdapterFamilyDispatchContext {
   logger: Logger;
   /** Opaque, non-PII end-user id forwarded to the direct-provider backends. */
   providerEndUserId?: string;
+  /** Anthropic semaphore fairness bucket; defaults to providerEndUserId. See AnthropicBackend. */
+  tenantKey?: string;
 }
 
 /** An expired key is a configuration error, not an absent credential. */
@@ -70,7 +72,7 @@ export function backendForAdapterFamily(
   family: AdapterFamily,
   ctx: AdapterFamilyDispatchContext
 ): ICompletionBackend | null {
-  const { apiKeyTable, logger, providerEndUserId } = ctx;
+  const { apiKeyTable, logger, providerEndUserId, tenantKey } = ctx;
 
   switch (family) {
     case 'openai-chat':
@@ -98,7 +100,8 @@ export function backendForAdapterFamily(
               ANTHROPIC_FEDERATED_KEY
             ),
             logger,
-            providerEndUserId
+            providerEndUserId,
+            tenantKey
           )
         : null;
     }

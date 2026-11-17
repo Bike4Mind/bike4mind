@@ -230,6 +230,27 @@ describe('POST /api/ai/tts', () => {
     expect(mocks.synthesizeTts).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['a session', undefined],
+    ['a key without ai:end-user-id', { keyId: 'k1', userId: 'u1', scopes: ['ai:generate'] }],
+  ])('refuses end_user_id from %s with a 400 before any provider cost', async (_name, apiKeyInfo) => {
+    const { promise } = run({ text: 'hi', end_user_id: 'customer_42' }, { id: 'u1' }, apiKeyInfo);
+    await expect(promise).rejects.toMatchObject({
+      statusCode: 400,
+      additionalInfo: { errorCode: 'end_user_id_not_allowed' },
+    });
+    expect(mocks.holdPreflightCredits).not.toHaveBeenCalled();
+    expect(mocks.synthesizeTts).not.toHaveBeenCalled();
+  });
+
+  it('accepts end_user_id from a platform key', async () => {
+    const platformKey = { keyId: 'k1', userId: 'u1', scopes: ['ai:generate', 'ai:end-user-id'] };
+    const { res, promise } = run({ text: 'hi', end_user_id: 'customer_42' }, { id: 'u1' }, platformKey);
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.synthesizeTts).toHaveBeenCalled();
+  });
+
   it('rejects an unsupported (vendor, format) pair with 422 before any provider cost', async () => {
     const { promise } = run({ text: 'hi', provider: 'elevenlabs', format: 'wav' });
     await expect(promise).rejects.toBeInstanceOf(UnprocessableEntityError);

@@ -18,6 +18,7 @@ export const ORG_TOOL_NOT_ALLOWED_ERROR_CODE = 'org_tool_not_allowed';
 export const MCP_ACTION_REPLACED_ERROR_CODE = 'action_replaced';
 export const PENDING_ACTION_EXPIRED_ERROR_CODE = 'action_expired';
 export const PENDING_ACTION_ALREADY_RESOLVED_ERROR_CODE = 'action_already_resolved';
+export const END_USER_ID_NOT_ALLOWED_ERROR_CODE = 'end_user_id_not_allowed';
 
 /**
  * The one enumerated vocabulary for the `errorCode` field on a public error body
@@ -145,6 +146,9 @@ export const API_ERROR_CODES = [
   'tool_changes_unsupported',
   /** A tool change message was malformed or sat where the provider does not accept one. */
   'invalid_tool_change',
+  // AI routes that take `end_user_id` (completions, TTS).
+  /** `end_user_id` was sent on a credential other than an API key holding `ai:end-user-id`. */
+  END_USER_ID_NOT_ALLOWED_ERROR_CODE,
   // Skill Market import conflicts (POST /api/v1/skills/market/listings/{id}/import); see
   // SKILL_MARKET_IMPORT_ERROR_CODES in schemas/skillMarketPublic.ts.
   /** A newer version was approved since the one the caller reviewed. */

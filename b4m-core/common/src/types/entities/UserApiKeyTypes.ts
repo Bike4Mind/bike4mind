@@ -214,6 +214,15 @@ export enum ApiKeyScope {
    * revocation, so it is granted only by ticking it.
    */
   API_KEYS_MANAGE = 'api-keys:manage',
+  /**
+   * Lets the key send `end_user_id` on `POST /api/ai/v1/completions` and `POST /api/ai/tts`, so a
+   * product serving many end users through one key reaches the model provider as one identifier per
+   * end user rather than one for the whole account (toPlatformEndUserProviderId in
+   * @bike4mind/llm-adapters). Admin-provisioned only: it changes how the provider attributes the
+   * key's traffic, so the owner cannot tick it. It authorizes no route by itself, and the key still
+   * needs `ai:chat`/`ai:generate`.
+   */
+  AI_END_USER_ID = 'ai:end-user-id',
 }
 
 /**

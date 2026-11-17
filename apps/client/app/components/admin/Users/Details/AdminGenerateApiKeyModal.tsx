@@ -48,10 +48,14 @@ interface AdminGenerateApiKeyModalProps {
 
 // overwatch-ingest:write is left out: createUserApiKey requires a productId for it, which
 // this admin path never collects, so offering it would only buy a 400.
-const ingestScopeOptions = ADMIN_ONLY_API_KEY_SCOPES.filter(s => s.value !== ApiKeyScope.OVERWATCH_INGEST_WRITE);
 // A confined scope must be a key's only scope (createUserApiKey enforces it), so picking one
 // replaces the selection and picking any other scope drops it.
 const confinedScopeValues = new Set<ApiKeyScopeValue>(CONFINED_API_KEY_SCOPES);
+const ingestScopeOptions = ADMIN_ONLY_API_KEY_SCOPES.filter(
+  s => s.value !== ApiKeyScope.OVERWATCH_INGEST_WRITE && confinedScopeValues.has(s.value)
+);
+// Admin-provisioned scopes that ride alongside the generic ones (ai:end-user-id).
+const companionAdminScopeOptions = ADMIN_ONLY_API_KEY_SCOPES.filter(s => !confinedScopeValues.has(s.value));
 
 const INGEST_FULL_ADMIN_ONLY = 'Only full administrators can create API keys with admin-provisioned scopes';
 
@@ -281,6 +285,18 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
             )}
             <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'sm', p: 1 }}>
               {ingestScopeOptions.map(scope => renderScope(scope, canMintIngest ? undefined : INGEST_FULL_ADMIN_ONLY))}
+            </Box>
+          </FormControl>
+
+          <FormControl>
+            <FormLabel sx={{ mb: 0.5 }}>Platform key</FormLabel>
+            <Typography level="body-xs" color="neutral" sx={{ mb: 1 }}>
+              Admin-only. Combine with the AI scopes above for a key that serves many end users.
+            </Typography>
+            <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'sm', p: 1 }}>
+              {companionAdminScopeOptions.map(scope =>
+                renderScope(scope, canMintIngest ? undefined : INGEST_FULL_ADMIN_ONLY)
+              )}
             </Box>
           </FormControl>
 

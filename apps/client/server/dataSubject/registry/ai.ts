@@ -268,6 +268,15 @@ export const aiHolders = {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
+  // The platform's end-user ids are the key owner's records, so they go with the owner.
+  PlatformEndUser: {
+    kind: 'holder',
+    references: [{ path: 'keyOwnerId', matchBy: 'userId', action: 'deleteDocument' }],
+    // Derived from keyOwnerId and endUserId, which the export already carries; it only resolves provider notices.
+    secretPaths: ['providerEndUserId'],
+    // The platform's ids for its own end users, not Bike4Mind accounts; deleted with the owner's row.
+    unrelatedPaths: ['endUserId', 'providerEndUserId'],
+  },
   RapidReplyAuditLog: {
     kind: 'holder',
     references: [

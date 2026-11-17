@@ -17,10 +17,14 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown)
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 
 const mockFindOne = vi.fn();
+const mockFindById = vi.fn();
+const mockFindEndUser = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   User: {
     findOne: (filter: unknown) => ({ select: () => ({ lean: () => mockFindOne(filter) }) }),
+    findById: (id: unknown) => ({ select: () => ({ lean: () => mockFindById(id) }) }),
   },
+  platformEndUserRepository: { findByProviderEndUserId: (id: string) => mockFindEndUser(id) },
 }));
 
 import handler from '../by-provider-id';
@@ -40,6 +44,8 @@ describe('GET /api/admin/users/by-provider-id', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFindOne.mockResolvedValue(null);
+    mockFindById.mockResolvedValue(null);
+    mockFindEndUser.mockResolvedValue(null);
   });
 
   it('gates through adminApi with JWT auth, admin scope and support:read for GET', () => {
@@ -67,7 +73,42 @@ describe('GET /api/admin/users/by-provider-id', () => {
     expect(mockFindOne).toHaveBeenCalledWith({ providerEndUserId: DIGEST });
     expect(res._getStatusCode()).toBe(200);
     expect(res.getHeader('Cache-Control')).toBe('private, no-store');
-    expect(res._getJSONData()).toEqual({ id: 'u1', name: 'Ada', username: 'ada', email: 'ada@example.com' });
+    expect(res._getJSONData()).toEqual({
+      kind: 'user',
+      id: 'u1',
+      name: 'Ada',
+      username: 'ada',
+      email: 'ada@example.com',
+    });
+    expect(mockFindEndUser).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a platform end user and names the platform account', async () => {
+    const firstSeenAt = new Date('2026-11-01T00:00:00Z');
+    const lastSeenAt = new Date('2026-11-02T00:00:00Z');
+    mockFindEndUser.mockResolvedValue({
+      providerEndUserId: DIGEST,
+      keyOwnerId: 'owner-1',
+      apiKeyId: 'key-1',
+      endUserId: 'customer_42',
+      firstSeenAt,
+      lastSeenAt,
+    });
+    mockFindById.mockResolvedValue({ _id: 'owner-1', name: 'Platform', username: 'platform', email: undefined });
+
+    const res = await call({ id: DIGEST });
+
+    expect(mockFindEndUser).toHaveBeenCalledWith(DIGEST);
+    expect(mockFindById).toHaveBeenCalledWith('owner-1');
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({
+      kind: 'platformEndUser',
+      account: { id: 'owner-1', name: 'Platform', username: 'platform', email: null },
+      endUserId: 'customer_42',
+      apiKeyId: 'key-1',
+      firstSeenAt: firstSeenAt.toISOString(),
+      lastSeenAt: lastSeenAt.toISOString(),
+    });
   });
 
   it('answers 404 when no account carries the identifier', async () => {
