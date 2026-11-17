@@ -18,12 +18,15 @@ vi.mock('@client/app/utils/stepUpInterceptor', () => ({
 
 let mfaEnabled = false;
 let backupCodesCount = 0;
+// The server's answer from its own enforceMFA: `required` drives the tag, `canDisable` the button.
+let required = false;
+let canDisable = true;
 // Separate handles so a test can fail one MFA mutation without the others seeing it.
 const disableMutation = { mutate: vi.fn(), isPending: false };
 const regenerateMutation = { mutate: vi.fn(), isPending: false };
 
 vi.mock('@client/app/hooks/data/mfa', () => ({
-  useMFAStatus: () => ({ data: mfaEnabled ? { enabled: true, backupCodesCount } : undefined }),
+  useMFAStatus: () => ({ data: mfaEnabled ? { enabled: true, required, canDisable, backupCodesCount } : undefined }),
   useSetupMFA: () => setupMutation,
   useVerifyMFASetup: () => mutation,
   useCancelMFASetup: () => mutation,
@@ -31,12 +34,11 @@ vi.mock('@client/app/hooks/data/mfa', () => ({
   useRegenerateBackupCodes: () => regenerateMutation,
 }));
 
-// Admin enforcement drives whether the card offers Disable at all.
-let enforceMFA = 'false';
-let authedSettingsLoaded = true;
-vi.mock('@client/app/contexts/AdminSettingsContext', () => ({
-  useAdminSettings: () => ({ settings: { enforceMFA }, authedSettingsLoaded }),
+// This tab's settings copy, which the card must not read: it disagrees with the server below.
+const { useAdminSettings } = vi.hoisted(() => ({
+  useAdminSettings: vi.fn(() => ({ settings: { enforceMFA: 'false' }, authedSettingsLoaded: true })),
 }));
+vi.mock('@client/app/contexts/AdminSettingsContext', () => ({ useAdminSettings }));
 const mfaModalProps: { onVerify?: (token: string) => void } = {};
 vi.mock('@client/app/components/common/MFAModal', () => ({
   default: (props: { onVerify: (token: string) => void }) => {
@@ -71,8 +73,8 @@ describe('MfaCard sections', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mfaEnabled = false;
-    enforceMFA = 'false';
-    authedSettingsLoaded = true;
+    required = false;
+    canDisable = true;
   });
 
   it.each(['passkeys-section-stub', 'trusted-devices-section-stub'])('mounts %s, disabled while MFA is off', testId => {
@@ -116,38 +118,53 @@ describe('MfaCard - disabled MFA actions and enforcement', () => {
     regenerateMutation.mutate.mockReset();
     mfaEnabled = true;
     backupCodesCount = 0;
-    enforceMFA = 'false';
-    authedSettingsLoaded = true;
+    required = false;
+    canDisable = true;
   });
 
-  it('offers Disable once MFA is on and not enforced', () => {
+  it('offers Disable once MFA is on and the server allows disabling it', () => {
     renderCard();
     expect(screen.getByTestId('settings-disable-mfa-btn')).toBeTruthy();
+    expect(screen.queryByText('(Required by administrator)')).toBeNull();
   });
 
-  it('hides Disable and flags the status as required when the administrator enforces MFA', () => {
-    enforceMFA = 'true';
+  it('hides Disable and flags the status as required when the server requires MFA', () => {
+    required = true;
+    canDisable = false;
     renderCard();
     expect(screen.queryByTestId('settings-disable-mfa-btn')).toBeNull();
     expect(screen.getByText('(Required by administrator)')).toBeTruthy();
+    // The settings copy in this tab says enforcement is off; the server's answer wins.
+    expect(useAdminSettings).not.toHaveBeenCalled();
+  });
+
+  it('hides Disable without the required tag for a user exempt from enforcement', () => {
+    // A persona under enforcement: not required to enroll, yet the disable route still refuses.
+    required = false;
+    canDisable = false;
+    renderCard();
+    expect(screen.queryByTestId('settings-disable-mfa-btn')).toBeNull();
+    expect(screen.queryByText('(Required by administrator)')).toBeNull();
   });
 
   it('does not flag enforcement while MFA is off', () => {
-    enforceMFA = 'true';
+    required = true;
+    canDisable = false;
     mfaEnabled = false;
     renderCard();
     expect(screen.queryByText('(Required by administrator)')).toBeNull();
     expect(screen.getByTestId('settings-enable-mfa-btn')).toBeTruthy();
   });
 
-  it('hides Disable until the authenticated settings have loaded', () => {
-    authedSettingsLoaded = false;
+  it('hides Disable until the status has loaded', () => {
+    mfaEnabled = false;
     renderCard();
     expect(screen.queryByTestId('settings-disable-mfa-btn')).toBeNull();
   });
 
-  it('keeps Regenerate available when the administrator enforces MFA', () => {
-    enforceMFA = 'true';
+  it('keeps Regenerate available when the server requires MFA', () => {
+    required = true;
+    canDisable = false;
     renderCard();
     expect(screen.getByTestId('settings-regenerate-backup-codes-btn')).toBeTruthy();
   });
