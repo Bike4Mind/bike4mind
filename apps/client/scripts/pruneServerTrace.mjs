@@ -1,0 +1,89 @@
+#!/usr/bin/env node
+// Drops files the Next server never loads from the build's .nft.json traces, so the hosted
+// server function stops shipping them.
+//
+// OpenNext's copyTracedFiles builds the Lambda from the `files` lists of `<.next>/**/*.nft.json`
+// and copies nothing else, so a path removed here never reaches the deployment package. This is
+// the working lever under Turbopack: next.config.mjs's outputFileTracingExcludes is dormant there
+// (see the note on it). The .next/standalone tree is left alone; the container build copies that
+// tree as is.
+//
+// Every entry is a package the server reaches only through a lazy import() of a code path that
+// never runs in this function, or a part of a package its entry point never reads. Removing a
+// file that IS loaded fails at that import with MODULE_NOT_FOUND, not at boot, so each entry
+// names what it relies on.
+//
+// Usage: node pruneServerTrace.mjs [--if-standalone] <path-to-.next-dir>
+//   --if-standalone: no-op when <.next>/standalone is absent (a plain `next build`, which OpenNext
+//   never packages), so the postbuild hook can run unconditionally.
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+export const PRUNED_TRACE_PATTERNS = [
+  // Browser automation runs only in a separate queue worker Lambda that installs its own copy
+  // (infra/queues.ts). The server traces it because a shared module names it in a lazy import();
+  // next's optional @playwright/test peer pulls in a second version. About 23 MB together.
+  /\/node_modules\/(?:playwright|playwright-core|@playwright\/[^/]+)(?:\/|$)/,
+  // tiktoken's node entry (tiktoken.cjs) reads only tiktoken_bg.wasm, which embeds every
+  // encoding's ranks. encoders/ and lite/ serve the `tiktoken/lite` and `tiktoken/load` entry
+  // points, which nothing here imports. About 18 MB.
+  /\/node_modules\/tiktoken\/(?:encoders|lite)(?:\/|$)/,
+];
+
+/** True when a traced path (relative to its .nft.json, any separator) must not ship. */
+export function isPrunedTracePath(tracedPath) {
+  const normalized = `/${tracedPath.split(path.sep).join('/')}`;
+  return PRUNED_TRACE_PATTERNS.some(pattern => pattern.test(normalized));
+}
+
+function findTraceFiles(dir) {
+  const found = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    // The standalone tree is a copy Next already made; its traces are not what OpenNext reads.
+    if (entry.isDirectory() && entry.name !== 'standalone' && entry.name !== 'cache')
+      found.push(...findTraceFiles(full));
+    else if (entry.isFile() && entry.name.endsWith('.nft.json')) found.push(full);
+  }
+  return found;
+}
+
+/** Rewrites every trace under nextDir in place. Returns the number of traces and paths removed. */
+export function pruneServerTrace(nextDir) {
+  let traces = 0;
+  let removed = 0;
+  for (const traceFile of findTraceFiles(nextDir)) {
+    const trace = JSON.parse(fs.readFileSync(traceFile, 'utf8'));
+    if (!Array.isArray(trace.files)) throw new Error(`${traceFile}: no "files" array`);
+    const kept = trace.files.filter(file => !isPrunedTracePath(file));
+    traces++;
+    if (kept.length === trace.files.length) continue;
+    removed += trace.files.length - kept.length;
+    fs.writeFileSync(traceFile, JSON.stringify({ ...trace, files: kept }));
+  }
+  return { traces, removed };
+}
+
+// realpath: a symlinked invocation path would otherwise skip the CLI and prune nothing, silently.
+const invokedPath = process.argv[1] ? fs.realpathSync(process.argv[1]) : '';
+if (import.meta.url === pathToFileURL(invokedPath).href) {
+  const args = process.argv.slice(2);
+  const nextDir = args.find(arg => !arg.startsWith('--'));
+  if (args.includes('--if-standalone') && nextDir && !fs.existsSync(path.join(nextDir, 'standalone'))) {
+    console.log(`pruneServerTrace: no standalone output under ${nextDir}, nothing to prune`);
+    process.exit(0);
+  }
+  if (!nextDir || !fs.existsSync(path.join(nextDir, 'server'))) {
+    console.error('usage: pruneServerTrace.mjs [--if-standalone] <.next dir containing server/>');
+    process.exit(1);
+  }
+  const { traces, removed } = pruneServerTrace(nextDir);
+  // Zero traces means the layout moved and this silently stopped doing anything: fail instead.
+  if (traces === 0) {
+    console.error(`pruneServerTrace: no .nft.json traces under ${nextDir}`);
+    process.exit(1);
+  }
+  console.log(`pruneServerTrace: removed ${removed} traced paths across ${traces} traces`);
+}
