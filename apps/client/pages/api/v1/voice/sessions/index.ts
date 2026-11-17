@@ -87,10 +87,11 @@ function remapVoiceModel(modelId: ChatModelName): ChatModelName {
 
 const handler = nextRouteForContract(createVoiceSessionContract).post(async (req, res) => {
   assertAiAccessAllowed(req.user);
-  // Voice bills the user personally, so only an org-billed key's own org can be the frozen org.
   const organizationId = billedOrganizationIdForFreeze(req.apiKeyInfo);
+  // The proxy checks and bills the token's org on every turn, so a frozen org must refuse here too.
+  const freezeOrganizationId = organizationId ?? (req.user.organizationId ? String(req.user.organizationId) : null);
   // Before any gate that reads settings or the provider, and whether or not credits are enforced.
-  await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, organizationId), {
+  await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, freezeOrganizationId), {
     db: { spendFreezes: spendFreezeRepository },
   });
   const { sessionId, reasoningModelId: bodyModelId, isReconnect } = req.validated;

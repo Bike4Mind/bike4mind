@@ -171,7 +171,7 @@ describe('POST /api/v1/voice/sessions - spend freeze', () => {
     h.findFreeze.mockResolvedValue(frozen);
     const refusal = await run(key).catch((e: unknown) => e);
     expect(refusal).toMatchObject({ statusCode: 403, additionalInfo: { errorCode: 'spend_frozen' } });
-    expect(h.findFreeze).toHaveBeenCalledWith({ userId: 'owner-1', organizationId: null, apiKeyId: 'key-1' });
+    expect(h.findFreeze).toHaveBeenCalledWith({ userId: 'owner-1', organizationId: 'home-org', apiKeyId: 'key-1' });
     expect(createModelAdmission).not.toHaveBeenCalled();
     expect(h.createSession).not.toHaveBeenCalled();
     expect(h.signToken).not.toHaveBeenCalled();
@@ -204,14 +204,15 @@ describe('POST /api/v1/voice/sessions - spend freeze', () => {
     expect(h.signToken.mock.calls[0][0]).not.toHaveProperty('apiKeyBillingOwnerType');
   });
 
-  it('allows a member whose only frozen scope is their home organization (personal spend continues)', async () => {
+  it('refuses a member whose home organization is frozen, since the proxy bills that org on every turn', async () => {
     h.findFreeze.mockImplementation(async (subject: { organizationId: string | null }) =>
-      subject.organizationId === 'home-org' ? frozen : null
+      subject.organizationId === 'home-org' ? { ...frozen, scopeType: 'Organization' } : null
     );
-    await run(key);
-    expect(h.findFreeze).toHaveBeenCalledWith({ userId: 'owner-1', organizationId: null, apiKeyId: 'key-1' });
-    expect(h.signToken).toHaveBeenCalledOnce();
-    expect(h.reserve).toHaveBeenCalledWith(expect.objectContaining({ organizationId: null }));
+    const refusal = await run(key).catch((e: unknown) => e);
+    expect(refusal).toMatchObject({ statusCode: 403, additionalInfo: { errorCode: 'spend_frozen' } });
+    expect(h.findFreeze).toHaveBeenCalledWith({ userId: 'owner-1', organizationId: 'home-org', apiKeyId: 'key-1' });
+    expect(h.signToken).not.toHaveBeenCalled();
+    expect(h.reserve).not.toHaveBeenCalled();
   });
 
   it('refuses 403 spend_frozen for an org-billed key whose org is frozen', async () => {
