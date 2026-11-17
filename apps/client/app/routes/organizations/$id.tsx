@@ -416,6 +416,12 @@ const OrganizationPage: FC = () => {
                 borderRight: '1px solid',
                 borderColor: 'divider',
                 p: 2,
+                // The rail is as tall as the page, which can be shorter than its entries; scroll it
+                // rather than letting the last entries (Settings) fall off-screen. Entries keep their
+                // height so the column overflows instead of squashing them.
+                overflowY: 'auto',
+                flexWrap: 'nowrap',
+                '& > *': { flexShrink: 0 },
                 '& .MuiTab-root': {
                   justifyContent: 'flex-start',
                   px: 2,
