@@ -33,6 +33,8 @@ export type DataColumn<Row> = {
    * strings still break inside the cell. `numeric` columns never truncate; give them a `width`.
    */
   wrap?: boolean;
+  /** Lets the header label wrap onto a second line instead of ending in an ellipsis. */
+  wrapHeader?: boolean;
 };
 export type DataTableSort = { columnId: string; direction: 'asc' | 'desc' };
 /** Server pagination: `rows` is already the current page. `page` is 1-based. */
@@ -385,7 +387,11 @@ export function DataTable<Row>({
                         : 'none'
                       : undefined
                   }
-                  style={{ textAlign: column.numeric ? 'right' : 'left', width: column.width }}
+                  style={{
+                    textAlign: column.numeric ? 'right' : 'left',
+                    width: column.width,
+                    ...(column.wrapHeader && { whiteSpace: 'normal' }),
+                  }}
                 >
                   {isSortable(column) ? (
                     <Button

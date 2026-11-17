@@ -261,19 +261,19 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'eventRule:infra/providerSpend.ts:ProviderAdminKeyChangeRule',
-    'd808ffebf735772b86f2a79b3c1e02fb06176ae4ba90c2707c8b78077796c220',
+    '010acb373b11052609e99fc37aeabc317d999e82e76f70bbddf984af22e54b3f',
     'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
     ['cloudwatch:PutMetricData']
   ),
   hostedOnly(
     'eventRule:infra/providerSpend.ts:ProviderAdminKeyKmsChangeRule',
-    '95f1a9d8bd93df1a27f3caeb8278e7f9e944d9561aaeb85ec326f2eeef41e5cd',
+    '7eedf24bd67a72237d112a9b37f58cc772c38164af7ef0b3db6cb8ec2ce94d24',
     'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
     ['cloudwatch:PutMetricData']
   ),
   hostedOnly(
     'eventRule:infra/providerSpend.ts:ProviderAdminKeyReadRule',
-    '090e9a2b604adf317aa9c0487f6bc1ad1c0b616c5c8606370c7df956b240e539',
+    '4b2696a1e72b34fc676d0bc764d02cb7ed429ee59bc5d1683426894023e2a9db',
     'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
     ['cloudwatch:PutMetricData']
   ),
@@ -1264,7 +1264,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'fb9427f9a234d8c335c1f021c0cc7a9b7d2a21f5fd24e3e0ff8b8b896217e78f',
+    '4c3f2396cd9e1aff1b6bd69390ef8a8a5f51e248d2683855b0831cda3972f421',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gap('service:infra/searxng.ts:Searxng', 'fef5f4ce5e094d32525bb4a13828a34b67ba75a38ab72c70e526ba908c31f049'),

@@ -16,12 +16,7 @@ import {
   usdToCreditsStochastic,
   type UsagePriceStamp,
 } from '@bike4mind/common';
-import type {
-  ReadOrgModelPolicy,
-  SoundGenerationVendor,
-  ThinkingVisibility,
-  VoiceGenerationVendor,
-} from '@bike4mind/common';
+import type { ReadOrgModelPolicy, ThinkingVisibility } from '@bike4mind/common';
 import { type ApiKeyTable, type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
@@ -43,7 +38,7 @@ import {
   stripCitationIndices,
 } from './citationNumbering';
 import { ToolDefinition, type ToolContext } from './base/types';
-import { validateImageCredits, validateAudioCredits } from './base/utils';
+import { validateImageCredits } from './base/utils';
 import { estimateImageCredits } from '../../imageCost';
 import {
   toImageCostInput,
@@ -51,7 +46,6 @@ import {
   type ImageToolFinishData,
   type ImageToolName,
 } from './imageToolBilling';
-import { estimateAudioCredits, type AudioCostInput } from '../../audioCost';
 import {
   extractAndSaveEntitiesFromUserMessage,
   getConversationContextSystemMessage,
@@ -88,9 +82,9 @@ export function buildToolUsageEvent(params: {
   /** Rate provenance for costUsd (buildUsagePriceStamp), from a caller that priced a text model. */
   priceStamp?: UsagePriceStamp;
   /**
-   * Defaults to 'tool'. The audio tool passes the feature its direct endpoint
-   * writes (sound_effects, text_to_speech), so a track counts as a track
-   * whichever path made it - the Gears status reads these features to unlock its gears.
+   * Defaults to 'tool'. A tool whose output has a direct endpoint passes the feature that
+   * endpoint writes, so the output counts the same whichever path made it - the Gears status
+   * reads these features to unlock its gears.
    */
   feature?: UsageEventFeature;
 }): IUsageEventInput {
@@ -550,9 +544,11 @@ export interface BuildToolPromptArgs {
   deferGuidanceFor?: ReadonlySet<string>;
 }
 
-// The paid media tools: onToolStart re-checks account standing for these, then records a gate
-// estimate (gateImageCredits, gateAudioCredits).
-const GATED_TOOL_NAMES = new Set(['image_generation', 'edit_image', 'audio_generation']);
+// The tools whose onToolStart records a gate estimate (gateImageCredits).
+const GATED_TOOL_NAMES = new Set(['image_generation', 'edit_image']);
+// The paid media tools billed by the host or by a job created mid-turn: onToolStart re-checks
+// account standing for these before the call.
+const ACCOUNT_CHECKED_TOOL_NAMES = new Set([...GATED_TOOL_NAMES, 'audio_generation']);
 // Reuse one async context store for the process; each tool invocation gets a unique token.
 const gatedToolInvocation = new AsyncLocalStorage<symbol>();
 
@@ -578,12 +574,12 @@ export class ToolBuilder {
   /**
    * Reserve one tool call's credits for end-of-quest settlement. Appends to the
    * per-name queue in call order rather than overwriting, so a tool called more
-   * than once in a turn (e.g. a 10s then a 20s audio clip) settles as the sum of
+   * than once in a turn (e.g. two image renders) settles as the sum of
    * every call, not the count times the last call's cost. Fires exactly once per
-   * call: image/edit/audio via onToolStart/onToolFinish, delegate via onSubagentCredits.
+   * call: image/edit via onToolStart/onToolFinish, delegate via onSubagentCredits.
    *
-   * `model` is the model that actually incurs the cost (gpt-image-2, an audio vendor
-   * model, the subagent's chat model) - never the quest's own chat model. It feeds the
+   * `model` is the model that actually incurs the cost (gpt-image-2, the subagent's
+   * chat model) - never the quest's own chat model. It feeds the
    * aggregate ledger row's attribution; pass it wherever it is resolvable. A charge whose
    * model cannot be resolved still records UNATTRIBUTED_TOOL_CHARGE, so the row can never
    * look single-model while billing for a model nobody named.
@@ -675,92 +671,6 @@ export class ToolBuilder {
   }
 
   /**
-   * Up-front affordability gate for audio_generation (onToolStart): throws
-   * insufficient_credits before the paid provider call. Speech is gated on a conservative
-   * per-character estimate (the resolved model is not known until synthesis returns);
-   * sound effects on the duration. The reservation is deferred to settleAudioCredits so a
-   * failed generation is never billed. Exposed for unit-testing the audio credit branch.
-   */
-  gateAudioCredits(data: AudioCostInput, enforceCredits: boolean, organization?: IOrganizationDocument | null): void {
-    if (!enforceCredits || !this.deps.db.creditTransactions) return;
-    const { requiredCredits } = validateAudioCredits(
-      this.deps.user,
-      data,
-      this.deps.logger,
-      organization,
-      this.committedToolCredits()
-    );
-    this.recordGatedToolCredits('audio_generation', requiredCredits);
-  }
-
-  /**
-   * Reserve + record a delivered audio clip's credits (onToolFinish) and ride its path on
-   * quest.images. Reached only after generation succeeds. Speech settles on the ACTUAL
-   * resolved model + character count so the charge matches the direct /api/ai/tts endpoint
-   * exactly; sound effects settle on the duration. Does not persist the quest - the caller
-   * saves. Exposed for unit-testing the audio credit branch.
-   */
-  settleAudioCredits(
-    quest: IChatHistoryItemDocument,
-    data: {
-      kind: 'speech' | 'sound_effect';
-      provider: VoiceGenerationVendor | SoundGenerationVendor;
-      model?: string;
-      characters?: number;
-      durationSeconds?: number;
-      paths: string[];
-    },
-    enforceCredits: boolean,
-    organization?: IOrganizationDocument | null
-  ): void {
-    if (enforceCredits && !!this.deps.db.creditTransactions) {
-      const costInput: AudioCostInput =
-        data.kind === 'sound_effect'
-          ? {
-              kind: 'sound_effect',
-              provider: data.provider as SoundGenerationVendor,
-              durationSeconds: data.durationSeconds,
-            }
-          : {
-              kind: 'speech',
-              provider: data.provider as VoiceGenerationVendor,
-              model: data.model,
-              characters: data.characters ?? 0,
-            };
-      // The gate prices the round-up; the charge is the unbiased draw on the exact cost (may be 0).
-      const { usdCost, units } = estimateAudioCredits(costInput);
-      const creditsUsed = usdToCreditsStochastic(usdCost);
-      // Speech always resolves a real model id; a sound effect has none, so qualify it by
-      // provider (e.g. "elevenlabs-sound_effect") instead of the bare kind so per-model
-      // COGS analytics stays clean.
-      const billedModel = data.model ?? `${data.provider}-${data.kind}`;
-      this.deps.logger.info(`Credits used for tool audio_generation (${data.kind}): ${creditsUsed}`);
-      this.reserveToolCredits('audio_generation', creditsUsed, billedModel);
-      quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
-      recordToolUsageEvent(
-        this.deps.db,
-        this.deps.logger,
-        'audio_generation',
-        buildToolUsageEvent({
-          quest,
-          user: this.deps.user,
-          organization,
-          provider: data.provider,
-          model: billedModel,
-          costUsd: usdCost,
-          creditsCharged: creditsUsed,
-          units,
-          feature: data.kind === 'sound_effect' ? 'sound_effects' : 'text_to_speech',
-        })
-      );
-    }
-    if (!quest.images) quest.images = [];
-    data.paths.forEach(path => {
-      if (!quest.images?.includes(path)) quest.images?.push(path);
-    });
-  }
-
-  /**
    * Write new generation jobs straight onto the stored quest. Otherwise only the ~10s streaming
    * heartbeat persists them, so a chat process dying in that window leaves a running, billed
    * job with no card in the chat. The in-memory quest already carries the jobs
@@ -794,7 +704,7 @@ export class ToolBuilder {
 
   /**
    * Up-front affordability gate for image_generation/edit_image (onToolStart): throws
-   * insufficient_credits before the paid provider call. Like audio, the charge itself is
+   * insufficient_credits before the paid provider call. The charge itself is
    * deferred to settleImageCredits so a failed generation is never billed. No-op when
    * enforcement is off, the model is unknown, or the credit store is unavailable. Exposed for
    * unit-testing the credit branch.
@@ -1113,7 +1023,7 @@ export class ToolBuilder {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         onToolStart: async (toolName: string, data: any) => {
           // Before status/preamble and the credit gates, so a refused call records no estimate.
-          if (GATED_TOOL_NAMES.has(toolName)) await this.assertToolAccountAllowed(toolName);
+          if (ACCOUNT_CHECKED_TOOL_NAMES.has(toolName)) await this.assertToolAccountAllowed(toolName);
 
           // Chat: surface a live, input-enriched status so the wait reads as
           // productive work instead of a dead spinner. Fire-and-forget and
@@ -1141,7 +1051,7 @@ export class ToolBuilder {
             }
           }
 
-          // video_generation and music_generation bill in their job's create step, not here.
+          // video_generation, music_generation and audio_generation bill in their job's create step, not here.
           if (toolName === 'image_generation' || toolName === 'edit_image') {
             this.deps.logger.info(`Tool ${toolName} started`);
             const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
@@ -1153,11 +1063,6 @@ export class ToolBuilder {
               precomputed?.models ?? []
             );
           }
-
-          if (toolName === 'audio_generation') {
-            const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
-            this.gateAudioCredits(data as AudioCostInput, enforceCredits, organization);
-          }
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         onToolFinish: async (toolName: string, data: any) => {
@@ -1166,27 +1071,7 @@ export class ToolBuilder {
             quest.deepResearchState = data;
             await saveQuest(quest);
           }
-          if (toolName === 'audio_generation') {
-            // Settle audio billing HERE (not onToolStart) so only a delivered clip is charged:
-            // the tool's failure paths return before onFinish. Audio rides quest.images; the
-            // client splits by extension to render an inline player.
-            const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
-            this.settleAudioCredits(
-              quest,
-              data as {
-                kind: 'speech' | 'sound_effect';
-                provider: VoiceGenerationVendor | SoundGenerationVendor;
-                model?: string;
-                characters?: number;
-                durationSeconds?: number;
-                paths: string[];
-              },
-              enforceCredits,
-              organization
-            );
-            await saveQuest(quest);
-          }
-          // Settle image billing HERE, like audio: a provider error returns before onFinish.
+          // Settle image billing HERE: a provider error returns before onFinish.
           if (toolName === 'image_generation' || toolName === 'edit_image') {
             this.deps.logger.info(`Tool ${toolName} finished`);
             const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;

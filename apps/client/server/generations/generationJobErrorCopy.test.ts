@@ -4,6 +4,8 @@ import {
   generationJobErrorCopy,
   IMAGE_JOB_ERROR_COPY,
   MUSIC_JOB_ERROR_COPY,
+  SOUND_EFFECT_JOB_ERROR_COPY,
+  SPEECH_JOB_ERROR_COPY,
   VIDEO_JOB_ERROR_COPY,
 } from './generationJobErrorCopy';
 
@@ -34,6 +36,8 @@ describe('generationJobErrorCopy', () => {
     ['video', VIDEO_JOB_ERROR_COPY],
     ['music', MUSIC_JOB_ERROR_COPY],
     ['image', IMAGE_JOB_ERROR_COPY],
+    ['speech', SPEECH_JOB_ERROR_COPY],
+    ['sound effect', SOUND_EFFECT_JOB_ERROR_COPY],
   ])('has non-empty %s copy for every code', (_kind, copy) => {
     for (const code of GENERATION_JOB_ERROR_CODES) expect(copy[code]).toMatch(/\S/);
   });

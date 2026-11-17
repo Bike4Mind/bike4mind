@@ -53,6 +53,8 @@ can silently turn it into `none`.
 | ActiveCodeAgent | `capabilities` | enum | `ai/ActiveCodeAgentModel.ts#upsertOnRegister` | route-schema | `apps/client/server/websocket/ccAgentRegister.ts#normalizeSourceAndCapabilities` | Sole caller: zod CcAgentRegisterAction enum, then filtered by source allowlist |
 | ActiveCodeAgent | `source` | enum | `ai/ActiveCodeAgentModel.ts#upsertOnRegister` | route-schema | `b4m-core/common/src/schemas/actions.ts#CcAgentRegisterAction` | Sole caller parses source with zod CcAgentSource enum; writer defaults to claude |
 | ActiveCodeAgent | `status` | enum | `ai/ActiveCodeAgentModel.ts#upsertOnRegister` | repository-check | `literal` | writes "running" |
+| AdminAccessReview | `decisions.decision` | enum | `infra/admin/AdminAccessReviewModel.ts#AdminAccessReviewRepository.recordDecision` | schema | `runValidators` | update call passes runValidators |
+| AdminAccessReview | `decisions.decision` | enum | `infra/admin/AdminAccessReviewModel.ts#AdminAccessReviewRepository.upsert` | schema | `runValidators` | update call passes runValidators |
 | AdminMorningBrief | `delivery` | enum | `infra/admin/AdminMorningBriefModel.ts#claimDelivery` | repository-check | `literal` | writes "sending" |
 | AdminMorningBrief | `delivery` | enum | `infra/admin/AdminMorningBriefModel.ts#finishDelivery` | route-schema | `apps/client/server/admin/morningBrief.ts#outcome` | Only caller sets literal union; Slack helper returns sent/unconfigured/failed literals only |
 | AdminMorningBrief | `delivery` | enum | `infra/admin/AdminMorningBriefModel.ts#saveOnce` | repository-check | `literal` | writes "ready" |
