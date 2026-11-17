@@ -295,16 +295,15 @@ describe('RekognitionImageModerationService.checkImage', () => {
         return { client, seen };
       };
 
-      it('is decoded and scanned as a JPEG of the same pixels', async () => {
+      it('is decoded up front and scanned once, as a JPEG of the same pixels', async () => {
         const { client, seen } = jpegOrPngOnly();
         const svc = new RekognitionImageModerationService(Logger.globalInstance, client);
 
         await expect(svc.checkImage(STILL_WEBP, 'image/webp')).resolves.toBeUndefined();
 
-        expect(client.send).toHaveBeenCalledTimes(2);
-        expect(seen[0].equals(STILL_WEBP)).toBe(true);
+        expect(client.send).toHaveBeenCalledTimes(1);
         const { Jimp } = await import('jimp');
-        const scanned = await Jimp.read(seen[1]);
+        const scanned = await Jimp.read(seen[0]);
         expect(scanned.bitmap).toMatchObject({ width: 32, height: 32 });
         const [r, g, b] = scanned.bitmap.data;
         expect(r).toBeGreaterThan(180);
@@ -319,13 +318,13 @@ describe('RekognitionImageModerationService.checkImage', () => {
         await expect(svc.checkImage(STILL_WEBP, 'image/webp')).rejects.toBeInstanceOf(ImageModerationBlockedError);
       });
 
-      it('is unsupported, not retried, when the WebP is corrupt', async () => {
+      it('is unsupported, never sent to Rekognition, when the WebP is corrupt', async () => {
         const { client } = jpegOrPngOnly();
         const svc = new RekognitionImageModerationService(Logger.globalInstance, client);
         const corrupt = Buffer.concat([STILL_WEBP.subarray(0, 20), Buffer.alloc(STILL_WEBP.length - 20)]);
 
         await expect(svc.checkImage(corrupt, 'image/webp')).rejects.toBeInstanceOf(UnsupportedImageFormatError);
-        expect(client.send).toHaveBeenCalledTimes(1);
+        expect(client.send).not.toHaveBeenCalled();
       });
     });
 

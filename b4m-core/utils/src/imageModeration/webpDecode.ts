@@ -1,60 +1,50 @@
-import { readFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
-import path from 'node:path';
-
-/**
- * The codec's file name. A bundled Lambda has no node_modules, so a Lambda that moderates images ships this file
- * at its task root via `copyFiles` (the generation job subscription in infra/queues.ts); unbundled runtimes
- * resolve it from the package.
- */
-export const WEBP_DECODER_WASM = 'webp_dec.wasm';
+import { WEBP_DECODER_WASM_BASE64 } from './webpDecoderWasm.generated';
 
 export type DecodedImage = { data: Uint8ClampedArray; width: number; height: number };
 
-const wasmCandidates = (): string[] => {
-  const candidates: string[] = [];
-  try {
-    candidates.push(createRequire(import.meta.url).resolve(`@jsquash/webp/codec/dec/${WEBP_DECODER_WASM}`));
-  } catch {
-    // Bundled: nothing to resolve from, so only the task-root copy below can exist.
-  }
-  candidates.push(path.join(process.env.LAMBDA_TASK_ROOT ?? process.cwd(), WEBP_DECODER_WASM));
-  return candidates;
-};
+type WebpModule = { decode(data: Uint8Array): DecodedImage | null };
 
-const toArrayBuffer = (bytes: Buffer): ArrayBuffer =>
-  bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+export const isWebp = (bytes: Buffer) =>
+  bytes.length >= 12 &&
+  bytes.subarray(0, 4).toString('latin1') === 'RIFF' &&
+  bytes.subarray(8, 12).toString('latin1') === 'WEBP';
 
-async function readWasm(): Promise<ArrayBuffer> {
-  const tried: string[] = [];
-  for (const candidate of wasmCandidates()) {
-    try {
-      return toArrayBuffer(await readFile(candidate));
-    } catch (err) {
-      tried.push(`${candidate}: ${(err as Error).message}`);
-    }
+/**
+ * The decoder itself could not start: a fault in this deployment, not in the image. Moderation rethrows it as a
+ * transient failure so it is retried and alarmed rather than blocking every WebP as an unsupported format.
+ */
+export class WebpDecoderUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super(`WebP decoder unavailable: ${(cause as Error)?.message ?? String(cause)}`, { cause });
+    this.name = 'WebpDecoderUnavailableError';
   }
-  throw new Error(`WebP decoder wasm not found (${tried.join('; ')})`);
 }
 
-let ready: Promise<(buffer: ArrayBuffer) => Promise<DecodedImage>> | undefined;
+let ready: Promise<WebpModule> | undefined;
 
-// The codec's own loader fetches its wasm by file URL, which Node's fetch refuses, so the bytes are handed to it.
-const decoder = () => {
+// The wasm is embedded (webpDecoderWasm.generated.ts) so no bundle needs a sibling asset. The factory is driven
+// directly rather than through the package's decode.js, whose cached module promise never recovers from a failed
+// load; locateFile keeps the factory from resolving a wasm URL it would never fetch.
+const loadModule = (): Promise<WebpModule> => {
   ready ??= (async () => {
-    const [codec, wasmBinary] = await Promise.all([import('@jsquash/webp/decode.js'), readWasm()]);
-    await codec.init({ wasmBinary });
-    return codec.default;
+    const { default: factory } = await import('@jsquash/webp/codec/dec/webp_dec.js');
+    const wasmBinary = Buffer.from(WEBP_DECODER_WASM_BASE64, 'base64');
+    return (await factory({ noInitialRun: true, wasmBinary, locateFile: (file: string) => file })) as WebpModule;
   })().catch(err => {
     ready = undefined;
-    throw err;
+    throw new WebpDecoderUnavailableError(err);
   });
   return ready;
 };
 
-/** Decodes a still WebP to RGBA. Throws on an animated or malformed file, or when the codec cannot load. */
+/**
+ * Decodes a still WebP to RGBA. Throws WebpDecoderUnavailableError when the decoder cannot start, and a plain
+ * Error for an animated or malformed file.
+ */
 export async function decodeWebp(bytes: Buffer): Promise<DecodedImage> {
-  const decode = await decoder();
-  const { data, width, height } = await decode(toArrayBuffer(bytes));
+  const webp = await loadModule();
+  const decoded = webp.decode(bytes);
+  if (!decoded) throw new Error('WebP could not be decoded (animated or malformed)');
+  const { data, width, height } = decoded;
   return { data, width, height };
 }
