@@ -64,6 +64,10 @@ describe('npm publish sources', () => {
       scripts: Record<string, string>;
     };
     expect(scripts['changeset:publish']).toBe('changeset publish');
+    const publishScripts = Object.entries(scripts)
+      .filter(([, command]) => PUBLISH.test(command))
+      .map(([name]) => name);
+    expect(publishScripts).toEqual(['changeset:publish']);
     const snapshotScripts = Object.entries(scripts)
       .filter(([, command]) => SNAPSHOT.test(command))
       .map(([name]) => name);

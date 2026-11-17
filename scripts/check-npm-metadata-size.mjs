@@ -61,13 +61,18 @@ export function formatReport(rows) {
 }
 
 async function measure(name, token) {
-  const response = await fetch(`${REGISTRY}/${name.replace('/', '%2f')}`, {
-    headers: { accept: 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
-  });
-  if (!response.ok) return { name, error: `HTTP ${response.status}` };
-  const body = Buffer.from(await response.arrayBuffer());
-  const versions = Object.keys(JSON.parse(body.toString('utf8')).versions ?? {}).length;
-  return { name, bytes: body.length, versions, status: classify(body.length) };
+  try {
+    const response = await fetch(`${REGISTRY}/${name.replace('/', '%2f')}`, {
+      headers: { accept: 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    });
+    if (!response.ok) return { name, error: `HTTP ${response.status}` };
+    const body = Buffer.from(await response.arrayBuffer());
+    const versions = Object.keys(JSON.parse(body.toString('utf8')).versions ?? {}).length;
+    return { name, bytes: body.length, versions, status: classify(body.length) };
+  } catch (error) {
+    // One network or parse failure must not drop the report for every other package.
+    return { name, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 async function main() {
