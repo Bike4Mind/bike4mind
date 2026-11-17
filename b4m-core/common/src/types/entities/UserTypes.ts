@@ -971,6 +971,14 @@ export interface IUser extends ICreditHolder {
    */
   isPersona?: boolean;
 
+  /**
+   * `'force'` makes this one account owe MFA enrollment as if the admin enforced MFA, with the
+   * stage-wide `enforceMFA` setting untouched, so e2e can drive the real enforcement path. Set only
+   * by POST /api/test/create-user; no signup, profile or admin update path writes it. Every reader
+   * goes through isMfaForcedForUser (common mfaEnforcement.ts).
+   */
+  mfaEnforcement?: 'force' | null;
+
   /** When the persona expiry sweep disables this persona account; set only on persona accounts. */
   personaExpiresAt?: Date | null;
 
