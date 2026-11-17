@@ -36,6 +36,7 @@ vi.mock('@bike4mind/database', () => ({
   // Lakes disabled, so the save tool answers right after its adapter gate without writing.
   adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(false) },
   apiKeyRepository: {},
+  spendFreezeRepository: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
   cacheRepository: {},
   dataLakeRepository: {
     findByDatalakeTags: vi.fn().mockResolvedValue([]),
@@ -100,7 +101,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
 });
 
 const { createDeepAgentToolMaterializer } = await import('./toolMaterializer');
-const { organizationRepository, questRepository, sessionRepository, userRepository } =
+const { organizationRepository, questRepository, sessionRepository, spendFreezeRepository, userRepository } =
   await import('@bike4mind/database');
 
 // A minimal backend stand-in; never invoked by the paths under test.
@@ -319,6 +320,24 @@ describe('deep agent media tools', () => {
     vi.mocked(userRepository.findById).mockResolvedValueOnce({ id: 'owner-1', currentCredits: 1_000_000 } as never);
 
     await expect(callbacks.onToolStart('edit_image', EDIT)).resolves.toBeUndefined();
+  });
+
+  it('refuses a media call for a frozen owner before any estimate, even when credits are not enforced', async () => {
+    const callbacks = await callbacksFor();
+    vi.mocked(spendFreezeRepository.findActiveForSubject).mockResolvedValueOnce({
+      scopeType: 'User',
+      scopeId: 'owner-1',
+      frozenAt: new Date('2026-11-16T00:00:00Z'),
+    } as never);
+
+    await expect(callbacks.onToolStart('edit_image', EDIT)).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { errorCode: 'spend_frozen' },
+    });
+    expect(spendFreezeRepository.findActiveForSubject).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'owner-1' })
+    );
+    expect(billing.estimate).not.toHaveBeenCalled();
   });
 
   it('skips the credit check when credits are not enforced', async () => {

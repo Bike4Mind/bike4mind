@@ -25,6 +25,8 @@ const OWNER_CREDIT_PRECHECK_SITES: Record<string, string> = {
   'apps/client/server/chatCompletion/external/embedRoute.ts': 'gated-by assertSpendNotFrozen earlier in the route',
   'packages/server-utils/src/billing/meterPlatformCompletion.ts': 'gated-by assertCanAfford own freeze check',
   'packages/server-utils/src/deepAgent/wakeMetering.ts': 'gated-by assertOwnerCanAfford at the top of the preflight',
+  'packages/server-utils/src/deepAgent/toolMaterializer.ts':
+    'gated-by assertSpendNotFrozen at the top of the media tool start',
 };
 
 const FIX_HINT = 'gate the new site with assertSpendNotFrozen, or classify it in this allow-list';
