@@ -230,9 +230,9 @@ export class RekognitionImageModerationService implements ImageModerationService
    * format - so it's terminal via `UnsupportedImageFormatError` right here (unless the WebP
    * decoder itself is down, which is rethrown as transient). Without this, an oversized+undecodable
    * buffer (e.g. HEIC from an iPhone, which is both large and a format jimp can't read) would fall
-   * through with the ORIGINAL oversized
-   * bytes; Rekognition would then likely throw `ImageTooLargeException` rather than
-   * `InvalidImageFormatException` (it never gets far enough to inspect the format), which isn't
+   * through with the ORIGINAL oversized bytes; Rekognition would then likely throw
+   * `ImageTooLargeException` rather than `InvalidImageFormatException` (it never gets far enough
+   * to inspect the format), which isn't
    * caught by the reactive transcode branch in `checkImage` - so it would burn the
    * transient-retry budget and get stuck 'pending' until DLQ instead of terminating cleanly.
    * The decode is local with no I/O, so unlike the Rekognition call there is no
