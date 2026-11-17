@@ -90,14 +90,17 @@ describe('Studio context collection', () => {
     const deps = readers({
       readSession: async () => ({
         status: 'ok',
-        value: { id: 'current', messages: [message('1', '😀😀😀'), message('2', 'abcdef'), message('3', 'omitted')] },
+        value: {
+          id: 'current',
+          messages: [message('1', '\u{1f600}\u{1f600}\u{1f600}'), message('2', 'abcdef'), message('3', 'omitted')],
+        },
       }),
     });
     const result = await new ContextCollector(deps, { sourceBytes: 5, totalBytes: 7 }).collect(
       { sessionId: 'current', selection: { kind: 'current' } },
       signal()
     );
-    expect(result.entries.map(entry => entry.text)).toEqual(['😀', 'abc']);
+    expect(result.entries.map(entry => entry.text)).toEqual(['\u{1f600}', 'abc']);
     expect(result.totalBytes).toBe(7);
     expect(result.issues.map(issue => issue.reason)).toEqual(['truncated', 'truncated', 'limit']);
   });
@@ -136,6 +139,26 @@ describe('Studio context collection', () => {
     expect(result.issues.at(-1)?.reason).toBe('limit');
     expect(() => new ContextCollector(deps, { sessions: NaN })).toThrow(RangeError);
     expect(() => new ContextCollector(deps, { totalBytes: 100_000 })).toThrow(RangeError);
+  });
+
+  it('captures attachment identity before an asynchronous reader can mutate its source', async () => {
+    const changing = { ...attachment };
+    const deps = readers({
+      readSession: async () => ({
+        status: 'ok',
+        value: { id: 'current', messages: [{ ...message('m', 'hello'), attachments: [changing] }] },
+      }),
+      readAttachment: async () => {
+        changing.id = 'changed';
+        changing.truncated = false;
+        return { status: 'ok', value: { text: 'original attachment' } };
+      },
+    });
+    const result = await new ContextCollector(deps).collect(
+      { sessionId: 'current', selection: { kind: 'current' } },
+      signal()
+    );
+    expect(result.entries[1]).toMatchObject({ source: { attachmentId: 'a' }, truncated: true });
   });
 
   it('bounds duplicate traversal and rejects oversized selections before reading', async () => {
@@ -194,7 +217,7 @@ describe('permission-aware file reader', () => {
     const sibling = join(root, 'sibling');
     await mkdir(current);
     await mkdir(sibling);
-    await writeFile(join(current, 'text'), '😀hello');
+    await writeFile(join(current, 'text'), '\u{1f600}hello');
     await writeFile(join(sibling, 'secret'), 'private');
     await symlink(join(sibling, 'secret'), join(current, 'escape'));
     await symlink(join(current, 'text'), join(current, 'alias'));
@@ -205,7 +228,7 @@ describe('permission-aware file reader', () => {
     expect(await read('current', join(current, 'missing'), 5, signal())).toEqual({ status: 'missing' });
     expect(await read('current', join(current, 'alias'), 5, signal())).toEqual({
       status: 'ok',
-      value: { text: '😀h', canonicalPath: join(current, 'text'), truncated: true },
+      value: { text: '\u{1f600}h', canonicalPath: join(current, 'text'), truncated: true },
     });
     expect(await read('current', join(current, 'text'), 3, signal())).toMatchObject({
       status: 'ok',

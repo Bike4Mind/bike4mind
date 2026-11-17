@@ -143,7 +143,8 @@ export class ContextCollector {
             { text: message.content }
           );
         }
-        for (const attachment of message.attachments ?? []) {
+        for (const original of message.attachments ?? []) {
+          const attachment = { ...original };
           if (++visited > this.limits.sources) {
             issues.push({ source: id, reason: 'limit' });
             break;
