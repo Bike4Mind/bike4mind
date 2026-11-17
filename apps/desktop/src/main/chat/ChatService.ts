@@ -4307,7 +4307,7 @@ export class ChatService {
         if (liveState && roundIndex > 0) {
           const next = toolState();
           if (!sameToolState(liveState, next)) {
-            appendLiveToolChange(wire, liveState.tools, next);
+            appendLiveToolChange(wire, liveState, next);
             pin(next.tools);
             [...liveState.tools, ...next.tools].forEach(name => referenced.add(name));
             await this.recordMidTurnToolState(session, next);
