@@ -139,13 +139,10 @@ export const canManageOrgIntegrations = ownerTierGate;
  * - Billing portal   pages/api/stripe/portal.ts
  * Must stay in sync with those three.
  *
- * A platform admin who is not the owner is deliberately excluded, though the first two routes would
- * admit them: portal.ts has no admin bypass, so an admin would still get a Billing Portal button
- * that rejects them. Admins act on an org's billing through the Admin -> Organizations panel, which
- * is the same split the page already makes for member management.
- *
- * Nothing is lost by hiding it: the plan, its status, the renewal date and seat usage are all on
- * the Overview tab and the page header, which every member sees.
+ * This decides who gets the real tab. A platform admin who is not the owner is excluded, though the
+ * first two routes would admit them: portal.ts has no admin bypass, so they would get a Billing
+ * Portal button that rejects them. Everyone else who manages the team (`isOrgOwnerOrCurrentAdmin`:
+ * managers, platform admins) gets a locked entry with a read-only summary, see `isOrgTabLocked`.
  */
 export const canViewOrgBilling = (
   currentUser: { id: string } | null | undefined,

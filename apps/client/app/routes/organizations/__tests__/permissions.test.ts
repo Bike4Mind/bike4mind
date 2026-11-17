@@ -14,6 +14,8 @@ import {
   canViewOrgBilling,
   canViewOrgUsage,
   OrganizationTabs,
+  ORG_TAB_AUDIENCE,
+  isOrgTabLocked,
   resolveAccessibleTab,
   resolveOrgTabView,
 } from '../orgTabAccess';
@@ -557,5 +559,48 @@ describe('resolveOrgTabView', () => {
       tab: OrganizationTabs.Members,
       locked: false,
     });
+  });
+});
+
+describe('ORG_TAB_AUDIENCE', () => {
+  it('pins the audience of every gated tab and leaves the open tabs out', () => {
+    expect(ORG_TAB_AUDIENCE).toEqual({
+      [OrganizationTabs.Groups]: 'managers',
+      [OrganizationTabs.Usage]: 'managers',
+      [OrganizationTabs.Analysis]: 'managers',
+      [OrganizationTabs.Integrations]: 'managers',
+      [OrganizationTabs.Domains]: 'managers',
+      [OrganizationTabs.ApiKeys]: 'managers',
+      [OrganizationTabs.Audit]: 'managers',
+      [OrganizationTabs.Settings]: 'managers',
+      [OrganizationTabs.Billing]: 'owner',
+    });
+    for (const open of [OrganizationTabs.Overview, OrganizationTabs.Library, OrganizationTabs.Members]) {
+      expect(ORG_TAB_AUDIENCE[open]).toBeUndefined();
+    }
+  });
+});
+
+describe('isOrgTabLocked for a platform admin who is not the owner', () => {
+  const org = { userId: 'owner1', adminUserIds: [] as string[] };
+  const staff = { id: 'staff1', isAdmin: true };
+
+  // Built the way $id.tsx builds it.
+  const access = {
+    canManageOrg: true,
+    canViewUsage: true,
+    canViewAnalysis: true,
+    canManageIntegrations: false,
+    canManageGroups: true,
+    canViewBilling: canViewOrgBilling(staff, org),
+    canManageConnectors: true,
+    canManageDomains: true,
+    canViewAudit: true,
+    seesLockedTabs: isOrgOwnerOrCurrentAdmin(staff, org),
+  };
+
+  it('shows Billing as a locked entry rather than the real tab', () => {
+    expect(access.canViewBilling).toBe(false);
+    expect(isOrgTabLocked(OrganizationTabs.Billing, access)).toBe(true);
   });
 });

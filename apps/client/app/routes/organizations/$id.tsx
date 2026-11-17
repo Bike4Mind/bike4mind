@@ -399,11 +399,28 @@ const OrganizationPage: FC = () => {
                   listbox: { 'aria-label': 'Team sections' },
                 }}
               >
-                {visibleTabs.map(entry => (
-                  <Option key={entry.tab} value={entry.tab} data-testid={`organization-tabs-option-${entry.tab}`}>
-                    {t(`organization.tabs.${entry.tab}`)}
-                  </Option>
-                ))}
+                {visibleTabs.map(entry => {
+                  const locked = isOrgTabLocked(entry.tab, access);
+                  return (
+                    <Option
+                      key={entry.tab}
+                      value={entry.tab}
+                      data-testid={
+                        locked
+                          ? `organization-tabs-option-locked-${entry.tab}`
+                          : `organization-tabs-option-${entry.tab}`
+                      }
+                    >
+                      {t(`organization.tabs.${entry.tab}`)}
+                      {locked && (
+                        <LockOutlinedIcon
+                          titleAccess={t('organization.access_notice.owner_only')}
+                          sx={{ ml: 'auto', color: 'text.tertiary' }}
+                        />
+                      )}
+                    </Option>
+                  );
+                })}
               </Select>
             </Box>
           ) : (

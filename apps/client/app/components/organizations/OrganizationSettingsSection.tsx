@@ -5,6 +5,7 @@ import { useTransferOrganizationOwnership, useUpdateOrganization } from '@client
 import { useGetOrganizationUsers } from '@client/app/hooks/data/user';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useNavigate } from '@tanstack/react-router';
+import { useTranslation } from 'react-i18next';
 import TransferOwnershipModal, { TransferCandidate } from './TransferOwnershipModal';
 import OrganizationExportSection from './OrganizationExportSection';
 import OrgFormSaveBar from './OrgFormSaveBar';
@@ -20,6 +21,7 @@ const OrganizationSettingsSection: FC<{ organization: WithId<IOrganizationDocume
   const [deleteOpen, setDeleteOpen] = useState(false);
   const updateOrganization = useUpdateOrganization();
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const { currentUser } = useUser();
 
   // Mirrors the server gate in organizationService/delete.ts: billing owner or platform admin only.
@@ -195,7 +197,7 @@ const OrganizationSettingsSection: FC<{ organization: WithId<IOrganizationDocume
       )}
       {!canDeleteOrg && (
         <OwnerOnlyNote testId="organization-settings-owner-only">
-          Exporting team data, transferring ownership and deleting the team
+          {t('organization.access_notice.settings_locked')}
         </OwnerOnlyNote>
       )}
       <OrgFormSaveBar
