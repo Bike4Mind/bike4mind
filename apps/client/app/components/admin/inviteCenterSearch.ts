@@ -2,7 +2,15 @@ import { oneOf } from './adminSearchValues';
 
 // `section` belongs to Admin Settings, and each registered param key needs exactly one owner (adminTabParams.ts).
 export const INVITE_CENTER_SECTION_PARAM = 'inviteSection';
-export const INVITE_CENTER_SECTION_IDS = ['waitlist', 'packages', 'schedule', 'pending', 'rewards'] as const;
+export const INVITE_CENTER_SECTION_IDS = [
+  'waitlist',
+  'invites',
+  'packages',
+  'partners',
+  'schedule',
+  'pending',
+  'rewards',
+] as const;
 export type InviteCenterSectionId = (typeof INVITE_CENTER_SECTION_IDS)[number];
 export const DEFAULT_INVITE_CENTER_SECTION: InviteCenterSectionId = 'waitlist';
 

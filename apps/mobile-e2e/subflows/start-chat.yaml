@@ -1,0 +1,14 @@
+appId: com.bike4mind.app
+---
+# Signed in -> one message sent from a new chat. iOS lands on a composer; Android opens one from the New chat button.
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - tapOn:
+          id: sessions-new-conversation-btn
+- tapOn:
+    id: chat-composer-field
+- inputText: "Reply with the single word: pong"
+- tapOn:
+    id: chat-composer-send

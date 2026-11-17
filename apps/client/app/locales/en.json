@@ -759,6 +759,8 @@
     "add_files_to_notebook_other": "Add {{count}} Files to Notebook",
     "add_files_to_project_one": "Add {{count}} File to Project",
     "add_files_to_project_other": "Add {{count}} Files to Project",
+    "add_files_to_production_one": "Add {{count}} File to Production",
+    "add_files_to_production_other": "Add {{count}} Files to Production",
     "in_project": "In Project"
   },
   "file_properties": {

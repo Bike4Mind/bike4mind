@@ -484,48 +484,49 @@ describe('settings/update enforceCredits hosted lock', () => {
   });
 });
 
-describe('settings/update reviewer email list', () => {
-  beforeEach(() => {
-    stored = null;
-    findOneAndUpdate.mockReset();
-    vi.clearAllMocks();
-  });
-
-  it('refuses a list with an invalid address and names the entry', async () => {
-    await expect(
-      runHandler('ImageModerationReviewerEmails', ['reviewer@example.com', 'not-an-email'])
-    ).rejects.toMatchObject({
-      statusCode: 400,
-      message: expect.stringContaining('not-an-email'),
+describe.each(['ImageModerationReviewerEmails', 'ImageModerationEscalationEmails'] as const)(
+  'settings/update %s reviewer email list',
+  key => {
+    beforeEach(() => {
+      stored = null;
+      findOneAndUpdate.mockReset();
+      vi.clearAllMocks();
     });
-    expect(findOneAndUpdate).not.toHaveBeenCalled();
-  });
 
-  it('stores a valid list trimmed, lowercased and deduped', async () => {
-    stageWriteResult('ImageModerationReviewerEmails', ['reviewer@example.com']);
-    await runHandler('ImageModerationReviewerEmails', [' Reviewer@Example.com', 'reviewer@example.com']);
-    expect(findOneAndUpdate).toHaveBeenCalledWith(
-      { settingName: 'ImageModerationReviewerEmails' },
-      { $set: { settingValue: ['reviewer@example.com'] } },
-      expect.anything()
-    );
-  });
+    it('refuses a list with an invalid address and names the entry', async () => {
+      await expect(runHandler(key, ['reviewer@example.com', 'not-an-email'])).rejects.toMatchObject({
+        statusCode: 400,
+        message: expect.stringContaining('not-an-email'),
+      });
+      expect(findOneAndUpdate).not.toHaveBeenCalled();
+    });
 
-  it('refuses a value that is not a list', async () => {
-    await expect(runHandler('ImageModerationReviewerEmails', 'reviewer@example.com')).rejects.toThrow();
-    expect(findOneAndUpdate).not.toHaveBeenCalled();
-  });
+    it('stores a valid list trimmed, lowercased and deduped', async () => {
+      stageWriteResult(key, ['reviewer@example.com']);
+      await runHandler(key, [' Reviewer@Example.com', 'reviewer@example.com']);
+      expect(findOneAndUpdate).toHaveBeenCalledWith(
+        { settingName: key },
+        { $set: { settingValue: ['reviewer@example.com'] } },
+        expect.anything()
+      );
+    });
 
-  it('stores an empty list when every address is removed', async () => {
-    stageWriteResult('ImageModerationReviewerEmails', []);
-    await runHandler('ImageModerationReviewerEmails', []);
-    expect(findOneAndUpdate).toHaveBeenCalledWith(
-      { settingName: 'ImageModerationReviewerEmails' },
-      { $set: { settingValue: [] } },
-      expect.anything()
-    );
-  });
-});
+    it('refuses a value that is not a list', async () => {
+      await expect(runHandler(key, 'reviewer@example.com')).rejects.toThrow();
+      expect(findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('stores an empty list when every address is removed', async () => {
+      stageWriteResult(key, []);
+      await runHandler(key, []);
+      expect(findOneAndUpdate).toHaveBeenCalledWith(
+        { settingName: key },
+        { $set: { settingValue: [] } },
+        expect.anything()
+      );
+    });
+  }
+);
 
 describe('settings/update blocked email domain list', () => {
   beforeEach(() => {
