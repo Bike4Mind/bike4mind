@@ -179,6 +179,14 @@ describe('resolveSecondFactor', () => {
     expect(mockConsumeTrustedDevice).not.toHaveBeenCalled();
   });
 
+  it('requires enrollment from a forced account while the stage setting is off', async () => {
+    const forced = { ...unenrolled, mfaEnforcement: 'force' } as IUserDocument;
+    expect((await resolveSecondFactor(req, forced, { origin })).kind).toBe('enroll');
+    expect(mockRecordMfaEnrollmentEvent).toHaveBeenCalledWith('u2', MfaEnrollmentEvents.REQUIRED, expect.anything());
+    // An enterprise IdP keeps its own MFA for a forced account too.
+    expect((await resolveSecondFactor(req, forced, { origin, enterpriseIdp: true })).kind).toBe('satisfied');
+  });
+
   it('is satisfied for an unenrolled user when MFA is not enforced', async () => {
     expect(await resolveSecondFactor(req, unenrolled, { origin })).toEqual({ kind: 'satisfied', trustedDevice: null });
     expect(mockRecordMfaEnrollmentEvent).not.toHaveBeenCalled();

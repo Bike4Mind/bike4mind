@@ -14,7 +14,6 @@
     "isolatedModules": true,
     "allowSyntheticDefaultImports": true,
     "incremental": true,
-    "baseUrl": ".",
     "paths": {
       "@server/*": ["../../apps/client/server/*"],
       "@client/*": ["../../apps/client/*"]

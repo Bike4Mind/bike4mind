@@ -55,6 +55,12 @@ export function getLlmByModel(
      * user. See `toProviderEndUserId`.
      */
     endUserId?: string | null;
+    /**
+     * An already-opaque identifier sent to the provider in place of the hash of `endUserId`: a
+     * platform key's end user (toPlatformEndUserProviderId). `endUserId` stays the key owner, and
+     * still decides the Anthropic semaphore's fairness bucket.
+     */
+    providerEndUserId?: string;
   }
 ): ICompletionBackend | null {
   const { modelInfo } = options;
@@ -62,7 +68,8 @@ export function getLlmByModel(
   const logger = options.logger ?? new Logger();
 
   // Hash once here so both direct-provider backends receive the same opaque id.
-  const providerEndUserId = toProviderEndUserId(options.endUserId);
+  const ownerEndUserId = toProviderEndUserId(options.endUserId);
+  const providerEndUserId = options.providerEndUserId ?? ownerEndUserId;
 
   if (!modelInfo) {
     return null;
@@ -98,6 +105,7 @@ export function getLlmByModel(
       modelId: String(modelInfo.id),
       logger,
       providerEndUserId,
+      tenantKey: ownerEndUserId,
     });
     backend?.setDispatchModel?.(modelInfo);
     return backend;
@@ -178,7 +186,8 @@ export function getLlmByModel(
               ANTHROPIC_FEDERATED_KEY
             ),
             logger,
-            providerEndUserId
+            providerEndUserId,
+            ownerEndUserId
           )
         : null;
       break;

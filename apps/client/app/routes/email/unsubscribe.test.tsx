@@ -15,11 +15,11 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-/** Mirrors the route: beforeLoad captures the token, then the page renders. */
+/** Mirrors a page load: router.tsx takes the token off the address at module load, then the page renders. */
 async function openLink(url: string) {
   window.history.replaceState(null, '', url);
-  const { captureUnsubscribeToken } = await import('./unsubscribeToken');
-  captureUnsubscribeToken();
+  const { captureEmailLinkToken } = await import('@client/app/utils/emailLinkToken');
+  captureEmailLinkToken();
   const { default: UnsubscribePage } = await import('./unsubscribe');
   render(<UnsubscribePage />, { wrapper: TestWrapper });
 }

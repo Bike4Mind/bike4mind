@@ -70,7 +70,10 @@ const StatusSummary: FC<{
   const mode = theme.palette.mode === 'dark' ? 'dark' : 'light';
   const colorFor = (product: string, i: number) => {
     const known = colorOrder.indexOf(product);
-    return seriesColor(known >= 0 ? known : i, mode);
+    // Summary identities can exceed the facet list. Their color must not depend on visible order.
+    const fallbackIndex =
+      colorOrder.length === 0 ? i : Array.from(product).reduce((sum, character) => sum + character.charCodeAt(0), 0);
+    return seriesColor(known >= 0 ? known : fallbackIndex, mode);
   };
   return (
     <Stack spacing={1.5} data-testid="qa-summary">
@@ -141,8 +144,9 @@ const StatusSummary: FC<{
       )}
       <Typography level="body-xs">
         E2E: passed tests out of all tests, not-started included; an E2E run passed when it had no failed or not-started
-        tests. Latency: model checks within their time limit, where a run that crashed before measuring counts each of
-        its tests as over the limit; a latency run passed when every check was within its limit.
+        tests and no infrastructure error. Latency: model checks within their time limit, where a run that crashed
+        before measuring counts each of its tests as over the limit; a latency run passed when every check was within
+        its limit.
       </Typography>
     </Stack>
   );

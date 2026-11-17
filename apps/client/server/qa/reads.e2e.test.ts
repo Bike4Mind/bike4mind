@@ -153,6 +153,73 @@ describe('getQaOverview', () => {
 describe('getQaSummary', () => {
   const SUMMARY_FILTERS = { branch: 'main', from: new Date(hoursAgo(24 * 7)), to: NOW };
 
+  it('summarizes the 201st product while keeping the display facets capped at 200', async () => {
+    const { tests: _tests, ...base } = makeIngest();
+    const productIds = Array.from({ length: 201 }, (_, index) => `product-${String(index).padStart(3, '0')}`);
+    await QaRun.insertMany(
+      productIds.map((product, index) => ({
+        ...base,
+        product,
+        externalRunId: `summary-products-${index}`,
+        startedAt: new Date(hoursAgo(1)),
+        trigger: 'Run via Schedule',
+        status: 'passed',
+        metrics: [],
+      }))
+    );
+    const facets = await getQaFacets('product-000');
+    expect(facets.products).toEqual(productIds.slice(0, 200));
+    const summary = await getQaSummary(SUMMARY_FILTERS);
+    expect(summary.products).toHaveLength(201);
+    expect(summary.products.map(product => product.product)).toEqual(productIds);
+    expect(summary.products[200]).toMatchObject({
+      product: 'product-200',
+      e2e: { runs: 1, cleanRuns: 1, passed: 2, tests: 2 },
+      latency: null,
+    });
+    expect(summary.truncated).toBe(false);
+  });
+
+  it('recognizes the 201st lifetime latency suite outside the selected branch, env and dates', async () => {
+    const { tests: _tests, ...base } = makeIngest();
+    const metric = { kind: 'latency' as const, model: 'model-a', value: 5, unit: 's', threshold: 10 };
+    await QaRun.insertMany(
+      Array.from({ length: 201 }, (_, index) => ({
+        ...base,
+        product: 'latency-product',
+        suite: `suite-${String(index).padStart(3, '0')}`,
+        env: 'production',
+        branch: 'pr-9',
+        externalRunId: `historical-latency-${index}`,
+        startedAt: new Date(hoursAgo(24 * 30)),
+        trigger: 'Run via Dispatch',
+        status: 'passed',
+        metrics: [metric],
+      }))
+    );
+    await seed({
+      product: 'latency-product',
+      suite: 'suite-200',
+      env: 'staging',
+      branch: 'main',
+      hours: 3,
+      trigger: 'Run via Schedule',
+      failing: [TEST_A, TEST_B],
+      metrics: [],
+    });
+    const summary = await getQaSummary({ ...SUMMARY_FILTERS, env: 'staging' });
+    expect(summary.products).toHaveLength(1);
+    expect(summary.products[0].e2e).toBeNull();
+    expect(summary.products[0].latency).toEqual({
+      runs: 1,
+      passedRuns: 0,
+      checks: 2,
+      checksWithinLimit: 0,
+      checkRate: 0,
+    });
+    expect(summary.truncated).toBe(false);
+  });
+
   it('covers every product and suite in range on the branch and env, scheduled runs only', async () => {
     const scheduled = 'Run via Schedule';
     await seed({ hours: 2, suite: 'Full', trigger: scheduled, failing: [TEST_B] });

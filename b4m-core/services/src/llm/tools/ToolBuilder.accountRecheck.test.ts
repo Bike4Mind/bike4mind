@@ -58,7 +58,6 @@ const build = (findById: ReturnType<typeof vi.fn>) => {
   } as unknown as ToolBuilderConfig;
   const builder = new ToolBuilder(deps);
   const gateImage = vi.spyOn(builder, 'gateImageCredits').mockResolvedValue(undefined);
-  const gateAudio = vi.spyOn(builder, 'gateAudioCredits').mockReturnValue(undefined);
   builder.buildTools({
     enabledTools: [],
     quest: { id: 'q1', sessionId: 's1' },
@@ -68,7 +67,7 @@ const build = (findById: ReturnType<typeof vi.fn>) => {
     organization: null,
   } as never);
   if (!captured.callbacks) throw new Error('buildSharedTools was not called');
-  return { onToolStart: captured.callbacks.onToolStart, gateImage, gateAudio, logger };
+  return { onToolStart: captured.callbacks.onToolStart, gateImage, logger };
 };
 
 const MEDIA_TOOLS = ['image_generation', 'edit_image', 'audio_generation'] as const;
@@ -88,25 +87,24 @@ describe('ToolBuilder onToolStart account re-check', () => {
   describe.each(MEDIA_TOOLS)('%s', toolName => {
     it.each(BLOCKED_USERS)('refuses a %s user with 403 before the credit gate', async (_label, fresh, message) => {
       expect(aiAccessDeniedMessage(fresh)).toBe(message);
-      const { onToolStart, gateImage, gateAudio } = build(vi.fn().mockResolvedValue(fresh));
+      const { onToolStart, gateImage } = build(vi.fn().mockResolvedValue(fresh));
 
       const err = await onToolStart(toolName, {}).catch((e: unknown) => e);
 
       expect(err).toMatchObject({ name: 'ForbiddenError', statusCode: 403, message });
       expect(gateImage).not.toHaveBeenCalled();
-      expect(gateAudio).not.toHaveBeenCalled();
       expect(isTerminalToolError(err)).toBe(true);
     });
 
-    it('lets an unblocked user through to the credit gate', async () => {
+    it('lets an unblocked user through', async () => {
       const findById = vi.fn().mockResolvedValue({ id: 'u1' });
-      const { onToolStart, gateImage, gateAudio } = build(findById);
+      const { onToolStart, gateImage } = build(findById);
 
       await expect(onToolStart(toolName, {})).resolves.toBeUndefined();
 
       expect(findById).toHaveBeenCalledWith('u1');
-      const gate = toolName === 'audio_generation' ? gateAudio : gateImage;
-      expect(gate).toHaveBeenCalledTimes(1);
+      // audio_generation bills in its job's create step, so only the image tools reach a host gate.
+      expect(gateImage).toHaveBeenCalledTimes(toolName === 'audio_generation' ? 0 : 1);
     });
   });
 

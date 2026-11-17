@@ -56,6 +56,18 @@ describe('StatusSummary', () => {
     );
   });
 
+  it('explains why an empty infrastructure failure is not a passed E2E run', () => {
+    const summary: QaSummary = {
+      ...SUMMARY,
+      products: [
+        { product: 'product-a', e2e: { runs: 1, cleanRuns: 0, passed: 0, tests: 0, passRate: null }, latency: null },
+      ],
+    };
+    render(<StatusSummary summary={summary} range={RANGE} branch="main" />, { wrapper: QaTestWrapper });
+    expect(screen.getByTestId('qa-summary-e2e')).toHaveTextContent('E2E tests passed-0 of 1 run passed');
+    expect(screen.getByTestId('qa-summary')).toHaveTextContent('and no infrastructure error');
+  });
+
   it('colors each product by its place among every known product, not among the cards shown', () => {
     const swatches = (order?: string[]) => {
       const { unmount } = render(<StatusSummary summary={SUMMARY} range={RANGE} branch="main" colorOrder={order} />, {
@@ -68,6 +80,31 @@ describe('StatusSummary', () => {
     const byCardOrder = swatches();
     expect(new Set(byCardOrder).size).toBe(2);
     expect(swatches(['product-b', 'product-a'])).toEqual([byCardOrder[1], byCardOrder[0]]);
+  });
+
+  it('keeps a product beyond the capped facet list the same color when the visible range changes', () => {
+    const colorOrder = Array.from({ length: 200 }, (_, index) => `product-${String(index).padStart(3, '0')}`);
+    const known = { ...SUMMARY.products[0], product: 'product-000' };
+    const beyondFacets = { ...SUMMARY.products[1], product: 'product-200' };
+    const { rerender } = render(
+      <StatusSummary
+        summary={{ ...SUMMARY, products: [known, beyondFacets] }}
+        range={RANGE}
+        branch="main"
+        colorOrder={colorOrder}
+      />,
+      { wrapper: QaTestWrapper }
+    );
+    const before = getComputedStyle(screen.getAllByTestId('qa-summary-swatch')[1]).backgroundColor;
+    rerender(
+      <StatusSummary
+        summary={{ ...SUMMARY, products: [beyondFacets] }}
+        range={RANGE}
+        branch="main"
+        colorOrder={colorOrder}
+      />
+    );
+    expect(getComputedStyle(screen.getByTestId('qa-summary-swatch')).backgroundColor).toBe(before);
   });
 
   it('names the env filter, warns when truncated, and says when the range is empty', () => {

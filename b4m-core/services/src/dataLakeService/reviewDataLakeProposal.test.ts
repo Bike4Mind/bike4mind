@@ -147,6 +147,25 @@ describe('approveDataLakeProposal', () => {
     expect(JSON.stringify(sourceMetadata)).not.toContain('secret');
   });
 
+  it('leaves the review reason out of the admitted file metadata', async () => {
+    const { deps, admitSource } = adapters({
+      proposal: proposal({
+        provenance: {
+          producer: 'research_run',
+          runId: 'run-7',
+          retrievedAt: new Date('2026-08-01T00:00:00Z'),
+          reviewReason: { kind: 'rule_match', conditions: ['About a sensitive topic'] },
+        },
+      }),
+    });
+
+    await approveDataLakeProposal('prop-1', ctx(), deps);
+
+    const { sourceMetadata } = admitSource.mock.calls[0][1].provenance;
+    expect(sourceMetadata).not.toHaveProperty('reviewReason');
+    expect(JSON.stringify(sourceMetadata)).not.toContain('sensitive');
+  });
+
   it('never stamps producer-proposed tags onto the file - they are advisory only', async () => {
     const { deps, admitSource } = adapters();
 

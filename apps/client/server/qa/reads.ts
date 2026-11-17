@@ -197,11 +197,10 @@ export interface QaRunDetailDeps {
   now?: Date;
 }
 
-const strings = (values: unknown[]): string[] =>
-  values
-    .filter((v): v is string => typeof v === 'string' && v.length > 0)
-    .sort()
-    .slice(0, 200);
+const normalizedStrings = (values: unknown[]): string[] =>
+  values.filter((v): v is string => typeof v === 'string' && v.length > 0).sort();
+
+const strings = (values: unknown[]): string[] => normalizedStrings(values).slice(0, 200);
 
 function runMatch(f: QaFilters): Record<string, unknown> {
   return {
@@ -323,7 +322,7 @@ export async function getQaOverview(f: QaFilters): Promise<QaOverview> {
  * crashed (no metrics) still counts them as latency rather than E2E.
  */
 export async function getQaSummary(f: QaSummaryFilters): Promise<QaSummary> {
-  const products = strings(await QaRun.distinct('product'));
+  const products = normalizedStrings(await QaRun.distinct('product'));
   let truncated = false;
   const latencySuites = new Map<string, Set<string>>();
   const perProduct = await Promise.all(
@@ -343,7 +342,7 @@ export async function getQaSummary(f: QaSummaryFilters): Promise<QaSummary> {
         QaRun.distinct('suite', { product, 'metrics.kind': 'latency' }),
       ]);
       if (runs.length === QA_SUMMARY_MAX_RUNS) truncated = true;
-      latencySuites.set(product, new Set(strings(suites)));
+      latencySuites.set(product, new Set(normalizedStrings(suites)));
       return runs;
     })
   );

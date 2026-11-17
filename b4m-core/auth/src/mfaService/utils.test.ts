@@ -8,6 +8,7 @@ import {
   matchTOTPStep,
   userHasMFAConfigured,
   userHasTotpConfigured,
+  userCanDisableMFA,
   userRequiresMFA,
 } from './utils';
 import type { IMFAConfig, IUserDocument } from '@bike4mind/common';
@@ -150,5 +151,20 @@ describe('userRequiresMFA', () => {
     const delegate = { ...persona, adminPermissions: ['settings:manage'] } as unknown as IUserDocument;
     expect(userRequiresMFA(fullAdmin, true)).toBe(true);
     expect(userRequiresMFA(delegate, true)).toBe(true);
+  });
+
+  it('requires a forced account while the stage setting is off, unless it is an exempt persona', () => {
+    expect(userRequiresMFA({ ...ordinary, mfaEnforcement: 'force' } as IUserDocument, false)).toBe(true);
+    expect(userRequiresMFA({ ...persona, mfaEnforcement: 'force' } as IUserDocument, false)).toBe(false);
+  });
+});
+
+describe('userCanDisableMFA', () => {
+  const ordinary = { mfa: { totpEnabled: true } } as unknown as IUserDocument;
+
+  it('lets a user disable only while neither the stage nor their account forces MFA', () => {
+    expect(userCanDisableMFA(ordinary, false)).toBe(true);
+    expect(userCanDisableMFA(ordinary, true)).toBe(false);
+    expect(userCanDisableMFA({ ...ordinary, mfaEnforcement: 'force' } as IUserDocument, false)).toBe(false);
   });
 });

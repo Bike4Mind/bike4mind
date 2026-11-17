@@ -63,6 +63,9 @@ vi.mock('@bike4mind/database/auth', () => ({
   UserActivityCounter: { find: vi.fn(async () => []) },
 }));
 
+const recordOrganizationRead = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@server/utils/orgReadAudit', () => ({ recordOrganizationRead }));
+
 import '@pages/api/organizations/stats';
 
 function mocks(user: unknown, query: Record<string, unknown> = {}) {
@@ -95,6 +98,19 @@ describe('GET /api/organizations/stats - membership-scoped ids', () => {
     const body = res._getJSONData();
     expect(body[MEMBER_ORG]).toBeDefined();
     expect(body[MEMBER_ORG].name).toBe('Member Org');
+  });
+
+  it('records the organizations it returns as a stats read', async () => {
+    recordOrganizationRead.mockClear();
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true }, { organizationIds: [MEMBER_ORG, FOREIGN_ORG] });
+    await mockRefs.getHandler!(req, res);
+
+    const [[auditedRequest, organizations, details]] = recordOrganizationRead.mock.calls as unknown as [
+      [unknown, Array<{ name: string }>, unknown],
+    ];
+    expect(auditedRequest).toBe(req);
+    expect(organizations.map(org => org.name)).toEqual(['Member Org', 'Foreign Org']);
+    expect(details).toEqual({ view: 'stats' });
   });
 
   it('skips the membership intersection entirely for an admin', async () => {
