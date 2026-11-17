@@ -366,9 +366,10 @@ async function seedSubject(source: 'self' | 'admin') {
   return { subject, adminId: String(adminId), seeded };
 }
 
-// Models where the purge deletes a row the registry only anonymizes, which erases more: it removes every
-// page the person still owns (any tier), where the registry anonymizes the owner of a non-personal one. A child of such a page goes with it.
-const DELETED_INSTEAD_OF_ANONYMIZED = new Set(['PublishedArtifact']);
+// Only these rows may vanish where the registry keeps them: the purge deletes every page the person owns
+// (the ownerId reference, any tier) and a ShadowDetection record once its last user is pulled.
+const EMPTIED_ROW_DELETED = new Set(['ShadowDetection']);
+const isOwnedPage = (model: string, ref?: UserReference) => model === 'PublishedArtifact' && ref?.path === 'ownerId';
 
 /**
  * Walks every seeded row by _id on the raw collection (soft-deleted rows count as present), so an
@@ -378,6 +379,7 @@ async function expectSeededOutcomes(subject: { userId: string; email: string }, 
   const outcomeOf = new Map(
     seeded.filter(row => row.outcome).map(row => [`${row.model}:${String(row.id)}`, row.outcome!])
   );
+  const refOf = new Map(seeded.map(row => [`${row.model}:${String(row.id)}`, row.ref]));
   const violations: string[] = [];
   for (const row of seeded) {
     const label = `${row.model} ${row.reference}`;
@@ -393,9 +395,10 @@ async function expectSeededOutcomes(subject: { userId: string; email: string }, 
     } else if (outcome === 'deleted') {
       if (found) violations.push(`${label} should be deleted`);
     } else if (!found) {
-      const emptied = row.ref?.action === 'pullFromArray'; // seeded with only the subject, so nothing is left
-      const purgedWithParent = row.under && DELETED_INSTEAD_OF_ANONYMIZED.has(row.under.parent);
-      const stronger = DELETED_INSTEAD_OF_ANONYMIZED.has(row.model) || purgedWithParent;
+      const emptied = row.ref?.action === 'pullFromArray' && EMPTIED_ROW_DELETED.has(row.model);
+      const purgedWithParent =
+        row.under && isOwnedPage(row.under.parent, refOf.get(`${row.under.parent}:${row.under.parentId}`));
+      const stronger = isOwnedPage(row.model, row.ref) || purgedWithParent;
       if (!emptied && !stronger) violations.push(`${label} should remain (${outcome})`);
     } else if (row.ref) {
       const wanted = row.ref.matchBy === 'email' ? subject.email : subject.userId;
