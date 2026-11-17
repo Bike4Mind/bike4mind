@@ -24,7 +24,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useGetSettingsValue, useSettingsFromServer, useUpdateSettings } from '@client/app/hooks/data/settings';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
-import { SecopsTriageConfigSchema, type SecopsTriageConfig } from '@bike4mind/common';
+import { SecopsTriageConfigFieldsSchema, SecopsTriageConfigSchema, type SecopsTriageConfig } from '@bike4mind/common';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import type { SecopsTriageRunSummary, SecopsTriageStatusResponse } from '@client/pages/api/admin/secops-triage/status';
@@ -255,15 +255,12 @@ function SecopsTriageConfigPanel() {
   });
 
   useEffect(() => {
-    try {
-      const parsed = SecopsTriageConfigSchema.parse(rawConfig ?? {});
-      setConfig(parsed);
-      setSavedConfig(parsed);
-    } catch {
-      const defaults = SecopsTriageConfigSchema.parse({});
-      setConfig(defaults);
-      setSavedConfig(defaults);
-    }
+    // A saved value that only breaks a cross-field rule still fills the form, so saving reports that
+    // rule instead of writing defaults over the stored fields.
+    const parsed = SecopsTriageConfigFieldsSchema.safeParse(rawConfig ?? {});
+    const loaded = parsed.success ? parsed.data : SecopsTriageConfigSchema.parse({});
+    setConfig(loaded);
+    setSavedConfig(loaded);
   }, [rawConfig]);
 
   const changeCount = config && savedConfig ? countChangedFields(config, savedConfig) : 0;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SecopsTriageConfigSchema } from './SecopsTriageTypes';
+import { SecopsTriageConfigFieldsSchema, SecopsTriageConfigSchema } from './SecopsTriageTypes';
 
 const firstIssue = (value: unknown) => {
   const result = SecopsTriageConfigSchema.safeParse(value);
@@ -46,5 +46,23 @@ describe('SecopsTriageConfigSchema', () => {
       path: ['modelId'],
       message: 'A model must be selected when LLM enrichment is enabled',
     });
+  });
+});
+
+describe('SecopsTriageConfigFieldsSchema', () => {
+  it('parses a value that breaks the cross-field rules, keeping its fields', () => {
+    const value = { enabled: true, llmEnrichment: true, slackChannelId: 'C123' };
+
+    expect(SecopsTriageConfigSchema.safeParse(value).success).toBe(false);
+    expect(SecopsTriageConfigFieldsSchema.parse(value)).toMatchObject({
+      enabled: true,
+      githubRepo: '',
+      llmEnrichment: true,
+      slackChannelId: 'C123',
+    });
+  });
+
+  it('still rejects a field of the wrong type', () => {
+    expect(SecopsTriageConfigFieldsSchema.safeParse({ maxIssuesPerScan: 'many' }).success).toBe(false);
   });
 });

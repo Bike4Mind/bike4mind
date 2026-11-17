@@ -318,6 +318,40 @@ describe('SecopsTriageTab', () => {
   });
 
   describe('saving', () => {
+    it('opens a stored config that breaks a cross-field rule with its stored fields, and names the rule on save', () => {
+      mocks.rawConfig = { enabled: true, githubRepo: 'not a repo', slackChannelId: 'C123', maxIssuesPerScan: 5 };
+      renderTab();
+
+      expect(within(screen.getByTestId('secops-triage-enabled-switch')).getByRole('switch')).toBeChecked();
+      expect(repoInput()).toHaveValue('not a repo');
+      expect(screen.getByDisplayValue('C123')).toBeInTheDocument();
+
+      toggle('secops-triage-dry-run-switch');
+      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+
+      expect(toast.error).toHaveBeenCalledWith(
+        'A repository in owner/name form is required when SecOps triage is enabled'
+      );
+      expect(mocks.update.mutateAsync).not.toHaveBeenCalled();
+    });
+
+    it('keeps the stored fields of an enabled config with no repository when the repository is fixed', async () => {
+      mocks.rawConfig = { enabled: true, slackChannelId: 'C123', maxIssuesPerScan: 5, severityThreshold: 'critical' };
+      renderTab();
+
+      fireEvent.change(repoInput(), { target: { value: 'example-org/fixed' } });
+      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+
+      await waitFor(() => expect(mocks.update.mutateAsync).toHaveBeenCalledTimes(1));
+      expect(mocks.update.mutateAsync.mock.calls[0][0].value).toMatchObject({
+        enabled: true,
+        githubRepo: 'example-org/fixed',
+        slackChannelId: 'C123',
+        maxIssuesPerScan: 5,
+        severityThreshold: 'critical',
+      });
+    });
+
     it.each([
       ['empty', ''],
       ['malformed', 'not a repo'],
