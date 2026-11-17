@@ -47,7 +47,7 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
 
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useGetOrganization: () => orgQuery.current,
-  useOrganizationSeats: () => ({ currentSeats: 1, maxSeats: 5, pendingSeats: 0, availableSeats: 4 }),
+  useOrganizationSeats: () => ({ currentSeats: 1, maxSeats: 5, pendingSeats: 0, activeSeats: 1, availableSeats: 4 }),
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.current }) }));

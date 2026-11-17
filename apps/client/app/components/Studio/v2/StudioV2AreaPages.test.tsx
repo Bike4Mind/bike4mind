@@ -22,6 +22,8 @@ vi.mock('../useStudioFeature', () => ({
 vi.mock('@client/app/components/Files/StudioLibrary', () => ({
   StudioLibrary: () => <div data-testid="studio-library" />,
 }));
+// The list's own behavior is covered by ProductionsList.test.tsx; this pins only that the page mounts it.
+vi.mock('../productions/ProductionsList', () => ({ default: () => <div data-testid="productions-list" /> }));
 
 import StudioLibraryPage from './StudioLibraryPage';
 import StudioProductionsPage from './StudioProductionsPage';
@@ -38,11 +40,10 @@ beforeEach(() => {
 });
 
 describe('Studio Productions', () => {
-  it('is a coming-soon placeholder under the Productions area', () => {
+  it('mounts the productions list under the Productions area', () => {
     render(<StudioProductionsPage />, { wrapper: TestWrapper });
-    expect(screen.getByTestId('studio-productions-page')).toBeInTheDocument();
     expect(screen.getByTestId('studio-area-productions')).toHaveAttribute('aria-current', 'page');
-    expect(screen.getByTestId('studio-productions-coming-soon')).toHaveTextContent('coming soon');
+    expect(screen.getByTestId('studio-productions-page')).toContainElement(screen.getByTestId('productions-list'));
   });
 
   it('links back to Create on the Image medium when it is open, else Video', () => {

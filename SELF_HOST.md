@@ -1312,7 +1312,7 @@ Focused verification:
 
 ```sh
 pnpm --filter @bike4mind/database test src/models/ai/DataLakeModel.purge.test.ts src/models/content/FabFileModel.cleanupTransaction.test.ts
-pnpm --filter @bike4mind/services test src/dataLakeService/cleanupDeletedDataLake.test.ts
+pnpm --filter @bike4mind/services-core test src/dataLakeService/cleanupDeletedDataLake.test.ts
 pnpm --filter @bike4mind/workers test src/selfhost/dataLakeCleanupQueue.test.ts
 pnpm --filter @bike4mind/workers test src/queueHandlers/dataLakeCleanup.test.ts
 # Requires an isolated loopback MinIO, a disposable bucket, and test AWS credentials.

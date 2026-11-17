@@ -3239,6 +3239,11 @@
       "count": 1
     }
   },
+  "apps/workers/src/organizations/retentionErasure.e2e.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
   "apps/workers/src/queueHandlers/accountDataExport.test.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 3
@@ -3247,6 +3252,11 @@
   "apps/workers/src/queueHandlers/accountDataExport.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 2
+    }
+  },
+  "apps/workers/src/queueHandlers/accountDataExportCollections.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
     }
   },
   "apps/workers/src/queueHandlers/accountErasure.test.ts": {
