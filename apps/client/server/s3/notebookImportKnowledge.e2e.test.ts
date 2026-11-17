@@ -18,7 +18,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
  * reported success with a count of the files it had not written.
  *
  * Drives the REAL service through the REAL FabFile model. Run
- * `pnpm --filter @bike4mind/services build` first: the service comes from the built dist, so a
+ * `pnpm --filter @bike4mind/services-core build` first: the service comes from the built dist, so a
  * stale build reports green against whatever was last compiled.
  */
 

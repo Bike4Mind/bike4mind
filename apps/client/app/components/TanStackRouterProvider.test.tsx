@@ -29,18 +29,21 @@ describe('TanStackRouterProvider', () => {
     window.history.replaceState(null, '', '/');
   });
 
-  it('clears an email link token that Next wrote back after router.tsx took it, before any effect runs', async () => {
-    window.history.replaceState(null, '', '/verify-email?token=tok-1');
-    const { captureEmailLinkToken, getEmailLinkToken } = await import('../utils/emailLinkToken');
-    captureEmailLinkToken(); // router.tsx at module load
-    // Next's App Router commits the URL it read at boot.
-    window.history.replaceState(null, '', '/verify-email?token=tok-1');
+  it.each(['/verify-email', '/email/unsubscribe'] as const)(
+    'clears a %s link token that Next wrote back after router.tsx took it, before any effect runs',
+    async path => {
+      window.history.replaceState(null, '', `${path}?token=tok-1`);
+      const { captureEmailLinkToken, getEmailLinkToken } = await import('../utils/emailLinkToken');
+      captureEmailLinkToken(); // router.tsx at module load
+      // Next's App Router commits the URL it read at boot.
+      window.history.replaceState(null, '', `${path}?token=tok-1`);
 
-    const { TanStackRouterProvider } = await import('./TanStackRouterProvider');
-    render(<TanStackRouterProvider />);
+      const { TanStackRouterProvider } = await import('./TanStackRouterProvider');
+      render(<TanStackRouterProvider />);
 
-    expect(addressAtEffect).toEqual([`${window.location.origin}/verify-email`]);
-    expect(window.location.href).not.toContain('tok-1');
-    expect(getEmailLinkToken('/verify-email')).toBe('tok-1');
-  });
+      expect(addressAtEffect).toEqual([`${window.location.origin}${path}`]);
+      expect(window.location.href).not.toContain('tok-1');
+      expect(getEmailLinkToken(path)).toBe('tok-1');
+    }
+  );
 });

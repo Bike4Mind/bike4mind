@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  send: vi.fn(async (_command: unknown): Promise<{ SecretString?: string }> => ({})),
+  send: vi.fn(async (_command: unknown): Promise<{ SecretString?: string; CreatedDate?: Date }> => ({})),
   config: {
     ANTHROPIC_ADMIN_API_KEY: 'config-anthropic-key' as string | undefined,
     OPENAI_ADMIN_API_KEY: 'config-openai-key' as string | undefined,
@@ -18,10 +18,12 @@ vi.mock('@aws-sdk/client-secrets-manager', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: mocks.config }));
 
-const { resolveProviderAdminKey } = await import('./providerAdminKey');
+const { lookupProviderAdminKey, resolveProviderAdminKey } = await import('./providerAdminKey');
 
 const SECRET_ARN =
   'arn:test:secretsmanager:us-east-2:123456789012:secret:app/stage/provider-admin-key/anthropic-AbCdEf';
+
+const CREATED = new Date('2026-09-01T00:00:00.000Z');
 
 const namedError = (name: string) => Object.assign(new Error(`${name}: simulated`), { name });
 
@@ -98,6 +100,59 @@ describe('resolveProviderAdminKey with the secret store', () => {
     expect(mocks.send).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ input: { SecretId: 'openai-secret-arn' } })
     );
+  });
+});
+
+describe('lookupProviderAdminKey', () => {
+  it('returns the stored key with the date its version was created', async () => {
+    vi.stubEnv('PROVIDER_ADMIN_KEY_SECRET_ANTHROPIC', SECRET_ARN);
+    mocks.send.mockResolvedValueOnce({ SecretString: ' sk-ant-admin01-stored\n', CreatedDate: CREATED });
+
+    expect(await lookupProviderAdminKey('anthropic')).toEqual({ key: 'sk-ant-admin01-stored', createdAt: CREATED });
+  });
+
+  it('leaves the date undefined when the store does not report one', async () => {
+    vi.stubEnv('PROVIDER_ADMIN_KEY_SECRET_ANTHROPIC', SECRET_ARN);
+    mocks.send.mockResolvedValueOnce({ SecretString: 'sk-ant-admin01-stored' });
+
+    expect(await lookupProviderAdminKey('anthropic')).toEqual({ key: 'sk-ant-admin01-stored', createdAt: undefined });
+  });
+
+  it.each([
+    ['an empty value', ''],
+    ['the not-configured placeholder', 'not-configured'],
+  ])('returns no key and no date for %s', async (_label, SecretString) => {
+    vi.stubEnv('PROVIDER_ADMIN_KEY_SECRET_ANTHROPIC', SECRET_ARN);
+    mocks.send.mockResolvedValueOnce({ SecretString, CreatedDate: CREATED });
+
+    expect(await lookupProviderAdminKey('anthropic')).toEqual({ key: undefined });
+  });
+
+  it('returns no key and no date when the secret has no current value yet', async () => {
+    vi.stubEnv('PROVIDER_ADMIN_KEY_SECRET_ANTHROPIC', SECRET_ARN);
+    mocks.send.mockRejectedValueOnce(namedError('ResourceNotFoundException'));
+
+    expect(await lookupProviderAdminKey('anthropic')).toEqual({ key: undefined });
+  });
+
+  it('rethrows a failed read', async () => {
+    vi.stubEnv('PROVIDER_ADMIN_KEY_SECRET_ANTHROPIC', SECRET_ARN);
+    mocks.send.mockRejectedValueOnce(namedError('AccessDeniedException'));
+
+    await expect(lookupProviderAdminKey('anthropic')).rejects.toThrow('AccessDeniedException');
+  });
+
+  it('returns the Config secret with no date where the store does not exist', async () => {
+    expect(await lookupProviderAdminKey('anthropic')).toEqual({ key: 'config-anthropic-key' });
+    expect(await lookupProviderAdminKey('openai')).toEqual({ key: 'config-openai-key' });
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('gives resolveProviderAdminKey the same key', async () => {
+    vi.stubEnv('PROVIDER_ADMIN_KEY_SECRET_ANTHROPIC', SECRET_ARN);
+    mocks.send.mockResolvedValueOnce({ SecretString: 'sk-ant-admin01-stored', CreatedDate: CREATED });
+
+    expect(await resolveProviderAdminKey('anthropic')).toBe('sk-ant-admin01-stored');
   });
 });
 

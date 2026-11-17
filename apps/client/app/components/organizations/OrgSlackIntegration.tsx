@@ -11,6 +11,7 @@ import {
   useDisconnectOrgSlack,
 } from '@client/app/hooks/data/useOrgSlackWorkspace';
 import OrgSlackApiPosting from './OrgSlackApiPosting';
+import OrgSlackFeedback from './OrgSlackFeedback';
 import { useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
 
@@ -161,6 +162,8 @@ const OrgSlackIntegration: FC<OrgSlackIntegrationProps> = ({ organization }) => 
         {workspace.enabled && (
           <OrgSlackApiPosting organizationId={organization.id} organizationName={organization.name} />
         )}
+
+        <OrgSlackFeedback organizationId={organization.id} canEnable={workspace.enabled} />
 
         <Box>
           <Button
