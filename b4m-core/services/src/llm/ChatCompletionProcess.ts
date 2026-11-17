@@ -1394,6 +1394,7 @@ export class ChatCompletionProcess {
     this.coreTutorialTurns = options.coreTutorialTurns;
     this.getScopeFilter = options.getScopeFilter;
     this.getEntitlements = options.getEntitlements;
+    this.admitQuestStart = options.admitQuestStart;
     this.getThinkingVisibility = options.getThinkingVisibility;
     this.getMcpClient = options.getMcpClient;
     this.customMcp = options.customMcp;
@@ -2184,6 +2185,8 @@ export class ChatCompletionProcess {
     return resolveRecentImageJobFiles({ recentImageJobs, resolver, userId: this.user.id, logger });
   }
 
+  private admitQuestStart: IChatCompletionServiceOptions['admitQuestStart'];
+
   public async process({
     body,
     logger,
@@ -2241,6 +2244,10 @@ export class ChatCompletionProcess {
     if (prefetchedQuest?.type === 'error') {
       logger.info(`Skipping process: quest ${prefetchedQuest.id} was already saved as an error`);
       return;
+    }
+
+    if (body.enableQuestMaster && !body.questMaster) {
+      await this.admitQuestStart?.(this.user, body.questMasterStartId ?? body.questId);
     }
 
     // Started now so its reads overlap context assembly instead of delaying the first token.

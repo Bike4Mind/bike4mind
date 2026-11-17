@@ -59,10 +59,11 @@ import { createChatLiveActivity, publishChatCompletedPush } from './questProcess
 import { recordFirstChatValue } from '@server/analytics/funnel';
 import { summarizeSession, contextSummarizeSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
+import { admitQuestStart } from '@bike4mind/server-utils/entitlements/questStartAllowance';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { operationalBillingAdapters } from '@bike4mind/server-utils/billing/operationalBilling';
 import { accessibleBy } from '@casl/mongoose';
-import { IUserDocument, Permission } from '@bike4mind/common';
+import { FREE_QUEST_LIMIT_REACHED_ERROR_CODE, getQuestErrorCode, IUserDocument, Permission } from '@bike4mind/common';
 import { LLMEvents, SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   getSharedTokenizer,
@@ -192,6 +193,7 @@ export const getStaticOptions = () => {
     // (e.g. a tag-less, entitlement-only subscriber). Pure function ref - safe to cache; the
     // per-request, per-user resolution happens inside ChatCompletionProcess.resolveEntitlementKeys.
     getEntitlements: getUserEntitlements,
+    admitQuestStart,
     getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
     invokeCreateMemento: async (
@@ -456,6 +458,17 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     });
   } catch (error) {
     await liveActivity.end('failed');
+    if (getQuestErrorCode(error) === FREE_QUEST_LIMIT_REACHED_ERROR_CODE) {
+      const message = (error as Error).message;
+      await questRepository.settleIfUnfinished(params.questId, {
+        status: 'done',
+        type: 'error',
+        errorCode: FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
+        reply: message,
+        replies: [message],
+      });
+      return;
+    }
     throw error;
   }
   await liveActivity.end();

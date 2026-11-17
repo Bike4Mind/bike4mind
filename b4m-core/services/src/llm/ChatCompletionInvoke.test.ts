@@ -4,6 +4,7 @@ import {
   type IUserDocument,
   ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
   ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+  ForbiddenError,
 } from '@bike4mind/common';
 import { ChatCompletionInvoke } from './ChatCompletionInvoke';
 import { QuestStartBodySchema } from './questStartBody';
@@ -130,6 +131,40 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
 
     expect((invoke as any).questStartParams).toEqual(
       expect.objectContaining({ skipAutoOffers: true, promptMode: 'raw' })
+    );
+  });
+
+  it('admits the first plan and refuses the second before dispatch or credit work', async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as never);
+    mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+    const refusal = new ForbiddenError('Free quest already started', { errorCode: 'free_quest_limit_reached' });
+    const admitQuestStart = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(refusal);
+    const dispatch = vi.fn();
+    const holdCredits = vi.fn();
+    mockDb.users = { incrementCredits: holdCredits };
+    const invoke = new ChatCompletionInvoke({
+      db: mockDb,
+      logger: { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      user: { id: OWNER_ID, tags: [] },
+      admitQuestStart,
+      invokeLambda: dispatch,
+    } as unknown as ConstructorParameters<typeof ChatCompletionInvoke>[0]);
+    const start = () =>
+      invoke.invoke({ body: { ...body, enableQuestMaster: true }, userId: OWNER_ID, authOrigin: 'session' });
+
+    await start();
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(dispatch.mock.calls[0][0].questMasterStartId).toBe(admitQuestStart.mock.calls[0][1]);
+    expect(invoke.questMasterStartId).toBe(admitQuestStart.mock.calls[0][1]);
+    await expect(start()).rejects.toBe(refusal);
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(admitQuestStart.mock.calls[0][1]).not.toBe(admitQuestStart.mock.calls[1][1]);
+    expect(holdCredits).not.toHaveBeenCalled();
+    expect(mockDb.quests.update).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: 'free_quest_limit_reached' })
     );
   });
   const enrolledGrant = {

@@ -137,6 +137,7 @@ export const chatContract = defineEndpoint({
       description:
         'The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), ' +
         'a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), ' +
+        'a free account already started its QuestMaster quest (`errorCode: "free_quest_limit_reached"`), ' +
         'organization-policy preflight refuses the model (`errorCode: "org_model_not_allowed"`), or an API-key ' +
         'caller named a built-in tool the organization does not allow (`errorCode: "org_tool_not_allowed"`).',
       schema: ChatForbiddenErrorSchema,

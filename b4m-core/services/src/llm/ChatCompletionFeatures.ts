@@ -541,6 +541,8 @@ export interface IChatCompletionServiceOptions {
    * entitlement-scoped data lakes in retrieval. Omitted -> no keys -> tag-only matching.
    */
   getEntitlements?: (user: IUserDocument) => Promise<string[]>;
+  /** Hosts with account allowances atomically admit a new plan before any provider or credit work. */
+  admitQuestStart?: (user: IUserDocument, startId: string) => Promise<void>;
   /**
    * How much model reasoning the caller may see (services/thinkingVisibility.ts), injected by the
    * app tier like getEntitlements. Omitted -> `raw`; a failed resolution withholds.

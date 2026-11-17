@@ -326,6 +326,7 @@ async function handleChat(
             body: {
               ...internalRequest,
               ...(invokeService.autoNameDispatched ? { autoNameDispatched: true } : {}),
+              questMasterStartId: invokeService.questMasterStartId,
               questId: quest.id,
               userId: req.user.id,
               // Mirrors invoke() above: process() reads the tool context's auth from this body only.

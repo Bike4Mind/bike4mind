@@ -23,6 +23,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import { Logger } from '@bike4mind/observability';
+import { ForbiddenError } from '@bike4mind/common';
 
 const {
   mockCheckFreeTierDailySpendCap,
@@ -193,6 +194,7 @@ vi.mock('@bike4mind/services/llm', async orig => {
     }
     prefetchedSession = undefined;
     prefetchedOrganization = undefined;
+    questMasterStartId = 'server-admitted-start';
     invoke = (...a: unknown[]) => mockInvoke(...a);
   }
   // The wait=true path constructs this directly; the async-path tests never reach it.
@@ -1419,6 +1421,30 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().promptDetails).toEqual(DETAILS);
+  });
+
+  it('carries the server admission id into the blocking process body', async () => {
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockProcess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({ questMasterStartId: 'server-admitted-start' }),
+      })
+    );
+  });
+
+  it.each([true, false])('returns a typed allowance refusal without processing (wait=%s)', async wait => {
+    mockInvoke.mockRejectedValueOnce(
+      new ForbiddenError('Free quest already started', {
+        errorCode: 'free_quest_limit_reached',
+      })
+    );
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'free_quest_limit_reached' });
+    expect(mockProcess).not.toHaveBeenCalled();
   });
 
   it('omits the breakdown without the flag, keeping the response shape unchanged', async () => {

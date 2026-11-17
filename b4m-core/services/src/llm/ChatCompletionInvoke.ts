@@ -13,6 +13,8 @@ import {
   LLMModelConfig,
   ModelInfo,
   ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+  FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
+  getQuestErrorCode,
   PromptMeta,
   PromptMetaZodSchema,
   readOrgModelPolicy,
@@ -42,6 +44,7 @@ import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { classifyQueryComplexity } from './queryComplexityClassifier';
 import { orgDisallowedTools } from './orgToolPolicy';
 import { filterBuiltInTools } from './tools/toolManager';
+import { randomUUID } from 'node:crypto';
 
 export class ChatCompletionInvoke {
   public db: IChatCompletionServiceOptions['db'];
@@ -54,6 +57,7 @@ export class ChatCompletionInvoke {
   private turnStartAutoNameDispatched = false;
   private invokeLambda?: (params: z.infer<typeof QuestStartBodySchema>) => Promise<void>;
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
+  private admitQuestStart: IChatCompletionServiceOptions['admitQuestStart'];
   private autoNameSession: IChatCompletionServiceOptions['autoNameSession'];
   /** Session fetched during invoke; exposed for the wait=true path to avoid a re-fetch in process. */
   public prefetchedSession: ISessionDocument | null = null;
@@ -64,12 +68,17 @@ export class ChatCompletionInvoke {
     return this.turnStartAutoNameDispatched;
   }
 
+  public get questMasterStartId(): string | undefined {
+    return this.questStartParams?.questMasterStartId;
+  }
+
   constructor(options: IChatCompletionServiceOptions) {
     this.db = options.db;
     this.logger = options.logger;
     this.user = options.user;
     this.invokeLambda = options.invokeLambda;
     this.getEntitlements = options.getEntitlements;
+    this.admitQuestStart = options.admitQuestStart;
     this.autoNameSession = options.autoNameSession;
   }
 
@@ -529,6 +538,8 @@ export class ChatCompletionInvoke {
       }
 
       let currentEmbeddingModel = embeddingModel;
+      const questMasterStartId = enableQuestMaster && !questMaster ? randomUUID() : undefined;
+      if (questMasterStartId) await this.admitQuestStart?.(this.user, questMasterStartId);
       if (!currentEmbeddingModel) {
         currentEmbeddingModel = defaultEmbeddingModel;
       }
@@ -563,6 +574,7 @@ export class ChatCompletionInvoke {
         params,
         dashboardParams,
         enableQuestMaster,
+        questMasterStartId,
         enableMementos,
         enableArtifacts,
         enableAgents,
@@ -638,7 +650,9 @@ export class ChatCompletionInvoke {
         type: quest.type,
         status: quest.status,
         reply: quest.reply,
+        errorCode: getQuestErrorCode(error),
       });
+      if (getQuestErrorCode(error) === FREE_QUEST_LIMIT_REACHED_ERROR_CODE) throw error;
     }
     return quest;
   }
