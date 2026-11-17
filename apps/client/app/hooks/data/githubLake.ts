@@ -60,9 +60,8 @@ export function useLakeGitHubConnection(dataLakeId?: string, enabled = true) {
 }
 
 /**
- * Whether the caller may connect, re-sync or disconnect the lake's repository. The status read also
- * admits an appointed org admin, who can see the connection but not operate it, so the controls key
- * off this. Shares useLakeGitHubConnection's query; a payload without the flag reads as `false`, so a dropped field fails closed.
+ * Whether the caller may connect, re-sync or disconnect the lake's repository.
+ * Shares useLakeGitHubConnection's query; a payload without the flag reads as `false`, so a dropped field fails closed.
  */
 export function useLakeGitHubCanManage(dataLakeId?: string, enabled = true) {
   const options = useLakeGitHubConnectionOptions(dataLakeId, enabled);

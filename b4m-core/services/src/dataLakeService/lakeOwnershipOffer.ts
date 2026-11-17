@@ -191,7 +191,8 @@ export async function acceptLakeOwnershipOffer(
     const org = await db.organizations.findById(lakeOrg);
     if (offer.offeredVia === 'org-admin') {
       // The org-admin rung is granted only through `administeredOrgIds` (billing owner or a manager
-      // in `adminUserIds`) - NOT roster membership, which `isOrgOwnershipCandidate` would also accept.
+      // in `adminUserIds` with a roster row) - NOT roster membership, which `isOrgOwnershipCandidate`
+      // would also accept.
       // Re-checking the rung the offer actually used, or a demoted admin could still demote an owner.
       if (!org || !isOrgAdminOf(org, offer.offeredByUserId)) {
         throw new BadRequestError(
