@@ -8,3 +8,4 @@ export * from './CampaignWatchModel';
 export * from './AbuseAssessmentModel';
 export * from './AutoContainmentDecisionModel';
 export * from './AbuseEvalSetModel';
+export * from './SecopsTriageRunModel';

@@ -64,7 +64,7 @@ export async function listAgentsForOwner(ownerUserId: string, limit = 50): Promi
       semanticMemoryCount: charter.semanticMemory.length,
       blockers: charter.blockers,
       updatedAt: charter.updatedAt,
-      ...(handoff
+      ...(handoff && handoff.wakeCount > 0
         ? {
             wakeCount: handoff.wakeCount,
             lastWakeAt: handoff.lastWakeAt,

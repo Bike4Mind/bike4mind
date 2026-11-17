@@ -76,12 +76,13 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+// Third column: how many rate limiters the route mounts after the gate (email/change has a short and a daily one).
 describe.each([
-  ['POST /api/auth/mfa/regenerate-backup-codes', regenerateBackupCodes as unknown as RunRoute],
-  ['POST /api/auth/mfa/setup', mfaSetup as unknown as RunRoute],
-  ['POST /api/auth/mfa/passkey/register-options', passkeyRegisterOptions as unknown as RunRoute],
-  ['POST /api/email/change', emailChange as unknown as RunRoute],
-])('%s: step-up gate runs ahead of the rate limit', (_name, route) => {
+  ['POST /api/auth/mfa/regenerate-backup-codes', regenerateBackupCodes as unknown as RunRoute, 1],
+  ['POST /api/auth/mfa/setup', mfaSetup as unknown as RunRoute, 1],
+  ['POST /api/auth/mfa/passkey/register-options', passkeyRegisterOptions as unknown as RunRoute, 1],
+  ['POST /api/email/change', emailChange as unknown as RunRoute, 2],
+])('%s: step-up gate runs ahead of the rate limit', (_name, route, limiterCount) => {
   it('does not spend the rate limit on a request bounced for verification', async () => {
     h.findBySid.mockResolvedValue(sessionSteppedUpAt(null));
 
@@ -105,7 +106,7 @@ describe.each([
     const { error } = await route(requestFor({}), {});
 
     expect(error).toBeUndefined();
-    expect(h.rateLimitSpy).toHaveBeenCalledTimes(1);
+    expect(h.rateLimitSpy).toHaveBeenCalledTimes(limiterCount);
     expect(h.routeHandler).toHaveBeenCalledTimes(1);
   });
 });
