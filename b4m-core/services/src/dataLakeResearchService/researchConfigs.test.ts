@@ -934,6 +934,14 @@ describe('research config item rules', () => {
     await expect(long.run()).resolves.toBeDefined();
   });
 
+  it('counts and length-checks the cleaned conditions', async () => {
+    const { run, repo } = create([...many(10), rule('\u200B\u200B')]);
+    await run();
+    expect(repo.createConfig.mock.calls[0][0].itemRules).toHaveLength(10);
+    const padded = create([rule('x'.repeat(300) + '\u200B'.repeat(20))]);
+    await expect(padded.run()).resolves.toBeDefined();
+  });
+
   it('treats a reordered or re-cased resubmit as a no-op with no history entry', async () => {
     const { run, record, repo } = update(stored({ itemRules: [rule('A one'), rule('b two', 'review')] }), {
       itemRules: [rule('B TWO', 'review'), rule(' a one ')],

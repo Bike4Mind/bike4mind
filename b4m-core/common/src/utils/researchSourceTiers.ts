@@ -76,14 +76,28 @@ export const isSameDomainSet = (a: readonly string[], b: readonly string[]): boo
   return setA.size === setB.size && [...setA].every(value => setB.has(value));
 };
 
-/** The one identity of a rule: trimmed, case-folded condition plus action. Normalizer, fingerprint and equality all use it. */
+/* eslint-disable no-control-regex -- matching control characters is the point */
+const RULE_WHITESPACE_CONTROLS = /[\u0009\u000A\u000D]/g;
+const RULE_STRIPPED_CHARS = /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C\uFEFF]/g;
+/* eslint-enable no-control-regex */
+
+/**
+ * A rule condition as it is stored and counted: tab/newline/CR become a space, other control,
+ * zero-width and bidi characters are removed, then trimmed. `trim()` alone leaves those characters
+ * in, so an invisible-only condition would pass as a real rule. Strips ZWJ, so emoji ZWJ sequences
+ * split into their parts.
+ */
+export const cleanResearchItemRuleCondition = (condition: string): string =>
+  condition.replace(RULE_WHITESPACE_CONTROLS, ' ').replace(RULE_STRIPPED_CHARS, '').trim();
+
+/** The one identity of a rule: cleaned, case-folded condition plus action. Normalizer, fingerprint and equality all use it. */
 export const researchItemRuleKey = (rule: ResearchItemRule): string =>
-  `${rule.action}\u0000${rule.condition.trim().toLowerCase()}`;
+  `${rule.action}\u0000${cleanResearchItemRuleCondition(rule.condition).toLowerCase()}`;
 
 const isResearchItemRuleAction = (value: unknown): value is ResearchItemRule['action'] =>
   typeof value === 'string' && (RESEARCH_ITEM_RULE_ACTIONS as readonly string[]).includes(value);
 
-/** Trim, drop empty conditions and unknown actions, dedupe on the canonical key. No clamping. */
+/** Clean, drop empty conditions and unknown actions, dedupe on the canonical key. No clamping. */
 export const canonicalItemRules = (values: readonly unknown[] | undefined): ResearchItemRule[] => {
   const seen = new Set<string>();
   const rules: ResearchItemRule[] = [];
@@ -91,7 +105,7 @@ export const canonicalItemRules = (values: readonly unknown[] | undefined): Rese
     if (typeof value !== 'object' || value === null) continue;
     const { condition, action } = value as { condition?: unknown; action?: unknown };
     if (typeof condition !== 'string' || !isResearchItemRuleAction(action)) continue;
-    const rule = { condition: condition.trim(), action };
+    const rule = { condition: cleanResearchItemRuleCondition(condition), action };
     if (!rule.condition) continue;
     const key = researchItemRuleKey(rule);
     if (seen.has(key)) continue;
