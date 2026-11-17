@@ -105,6 +105,28 @@ describe('trackQuests', () => {
     expect(ledger.open.size).toBe(0);
   });
 
+  it('checks off a held re-run that reaches needs-you and is then accepted', () => {
+    const ledger = track([
+      [agent('a', 'working', { outcome: 'finished' })],
+      [agent('a', 'done', { outcome: 'finished' })],
+      [ended('a', 'needs-you', 'finished')],
+      [ended('a', 'done', 'finished')],
+    ]);
+    expect(ledger.finished).toEqual(new Map([['a', 300]]));
+    expect(ledger.open.size).toBe(0);
+  });
+
+  it("still holds a done straight after working that reads as the previous run's outcome", () => {
+    const ledger = track([
+      [agent('a', 'needs-you', { outcome: 'finished' })],
+      [agent('a', 'working', { outcome: 'finished' })],
+      [agent('a', 'done', { outcome: 'finished' })],
+      [agent('a', 'done', { outcome: 'finished' })],
+    ]);
+    expect(ledger.finished.size).toBe(0);
+    expect(ledger.open.has('a')).toBe(true);
+  });
+
   it('ends a run the user stops while it waits on them, even with its record unchanged', () => {
     const ledger = track([[ended('a', 'needs-you', 'aborted')], [ended('a', 'stopped', 'aborted')]]);
     expect(ledger.open.size).toBe(0);
