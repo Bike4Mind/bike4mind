@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB,
+  DEFAULT_STORAGE_LIMIT_MB,
   isStorageLimitError,
   StorageLimitError,
   StorageLimitErrorInfoSchema,
@@ -22,6 +23,18 @@ describe('checkStorageLimit', () => {
     await expect(checkStorageLimit(user({ storageLimit: 10, currentStorageSize: 8 * MB }), 2 * MB)).resolves.toBe(
       undefined
     );
+  });
+
+  it('refuses any upload once a cancelled plan leaves usage above the default limit (#7379)', async () => {
+    // What clearPlanStorageLimit leaves behind: storageLimit back at the default, usage unchanged.
+    const lapsed = user({
+      storageLimit: DEFAULT_STORAGE_LIMIT_MB,
+      currentStorageSize: 3 * DEFAULT_STORAGE_LIMIT_MB * MB,
+    });
+
+    await expect(checkStorageLimit(lapsed, 1)).rejects.toMatchObject({
+      info: { errorCode: 'storage_limit_exceeded', limit_bytes: DEFAULT_STORAGE_LIMIT_MB * MB },
+    });
   });
 
   it('carries a stable code and the used, limit and requested bytes', async () => {

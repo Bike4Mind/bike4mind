@@ -1278,6 +1278,11 @@ export interface IUserRepository
    * override field first gets its legacy-derived override written. False when the user does not exist.
    */
   setPlanStorageLimit: (userId: string, planStorageLimitMb: number) => Promise<boolean>;
+  /**
+   * Clears `planStorageLimit` (to null) and re-derives `storageLimit` the same way, so it falls back to the
+   * override, or to DEFAULT_STORAGE_LIMIT_MB without one. Deletes nothing. False when the user does not exist.
+   */
+  clearPlanStorageLimit: (userId: string) => Promise<boolean>;
   /** The user's `currentStorageSize` (missing counts as 0), or null when the user does not exist. */
   findCurrentStorageSize: (userId: string) => Promise<number | null>;
   /** One keyset page of user ids in `_id` order, starting after `afterId` (null = first page). */

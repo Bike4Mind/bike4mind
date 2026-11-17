@@ -2,6 +2,10 @@ import { MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
 import { organizationRepository, userRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
+import {
+  endsPlanStorageAllowance,
+  releasePlanStorageLimit,
+} from '@bike4mind/server-utils/subscriptions/releasePlanStorageLimit';
 import type Stripe from 'stripe';
 
 /** Stripe price metadata key carrying the plan's storage allowance, in decimal MB (see BYTES_PER_STORAGE_MB). */
@@ -27,9 +31,12 @@ export const readPlanStorageLimit = (priceMetadata: Stripe.Metadata | null | und
 /**
  * Writes the subscribed price's `storageLimitMb` to the owner's `planStorageLimit` while the subscription
  * is active or trialing. A price without the key, or with an unusable value, leaves the limit as it is.
- * Cancellation does not reset it. Callers: customerSubscriptionUpdated (every change) and
- * handleUserSubscriptionInvoice and handleOrganizationSubscriptionInvoice (first payment, which can land
- * after the update event). `userId` is the owner id (a user or an org, per `ownerType`). Never throws:
+ * Once a user's subscription has ended (canceled, incomplete_expired) the plan limit is cleared instead, see
+ * releasePlanStorageLimit; other statuses (past_due, unpaid, paused, incomplete) keep it while Stripe can
+ * still bring the subscription back. An organization's limit is not cleared on cancellation. Callers:
+ * customerSubscriptionUpdated (every change) and handleUserSubscriptionInvoice and
+ * handleOrganizationSubscriptionInvoice (first payment, which can land after the update event). `userId` is
+ * the owner id (a user or an org, per `ownerType`). Never throws:
  * a storage-limit failure must not fail the subscription sync that already committed.
  */
 export async function applyPlanStorageLimit(
@@ -38,6 +45,11 @@ export async function applyPlanStorageLimit(
   logger: Logger,
   ownerType: 'User' | 'Organization' = 'User'
 ): Promise<void> {
+  // Before the metadata read: the ended plan's allowance goes whatever the price carries.
+  if (ownerType === 'User' && endsPlanStorageAllowance(subscription.status)) {
+    await releasePlanStorageLimit(userId, subscription.id, logger);
+    return;
+  }
   const price = subscription.items.data[0]?.price;
   const reading = readPlanStorageLimit(price?.metadata);
   if (reading.kind === 'absent') return;

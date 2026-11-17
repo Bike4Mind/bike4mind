@@ -196,6 +196,21 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
       .lean({ virtuals: true });
   }
 
+  /**
+   * Whether the user still has an active or trialing subscription other than `excludeSubscriptionId`
+   * (any source, admin grants included). An ended subscription must not take away a storage allowance
+   * another live subscription still grants.
+   */
+  async hasOtherGrantingUserSubscription(userId: string, excludeSubscriptionId: string): Promise<boolean> {
+    const row = await this.model.exists({
+      ownerType: SubscriptionOwnerType.User,
+      ownerId: userId,
+      status: { $in: ['active', 'trialing'] },
+      subscriptionId: { $ne: excludeSubscriptionId },
+    });
+    return row !== null;
+  }
+
   /** Active subscriptions of any of `ownerIds`, in one `$in` read on the {ownerType, ownerId, status} index. */
   findActiveSubscriptionsByOwners(
     ownerType: SubscriptionOwnerType,

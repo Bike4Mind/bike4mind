@@ -1231,11 +1231,26 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   async setPlanStorageLimit(userId: string, planStorageLimitMb: number): Promise<boolean> {
+    return this.writePlanStorageLimit(userId, planStorageLimitMb);
+  }
+
+  /**
+   * Drops the plan allowance once the subscription that granted it has ended, so the enforced
+   * `storageLimit` falls back to the manual override, or to DEFAULT_STORAGE_LIMIT_MB without one.
+   * Files already stored are untouched: a user left over the new limit can still read and delete,
+   * and the upload checks refuse anything that would add to the usage.
+   */
+  async clearPlanStorageLimit(userId: string): Promise<boolean> {
+    return this.writePlanStorageLimit(userId, null);
+  }
+
+  private async writePlanStorageLimit(userId: string, planStorageLimitMb: number | null): Promise<boolean> {
     if (!mongoose.isValidObjectId(userId)) return false;
     const fieldMissing = (field: string) => ({ $eq: [{ $type: field }, 'missing'] });
     const res = await this.model.updateOne({ _id: userId }, [
       // A row without the override field (pre-backfill, or an OAuth signup) gets the override
-      // resolveUserStorageLimit would derive for it, since a defined plan limit retires that fallback.
+      // resolveUserStorageLimit would derive for it, since writing planStorageLimit (a limit or an
+      // explicit null) retires that fallback.
       {
         $set: {
           storageLimitOverride: {
@@ -1256,7 +1271,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       {
         $set: {
           planStorageLimit: planStorageLimitMb,
-          storageLimit: { $ifNull: ['$storageLimitOverride', planStorageLimitMb] },
+          storageLimit: { $ifNull: ['$storageLimitOverride', planStorageLimitMb ?? DEFAULT_STORAGE_LIMIT_MB] },
         },
       },
     ]);
