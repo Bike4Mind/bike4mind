@@ -116,18 +116,26 @@ export class BflVideoProvider implements VideoProvider {
 
   async submit(
     request: ValidatedVideoRequest,
-    _inputs: ResolvedInputs,
+    inputs: ResolvedInputs,
     ctx: VideoProviderContext
   ): Promise<ProviderJobHandle> {
     const resolution = request.resolution === '720p' ? 'hd' : request.resolution === '1080p' ? 'fhd' : undefined;
     if (!resolution) throw new ProviderSubmitError('bfl_unsupported_resolution', true, undefined, false);
     const body = {
-      mode: 't2v',
+      mode: request.mode === 'image_to_video' ? 'i2v' : 't2v',
       prompt: request.prompt,
       duration: request.durationSeconds,
       aspect_ratio: request.aspectRatio,
       resolution,
       generate_audio: request.audio ?? true,
+      ...(request.draft !== undefined && { draft: request.draft }),
+      ...(request.keyframes && {
+        keyframes: request.keyframes.map((frame, index) => {
+          const image = inputs.images?.[index];
+          if (!image) throw new ProviderSubmitError('bfl_missing_keyframe', true, undefined, false);
+          return [frame.timeSeconds, `data:${image.mimeType};base64,${image.bytes.toString('base64')}`];
+        }),
+      }),
     };
     let response: Response;
     try {

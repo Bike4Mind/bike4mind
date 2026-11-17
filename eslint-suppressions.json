@@ -884,11 +884,6 @@
       "count": 1
     }
   },
-  "apps/client/app/routes/email/unsubscribe.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 3
-    }
-  },
   "apps/client/app/routes/integrations/atlassian/select-site.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 3
