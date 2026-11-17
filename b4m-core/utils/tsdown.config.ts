@@ -17,6 +17,8 @@ export default defineConfig({
     'src/imageModeration/index.ts',
     // Server-only image downscaling (jimp), kept off the barrel for the same reason. #660
     'src/imageResize.ts',
+    // Server-only product cutout (jimp): pads a source for the matte model and lays its alpha onto the original.
+    'src/imageCutout.ts',
     'src/llm/backend.ts',
     'src/escapeRegex.ts',
     'src/escapeHtml.ts',

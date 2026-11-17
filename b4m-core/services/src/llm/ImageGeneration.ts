@@ -96,6 +96,7 @@ import { CostInput } from './imageCostCalculator/types';
 import type { ImageCreditHolds } from './imageCreditHolds';
 import { shouldSummarizeSession } from './ChatCompletionFeatures';
 import { moderateImageOrThrow } from './imageModerationGate';
+import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
 
 /** BFL models with no output_format field (flux-3-image): BFL picks the format, so none is persisted. */
@@ -962,8 +963,12 @@ export class ImageGenerationService {
         });
         // Only moderate if using OpenAI (BFL models have their own safety_tolerance)
         const isBFLModelForModeration = Object.values(BFL_IMAGE_MODELS).includes(model as any);
-        if (!isBFLModelForModeration && apiKeyTable.openai) {
-          await new OpenaiModerationsService(apiKeyTable.openai, logger).checkPrompt(prompt);
+        const moderationOpenaiKey = resolveModerationOpenaiKey(
+          apiKeyTable.openai,
+          getSettingsValue('openaiDemoKey', settings)
+        );
+        if (!isBFLModelForModeration && moderationOpenaiKey) {
+          await new OpenaiModerationsService(moderationOpenaiKey, logger).checkPrompt(prompt);
         }
       }
 

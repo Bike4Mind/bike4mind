@@ -6,10 +6,7 @@ import express, { type Request, type Response, type Express, type NextFunction }
 import {
   CompletionRequestSchema,
   BadRequestError,
-  CreditHolderType,
   HTTPError,
-  NotFoundError,
-  RUN_NOT_FOUND_ERROR_CODE,
   LEGACY_REQUEST_ID_HEADER,
   REQUEST_ID_HEADER,
   TooManyRequestsError,
@@ -50,12 +47,12 @@ import {
   usageEventRepository,
   organizationRepository,
   cacheRepository,
-  completionRunRepository,
 } from '@bike4mind/database';
 import type { CompletionSettlement } from '@bike4mind/services/cliCompletions';
 import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
 import { resolveContractAuth } from '@bike4mind/server-utils/cli/resolveContractAuth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
+import { findCallerCompletionRun, type CompletionRunCaller } from '@server/completionRuns/callerCompletionRun';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';
 import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
@@ -122,26 +119,13 @@ function isUpstreamCallerError(error: unknown): error is Error {
   return !OPERATOR_SIDE_4XX_PATTERNS.some(pattern => pattern.test(error.message));
 }
 
-/**
- * Returns the attribution only when the run was minted by this user for this billing owner, resolved
- * as completion-runs.ts resolves it. A missing run and someone else's run get the same 404, so a run
- * id reveals nothing about other accounts.
- */
+/** The attribution, with the stored run id, once findCallerCompletionRun confirms this caller minted it. */
 async function verifyRunOwnership(
   run: CompletionRunAttribution,
-  caller: { userId: string; billingOrganizationId?: string }
+  caller: CompletionRunCaller
 ): Promise<CompletionRunAttribution> {
-  // _id is stored lowercase (randomUUID) but z.uuid accepts uppercase.
-  const runId = run.runId.toLowerCase();
-  const stored = await completionRunRepository.findById(runId);
-  const ownerType = caller.billingOrganizationId ? CreditHolderType.Organization : CreditHolderType.User;
-  const ownerId = caller.billingOrganizationId ?? caller.userId;
-  if (!stored || stored.userId !== caller.userId || stored.ownerType !== ownerType || stored.ownerId !== ownerId) {
-    throw new NotFoundError('Completion run not found. Create one with POST /api/v1/completion-runs.', {
-      errorCode: RUN_NOT_FOUND_ERROR_CODE,
-    });
-  }
-  return { ...run, runId };
+  const stored = await findCallerCompletionRun(run.runId, caller);
+  return { ...run, runId: stored.runId };
 }
 
 function requestIdFrom(headers: Record<string, string | undefined>): string {

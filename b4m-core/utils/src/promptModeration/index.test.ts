@@ -59,6 +59,26 @@ describe('BedrockGuardrailsService', () => {
     expect((err as FlaggedContentError).categories).toEqual(['Violence']);
   });
 
+  it('logs a block once at warn with the categories, never at error or with the prompt', async () => {
+    mockSend.mockResolvedValue({
+      action: 'GUARDRAIL_INTERVENED',
+      assessments: [{ topicPolicy: { topics: [{ name: 'Violence', action: 'BLOCKED' }] } }],
+    });
+
+    const svc = new BedrockGuardrailsService('gid', 'DRAFT', mockLogger as unknown as Logger);
+    await svc.checkPrompt('hurt someone').catch(() => undefined);
+
+    expect(mockLogger.error).not.toHaveBeenCalled();
+    expect(mockLogger.warn).toHaveBeenCalledOnce();
+    expect(mockLogger.warn).toHaveBeenCalledWith('Prompt flagged by moderation', {
+      provider: 'bedrock',
+      categories: ['Violence'],
+      guardrailId: 'gid',
+      guardrailVersion: 'DRAFT',
+    });
+    expect(JSON.stringify(mockLogger.warn.mock.calls)).not.toContain('hurt someone');
+  });
+
   it('throws FlaggedContentError with filter type when a content-filter is blocked', async () => {
     mockSend.mockResolvedValue({
       action: 'GUARDRAIL_INTERVENED',
@@ -160,5 +180,36 @@ describe('OpenaiModerationsService', () => {
 
     expect(err).toBeInstanceOf(FlaggedContentError);
     expect((err as FlaggedContentError).categories).toEqual(['violence', 'illicit/violent']);
+  });
+
+  it('logs a flag once at warn with the categories and model, never the prompt or the raw response', async () => {
+    mockModerationsCreate.mockResolvedValue({
+      model: 'omni-moderation-2024-09-26',
+      results: [{ flagged: true, categories: { violence: true, hate: false }, category_scores: { violence: 0.91 } }],
+    });
+
+    await new OpenaiModerationsService('key', logger).checkPrompt('secret prompt text').catch(() => undefined);
+
+    expect(mockLogger.error).not.toHaveBeenCalled();
+    expect(mockLogger.warn).toHaveBeenCalledOnce();
+    expect(mockLogger.warn).toHaveBeenCalledWith('Prompt flagged by moderation', {
+      provider: 'openai',
+      categories: ['violence'],
+      model: 'omni-moderation-2024-09-26',
+    });
+    const logged = JSON.stringify(mockLogger.warn.mock.calls);
+    expect(logged).not.toContain('secret prompt text');
+    expect(logged).not.toContain('category_scores');
+  });
+
+  it('falls back to the requested model name when the response omits it', async () => {
+    mockModerationsCreate.mockResolvedValue({ results: [{ flagged: true, categories: { violence: true } }] });
+
+    await new OpenaiModerationsService('key', logger).checkPrompt('bad content').catch(() => undefined);
+
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      'Prompt flagged by moderation',
+      expect.objectContaining({ model: 'omni-moderation-latest' })
+    );
   });
 });

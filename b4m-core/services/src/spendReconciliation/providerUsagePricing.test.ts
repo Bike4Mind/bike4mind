@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ModelInfo } from '@bike4mind/common';
-import { priceProviderUsage, resolveUsageModel } from './providerUsagePricing';
+import { OpenAIBackend } from '@bike4mind/llm-adapters';
+import { priceProviderUsage, resolveUsageModel, USAGE_ONLY_PRICING } from './providerUsagePricing';
 import type { ProviderHourlyUsage } from './providerUsageFetchers';
 
 const model = (id: string, pricing: ModelInfo['pricing'], extra: Partial<ModelInfo> = {}) =>
@@ -112,5 +113,30 @@ describe('priceProviderUsage', () => {
     const result = await priceProviderUsage(provider, [row(modelId, { inputTokens: 1000, outputTokens: 1000 })]);
     expect(result.usd).toBeGreaterThan(0);
     expect(result.unpricedModels).toEqual([]);
+  });
+
+  it('prices a model the adapter table does not ship at its published rates', async () => {
+    const result = await priceProviderUsage('openai', [
+      row('gpt-6.1-sol', { inputTokens: 1_000_000, outputTokens: 1_000_000, cacheReadTokens: 1_000_000 }),
+    ]);
+    // 2 input + 10 output + 0.10 cache read.
+    expect(result.usd).toBeCloseTo(12.1, 6);
+    expect(result).toMatchObject({ unpricedOutputTokens: 0, unpricedModels: [] });
+  });
+
+  it.each([
+    ['gpt-image-1.5-2025-12-16', 40],
+    ['gpt-image-2', 38],
+  ])('prices the image model %s at its per-token image rates', async (modelId, usd) => {
+    const result = await priceProviderUsage('openai', [
+      row(modelId, { inputTokens: 1_000_000, outputTokens: 1_000_000 }),
+    ]);
+    expect(result.usd).toBeCloseTo(usd, 6);
+    expect(result).toMatchObject({ unpricedOutputTokens: 0, unpricedModels: [] });
+  });
+
+  it('keeps no usage-only price for a model the adapter table ships', async () => {
+    const shipped = new Set((await new OpenAIBackend('static-price-table').getModelInfo()).map(m => String(m.id)));
+    expect(Object.keys(USAGE_ONLY_PRICING.openai).filter(id => shipped.has(id))).toEqual([]);
   });
 });
