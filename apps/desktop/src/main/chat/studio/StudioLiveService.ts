@@ -145,6 +145,7 @@ export class StudioLiveService {
 
   async assertDeletable(sessionId: string): Promise<void> {
     const scope = this.deps.sessions.scopeKey();
+    if (!(await this.deps.sessions.get(sessionId))) return;
     if ((await this.family(sessionId)).length > 1) return;
     let cursor: string | undefined;
     do {

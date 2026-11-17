@@ -139,6 +139,7 @@ export class StudioGenerationService {
       }
       await this.saveJob(sessionId, job, connection);
       try {
+        this.assertConnection(connection);
         if (request.kind === 'image') {
           const result = await connection.client.generateImage({ ...request.body, prompt_resolution: 'literal' });
           job = { ...job, state: 'queued', providerJobId: result.questId };

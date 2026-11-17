@@ -38,11 +38,13 @@ export function registerStudio(deps: {
   changed(event: { sessionId: string; workspaceId: string }): void;
 }) {
   const { sessions, auth, ipc } = deps;
+  let disposed = false;
   const workspaces = new StudioWorkspaceStore(join(deps.directory, 'studio'), sessions);
   const generation = new StudioGenerationService({
     workspaces,
     media: deps.media,
     connection: () => {
+      if (disposed) return null;
       const scope = sessions.scopeKey();
       const api = auth.getApiClient();
       return scope && api ? { scope, client: new MediaApiClient(api), cdnUrl: '' } : null;
@@ -335,6 +337,7 @@ export function registerStudio(deps: {
   let nextCleanup = 0;
   scheduler.start();
   const dispose = () => {
+    disposed = true;
     scheduler.dispose();
     clearInterval(timer);
     live.invalidate();

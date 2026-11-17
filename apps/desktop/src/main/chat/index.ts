@@ -850,6 +850,7 @@ export function registerChat(
     changed: event => send(IPC_CHANNELS.studioChanged, event),
   });
   service.studioDisposed = studioIntegration.dispose;
+  service.studioBeforeDelete = sessionId => studioIntegration.live.assertDeletable(sessionId);
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: unknown) =>
     service.listModels(force === 'local' ? 'local' : force === true)
@@ -1197,7 +1198,6 @@ export function registerChat(
     if (typeof sessionId !== 'string' || (removeWorktree !== undefined && typeof removeWorktree !== 'boolean')) {
       throw new Error('Invalid delete request');
     }
-    await studioIntegration.live.assertDeletable(sessionId);
     await service.deleteSession(sessionId, removeWorktree === true);
     await pullRequests.forget(sessionId);
   });

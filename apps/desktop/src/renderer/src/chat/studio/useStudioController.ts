@@ -11,6 +11,7 @@ export function useStudioController(
   const [error, setError] = useState<string | null>(null);
   const epoch = useRef(0);
   const pages = useRef({ assets: 1, jobs: 1 });
+  const readVersion = useRef(0);
   useEffect(() => {
     const api = window.b4m.studio;
     const generation = ++epoch.current;
@@ -22,6 +23,7 @@ export function useStudioController(
     const refresh = async () => {
       if (pending) return;
       pending = true;
+      const version = readVersion.current;
       try {
         const next = await api.get(sessionId);
         for (const collection of ['assets', 'jobs'] as const) {
@@ -38,7 +40,7 @@ export function useStudioController(
             }
           }
         }
-        if (epoch.current === generation) {
+        if (epoch.current === generation && version === readVersion.current) {
           setState(next);
           setError(null);
         }
@@ -89,8 +91,10 @@ export function useStudioController(
       check();
       const cursor = collection === 'assets' ? current?.workspace.nextAssetCursor : current?.workspace.nextJobCursor;
       if (!cursor) return;
+      readVersion.current++;
       const page = await window.b4m.studio.page({ sessionId, collection, cursor });
       check();
+      readVersion.current++;
       pages.current[collection]++;
       setState(previous => {
         if (!previous || previous.sessionId !== sessionId) return previous;

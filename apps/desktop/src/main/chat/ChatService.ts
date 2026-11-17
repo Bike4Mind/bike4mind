@@ -799,6 +799,7 @@ export type AutomaticTurnResult = { ok: true } | { ok: false; busy: boolean; err
 
 export class ChatService {
   studioDisposed?: () => void;
+  studioBeforeDelete?: (sessionId: string) => Promise<void>;
   private readonly loopRequests = new Map<string, AbortController>();
   private readonly loops = new LoopScheduler(
     id => this.hasTurnInFlight(id) || this.queuedMessages(id).length > 0,
@@ -2697,6 +2698,7 @@ export class ChatService {
    * be left that could turn a forgotten dev server off.
    */
   async deleteImportedSession(sessionId: string, scopeKey: string): Promise<'removed' | 'forked' | 'missing'> {
+    await this.studioBeforeDelete?.(sessionId);
     const historyScope = this.deps.history?.scopeKey() ?? null;
     const outcome = await this.deps.store.deleteImported(sessionId, scopeKey);
     if (outcome === 'removed') await this.cleanupDeletedSession(sessionId, false, historyScope);
@@ -2790,6 +2792,7 @@ export class ChatService {
   }
 
   async deleteSession(sessionId: string, removeWorktree = false): Promise<void> {
+    await this.studioBeforeDelete?.(sessionId);
     if (!removeWorktree) {
       await this.cleanupDeletedSession(sessionId, true);
       return;
