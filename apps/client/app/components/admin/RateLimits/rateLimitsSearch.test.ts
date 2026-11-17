@@ -66,7 +66,15 @@ describe('parseIsoDateTime', () => {
   });
 
   it('rejects anything that is not a UTC timestamp', () => {
-    for (const value of ['2026-11-17', '2026-11-17T08:30:00+09:00', '2026-13-01T00:00Z', 'now', 42, null]) {
+    for (const value of [
+      '2026-11-17',
+      '2026-11-17T08:30:00+09:00',
+      '2026-13-01T00:00Z',
+      '+275760-09-13T00:00:00.000Z',
+      'now',
+      42,
+      null,
+    ]) {
       expect(parseIsoDateTime(value), String(value)).toBeUndefined();
     }
   });

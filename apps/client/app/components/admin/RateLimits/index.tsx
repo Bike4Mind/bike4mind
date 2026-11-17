@@ -11,7 +11,7 @@ import { OverviewTab } from './components/OverviewTab';
 import { useRateLimitsSearchParams } from './hooks/useRateLimitsSearchParams';
 import { RATE_LIMIT_INTEGRATIONS } from '@bike4mind/common';
 import { oneOf } from '../adminSearchValues';
-import { DEFAULT_RATE_LIMITS_VIEW, RATE_LIMITS_VIEWS } from './rateLimitsSearch';
+import { DEFAULT_RATE_LIMITS_VIEW, RATE_LIMITS_VIEWS, parseIsoDateTime } from './rateLimitsSearch';
 import type { RateLimitFilters } from './types';
 
 const parseDraftIntegration = oneOf(RATE_LIMIT_INTEGRATIONS);
@@ -44,8 +44,8 @@ const RateLimitsTab: React.FC = () => {
 
   const handleApplyFilters = () => {
     applied.patch({
-      dateFrom,
-      dateTo,
+      dateFrom: parseIsoDateTime(dateFrom) ?? '',
+      dateTo: parseIsoDateTime(dateTo) ?? '',
       integration: parseDraftIntegration(integrationFilter) ?? '',
       throttledOnly,
     });

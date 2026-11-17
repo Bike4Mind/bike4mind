@@ -26,12 +26,12 @@ vi.mock('./hooks/useRateLimitMetrics', () => ({
 import RateLimitsTab from './index';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
-const renderTab = () =>
-  render(
-    <CssVarsProvider theme={appTheme}>
-      <RateLimitsTab />
-    </CssVarsProvider>
-  );
+const tree = () => (
+  <CssVarsProvider theme={appTheme}>
+    <RateLimitsTab />
+  </CssVarsProvider>
+);
+const renderTab = () => render(tree());
 
 type SearchUpdater = (previous: Record<string, unknown>) => Record<string, unknown>;
 const lastSearchUpdate = (previous: Record<string, unknown>) =>
@@ -56,6 +56,17 @@ describe('RateLimitsTab URL state', () => {
       throttledOnly: true,
     });
     expect(throttledCheckbox().checked).toBe(true);
+    expect(screen.getByTestId('rate-limit-integration-select').textContent).toContain('Jira');
+    expect((screen.getByLabelText('Date from') as HTMLInputElement).value).toBe('2026-11-10T08:00');
+  });
+
+  it('re-syncs the draft when the URL changes while mounted', () => {
+    const { rerender } = renderTab();
+    expect(throttledCheckbox().checked).toBe(false);
+    mocks.search = { rateIntegration: 'jira', rateThrottled: 'true' };
+    rerender(tree());
+    expect(throttledCheckbox().checked).toBe(true);
+    expect(screen.getByTestId('rate-limit-integration-select').textContent).toContain('Jira');
   });
 
   it('keeps a draft edit local until Apply, then writes it to the URL', () => {
