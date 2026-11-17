@@ -21,9 +21,9 @@ const infraSources: readonly string[] = readdirSync(infraDir, { recursive: true,
   .filter(file => file.endsWith('.ts') && !file.endsWith('.test.ts') && !file.split(path.sep).includes('__tests__'))
   .map(file => readFileSync(path.join(infraDir, file), 'utf8'));
 
-/** Variables bound to `new sst.aws.<constructorName>(` anywhere under `infra/`, including across a line break. */
+/** Variables bound to `new sst.aws.<constructorName>(` anywhere under `infra/`, including across a line break or behind a stage-gating ternary. */
 function declaredInInfra(constructorName: string): string[] {
-  const declaration = new RegExp(`const (\\w+)\\s*=\\s*new sst\\.aws\\.${constructorName}\\(`, 'g');
+  const declaration = new RegExp(`const (\\w+)\\s*=\\s*(?:[^;=]*\\?\\s*)?new sst\\.aws\\.${constructorName}\\(`, 'g');
   return infraSources.flatMap(source => [...source.matchAll(declaration)].map(match => match[1])).sort();
 }
 

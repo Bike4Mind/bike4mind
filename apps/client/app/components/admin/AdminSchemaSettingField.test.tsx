@@ -6,6 +6,9 @@ import { settingsMap } from '@bike4mind/common';
 
 const mutate = vi.fn();
 const mutateAsync = vi.fn();
+vi.mock('@client/app/hooks/data/dlqManagement', () => ({
+  useDlqQueues: () => ({ data: [{ label: 'quest' }], isError: false }),
+}));
 let updateError: unknown;
 vi.mock('@client/app/hooks/data/settings', () => ({
   useUpdateSettings: () => ({ mutate, mutateAsync, isPending: false, error: updateError }),
@@ -49,6 +52,27 @@ const pick = (selectTestId: string, option: string) => {
 const type = (testId: string, value: string) => fireEvent.change(byId(testId), { target: { value } });
 
 describe('AdminSchemaSettingField', () => {
+  it('never renders [object Object] in hints for an object default', () => {
+    const { container } = renderField('adminAiConfig');
+    const hints = Array.from(container.querySelectorAll('[data-testid$="-hint"]'));
+    expect(hints.length).toBeGreaterThan(0);
+    expect(hints.some(hint => hint.textContent?.includes('{}'))).toBe(true);
+    expect(container.innerHTML).not.toContain('[object Object]');
+  });
+
+  it('edits and saves per-queue DLQ modes through the existing setting', () => {
+    renderField('adminAiConfig');
+    pick('admin-setting-dlq-mode-quest', 'off');
+    fireEvent.click(byId('admin-setting-adminAiConfig-save-btn'));
+    expect(mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: 'adminAiConfig',
+        value: expect.objectContaining({ dlqQueueModes: { quest: 'off' } }),
+      }),
+      expect.any(Object)
+    );
+  });
+
   beforeEach(() => {
     mutate.mockReset();
     mutateAsync.mockReset();

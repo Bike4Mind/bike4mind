@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
 // Fails when an infra/ `sst.aws.Function` exposes a Function URL (`url:`) but its
-// handler is not built on defineLambdaRoute.
+// handler is not built on defineLambdaRoute or explicitly exempt for a fixed third-party protocol.
 //
-// A Function URL is a public endpoint: it skips every middleware the Next.js
-// transport installs, so the contract has to be wired at the handler. This is the
-// scan 4 of scripts/check-contract-gate.sh; the earlier scans cover
+// Function URLs skip the Next.js middleware chain, so app handlers need a contract
+// at the handler. Fixed third-party protocols have narrowly reviewed bindings below.
+// This is scan 4 of scripts/check-contract-gate.sh; the earlier scans cover
 // apps/client/pages/api and cannot see a Lambda declared in infra/.
 //
 // The repo-guards CI job installs nothing, so this is a hand-written scanner
@@ -39,6 +39,14 @@ export const ADAPTER_FILE = 'apps/workers/src/cli/defineLambdaRoute.ts';
 // `@workers/*` -> apps/workers/src/* (apps/workers/tsconfig.json). An import that
 // resolves through any other alias is left unresolved, which fails closed.
 const IMPORT_ALIASES = [['@workers/', 'apps/workers/src/']];
+
+// Permanent protocol exceptions are separate from the frozen migration-debt baseline.
+// Turbo requires authenticated OPTIONS, HEAD and redirect headers on its fixed v8 paths.
+// The app's JSON/auth adapter is not this transport; the cache handler owns bearer auth
+// and read/write roles. See docs/architecture/turbo-remote-cache.md and handler.test.ts.
+// Match both the infra declaration file and exact handler export, never a directory/import.
+// Each entry covers exactly one declaration: main() fails when a second one names the same handler.
+const FIXED_PROTOCOL_EXCEPTIONS = new Map([['infra/turborepoCache.ts', 'apps/workers/src/turboCache/handler.handler']]);
 
 const MAX_IMPORT_DEPTH = 3;
 
@@ -499,13 +507,24 @@ function main() {
 
   const { exposed, problems } = findUrlFunctions(sources);
   const violations = new Set();
+  const exceptionMatches = new Map();
   for (const { file, handler } of exposed) {
     if (isOverlayHandler(handler)) continue;
     const handlerFile = resolveHandlerFile(root, handler);
+    const isException = FIXED_PROTOCOL_EXCEPTIONS.get(file) === handler;
+    if (isException) exceptionMatches.set(file, (exceptionMatches.get(file) ?? 0) + 1);
     if (!handlerFile) {
       problems.push(`${file}: no source file for handler '${handler}'`);
-    } else if (!usesDefineLambdaRoute(root, handlerFile)) {
+    } else if (!isException && !usesDefineLambdaRoute(root, handlerFile)) {
       violations.add(handlerFile);
+    }
+  }
+  // The exception was reviewed against one declaration; a duplicate could carry different link, CORS or URL settings.
+  for (const [file, count] of exceptionMatches) {
+    if (count > 1) {
+      problems.push(
+        `${file}: ${count} declarations use the protocol exception for '${FIXED_PROTOCOL_EXCEPTIONS.get(file)}'; it covers exactly one`
+      );
     }
   }
 
@@ -515,7 +534,7 @@ function main() {
   if (problems.length > 0) {
     for (const problem of problems) console.error(`::error::${problem}`);
     console.error(
-      `ERROR: ${problems.length} unreadable Function URL declaration(s) under infra/; the contract gate cannot verify them.`
+      `ERROR: ${problems.length} unverifiable Function URL declaration(s) under infra/; the contract gate cannot verify them.`
     );
     process.exit(2);
   }

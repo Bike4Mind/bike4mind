@@ -10,6 +10,7 @@ const HEADINGS: Record<string, string> = {
   notebooks: 'Chat',
   profile: 'Profile',
   skills: 'Skills',
+  artifacts: 'Artifacts',
   organizations: 'Teams',
   agents: 'Agents',
   'agent-executions': 'Agent executions',

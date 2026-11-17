@@ -64,6 +64,7 @@ vi.mock('@server/agents/agentScopes', async importOriginal => {
 import '@pages/api/agents/[id]/missions';
 import { ApiKeyScope } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/utils';
+import { AI_ACCESS_PENDING_REVIEW_MESSAGE } from '@bike4mind/services/userService/accountState';
 import { assertAgentsReadScope, assertAgentsWriteScope } from '@server/agents/agentScopes';
 
 const SHARED_AGENT = { id: 'a1', userId: 'owner', users: [{ userId: 'u1' }] };
@@ -215,6 +216,17 @@ describe('POST /api/agents/[id]/missions', () => {
     const { res, run } = invoke('POST', developer);
     await run();
     expect(res._getStatusCode()).toBe(500);
+  });
+
+  it("answers a restricted owner's first-wake refusal with its 403, not a 500", async () => {
+    enrollMissionForAgent.mockResolvedValue({ missionId: 'm1' });
+    discardEnrolledMission.mockResolvedValue(undefined);
+    runMissionFirstWake.mockRejectedValue(new ForbiddenError(AI_ACCESS_PENDING_REVIEW_MESSAGE));
+    const { res, run } = invoke('POST', developer);
+    await run();
+    expect(discardEnrolledMission).toHaveBeenCalledWith('m1');
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toEqual({ error: AI_ACCESS_PENDING_REVIEW_MESSAGE });
   });
 
   it('answers an unrelated enroll failure with a 500', async () => {

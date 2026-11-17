@@ -75,7 +75,8 @@ export const CENSUS_FIELDS: CensusField[] = [
     TOKENS
   ),
   ...fields('users', ['securityQuestions.answer'], 'bcrypt', PROTECT, { array: 'securityQuestions' }),
-  ...fields('users', ['mfa.totpSecret', 'mfa.pendingBackupCodes'], 'ciphertext', null),
+  ...fields('users', ['mfa.totpSecret'], 'ciphertext', PROTECT),
+  ...fields('users', ['mfa.pendingBackupCodes'], 'ciphertext', null),
   ...fields('orgslackworkspaces', ['slackBotToken'], 'ciphertext', TOKENS),
   ...fields('slackdevworkspaces', ['slackBotToken'], 'ciphertext', TOKENS),
   ...fields('slackdevworkspaces', [...slackFields], 'ciphertext', PROTECT),

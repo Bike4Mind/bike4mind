@@ -65,6 +65,15 @@ describe('AdminRoleUpdateSchema', () => {
   it('accepts a rename alone', () => {
     expect(AdminRoleUpdateSchema.parse({ name: 'Billing team' })).toEqual({ name: 'Billing team' });
   });
+
+  it('takes an optional reason, but a reason alone is not a change', () => {
+    expect(AdminRoleUpdateSchema.parse({ name: 'Billing team', reason: ' New hire onboarding ' })).toEqual({
+      name: 'Billing team',
+      reason: 'New hire onboarding',
+    });
+    expect(AdminRoleUpdateSchema.safeParse({ reason: 'New hire onboarding' }).success).toBe(false);
+    expect(AdminRoleUpdateSchema.safeParse({ name: 'Billing team', reason: 'no' }).success).toBe(false);
+  });
 });
 
 describe('effective permissions with roles', () => {

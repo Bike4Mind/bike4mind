@@ -138,3 +138,18 @@ public enum TurnInto {
     }
   }
 }
+
+extension StudioSeed {
+  /// "Remix": re-opens a finished item as a new request with its prompt pre-filled and nothing attached, ready to
+  /// iterate. Nil when the server recorded no prompt, since there is nothing to iterate on.
+  public static func remix(of item: MediaItem) -> StudioSeed? {
+    guard let prompt = item.prompt?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty else { return nil }
+    let kind: GenerationKind =
+      switch item.kind {
+      case .image: .image
+      case .video: .video
+      case .audio: .music
+      }
+    return StudioSeed(kind: kind, prompt: prompt, inputs: [])
+  }
+}

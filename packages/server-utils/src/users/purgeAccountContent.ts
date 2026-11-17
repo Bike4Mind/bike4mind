@@ -79,9 +79,9 @@ export const personalFilter = (userId: string, personalOrganizationIds: readonly
 });
 
 /** The ids of the person's personal-workspace organizations, tombstones included. */
-export async function findPersonalOrganizationIds(userId: string): Promise<string[]> {
+export async function findPersonalOrganizationIds(userId: string, session?: mongoose.ClientSession): Promise<string[]> {
   const workspaces = await collectionFor('Organization')
-    .find({ ...ownerFilter(userId), personal: true }, { projection: { _id: 1 } })
+    .find({ ...ownerFilter(userId), personal: true }, { projection: { _id: 1 }, session })
     .toArray();
   return workspaces.map(workspace => String(workspace._id));
 }
@@ -298,27 +298,46 @@ async function purgeQuestGraphs(userId: string, assertLease: () => Promise<void>
   }
 }
 
-async function purgePersonalLakes(
+/** Canonical effective ownership, after the caller loads only active grants. */
+export const isSubjectOwnedPersonalLake = (
   userId: string,
-  personalOrganizationIds: readonly string[],
+  organizationId: string | null | undefined,
+  effectiveOwnerIds: readonly string[],
+  personalOrganizationIds: readonly string[]
+): boolean => {
+  if (organizationId) return personalOrganizationIds.includes(String(organizationId));
+  return effectiveOwnerIds.length === 1 && effectiveOwnerIds[0] === userId;
+};
+
+/** A bounded database-only cascade; every transaction retry re-reads the current authority. */
+export async function purgePersonalLakeById(
+  userId: string,
+  id: string,
   assertLease: () => Promise<void>
-) {
-  const lakes = collectionFor('DataLake');
-  const grantsCollection = collectionFor('DataLakeAccessGrant');
-  const grantSchema = z.object({
-    principalType: z.enum(['user', 'organization']),
-    principalId: z.string(),
-    role: z.enum(['owner', 'curator', 'reader']),
-  });
-  const purgeLake = async (record: PurgeRecord & { _id: mongoose.mongo.ObjectId }) => {
+): Promise<boolean> {
+  return withTransaction(async session => {
+    await assertLease();
+    const personalOrganizationIds = await findPersonalOrganizationIds(userId, session);
+    const lakes = collectionFor('DataLake');
+    const grantsCollection = collectionFor('DataLakeAccessGrant');
+    const record = await lakes.findOne({ _id: new mongoose.Types.ObjectId(id) }, { session });
+    if (!record) return false;
+    const grantSchema = z.object({
+      principalType: z.enum(['user', 'organization']),
+      principalId: z.string(),
+      role: z.enum(['owner', 'curator', 'reader']),
+    });
     await assertLease();
     const lake = z.object({ createdByUserId: z.string(), datalakeTag: z.string().min(1) }).parse(record);
     const dataLakeId = String(record._id);
     const grants = await grantsCollection
-      .find({
-        dataLakeId,
-        $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
-      })
+      .find(
+        {
+          dataLakeId,
+          $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
+        },
+        { session }
+      )
       .toArray();
     const owners = dataLakeService.resolveEffectiveOwnerIds(
       lake,
@@ -326,10 +345,14 @@ async function purgePersonalLakes(
     );
     // Creator provenance cannot override a transfer. A co-owned/shared lake also has surviving
     // owners, so remove only this user's access later and leave its content and memory intact.
-    if (!personalOrganizationIds.includes(record.organizationId ?? '') && (owners.length !== 1 || owners[0] !== userId))
-      return;
+    if (!isSubjectOwnedPersonalLake(userId, record.organizationId, owners, personalOrganizationIds)) return false;
+    await assertLease();
+    await lakes.updateOne({ _id: record._id }, { $currentDate: { updatedAt: true } }, { session });
     await memoryPrincipalKeyRepository.destroy('lake', lake.datalakeTag);
-    await collectionFor('MemoryLedgerEvent').deleteMany({ principalKind: 'lake', principalId: lake.datalakeTag });
+    await collectionFor('MemoryLedgerEvent').deleteMany(
+      { principalKind: 'lake', principalId: lake.datalakeTag },
+      { session }
+    );
     for (const model of [
       'DataLakeBatch',
       'DataLakeResearchConfig',
@@ -349,32 +372,40 @@ async function purgePersonalLakes(
       'DataLakeOwnershipOffer',
     ]) {
       await assertLease();
-      await collectionFor(model).deleteMany({ dataLakeId });
+      await collectionFor(model).deleteMany({ dataLakeId }, { session });
     }
     for (const model of ['OrgGoogleDriveConnection', 'OrgGitHubLakeConnection']) {
-      await collectionFor(model).deleteMany({
-        dataLakeId,
-        organizationId: { $in: [null, '', ...personalOrganizationIds] },
-      });
+      await collectionFor(model).deleteMany(
+        {
+          dataLakeId,
+          organizationId: { $in: [null, '', ...personalOrganizationIds] },
+        },
+        { session }
+      );
     }
     // Surviving uploads belong to other users or an organization. Only detach the removed lake's
     // unique membership tag; deleting the lake never authorizes deleting their bytes.
     await collectionFor(FabFile.modelName).updateMany(
       { 'tags.name': lake.datalakeTag },
-      { $pull: { tags: { name: lake.datalakeTag } } }
+      { $pull: { tags: { name: lake.datalakeTag } } },
+      { session }
     );
-    // Ownership grants are the retry anchor for a transferred-in lake. Delete them only in the
-    // same transaction as the lake, or a failed final write would restore the original creator
-    // fallback and make this user's remaining lake unreachable to a retry.
-    await withTransaction(async session => {
-      await assertLease();
-      await grantsCollection.deleteMany({ dataLakeId }, { session });
-      await lakes.deleteOne(
-        { _id: record._id, organizationId: { $in: [null, '', ...personalOrganizationIds] } },
-        { session }
-      );
-    });
-  };
+    await assertLease();
+    await grantsCollection.deleteMany({ dataLakeId }, { session });
+    await lakes.deleteOne({ _id: record._id }, { session });
+    return true;
+  });
+}
+
+async function purgePersonalLakes(
+  userId: string,
+  personalOrganizationIds: readonly string[],
+  assertLease: () => Promise<void>
+) {
+  const lakes = collectionFor('DataLake');
+  const grantsCollection = collectionFor('DataLakeAccessGrant');
+  const purgeLake = (record: PurgeRecord & { _id: mongoose.mongo.ObjectId }) =>
+    purgePersonalLakeById(userId, String(record._id), assertLease);
   const personal = { organizationId: { $in: [null, '', ...personalOrganizationIds] } };
   for await (const lake of lakes.find({
     ...personal,
@@ -452,7 +483,6 @@ async function purgePersonalUsage(
   assertLease: () => Promise<void>
 ) {
   await assertLease();
-  await collectionFor('CounterLog').deleteMany(ownerFilter(userId));
   const usage = collectionFor('UsageEvent');
   await usage.deleteMany({
     $or: [
@@ -497,10 +527,11 @@ async function purgePersonalMemory(
 }
 
 /**
- * Strict, resumable removal for a claimed self-serve deletion. No catch converts a failed purge
- * into completion; the User deletion marker remains until every step resolves. Ownership predicates
- * remove the user's personal originals, while organization-owned records and other owners' copies
- * survive. Auth/security audit records follow their existing TTL and are not swept here.
+ * Strict, resumable removal for a claimed account deletion. No catch converts a failed purge
+ * into completion; the User deletion marker remains until every step resolves. Covers what needs more
+ * than a row write (storage, CDN, memory keys, grant cascades, lake transfers); the rows that merely
+ * name the person are erased afterwards from the data holder registry (ErasureRegistry.erase in
+ * completeAccountDeletion.ts, and again by apps/client/server/users/reapplyErasure.ts). Auth/security audit records follow their existing TTL and are not swept here.
  */
 export async function purgeAccountContent(userId: string, { logger, assertLease }: PurgeOptions): Promise<void> {
   await assertLease();
@@ -529,88 +560,16 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
   await purgePersonalProjects(userId, personalOrganizationIds, assertLease);
   await purgePersonalAgents(userId, personalOrganizationIds, assertLease);
 
-  for (const model of [
-    'ToolModel',
-    'Memento',
-    'ResearchAgent',
-    'ResearchTask',
-    'WorkItem',
-    'AgentExecution',
-    'Favorite',
-    'Tag',
-    'BriefcasePrompt',
-    'ImageGenerationTemplate',
-    'ResearchData',
-    'StockPortfolio',
-    'StockTrade',
-    'TavernQuest',
-    'QuestMasterPlan',
-    'QuestExternalLink',
-    'GearStamp',
-  ]) {
-    await assertLease();
-    await collectionFor(model).deleteMany(personalFilter(userId, personalOrganizationIds));
-  }
-
-  for (const model of [
-    'AuthSession',
-    'TrustedDevice',
-    'PasskeyCredential',
-    'OAuthGrant',
-    'OAuthRefreshToken',
-    'OAuthAuthorizationCode',
-    'UserApiKey',
-    'ApiKey',
-    'PushToken',
-    'DeviceAuthorization',
-    'CcBridgeDevice',
-    'CcBridgePairingToken',
-    'WsConnectTicket',
-    'PasskeyChallenge',
-    'UserActivityCounter',
-    'UserUsagePatternSignals',
-    'AdminUserNote',
-    'AdminUserNoteRevision',
-    'FeedbackNote',
-  ]) {
-    await assertLease();
-    await collectionFor(model).deleteMany(ownerFilter(userId));
-  }
-  // Connection rows are ended by the caller's realtime invalidation, which needs them to find
-  // subscriptions and leaves them for the sweep to close the sockets before deleting the rows.
-  for (const model of ['ActiveCodeAgent', 'CodeAgentEvent', 'SessionAgentConfig', 'SessionToolApproval']) {
-    await assertLease();
-    await collectionFor(model).deleteMany(ownerFilter(userId));
-  }
-  await collectionFor('GitHubLakeAuthGrant').deleteMany(ownerFilter(userId));
-  await collectionFor('Inbox').deleteMany({ receiverId: userId });
-  await collectionFor('Friendship').deleteMany({ $or: [{ requester: userId }, { recipient: userId }] });
-  await collectionFor('McpConnection').deleteMany({ ownerType: 'user', ownerKey: userId });
-  await collectionFor('McpServer').deleteMany(ownerFilter(userId));
+  // Rows owned by a personal workspace do not name the person, so the registry erasure cannot find them.
   await collectionFor('GenerationJob').deleteMany({
-    $or: [
-      { ownerType: CreditHolderType.User, ownerId: userId },
-      { ownerType: CreditHolderType.Organization, ownerId: { $in: personalOrganizationIds } },
-    ],
+    ownerType: CreditHolderType.Organization,
+    ownerId: { $in: personalOrganizationIds },
   });
-  await collectionFor('Activity').deleteMany({
-    $or: [
-      { ownerType: 'User', ownerId: userId },
-      { ownerType: 'Organization', ownerId: { $in: personalOrganizationIds } },
-    ],
-  });
-  await collectionFor('TaskSchedule').deleteMany({ 'payload.userId': userId });
-  // A share received from another owner is an access row, never that owner's content.
-  for (const model of [Session.modelName, 'Project', FabFile.modelName, 'Agent', 'ToolModel']) {
+  await collectionFor('Activity').deleteMany({ ownerType: 'Organization', ownerId: { $in: personalOrganizationIds } });
+  for (const model of ['AgentExecution', 'QuestExternalLink', 'ResearchData', 'ResearchTask', 'WorkItem']) {
     await assertLease();
-    await collectionFor(model).updateMany({ 'users.userId': userId }, { $pull: { users: { userId } } });
+    await collectionFor(model).deleteMany({ organizationId: { $in: personalOrganizationIds } });
   }
-  await assertLease();
-  await collectionFor('Organization').updateMany(
-    { $or: [{ 'users.userId': userId }, { adminUserIds: userId }, { 'userDetails.id': userId }] },
-    { $pull: { users: { userId }, adminUserIds: userId, userDetails: { id: userId } } }
-  );
-  await collectionFor('DataLakeAccessGrant').deleteMany({ principalType: 'user', principalId: userId });
   await embedConversationRepository.deleteAllForUser(userId);
   await integrationRequestRepository.deleteAllForUser(userId);
   await hideDeletedAuthorAnnotations(userId);

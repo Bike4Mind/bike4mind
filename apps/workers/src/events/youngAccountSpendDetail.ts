@@ -148,7 +148,7 @@ export async function fetchYoungAccountSpenders(
   return { spenders: aggregateSpenders(rows), truncated: rows.length >= RESULT_ROW_LIMIT };
 }
 
-const formatUsd = (usd: number) => (usd >= 0.01 || usd === 0 ? usd.toFixed(2) : usd.toFixed(4));
+export const formatUsd = (usd: number) => (usd >= 0.01 || usd === 0 ? usd.toFixed(2) : usd.toFixed(4));
 
 /** "12 min old", "3 h old", "2 d old" at the end of the window; the alarm's own clock, not now. */
 export function formatAccountAge(createdAt: Date | undefined, at: Date): string {
@@ -161,7 +161,7 @@ export function formatAccountAge(createdAt: Date | undefined, at: Date): string 
 }
 
 /** Same path as the young-account spend post in LiveOps (apps/workers/src/cron/youngAccountSpendAlert.ts). */
-const adminUserUrl = (appUrl: string, userId: string) =>
+export const adminUserUrl = (appUrl: string, userId: string) =>
   `${appUrl.replace(/\/+$/, '')}/admin/users/${encodeURIComponent(userId)}`;
 
 function describeModels(models: YoungAccountSpender['models']): string {

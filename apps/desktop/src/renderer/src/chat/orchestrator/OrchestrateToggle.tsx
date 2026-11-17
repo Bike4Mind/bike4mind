@@ -1,6 +1,5 @@
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
-import { useTheme } from '@mui/joy/styles';
 import Tooltip from '@mui/joy/Tooltip';
 import { keyframes } from '@mui/system';
 import { useEffect, useRef, type ReactNode } from 'react';
@@ -33,7 +32,6 @@ export function isSurfaceToggleKey(event: Pick<KeyboardEvent, 'metaKey' | 'ctrlK
 
 function Segment({
   selected,
-  raisedBg,
   label,
   hint,
   icon,
@@ -42,8 +40,6 @@ function Segment({
   children,
 }: {
   selected: boolean;
-  /** The selected segment's fill: one step lighter than the track in either scheme. */
-  raisedBg: string;
   label: string;
   hint: string;
   icon: ReactNode;
@@ -55,19 +51,19 @@ function Segment({
     <Tooltip title={hint} size="sm" variant="soft" placement="bottom">
       <Button
         size="sm"
-        variant="plain"
-        color="neutral"
+        variant={selected ? 'soft' : 'plain'}
+        color={selected ? 'primary' : 'neutral'}
         aria-label={label}
         aria-pressed={selected}
         onClick={onClick}
         data-testid={testId}
         sx={{
           minHeight: 26,
-          px: 0.75,
+          px: 1,
           gap: 0.5,
-          color: selected ? 'text.primary' : 'text.tertiary',
+          fontWeight: selected ? 600 : 400,
+          ...(!selected && { color: 'text.secondary' }),
           '& svg': { width: 14, height: 14 },
-          ...(selected && { bgcolor: raisedBg, boxShadow: 'xs', '&:hover': { bgcolor: raisedBg } }),
         }}
       >
         {icon}
@@ -80,12 +76,16 @@ function Segment({
 /**
  * Header switch between the conversation and its agents' stage, sized like the sidebar's ModeSwitcher.
  * View only: the Orchestrate behaviour is the composer's OrchestratePill, which is why this one draws
- * AgentStageIcon rather than its AgentsIcon. Absent until the session has an agent: an empty stage is
- * nothing to navigate to. The conversation segment stays icon-only, since "Chat" already names the
- * sidebar's Chat/Code mode and would misread in a Code session.
+ * AgentStageIcon rather than its AgentsIcon. The conversation segment stays icon-only: "Chat" already
+ * names the sidebar's Chat/Code mode and would misread in a Code session. Absent until the session has an agent: an empty stage is
+ * nothing to navigate to.
  */
-export function OrchestrateToggle({ states, parentNeedsYou = false, surface, onSurfaceChange }: OrchestrateToggleProps) {
-  const dark = useTheme().palette.mode === 'dark';
+export function OrchestrateToggle({
+  states,
+  parentNeedsYou = false,
+  surface,
+  onSurfaceChange,
+}: OrchestrateToggleProps) {
   const available = states.length > 0;
 
   const select = (next: SessionSurface) => {
@@ -109,7 +109,6 @@ export function OrchestrateToggle({ states, parentNeedsYou = false, surface, onS
   const needsYou = parentNeedsYou || states.includes('needs-you');
   const failed = !needsYou && states.includes('failed');
   const working = !needsYou && !failed && states.includes('working');
-  const raisedBg = dark ? 'background.level2' : 'background.surface';
   const badgeColor = needsYou ? 'warning' : failed ? 'danger' : 'neutral';
   const description = describeAgentStates(states, parentNeedsYou ? 1 : 0);
 
@@ -118,19 +117,17 @@ export function OrchestrateToggle({ states, parentNeedsYou = false, surface, onS
       role="group"
       aria-label="Conversation or agents view"
       data-testid="chat-surface-toggle"
-      // Dark inverts Joy's ramp (surface is darker than level1), so the track and the raised fill swap.
       sx={{
         display: 'inline-flex',
         flexShrink: 0,
         gap: 0.25,
         p: '2px',
         borderRadius: 'sm',
-        bgcolor: dark ? 'background.level1' : 'background.level2',
+        bgcolor: 'background.level2',
       }}
     >
       <Segment
         selected={surface === 'chat'}
-        raisedBg={raisedBg}
         label="Show conversation"
         hint={`Show conversation \u00B7 ${SHORTCUT_HINT}`}
         icon={<ConversationIcon />}
@@ -139,7 +136,6 @@ export function OrchestrateToggle({ states, parentNeedsYou = false, surface, onS
       />
       <Segment
         selected={surface === 'orchestrate'}
-        raisedBg={raisedBg}
         label={`Show agents, ${description}`}
         hint={`Show agents (${description}) \u00B7 ${SHORTCUT_HINT}`}
         icon={<AgentStageIcon />}
