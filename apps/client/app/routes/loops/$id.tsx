@@ -296,7 +296,7 @@ export default function LoopDetailPage() {
             <Stack direction="row" justifyContent="space-between" gap={1}>
               <Typography level="title-sm">Reflection</Typography>
               <Typography level="body-xs" data-testid="loop-run-reflection-credits">
-                {formatCredits(runInfo.loopReflection.credits)} credits
+                {formatCredits(runInfo.loopReflection.credits)}
               </Typography>
             </Stack>
             <Typography level="body-sm" data-testid="loop-run-reflection-text">

@@ -272,7 +272,7 @@ describe('LoopDetailPage run drawer', () => {
       const { unmount } = renderPage();
       expect(screen.getByTestId('loop-run-reflection-text')).toHaveTextContent('The tests were flaky');
       expect(screen.getByTestId('loop-run-reflection-next')).toHaveTextContent('Next time: Rerun CI first');
-      expect(screen.getByTestId('loop-run-reflection-credits')).toHaveTextContent('3 credits');
+      expect(screen.getByTestId('loop-run-reflection-credits')).toHaveTextContent(/^3 credits$/);
       unmount();
 
       runInfo.data = { model: 'm' };
