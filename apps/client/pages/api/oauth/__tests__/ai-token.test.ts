@@ -53,9 +53,11 @@ vi.mock('@server/auth/verifyFederatedIdToken', () => ({
   verifyFederatedIdToken: h.verifyFederatedIdToken,
   FederatedIdTokenError: class FederatedIdTokenError extends Error {
     jwksUnavailable: boolean;
-    constructor(message: string, options?: { jwksUnavailable?: boolean }) {
+    jwksInvalid: boolean;
+    constructor(message: string, options?: { jwksUnavailable?: boolean; jwksInvalid?: boolean }) {
       super(message);
       this.jwksUnavailable = options?.jwksUnavailable ?? false;
+      this.jwksInvalid = options?.jwksInvalid ?? false;
     }
   },
 }));
@@ -195,6 +197,22 @@ describe('POST /api/oauth/ai-token account gates', () => {
       const res = await run();
       expect(res._getStatusCode()).toBe(401);
       expect(lastRefusal()).toMatchObject({ error: 'invalid_grant', recordAs: 'idp_unavailable', verified: true });
+    });
+
+    it('records a malformed JWKS on our own issuer as server_error, with the same 401', async () => {
+      withIssuer(OWN);
+      h.verifyFederatedIdToken.mockRejectedValue(new FederatedIdTokenError('ID token failed', { jwksInvalid: true }));
+      const res = await run();
+      expect(res._getStatusCode()).toBe(401);
+      expect(res._getJSONData().error).toBe('invalid_grant');
+      expect(lastRefusal()).toMatchObject({ error: 'invalid_grant', recordAs: 'server_error', verified: true });
+    });
+
+    it('leaves a malformed JWKS on a third-party issuer recorded as invalid_grant', async () => {
+      withIssuer('https://idp.other.test');
+      h.verifyFederatedIdToken.mockRejectedValue(new FederatedIdTokenError('ID token failed', { jwksInvalid: true }));
+      await run();
+      expect(lastRefusal()).toMatchObject({ error: 'invalid_grant', recordAs: undefined });
     });
 
     it('keeps a signature or claim failure an app-side invalid_grant', async () => {

@@ -188,12 +188,16 @@ const handler = baseApi({ auth: false })
             }`
           );
           // An unreachable JWKS is the identity provider's outage, not a bad grant. It is ours only
-          // when the provider is our own OIDC issuer.
+          // when the provider is our own OIDC issuer. A malformed JWKS is likewise ours on our own
+          // issuer, but a third party's is left as the caller's invalid_grant.
+          const ownIssuer = isOwnOidcIssuer(federatedIdp.issuer);
           const recordAs = err.jwksUnavailable
-            ? isOwnOidcIssuer(federatedIdp.issuer)
+            ? ownIssuer
               ? 'server_error'
               : 'idp_unavailable'
-            : undefined;
+            : err.jwksInvalid && ownIssuer
+              ? 'server_error'
+              : undefined;
           logError('invalid_grant', 401, recordAs);
           return res.status(401).json({ error: 'invalid_grant', error_description: 'Invalid ID token' });
         }

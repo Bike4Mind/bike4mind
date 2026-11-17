@@ -279,6 +279,14 @@ describe('apiKeyAuth preauthorizedLakeIds binding', () => {
     expect(bindingOf(req)).toEqual(['lake-a']);
   });
 
+  it('copies the key owner onto req.apiKeyInfo', async () => {
+    validateUserApiKeyMock.mockResolvedValue(validation());
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.apiKeyInfo?.userId).toBe('user-1');
+  });
+
   it('leaves the binding undefined for a key that carries none', async () => {
     validateUserApiKeyMock.mockResolvedValue(validation());
     const req = makeReq();

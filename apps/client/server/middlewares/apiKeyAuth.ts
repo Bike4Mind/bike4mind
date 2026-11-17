@@ -271,6 +271,7 @@ export const apiKeyAuth = (
 
       req.apiKeyInfo = {
         keyId: validation.keyId!,
+        userId: validation.userId,
         scopes: validation.scopes!,
         rateLimit,
         ownerUntrusted,
