@@ -1,4 +1,10 @@
-import axios, { isAxiosError, type AxiosAdapter, type AxiosInstance, type AxiosRequestConfig } from 'axios';
+import axios, {
+  isAxiosError,
+  type AxiosAdapter,
+  type AxiosInstance,
+  type AxiosRequestConfig,
+  type InternalAxiosRequestConfig,
+} from 'axios';
 import type { RefreshTokenResponse } from './DeviceFlowClient';
 import type { AuthLogger, AuthTokens, TokenStore } from './tokens';
 
@@ -104,7 +110,7 @@ export interface AuthenticatedApiClientOptions {
    * {@link SessionRevokedError}); this lets a host stop using them until the user signs in again.
    */
   onStillUnauthorized?: (reason: string) => void;
-  /** Synchronous ownership check for a client bound to a captured host session. */
+  /** Return true synchronously for the captured host session. API-key transport checks receive null. */
   isSessionCurrent?: (tokens: AuthTokens | null) => boolean;
 }
 
@@ -198,23 +204,17 @@ export class AuthenticatedApiClient {
     this.client.interceptors.request.use(
       async config => {
         if (this.apiKey) {
+          this.assertSession(null, !('_retry' in config && config._retry === true));
+          this.guardTransport(config, null);
           config.headers['x-api-key'] = this.apiKey;
           return config;
         }
 
         const tokens = await this.tokenStore.getAuthTokens();
         this.assertSession(tokens, !('_retry' in config && config._retry === true));
-        if (this.options.isSessionCurrent) {
-          if (!tokens) throw new SessionChangedError(!('_retry' in config && config._retry === true));
-          const selected = axios.getAdapter(config.adapter ?? this.client.defaults.adapter);
-          const adapter = this.sessionAdapters.get(selected) ?? selected;
-          const guarded: AxiosAdapter = request => {
-            this.assertSession(tokens, !('_retry' in request && request._retry === true));
-            return adapter(request);
-          };
-          this.sessionAdapters.set(guarded, adapter);
-          config.adapter = guarded;
-        }
+        if (this.options.isSessionCurrent && !tokens)
+          throw new SessionChangedError(!('_retry' in config && config._retry === true));
+        this.guardTransport(config, tokens);
 
         if (tokens) {
           config.headers.Authorization = `Bearer ${tokens.accessToken}`;
@@ -359,16 +359,29 @@ export class AuthenticatedApiClient {
     const inherited = this.options.isSessionCurrent;
     const fork = new AuthenticatedApiClient({
       ...this.options,
-      isSessionCurrent: tokens => (inherited?.(tokens) ?? true) && isSessionCurrent(tokens),
+      isSessionCurrent: tokens =>
+        (inherited === undefined || inherited(tokens) === true) && isSessionCurrent(tokens) === true,
     });
     fork.refreshState = this.refreshState;
     return fork;
   }
 
   private assertSession(tokens: AuthTokens | null, beforeRequest = false): void {
-    if (this.options.isSessionCurrent && !this.options.isSessionCurrent(tokens)) {
+    if (this.options.isSessionCurrent && this.options.isSessionCurrent(tokens) !== true) {
       throw new SessionChangedError(beforeRequest);
     }
+  }
+
+  private guardTransport(config: InternalAxiosRequestConfig<unknown>, tokens: AuthTokens | null): void {
+    if (!this.options.isSessionCurrent) return;
+    const selected = axios.getAdapter(config.adapter ?? this.client.defaults.adapter);
+    const adapter = this.sessionAdapters.get(selected) ?? selected;
+    const guarded: AxiosAdapter = request => {
+      this.assertSession(tokens, !('_retry' in request && request._retry === true));
+      return adapter(request);
+    };
+    this.sessionAdapters.set(guarded, adapter);
+    config.adapter = guarded;
   }
 
   private async lockedExchange(rejectedAccessToken: string | undefined): Promise<AuthTokens> {

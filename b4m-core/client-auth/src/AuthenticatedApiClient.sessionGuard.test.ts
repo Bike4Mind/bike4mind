@@ -56,6 +56,82 @@ function clientFor(store: TokenStore, isSessionCurrent?: (value: AuthTokens | nu
   return { client: new AuthenticatedApiClient(options), logger, refreshToken, options };
 }
 
+function apiKeyClientFor(isSessionCurrent: (value: AuthTokens | null) => boolean = () => true) {
+  const { store } = storeFor(tokens('a'));
+  const reads = vi.fn(store.getAuthTokens);
+  const reloads = vi.fn(store.getAuthTokens);
+  store.getAuthTokens = reads;
+  store.reloadAuthTokens = reloads;
+  const { options, refreshToken } = clientFor(store);
+  const guard = vi.fn(isSessionCurrent);
+  const client = new AuthenticatedApiClient({ ...options, apiKey: 'test-key', isSessionCurrent: guard });
+  const dispatch = vi.fn<AxiosAdapter>(async config => response(config));
+  client.getAxiosInstance().defaults.adapter = dispatch;
+  return { client, reads, reloads, refreshToken, dispatch, guard };
+}
+
+describe('API-key session ownership', () => {
+  it('refuses an expired captured session before dispatch without reading OAuth credentials', async () => {
+    const { client, reads, reloads, refreshToken, dispatch } = apiKeyClientFor(() => false);
+    await expect(client.post('/api/paid', {})).rejects.toMatchObject({
+      name: 'SessionChangedError',
+      beforeRequest: true,
+    });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(reads).not.toHaveBeenCalled();
+    expect(reloads).not.toHaveBeenCalled();
+    expect(refreshToken).not.toHaveBeenCalled();
+  });
+  it('sends only the static key when the captured session remains current', async () => {
+    const { client, reads, reloads, refreshToken, dispatch, guard } = apiKeyClientFor();
+    expect(await client.get('/api/paid')).toEqual({ jobId: 'remote-job' });
+    const config = dispatch.mock.calls[0][0];
+    expect(config.headers['x-api-key']).toBe('test-key');
+    expect(config.headers.Authorization).toBeUndefined();
+    expect(guard).toHaveBeenCalledWith(null);
+    expect(reads).not.toHaveBeenCalled();
+    expect(reloads).not.toHaveBeenCalled();
+    expect(refreshToken).not.toHaveBeenCalled();
+  });
+  it('rechecks ownership at the actual key-authenticated transport boundary', async () => {
+    let active = true;
+    let checks = 0;
+    const { client, dispatch, reads } = apiKeyClientFor(() => {
+      if (++checks === 1)
+        queueMicrotask(() => {
+          active = false;
+        });
+      return active;
+    });
+    await expect(client.get('/api/paid')).rejects.toMatchObject({ name: 'SessionChangedError', beforeRequest: true });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(reads).not.toHaveBeenCalled();
+  });
+  it('keeps a key-authenticated fork bound to its own guard', async () => {
+    const { client: base, reads, reloads, refreshToken } = apiKeyClientFor();
+    const client = base.withSessionGuard(() => false);
+    const dispatch = vi.fn<AxiosAdapter>(async config => response(config));
+    client.getAxiosInstance().defaults.adapter = dispatch;
+    await expect(client.get('/api/paid')).rejects.toMatchObject({ name: 'SessionChangedError' });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(reads).not.toHaveBeenCalled();
+    expect(reloads).not.toHaveBeenCalled();
+    expect(refreshToken).not.toHaveBeenCalled();
+  });
+  it('keeps a key-authenticated 401 terminal without an OAuth retry', async () => {
+    const { client, reads, reloads, refreshToken } = apiKeyClientFor();
+    const dispatch = vi.fn<AxiosAdapter>(async config => {
+      throw refused(config, 401);
+    });
+    client.getAxiosInstance().defaults.adapter = dispatch;
+    await expect(client.get('/api/paid')).rejects.toMatchObject({ response: { status: 401 } });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(reads).not.toHaveBeenCalled();
+    expect(reloads).not.toHaveBeenCalled();
+    expect(refreshToken).not.toHaveBeenCalled();
+  });
+});
+
 describe('account-scoped HTTP requests', () => {
   it('checks the account after an awaited initial credential read', async () => {
     const { store } = storeFor(tokens('a'));
@@ -241,6 +317,21 @@ describe('account-scoped HTTP requests', () => {
     );
     await expect(client.refreshSession()).rejects.toMatchObject({ name: 'SessionChangedError' });
     expect(onTokensCleared).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('fails closed for an asynchronous guard (composed: %s)', async composed => {
+    const { store } = storeFor(tokens('a'));
+    // Represents an untyped JavaScript caller supplying an invalid callback result.
+    const asynchronousGuard = (() => Promise.resolve(false)) as unknown as (value: AuthTokens | null) => boolean;
+    const { client: base } = clientFor(store, asynchronousGuard);
+    const client = composed ? base.withSessionGuard(() => true) : base;
+    const dispatch = vi.fn<AxiosAdapter>(async config => response(config));
+    client.getAxiosInstance().defaults.adapter = dispatch;
+    await expect(client.post('/api/paid', {})).rejects.toMatchObject({
+      name: 'SessionChangedError',
+      beforeRequest: true,
+    });
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it('records bounded diagnostics without request content or credentials', async () => {
