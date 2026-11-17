@@ -9,6 +9,8 @@ const EVENTBRIDGE_SAFE_LIMIT = 230 * 1024;
 
 // The fab-file bucket's expire-shared-email-files lifecycle rule (infra/buckets.ts) reaps this prefix,
 // so it must outlive the link TTL; infra/__tests__/fabFileBucketLifecycle.test.ts pins both.
+// Account erasure deletes `<prefix><userId>/` through a copy of this literal in
+// packages/server-utils/src/users/purgeAccountFiles.ts, which cannot import it; keep them in sync.
 export const SHARED_EMAIL_FILES_PREFIX = 'shared-email-files/';
 export const SHARED_EMAIL_FILE_LINK_TTL_DAYS = 7;
 

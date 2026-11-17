@@ -8,4 +8,4 @@ export const DLQ_SEARCH_KEYS = {
   view: 'dlqView',
   filters: { feature: 'dlqFeature', queue: DLQ_QUEUE_PARAM },
 } as const;
-export const DLQ_TAB_PARAMS = Object.values(DLQ_SEARCH_KEYS.filters);
+export const DLQ_TAB_PARAMS = [...Object.values(DLQ_SEARCH_KEYS.filters), 'dlqMessage'] as const;

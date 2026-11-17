@@ -230,6 +230,10 @@ export const infraHolders = {
     ],
   },
   Counters: { kind: 'noUserData', note: 'Platform-wide named counters.' },
+  DlqTriageDelivery: {
+    kind: 'noUserData',
+    note: 'Notification deduplication keys derived from suggestion IDs, delivery state and timestamps only. No bodies or user references. Expires after 30 days.',
+  },
   DlqFailure: {
     kind: 'noUserData',
     note: 'Queue failure metadata keyed by SQS message ID, not a user reference. Thrown error text may contain incidental identifiers and expires after 15 days.',
