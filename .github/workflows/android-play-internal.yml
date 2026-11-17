@@ -66,10 +66,14 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           ANDROID_PACKAGE_NAME: ${{ vars.ANDROID_PACKAGE_NAME }}
+          FCM_APPLICATION_ID: ${{ vars.FCM_APPLICATION_ID }}
+          FCM_API_KEY: ${{ vars.FCM_API_KEY }}
+          FCM_PROJECT_ID: ${{ vars.FCM_PROJECT_ID }}
+          FCM_SENDER_ID: ${{ vars.FCM_SENDER_ID }}
         run: |
           missing=""
           for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD \
-            PLAY_SERVICE_ACCOUNT_JSON ANDROID_PACKAGE_NAME; do
+            PLAY_SERVICE_ACCOUNT_JSON ANDROID_PACKAGE_NAME FCM_APPLICATION_ID FCM_API_KEY FCM_PROJECT_ID FCM_SENDER_ID; do
             if [ -z "${!name}" ]; then missing="$missing $name"; fi
           done
           if [ -n "$missing" ]; then
@@ -88,7 +92,15 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           VERSION_NAME: ${{ needs.plan.outputs.version }}
           VERSION_CODE: ${{ needs.plan.outputs.build_number }}
-        run: ./gradlew :app:bundleRelease -Pb4m.versionName="$VERSION_NAME" -Pb4m.versionCode="$VERSION_CODE"
+          FCM_APPLICATION_ID: ${{ vars.FCM_APPLICATION_ID }}
+          FCM_API_KEY: ${{ vars.FCM_API_KEY }}
+          FCM_PROJECT_ID: ${{ vars.FCM_PROJECT_ID }}
+          FCM_SENDER_ID: ${{ vars.FCM_SENDER_ID }}
+        run: |
+          ./gradlew :app:bundleRelease \
+            -Pb4m.versionName="$VERSION_NAME" -Pb4m.versionCode="$VERSION_CODE" \
+            -Pb4m.fcm.applicationId="$FCM_APPLICATION_ID" -Pb4m.fcm.apiKey="$FCM_API_KEY" \
+            -Pb4m.fcm.projectId="$FCM_PROJECT_ID" -Pb4m.fcm.senderId="$FCM_SENDER_ID"
 
       - uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:

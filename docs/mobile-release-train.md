@@ -75,7 +75,7 @@ Both workflows trigger on a `mobile-v*` tag push, or by hand (`workflow_dispatch
 1. **plan** (Ubuntu, the shared [`_mobile-release-plan.yml`](../.github/workflows/_mobile-release-plan.yml)): installs the workspace, builds `@bike4mind/common`, and runs `mobile-release plan --platform <ios|android>`, which parses the tag or inputs, applies the parity gate, and outputs the version and build number.
 2. **The lane**, in the `mobile-release` GitHub environment, so its secrets are scoped there and required reviewers on that environment gate every upload.
    - **iOS** (`macos-26`): selects Xcode 26.x as `ios.yml` does, then `bundle exec fastlane beta`, which archives with automatic signing through the App Store Connect API key and uploads to TestFlight. The build lands in TestFlight for internal testers once Apple finishes processing.
-   - **Android** (Ubuntu): decodes the upload keystore into the runner's temp dir, runs `./gradlew :app:bundleRelease` with the planned `versionName` and `versionCode`, and uploads the signed bundle to the Play internal testing track.
+   - **Android** (Ubuntu): decodes the upload keystore into the runner's temp dir, runs `./gradlew :app:bundleRelease` with the planned `versionName` and `versionCode` and the `FCM_*` values as `b4m.fcm.*` Gradle properties (a build without them would ship with push off), and uploads the signed bundle to the Play internal testing track.
 
 ### Required secrets and variables
 
@@ -95,6 +95,10 @@ Also on that environment, limit **Deployment branches and tags** to `main`, `rel
 | `ANDROID_KEY_PASSWORD` | secret | Android | Upload key password. |
 | `PLAY_SERVICE_ACCOUNT_JSON` | secret | Android | JSON key of a Google Cloud service account invited in the Play Console with release permission for the app. |
 | `ANDROID_PACKAGE_NAME` | variable | Android | The app's Play package name (the `applicationId`). |
+| `FCM_APPLICATION_ID` | variable | Android | Firebase app id (`mobilesdk_app_id` in the console's `google-services.json`). Client config, not a secret. Baked into the build; push is off without it. |
+| `FCM_API_KEY` | variable | Android | Firebase web API key (`current_key` in `google-services.json`). Client config, not a secret. |
+| `FCM_PROJECT_ID` | variable | Android | Firebase project id. |
+| `FCM_SENDER_ID` | variable | Android | Firebase sender id (`project_number`). |
 | `ANDROID_PLAY_RELEASE_STATUS` | variable, optional | Android | `completed` by default. Set to `draft` until the app's first Play review is done, since Play accepts only drafts before then. |
 
 Each lane checks its credentials up front and fails with the list of missing names rather than half-running.

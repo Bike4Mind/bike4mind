@@ -74,7 +74,9 @@ describe.each(LANES)('$file', ({ file, platform, lane, secrets }) => {
     const env = stepEnv(job);
     for (const name of secrets) expect(text).toContain(`secrets.${name} }}`);
     for (const [key, value] of Object.entries(env)) {
-      if (CREDENTIAL.test(key) && String(value).includes('${{')) expect(value, key).toMatch(/^\$\{\{ secrets\./);
+      if (CREDENTIAL.test(key) && !key.startsWith('FCM_') && String(value).includes('${{')) {
+        expect(value, key).toMatch(/^\$\{\{ secrets\./);
+      }
     }
   });
 
@@ -109,6 +111,23 @@ describe('_mobile-release-plan.yml', () => {
 });
 
 describe('android-play-internal.yml', () => {
+  const FCM = [
+    ['FCM_APPLICATION_ID', 'applicationId'],
+    ['FCM_API_KEY', 'apiKey'],
+    ['FCM_PROJECT_ID', 'projectId'],
+    ['FCM_SENDER_ID', 'senderId'],
+  ] as const;
+
+  it.each(FCM)('passes %s to Gradle and fails the lane up front when it is unset', (name, property) => {
+    const steps = load('android-play-internal.yml').workflow.jobs['play-internal'].steps ?? [];
+    const check = steps.find(step => step.run?.includes('missing='));
+    const build = steps.find(step => step.run?.includes(':app:bundleRelease'));
+    expect(check?.env?.[name]).toBe(`\${{ vars.${name} }}`);
+    expect(check?.run).toMatch(new RegExp(`for name in [^;]*\\b${name}\\b`));
+    expect(build?.env?.[name]).toBe(`\${{ vars.${name} }}`);
+    expect(build?.run).toContain(`-Pb4m.fcm.${property}="$${name}"`);
+  });
+
   it('uploads the signed bundle to the internal track', () => {
     const upload = load('android-play-internal.yml').workflow.jobs['play-internal'].steps?.find(step =>
       step.uses?.startsWith('r0adkll/upload-google-play@')
