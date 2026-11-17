@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DeepAgentStore } from '@bike4mind/agents';
-import type { ModelInfo } from '@bike4mind/common';
+import { ForbiddenError, type ModelInfo } from '@bike4mind/common';
+import { AI_ACCESS_PENDING_REVIEW_MESSAGE } from '@bike4mind/services/userService/accountState';
 import { Logger } from '@bike4mind/observability';
 
 const state = vi.hoisted(() => ({ disabled: false, restricted: false, failure: undefined as Error | undefined }));
@@ -53,6 +54,14 @@ describe('missionWakeMeter admission refusals', () => {
 
   it('leaves an infrastructure failure retryable', async () => {
     const error = new Error('database unavailable');
+    state.failure = error;
+    const meter = await missionWakeMeter(store, 'mission', new Logger());
+
+    await expect(meter(model, [], 100)).rejects.toBe(error);
+  });
+
+  it('passes an account-standing refusal through unwrapped so the wake defers', async () => {
+    const error = new ForbiddenError(AI_ACCESS_PENDING_REVIEW_MESSAGE);
     state.failure = error;
     const meter = await missionWakeMeter(store, 'mission', new Logger());
 
