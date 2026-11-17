@@ -1,10 +1,13 @@
 import {
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
+  BadRequestError,
   CreditHolderType,
   UnauthorizedError,
   type CompletionRunAttribution,
 } from '@bike4mind/common';
+import type { ApiKeyHolder } from '@bike4mind/server-utils/billing/assertApiKeyOrgMembership';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { resolveApiKeyBillingOrg } from '@server/billing/apiKeyBillingOrg';
 import { findCallerCompletionRun } from './callerCompletionRun';
 
 /** A paid tool call's run, once the caller is confirmed to have minted it. */
@@ -19,13 +22,18 @@ export type PaidCallRun = {
   billingOrganizationId: string | null;
 };
 
-type PaidCallRequest = { user?: { id: string }; apiKeyInfo?: { organizationId?: string | null } };
+type PaidCallRequest = {
+  user?: ApiKeyHolder;
+  apiKeyInfo?: Pick<Express.ApiKeyInfo, 'billingOwnerType' | 'organizationId'>;
+};
 
 /**
  * Resolve the `run` a paid route (image, video, music, speech, sound) was sent with. Same ownership
  * rule as completions (sseRoute.verifyRunOwnership): another caller's run is a 404, never a charge
  * against it. `requestedOrganizationId` is the route's own payer field; naming an account other than
- * the run's is refused rather than silently billing one of the two.
+ * the run's is refused rather than silently billing one of the two. An org-billed API key also passes
+ * the key rule a run-less call gets from resolveMediaBillingOrgId (apiKeyBillingOrg.ts), so a key whose
+ * org is gone or whose holder has left it is refused rather than billing the run's org.
  */
 export async function resolvePaidCallRun(
   req: PaidCallRequest,
@@ -43,6 +51,15 @@ export async function resolvePaidCallRun(
     throw new ForbiddenError('This run bills a different account than the requested organization_id', {
       errorCode: BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
     });
+  }
+  const keyBilling = await resolveApiKeyBillingOrg({
+    apiKeyInfo: req.apiKeyInfo,
+    user: req.user,
+    requestedOrgId: billingOrganizationId,
+  });
+  if (keyBilling.kind === 'stale') throw new BadRequestError(keyBilling.message);
+  if (keyBilling.kind === 'mismatch') {
+    throw new ForbiddenError(keyBilling.message, { errorCode: BILLING_ORGANIZATION_MISMATCH_ERROR_CODE });
   }
   return { attribution: { ...run, runId: stored.runId, purpose: 'tool' }, billingOrganizationId };
 }

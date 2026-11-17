@@ -190,6 +190,20 @@ describe('image credit holds against a budgeted completion run', () => {
     expect(await PendingCreditHoldModel.countDocuments()).toBe(0);
   });
 
+  it('rolls the run claim back when the balance hold is refused', async () => {
+    const { userId, balance } = await userWith(10);
+    const { run, committed } = await budgetedRun(userId, 50);
+
+    const refusal = await imageCreditHolds
+      .hold({ userId, organizationId: null, requiredCredits: 40, run, ...context })
+      .catch((error: unknown) => error);
+
+    expect(getQuestErrorCode(refusal)).toBe('insufficient_credits');
+    expect(await balance()).toBe(10);
+    expect(await committed()).toBe(0);
+    expect(await PendingCreditHoldModel.countDocuments({ userId })).toBe(0);
+  });
+
   it('settle releases the claim down to the charge and the ledger row carries the run', async () => {
     const { userId, balance } = await userWith(100);
     const { run, committed } = await budgetedRun(userId, 50);

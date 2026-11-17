@@ -69,7 +69,8 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
   } = body;
   const callback = await resolveGenerationCallback(req, callbackUrl);
 
-  // Before getOrCreateSession, so a refused payer or run never leaves behind a new, empty notebook.
+  // Before getOrCreateSession, so a refused payer or someone else's run never leaves behind a new, empty
+  // notebook. The run's headroom is checked later, in invoke, once the render's price is known.
   // A run bills the account it is bound to, so the charge lands where the run's usage read looks for it.
   // Otherwise an org-billed API key bills its org; null = personal, undefined = the caller's own org.
   const paidRun = await resolvePaidCallRun(

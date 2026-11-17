@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CreditHolderType, NotFoundError } from '@bike4mind/common';
 
-const { findById } = vi.hoisted(() => ({ findById: vi.fn() }));
+const { findById, resolveApiKeyBillingOrg } = vi.hoisted(() => ({
+  findById: vi.fn(),
+  resolveApiKeyBillingOrg: vi.fn(),
+}));
 vi.mock('@bike4mind/database', () => ({ completionRunRepository: { findById } }));
+vi.mock('@server/billing/apiKeyBillingOrg', () => ({ resolveApiKeyBillingOrg }));
 
 import { resolvePaidCallRun } from './paidCallRun';
 
@@ -13,7 +17,10 @@ const jwtReq = { user: { id: 'u1' } };
 const orgKeyReq = { user: { id: 'u1' }, apiKeyInfo: { organizationId: 'org-1' } };
 
 describe('resolvePaidCallRun', () => {
-  beforeEach(() => findById.mockReset());
+  beforeEach(() => {
+    findById.mockReset();
+    resolveApiKeyBillingOrg.mockReset().mockResolvedValue({ kind: 'not_org_billed' });
+  });
 
   it('is undefined for a call made outside a run, without a lookup', async () => {
     expect(await resolvePaidCallRun(jwtReq, undefined)).toBeUndefined();
@@ -59,6 +66,39 @@ describe('resolvePaidCallRun', () => {
     findById.mockResolvedValue(userRun);
 
     await expect(resolvePaidCallRun(jwtReq, { runId: RUN_ID, role: 'root' }, 'org-9')).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { errorCode: 'billing_organization_mismatch' },
+    });
+  });
+
+  it("checks an org-billed key against the run's account, as a call without a run would be", async () => {
+    findById.mockResolvedValue(orgRun);
+    resolveApiKeyBillingOrg.mockResolvedValue({ kind: 'org', organizationId: 'org-1' });
+
+    await resolvePaidCallRun(orgKeyReq, { runId: RUN_ID, role: 'root' });
+
+    expect(resolveApiKeyBillingOrg).toHaveBeenCalledWith({
+      apiKeyInfo: orgKeyReq.apiKeyInfo,
+      user: orgKeyReq.user,
+      requestedOrgId: 'org-1',
+    });
+  });
+
+  it("refuses an org-billed key whose holder has left the key's org", async () => {
+    findById.mockResolvedValue(orgRun);
+    resolveApiKeyBillingOrg.mockResolvedValue({ kind: 'stale', message: 'The key holder left the org' });
+
+    await expect(resolvePaidCallRun(orgKeyReq, { runId: RUN_ID, role: 'root' })).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'The key holder left the org',
+    });
+  });
+
+  it('refuses an org-billed key whose org is not the account the run bills', async () => {
+    findById.mockResolvedValue(orgRun);
+    resolveApiKeyBillingOrg.mockResolvedValue({ kind: 'mismatch', message: 'Different org' });
+
+    await expect(resolvePaidCallRun(orgKeyReq, { runId: RUN_ID, role: 'root' })).rejects.toMatchObject({
       statusCode: 403,
       additionalInfo: { errorCode: 'billing_organization_mismatch' },
     });

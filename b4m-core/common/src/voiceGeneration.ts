@@ -151,7 +151,8 @@ export type TtsBase64Response = z.infer<typeof ttsBase64ResponseSchema>;
  * `insufficient_credits` rides the 422 and means the same thing it does on
  * /api/ai/music and every other credit-metered endpoint. The two provider codes
  * are easy to invert: `provider_not_configured` means WE have no usable key,
- * `provider_rejected` means the provider REFUSED the key we sent.
+ * `provider_rejected` means the provider REFUSED the key we sent. A call sent with a `run` adds
+ * `run_not_found` (404) and `run_budget_exhausted` (422, the run's budget has no room for the hold).
  */
 export const TTS_ERROR_CODES = [
   'insufficient_credits',
@@ -161,6 +162,8 @@ export const TTS_ERROR_CODES = [
   'invalid_end_user_id',
   // The 504 of a clip that outlasted the request and could never be retrieved (unretrievableAudioResponse).
   'request_timeout',
+  'run_not_found',
+  'run_budget_exhausted',
 ] as const satisfies readonly ApiErrorCode[];
 
 /**

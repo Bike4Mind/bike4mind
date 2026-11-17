@@ -3861,7 +3861,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -3882,7 +3884,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -3933,7 +3937,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -3963,7 +3969,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -3984,7 +3992,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -4005,7 +4015,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -4026,7 +4038,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -13826,7 +13840,7 @@ export interface operations {
           'application/json': components['schemas']['synthesizeSpeechResponse403'];
         };
       };
-      /** @description A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. */
+      /** @description A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. A `run` that does not exist or that another user or billing owner minted is `404` (`errorCode: "run_not_found"`). */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -13885,7 +13899,7 @@ export interface operations {
           'application/json': components['schemas']['synthesizeSpeechResponse413'];
         };
       };
-      /** @description Request body failed validation, the text exceeds the provider character limit, the provider cannot produce the requested `format`, the provider rejected the request (e.g. an unknown voice), or the caller cannot afford the synthesis - the last of those is the only one tagged `errorCode: "insufficient_credits"`, so match on the classifier rather than the status to tell a billing failure from a bad request. */
+      /** @description Request body failed validation, the text exceeds the provider character limit, the provider cannot produce the requested `format`, the provider rejected the request (e.g. an unknown voice), or the caller cannot afford the synthesis - the last of those is tagged `errorCode: "insufficient_credits"`, and a call whose `run` budget has no room for it is tagged `errorCode: "run_budget_exhausted"`, so match on the classifier rather than the status to tell a billing failure from a bad request. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -14492,7 +14506,7 @@ export interface operations {
           'application/json': components['schemas']['generateSoundEffectResponse403'];
         };
       };
-      /** @description A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. */
+      /** @description A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. A `run` that does not exist or that another user or billing owner minted is `404` (`errorCode: "run_not_found"`). */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -14551,7 +14565,7 @@ export interface operations {
           'application/json': components['schemas']['generateSoundEffectResponse413'];
         };
       };
-      /** @description Request body failed validation (including a `format` whose codec the provider cannot produce), or the caller cannot afford the effect - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). */
+      /** @description Request body failed validation (including a `format` whose codec the provider cannot produce), or the caller cannot afford the effect - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted), or `errorCode: "run_budget_exhausted"` when the `run` budget has no room for it. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
