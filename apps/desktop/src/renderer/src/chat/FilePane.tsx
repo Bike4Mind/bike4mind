@@ -1,4 +1,14 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import {
+  memo,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type RefObject,
+} from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import IconButton from '@mui/joy/IconButton';
@@ -82,9 +92,51 @@ const formatSize = (bytes: number) =>
       ? `${(bytes / 1024).toFixed(1)} KB`
       : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
+const PRE_STYLE: CSSProperties = {
+  margin: 0,
+  padding: '8px 0',
+  background: 'transparent',
+  fontSize: '12px',
+  minWidth: 'fit-content',
+};
+const LINE_NUMBER_STYLE: CSSProperties = {
+  minWidth: '3em',
+  paddingRight: '1em',
+  color: 'var(--joy-palette-text-tertiary)',
+};
+
+const lineStyle = (number: number, line?: number): CSSProperties =>
+  number === line ? { display: 'block', backgroundColor: 'var(--joy-palette-warning-softBg)' } : { display: 'block' };
+
+/**
+ * The file as plain text, laid out line for line as the highlighter lays it out (same container
+ * styles, same line-number column), so swapping the highlighted copy in moves nothing.
+ */
+function PlainLines({ lines, line, mode }: { lines: string[]; line?: number; mode: 'light' | 'dark' }) {
+  const theme = SYNTAX_THEMES[mode];
+  return (
+    <pre style={{ ...theme['pre[class*="language-"]'], ...PRE_STYLE }}>
+      <code style={theme['code[class*="language-"]']}>
+        {lines.map((content, index) => (
+          <span key={index} data-line={index + 1} style={lineStyle(index + 1, line)}>
+            <span style={{ display: 'inline-block', textAlign: 'right', userSelect: 'none', ...LINE_NUMBER_STYLE }}>
+              {index + 1}
+            </span>
+            {content}
+            {'\n'}
+          </span>
+        ))}
+      </code>
+    </pre>
+  );
+}
+
 /**
  * The file itself, highlighted, with line numbers. Memoized on the text: the shell above re-renders
  * on every streamed token, and re-tokenizing a long file each time would stall the reply.
+ *
+ * Highlighting a file of a couple of thousand lines takes a few hundred ms in one synchronous
+ * render, so the pane first draws it plain and highlights it in a deferred render after that.
  */
 const FileBody = memo(function FileBody({
   text,
@@ -97,6 +149,11 @@ const FileBody = memo(function FileBody({
   line?: number;
   mode: 'light' | 'dark';
 }) {
+  // A file's closing newline ends its last line rather than starting another.
+  const content = text.replace(/\r?\n$/, '');
+  const ready = useDeferredValue(content, '') === content;
+  if (!ready) return <PlainLines lines={content.split(/\r?\n/)} line={line} mode={mode} />;
+
   const highlighted = text.length <= HIGHLIGHT_LIMIT;
   return (
     <SyntaxHighlighter
@@ -104,24 +161,11 @@ const FileBody = memo(function FileBody({
       style={SYNTAX_THEMES[mode]}
       showLineNumbers
       wrapLines
-      lineProps={(number: number) => ({
-        'data-line': number,
-        style:
-          number === line
-            ? { display: 'block', backgroundColor: 'var(--joy-palette-warning-softBg)' }
-            : { display: 'block' },
-      })}
-      customStyle={{
-        margin: 0,
-        padding: '8px 0',
-        background: 'transparent',
-        fontSize: '12px',
-        minWidth: 'fit-content',
-      }}
-      lineNumberStyle={{ minWidth: '3em', paddingRight: '1em', color: 'var(--joy-palette-text-tertiary)' }}
+      lineProps={(number: number) => ({ 'data-line': number, style: lineStyle(number, line) })}
+      customStyle={PRE_STYLE}
+      lineNumberStyle={LINE_NUMBER_STYLE}
     >
-      {/* A file's closing newline ends its last line rather than starting another. */}
-      {text.replace(/\r?\n$/, '')}
+      {content}
     </SyntaxHighlighter>
   );
 });

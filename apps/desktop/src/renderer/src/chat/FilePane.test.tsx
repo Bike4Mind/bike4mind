@@ -92,8 +92,14 @@ describe('FilePane', () => {
 
     const line = byTestId('file-pane-body')!.querySelector<HTMLElement>('[data-line="2"]')!;
     expect(line.style.backgroundColor).toContain('warning-softBg');
-    expect(scrolled.mock.contexts).toContain(line);
+    // Scrolled on the first, plain draw; the highlighted copy that replaces it keeps the layout.
+    expect(scrolled.mock.contexts.map(element => (element as HTMLElement).dataset.line)).toContain('2');
     scrolled.mockRestore();
+  });
+
+  it('ends up highlighted after the plain first draw', async () => {
+    await render(VIEW);
+    expect(byTestId('file-pane-body')!.querySelector('.token')?.textContent).toBe('const');
   });
 
   it('says when it shows only the start of a long file', async () => {
