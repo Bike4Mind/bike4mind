@@ -13,6 +13,11 @@ const h = vi.hoisted(() => ({
   triageReleaseNotes: vi.fn(),
   createCompleter: vi.fn(),
   fetch: vi.fn(),
+  config: { SECRET_ENCRYPTION_KEY: 'a'.repeat(64) } as Record<string, string | undefined>,
+}));
+// Real encryptToken/decryptToken run against this key.
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: new Proxy({}, { get: (_, key: string) => h.config[key] }),
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: h.getSettingsByNames }));
 vi.mock('@bike4mind/database', () => ({
@@ -33,6 +38,7 @@ vi.stubGlobal('fetch', h.fetch);
 
 import { dispatch } from './whatsNewJob';
 import { GENERATION_BUDGET_MS } from './releaseNotes';
+import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 
 const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never as {
   warn: ReturnType<typeof vi.fn>;
@@ -77,6 +83,7 @@ describe('releaseNotes queue handler', () => {
     h.triageReleaseNotes.mockResolvedValue({ notes: new Map([[1, 'Search is faster']]), omitted: [], usage });
     h.writeReleaseNotes.mockResolvedValue(draft());
     h.upsertGenerated.mockImplementation(async (note: unknown) => ({ note, preserved: false }));
+    h.config.SECRET_ENCRYPTION_KEY = 'a'.repeat(64);
     h.findWorkspace.mockResolvedValue({ slackBotToken: 'xoxb-test' });
     h.fetch.mockResolvedValue({ json: async () => ({ ok: true }) });
   });
@@ -160,6 +167,37 @@ describe('releaseNotes queue handler', () => {
     await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
     expect(h.upsertGenerated).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Slack announcement failed'), expect.anything());
+  });
+
+  it('sends the decrypted bot token when the stored value is ciphertext', async () => {
+    setConfig(enabledConfig);
+    const stored = encryptToken('xoxb-plain')!;
+    expect(stored).not.toContain('xoxb-plain');
+    h.findWorkspace.mockResolvedValue({ slackBotToken: stored });
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    expect(slackPosts()).toHaveLength(1);
+    expect(slackPosts()[0][1].headers.Authorization).toBe('Bearer xoxb-plain');
+  });
+
+  it('still sends a legacy plaintext bot token unchanged', async () => {
+    setConfig(enabledConfig);
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    expect(slackPosts()[0][1].headers.Authorization).toBe('Bearer xoxb-test');
+  });
+
+  it('skips the post and logs no token value when the stored token cannot be decrypted', async () => {
+    setConfig(enabledConfig);
+    h.config.SECRET_ENCRYPTION_KEY = 'b'.repeat(64);
+    const stored = encryptToken('xoxb-plain')!;
+    h.config.SECRET_ENCRYPTION_KEY = 'a'.repeat(64);
+    h.findWorkspace.mockResolvedValue({ slackBotToken: stored });
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    expect(slackPosts()).toHaveLength(0);
+    expect(h.upsertGenerated).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Slack announcement failed'), expect.anything());
+    const logged = JSON.stringify(logger.warn.mock.calls);
+    expect(logged).not.toContain(stored);
+    expect(logged).not.toContain('xoxb-plain');
   });
 
   it('does not post when no Slack target is configured', async () => {
