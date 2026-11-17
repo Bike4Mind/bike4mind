@@ -1,5 +1,6 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "remoteCache": { "preflight": true },
   "globalEnv": ["CI"],
   "globalPassThroughEnv": ["NODE_OPTIONS"],
   // dataLakeSearchMetrics.test.ts reads infra/dataLakeSearchDashboard.ts to pin the metric names

@@ -58,7 +58,17 @@ export async function toolModelRefusal(
     else await admission.assert(modelId, options);
     return null;
   } catch (error) {
-    const note = isOrgModelNotAllowedError(error) ? ORG_POLICY_MODEL_NOTE : SETTINGS_MODEL_NOTE;
-    return paidPlanRefusalOrRethrow(context, error, modelId, toolName) + note;
+    return settingsModelRefusalOrRethrow(context, error, modelId, toolName);
   }
+}
+
+/** paidPlanRefusalOrRethrow for a model taken from the user's settings (see SETTINGS_MODEL_NOTE / ORG_POLICY_MODEL_NOTE). */
+export function settingsModelRefusalOrRethrow(
+  context: Pick<ToolContext, 'logger'>,
+  error: unknown,
+  modelId: string,
+  toolName: string
+): string {
+  const note = isOrgModelNotAllowedError(error) ? ORG_POLICY_MODEL_NOTE : SETTINGS_MODEL_NOTE;
+  return paidPlanRefusalOrRethrow(context, error, modelId, toolName) + note;
 }

@@ -199,6 +199,11 @@ export const contentHolders = {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
+  // A Studio Production: owner-only, so it goes with its owner. The FabFiles it references are their own holders.
+  StudioComposition: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
   SystemPrompt: {
     kind: 'holder',
     references: [

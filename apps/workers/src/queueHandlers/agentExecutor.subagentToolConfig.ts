@@ -14,7 +14,7 @@
 import type { ApiKeyTable } from '@bike4mind/llm-adapters';
 import type { GenerateImageToolCall, AudioGenerationToolCall } from '@bike4mind/common';
 import type { BuildSharedToolsOptions } from '@bike4mind/services/llm';
-import type { MusicToolConfig, VideoToolConfig } from '@bike4mind/services/llm/tools';
+import type { ImageToolConfig, MusicToolConfig, VideoToolConfig } from '@bike4mind/services/llm/tools';
 
 export interface BuildSubagentToolConfigInput {
   model?: string;
@@ -40,6 +40,11 @@ export interface BuildSubagentToolConfigInput {
    */
   audioConfig?: Partial<AudioGenerationToolCall>;
   /**
+   * Built per invocation by agentExecutor.imageToolConfig.ts around `imageConfig`; when set, the image tools start
+   * capped image jobs instead of rendering in-process. Null/omitted keeps the in-process render.
+   */
+  imageJobConfig?: ImageToolConfig | null;
+  /**
    * Built per invocation by agentExecutor.videoToolConfig.ts (it carries a `createJob` function, so
    * it cannot be persisted on the execution doc). Null/omitted leaves `video_generation` unoffered.
    */
@@ -60,6 +65,7 @@ export function buildSubagentToolConfig({
   apiKeyTable,
   imageConfig,
   audioConfig,
+  imageJobConfig,
   videoConfig,
   musicConfig,
   imageUrlSigningSecret,
@@ -74,7 +80,9 @@ export function buildSubagentToolConfig({
     // passes `image_generation` + `edit_image` so the tools have a model to
     // run with. Only set when imageConfig is present so a text-only run
     // doesn't carry an empty object.
-    ...(imageConfig && { image_generation: imageConfig, edit_image: imageConfig }),
+    ...(imageJobConfig
+      ? { image_generation: imageJobConfig, edit_image: imageJobConfig }
+      : imageConfig && { image_generation: imageConfig, edit_image: imageConfig }),
     // Same for audio_generation - the classic path threads `audioConfig`
     // (ChatCompletionProcess), so agent-mode must too or the tool ignores the
     // user's saved audio settings. Only set when present.

@@ -70,6 +70,16 @@
         "default": "./dist/imageModeration/index.cjs"
       }
     },
+    "./imageCutout": {
+      "import": {
+        "types": "./dist/imageCutout.d.mts",
+        "default": "./dist/imageCutout.mjs"
+      },
+      "require": {
+        "types": "./dist/imageCutout.d.cts",
+        "default": "./dist/imageCutout.cjs"
+      }
+    },
     "./imageResize": {
       "import": {
         "types": "./dist/imageResize.d.mts",
