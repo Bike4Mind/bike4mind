@@ -48,6 +48,7 @@ describe('organization invitation seats', () => {
     await waitFor(() => {
       expect(result.current.pendingSeats).toBe(2);
     });
+    expect(result.current.activeSeats).toBe(2);
     expect(result.current.currentSeats).toBe(4);
     expect(result.current.availableSeats).toBe(1);
     expect(get).toHaveBeenCalledWith('/api/organizations/organization/invites');

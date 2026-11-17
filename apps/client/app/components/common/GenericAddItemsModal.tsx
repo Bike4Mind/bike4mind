@@ -60,6 +60,8 @@ export interface GenericAddItemsModalProps<T> {
   showButtonBadge?: boolean;
   searchMinLength?: number;
   triggerTestId?: string;
+  /** 'sm' renders a toolbar-sized trigger that sits beside other `size="sm"` buttons. */
+  triggerSize?: 'sm';
   testIdPrefix?: string;
 }
 
@@ -102,6 +104,7 @@ function GenericAddItemsModal<T>({
   showButtonBadge = true,
   searchMinLength,
   triggerTestId,
+  triggerSize,
   testIdPrefix = 'generic-add-items',
 }: GenericAddItemsModalProps<T>) {
   const { t } = useTranslation();
@@ -175,18 +178,31 @@ function GenericAddItemsModal<T>({
 
   return (
     <>
-      <Button
-        className="generic-add-items-modal-trigger"
-        data-testid={triggerTestId}
-        sx={{
-          width: { xs: 'auto', sm: '190px' },
-          fontSize: { xs: '0.875rem', sm: '1rem' },
-          whiteSpace: 'nowrap',
-        }}
-        onClick={() => setOpen(true)}
-      >
-        {buttonIcon} {buttonLabel} {showButtonBadge && value?.length ? `(${value.length})` : ''}
-      </Button>
+      {triggerSize === 'sm' ? (
+        <Button
+          className="generic-add-items-modal-trigger"
+          data-testid={triggerTestId}
+          size="sm"
+          startDecorator={buttonIcon}
+          sx={{ whiteSpace: 'nowrap' }}
+          onClick={() => setOpen(true)}
+        >
+          {buttonLabel} {showButtonBadge && value?.length ? `(${value.length})` : ''}
+        </Button>
+      ) : (
+        <Button
+          className="generic-add-items-modal-trigger"
+          data-testid={triggerTestId}
+          sx={{
+            width: { xs: 'auto', sm: '190px' },
+            fontSize: { xs: '0.875rem', sm: '1rem' },
+            whiteSpace: 'nowrap',
+          }}
+          onClick={() => setOpen(true)}
+        >
+          {buttonIcon} {buttonLabel} {showButtonBadge && value?.length ? `(${value.length})` : ''}
+        </Button>
+      )}
       <Modal
         className="generic-add-items-modal"
         open={open}

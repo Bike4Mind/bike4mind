@@ -198,6 +198,10 @@ export class SubjectRecordExport {
     references: readonly UserReference[],
     seen = new Set<string>()
   ): AsyncGenerator<LeanDocument> {
+    if (model === 'DataLake' && references.some(reference => reference.scope === 'personal')) {
+      for (const document of (await this.matcher.personalLakes()).documents) yield document;
+      return;
+    }
     const queried = new Set<string>();
     for (const reference of references) {
       const filter = this.matcher.filterFor(reference);

@@ -695,6 +695,8 @@ export function useLeaveOrganization() {
 interface OrganizationSeatsInfo {
   maxSeats: number;
   pendingSeats: number;
+  /** Members who have joined; currentSeats adds the pending invitations. */
+  activeSeats: number;
   currentSeats: number;
   availableSeats: number;
 }
@@ -720,17 +722,19 @@ export const useOrganizationSeats = (organizationId?: string): OrganizationSeats
   const maxSeats = organization?.seats ?? 0;
   const pendingSeats =
     pendingInvites?.reduce((count, invite) => count + (invite.recipients?.pending?.length ?? 0), 0) ?? 0;
-  const currentSeats = (users?.length ?? 0) + pendingSeats;
+  const activeSeats = users?.length ?? 0;
+  const currentSeats = activeSeats + pendingSeats;
   const availableSeats = Math.max(0, maxSeats - currentSeats);
 
   return useMemo(
     () => ({
       maxSeats,
       pendingSeats,
+      activeSeats,
       currentSeats,
       availableSeats,
     }),
-    [maxSeats, pendingSeats, currentSeats, availableSeats]
+    [maxSeats, pendingSeats, activeSeats, currentSeats, availableSeats]
   );
 };
 

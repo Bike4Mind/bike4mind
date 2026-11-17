@@ -221,6 +221,38 @@ describe('POST /api/reg-invites/update - widening a package-linked code', () => 
     );
   });
 
+  it.each([
+    ['an admin-closed code', { ...stored, status: 'used' }, 'open'],
+    ['an admin-closed code to waiting', { ...stored, status: 'used' }, 'waiting'],
+    ['a redeemed single-use code', { ...stored, status: 'waiting', used: new Date() }, 'open'],
+  ])('refuses reopening %s without a reason and writes nothing', async (_label, row, status) => {
+    h.find.mockResolvedValue([row]);
+    const { error } = await call({ status });
+    expect(error).toHaveProperty('statusCode', 400);
+    expect(h.formatRegInvites).not.toHaveBeenCalled();
+  });
+
+  it('records the reason for reopening a closed code', async () => {
+    h.find.mockResolvedValue([{ ...stored, status: 'used' }]);
+    const { error } = await call({ status: 'open', reason: 'Partner asked to restore the code' });
+    expect(error).toBeNull();
+    expect(h.find).toHaveBeenCalledWith({ _id: { $in: [ID1] }, grantPackageId: { $nin: [null, ''] } });
+    expect(h.audit.mock.calls[0][1]).toMatchObject({ reason: 'Partner asked to restore the code' });
+  });
+
+  it.each([
+    ['an open code', { ...stored, status: 'open' }],
+    ['a used unlimited-use code', { ...stored, status: 'waiting', unlimitedUse: true, used: new Date() }],
+  ])('needs no reason to reopen %s', async (_label, row) => {
+    h.find.mockResolvedValue([row]);
+    expect((await call({ status: 'open' })).error).toBeNull();
+  });
+
+  it('does not look up the codes to close them', async () => {
+    expect((await call({ status: 'used' })).error).toBeNull();
+    expect(h.find).not.toHaveBeenCalled();
+  });
+
   it('needs no reason to shorten the expiry or for a code with no package', async () => {
     expect((await call({ expiresAt: '2029-01-31T23:59:59.999Z' })).error).toBeNull();
     h.find.mockResolvedValue([]);
