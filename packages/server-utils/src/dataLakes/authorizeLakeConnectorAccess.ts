@@ -39,10 +39,10 @@ export async function authorizeLakeConnectorAccess(
 }
 
 /**
- * Read-tier twin of authorizeLakeConnectorAccess for the connection STATUS read only: an org lake also
- * admits an appointed org admin, who can already manage the lake itself. `canManage` says whether the
- * caller passes the write gate, so the client can offer connect/re-sync/disconnect only to who may use
- * them. A personal lake is unchanged - its creator only, who always manages it.
+ * Read-tier twin of authorizeLakeConnectorAccess for the connection STATUS read only. An org lake admits
+ * the same owner/manager/platform-admin set as the write gate (via verifyOrgAdminRead); `canManage` is
+ * kept for callers' flag shape and is always true on an org lake. A personal lake is unchanged - its
+ * creator only, who always manages it.
  */
 export async function authorizeLakeConnectorRead(
   user: LakeConnectorAccessUser,

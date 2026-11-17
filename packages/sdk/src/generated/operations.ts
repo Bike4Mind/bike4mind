@@ -225,6 +225,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/client-config',
   },
+  getCompletionRunUsage: {
+    method: 'GET',
+    path: '/api/v1/completion-runs/{runId}/usage',
+  },
   getCreditBalance: {
     method: 'GET',
     path: '/api/v1/credits',

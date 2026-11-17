@@ -156,7 +156,13 @@ interface IImageEditServiceOptions {
   startImageEditProcess: (body: ImageEditBody) => Promise<void>;
   /** Reserves the estimate before the provider call. Required so the app factory cannot drop the hold. */
   creditHolds: ImageCreditHolds;
-  assertModelAdmission: (user: string | IUserDocument, modelId: string, adminRoleWithheld?: boolean) => Promise<void>;
+  /** organizationId is the org this request bills, so its model policy applies. */
+  assertModelAdmission: (
+    user: string | IUserDocument,
+    modelId: string,
+    adminRoleWithheld?: boolean,
+    organizationId?: string | null
+  ) => Promise<void>;
   deleteFabFile: (userId: string, fileId: string) => Promise<void>;
   wsHttpsUrl: string;
   abilityGetter: (user: IUserDocument | undefined) => MongoAbility;
@@ -265,7 +271,7 @@ export class ImageEditService {
         ? ImageModels.GPT_IMAGE_1_5
         : requestedModel;
 
-    await this.assertModelAdmission(userId, model, adminRoleWithheld);
+    await this.assertModelAdmission(userId, model, adminRoleWithheld, organizationId);
     const session = await this.db.sessions.findById(sessionId);
     if (!session) throw new NotFoundError('Session not found');
 
@@ -557,7 +563,7 @@ export class ImageEditService {
         organizationId ? this.db.organizations.findById(organizationId) : Promise.resolve(null),
       ]);
       if (!user) throw new NotFoundError('User not found');
-      await this.assertModelAdmission(user, model, adminRoleWithheld);
+      await this.assertModelAdmission(user, model, adminRoleWithheld, organizationId);
 
       // skipCache: enforceCredits gates money (and ModerationEnabled below gates content safety),
       // and this host may outlive the admin's write to either.

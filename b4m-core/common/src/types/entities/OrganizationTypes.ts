@@ -85,6 +85,13 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
    * Applies to pushes for users whose active organization is this one.
    */
   redactPushContent?: boolean;
+
+  /**
+   * Allowlist of providers, models and built-in tools for this org's members (OrgModelPolicySchema).
+   * Absent or null is unrestricted; read it through readOrgModelPolicy, which fails closed on a bad row.
+   */
+  modelPolicy?: unknown;
+
   sharingPolicy?: OrganizationSharingPolicy;
   mfaPolicy?: {
     required: boolean;
@@ -233,9 +240,8 @@ export interface IOrganizationRepository
 
   /**
    * IDs of every organization where the user holds admin RIGHTS: billing owner (`userId`) OR a
-   * manager (`adminUserIds`), with or without a `users[]` row. Broader than `findIdsAdministeredBy`
-   * (which also requires the row) - deliberately a separate method so its consumers keep their own
-   * semantics. This is the org-admin set data-lake management
+   * manager (`adminUserIds` entry that also has a `users[]` row). Same set as `findIdsAdministeredBy`,
+   * kept as a separate name for its data-lake callers. This is the org-admin set data-lake management
    * consults: an org admin may manage any lake scoped to that org (see `canManageLake`). Returns a
    * bare id list, suitable for an `$in` filter or membership test.
    */

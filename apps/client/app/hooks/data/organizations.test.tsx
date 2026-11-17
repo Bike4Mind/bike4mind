@@ -41,8 +41,14 @@ const renderWithClient = <T,>(useHook: () => T) => {
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
   const { result } = renderHook(useHook, { wrapper });
-  return { result, invalidateSpy };
+  return { result, invalidateSpy, queryClient };
 };
+
+const seedInviteLinks = (queryClient: QueryClient) =>
+  queryClient.setQueryData(['organizations', 'org1', 'invite-links'], {
+    pages: [{ links: [], nextCursor: undefined }],
+    pageParams: [undefined],
+  });
 
 describe('credit budget mutations', () => {
   beforeEach(() => {
@@ -205,6 +211,24 @@ describe('manager and ownership mutations', () => {
     expect(toast.success).toHaveBeenCalledWith('Manager removed');
   });
 
+  it.each([
+    [true, 'Member is now a manager'],
+    [false, 'Manager removed'],
+  ])(
+    'useSetOrganizationManager(isManager=%s) succeeds with an invite-links page cached',
+    async (isManager, message) => {
+      const { result, queryClient } = renderWithClient(useSetOrganizationManager);
+      seedInviteLinks(queryClient);
+
+      await expect(result.current.mutateAsync({ organizationId: 'org1', userId: 'u1', isManager })).resolves.toEqual({
+        id: 'org1',
+      });
+
+      expect(toast.success).toHaveBeenCalledWith(message);
+      expect(toast.error).not.toHaveBeenCalled();
+    }
+  );
+
   it('useTransferOrganizationOwnership POSTs the new owner and refetches the org and its roster', async () => {
     const { result, invalidateSpy } = renderWithClient(useTransferOrganizationOwnership);
 
@@ -252,6 +276,17 @@ describe('member removal', () => {
     vi.mocked(toast.success).mockClear();
     await result.current.mutateAsync({ organizationId: 'org1', userId: 'u2', quiet: true });
     expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('removes a member with an invite-links page cached', async () => {
+    del.mockResolvedValue({ data: { id: 'org1', personalLakeSharesKept: 0 } });
+    const { result, queryClient } = renderWithClient(useRemoveMemberFromOrganization);
+    seedInviteLinks(queryClient);
+
+    await expect(result.current.mutateAsync({ organizationId: 'org1', userId: 'u1' })).resolves.toBe(0);
+
+    expect(toast.success).toHaveBeenCalledWith('Member removed successfully');
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it('reports a failed removal unless asked to stay quiet', async () => {
