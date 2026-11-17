@@ -25,6 +25,7 @@ import {
 } from '../../../../packages/database/src/__test__/createMongoServer';
 const h = vi.hoisted(() => ({ purgeFiles: vi.fn(), purgeContent: vi.fn(), sendComplete: vi.fn() }));
 vi.mock('./purgeAccountFiles', () => ({ purgeAccountFiles: h.purgeFiles }));
+vi.mock('../billing/redactAccountStripeCustomer', () => ({ redactAccountStripeCustomer: vi.fn() }));
 vi.mock('./purgeAccountContent', () => ({ purgeAccountContent: h.purgeContent }));
 vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: h.sendComplete }));
 vi.mock('@bike4mind/services', async importOriginal => {

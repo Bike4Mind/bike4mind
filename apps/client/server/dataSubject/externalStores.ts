@@ -212,10 +212,7 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
     kind: 'service',
     name: 'Stripe',
     receives: 'Customer record (email, name), payment methods, subscriptions, invoices and risk metadata',
-    erasure: {
-      action: 'notErased',
-      gap: 'Account deletion cancels subscriptions (`cancelAccountSubscriptions`) but keeps the customer: decide between deleting it and keeping it under the financial-record period',
-    },
+    erasure: { action: 'erased', erasedBy: 'redactAccountStripeCustomer' },
     cannotRecall: `Charges and invoices, which Stripe keeps for its own legal obligations; ours: ${FINANCIAL_RECORD.reason}`,
   },
   {
