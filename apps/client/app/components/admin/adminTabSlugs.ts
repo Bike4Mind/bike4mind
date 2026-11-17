@@ -3,6 +3,7 @@ import {
   ADMIN_DLQ_REPLAY_TAB_SLUG,
   ADMIN_FEEDBACK_TAB_SLUG,
   ADMIN_MODERATION_INCIDENTS_TAB_SLUG,
+  ADMIN_TEXT_MODERATION_REVIEW_TAB_SLUG,
   ADMIN_USERS_TAB_SLUG,
 } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
@@ -95,6 +96,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<Exclude<AdminTab, RetiredTab>, string>>
   [AdminTab.SignupRiskReview]: ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG,
   [AdminTab.ShadowDetections]: ADMIN_SHADOW_DETECTIONS_TAB_SLUG,
   [AdminTab.ModerationIncidents]: ADMIN_MODERATION_INCIDENTS_TAB_SLUG,
+  [AdminTab.TextModerationReview]: ADMIN_TEXT_MODERATION_REVIEW_TAB_SLUG,
   [AdminTab.StripeDisputes]: ADMIN_STRIPE_DISPUTES_TAB_SLUG,
   [AdminTab.HeldSignupGrants]: 'held-signup-grants',
   [AdminTab.EmbedKeys]: 'embed-keys',

@@ -70,6 +70,7 @@ import {
 } from './queues';
 import {
   telemetryAlertDeadLetter,
+  moderationAlertsDeadLetter,
   sessionEnrichmentDeadLetter,
   billingEventsDeadLetter,
   emailEventsDeadLetter,
@@ -726,6 +727,12 @@ if (isMonitoredStage) {
     displayName: 'Telemetry Alert Rule',
     application: 'TelemetryAlerts',
     queue: telemetryAlertDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'moderation-alerts',
+    displayName: 'Moderation Escalation Alerts',
+    application: 'ModerationAlerts',
+    queue: moderationAlertsDeadLetter.queue,
   });
   createDlqAlarms({
     label: 'session-enrichment',

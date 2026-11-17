@@ -66,6 +66,7 @@ import { IUserDocument, Permission } from '@bike4mind/common';
 import { LLMEvents, SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   getSharedTokenizer,
+  publishModerationEscalation,
   publishTelemetryAlertCallback,
 } from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@bike4mind/server-utils/memory/recallMementosV2';
@@ -195,6 +196,7 @@ export const getStaticOptions = () => {
     getEntitlements: getUserEntitlements,
     getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
+    notifyModerationEscalation: publishModerationEscalation,
     invokeCreateMemento: async (
       questId: string,
       sessionId: string,

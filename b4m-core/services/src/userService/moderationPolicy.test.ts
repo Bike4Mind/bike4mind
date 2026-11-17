@@ -5,6 +5,7 @@ import {
   evaluateModerationPolicy,
   moderationThrottleKey,
   applyModerationHit,
+  moderationEscalationAlert,
 } from './moderationPolicy';
 import type { IModerationHit } from '@bike4mind/common';
 
@@ -165,5 +166,64 @@ describe('moderationPolicy - applyModerationHit', () => {
     const result = await applyModerationHit({ users, userId: 'user-1', hit, now: NOW });
 
     expect(result).toMatchObject({ hitsInWindow: 0, action: 'none', status: 'active' });
+  });
+});
+
+describe('moderationPolicy - moderationEscalationAlert', () => {
+  let users: { recordModerationHit: Mock; setModerationStatus: Mock };
+  const ordinary: IModerationHit = { at: NOW, categories: ['hate'], source: 'openai' };
+  const severe: IModerationHit = { at: NOW, categories: ['sexual', 'sexual/minors'], source: 'openai' };
+  const userWith = (count: number, status: 'active' | 'throttled' | 'suspend_pending' | 'suspended' = 'active') => ({
+    id: 'user-1',
+    moderation: { hits: Array.from({ length: count }, () => ({ at: NOW })), status, throttledUntil: null },
+  });
+  const alertFor = async (hit: IModerationHit, user: ReturnType<typeof userWith>) => {
+    users.recordModerationHit.mockResolvedValue(user);
+    const decision = await applyModerationHit({ users, userId: 'user-1', hit, now: NOW });
+    return moderationEscalationAlert('user-1', hit, decision);
+  };
+
+  beforeEach(() => {
+    users = { recordModerationHit: vi.fn(), setModerationStatus: vi.fn() };
+  });
+
+  it('raises nothing for an ordinary single hit', async () => {
+    expect(await alertFor(ordinary, userWith(1))).toBeNull();
+  });
+
+  it('raises nothing for an ordinary hit that only throttles', async () => {
+    expect(await alertFor(ordinary, userWith(MODERATION_POLICY.throttleAt))).toBeNull();
+  });
+
+  it('alerts once on the transition into suspend_pending', async () => {
+    expect(await alertFor(ordinary, userWith(MODERATION_POLICY.suspendAt))).toEqual({
+      userId: 'user-1',
+      reasons: ['suspend_pending'],
+      categories: ['hate'],
+      source: 'openai',
+      hitsInWindow: MODERATION_POLICY.suspendAt,
+    });
+  });
+
+  it('does not alert again on later hits while the user is already pending', async () => {
+    expect(await alertFor(ordinary, userWith(MODERATION_POLICY.suspendAt + 1, 'suspend_pending'))).toBeNull();
+  });
+
+  it('alerts on every severe-category hit, whatever the status', async () => {
+    for (const user of [userWith(1), userWith(2, 'suspend_pending'), userWith(3, 'suspended')]) {
+      expect(await alertFor(severe, user)).toMatchObject({ reasons: ['severe_category'] });
+    }
+  });
+
+  it('carries both reasons when a severe hit is also the one that tips the user into suspend_pending', async () => {
+    expect(await alertFor(severe, userWith(MODERATION_POLICY.suspendAt))).toMatchObject({
+      reasons: ['suspend_pending', 'severe_category'],
+      categories: ['sexual', 'sexual/minors'],
+    });
+  });
+
+  it('matches the severe category exactly, not by prefix', () => {
+    const decision = { hitsInWindow: 1, transitionedTo: null };
+    expect(moderationEscalationAlert('user-1', { categories: ['sexual'], source: 'openai' }, decision)).toBeNull();
   });
 });

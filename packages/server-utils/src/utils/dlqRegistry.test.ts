@@ -60,6 +60,7 @@ const mockDlqUrls = vi.hoisted(() => ({
       'organization-retention',
       'fab-file-moderation',
       'telemetry-alert-rule',
+      'moderation-alerts',
       'session-enrichment',
       'billing-events',
       'email-events',

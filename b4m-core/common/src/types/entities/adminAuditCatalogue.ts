@@ -78,6 +78,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // Single-user counterparts of user.bulk.suspended / user.bulk.restricted, written by PUT /api/users/[id]/update.
   'user.suspended': { category: 'access', severity: 'critical', write: 'strict' },
   'user.reinstated': { category: 'access', severity: 'notice', write: 'strict' },
+  // The text-moderation escalation state (moderation.status), set by PUT /api/users/[id]/update.
+  'user.moderation_status.changed': { category: 'access', severity: 'critical', write: 'strict' },
   'user.restricted': { category: 'access', severity: 'notice', write: 'strict' },
   'user.restriction_lifted': { category: 'access', severity: 'notice', write: 'strict' },
   // The linked-account propagation run once for accounts an admin suspended together

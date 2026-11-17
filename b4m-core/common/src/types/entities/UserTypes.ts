@@ -320,6 +320,29 @@ export interface IUserModeration {
   appealText?: string | null;
 }
 
+/**
+ * Moderation categories severe enough that every hit is alerted on and queued for admin review,
+ * whatever the user's escalation status. Matching is exact against `IModerationHit.categories`.
+ */
+export const MODERATION_SEVERE_CATEGORIES: readonly string[] = ['sexual/minors'];
+
+/** Statuses the admin moderation review list always shows: they await a human decision. */
+export const MODERATION_REVIEW_STATUSES = [
+  'throttled',
+  'suspend_pending',
+] as const satisfies readonly UserModerationStatus[];
+
+/** One row of the admin text-moderation review list. */
+export interface ModerationReviewUser {
+  id: string;
+  name: string | null;
+  email: string | null;
+  createdAt: Date | null;
+  moderation: IUserModeration;
+  /** Whether a retained hit carries a {@link MODERATION_SEVERE_CATEGORIES} label newer than the last status change. */
+  hasUnreviewedSevereHit: boolean;
+}
+
 export const THROTTLE_TIERS = ['none', 'shadow'] as const;
 export type ThrottleTier = (typeof THROTTLE_TIERS)[number];
 export const THROTTLE_SOURCES = ['admin', 'signup_honeypot', 'signup_timing'] as const;
@@ -1237,6 +1260,11 @@ export interface IUserRepository
    * `moderation.status` - escalation is decided by the policy layer. Returns the updated user.
    */
   recordModerationHit: (userId: string, hit: IModerationHit) => Promise<IUserDocument | null>;
+  /**
+   * The admin text-moderation review list: users in a {@link MODERATION_REVIEW_STATUSES} status, plus
+   * users with a severe-category hit newer than their last status change. Most recent hit first.
+   */
+  findModerationReviewQueue: (limit: number) => Promise<ModerationReviewUser[]>;
   /**
    * Transition a user's moderation escalation state. Leaves `isModerated` alone. Returns the
    * updated user.

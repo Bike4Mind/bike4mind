@@ -253,7 +253,13 @@ import { resolveToolConfigSafely } from './resolveToolConfigSafely';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
 import type { MusicToolConfig } from './tools/implementation/musicGeneration';
 import type { ImageToolConfig } from './tools/implementation/imageGeneration';
-import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
+import {
+  applyModerationHit,
+  MODERATION_POLICY,
+  moderationEscalationAlert,
+  moderationThrottleKey,
+  type ModerationEscalationAlert,
+} from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
 import { createStreamingStatusSender } from './streamingStatusSender';
@@ -1127,6 +1133,7 @@ export class ChatCompletionProcess {
   public logEvent: IChatCompletionServiceOptions['logEvent'];
   public queue: IChatCompletionServiceOptions['queue'];
   public autoNameSession: IChatCompletionServiceOptions['autoNameSession'];
+  public notifyModerationEscalation: IChatCompletionServiceOptions['notifyModerationEscalation'];
   public summarizeSession: IChatCompletionServiceOptions['summarizeSession'];
   public contextSummarizeSession: IChatCompletionServiceOptions['contextSummarizeSession'];
   public slackWebhookUrl: string;
@@ -1388,6 +1395,7 @@ export class ChatCompletionProcess {
     this.logEvent = options.logEvent;
     this.queue = options.queue;
     this.autoNameSession = options.autoNameSession;
+    this.notifyModerationEscalation = options.notifyModerationEscalation;
     this.summarizeSession = options.summarizeSession;
     this.contextSummarizeSession = options.contextSummarizeSession;
     this.wsHttpsUrl = options.wsHttpsUrl;
@@ -9051,19 +9059,28 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     logger: Logger
   ): Promise<void> {
     try {
-      const decision = await applyModerationHit({
-        users: this.db.users,
-        userId: this.user.id,
-        hit: { at: new Date(), categories, source, questId },
-      });
+      const hit = { at: new Date(), categories, source, questId };
+      const decision = await applyModerationHit({ users: this.db.users, userId: this.user.id, hit });
       logger.warn(
         `[Moderation] User ${this.user.id} flagged by ${source}` +
           (categories.length ? ` (${categories.join(', ')})` : '') +
           `; ${decision.hitsInWindow} hit(s) in window -> status ${decision.status}`
       );
+      this.sendModerationEscalationAlert(moderationEscalationAlert(this.user.id, hit, decision), logger);
     } catch (recordError) {
       logger.error(`[Moderation] Failed to record ${source} moderation hit for user ${this.user.id}:`, recordError);
     }
+  }
+
+  /** Fire-and-forget: alert delivery never delays or fails the chat request. */
+  private sendModerationEscalationAlert(alert: ModerationEscalationAlert | null, logger: Logger): void {
+    const notify = this.notifyModerationEscalation;
+    if (!alert || !notify) return;
+    void Promise.resolve()
+      .then(() => notify(alert))
+      .catch(alertError =>
+        logger.warn(`[Moderation] Failed to send the escalation alert for user ${this.user.id}:`, alertError)
+      );
   }
 
   private getBedrockGuardrailsService(

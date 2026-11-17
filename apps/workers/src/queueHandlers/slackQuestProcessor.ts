@@ -81,6 +81,7 @@ import { cancelPendingActionOnQuest } from '@bike4mind/server-utils/utils/pendin
 import { buildPendingActionButtons } from '@bike4mind/server-utils/integrations/slack/pendingActionButtons';
 import {
   getSharedTokenizer,
+  publishModerationEscalation,
   publishTelemetryAlertCallback,
 } from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@bike4mind/server-utils/memory/recallMementosV2';
@@ -195,6 +196,7 @@ export const getStaticOptions = () => {
     getEntitlements: getUserEntitlements,
     getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
+    notifyModerationEscalation: publishModerationEscalation,
     invokeCreateMemento: async (
       questId: string,
       sessionId: string,

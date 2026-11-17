@@ -738,6 +738,17 @@ const DLQ_REGISTRY = [
     describe: entityAt('Quest', 'detail.requestId'),
   },
   {
+    label: 'moderation-alerts',
+    displayName: 'Moderation Escalation Alerts',
+    application: 'ModerationAlerts',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains moderation escalation alerts that could not be posted to the abuse alarm channel.',
+    replayNote: 'No SQS replay destination; check the user in the text moderation review list instead.',
+    owner: 'Trust and safety',
+    describe: entityAt('User', 'detail.userId'),
+  },
+  {
     label: 'session-enrichment',
     displayName: 'Session Enrichment',
     application: 'SessionEnrichment',
