@@ -109,6 +109,11 @@ const AUDITED_SETTINGS_FIELDS = [
 const settingsAuditValue = (field: (typeof AUDITED_SETTINGS_FIELDS)[number], value: unknown) =>
   field === 'systemPrompt' ? { characters: typeof value === 'string' ? value.length : 0 } : (value ?? null);
 
+const resolvedStorageOverride = (organization: Parameters<typeof resolveOrganizationStorageLimit>[0]) => {
+  const resolved = resolveOrganizationStorageLimit(organization);
+  return resolved.source === 'override' ? resolved.limitMb : null;
+};
+
 const handler = baseApi()
   .get(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
@@ -151,7 +156,7 @@ const handler = baseApi()
         );
 
       const auditedFields = AUDITED_SETTINGS_FIELDS.filter(field => profile[field] !== undefined);
-      const auditsStorageOverride = profile.storageLimit !== undefined;
+      const auditsStorageOverride = req.user!.isAdmin && profile.storageLimit !== undefined;
       const before =
         auditedFields.length > 0 || auditsStorageOverride ? await organizationRepository.findById(orgId) : null;
 
@@ -183,9 +188,8 @@ const handler = baseApi()
         : [];
       if (before && auditsStorageOverride) {
         // storageLimit mirrors the effective limit, so the override itself is what gets audited.
-        const resolvedBefore = resolveOrganizationStorageLimit(before);
-        const overrideBefore = resolvedBefore.source === 'override' ? resolvedBefore.limitMb : null;
-        const overrideAfter = updatedOrganization.storageLimitOverride ?? null;
+        const overrideBefore = resolvedStorageOverride(before);
+        const overrideAfter = resolvedStorageOverride(updatedOrganization);
         if (overrideBefore !== overrideAfter) {
           changes.push({ field: 'storageLimitOverride', before: overrideBefore, after: overrideAfter });
         }
