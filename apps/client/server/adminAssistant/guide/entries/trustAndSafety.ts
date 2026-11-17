@@ -218,12 +218,14 @@ export const TRUST_AND_SAFETY_GUIDE: readonly AdminGuideEntry[] = [
     id: 'secops-triage',
     title: 'SecOps triage',
     summary:
-      'Settings for the pipeline that turns critical and high security scan findings into GitHub issues and Slack alerts.',
+      'Settings for the pipeline that files a GitHub issue for each critical or high security scan finding, closes it when the finding is gone, and posts a Slack summary.',
     views: ['admin.secops_triage'],
     settings: ['secopsTriageConfig'],
     howTo: [
-      'Under Master controls, Enabled is the kill switch: when off, findings are still ingested but no GitHub issues are created. Turn on Dry run first to log actions without creating issues or posting to Slack.',
-      'GitHub settings: set the Repository, Severity Threshold, the Critical and High priority labels, and Max Issues Per Scan.',
+      'Status, at the top, shows whether the GitHub connection and the saved repository are ready, and the outcome of recent runs.',
+      'Under Master controls, Enabled is the kill switch: when off, findings are still ingested but no GitHub issues are created. Turn on Dry run first to log actions without creating, commenting on, reopening or closing issues; the Slack summary is still posted, marked as a dry run.',
+      'A finding that is detected again reopens its closed issue. To keep an issue closed, close it as not planned or as a duplicate.',
+      'GitHub settings: set the Repository (owner/repo, private, required while Enabled is on), Severity Threshold, the Critical and High priority labels, and Max Issues Per Scan.',
       'Slack notifications: pick a Workspace and enter the Slack Channel ID.',
       'LLM enrichment optionally adds a "Where It Was Found" and "How to Fix" section to each new issue; choose a Model. Save with the save bar. Full admin access is required.',
     ],
