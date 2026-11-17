@@ -99,10 +99,6 @@ const invalidClipIdsOf = (timeline: StudioTimeline, issues: TimelineEditorIssue[
   return ids;
 };
 
-/**
- * The timeline editor for one production: its title, length and output shapes; the live preview with transport
- * and output switch; the tracks; and the selected clip's inspector. Edits stay in a local draft that autosaves.
- */
 // Play/pause, timecode and seek: the editor's only controls that re-render on every clock tick.
 const PlaybackTransport = ({ clock, durationMs }: { clock: PlaybackClock; durationMs: number }) => {
   const timeMs = usePlaybackTime(clock);
@@ -129,6 +125,10 @@ const PlaybackTransport = ({ clock, durationMs }: { clock: PlaybackClock; durati
   );
 };
 
+/**
+ * The timeline editor for one production: its title, length and output shapes; the live preview with transport
+ * and output switch; the tracks; and the selected clip's inspector. Edits stay in a local draft that autosaves.
+ */
 const ProductionEditor = ({ composition }: { composition: StudioCompositionResponse }) => {
   const [timeline, setTimeline] = useState(composition.timeline);
   const timelineRef = useRef(timeline);
