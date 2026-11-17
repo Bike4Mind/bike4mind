@@ -4,6 +4,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import { EmailCategory } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { getServerErrorField } from '@client/app/utils/error';
 import { getCapturedUnsubscribeToken } from './unsubscribeToken';
 
 interface PreferencesData {
@@ -54,8 +55,8 @@ export default function UnsubscribePage() {
       try {
         const response = await api.get('/api/email/unsubscribe', tokenHeader(token));
         setData(response.data);
-      } catch (err: any) {
-        setError(err.response?.data?.message || 'Failed to load preferences. The link may be invalid or expired.');
+      } catch (err) {
+        setError(getServerErrorField(err) || 'Failed to load preferences. The link may be invalid or expired.');
       } finally {
         setLoading(false);
       }
@@ -81,8 +82,8 @@ export default function UnsubscribePage() {
           },
         });
       }
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to update preferences');
+    } catch (err) {
+      setError(getServerErrorField(err) || 'Failed to update preferences');
     } finally {
       setProcessing(false);
     }
@@ -105,8 +106,8 @@ export default function UnsubscribePage() {
           },
         });
       }
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to update preferences');
+    } catch (err) {
+      setError(getServerErrorField(err) || 'Failed to update preferences');
     } finally {
       setProcessing(false);
     }
