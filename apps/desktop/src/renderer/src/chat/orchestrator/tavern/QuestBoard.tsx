@@ -9,7 +9,8 @@ import { keyframes } from '@mui/system';
 import type { AgentView } from '../roster';
 import { PLAQUE_EDGE, PLAQUE_WOOD } from './plaque';
 import { QUEST_DONE_LINGER_MS, questTitle, type QuestNote } from './quests';
-import { QUEST_BOARD, STATE_LAMP, noteCapacity, pinNotes } from './scene';
+import { QUEST_BOARD, noteCapacity, pinNotes } from './scene';
+import { stateLampColor } from '../statePalette';
 
 const NO_MOTION = '@media (prefers-reduced-motion: reduce)';
 /** The last stretch (ms) of a finished note's linger, over which it fades before it is taken down. */
@@ -116,7 +117,7 @@ function Note({
             flex: '0 0 auto',
             width: '0.8em',
             textAlign: 'center',
-            color: done ? '#2f7a2b' : STATE_LAMP[agent.state],
+            color: done ? '#2f7a2b' : stateLampColor(agent.state),
           }}
         >
           {done ? '\u2713' : '\u25A0'}
@@ -190,8 +191,8 @@ function MoreNotes({
                 sx={{
                   width: 8,
                   height: 8,
-                  bgcolor: note.done ? '#7ed07a' : STATE_LAMP[note.agent.state],
-                  boxShadow: `0 0 4px ${note.done ? '#7ed07a' : STATE_LAMP[note.agent.state]}`,
+                  bgcolor: note.done ? '#7ed07a' : stateLampColor(note.agent.state),
+                  boxShadow: `0 0 4px ${note.done ? '#7ed07a' : stateLampColor(note.agent.state)}`,
                 }}
               />
             </ListItemDecorator>

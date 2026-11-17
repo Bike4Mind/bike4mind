@@ -37,7 +37,6 @@ import {
   DOOR_POINT,
   INNKEEPER_POINT,
   LABEL_SPAN,
-  STATE_LAMP,
   assignCharacters,
   nameLabelLayout,
   needsYouGroups,
@@ -49,6 +48,7 @@ import {
   type SlotPoint,
   type TavernZone,
 } from './scene';
+import { stateLampColor } from '../statePalette';
 import { TavernLight, type TavernMood } from './TavernLight';
 import { INNKEEPER_ART, TAVERN_BACKDROP, characterSprite, type CharacterId, type InnkeeperPose } from './tavernArt';
 import { useScenePause, type ScenePauseOptions } from './useScenePause';
@@ -300,7 +300,7 @@ function NameLabelPlate({
         {
           '--label-max': `${label.maxWidth}cqw`,
           '--label-drop': `${label.lane * LABEL_SPAN}cqh`,
-          '--lamp': state ? STATE_LAMP[state] : 'transparent',
+          '--lamp': state ? stateLampColor(state) : 'transparent',
         } as CssVars
       }
       sx={{
