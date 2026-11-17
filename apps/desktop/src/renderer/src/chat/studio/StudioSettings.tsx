@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Checkbox from '@mui/joy/Checkbox';
@@ -46,8 +46,24 @@ export function StudioSettings({
 }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(false);
+  const latest = useRef<{
+    draft: StudioCreationDraft;
+    disabled: boolean;
+    edit: typeof edit;
+    referenceMax: number;
+  } | null>(null);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const catalog = controller.catalog;
-  if (!catalog) return null;
+  if (!catalog) {
+    latest.current = null;
+    return null;
+  }
   const s = draft.settings;
   const update = (patch: Partial<Settings>) => edit({ ...draft, settings: { ...s, ...patch } });
   const select = (
@@ -138,6 +154,42 @@ export function StudioSettings({
   const video = catalog.videos.find(model => model.id === s.model);
   const music = catalog.music.find(model => model.id === s.model);
   const referenceMax = draft.kind === 'image' ? (image?.capabilities.modes.generate?.inputs.reference?.max ?? 0) : 1;
+  latest.current = { draft, disabled, edit, referenceMax };
+  const uploadReference = async () => {
+    const started = latest.current;
+    if (!started || !controller.uploadReference) return;
+    setUploading(true);
+    setError(null);
+    try {
+      const reference = await controller.uploadReference();
+      if (!reference || !mounted.current) return;
+      const current = latest.current;
+      if (
+        !current ||
+        current.disabled ||
+        current.draft.sessionId !== started.draft.sessionId ||
+        current.draft.workspaceId !== started.draft.workspaceId ||
+        current.draft.revision !== started.draft.revision ||
+        current.draft.kind !== started.draft.kind ||
+        current.draft.settings.model !== started.draft.settings.model ||
+        current.draft.settings.mode !== started.draft.settings.mode ||
+        (current.draft.settings.references?.length ?? 0) >= current.referenceMax
+      ) {
+        setError(
+          'The reference was uploaded to Files. Settings changed while it uploaded; review them before adding it.'
+        );
+        return;
+      }
+      current.edit({
+        ...current.draft,
+        settings: { ...current.draft.settings, references: [...(current.draft.settings.references ?? []), reference] },
+      });
+    } catch (cause) {
+      if (mounted.current) setError(cause instanceof Error ? cause.message : 'Upload failed.');
+    } finally {
+      if (mounted.current) setUploading(false);
+    }
+  };
   const references =
     (draft.kind === 'image' && (referenceMax > 0 || s.references?.length)) ||
     (draft.kind === 'video' && (s.mode === 'image_to_video' || s.references?.length));
@@ -310,14 +362,7 @@ export function StudioSettings({
             disabled={disabled || !controller.uploadReference || (s.references?.length ?? 0) >= referenceMax}
             data-testid="studio-upload-reference-btn"
             onClick={() => {
-              setUploading(true);
-              setError(null);
-              void controller.uploadReference!()
-                .then(reference => {
-                  if (reference) update({ references: [...(s.references ?? []), reference] });
-                })
-                .catch(cause => setError(cause instanceof Error ? cause.message : 'Upload failed.'))
-                .finally(() => setUploading(false));
+              void uploadReference();
             }}
           >
             Upload reference to Files

@@ -1,4 +1,5 @@
 import { registerOrchestrationIpc } from './orchestrationIpc';
+import { createStudioDiagnostics } from './studio/StudioDiagnostics';
 import { registerStudio } from './studio/registerStudio';
 import { randomUUID } from 'node:crypto';
 import { copyFile, readFile, writeFile } from 'node:fs/promises';
@@ -641,7 +642,7 @@ export function registerChat(
     if (event.type === 'tool-end' && event.call.media?.length) {
       void studioIntegration
         .indexChatSession(event.sessionId)
-        .catch(error => logger.warn(`STUDIO: could not index chat media: ${String(error)}`));
+        .catch(() => createStudioDiagnostics(logger)('asset-index', { sessionId: event.sessionId }));
     }
   };
 
@@ -660,7 +661,7 @@ export function registerChat(
       if (job.state === 'succeeded' && job.media)
         void studioIntegration
           .indexChatSession(sessionId, true)
-          .catch(error => logger.warn(`STUDIO: could not index video: ${String(error)}`));
+          .catch(() => createStudioDiagnostics(logger)('asset-index', { sessionId }));
     },
     logger,
   });
@@ -838,6 +839,7 @@ export function registerChat(
   });
 
   const studioIntegration = registerStudio({
+    logger,
     ipc: ipcMain,
     directory: userData,
     sessions: store,
@@ -850,7 +852,7 @@ export function registerChat(
     changed: event => send(IPC_CHANNELS.studioChanged, event),
   });
   service.studioDisposed = studioIntegration.dispose;
-  service.studioBeforeDelete = sessionId => studioIntegration.live.assertDeletable(sessionId);
+  service.studioWithSessionDeletion = studioIntegration.withSessionDeletion;
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: unknown) =>
     service.listModels(force === 'local' ? 'local' : force === true)

@@ -241,9 +241,11 @@ export class StudioLiveService {
     const timer = setTimeout(() => controller.abort(), 90_000);
     try {
       await this.deps.plan?.(draft, draft.prompt);
+      const context = await this.context(draft);
+      if (identity.scope !== this.deps.sessions.scopeKey()) throw new Error('Account changed.');
       const prepared = await this.preparing.prepare(
         {
-          context: await this.context(draft),
+          context,
           kind: draft.kind === 'speech' ? 'script' : 'prompt',
           instruction: draft.prompt,
           ...(draft.kind === 'sound-effect' ? { maxCharacters: SOUND_EFFECTS_MAX_INPUT_CHARS } : {}),

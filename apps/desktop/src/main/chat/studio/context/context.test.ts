@@ -322,3 +322,27 @@ describe('draft preparation', () => {
     ).rejects.toThrow('scope changed');
   });
 });
+
+it('checks the captured scope after collection and before dispatching preparation', async () => {
+  let scope = 'first';
+  const collector = new ContextCollector(readers({ scopeKey: () => scope }));
+  const original = collector.collect.bind(collector);
+  vi.spyOn(collector, 'collect').mockImplementationOnce(async (...args) => {
+    const collected = await original(...args);
+    scope = 'second';
+    return collected;
+  });
+  const prepare = vi.fn(async () => 'Prepared');
+  const service = new ContextPreparationService(collector, { prepare });
+  await expect(
+    service.prepare(
+      {
+        context: { sessionId: 'current', selection: { kind: 'current' } },
+        kind: 'prompt',
+        instruction: 'First account instruction',
+      },
+      signal()
+    )
+  ).rejects.toThrow('scope changed');
+  expect(prepare).not.toHaveBeenCalled();
+});

@@ -147,6 +147,45 @@ describe('Studio states', () => {
       })
     );
   });
+  it.each(['settings', 'model'] as const)('preserves newer %s when a reference upload finishes', async change => {
+    let finishUpload: (value: { fileId: string; name: string } | null) => void = () => {};
+    const upload = new Promise<{ fileId: string; name: string } | null>(resolve => {
+      finishUpload = resolve;
+    });
+    const value = controller({
+      uploadReference: vi.fn(() => upload),
+      catalog: {
+        images: [
+          { id: 'gpt-image-2', name: 'GPT Image 2', capabilities: IMAGE_MODEL_CATALOG['gpt-image-2'] },
+          { id: 'flux-pro-1.1', name: 'Flux Pro', capabilities: IMAGE_MODEL_CATALOG['flux-pro-1.1'] },
+        ],
+        videos: [],
+        music: [],
+        speech: [],
+        soundEffects: [],
+        voices: [],
+      },
+    });
+    await mount(value);
+    await click('studio-create-image-tile');
+    await input('studio-prompt-input', 'Before upload');
+    await click('studio-upload-reference-btn');
+    if (change === 'model') await input('studio-setting-model', 'flux-pro-1.1');
+    else await input('studio-setting-count', '3');
+    await input('studio-prompt-input', 'Edited while uploading');
+    await act(async () => finishUpload({ fileId: 'reference', name: 'Uploaded image.png' }));
+    expect((get('studio-prompt-input') as HTMLTextAreaElement).value).toBe('Edited while uploading');
+    expect((get('studio-setting-model') as HTMLSelectElement).value).toBe(
+      change === 'model' ? 'flux-pro-1.1' : 'gpt-image-2'
+    );
+    if (change === 'settings') {
+      expect((get('studio-setting-count') as HTMLSelectElement).value).toBe('3');
+      expect(get('studio-model-settings').textContent).toContain('Uploaded image.png');
+    } else {
+      expect(get('studio-model-settings').textContent).not.toContain('Uploaded image.png');
+      expect(get('studio-model-settings').textContent).toContain('Settings changed');
+    }
+  });
   it('loads remaining history pages and prefills reusable settings without submitting', async () => {
     const loadMore = vi.fn(async () => undefined);
     const value = controller({

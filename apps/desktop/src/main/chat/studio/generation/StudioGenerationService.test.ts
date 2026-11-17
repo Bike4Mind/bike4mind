@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MediaApiClient } from '../../media/MediaApiClient';
+import { AuthenticatedApiClient, SessionChangedError } from '@bike4mind/client-auth';
+import { AxiosError, type AxiosAdapter } from 'axios';
+import { isCredentialAccepted401 } from '../../../auth/unauthorizedBody';
+import { MUSIC_VALIDATION_ERROR_CODES, VIDEO_VALIDATION_ERROR_CODES } from '@bike4mind/common';
+import { createStudioDiagnostics } from '../StudioDiagnostics';
+import { MediaApiClient } from '../../media/MediaApiClient';
 import { MediaStore } from '../../media/MediaStore';
 import { SessionStore } from '../../SessionStore';
 import { sessionScopeKey, type SessionScope } from '../../sessionScope';
@@ -141,6 +146,203 @@ describe('Studio generation', () => {
     await service.recover(session.id);
     expect(client.createStudioImages).toHaveBeenCalledTimes(1);
     expect(client.generateImage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [400, 'invalid_request', 'failed'],
+    [400, 'invalid_count', 'failed'],
+    [400, 'storage_quota_exceeded', 'failed'],
+    [402, 'insufficient_credits', 'failed'],
+    [403, 'FEATURE_DISABLED', 'failed'],
+    [422, 'model_unavailable', 'failed'],
+    [422, 'unsupported_by_model', 'failed'],
+    [422, 'input_image_not_found', 'failed'],
+    [422, 'unsupported_input_image', 'failed'],
+    [422, 'idempotency_key_reused', 'unknown'],
+    [422, 'unexpected_refusal', 'unknown'],
+    [402, '', 'unknown'],
+    [403, '', 'unknown'],
+    [500, 'insufficient_credits', 'unknown'],
+  ] as const)('settles image HTTP %i %s only according to its admission contract', async (status, code, expected) => {
+    const session = await sessions.create();
+    const api = new AuthenticatedApiClient({
+      baseUrl: account.environmentUrl,
+      tokenStore: {
+        getAuthTokens: async () => null,
+        setAuthTokens: async () => {},
+        clearAuthTokens: async () => {},
+        isAuthenticated: async () => false,
+      },
+      oauthClient: { refreshToken: vi.fn() },
+      logger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      reauthMessages: { refreshFailed: 'refresh', stillUnauthorized: 'unauthorized' },
+    });
+    const transport = vi.fn<AxiosAdapter>(async config => {
+      throw new AxiosError('HTTP refusal', 'ERR_BAD_RESPONSE', config, undefined, {
+        status,
+        statusText: String(status),
+        headers: {},
+        config,
+        data: {
+          ...(code ? (code === 'FEATURE_DISABLED' ? { code } : { error: code }) : {}),
+          message: 'Original server explanation',
+        },
+      });
+    });
+    api.getAxiosInstance().defaults.adapter = transport;
+    deps.connection = () => ({ scope: sessionScopeKey(account), client: new MediaApiClient(api), cdnUrl: '' });
+    const job = await service.submit(session.id, {
+      kind: 'image',
+      body: { mode: 'generate', model: 'gpt-image-2', prompt: 'A garden' },
+    });
+    expect(job.state).toBe(expected);
+    expect(job.error).toContain('Original server explanation');
+    if (code) expect(job.errorCode).toBe(code);
+    await service.recover(session.id);
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect((await workspaces.getJob(session.id, job.id))?.state).toBe(expected);
+  });
+
+  it.each([
+    ...VIDEO_VALIDATION_ERROR_CODES.map(code => ['video', 422, code, 'failed'] as const),
+    ...MUSIC_VALIDATION_ERROR_CODES.map(code => ['music', 422, code, 'failed'] as const),
+    ['video', 422, 'insufficient_credits', 'failed'],
+    ['music', 422, 'insufficient_credits', 'failed'],
+    ['video', 422, 'idempotency_key_reused', 'unknown'],
+    ['music', 422, 'idempotency_key_reused', 'unknown'],
+    ['speech', 422, 'insufficient_credits', 'failed'],
+    ['speech', 401, 'provider_not_configured', 'failed'],
+    ['speech', 413, '', 'unknown'],
+    ['sound-effect', 413, '', 'unknown'],
+    ['sound-effect', 503, '', 'unknown'],
+    ['music', 422, 'unexpected_refusal', 'unknown'],
+  ] as const)('preserves the %s HTTP %i %s admission boundary', async (kind, status, code, expected) => {
+    const session = await sessions.create();
+    const api = new AuthenticatedApiClient({
+      baseUrl: account.environmentUrl,
+      tokenStore: {
+        getAuthTokens: async () => null,
+        setAuthTokens: async () => {},
+        clearAuthTokens: async () => {},
+        isAuthenticated: async () => false,
+      },
+      oauthClient: { refreshToken: vi.fn() },
+      logger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      isPassThrough401: isCredentialAccepted401,
+      reauthMessages: { refreshFailed: 'refresh', stillUnauthorized: 'unauthorized' },
+    });
+    const transport = vi.fn<AxiosAdapter>(async config => {
+      throw new AxiosError('Refusal', 'ERR_BAD_RESPONSE', config, undefined, {
+        status,
+        statusText: String(status),
+        headers: {},
+        config,
+        data: { ...(code ? { errorCode: code } : {}), message: 'Original server explanation' },
+      });
+    });
+    api.getAxiosInstance().defaults.adapter = transport;
+    deps.connection = () => ({ scope: sessionScopeKey(account), client: new MediaApiClient(api), cdnUrl: '' });
+    const request = requests.find(request => request.kind === kind)!;
+    const job = await service.submit(session.id, request);
+    expect(job.state).toBe(expected);
+    if (code) expect(job.errorCode).toBe(code);
+    if (status !== 413) expect(job.error).toContain('Original server explanation');
+    await service.recover(session.id);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([true, false])('keeps account-change failures definitive only before dispatch (%s)', async beforeRequest => {
+    const session = await sessions.create();
+    client.createMusicGeneration.mockRejectedValueOnce(new SessionChangedError(beforeRequest));
+    const job = await service.submit(session.id, music);
+    expect(job.state).toBe(beforeRequest ? 'failed' : 'unknown');
+    await service.recover(session.id);
+    expect(client.createMusicGeneration).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips malformed or foreign chat URLs while importing the next valid asset', async () => {
+    const session = await sessions.create();
+    const logger = { warn: vi.fn() };
+    deps.diagnostic = createStudioDiagnostics(logger);
+    const stored = await media.save(session.id, Buffer.from('valid bytes'), 'image/png');
+    const asset = {
+      id: 'valid',
+      kind: 'image' as const,
+      title: 'Image',
+      originatingSessionId: session.id,
+      createdAt: 'now',
+      updatedAt: 'now',
+      url: stored.url,
+    };
+    for (const url of [
+      'b4m-media://media/%ZZ/image.png',
+      'https://foreign.test/private-query',
+      `b4m-media://media/${session.id}/00000000-0000-0000-0000-000000000000.png`,
+    ]) {
+      await service.importChatAsset(session.id, { ...asset, id: 'bad', url });
+    }
+    await service.importChatAsset(session.id, asset);
+    expect(await workspaces.getAsset(session.id, 'bad')).toBeNull();
+    expect(await workspaces.getAsset(session.id, 'valid')).not.toBeNull();
+    expect(logger.warn).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain(session.id);
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('private-query');
+  });
+
+  it('continues recovery after one job fails with bounded diagnostics', async () => {
+    const session = await sessions.create();
+    const logger = { warn: vi.fn() };
+    deps.diagnostic = createStudioDiagnostics(logger);
+    await service.submit(session.id, image);
+    await service.submit(session.id, image);
+    client.getQuest.mockRejectedValueOnce(new Error('TOKEN private prompt https://signed.test/private-query'));
+    const recovered = await service.recover(session.id);
+    expect(recovered.map(job => job.state).sort()).toEqual(['completed', 'queued']);
+    expect(client.generateImage).toHaveBeenCalledTimes(2);
+    const logged = JSON.stringify(logger.warn.mock.calls);
+    expect(logged).toContain('job-recovery');
+    for (const secret of ['TOKEN', 'private prompt', 'signed.test', session.id]) expect(logged).not.toContain(secret);
+  });
+
+  it('retains an ambiguous intent after an in-flight account switch without resubmitting', async () => {
+    const session = await sessions.create();
+    const entered = Promise.withResolvers<void>();
+    const receipt = Promise.withResolvers<{ id: string }>();
+    client.createMusicGeneration.mockImplementationOnce(() => {
+      entered.resolve();
+      return receipt.promise;
+    });
+    const submitting = service.submit(session.id, music).catch((error: unknown) => error);
+    await entered.promise;
+    scope = { ...account, accountId: 'other' };
+    receipt.resolve({ id: 'accepted-for-first-account' });
+    expect(await submitting).toBeInstanceOf(Error);
+    scope = account;
+    const persisted = (await workspaces.get(session.id))!.jobs;
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]).toMatchObject({ state: 'submitting' });
+    expect(persisted[0].providerJobId).toBeUndefined();
+    expect((await service.recover(session.id))[0].state).toBe('unknown');
+    expect(client.createMusicGeneration).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps valid import failures retryable', async () => {
+    const session = await sessions.create();
+    const stored = await media.save(session.id, Buffer.from('valid bytes'), 'image/png');
+    const asset = {
+      id: 'retry',
+      kind: 'image' as const,
+      title: 'Image',
+      originatingSessionId: session.id,
+      createdAt: 'now',
+      updatedAt: 'now',
+      url: stored.url,
+    };
+    vi.spyOn(media, 'saveStream').mockRejectedValueOnce(new Error('disk unavailable'));
+    await expect(service.importChatAsset(session.id, asset)).rejects.toThrow('disk unavailable');
+    expect(await workspaces.getJob(session.id, 'retry')).toBeNull();
+    await service.importChatAsset(session.id, asset);
+    expect(await workspaces.getAsset(session.id, 'retry')).not.toBeNull();
   });
 
   it('copies chat media into family storage and never reimports deleted assets', async () => {

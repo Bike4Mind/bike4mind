@@ -1260,9 +1260,11 @@ export class SessionStore implements SessionWritesStore {
    * a worktree can hold uncommitted work, and deleting a chat must never be a way to lose code.
    * Removing one stays a git operation the user performs themselves (`rmworktree <branch>`).
    */
-  async delete(id: string): Promise<void> {
+  async delete(id: string, expectedScope = this.scopeKey()): Promise<void> {
     await this.serialize(id, async () => {
+      if (this.scopeKey() !== expectedScope) throw new Error('Account changed.');
       const directory = await this.directoryFor(false);
+      if (this.scopeKey() !== expectedScope) throw new Error('Account changed.');
       if (!directory) return;
       await rm(this.filePath(directory, id), { force: true });
     });

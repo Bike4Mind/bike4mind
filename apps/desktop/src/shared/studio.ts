@@ -92,6 +92,7 @@ export const studioJobSchema = z.object({
   outputErrors: z.array(z.string()).optional(),
   assetIds: z.array(studioIdSchema),
   error: z.string().optional(),
+  errorCode: z.string().max(100).optional(),
   recoveryExpired: z.boolean().optional(),
   provenance: studioProvenanceSchema.optional(),
   creation: studioCreationSchema.optional(),

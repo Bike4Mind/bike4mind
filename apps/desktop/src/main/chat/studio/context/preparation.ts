@@ -46,6 +46,7 @@ export class ContextPreparationService {
     }
     const context = await this.collector.collect(request.context, signal);
     signal.throwIfAborted();
+    if (this.collector.scopeKey() !== scope) throw new Error('Context account scope changed');
     const maxCharacters = request.maxCharacters;
     if (
       maxCharacters !== undefined &&

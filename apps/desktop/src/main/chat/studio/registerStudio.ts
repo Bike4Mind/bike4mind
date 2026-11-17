@@ -7,6 +7,9 @@ import { z } from 'zod';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { studioIdSchema } from '@shared/studio';
 import { studioAssetActionSchema, type StudioCatalog } from '@shared/studioIpc';
+import type { AuthLogger } from '@bike4mind/client-auth';
+import { createStudioSessionDeletion } from './StudioSessionDeletion';
+import { createStudioDiagnostics } from './StudioDiagnostics';
 import type { AuthService } from '../../auth/AuthService';
 import type { SessionStore } from '../SessionStore';
 import type { ChatService } from '../ChatService';
@@ -24,6 +27,7 @@ import { StudioJobScheduler } from './StudioJobScheduler';
 import { StudioGenerationService, studioGenerationRequestSchema } from './generation/StudioGenerationService';
 
 export function registerStudio(deps: {
+  logger: Pick<AuthLogger, 'warn'>;
   ipc: IpcMain;
   directory: string;
   sessions: SessionStore;
@@ -37,33 +41,28 @@ export function registerStudio(deps: {
 }) {
   const { sessions, auth, ipc } = deps;
   let disposed = false;
+  const diagnostic = createStudioDiagnostics(deps.logger);
   const workspaces = new StudioWorkspaceStore(join(deps.directory, 'studio'), sessions);
   const generation = new StudioGenerationService({
     workspaces,
+    diagnostic,
     media: deps.media,
     connection: () => {
       if (disposed) return null;
       const scope = sessions.scopeKey();
-      const api = auth.getApiClient();
+      const api = auth.getSessionBoundApiClient();
       return scope && api ? { scope, client: new MediaApiClient(api), cdnUrl: '' } : null;
     },
-    authorize: async ({ sessionId, request }) => {
-      // The generation service parses a copy; bind the single authorization to its exact body.
-      const key = JSON.stringify({ scope: sessions.scopeKey(), sessionId, request });
-      const authorize = authorizations.get(key);
-      authorizations.delete(key);
-      return authorize ? authorize() : false;
-    },
+    authorize: async () => false,
   });
-  const authorizations = new Map<string, () => Promise<boolean>>();
   let availability: { scope: string | null; expires: number; catalog: StudioCatalog } | undefined;
   const catalog = async (): Promise<StudioCatalog> => {
     const scope = sessions.scopeKey();
-    const api = auth.getApiClient();
+    const api = auth.getSessionBoundApiClient();
     if (!api) return { images: [], videos: [], music: [], speech: [], soundEffects: [], voices: [] };
     if (availability?.scope === scope && availability.expires > Date.now()) return availability.catalog;
     const value = await readStudioCatalog(api, deps.models);
-    if (scope !== sessions.scopeKey()) throw new Error('Account changed.');
+    if (scope !== sessions.scopeKey() || api !== auth.getSessionBoundApiClient()) throw new Error('Account changed.');
     availability = { scope, expires: Date.now() + 60_000, catalog: value };
     return value;
   };
@@ -72,8 +71,8 @@ export function registerStudio(deps: {
     workspaces,
     attachments: deps.attachments,
     roots: id => deps.service.studioContextRoots(id),
-    prepare: (...args) => deps.service.prepareStudioText(...args),
-    available: () => !!auth.getApiClient(),
+    prepare: (...args) => deps.service.prepareStudioText(...args, auth.getSessionBoundApiClient()),
+    available: () => !!auth.getSessionBoundApiClient(),
     catalog,
     plan: async (draft, prompt) => planStudioCreation(draft, prompt, await catalog()),
     unavailableKinds: async () => {
@@ -88,7 +87,7 @@ export function registerStudio(deps: {
     },
     changed: deps.changed,
     generation: {
-      recover: id => (auth.getApiClient() ? generation.recover(id) : Promise.resolve([])),
+      recover: id => (auth.getSessionBoundApiClient() ? generation.recover(id) : Promise.resolve([])),
       submit: async (sessionId, draft, prompt, provenance, authorize, planned) => {
         const scope = sessions.scopeKey();
         if (!planned) throw new Error('Prepare and review these settings first.');
@@ -100,7 +99,7 @@ export function registerStudio(deps: {
           JSON.stringify(studioGenerationRequestSchema.parse(checked))
         )
           throw new Error('Model capabilities changed. Review again.');
-        const api = auth.getApiClient();
+        const api = auth.getSessionBoundApiClient();
         if (!api) throw new Error('Sign in first.');
         for (const reference of draft.settings.references ?? []) {
           const file = await new MediaApiClient(api).getFile(reference.fileId);
@@ -111,20 +110,26 @@ export function registerStudio(deps: {
           if (scope !== sessions.scopeKey()) throw new Error('Account changed.');
         }
         if (scope !== sessions.scopeKey()) throw new Error('Account changed.');
-        const key = JSON.stringify({ scope, sessionId, request });
-        authorizations.set(key, authorize);
-        try {
-          return await generation.submit(sessionId, request);
-        } finally {
-          authorizations.delete(key);
-        }
+        const expected = JSON.stringify(request);
+        let authorizationUsed = false;
+        return generation.submit(sessionId, request, async authorization => {
+          if (authorizationUsed) return false;
+          authorizationUsed = true;
+          if (
+            scope !== sessions.scopeKey() ||
+            authorization.sessionId !== sessionId ||
+            JSON.stringify(authorization.request) !== expected
+          )
+            return false;
+          return authorize();
+        });
       },
     },
   });
   const indexed = new Map<string, string>();
   const indexedFamilies = new Set<string>();
   async function indexChatSession(sessionId: string, force = false) {
-    if (!auth.getApiClient()) return;
+    if (!auth.getSessionBoundApiClient()) return;
     const scope = sessions.scopeKey();
     const session = await sessions.get(sessionId);
     if (!session || scope !== sessions.scopeKey()) return;
@@ -221,7 +226,7 @@ export function registerStudio(deps: {
   ipc.handle(IPC_CHANNELS.studioUploadReference, async (_event, raw: unknown) => {
     const sessionId = studioIdSchema.parse(raw);
     const scope = sessions.scopeKey();
-    const api = auth.getApiClient();
+    const api = auth.getSessionBoundApiClient();
     if (!api || !(await sessions.get(sessionId))) throw new Error('Sign in and open a session first.');
     const picked = await dialog.showOpenDialog({
       title: 'Upload reference image to Files',
@@ -312,7 +317,6 @@ export function registerStudio(deps: {
     if (lastScope !== sessions.scopeKey()) {
       lastScope = sessions.scopeKey();
       live.invalidate();
-      authorizations.clear();
       indexed.clear();
       indexedFamilies.clear();
       availability = undefined;
@@ -321,7 +325,8 @@ export function registerStudio(deps: {
   let lastScope = sessions.scopeKey();
   timer.unref();
   const scheduler = new StudioJobScheduler({
-    scope: () => (auth.getApiClient() ? sessions.scopeKey() : null),
+    diagnostic,
+    scope: () => (auth.getSessionBoundApiClient() ? sessions.scopeKey() : null),
     sessions: async () => {
       const scope = sessions.scopeKey();
       const listed = await sessions.list();
@@ -329,13 +334,30 @@ export function registerStudio(deps: {
       if (Date.now() >= nextCleanup) {
         nextCleanup = Date.now() + 60 * 60_000;
         const active = new Set<string>();
+        let complete = true;
         for (const session of listed) {
-          const identity = session.studioWorkspaceId
-            ? { workspaceId: session.studioWorkspaceId }
-            : await sessions.resolveStudioWorkspace(session.id, scope);
-          if (identity) active.add(identity.workspaceId);
+          try {
+            const identity = session.studioWorkspaceId
+              ? { workspaceId: session.studioWorkspaceId }
+              : await sessions.resolveStudioWorkspace(session.id, scope);
+            if (scope !== sessions.scopeKey()) return [];
+            if (identity) active.add(identity.workspaceId);
+          } catch {
+            if (scope !== sessions.scopeKey()) return [];
+            complete = false;
+            diagnostic('scheduler-workspace', { sessionId: session.id });
+          }
         }
-        if (scope === sessions.scopeKey()) await generation.pruneOrphans(active);
+        if (complete && scope === sessions.scopeKey()) {
+          try {
+            await generation.pruneOrphans(active);
+          } catch {
+            if (scope !== sessions.scopeKey()) return [];
+            diagnostic('workspace-cleanup', {});
+            complete = false;
+          }
+        }
+        if (!complete) nextCleanup = Date.now() + 60_000;
       }
       return listed;
     },
@@ -350,10 +372,15 @@ export function registerStudio(deps: {
     scheduler.dispose();
     clearInterval(timer);
     live.invalidate();
-    authorizations.clear();
     indexed.clear();
     indexedFamilies.clear();
   };
   app.once('before-quit', dispose);
-  return { live, generation, dispose, indexChatSession };
+  return {
+    live,
+    generation,
+    dispose,
+    indexChatSession,
+    withSessionDeletion: createStudioSessionDeletion(sessions, live, generation),
+  };
 }

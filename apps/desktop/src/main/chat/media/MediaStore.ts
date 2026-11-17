@@ -326,15 +326,13 @@ export class MediaStore {
  * returns null for anything that is not a well-formed URL of this scheme.
  */
 export function parseMediaUrl(url: string): { sessionId: string; name: string } | null {
-  let parsed: URL;
   try {
-    parsed = new URL(url);
+    const parsed = new URL(url);
+    if (parsed.protocol !== `${MEDIA_SCHEME}:` || parsed.hostname !== MEDIA_HOST) return null;
+    const segments = parsed.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+    if (segments.length !== 2) return null;
+    return { sessionId: segments[0], name: segments[1] };
   } catch {
     return null;
   }
-  if (parsed.protocol !== `${MEDIA_SCHEME}:` || parsed.hostname !== MEDIA_HOST) return null;
-
-  const segments = parsed.pathname.split('/').filter(Boolean).map(decodeURIComponent);
-  if (segments.length !== 2) return null;
-  return { sessionId: segments[0], name: segments[1] };
 }

@@ -1,7 +1,7 @@
 import type { Readable } from 'node:stream';
 import { z } from 'zod';
 import axios, { isAxiosError, type AxiosError } from 'axios';
-import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
+import { SessionChangedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
 import {
   CreateFileUploadResponseSchema,
   FileResponseSchema,
@@ -42,6 +42,8 @@ export type StudioRemoteImageJob = z.infer<typeof studioImageJobSchema>;
  * provider standing in for the one that was asked for. See ChatToolNotice.
  */
 export class MediaToolError extends Error {
+  code?: string;
+  requestNotStarted?: boolean;
   /** The HTTP status behind it, when there was one; the video poller backs off differently per status. */
   status?: number;
   /** How long the server asked this caller to wait, in ms, when a 429 carried a Retry-After. */
@@ -131,14 +133,12 @@ export class MediaApiClient {
 
   async createStudioImages(request: ImageJobRequest, count: number, key: string) {
     const body = { request: ImageJobRequestSchema.parse(request), count: z.number().int().min(1).max(4).parse(count) };
-    return z
-      .object({ groupId: z.string(), jobs: z.array(studioImageJobSchema).min(1).max(4) })
-      .parse(
-        await this.api.post<unknown>('/api/studio/image-jobs', body, {
-          timeout: TIMEOUT_MS.submit,
-          headers: { 'Idempotency-Key': key },
-        })
-      );
+    return z.object({ groupId: z.string(), jobs: z.array(studioImageJobSchema).min(1).max(4) }).parse(
+      await this.api.post<unknown>('/api/studio/image-jobs', body, {
+        timeout: TIMEOUT_MS.submit,
+        headers: { 'Idempotency-Key': key },
+      })
+    );
   }
 
   async listStudioImages(cursor?: string) {
@@ -484,18 +484,28 @@ export function toMediaError(error: unknown, action: string): MediaToolError {
   if (isAxiosError(error)) {
     const mapped = fromAxiosError(error, action);
     mapped.status = error.response?.status;
+    const body = z
+      .object({
+        code: z.string().max(100).optional().catch(undefined),
+        errorCode: z.string().max(100).optional().catch(undefined),
+        error: z.string().max(100).optional().catch(undefined),
+      })
+      .safeParse(error.response?.data);
+    if (body.success) mapped.code = body.data.code ?? body.data.errorCode ?? body.data.error;
     const retryAfterMs = parseRetryAfterMs(error.response?.headers['retry-after']);
     if (retryAfterMs !== undefined) mapped.retryAfterMs = retryAfterMs;
     return mapped;
   }
 
-  return new MediaToolError(`${action} failed: ${error instanceof Error ? error.message : String(error)}`);
+  const mapped = new MediaToolError(`${action} failed: ${error instanceof Error ? error.message : String(error)}`);
+  if (error instanceof SessionChangedError) mapped.requestNotStarted = error.beforeRequest;
+  return mapped;
 }
 
 function fromAxiosError(error: AxiosError, action: string): MediaToolError {
   const status = error.response?.status;
   const body = (error.response?.data ?? {}) as ApiErrorBody;
-  const detail = body.error || body.message;
+  const detail = body.message || body.error;
 
   if (body.errorCode === 'insufficient_credits') {
     return new MediaToolError(detail || 'There are not enough credits on this account to generate that.', {

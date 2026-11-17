@@ -1,3 +1,5 @@
+import type { StudioDiagnosticSink } from './StudioDiagnostics';
+
 export class StudioJobScheduler {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private stopped = false;
@@ -5,6 +7,7 @@ export class StudioJobScheduler {
   private readonly due = new Map<string, { at: number; delay: number }>();
   constructor(
     private readonly deps: {
+      diagnostic?: StudioDiagnosticSink;
       scope(): string | null;
       sessions(): Promise<readonly { id: string; studioWorkspaceId?: string }[]>;
       workspace(sessionId: string, scope: string): Promise<{ workspaceId: string } | null>;
@@ -39,27 +42,36 @@ export class StudioJobScheduler {
       const visited = new Set<string>();
       for (const session of await this.deps.sessions()) {
         if (this.stopped || scope !== this.deps.scope()) return;
-        const workspace = session.studioWorkspaceId
-          ? { workspaceId: session.studioWorkspaceId }
-          : await this.deps.workspace(session.id, scope);
-        if (!workspace || visited.has(workspace.workspaceId)) continue;
-        visited.add(workspace.workspaceId);
-        const previous = this.due.get(workspace.workspaceId);
-        if (previous && previous.at > Date.now()) continue;
-        let delay = 5000;
+        let workspaceId: string | undefined;
+        let phase: 'scheduler-workspace' | 'scheduler-recovery' = 'scheduler-workspace';
         try {
+          const workspace = session.studioWorkspaceId
+            ? { workspaceId: session.studioWorkspaceId }
+            : await this.deps.workspace(session.id, scope);
+          if (this.stopped || scope !== this.deps.scope()) return;
+          if (!workspace || visited.has(workspace.workspaceId)) continue;
+          workspaceId = workspace.workspaceId;
+          visited.add(workspaceId);
+          const previous = this.due.get(workspaceId);
+          if (previous && previous.at > Date.now()) continue;
+          phase = 'scheduler-recovery';
           await this.deps.recover(session.id);
-          if (!this.stopped && scope === this.deps.scope()) this.deps.changed(session.id, workspace.workspaceId);
-          delay = Math.min((previous?.delay ?? 2500) * 2, 60_000);
+          if (this.stopped || scope !== this.deps.scope()) return;
+          this.deps.changed(session.id, workspaceId);
+          const delay = Math.min((previous?.delay ?? 2500) * 2, 60_000);
+          this.due.set(workspaceId, { at: Date.now() + delay, delay });
         } catch {
-          delay = Math.min((previous?.delay ?? 5000) * 2, 300_000);
+          if (this.stopped || scope !== this.deps.scope()) return;
+          this.deps.diagnostic?.(phase, { sessionId: session.id, ...(workspaceId ? { workspaceId } : {}) });
+          if (workspaceId) {
+            const delay = Math.min((this.due.get(workspaceId)?.delay ?? 5000) * 2, 300_000);
+            this.due.set(workspaceId, { at: Date.now() + delay, delay });
+          }
         }
-        if (scope !== this.deps.scope()) return;
-        this.due.set(workspace.workspaceId, { at: Date.now() + delay, delay });
       }
       for (const id of this.due.keys()) if (!visited.has(id)) this.due.delete(id);
     } catch {
-      // A damaged workspace must not stop recovery of the remaining runtime.
+      if (!this.stopped && scope === this.deps.scope()) this.deps.diagnostic?.('scheduler-enumeration', {});
     } finally {
       if (!this.stopped) this.schedule(5000);
     }

@@ -1,3 +1,4 @@
+import { studioSubmissionFailure } from './StudioSubmissionFailure';
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { z } from 'zod';
@@ -14,6 +15,7 @@ import { titleFromStudioPrompt } from '@shared/studioAssetTitle';
 import { isTerminalQuest, type MediaApiClient } from '../../media/MediaApiClient';
 import { MediaStore, parseMediaUrl } from '../../media/MediaStore';
 import { resolveImageUrls } from '../../media/imageGeneration';
+import type { StudioDiagnosticSink } from '../StudioDiagnostics';
 import type { StudioWorkspaceStore } from '../StudioWorkspaceStore';
 
 export const studioGenerationRequestSchema = z.discriminatedUnion('kind', [
@@ -47,6 +49,7 @@ export interface StudioGenerationConnection {
 }
 
 export interface StudioGenerationDeps {
+  diagnostic?: StudioDiagnosticSink;
   workspaces: StudioWorkspaceStore;
   media: MediaStore;
   connection(): StudioGenerationConnection | null;
@@ -76,14 +79,20 @@ export class StudioGenerationService {
 
   async importChatAsset(sessionId: string, asset: StudioAsset): Promise<void> {
     const connection = this.requireConnection();
-    const workspace = await this.requireWorkspace(sessionId, connection);
     const source = parseMediaUrl(asset.url);
-    if (!source || source.sessionId !== asset.originatingSessionId) throw new Error('Invalid chat asset location.');
-    await this.lock(`${connection.scope}:${workspace.workspaceId}`, async () => {
+    if (!source || source.sessionId !== asset.originatingSessionId) {
+      this.deps.diagnostic?.('asset-invalid', { sessionId });
+      return;
+    }
+    const workspace = await this.requireWorkspace(sessionId, connection);
+    await this.withWorkspaceLock(connection.scope, workspace.workspaceId, async () => {
       if (await this.deps.workspaces.getJob(sessionId, asset.id)) return;
       const file = await this.deps.media.locate(source.sessionId, source.name);
       this.assertConnection(connection);
-      if (!file) return;
+      if (!file) {
+        this.deps.diagnostic?.('asset-invalid', { sessionId });
+        return;
+      }
       const stored = await this.deps.media.saveStream(
         bucketFor(connection.scope, workspace.workspaceId, asset.id),
         createReadStream(file.path),
@@ -116,7 +125,11 @@ export class StudioGenerationService {
     });
   }
 
-  async submit(sessionId: string, input: StudioGenerationRequest): Promise<StudioJob> {
+  async submit(
+    sessionId: string,
+    input: StudioGenerationRequest,
+    authorize: StudioGenerationDeps['authorize'] = this.deps.authorize
+  ): Promise<StudioJob> {
     const request = {
       ...studioGenerationRequestSchema.parse(input),
       ...(input.title !== undefined ? { title: z.string().max(500).parse(input.title) } : {}),
@@ -137,8 +150,8 @@ export class StudioGenerationService {
       provenance: request.provenance,
       creation: creationFromRequest(request),
     };
-    return this.lock(`${connection.scope}:${workspace.workspaceId}`, async () => {
-      if (!(await this.deps.authorize({ sessionId, request: structuredClone(request) }))) {
+    return this.withWorkspaceLock(connection.scope, workspace.workspaceId, async () => {
+      if (!(await authorize({ sessionId, request: structuredClone(request) }))) {
         throw new Error('Studio generation was not approved.');
       }
       this.assertConnection(connection);
@@ -206,8 +219,7 @@ export class StudioGenerationService {
         // A timeout can happen after billing. Never treat it as permission to submit again.
         job = {
           ...job,
-          state: 'unknown',
-          error: error instanceof Error ? error.message : 'Generation outcome unknown.',
+          ...studioSubmissionFailure(error, request),
         };
         await this.saveJob(sessionId, job, connection);
         return job;
@@ -218,7 +230,7 @@ export class StudioGenerationService {
   async reconcile(sessionId: string, jobId: string): Promise<StudioJob> {
     const connection = this.requireConnection();
     const workspace = await this.requireWorkspace(sessionId, connection);
-    return this.lock(`${connection.scope}:${workspace.workspaceId}`, async () => {
+    return this.withWorkspaceLock(connection.scope, workspace.workspaceId, async () => {
       let job = await this.findJob(sessionId, jobId, connection);
       if (terminal.has(job.state)) return job;
       if (job.imageBatch) return this.reconcileImages(sessionId, workspace.workspaceId, job, connection);
@@ -388,6 +400,7 @@ export class StudioGenerationService {
         recovered.push(await this.reconcile(sessionId, job.id));
       } catch {
         this.assertConnection(connection);
+        this.deps.diagnostic?.('job-recovery', { sessionId, jobId: job.id });
         recovered.push(job);
       }
     }
@@ -397,7 +410,7 @@ export class StudioGenerationService {
   async cancel(sessionId: string, jobId: string): Promise<StudioJob> {
     const connection = this.requireConnection();
     const workspace = await this.requireWorkspace(sessionId, connection);
-    return this.lock(`${connection.scope}:${workspace.workspaceId}`, async () => {
+    return this.withWorkspaceLock(connection.scope, workspace.workspaceId, async () => {
       const job = await this.findJob(sessionId, jobId, connection);
       if (terminal.has(job.state)) return job;
       if (!job.providerJobId || (job.kind !== 'video' && job.kind !== 'music')) {
@@ -416,7 +429,7 @@ export class StudioGenerationService {
   async renameAsset(sessionId: string, assetId: string, title: string): Promise<void> {
     const connection = this.requireConnection();
     const workspace = await this.requireWorkspace(sessionId, connection);
-    await this.lock(`${connection.scope}:${workspace.workspaceId}`, async () => {
+    await this.withWorkspaceLock(connection.scope, workspace.workspaceId, async () => {
       const asset = await this.findAsset(sessionId, assetId, connection);
       if (!asset) throw new Error('Studio asset not found.');
       if (
@@ -450,7 +463,7 @@ export class StudioGenerationService {
   async removeAsset(sessionId: string, assetId: string): Promise<void> {
     const connection = this.requireConnection();
     const workspace = await this.requireWorkspace(sessionId, connection);
-    await this.lock(`${connection.scope}:${workspace.workspaceId}`, async () => {
+    await this.withWorkspaceLock(connection.scope, workspace.workspaceId, async () => {
       const asset = await this.findAsset(sessionId, assetId, connection);
       if (!asset) return;
       if (asset.jobId && !terminal.has((await this.findJob(sessionId, asset.jobId, connection)).state)) {
@@ -570,6 +583,10 @@ export class StudioGenerationService {
     this.assertConnection(connection);
     if (!workspace) throw new Error('Studio workspace unavailable.');
     return workspace;
+  }
+
+  withWorkspaceLock<T>(scope: string, workspaceId: string, operation: () => Promise<T>): Promise<T> {
+    return this.lock(JSON.stringify([scope, workspaceId]), operation);
   }
 
   private async lock<T>(key: string, operation: () => Promise<T>): Promise<T> {
