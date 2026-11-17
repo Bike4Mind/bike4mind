@@ -61,7 +61,7 @@ const openMenu = () => act(async () => get('chat-panes-menu-btn').click());
 
 describe('PanesMenu', () => {
   it('lists the panes in fixed order with the terminal shortcut, and marks the open ones', async () => {
-    await mount([pane('model'), pane('browser', { open: true }), pane('terminal'), pane('simulator')]);
+    await mount([pane('studio'), pane('model'), pane('browser', { open: true }), pane('terminal'), pane('simulator')]);
     await openMenu();
     const items = [...get('chat-panes-menu').querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')];
     expect(items.map(item => item.dataset.testid)).toEqual([
@@ -69,8 +69,9 @@ describe('PanesMenu', () => {
       'chat-panes-menu-browser-item',
       'chat-panes-menu-simulator-item',
       'chat-panes-menu-model-item',
+      'chat-panes-menu-studio-item',
     ]);
-    expect(items.map(item => item.getAttribute('aria-checked'))).toEqual(['false', 'true', 'false', 'false']);
+    expect(items.map(item => item.getAttribute('aria-checked'))).toEqual(['false', 'true', 'false', 'false', 'false']);
     expect(items[0].textContent).toContain('Ctrl+`');
     // Only the terminal has a bound shortcut.
     expect(items.slice(1).some(item => item.textContent?.includes('Ctrl'))).toBe(false);
