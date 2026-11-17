@@ -54,6 +54,7 @@ import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLe
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
+import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
 import { organizationRetentionDeadLetter } from './organizationRetention';
 import { businessMetricAlertsDLQ } from './businessMetricAlerts';
 import { dlqAlarmHandlerDlq } from './dlqAlarmHandlerDeadLetter';
@@ -289,6 +290,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
         'subscription-reconciliation': subscriptionReconciliationDeadLetter.queue.url,
       }),
       ...(accountDeletionSweepDeadLetter && { 'account-deletion-sweep': accountDeletionSweepDeadLetter.queue.url }),
+      ...(dlqTriageSweepDeadLetter && { 'dlq-triage-sweep': dlqTriageSweepDeadLetter.queue.url }),
       ...(organizationRetentionDeadLetter && { 'organization-retention': organizationRetentionDeadLetter.queue.url }),
       ...(businessMetricAlertsDLQ && { 'business-metric-alerts': businessMetricAlertsDLQ.url }),
     }),

@@ -15,7 +15,6 @@ import {
 import MFAModal from '@client/app/components/common/MFAModal';
 import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
-import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import PasskeysSection from './PasskeysSection';
 import TrustedDevicesSection from './TrustedDevicesSection';
@@ -28,11 +27,9 @@ import SettingsActionButton from './SettingsActionButton';
 const MfaCard = () => {
   const { refreshUser } = useUser();
   const queryClient = useQueryClient();
-  // MFA enforcement is a settings-map value; until the authenticated fetch lands we do not know
-  // whether the user may disable, so Disable stays hidden (and stays hidden if that fetch fails)
-  // rather than appearing and vanishing, or showing for an enforced org.
-  const { settings: adminSettings, authedSettingsLoaded } = useAdminSettings();
-  const mfaEnforced = adminSettings?.enforceMFA === 'true';
+  // The status answers from the server's own enforceMFA, so a stale or missing client settings
+  // copy cannot offer a Disable the server refuses. `canDisable` mirrors the disable route's check
+  // (userCanDisableMFA): an exempt persona under enforcement is not required yet still cannot disable.
   const { data: mfaStatus } = useMFAStatus();
   const setupMFA = useSetupMFA();
   const verifyMFASetup = useVerifyMFASetup();
@@ -173,7 +170,7 @@ const MfaCard = () => {
                 ) : (
                   <span style={{ color: 'orange', fontWeight: 'bold' }}>Disabled</span>
                 )}
-                {mfaEnforced && mfaStatus?.enabled && (
+                {mfaStatus?.required && mfaStatus.enabled && (
                   <span style={{ color: 'orange', fontWeight: 'normal', marginLeft: '8px' }}>
                     (Required by administrator)
                   </span>
@@ -207,7 +204,7 @@ const MfaCard = () => {
                   Enable
                 </SettingsActionButton>
               )}
-              {mfaStatus?.enabled && authedSettingsLoaded && !mfaEnforced && (
+              {mfaStatus?.enabled && mfaStatus.canDisable && (
                 <SettingsActionButton
                   color="danger"
                   variant="outlined"

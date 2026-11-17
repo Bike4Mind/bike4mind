@@ -33,6 +33,14 @@ export const studioCompletionTitle = (prompt: string | undefined): string => {
 // These finish while the requester waits on the synchronous route, already looking at the result.
 const INLINE_KINDS: readonly GenerationJobKind[] = ['speech', 'sound_effect'];
 
+// A cutout's prompt is the server's fixed instruction, so it is named for what it is; matches ImageJobCard's caption.
+const groupTitle = (anchor: Parameters<typeof generationJobPrompt>[0], readyCount: number): string => {
+  if ('purpose' in anchor.payload && anchor.payload.purpose === 'cutout') {
+    return readyCount > 0 ? 'Background removed' : 'Background removal';
+  }
+  return studioCompletionTitle(generationJobPrompt(anchor));
+};
+
 /** Announces a finished Studio group as `studio.job.completed`, the event every Studio surface subscribes to. */
 export const studioCompletionSubscriber = (
   publish: (event: StudioJobCompletedEvent) => Promise<void>
@@ -50,7 +58,7 @@ export const studioCompletionSubscriber = (
       readyCount,
       failedCount,
       cancelledCount,
-      title: studioCompletionTitle(generationJobPrompt(anchor)),
+      title: groupTitle(anchor, readyCount),
       link: studioCompletionLink(medium, groupId),
       completedAt: completedAt.toISOString(),
     });
