@@ -1,17 +1,9 @@
-import { ISpaceDocument, ISpaceRepository } from '@bike4mind/common';
+import { ISpaceDocument, ISpaceRepository, emailDomainOf } from '@bike4mind/common';
 
 interface RecheckDomainMembersAdapters {
   db: { spaces: Pick<ISpaceRepository, 'listDomainJoinedForUser' | 'removeMember'> };
   isDomainJoinable: (space: ISpaceDocument, email: string) => Promise<boolean>;
 }
-
-const emailDomain = (email: string | null) =>
-  email === null
-    ? null
-    : email
-        .slice(email.lastIndexOf('@') + 1)
-        .trim()
-        .toLowerCase();
 
 /**
  * After an email change, drops the user from every Space they joined by domain whose rule the new
@@ -26,8 +18,8 @@ export async function recheckDomainMembers(
 ): Promise<void> {
   const { db, isDomainJoinable } = adapters;
   const { oldEmail, newEmail } = emails;
-  const oldDomain = emailDomain(oldEmail);
-  if (oldDomain !== null && oldDomain === emailDomain(newEmail)) return;
+  const oldDomain = oldEmail === null ? null : emailDomainOf(oldEmail);
+  if (oldDomain && oldDomain === emailDomainOf(newEmail)) return;
   for (const space of await db.spaces.listDomainJoinedForUser(userId)) {
     if (await isDomainJoinable(space, newEmail)) continue;
     await db.spaces.removeMember(space.id, userId, { block: false });

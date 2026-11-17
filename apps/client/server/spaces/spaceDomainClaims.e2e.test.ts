@@ -84,8 +84,12 @@ const verifiedSpaceClaim = async (spaceId: string, policy: 'off' | 'suggest' = '
   return claim;
 };
 
-const verifiedOrgClaim = async (orgId: string, policy: 'suggest' | 'auto-join' | 'off' = 'suggest') => {
-  const claim = await addDomainClaim(orgId, 'owner', DOMAIN);
+const verifiedOrgClaim = async (
+  orgId: string,
+  policy: 'suggest' | 'auto-join' | 'off' = 'suggest',
+  domain = DOMAIN
+) => {
+  const claim = await addDomainClaim(orgId, 'owner', domain);
   await verifyDomainClaim(orgId, claim.id, resolverFor(claim.verificationToken));
   await OrgDomainClaim.updateOne({ _id: claim.id }, { policy });
   return claim;
@@ -185,7 +189,7 @@ describe('failed verify rolls back the release (real transaction)', () => {
 
     expect(await OrgDomainClaim.countDocuments({ spaceId: space.id, status: 'verified' })).toBe(1);
     expect(await OrgDomainClaim.countDocuments({ domain: DOMAIN, status: 'verified' })).toBe(1);
-  }, 15_000);
+  });
 
   it('404s a claim deleted during the lookup and keeps the Space claim without notifying', async () => {
     const { spaceOwner, space, org, claim } = await orgPending();
@@ -198,7 +202,7 @@ describe('failed verify rolls back the release (real transaction)', () => {
 
     expect(await OrgDomainClaim.countDocuments({ spaceId: space.id, status: 'verified' })).toBe(1);
     expect(await Inbox.countDocuments({ receiverId: spaceOwner.id })).toBe(0);
-  }, 15_000);
+  });
 });
 
 describe('org flows ignore Space claims', () => {
@@ -346,11 +350,12 @@ describe('email change recheck', () => {
     const owner = await makeUser('so@other.org');
     const org = await makeOrg(owner.id);
     await verifiedOrgClaim(org.id, 'suggest');
+    await verifiedOrgClaim(org.id, 'suggest', `second-${DOMAIN}`);
     const space = await makeSpace(owner.id, { parentOrganizationId: org.id });
     const dee = await makeUser(`dee@${DOMAIN}`);
     await join(dee.id, space.id);
 
-    await recheck(dee.id, `dee2@${DOMAIN}`);
+    await recheck(dee.id, `dee@second-${DOMAIN}`);
     expect(await membersOf(space.id)).toEqual([dee.id]);
   });
 
