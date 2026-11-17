@@ -15,7 +15,7 @@ import {
 } from './StudioGenerationService';
 
 const account = { environmentUrl: 'https://example.com', accountId: 'one' };
-const image: StudioGenerationRequest = { kind: 'image', body: { prompt: 'a bicycle', model: 'gpt-image-1' } };
+const image: StudioGenerationRequest = { kind: 'image', body: { prompt: 'a bicycle', model: 'gpt-image-2' } };
 const music: StudioGenerationRequest = { kind: 'music', body: { prompt: 'calm music', model: 'lyria-3.5' } };
 
 describe('Studio generation', () => {
@@ -117,6 +117,9 @@ describe('Studio generation', () => {
   it.each(requests)('adapts $kind with durable output and no repeated spend during recovery', async request => {
     const session = await sessions.create();
     const submitted = await service.submit(session.id, request);
+    if (request.kind === 'image') {
+      expect(client.generateImage).toHaveBeenCalledWith({ ...request.body, prompt_resolution: 'literal' });
+    }
     const restarted = new StudioGenerationService(deps);
     const [job] = await restarted.recover(session.id);
     expect(job).toMatchObject({ id: submitted.id, state: 'completed' });
@@ -228,5 +231,33 @@ describe('Studio generation', () => {
     expect((await service.cancel(session.id, job.id)).state).toBe('cancelled');
     const imageJob = await service.submit(session.id, image);
     await expect(service.cancel(session.id, imageJob.id)).rejects.toThrow('cannot cancel');
+  });
+
+  it('recovers inline output committed before the final job update without spending', async () => {
+    const session = await sessions.create();
+    const job = await service.submit(session.id, { kind: 'speech', body: { text: 'hello' } });
+    await workspaces.upsertJob(session.id, { ...job, state: 'submitting', assetIds: [] });
+    const recovered = await new StudioGenerationService(deps).reconcile(session.id, job.id);
+    expect(recovered).toMatchObject({ state: 'completed', assetIds: job.assetIds });
+    expect(client.synthesizeSpeech).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not resurrect an asset when rename is concurrent with deletion', async () => {
+    const session = await sessions.create();
+    const job = await service.submit(session.id, { kind: 'speech', body: { text: 'hello' } });
+    const results = await Promise.allSettled([
+      service.removeAsset(session.id, job.assetIds[0]),
+      service.renameAsset(session.id, job.assetIds[0], 'late rename'),
+    ]);
+    expect(results[0].status).toBe('fulfilled');
+    expect((await workspaces.get(session.id))?.assets).toEqual([]);
+  });
+
+  it('does not individually read completed jobs during recovery', async () => {
+    const session = await sessions.create();
+    await service.submit(session.id, { kind: 'speech', body: { text: 'hello' } });
+    const lookup = vi.spyOn(workspaces, 'getJob');
+    await service.recover(session.id);
+    expect(lookup).not.toHaveBeenCalled();
   });
 });

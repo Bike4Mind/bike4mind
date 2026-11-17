@@ -48,6 +48,7 @@ export interface GenerateImageRequest {
   prompt: string;
   model: string;
   size?: string;
+  prompt_resolution?: 'auto' | 'literal';
   /** Notebook to file the generation under; the server creates one when this is absent. */
   sessionId?: string;
   sessionName?: string;

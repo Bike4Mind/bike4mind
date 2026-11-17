@@ -88,7 +88,7 @@ export class StudioGenerationService {
       await this.saveJob(sessionId, job, connection);
       try {
         if (request.kind === 'image') {
-          const result = await connection.client.generateImage(request.body);
+          const result = await connection.client.generateImage({ ...request.body, prompt_resolution: 'literal' });
           job = { ...job, state: 'queued', providerJobId: result.questId };
         } else if (request.kind === 'video' || request.kind === 'music') {
           const result =
@@ -144,6 +144,14 @@ export class StudioGenerationService {
     return this.lock(`${connection.scope}:${workspace.workspaceId}`, async () => {
       let job = await this.findJob(sessionId, jobId, connection);
       if (terminal.has(job.state)) return job;
+      if (job.kind === 'speech' || job.kind === 'sound-effect') {
+        const asset = await this.findAsset(sessionId, `${job.id}_0`, connection);
+        if (asset && (await this.locateAsset(sessionId, asset.id))) {
+          job = { ...job, state: 'completed', assetIds: [asset.id], error: undefined };
+          await this.saveJob(sessionId, job, connection);
+          return job;
+        }
+      }
       if (!job.providerJobId) {
         job = { ...job, state: 'unknown', error: 'No recoverable remote job ID. Do not retry automatically.' };
         await this.saveJob(sessionId, job, connection);
@@ -220,6 +228,10 @@ export class StudioGenerationService {
     const jobs = await this.allJobs(sessionId, connection);
     const recovered: StudioJob[] = [];
     for (const job of jobs) {
+      if (terminal.has(job.state)) {
+        recovered.push(job);
+        continue;
+      }
       try {
         recovered.push(await this.reconcile(sessionId, job.id));
       } catch {
@@ -251,20 +263,23 @@ export class StudioGenerationService {
 
   async renameAsset(sessionId: string, assetId: string, title: string): Promise<void> {
     const connection = this.requireConnection();
-    const asset = await this.findAsset(sessionId, assetId, connection);
-    if (!asset) throw new Error('Studio asset not found.');
-    if (
-      !(await this.deps.workspaces.upsertAsset(
-        sessionId,
-        {
-          ...asset,
-          title: z.string().max(500).parse(title),
-          updatedAt: new Date().toISOString(),
-        },
-        connection.scope
-      ))
-    )
-      throw new Error('Studio workspace unavailable.');
+    const workspace = await this.requireWorkspace(sessionId, connection);
+    await this.lock(`${connection.scope}:${workspace.workspaceId}`, async () => {
+      const asset = await this.findAsset(sessionId, assetId, connection);
+      if (!asset) throw new Error('Studio asset not found.');
+      if (
+        !(await this.deps.workspaces.upsertAsset(
+          sessionId,
+          {
+            ...asset,
+            title: z.string().max(500).parse(title),
+            updatedAt: new Date().toISOString(),
+          },
+          connection.scope
+        ))
+      )
+        throw new Error('Studio workspace unavailable.');
+    });
   }
 
   async locateAsset(sessionId: string, assetId: string) {
@@ -286,6 +301,9 @@ export class StudioGenerationService {
     await this.lock(`${connection.scope}:${workspace.workspaceId}`, async () => {
       const asset = await this.findAsset(sessionId, assetId, connection);
       if (!asset) return;
+      if (asset.jobId && !terminal.has((await this.findJob(sessionId, asset.jobId, connection)).state)) {
+        throw new Error('Wait until the generation finishes before deleting an output.');
+      }
       await this.deps.media.forgetSession(bucketFor(connection.scope, workspace.workspaceId, asset.id));
       if (!(await this.deps.workspaces.removeAsset(sessionId, asset.id, connection.scope))) {
         throw new Error('Studio workspace unavailable.');
@@ -367,23 +385,18 @@ export class StudioGenerationService {
   }
 
   private async findJob(sessionId: string, id: string, connection: StudioGenerationConnection) {
-    const job = (await this.allJobs(sessionId, connection)).find(item => item.id === id);
+    this.assertConnection(connection);
+    const job = await this.deps.workspaces.getJob(sessionId, id);
+    this.assertConnection(connection);
     if (!job) throw new Error('Studio job not found.');
     return job;
   }
 
   private async findAsset(sessionId: string, id: string, connection: StudioGenerationConnection) {
-    await this.requireWorkspace(sessionId, connection);
-    let cursor: string | undefined;
-    do {
-      const page = await this.deps.workspaces.listAssets(sessionId, { cursor });
-      this.assertConnection(connection);
-      if (!page) throw new Error('Studio workspace unavailable.');
-      const found = page.items.find(item => item.id === id);
-      if (found) return found;
-      cursor = page.nextCursor;
-    } while (cursor);
-    return undefined;
+    this.assertConnection(connection);
+    const asset = await this.deps.workspaces.getAsset(sessionId, id);
+    this.assertConnection(connection);
+    return asset ?? undefined;
   }
 
   private requireConnection() {
