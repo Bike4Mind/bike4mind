@@ -62,6 +62,10 @@ const erasureRegistry: ErasureRegistry = {
     h.assertClassified(['Alpha', 'Beta']);
     return h.collections(assertLease);
   },
+  async erase(_subject, assertLease, stage) {
+    await assertLease();
+    h.order.push(`erase:${stage}`);
+  },
   async audit() {
     const collections: { deleted: number; anonymized: number }[] = await h.collections();
     const remaining = collections.filter(collection => collection.deleted + collection.anonymized > 0);
@@ -72,6 +76,7 @@ const complete = () => completeAccountDeletion(USER_ID, { logger: logger as neve
 type HardDeleteContext = {
   assertInTransaction?: () => Promise<void>;
   recordInTransaction?: (target: unknown) => Promise<void>;
+  afterDeleteInTransaction?: (session: never) => Promise<void>;
 };
 const deletedTarget = { name: 'Leaving User', username: 'leaving', email: 'leaving@example.com' };
 
@@ -112,6 +117,7 @@ beforeEach(() => {
       await context.assertInTransaction?.();
       const result = await commitDelete(users);
       await context.recordInTransaction?.(deletedTarget);
+      await context.afterDeleteInTransaction?.(undefined as never);
       return { result, subscriptionCancellation: null };
     }
   );
@@ -160,7 +166,17 @@ describe('completeAccountDeletion', () => {
         },
       }
     );
-    expect(h.order).toEqual(['orgs', 'files', 'content', 'realtime', 'delete', 'audit', 'email']);
+    expect(h.order).toEqual([
+      'orgs',
+      'files',
+      'content',
+      'realtime',
+      'erase:beforeDelete',
+      'delete',
+      'audit',
+      'erase:afterDelete',
+      'email',
+    ]);
     expect(h.deletePersonalOrganizations).toHaveBeenCalledWith(
       { userId: USER_ID, personal: true },
       { hardDelete: true }
@@ -296,7 +312,7 @@ describe('completeAccountDeletion', () => {
       expect.objectContaining({ logger })
     );
     expect(JSON.stringify(h.recordAdminAction.mock.calls[0][0])).not.toContain('leaving@example.com');
-    expect(h.order.slice(-3)).toEqual(['delete', 'audit', 'email']);
+    expect(h.order.slice(-4)).toEqual(['delete', 'audit', 'erase:afterDelete', 'email']);
   });
 
   it('falls back to the user id when the deleted row is unreadable', async () => {
@@ -304,6 +320,7 @@ describe('completeAccountDeletion', () => {
       async (_id: string, context: HardDeleteContext, commitDelete: (repository: typeof users) => Promise<unknown>) => {
         const result = await commitDelete(users);
         await context.recordInTransaction?.(null);
+        await context.afterDeleteInTransaction?.(undefined as never);
         return { result, subscriptionCancellation: null };
       }
     );
