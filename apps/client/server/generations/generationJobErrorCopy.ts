@@ -31,6 +31,9 @@ export function generationJobErrorCopy(
 // The video and music tables back the public v1 resources: their wording is part of the published contract.
 export const VIDEO_JOB_ERROR_COPY = generationJobErrorCopy({ noun: 'video', plural: 'videos' });
 export const MUSIC_JOB_ERROR_COPY = generationJobErrorCopy({ noun: 'song', plural: 'songs' });
+// Published too, on the 202 the sync audio routes answer when a clip outlasts the request.
+export const SPEECH_JOB_ERROR_COPY = generationJobErrorCopy({ noun: 'speech', plural: 'speech' });
+export const SOUND_EFFECT_JOB_ERROR_COPY = generationJobErrorCopy({ noun: 'sound effect', plural: 'sound effects' });
 export const IMAGE_JOB_ERROR_COPY = generationJobErrorCopy(
   { noun: 'image', plural: 'images' },
   {

@@ -23,7 +23,11 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsMap: mocks.settings,
 }));
 vi.mock('../entitlements/index', () => ({ getUserEntitlements: mocks.entitlements }));
-import { assertMediaModelAdmission, filterAdmittedMediaModels } from './assertMediaModelAdmission';
+import {
+  assertMediaModelAdmission,
+  filterAdmittedMediaModels,
+  isMediaModelAdmitted,
+} from './assertMediaModelAdmission';
 
 describe('media model admission', () => {
   beforeEach(() => {
@@ -105,6 +109,18 @@ describe('media model admission', () => {
     mocks.org.mockResolvedValue({ id: 'org-1', modelPolicy: { allowedProviders: ['xai'] } });
     const videos = [{ id: 'grok-imagine-video-1.5' }, { id: 'flux-3-video' }];
     expect(await filterAdmittedMediaModels(user, videos, 'org-1')).toEqual([{ id: 'grok-imagine-video-1.5' }]);
+  });
+
+  it('judges an org provider allowlist by the dispatch vendor when one is given', async () => {
+    mocks.entitlements.mockResolvedValue([PAID_PLAN_ENTITLEMENT_KEY]);
+    mocks.org.mockResolvedValue({ id: 'org-1', modelPolicy: { allowedProviders: ['openai'] } });
+    // An OpenAI model id sent to a vendor outside ModelBackend (null) is refused, whatever its id suggests.
+    await expect(assertMediaModelAdmission('user-1', 'gpt-4o-mini-tts', false, 'org-1', null)).rejects.toMatchObject({
+      additionalInfo: { errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE },
+    });
+    expect(await isMediaModelAdmitted('user-1', 'gpt-4o-mini-tts', false, 'org-1', null)).toBe(false);
+    expect(await isMediaModelAdmitted('user-1', 'gpt-4o-mini-tts', false, 'org-1')).toBe(true);
+    expect(await isMediaModelAdmitted('user-1', 'eleven_multilingual_v2', false, 'org-1', null)).toBe(false);
   });
 
   it('fails closed with a retryable error if plan lookup fails', async () => {

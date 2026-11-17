@@ -17,6 +17,7 @@ import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { adminRoleWithheldFor, requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
+import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
 import { resolveCallerDefaultModel } from '@server/utils/callerModelList';
 import {
   getDefaultChatCompletionOptions,
@@ -242,6 +243,8 @@ async function handleChat(
     // Not on the shared defaults (surfaces without a confirm card must not offer custom tools);
     // the queued path registers it in questProcessor, so the inline wait=true path must too.
     customMcp: customMcpToolHost,
+    // As questProcessor: the inline wait=true path runs audio_generation itself.
+    audioToolJobs: buildAudioToolJobs(),
     queue: new SQSService(), // Create per-request to ensure fresh credentials
     tokenizer: getSharedTokenizer(req.logger),
     user: req.user,

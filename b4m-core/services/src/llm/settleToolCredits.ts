@@ -4,14 +4,14 @@ export type SettleableFunctionCall = { name?: string; creditsUsed?: number };
  * Assign each tool call its own reserved credits for end-of-quest settlement.
  *
  * `toolCreditsMap` holds a per-name queue of charges in call order (see
- * ToolBuilder.reserveToolCredits): a tool invoked more than once in a turn - two
- * audio_generation clips, several image_generation renders - reserves one entry per
+ * ToolBuilder.reserveToolCredits): a tool invoked more than once in a turn - several
+ * image_generation renders - reserves one entry per
  * call. Walking the calls in order and shifting the next charge off the matching queue
  * bills the sum of every call. The previous behavior stamped the queue's last value onto
  * every same-named call, so two calls settled at 2x the later call's cost instead of
  * cost1 + cost2.
  *
- * When a call reserved nothing (a failed image_generation, edit_image or audio_generation
+ * When a call reserved nothing (a failed image_generation or edit_image
  * returns before onFinish, so no charge is queued) the queue can be shorter than the matching
  * calls; the leftover calls simply keep their existing creditsUsed. A failed call followed by a
  * successful retry can therefore carry the retry's charge on its own slot. Only the total is
@@ -64,8 +64,8 @@ export const UNATTRIBUTED_TOOL_CHARGE = '(unattributed)';
  * which is what the row used to carry regardless of which tool incurred the cost.
  *
  * Per-call provider/model attribution is not lost either way: it lives on the tool
- * usage events (ToolBuilder.buildToolUsageEvent) - `feature: 'tool'`, or the media
- * feature for the music and audio tools.
+ * usage events (ToolBuilder.buildToolUsageEvent, or the generation job's own for the
+ * job-billed media tools).
  */
 export function resolveAggregateToolModel(chargedModels: Iterable<string>): string | undefined {
   const distinct = Array.from(new Set(chargedModels));
