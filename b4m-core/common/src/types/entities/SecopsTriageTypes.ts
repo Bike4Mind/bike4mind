@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
-const GITHUB_REPO_PATTERN = /^[\w.-]+\/[\w.-]+$/;
+/** An `owner/name` GitHub repository; also used by the worker's repository check. */
+export const SECOPS_TRIAGE_REPO_PATTERN = /^[\w.-]+\/[\w.-]+$/;
 const MAX_ISSUES_MESSAGE = 'Max issues per scan must be between 1 and 100';
 
 /**
@@ -62,7 +63,7 @@ export const SecopsTriageConfigSchema = SecopsTriageConfigFieldsSchema.refine(
     message: 'A model must be selected when LLM enrichment is enabled',
     path: ['modelId'],
   }
-).refine(data => !data.enabled || GITHUB_REPO_PATTERN.test(data.githubRepo), {
+).refine(data => !data.enabled || SECOPS_TRIAGE_REPO_PATTERN.test(data.githubRepo), {
   message: 'A repository in owner/name form is required when SecOps triage is enabled',
   path: ['githubRepo'],
 });

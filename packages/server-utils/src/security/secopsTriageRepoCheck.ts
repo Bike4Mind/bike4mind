@@ -1,11 +1,10 @@
+import { SECOPS_TRIAGE_REPO_PATTERN } from '@bike4mind/common';
 import type { GitHubService } from '../services/githubService';
 
 export type SecopsTriageRepoIssue =
   'not_configured' | 'not_allowed' | 'not_found' | 'public' | 'archived' | 'issues_disabled';
 
 export type SecopsTriageRepoCheck = { ok: true } | { ok: false; reason: SecopsTriageRepoIssue };
-
-const OWNER_NAME_PATTERN = /^[\w.-]+\/[\w.-]+$/;
 
 /**
  * Whether SecOps triage can file issues in `repo` through this connection. Shared by the triage
@@ -16,7 +15,7 @@ export async function checkSecopsTriageRepo(
   githubService: Pick<GitHubService, 'isRepositoryAllowed' | 'getRepository'>,
   repo: string
 ): Promise<SecopsTriageRepoCheck> {
-  if (!OWNER_NAME_PATTERN.test(repo)) return { ok: false, reason: 'not_configured' };
+  if (!SECOPS_TRIAGE_REPO_PATTERN.test(repo)) return { ok: false, reason: 'not_configured' };
   if (!githubService.isRepositoryAllowed(repo)) return { ok: false, reason: 'not_allowed' };
 
   const repository = await githubService.getRepository(repo);
