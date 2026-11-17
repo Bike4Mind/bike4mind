@@ -9279,9 +9279,9 @@ const FULL_ACCESS_ASK_PREFIX = 'Asked in Full access because:';
  * checks before any mode, with the tool's own words for them.
  */
 function fullAccessStopReasons(prompt: ApprovalPrompt): string[] {
-  if (prompt.irreversible) return ['it cannot be undone, so it is asked every time.'];
+  if (prompt.irreversible) return ['It cannot be undone, so it is asked every time.'];
   if (!prompt.askInFull) return [];
-  return prompt.reasons?.length ? [...prompt.reasons] : ['the tool asks for it in every mode.'];
+  return prompt.reasons?.length ? [...prompt.reasons] : ['This tool asks in every mode, Full access included.'];
 }
 
 function approvalRecord(
