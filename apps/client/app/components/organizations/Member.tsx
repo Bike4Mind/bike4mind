@@ -165,7 +165,8 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
   const isOrgAlertRecipient = !organization.personal && (viewerRole === 'owner' || viewerRole === 'manager');
 
   // Mirrors OrganizationMfaPolicy's own gate, so the policies heading never shows over nothing.
-  const canManageMfa = !!currentUser && !organization.personal && isOrgOwnerOrCurrentAdmin(currentUser, organization);
+  const canManageMfa =
+    !!currentUser && !organization.personal && hasOrgPermission(currentUser, organization, 'managePolicies');
 
   // Mirrors the owner-only gate on the manager route (organizationService.setOrganizationManager).
   const canManageManagers =
