@@ -403,6 +403,15 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         });
       }
 
+      // The ended plan's storage allowance goes (#7379): the user falls back to their manual override,
+      // or the default limit. Nothing stored is deleted; uploads over the new limit are refused.
+      // Owner from the row, not metadata, as in customerSubscriptionUpdated.ts. Org-owned
+      // subscriptions have no plan storage mapping yet. Before the invoice cleanup: a cancel-immediately
+      // reaches only this branch, and a delivery timing out in the slower void must not skip it. Never throws.
+      if (updated.ownerType === SubscriptionOwnerType.User) {
+        await releasePlanStorageLimit(updated.ownerId, subscription.id, req.logger);
+      }
+
       // Deletion is terminal, and a Billing Portal "cancel immediately" fires this
       // without a cancel_at_period_end update. Void anything still open so Stripe
       // stops retrying the invoice and emailing the customer. A no-op when nothing
@@ -426,14 +435,6 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       // swallows its own failures, so it cannot fail a delivery that already landed.
       if (cleanupFailed) {
         await emitMetric('Lumina5/Entitlements', 'DunningCleanupFailed', 1, { reason: 'void_failed' });
-      }
-
-      // The ended plan's storage allowance goes (#7379): the user falls back to their manual override,
-      // or the default limit. Nothing stored is deleted; uploads over the new limit are refused.
-      // Owner from the row, not metadata, as in customerSubscriptionUpdated.ts. Org-owned
-      // subscriptions have no plan storage mapping yet. Never throws.
-      if (updated.ownerType === SubscriptionOwnerType.User) {
-        await releasePlanStorageLimit(updated.ownerId, subscription.id, req.logger);
       }
 
       // Only when Stripe's retry schedule ended in cancel. A Dashboard setting of "mark unpaid"
