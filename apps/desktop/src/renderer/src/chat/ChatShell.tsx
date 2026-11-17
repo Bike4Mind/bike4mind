@@ -1340,8 +1340,10 @@ export function ChatShell({
             {/* Keyed so an open menu can never carry an image into another conversation,
             should a switch ever skip the `opening` gate that unmounts this today. */}
             <ImageMenuProvider key={activeId ?? 'none'} onAttach={activeId ? draft.attachImage : undefined}>
-              {/* A path not found yet is asked again once a turn settles: replies name files before writing them. */}
+              {/* A path not found yet is asked again once a turn settles: replies name files before writing them.
+              Keyed like the image menu: its answers and an open menu belong to one conversation's folders. */}
               <FilePathLinkProvider
+                key={activeId ?? 'none'}
                 sessionId={activeId}
                 recheck={conversation.settledTurns}
                 showFile={showFile}

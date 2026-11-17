@@ -25,7 +25,9 @@ const EXISTING: Record<string, string> = {
   'package.json': '/work/project/package.json',
 };
 
-const checkFilePaths = vi.fn(async (_sessionId: string, paths: string[]) => paths.map(path => EXISTING[path] ?? null));
+const checkFilePaths = vi.fn(async (_sessionId: string, paths: string[]): Promise<(string | null)[]> =>
+  paths.map(path => EXISTING[path] ?? null)
+);
 const openFilePath = vi.fn(async (_sessionId: string, _path: string): Promise<ChatFilePathOpenResult> => ({
   ok: true,
   opened: 'opened',
@@ -154,6 +156,18 @@ describe('file path links in a reply', () => {
     } finally {
       delete EXISTING['out/report.md'];
     }
+  });
+
+  it("asks again for another conversation rather than reusing the last one's answers", async () => {
+    const reply = <ReplyMarkdown text="See reports/run.webm" />;
+    await render(<FilePathLinkProvider sessionId="s1">{reply}</FilePathLinkProvider>);
+    expect(links()).toHaveLength(1);
+
+    checkFilePaths.mockImplementationOnce(async (_sessionId, paths) => paths.map(() => null));
+    await render(<FilePathLinkProvider sessionId="s2">{reply}</FilePathLinkProvider>);
+
+    expect(checkFilePaths).toHaveBeenLastCalledWith('s2', ['reports/run.webm']);
+    expect(links()).toHaveLength(0);
   });
 
   it('draws paths as plain text with no conversation open', async () => {

@@ -49,6 +49,16 @@ interface FilePathLinks {
 
 const FilePathContext = createContext<FilePathLinks | null>(null);
 
+/** What one conversation's links have asked main, and what is still waiting to be asked. */
+interface LinkStore {
+  cache: Map<string, Promise<string | null>>;
+  settled: Map<string, string | null>;
+  queue: { path: string; resolve: (found: string | null) => void }[];
+  scheduled: boolean;
+}
+
+const newLinkStore = (): LinkStore => ({ cache: new Map(), settled: new Map(), queue: [], scheduled: false });
+
 /**
  * Asks main which paths exist for one conversation, a batch per tick and each path once.
  *
@@ -62,28 +72,31 @@ function useFilePathLinks(
   showFile: ShowFile | undefined,
   menu: FilePathLinks['menu']
 ): FilePathLinks {
-  const cache = useRef(new Map<string, Promise<string | null>>());
-  const settled = useRef(new Map<string, string | null>());
-  const queue = useRef<{ path: string; resolve: (found: string | null) => void }[]>([]);
-  const scheduled = useRef(false);
+  // Answers hold for one conversation's folders only, so a new conversation gets a new store. It is
+  // swapped during render, not in an effect, so no link reads another conversation's answer first,
+  // and every check writes back to the store it started from.
+  const store = useRef<{ sessionId: string; links: LinkStore }>({ sessionId, links: newLinkStore() });
+  if (store.current.sessionId !== sessionId) store.current = { sessionId, links: newLinkStore() };
+  const links = store.current.links;
 
   const [generation, setGeneration] = useState(0);
   const firstRecheck = useRef(recheck);
   useEffect(() => {
     if (Object.is(firstRecheck.current, recheck)) return;
     firstRecheck.current = recheck;
-    for (const [path, found] of settled.current) {
+    const { settled, cache } = store.current.links;
+    for (const [path, found] of settled) {
       if (found !== null) continue;
-      settled.current.delete(path);
-      cache.current.delete(path);
+      settled.delete(path);
+      cache.delete(path);
     }
     setGeneration(value => value + 1);
   }, [recheck]);
 
   const flush = useCallback(() => {
-    scheduled.current = false;
-    while (queue.current.length > 0) {
-      const batch = queue.current.splice(0, BATCH);
+    links.scheduled = false;
+    while (links.queue.length > 0) {
+      const batch = links.queue.splice(0, BATCH);
       window.b4m.chat
         .checkFilePaths(
           sessionId,
@@ -94,7 +107,7 @@ function useFilePathLinks(
           () => batch.forEach(entry => entry.resolve(null))
         );
     }
-  }, [sessionId]);
+  }, [sessionId, links]);
 
   const failed = useCallback(
     (error: unknown) => report(error instanceof Error ? error.message : String(error)),
@@ -129,21 +142,21 @@ function useFilePathLinks(
   // A new object per generation, so every link re-reads its answer after a recheck.
   return useMemo(
     () => ({
-      known: path => settled.current.get(path),
+      known: path => links.settled.get(path),
       check: path => {
-        let pending = cache.current.get(path);
+        let pending = links.cache.get(path);
         if (!pending) {
           pending = new Promise<string | null>(resolve => {
-            queue.current.push({ path, resolve });
-            if (!scheduled.current) {
-              scheduled.current = true;
+            links.queue.push({ path, resolve });
+            if (!links.scheduled) {
+              links.scheduled = true;
               setTimeout(flush, 0);
             }
           }).then(found => {
-            settled.current.set(path, found);
+            links.settled.set(path, found);
             return found;
           });
-          cache.current.set(path, pending);
+          links.cache.set(path, pending);
         }
         return pending;
       },
@@ -151,7 +164,7 @@ function useFilePathLinks(
       menu,
     }),
     // generation is listed only so a recheck makes a fresh object.
-    [flush, open, menu, generation]
+    [links, flush, open, menu, generation]
   );
 }
 

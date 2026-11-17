@@ -289,9 +289,11 @@ export function registerFilePathLinkIpc(ipc: Pick<IpcMain, 'handle'>, deps: File
   ipc.handle(
     IPC_CHANNELS.chatAttachFilePath,
     async (_event, sessionId: unknown, value: unknown): Promise<AddAttachmentsResult> => {
-      const name = typeof value === 'string' ? basename(value) || 'file' : 'file';
+      if (typeof value !== 'string' || !isPathText(value)) {
+        return { attachments: [], rejected: [{ name: 'file', reason: GONE }] };
+      }
+      const name = basename(value) || 'file';
       const gone: AddAttachmentsResult = { attachments: [], rejected: [{ name, reason: GONE }] };
-      if (typeof value !== 'string' || !isPathText(value)) return gone;
       try {
         const scope = await scopeOf(sessionId);
         const found = scope && (await resolveOne(value, scope, deps));
