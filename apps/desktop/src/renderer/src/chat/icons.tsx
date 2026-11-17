@@ -314,6 +314,28 @@ export function TableIcon() {
   );
 }
 
+/** The Tile Wall view: an even grid of tiles. */
+export function TileWallIcon() {
+  return (
+    <Glyph>
+      <rect x="2" y="2.5" width="5" height="5" rx="1" />
+      <rect x="9" y="2.5" width="5" height="5" rx="1" />
+      <rect x="2" y="8.5" width="5" height="5" rx="1" />
+      <rect x="9" y="8.5" width="5" height="5" rx="1" />
+    </Glyph>
+  );
+}
+
+/** The Aquarium view: a fish. */
+export function AquariumIcon() {
+  return (
+    <Glyph>
+      <path d="M2.5 8c2-3 6-3.5 8.5 0-2.5 3.5-6.5 3-8.5 0z" />
+      <path d="M11 8l2.5-2v4z" />
+    </Glyph>
+  );
+}
+
 /**
  * The header's way to the agents stage: a grid of agent cards. Kept apart from AgentsIcon, which is
  * the composer's Orchestrate behaviour, so the view switch never reads as a second copy of it.

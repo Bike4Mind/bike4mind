@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { defineEndpoint } from '../defineEndpoint';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts
@@ -13,7 +14,37 @@ import {
   BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
 } from '../../schemas/billingOrganization';
 import { generatedAudioResponseSchema, generatedAudioTooLargeSchema } from '../../generatedAudio';
-import { GENERATED_AUDIO_CONTENT_TYPES, GENERATED_AUDIO_DESCRIPTION, generatedAudioResponses } from './audioResponses';
+import {
+  GENERATED_AUDIO_CONTENT_TYPES,
+  GENERATED_AUDIO_DESCRIPTION,
+  generatedAudioResponses,
+  outlastedAudioResponse,
+  unretrievableAudioResponse,
+} from './audioResponses';
+import { EXAMPLE_RESOURCE_ID } from '../exampleIds';
+import { SoundEffectGenerationSchema } from '../../schemas/audioGenerations';
+
+// The 504 names the job it left running; written (not thrown), so `jobId` rides beside the envelope.
+const soundEffectsTimeoutErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal('request_timeout').optional(),
+  jobId: z.string().optional(),
+  message: z.string().optional(),
+});
+
+const exampleOutlastedJob = {
+  id: EXAMPLE_RESOURCE_ID,
+  object: 'sound_effect_generation',
+  state: 'running',
+  text: 'heavy wooden door creaking open',
+  provider: 'elevenlabs',
+  duration_seconds: 3,
+  source: 'api',
+  error: null,
+  output: null,
+  credits: { reserved: 12, settled: null },
+  created_at: '2026-10-14T00:00:00.000Z',
+  updated_at: '2026-10-14T00:00:30.000Z',
+} as const;
 
 /**
  * Contract for POST /api/ai/sound-effects - one-shot sound-effect generation.
@@ -49,6 +80,11 @@ export const generateSoundEffectContract = defineEndpoint({
       binaryContentTypes: GENERATED_AUDIO_CONTENT_TYPES,
       tooLargeSchema: generatedAudioTooLargeSchema,
     }),
+    202: outlastedAudioResponse({
+      noun: 'sound effect',
+      schema: SoundEffectGenerationSchema,
+      example: exampleOutlastedJob,
+    }),
     400: {
       description: `The billing user or organization could not be resolved. ${BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION}`,
       schema: ApiErrorSchema,
@@ -78,10 +114,13 @@ export const generateSoundEffectContract = defineEndpoint({
       headers: { 'Retry-After': 'Seconds to wait before retrying.' },
     },
     502: {
-      description: 'The provider failed to generate the effect; reserved credits are refunded.',
-      schema: ApiErrorSchema,
+      description:
+        'The provider failed to generate the effect; reserved credits are refunded. When the clip was generated ' +
+        'but could not be read back, the body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`.',
+      schema: soundEffectsTimeoutErrorSchema,
     },
     503: { description: 'No provider API key is configured for this deployment.', schema: ApiErrorSchema },
+    504: unretrievableAudioResponse({ noun: 'sound effect', schema: soundEffectsTimeoutErrorSchema }),
   },
   // Served by baseApi, so apiKeyRateLimit sets the windowed X-RateLimit-* headers.
   emitsRateLimitHeaders: true,

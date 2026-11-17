@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import {
   AuthEvents,
   MfaEnrollmentEvents,
+  isMfaForcedForUser,
   type AuthSessionCreatedVia,
   type AuthStrategy,
   type IUserDocument,
@@ -70,7 +71,8 @@ export async function resolveSecondFactor(
     return { kind: 'challenge', mfaToken: signMfaPendingToken(user, origin), passkeyAvailable };
   }
 
-  if ((!enterpriseIdp && (await readEnforceMfa())) || (await requiresOrganizationMfaEnrollment(user))) {
+  const enforced = !enterpriseIdp && (isMfaForcedForUser(user) || (await readEnforceMfa()));
+  if (enforced || (await requiresOrganizationMfaEnrollment(user))) {
     await recordMfaEnrollmentEvent(user.id, MfaEnrollmentEvents.REQUIRED, {
       surface: 'signin',
       source: origin.createdVia,

@@ -50,6 +50,11 @@ export const COMMANDS: CommandDefinition[] = [
     aliases: ['sessions'],
   },
   {
+    name: 'peers',
+    description: 'Discover and message local CLI sessions (opt-in)',
+    args: '<on|off|list|send|reply|inbox|status|cancel|accept|hold|refuse|release|delete>',
+  },
+  {
     name: 'config',
     description: 'Open interactive configuration editor',
   },

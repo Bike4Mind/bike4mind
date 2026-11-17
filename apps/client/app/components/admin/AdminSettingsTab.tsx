@@ -162,6 +162,7 @@ const MODEL_SETTINGS_LINK_TEXT =
 // Settings whose value is a list of plain strings get the one-entry-per-line editor.
 const STRING_LIST_SETTING_KEYS = new Set<string>([
   'ImageModerationReviewerEmails',
+  'ImageModerationEscalationEmails',
   'blockedEmailDomains',
   'freeTierAllowedModels',
 ]);

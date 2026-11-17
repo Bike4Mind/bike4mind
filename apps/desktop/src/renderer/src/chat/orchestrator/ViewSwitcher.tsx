@@ -7,7 +7,7 @@ import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import Typography from '@mui/joy/Typography';
 import { Fragment, useEffect, useRef, type ReactNode } from 'react';
-import { BoardIcon, CaretDownIcon, CheckIcon, TableIcon, TavernIcon } from '../icons';
+import { AquariumIcon, BoardIcon, CaretDownIcon, CheckIcon, TableIcon, TavernIcon, TileWallIcon } from '../icons';
 import { isMac } from '../platform';
 import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs';
 import { AMBIENT_IDLE_MS } from './ambient';
@@ -32,6 +32,13 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     icon: <TavernIcon />,
     ambient: true,
   },
+  aquarium: {
+    label: 'Aquarium',
+    description: 'A quiet tank, one fish per agent',
+    group: 'scene',
+    icon: <AquariumIcon />,
+    ambient: true,
+  },
   board: {
     label: 'Board',
     description: 'Columns by state, like a kanban',
@@ -44,6 +51,13 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     description: 'Every agent in sortable rows',
     group: 'layout',
     icon: <TableIcon />,
+    ambient: false,
+  },
+  'tile-wall': {
+    label: 'Tile Wall',
+    description: 'A calm grid, one tile per agent',
+    group: 'layout',
+    icon: <TileWallIcon />,
     ambient: false,
   },
 };

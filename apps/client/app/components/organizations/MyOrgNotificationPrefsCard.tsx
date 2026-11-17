@@ -20,8 +20,8 @@ const MyOrgNotificationPrefsCard: FC<{ organizationId: string }> = ({ organizati
   if (!prefs) return null;
 
   return (
-    <Card variant="outlined" sx={{ mx: { xs: 0, sm: '20px' } }} data-testid="org-alert-prefs-card">
-      <Stack spacing={1.5} p={2}>
+    <Card variant="outlined" data-testid="org-alert-prefs-card">
+      <Stack spacing={1.5}>
         <Stack spacing={0.5}>
           <Typography level="title-sm">My alert notifications</Typography>
           <Typography level="body-sm" sx={{ color: 'text.secondary' }}>

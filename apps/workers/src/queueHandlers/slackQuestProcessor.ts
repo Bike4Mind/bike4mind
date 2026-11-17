@@ -94,6 +94,7 @@ import {
   type PendingSlackNotification,
 } from '@workers/videoGenerations/slackVideoToolConfig';
 import { getCreateVideoJobDeps, getVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
+import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
 
 // Slack quests settle org credits; this entry does not load queueHandlers/utils.
 registerOrgAlertObserver();
@@ -450,6 +451,7 @@ export const handler = withEventContext(async (event, logger) => {
     tokenizer: getSharedTokenizer(logger),
     sessionId: params.sessionId,
     user,
+    audioToolJobs: buildAudioToolJobs(),
     createCompletionMeter: ({ organizationId, featureLabel }) =>
       createCompletionMeter(user, logger, featureLabel, { sessionId: params.sessionId, organizationId }),
   });
