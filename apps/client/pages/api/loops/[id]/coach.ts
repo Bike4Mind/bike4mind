@@ -21,6 +21,7 @@ import { assertLoopsEnabled, LOOP_RATE_LIMIT, LOOP_RATE_WINDOW_MS } from '@serve
 const DAY_MS = 24 * 60 * 60 * 1000;
 const VERSIONS_SHOWN = 20;
 const UNSURE_EVENTS = 500;
+const CONFIG_EVENTS = 500;
 const DISMISSED_MAX = 50;
 const DISMISS_REASON_MAX = 300;
 const KEY_MAX = 300;
@@ -32,9 +33,10 @@ async function coachState(loop: ILoop, user: IUserDocument, logger: Logger, now:
   const trialBaseline = loop.coachTrial
     ? new Date(new Date(loop.coachTrial.startedAt).getTime() - COACH.windowDays * DAY_MS)
     : undefined;
-  const [{ stats, runs, tickets }, unsure, modelList, availability] = await Promise.all([
+  const [{ stats, runs, tickets }, unsure, configChanges, modelList, availability] = await Promise.all([
     readLoopStats(loop, user.id, COACH.windowDays, now, trialBaseline),
     loopEventRepository.listForLoopSince(user.id, loop.id, windowStart, ['unsure'], UNSURE_EVENTS),
+    loopEventRepository.listForLoopSince(user.id, loop.id, windowStart, ['config_changed'], CONFIG_EVENTS),
     getCallerModelList(user, logger),
     resolveToolAvailability(
       user.id,
@@ -61,6 +63,9 @@ async function coachState(loop: ILoop, user: IUserDocument, logger: Logger, now:
     unsureReasons,
     models: modelList.models,
     canAddTool: tool => (B4MLLMToolsList as string[]).includes(tool) && isToolOfferable(tool, availability),
+    appliedKeys: configChanges.flatMap(event =>
+      event.config?.suggestionKey && !event.config.undoneBy ? [event.config.suggestionKey] : []
+    ),
     now,
   });
   return { suggestions, runs, tickets };

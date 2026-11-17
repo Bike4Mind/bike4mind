@@ -326,6 +326,11 @@ describe('coachSuggestions suppression', () => {
     expect(dismissed(ago(31))).toContain('remove_stage:review');
   });
 
+  it('drops a key applied in the window, since its evidence still counts the runs before the change', () => {
+    expect(keys({ ...firing, appliedKeys: ['remove_stage:review'] })).not.toContain('remove_stage:review');
+    expect(keys({ ...firing, appliedKeys: ['add_tool:x'] })).toContain('remove_stage:review');
+  });
+
   it('drops suggestions for the stage on trial', () => {
     const coachTrial = { stage: 'review', model: 'small', baselineModel: 'big', tickets: 10, startedAt: ago(1) };
     expect(keys({ ...firing, loop: loopOf({ coachTrial }) })).toEqual([]);

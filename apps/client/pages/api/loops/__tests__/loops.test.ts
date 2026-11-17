@@ -1858,6 +1858,27 @@ describe('/api/loops/:id/coach', () => {
     expect(body.trial).toBeUndefined();
   });
 
+  it('GET stops offering a suggestion applied in the window, and offers it again once that change is undone', async () => {
+    idleRuns();
+    stored(coachLoop());
+    const applied = (undoneBy?: string) =>
+      loopEvents.listForLoopSince.mockImplementation(async (_u: string, _l: string, _s: Date, kinds: string[]) =>
+        kinds.includes('config_changed')
+          ? [{ id: 'e1', config: { by: 'coach', suggestionKey: 'slower_schedule', ...(undoneBy && { undoneBy }) } }]
+          : []
+      );
+    const keys = async () => {
+      const { res, result } = coach('get');
+      await result;
+      return res._getJSONData().suggestions.map((s: { key: string }) => s.key);
+    };
+
+    applied();
+    expect(await keys()).toEqual([]);
+    applied('e2');
+    expect(await keys()).toEqual(['slower_schedule']);
+  });
+
   it('apply writes the recomputed patch (ignoring a client patch) exactly as PATCH would, and logs it as the coach', async () => {
     idleRuns();
     stored(coachLoop());

@@ -59,6 +59,8 @@ export interface CoachInput {
   models: ModelInfo[];
   /** A built-in tool the owner can use (`resolveToolAvailability`). */
   canAddTool: (tool: string) => boolean;
+  /** Keys of suggestions applied (and not undone) in the window: their evidence still counts the runs before. */
+  appliedKeys?: string[];
   now: Date;
 }
 
@@ -143,7 +145,7 @@ function perStage(input: CoachInput) {
 /**
  * Rule-based suggestions to change a loop's stages, models, tools, schedule and budget, each with its numbers. Pure:
  * the coach route reads the inputs and applies a suggestion only when the owner asks. Drops a suggestion the owner
- * dismissed in the last `COACH.dismissDays`, one for the stage on trial, one that would change nothing, and one whose
+ * dismissed in the last `COACH.dismissDays` or applied in the window, one for the stage on trial, one that would change nothing, and one whose
  * patch PATCH would reject.
  */
 export function coachSuggestions(input: CoachInput): LoopCoachSuggestion[] {
@@ -352,7 +354,7 @@ export function coachSuggestions(input: CoachInput): LoopCoachSuggestion[] {
   const kindOrder = (kind: string) => LOOP_COACH_KINDS.indexOf(kind as (typeof LOOP_COACH_KINDS)[number]);
   return out
     .flatMap(suggestion => {
-      if (dismissed.has(suggestion.key)) return [];
+      if (dismissed.has(suggestion.key) || input.appliedKeys?.includes(suggestion.key)) return [];
       if (loop.coachTrial && suggestion.stage === loop.coachTrial.stage) return [];
       if (!suggestion.patch) return [suggestion];
       const patch = validatedPatch(loop, suggestion.patch);
