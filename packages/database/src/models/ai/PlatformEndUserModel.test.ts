@@ -24,7 +24,7 @@ describe('platformEndUserRepository', () => {
     const first = new Date('2026-11-01T00:00:00Z');
     await platformEndUserRepository.recordSeen(input, first);
 
-    await platformEndUserRepository.recordSeen({ ...input, apiKeyId: 'key-2' }, new Date(first.getTime() + 60_000));
+    await platformEndUserRepository.recordSeen(input, new Date(first.getTime() + 60_000));
     expect(await platformEndUserRepository.findByProviderEndUserId(DIGEST)).toMatchObject({
       apiKeyId: 'key-1',
       lastSeenAt: first,
@@ -37,6 +37,23 @@ describe('platformEndUserRepository', () => {
       firstSeenAt: first,
       lastSeenAt: later,
     });
+    expect(await PlatformEndUser.countDocuments()).toBe(1);
+  });
+
+  it('refreshes the key on a fresh row when a different key sends the end user', async () => {
+    const first = new Date('2026-11-01T00:00:00Z');
+    await platformEndUserRepository.recordSeen(input, first);
+
+    const soon = new Date(first.getTime() + 60_000);
+    await platformEndUserRepository.recordSeen({ ...input, apiKeyId: 'key-2' }, soon);
+    expect(await platformEndUserRepository.findByProviderEndUserId(DIGEST)).toMatchObject({
+      apiKeyId: 'key-2',
+      firstSeenAt: first,
+      lastSeenAt: soon,
+    });
+
+    await platformEndUserRepository.recordSeen({ ...input, apiKeyId: 'key-2' }, new Date(soon.getTime() + 60_000));
+    expect((await platformEndUserRepository.findByProviderEndUserId(DIGEST))?.lastSeenAt).toEqual(soon);
     expect(await PlatformEndUser.countDocuments()).toBe(1);
   });
 

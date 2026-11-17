@@ -31,6 +31,7 @@ const confinedScopes: ReadonlySet<ApiKeyScopeValue> = new Set(CONFINED_API_KEY_S
  * route's other such scopes (users/[userId]/generate-api-key.ts): a full admin only, with a reason.
  * A confined key is refused, since a confined scope must stay its key's only scope.
  */
+// The catalogue has no key-provisioning permission (generate-api-key.ts uses the same one); the full-admin check below is what authorizes the grant.
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'keys:revoke' } })
   .use(csrfProtection())
   .post(async (req, res) => {
@@ -47,6 +48,10 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'keys:revo
     if (key.status !== ApiKeyStatus.ACTIVE) throw new ConflictError('Only an active API key can be changed');
     if (key.scopes?.some(scope => confinedScopes.has(scope))) {
       throw new ConflictError('A key with a dedicated-flow scope cannot also hold ai:end-user-id');
+    }
+
+    if (enabled && !key.scopes?.some(scope => scope === ApiKeyScope.AI_CHAT || scope === ApiKeyScope.AI_GENERATE)) {
+      throw new ConflictError('ai:end-user-id only applies to a key that holds ai:chat or ai:generate');
     }
 
     const target = await ownerAuditTarget(key.userId);

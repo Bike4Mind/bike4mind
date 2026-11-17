@@ -54,14 +54,21 @@ export interface RecordPlatformEndUserInput {
 
 export const platformEndUserRepository = {
   /**
-   * Upsert the row for an end user seen now. Matches only a row whose lastSeenAt is stale, so a
-   * fresh row turns the upsert into a duplicate-key insert, which is the cheap "nothing to do".
+   * Upsert the row for an end user seen now. Matches only a row whose lastSeenAt is stale or whose
+   * apiKeyId differs, so an up-to-date row turns the upsert into a duplicate-key insert, which is
+   * the cheap "nothing to do".
    */
   async recordSeen(input: RecordPlatformEndUserInput, now = new Date()): Promise<void> {
     const staleBefore = new Date(now.getTime() - PLATFORM_END_USER_SEEN_REFRESH_MS);
     try {
       await PlatformEndUser.updateOne(
-        { providerEndUserId: input.providerEndUserId, lastSeenAt: { $lt: staleBefore } },
+        {
+          providerEndUserId: input.providerEndUserId,
+          $or: [
+            { lastSeenAt: { $lt: staleBefore } },
+            ...(input.apiKeyId ? [{ apiKeyId: { $ne: input.apiKeyId } }] : []),
+          ],
+        },
         {
           $setOnInsert: { keyOwnerId: input.keyOwnerId, endUserId: input.endUserId, firstSeenAt: now },
           $set: { lastSeenAt: now, ...(input.apiKeyId && { apiKeyId: input.apiKeyId }) },

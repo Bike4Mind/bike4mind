@@ -73,6 +73,7 @@ A key granted the `ai:end-user-id` scope serves the end users of another product
 
 - In the Users tab search, the value finds the account that owns the key.
 - The API returns `kind: "platformEndUser"` with `account` (the key owner's ID, name, username, and email), `endUserId` (the product's own identifier for its end user), `apiKeyId` (the key most recently used for that end user), `firstSeenAt`, and `lastSeenAt`. Ask the account owner about the end user it names; Bike4Mind holds no other details about that person.
+- `end_user_id` on text-to-speech requests is validated but not sent to any provider, so an end user who only uses text-to-speech has no lookup record and the lookup returns not found for them.
 
 ### Granting the platform scope
 

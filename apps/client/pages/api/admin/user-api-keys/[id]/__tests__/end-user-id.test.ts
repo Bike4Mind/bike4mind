@@ -120,6 +120,24 @@ describe('POST /api/admin/user-api-keys/[id]/end-user-id', () => {
     expect(h.setScopeHeld).not.toHaveBeenCalled();
   });
 
+  it('409s when enabling on a key with neither ai:chat nor ai:generate', async () => {
+    h.findKey.mockResolvedValue(activeKey({ scopes: [ApiKeyScope.ADMIN] }));
+    await expect(h.handler!(request(), response())).rejects.toBeInstanceOf(ConflictError);
+    expect(h.setScopeHeld).not.toHaveBeenCalled();
+  });
+
+  it('allows enabling on an ai:generate-only key', async () => {
+    h.findKey.mockResolvedValue(activeKey({ scopes: [ApiKeyScope.AI_GENERATE] }));
+    await h.handler!(request(), response());
+    expect(h.setScopeHeld).toHaveBeenCalledExactlyOnceWith('key-1', ApiKeyScope.AI_END_USER_ID, true);
+  });
+
+  it('always allows disabling, even without an ai scope', async () => {
+    h.findKey.mockResolvedValue(activeKey({ scopes: [ApiKeyScope.AI_END_USER_ID] }));
+    await h.handler!(request({ body: { enabled: false, reason: 'r' } }), response());
+    expect(h.setScopeHeld).toHaveBeenCalledExactlyOnceWith('key-1', ApiKeyScope.AI_END_USER_ID, false);
+  });
+
   it.each([true, false])('sets the scope held=%s and audits it without secrets', async enabled => {
     const req = request({ body: { enabled, reason: 'Serves a product with many end users' } });
     const res = response();

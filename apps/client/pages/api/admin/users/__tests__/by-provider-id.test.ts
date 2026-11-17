@@ -111,6 +111,23 @@ describe('GET /api/admin/users/by-provider-id', () => {
     });
   });
 
+  it('returns the end user with a null account when the owning account no longer exists', async () => {
+    const seen = new Date('2026-11-01T00:00:00Z');
+    mockFindEndUser.mockResolvedValue({
+      providerEndUserId: DIGEST,
+      keyOwnerId: 'gone-1',
+      apiKeyId: 'key-1',
+      endUserId: 'customer_42',
+      firstSeenAt: seen,
+      lastSeenAt: seen,
+    });
+
+    const res = await call({ id: DIGEST });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ kind: 'platformEndUser', account: null, endUserId: 'customer_42' });
+  });
+
   it('answers 404 when no account carries the identifier', async () => {
     await expect(call({ id: DIGEST })).rejects.toThrow('No account has this provider end-user identifier');
   });
