@@ -17,13 +17,16 @@ describe('getOrgPlanState', () => {
     expect(getOrgPlanState(sub({ status: 'past_due', cancelAt: new Date() }))).toBe('payment_issue');
   });
 
-  it('treats a canceled subscription as no plan', () => {
-    expect(getOrgPlanState(sub({ canceledAt: new Date() }))).toBe('none');
+  it('treats a terminated subscription as no plan', () => {
+    expect(getOrgPlanState(sub({ status: 'canceled', canceledAt: new Date() }))).toBe('none');
+    expect(getOrgPlanState(sub({ status: 'incomplete_expired' }))).toBe('none');
   });
 
-  it('reports a scheduled cancel as ending, by date or at period end', () => {
+  it('reports a scheduled cancel as ending, by date, at period end, or by a cancel request on a live row', () => {
     expect(getOrgPlanState(sub({ cancelAt: new Date() }))).toBe('ending');
     expect(getOrgPlanState(sub({ cancelAtPeriodEnd: true }))).toBe('ending');
+    expect(getOrgPlanState(sub({ canceledAt: new Date(), cancelAtPeriodEnd: true }))).toBe('ending');
+    expect(getOrgPlanState(sub({ canceledAt: new Date() }))).toBe('ending');
   });
 
   it('reports a trial', () => {

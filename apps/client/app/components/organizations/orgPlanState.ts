@@ -2,6 +2,7 @@ import {
   isDelinquentSubscriptionStatus,
   resolveSubscriptionSource,
   SubscriptionSource,
+  TERMINAL_SUBSCRIPTION_STATUSES,
   type ISubscription,
 } from '@bike4mind/server-utils/lib/subscriptions/types';
 
@@ -19,9 +20,10 @@ export function getOrgPlanState(subscription: PlanSubscription | null | undefine
   if (!subscription) return 'none';
   // Delinquent first: a green plan label while entitlements deny access is a false green.
   if (isDelinquentSubscriptionStatus(subscription.status)) return 'payment_issue';
-  if (subscription.canceledAt) return 'none';
+  if (TERMINAL_SUBSCRIPTION_STATUSES.has(subscription.status)) return 'none';
+  // Stripe sets canceledAt when a period-end cancel is requested, so on a live row it means ending.
   // cancelAt also covers a cancel on a custom date, which leaves cancelAtPeriodEnd false.
-  if (subscription.cancelAt || subscription.cancelAtPeriodEnd) return 'ending';
+  if (subscription.canceledAt || subscription.cancelAt || subscription.cancelAtPeriodEnd) return 'ending';
   if (subscription.status === 'trialing') return 'trialing';
   if (resolveSubscriptionSource(subscription) === SubscriptionSource.AdminGrant) return 'granted';
   return 'active';
