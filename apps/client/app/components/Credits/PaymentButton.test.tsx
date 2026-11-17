@@ -317,12 +317,13 @@ describe('PaymentButton terms consent', () => {
     );
   });
 
-  it('does not make the terms checkbox row a scroll container', async () => {
+  it('keeps the terms row visible and gives the outer dialog scrolling', async () => {
     termsConsentRequired = true;
     renderButton();
 
     await userEvent.click(screen.getByTestId('credits-purchase-btn'));
     expect(getComputedStyle(await screen.findByTestId('credits-terms-content')).overflow).toBe('visible');
+    expect(getComputedStyle(screen.getByTestId('credits-terms-dialog')).overflow).toBe('auto');
   });
 
   it('starts nothing when the terms dialog is cancelled', async () => {

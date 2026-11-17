@@ -32,6 +32,7 @@ describe('normalizeResearchLevers', () => {
       minRelevance: RESEARCH_MIN_RELEVANCE_DEFAULT,
       costCeilingMicroUsd: RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
       proposedTags: [],
+      itemRules: [],
     });
   });
 
@@ -242,6 +243,35 @@ describe('normalizeResearchLevers', () => {
 
     it('does not clamp the cap against maxProposals', () => {
       expect(normalizeResearchLevers({ query: 'q', maxProposals: 2, maxAutoAdmits: 10 }).maxAutoAdmits).toBe(10);
+    });
+  });
+
+  describe('item rules', () => {
+    it('defaults to none', () => {
+      expect(normalizeResearchLevers({ query: 'q' }).itemRules).toEqual([]);
+    });
+
+    it('trims, drops empties and bad actions, and dedupes case-insensitively', () => {
+      const rules = normalizeResearchLevers({
+        query: 'q',
+        itemRules: [
+          { condition: ' Published by Acme ', action: 'block' },
+          { condition: 'published by acme', action: 'block' },
+          { condition: '', action: 'review' },
+          { condition: 'x', action: 'admit' as never },
+        ],
+      }).itemRules;
+      expect(rules).toEqual([{ condition: 'Published by Acme', action: 'block' }]);
+    });
+
+    it('clamps count and length without throwing', () => {
+      const many = Array.from({ length: 12 }, (_, i) => ({ condition: `r${i}`, action: 'review' as const }));
+      expect(normalizeResearchLevers({ query: 'q', itemRules: many }).itemRules).toHaveLength(10);
+      const long = normalizeResearchLevers({
+        query: 'q',
+        itemRules: [{ condition: 'y'.repeat(500), action: 'block' }],
+      });
+      expect(long.itemRules[0].condition).toHaveLength(300);
     });
   });
 

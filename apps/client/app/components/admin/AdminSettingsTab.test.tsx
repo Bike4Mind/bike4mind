@@ -353,14 +353,17 @@ describe('AdminSettingsTab Turnstile notice', () => {
 });
 
 describe('AdminSettingsTab reviewer emails setting', () => {
-  it('renders the string-list editor with the stored reviewers and no generic card', () => {
-    serverSettings = [{ settingName: 'ImageModerationReviewerEmails', settingValue: '["reviewer@example.com"]' }];
-    renderSecurityTab();
+  it.each(['ImageModerationReviewerEmails', 'ImageModerationEscalationEmails'] as const)(
+    'renders the %s string-list editor with the stored reviewers and no generic card',
+    key => {
+      serverSettings = [{ settingName: key, settingValue: '["reviewer@example.com"]' }];
+      renderSecurityTab();
 
-    const field = screen.getByTestId('string-list-setting-ImageModerationReviewerEmails');
-    expect(field.getAttribute('data-stored-value')).toContain('reviewer@example.com');
-    expect(screen.queryByTestId('generic-setting-ImageModerationReviewerEmails')).toBeNull();
-  });
+      const field = screen.getByTestId(`string-list-setting-${key}`);
+      expect(field.getAttribute('data-stored-value')).toContain('reviewer@example.com');
+      expect(screen.queryByTestId(`generic-setting-${key}`)).toBeNull();
+    }
+  );
 
   it('gives the generic field to an object setting that defaults to an array', () => {
     // The editor belongs to the listed keys, not to every object setting that happens to hold a
