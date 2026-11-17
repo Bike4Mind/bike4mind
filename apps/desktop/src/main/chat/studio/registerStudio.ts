@@ -131,6 +131,7 @@ export function registerStudio(deps: {
     }
   }
   const indexed = new Map<string, string>();
+  const indexedFamilies = new Set<string>();
   async function indexChatSession(sessionId: string) {
     if (!auth.getApiClient()) return;
     const scope = sessions.scopeKey();
@@ -177,13 +178,18 @@ export function registerStudio(deps: {
     const scope = sessions.scopeKey();
     const workspace = await sessions.resolveStudioWorkspace(sessionId, scope);
     if (!workspace) throw new Error('Studio workspace unavailable.');
-    for (const candidate of (await sessions.list()).slice(0, 256)) {
-      if (scope !== sessions.scopeKey()) throw new Error('Account changed.');
-      if (
-        candidate.id === sessionId ||
-        (await sessions.resolveStudioWorkspace(candidate.id, scope))?.workspaceId === workspace.workspaceId
-      )
-        await indexChatSession(candidate.id);
+    const familyKey = `${scope}:${workspace.workspaceId}`;
+    if (!indexedFamilies.has(familyKey)) {
+      for (const candidate of (await sessions.list()).slice(0, 256)) {
+        if (scope !== sessions.scopeKey()) throw new Error('Account changed.');
+        if (
+          candidate.id === sessionId ||
+          (await sessions.resolveStudioWorkspace(candidate.id, scope))?.workspaceId === workspace.workspaceId
+        )
+          await indexChatSession(candidate.id);
+      }
+      if (indexedFamilies.size >= 256) indexedFamilies.clear();
+      indexedFamilies.add(familyKey);
     }
     return live.get(sessionId);
   });
@@ -230,6 +236,7 @@ export function registerStudio(deps: {
       live.invalidate();
       authorizations.clear();
       indexed.clear();
+      indexedFamilies.clear();
     }
   }, 500);
   let lastScope = sessions.scopeKey();
@@ -239,6 +246,7 @@ export function registerStudio(deps: {
     live.invalidate();
     authorizations.clear();
     indexed.clear();
+    indexedFamilies.clear();
   };
   app.once('before-quit', dispose);
   return { live, generation, dispose, indexChatSession };
