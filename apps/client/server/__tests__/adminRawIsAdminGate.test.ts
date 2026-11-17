@@ -209,7 +209,6 @@ const OWNER_OR_ADMIN = new Map<string, string>([
     'managePolicies holder manages the org; verifyOrgPermission lets an admin through',
   ],
   ['organizations/[id]/mfa-policy.ts', 'isAdmin only passed to toSafeOrganization for response shaping'],
-  ['organizations/[id]/model-policy.ts', ORG_MANAGER_REASON],
   ['organizations/[id]/pendingUsers.ts', 'isAdmin only widens projection of returned users'],
   [
     'organizations/[id]/storage-usage.ts',
