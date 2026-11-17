@@ -68,12 +68,12 @@ function DecisionCell({ row }: { row: ReviewRow }) {
 
 // Column widths plus the 3.5rem actions column sum to the DataTable minWidth below; keep them in step.
 const columns: DataColumn<ReviewRow>[] = [
-  { id: 'admin', label: 'Admin', width: '10.5rem', wrap: true, render: row => label(row) },
+  { id: 'admin', label: 'Admin', width: '12rem', wrap: true, render: row => label(row) },
   { id: 'permissions', label: 'Permissions', width: '7rem', wrap: true, render: row => <PermissionsCell row={row} /> },
   {
     id: 'granted',
     label: 'Granted by',
-    width: '6.5rem',
+    width: '7.5rem',
     wrap: true,
     render: ({ live }) => {
       if (!live) return '-';
@@ -89,7 +89,9 @@ const columns: DataColumn<ReviewRow>[] = [
   {
     id: 'lastAction',
     label: 'Last admin action',
-    width: '8.5rem',
+    width: '6rem',
+    wrap: true,
+    wrapHeader: true,
     render: ({ live }) => {
       if (!live) return '\u2014';
       return live.lastAdminActionAt ? <RelativeTime at={live.lastAdminActionAt} /> : 'None';
@@ -98,7 +100,8 @@ const columns: DataColumn<ReviewRow>[] = [
   {
     id: 'lastSignIn',
     label: 'Last sign-in',
-    width: '9rem',
+    width: '8rem',
+    wrap: true,
     render: ({ live }) => {
       if (!live) return '\u2014';
       return live.lastSignInAt ? <RelativeTime at={live.lastSignInAt} /> : 'None in 12 months';
@@ -107,7 +110,7 @@ const columns: DataColumn<ReviewRow>[] = [
   {
     id: 'flags',
     label: 'Flags',
-    width: '5.5rem',
+    width: '6.5rem',
     wrap: true,
     render: ({ live }) =>
       live ? (
