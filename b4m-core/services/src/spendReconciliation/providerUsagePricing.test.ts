@@ -115,18 +115,22 @@ describe('priceProviderUsage', () => {
     expect(result.unpricedModels).toEqual([]);
   });
 
-  it('prices a model the adapter table does not ship at its published rates', async () => {
+  // USD for 1M input + 1M output + 1M cache-read tokens.
+  it.each([
+    ['gpt-6.1-sol', 12.1], // 2 + 10 + 0.10
+    ['gpt-6-astra', 61], // 10 + 50 + 1
+  ])('prices %s, which the adapter table does not ship, at its published rates', async (modelId, usd) => {
     const result = await priceProviderUsage('openai', [
-      row('gpt-6.1-sol', { inputTokens: 1_000_000, outputTokens: 1_000_000, cacheReadTokens: 1_000_000 }),
+      row(modelId, { inputTokens: 1_000_000, outputTokens: 1_000_000, cacheReadTokens: 1_000_000 }),
     ]);
-    // 2 input + 10 output + 0.10 cache read.
-    expect(result.usd).toBeCloseTo(12.1, 6);
+    expect(result.usd).toBeCloseTo(usd, 6);
     expect(result).toMatchObject({ unpricedOutputTokens: 0, unpricedModels: [] });
   });
 
   it.each([
     ['gpt-image-1.5-2025-12-16', 40],
     ['gpt-image-2', 38],
+    ['gpt-image-2.5-sunburst', 38],
   ])('prices the image model %s at its per-token image rates', async (modelId, usd) => {
     const result = await priceProviderUsage('openai', [
       row(modelId, { inputTokens: 1_000_000, outputTokens: 1_000_000 }),

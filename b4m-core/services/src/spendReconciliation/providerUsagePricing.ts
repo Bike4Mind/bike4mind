@@ -43,6 +43,7 @@ const PER_MTOK = 1 / 1_000_000;
 export const USAGE_ONLY_PRICING: Record<UsageReportProvider, Record<string, ModelInfo['pricing']>> = {
   anthropic: {},
   openai: {
+    'gpt-6-astra': { 272_000: { input: 10 * PER_MTOK, output: 50 * PER_MTOK, cache_read: 1 * PER_MTOK } },
     'gpt-6.1-sol': { 272_000: { input: 2 * PER_MTOK, output: 10 * PER_MTOK, cache_read: 0.1 * PER_MTOK } },
   },
 };
