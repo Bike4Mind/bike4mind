@@ -3,6 +3,7 @@ import { defineConfig } from 'tsdown';
 export default defineConfig({
   entry: [
     'src/index.ts',
+    'src/cache/ApplicationCache.ts',
     'src/artifactParser.ts',
     // Own entry so the client can import the elision detector without pulling the whole
     // utils barrel into the browser bundle (same reason as artifactParser above).
