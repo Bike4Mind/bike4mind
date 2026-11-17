@@ -1,7 +1,8 @@
 import type { APIRequestContext, Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
-import { apiGetOtcCode, apiLoginViaOtc } from './helpers/api';
+import { apiGetMfaCode, apiGetOtcCode, apiLoginViaOtc } from './helpers/api';
+import { watchMfaSetup } from './helpers/mfa';
 import type { LoginPage } from './pages/LoginPage';
 
 /**
@@ -23,7 +24,18 @@ const EXISTING_USER_EMAIL = 'qa-user-e2e@test.com';
 const BARE_REFRESH_COOKIE = 'b4m_rt';
 const BARE_REFRESH_COOKIE_PATH = '/api';
 
-/** Signs in through the login form and returns the verify response the app received. */
+type VerifyBody = {
+  email?: string;
+  registrationRequired?: boolean;
+  mfaRequired?: boolean;
+  mfaSetupRequired?: boolean;
+};
+
+/**
+ * Signs in through the login form and returns the verify response the app received. Handles the
+ * account's second factor: a TOTP challenge once it is enrolled, or setup from the dialog when the
+ * stage enforces MFA and the account has not enrolled yet.
+ */
 async function signInThroughForm(page: Page, loginPage: LoginPage, request: APIRequestContext) {
   await loginPage.goto();
   await loginPage.fillEmail(EXISTING_USER_EMAIL);
@@ -32,10 +44,21 @@ async function signInThroughForm(page: Page, loginPage: LoginPage, request: APIR
   const verified = page.waitForResponse(
     response => response.url().includes('/api/otc/verify') && response.request().method() === 'POST'
   );
-  await loginPage.submit();
+  const mfaSetup = watchMfaSetup(page);
+  await loginPage.submitOtcExpectingMfa();
   const response = await verified;
   expect(response.status(), 'OTC verify').toBe(200);
-  return (await response.json()) as { email?: string; registrationRequired?: boolean; mfaRequired?: boolean };
+  const body = (await response.json()) as VerifyBody;
+
+  if (body.mfaRequired) {
+    await loginPage.expectMfaChallenge();
+    await loginPage.fillMfaCode(await apiGetMfaCode(request, EXISTING_USER_EMAIL));
+    await loginPage.submitMfa();
+  } else {
+    await mfaSetup.enrollIfAsked(body);
+  }
+  await page.waitForURL(url => !url.pathname.includes('/login'), { timeout: TIMEOUTS.ACTION });
+  return body;
 }
 
 async function expectSignedIn(page: Page) {
@@ -58,7 +81,6 @@ test.describe('Existing user sign-in', () => {
     await test.step('the code logs in to the existing account instead of starting a registration', async () => {
       const body = await signInThroughForm(page, loginPage, request);
       expect(body.registrationRequired, 'an existing account must not be asked to register').toBeFalsy();
-      expect(body.mfaRequired, 'the standing account is expected to have no MFA').toBeFalsy();
       expect(body.email).toBe(EXISTING_USER_EMAIL);
       await basePage.dismissModals();
       await expectSignedIn(page);
