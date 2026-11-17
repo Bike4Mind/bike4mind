@@ -10,6 +10,7 @@ import type { TaskContract } from '@shared/orchestration';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
 import type { CompletionRunMinter } from './completionRuns';
+import { MediaStore } from './media/MediaStore';
 import type { ModelCatalog } from './ModelCatalog';
 import type { AccessStore } from './tools/AccessStore';
 
@@ -64,6 +65,8 @@ describe('orchestration run budget', () => {
   let completions: ReturnType<typeof vi.fn<Request>>;
   let raise: ReturnType<typeof vi.fn<Request>>;
   let get: ReturnType<typeof vi.fn<Request>>;
+  /** Client-level post (resolves to the body): the paid media routes. */
+  let paid: ReturnType<typeof vi.fn<Request>>;
   let mint: ReturnType<typeof vi.fn<CompletionRunMinter>>;
   let events: ChatStreamEvent[];
   let budgetState: CompletionRunBudgetState;
@@ -90,6 +93,7 @@ describe('orchestration run budget', () => {
     get = vi.fn<Request>(url =>
       url === USAGE_PATH ? Promise.resolve({ data: usage(budgetState) }) : Promise.reject(new Error(`no ${url}`))
     );
+    paid = vi.fn<Request>().mockRejectedValue(new Error('no paid call expected'));
     mint = vi.fn<CompletionRunMinter>().mockResolvedValue({ runId: RUN_A, createdAt: '2026-11-10T00:00:00.000Z' });
     service = new ChatService({
       store,
@@ -100,11 +104,13 @@ describe('orchestration run budget', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
+          post: paid,
           getAxiosInstance: () => ({ post, get }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: event => void events.push(event),
       mintCompletionRun: mint,
+      media: new MediaStore(await mkdtemp(join(tmpdir(), 'b4m-budget-media-'))),
     });
   });
   afterEach(() => {
@@ -355,5 +361,45 @@ describe('orchestration run budget', () => {
     expect((await policyOf(root.id))?.budgetCredits).toBe(2000);
     expect((await policyOf(root.id))?.budgetPaused).toBeUndefined();
     for (const stream of streams) stream.end();
+  });
+  it('pauses the run when a paid tool is refused for the budget, and the raise resumes it', async () => {
+    const root = await budgeted(500);
+    budgetState = { budgetCredits: 500, committedCredits: 480, reservedCredits: 0, remainingCredits: 20 };
+    paid.mockRejectedValue(
+      Object.assign(new Error('Request failed'), {
+        isAxiosError: true,
+        response: { status: 422, data: { error: 'Run budget used up', errorCode: 'run_budget_exhausted' } },
+      })
+    );
+
+    await service.send(root.id, 'Read the summary aloud');
+    await waitStream(0);
+    streams[0].write(
+      frame({
+        type: 'tool_use',
+        tools: [{ id: 'tts-0', name: 'generate_speech', arguments: JSON.stringify({ text: 'The summary' }) }],
+      })
+    );
+    streams[0].write(frame('[DONE]'));
+    await idle(root.id);
+
+    expect(paid).toHaveBeenCalledWith(
+      '/api/ai/tts',
+      expect.objectContaining({ run: expect.objectContaining({ runId: RUN_A, role: 'root', purpose: 'tool' }) }),
+      expect.anything()
+    );
+    // The model is not asked to carry on past a refused spend: the run stops where it is.
+    expect(completions).toHaveBeenCalledTimes(1);
+    const reply = await lastReply(root.id);
+    expect(reply?.stopReason).toBe(RUN_BUDGET_STOP);
+    expect(reply?.toolCalls?.[0]).toMatchObject({ id: 'tts-0', status: 'error' });
+    expect((await policyOf(root.id))?.budgetPaused).toBe(true);
+
+    await expect(service.raiseRunBudget(root.id, 1500)).resolves.toEqual({ ok: true, resumed: 1 });
+    await waitStream(1);
+    expect(wire(1).run?.runId).toBe(RUN_A);
+    finish(1, 'Carried on');
+    await idle(root.id);
+    expect((await lastReply(root.id))?.stopReason).not.toBe(RUN_BUDGET_STOP);
   });
 });

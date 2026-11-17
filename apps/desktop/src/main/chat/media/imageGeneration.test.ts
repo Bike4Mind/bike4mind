@@ -2,6 +2,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RunBudgetExhaustedError } from '../completions';
 import { generateImage, resolveImageUrls } from './imageGeneration';
 import type { MediaApiClient, QuestPoll } from './MediaApiClient';
 import { MediaStore } from './MediaStore';
@@ -144,6 +145,18 @@ describe('generateImage', () => {
       message: 'Out of credits.',
       notice: { kind: 'insufficient-credits' },
     });
+    expect(h.fetchGenerated).not.toHaveBeenCalled();
+  });
+
+  // A refused run claim in the worker: the POST already succeeded, so the poll is the only signal.
+  it('turns a quest refused for the run budget into RunBudgetExhaustedError, so the run pauses', async () => {
+    const h = await harness([
+      { id: 'q1', status: 'done', type: 'error', errorCode: 'run_budget_exhausted', reply: 'Run budget used up.' },
+    ]);
+
+    const outcome = await settle(generateImage(REQUEST, h.deps), 5_000);
+    expect(outcome).toBeInstanceOf(RunBudgetExhaustedError);
+    expect(outcome).toMatchObject({ message: 'Run budget used up.' });
     expect(h.fetchGenerated).not.toHaveBeenCalled();
   });
 
