@@ -93,6 +93,14 @@ function byTestId(id: string): HTMLElement | null {
 }
 
 describe('UpdateNotice', () => {
+  it('anchors to its containing region when the chat reserves space above the composer', async () => {
+    await render(<UpdateNotice state={offered('0.2.0')} onOpenRelease={() => {}} onDismiss={() => {}} contained />);
+    const style = getComputedStyle(byTestId('update-notice') as HTMLElement);
+    expect(style.position).toBe('absolute');
+    expect(style.bottom).toBe('12px');
+    expect(style.right).toBe('12px');
+  });
+
   it('announces the newer version and opens its release page', async () => {
     const onOpenRelease = vi.fn();
     await mount(offered('0.2.0'), { onOpenRelease });

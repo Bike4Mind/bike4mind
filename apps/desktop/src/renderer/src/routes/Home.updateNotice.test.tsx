@@ -120,17 +120,22 @@ const byTestId = (id: string) => document.querySelector<HTMLElement>(`[data-test
 const notices = () => Array.from(document.querySelectorAll<HTMLElement>('[data-testid="update-notice"]'));
 
 describe('the update card in the signed-in window', () => {
-  it('floats once, outside the sidebar, whether the sidebar is open or collapsed', async () => {
+  it('anchors above the composer, outside the sidebar, whether the sidebar is open or collapsed', async () => {
     await mount();
     expect(byTestId('sidebar')).not.toBeNull();
     expect(notices()).toHaveLength(1);
-    expect(getComputedStyle(notices()[0]).position).toBe('fixed');
+    expect(getComputedStyle(notices()[0]).position).toBe('absolute');
+    expect(notices()[0].parentElement).toBe(byTestId('chat-update-notice-region'));
+    expect(getComputedStyle(notices()[0].parentElement!).position).toBe('relative');
+    expect(byTestId('chat-update-notice-region')?.contains(byTestId('chat-composer-region'))).toBe(false);
+    expect(byTestId('chat-update-notice-region')?.nextElementSibling).toBe(byTestId('chat-composer-region'));
     expect(byTestId('sidebar')?.contains(notices()[0])).toBe(false);
 
     await act(async () => byTestId('sidebar-toggle-btn')?.click());
     expect(byTestId('sidebar-rail')).not.toBeNull();
     expect(notices()).toHaveLength(1);
-    expect(getComputedStyle(notices()[0]).position).toBe('fixed');
+    expect(getComputedStyle(notices()[0]).position).toBe('absolute');
+    expect(notices()[0].parentElement).toBe(byTestId('chat-update-notice-region'));
   });
 
   it('confirms in the card a restart the account label asked for while work is running', async () => {

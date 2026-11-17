@@ -21,6 +21,7 @@ export interface UpdateNoticeProps {
   onOpenRelease: (url: string) => void;
   onDismiss: (version: string) => void;
   actions?: UpdateNoticeActions;
+  contained?: boolean;
 }
 
 const EDGE = 12;
@@ -35,7 +36,7 @@ function noticeTitle(state: UpdateState, inApp: boolean): string {
  * Given `actions` the card downloads and installs; which version it shows, if any,
  * is updateNoticeVersion's call.
  */
-export function UpdateNotice({ state, onOpenRelease, onDismiss, actions }: UpdateNoticeProps) {
+export function UpdateNotice({ state, onOpenRelease, onDismiss, actions, contained = false }: UpdateNoticeProps) {
   // A failed download outranks an earlier dismissal: the user has just asked for this version.
   const version =
     updateNoticeVersion(state) ??
@@ -50,7 +51,7 @@ export function UpdateNotice({ state, onOpenRelease, onDismiss, actions }: Updat
       role="status"
       data-testid="update-notice"
       sx={{
-        position: 'fixed',
+        position: contained ? 'absolute' : 'fixed',
         bottom: EDGE,
         right: EDGE,
         zIndex: 'snackbar',
@@ -168,11 +169,12 @@ function NoticeActions({ state, actions }: { state: UpdateState; actions: Update
 }
 
 /** The notice wired to main through `controller`, which the account label shares. */
-export function AppUpdateNotice({ controller }: { controller: AppUpdateController }) {
+export function AppUpdateNotice({ controller, contained }: { controller: AppUpdateController; contained?: boolean }) {
   return (
     <UpdateNotice
       state={controller.state}
       actions={controller}
+      contained={contained}
       onOpenRelease={url => void window.b4m.shell.openExternal(url)}
       onDismiss={controller.dismiss}
     />
