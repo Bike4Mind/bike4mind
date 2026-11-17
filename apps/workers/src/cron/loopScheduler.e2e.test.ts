@@ -2752,6 +2752,21 @@ describe('dispatchLoopNow', () => {
     expect(after.hold).toMatchObject({ kind: 'capacity', limit: 'loop' });
   });
 
+  it('opens what the server cap allows of a multi-lane loop, and holds the rest on the server cap', async () => {
+    for (let i = 0; i < MAX_ACTIVE_LOOP_RUNS - 1; i++)
+      await createLoop({ userId: 'user-2', activeExecutionIds: [`busy-${i}`], nextRunAt: LATER });
+    const loop = await createLoop({ maxConcurrent: 2 });
+    for (let i = 0; i < 3; i++) await createTicket(loop.id);
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect(await reload(loop.id)).toMatchObject({
+      activeExecutionIds: ['exec-1'],
+      hold: { kind: 'capacity', limit: 'server', at: NOW },
+    });
+  });
+
   it('folds both finished lanes of a two-lane loop and refills both in one call', async () => {
     const loop = await createLoop({ maxConcurrent: 2, activeExecutionIds: ['exec-a', 'exec-b'], nextRunAt: LATER });
     await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-a' });

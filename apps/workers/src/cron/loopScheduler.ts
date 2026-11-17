@@ -207,9 +207,9 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
 /**
  * Event-driven dispatch, from the loop dispatch queue (apps/workers/src/queueHandlers/loopDispatch.ts): folds
  * the loop's finished run, then fills free run slots one at a time through the tick's own `dispatchDue`, until
- * this loop has no free lane or ready ticket left, or the cap is reached. Each claim takes the longest-due loop, so a run that frees a slot
- * does not hand it straight back to its own loop, and a loop that went due silently (its interval) does not
- * keep this one waiting for the tick while slots are free. The claim's lease is the only gate, so the tick
+ * this loop has no free lane or ready ticket left, or the cap is reached. Each claim takes the longest-due loop,
+ * so a run that frees a slot does not hand it straight back to its own loop, and a loop that went due silently
+ * (its interval) does not keep this one waiting for the tick while slots are free. The claim's lease is the only gate, so the tick
  * and any number of events never start one loop twice. A no-op when nothing is due.
  */
 export async function dispatchLoopNow(loopId: string, now: Date, logger: Logger): Promise<void> {
@@ -232,6 +232,7 @@ export async function dispatchLoopNow(loopId: string, now: Date, logger: Logger)
   // consumer's concurrency (infra/cron.ts, loopDispatchQueue); an atomic in-flight counter is the upgrade.
   const { maxActiveRuns, lanesPerUser } = await loopLaneLimits();
   const claimed: string[] = [];
+  const skipped: string[] = [];
   let serverFull = false;
   let done = false;
   for (let i = 0; i < maxActiveRuns && !done; i++) {
@@ -240,10 +241,11 @@ export async function dispatchLoopNow(loopId: string, now: Date, logger: Logger)
       serverFull = true;
       break;
     }
-    // The real room left, so a multi-lane loop's budget splits across its lanes as on the tick.
+    // The room left, as on the tick, so a multi-lane loop's budget splits across the lanes it opens.
     const room = Math.min(MAX_DISPATCH_PER_TICK, maxActiveRuns - inFlight);
     const result = await dispatchDue(now, 1, lanesPerUser, logger, room);
     claimed.push(...result.claimed);
+    skipped.push(...result.skipped);
     // Nothing started: nothing else is startable now.
     if (!result.capped) break;
     // A loop left due with a free lane and another ready ticket fills it in this call, as on the tick.
@@ -251,8 +253,9 @@ export async function dispatchLoopNow(loopId: string, now: Date, logger: Logger)
   }
 
   // dispatchDue already pushed for every loop it claimed, and held it on the owner's lane limit if that was full.
-  if (claimed.includes(loopId)) return;
-  const held = await holdUnstarted(loopId, serverFull, claimed, now);
+  // A loop that opened a lane but still has a free one is held on the server cap below, as on the tick.
+  if (claimed.includes(loopId) && !serverFull) return;
+  const held = await holdUnstarted(loopId, serverFull, skipped, now);
   if (folded || held) await pushLoopChanged(loop.userId, loop.id, logger);
 }
 
@@ -260,7 +263,7 @@ export async function dispatchLoopNow(loopId: string, now: Date, logger: Logger)
  * Shows why an event could not start a due loop, so it does not look stuck until the next tick: its own lanes
  * are full (`loop`), else the server-wide cap (the tick's own `setCapacityHolds`, which skips leased loops).
  */
-async function holdUnstarted(loopId: string, serverFull: boolean, claimed: string[], now: Date): Promise<boolean> {
+async function holdUnstarted(loopId: string, serverFull: boolean, skipped: string[], now: Date): Promise<boolean> {
   const loop = await loopRepository.findById(loopId);
   if (!loop || loop.status !== 'live' || !loop.nextRunAt || new Date(loop.nextRunAt) > now) return false;
   const lanes = loopMaxConcurrent(loop);
@@ -270,7 +273,7 @@ async function holdUnstarted(loopId: string, serverFull: boolean, claimed: strin
     return true;
   }
   if (!serverFull) return false;
-  await loopRepository.setCapacityHolds(now, claimed);
+  await loopRepository.setCapacityHolds(now, skipped);
   return true;
 }
 
