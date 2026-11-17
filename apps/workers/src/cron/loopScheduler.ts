@@ -209,8 +209,8 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
  * the loop's finished run, then fills free run slots one at a time through the tick's own `dispatchDue`, until
  * this loop has no free lane or ready ticket left, or the cap is reached. Each claim takes the longest-due loop,
  * so a run that frees a slot does not hand it straight back to its own loop, and a loop that went due silently
- * (its interval) does not keep this one waiting for the tick while slots are free. The claim's lease is the only gate, so the tick
- * and any number of events never start one loop twice. A no-op when nothing is due.
+ * (its interval) does not keep this one waiting for the tick while slots are free. The claim's lease is the only
+ * gate, so the tick and any number of events never start one loop twice. A no-op when nothing is due.
  */
 export async function dispatchLoopNow(loopId: string, now: Date, logger: Logger): Promise<void> {
   if ((await adminSettingsRepository.getSettingsValue('EnableLoops')) !== true) return;
