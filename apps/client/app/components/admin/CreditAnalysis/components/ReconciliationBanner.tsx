@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Alert, Chip, CircularProgress, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
@@ -20,28 +21,17 @@ const statusFromDelta = (deltaPct: number): { color: 'success' | 'warning' | 'da
 };
 
 export const ReconciliationBanner: React.FC = () => {
-  const [rows, setRows] = useState<ISpendReconciliation[] | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchReconciliation = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const res = await api.get<{ reconciliations: ISpendReconciliation[] }>(
-        '/api/admin/spend-reconciliation?view=latest'
-      );
-      setRows(res.data.reconciliations);
-    } catch (err) {
-      setError((err as Error)?.message || 'Failed to load reconciliation data');
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchReconciliation();
-  }, [fetchReconciliation]);
+  const query = useQuery({
+    queryKey: ['admin', 'spend-reconciliation', 'latest'],
+    queryFn: async () =>
+      (await api.get<{ reconciliations: ISpendReconciliation[] }>('/api/admin/spend-reconciliation?view=latest')).data
+        .reconciliations,
+    staleTime: 5 * 60 * 1000,
+  });
+  const rows = query.data ?? null;
+  const isLoading = query.isFetching;
+  const error = query.error ? query.error.message || 'Failed to load reconciliation data' : null;
+  const fetchReconciliation = () => void query.refetch();
 
   // Nothing to show until the first reconciliation runs.
   if (isLoading && !rows) {
