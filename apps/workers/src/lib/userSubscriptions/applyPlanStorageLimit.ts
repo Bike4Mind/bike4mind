@@ -3,16 +3,14 @@ import { organizationRepository, userRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import {
-  endsPlanStorageAllowance,
-  releasePlanStorageLimit,
-} from '@bike4mind/server-utils/subscriptions/releasePlanStorageLimit';
+  PLAN_STORAGE_GRANTING_STATUSES,
+  TERMINAL_SUBSCRIPTION_STATUSES,
+} from '@bike4mind/server-utils/lib/subscriptions/types';
+import { releasePlanStorageLimit } from '@bike4mind/server-utils/subscriptions/releasePlanStorageLimit';
 import type Stripe from 'stripe';
 
 /** Stripe price metadata key carrying the plan's storage allowance, in decimal MB (see BYTES_PER_STORAGE_MB). */
 export const STORAGE_LIMIT_PRICE_METADATA_KEY = 'storageLimitMb';
-
-/** Trialing counts as granting: Stripe has not charged yet, but the plan's access is already live. */
-const STORAGE_GRANTING_STATUSES: ReadonlySet<Stripe.Subscription.Status> = new Set(['active', 'trialing']);
 
 export type PlanStorageLimitReading =
   { kind: 'absent' } | { kind: 'invalid'; raw: string } | { kind: 'limit'; limitMb: number };
@@ -46,7 +44,7 @@ export async function applyPlanStorageLimit(
   ownerType: 'User' | 'Organization' = 'User'
 ): Promise<void> {
   // Before the metadata read: the ended plan's allowance goes whatever the price carries.
-  if (ownerType === 'User' && endsPlanStorageAllowance(subscription.status)) {
+  if (ownerType === 'User' && TERMINAL_SUBSCRIPTION_STATUSES.has(subscription.status)) {
     await releasePlanStorageLimit(userId, subscription.id, logger);
     return;
   }
@@ -57,7 +55,7 @@ export async function applyPlanStorageLimit(
     logger.warn(`Ignoring invalid ${STORAGE_LIMIT_PRICE_METADATA_KEY} on price ${price?.id}`, { raw: reading.raw });
     return;
   }
-  if (!STORAGE_GRANTING_STATUSES.has(subscription.status)) return;
+  if (!PLAN_STORAGE_GRANTING_STATUSES.has(subscription.status)) return;
   try {
     const repository = ownerType === 'Organization' ? organizationRepository : userRepository;
     const applied = await repository.setPlanStorageLimit(userId, reading.limitMb);

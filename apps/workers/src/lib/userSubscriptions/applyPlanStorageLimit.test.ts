@@ -14,8 +14,7 @@ vi.mock('@bike4mind/database', () => ({
 const { mockEmitMetric } = vi.hoisted(() => ({ mockEmitMetric: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: mockEmitMetric }));
 const { mockRelease } = vi.hoisted(() => ({ mockRelease: vi.fn() }));
-vi.mock('@bike4mind/server-utils/subscriptions/releasePlanStorageLimit', async importOriginal => ({
-  ...(await importOriginal<typeof import('@bike4mind/server-utils/subscriptions/releasePlanStorageLimit')>()),
+vi.mock('@bike4mind/server-utils/subscriptions/releasePlanStorageLimit', () => ({
   releasePlanStorageLimit: mockRelease,
 }));
 

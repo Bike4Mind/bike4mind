@@ -2,6 +2,7 @@ import { mongoose } from '@bike4mind/database';
 import {
   ISubscription,
   ISubscriptionRepository,
+  PLAN_STORAGE_GRANTING_STATUSES,
   SubscriptionOwnerType,
   SubscriptionSource,
   TERMINAL_SUBSCRIPTION_STATUSES,
@@ -205,7 +206,7 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
     const row = await this.model.exists({
       ownerType: SubscriptionOwnerType.User,
       ownerId: userId,
-      status: { $in: ['active', 'trialing'] },
+      status: { $in: [...PLAN_STORAGE_GRANTING_STATUSES] },
       subscriptionId: { $ne: excludeSubscriptionId },
     });
     return row !== null;
