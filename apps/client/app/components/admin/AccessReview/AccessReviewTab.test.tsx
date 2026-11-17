@@ -232,6 +232,22 @@ describe('AccessReviewTab', () => {
     expect(screen.getByTestId('admin-access-review-pending-self')).toBeInTheDocument();
   });
 
+  it('labels an undecided admin as added after a completed review instead of pending', () => {
+    mocks.report = {
+      ...report([row({ userId: OTHER_FULL })]),
+      record: { completedAt: '2026-11-10T00:00:00.000Z', decisions: [] } as unknown as AccessReviewReport['record'],
+    };
+    renderWithTheme(<AccessReviewTab />);
+    expect(within(rowOf(OTHER_FULL)).getByTestId('admin-access-review-added-after-chip')).toBeInTheDocument();
+    expect(within(rowOf(OTHER_FULL)).queryByTestId('admin-access-review-pending-text')).toBeNull();
+  });
+
+  it('still shows pending for an undecided admin while the review is incomplete', () => {
+    renderWithTheme(<AccessReviewTab />);
+    expect(within(rowOf(OTHER_FULL)).getByTestId('admin-access-review-pending-text')).toBeInTheDocument();
+    expect(within(rowOf(OTHER_FULL)).queryByTestId('admin-access-review-added-after-chip')).toBeNull();
+  });
+
   it('lists an account revoked this quarter from the review record', () => {
     const base = report([row({})]);
     mocks.report = {

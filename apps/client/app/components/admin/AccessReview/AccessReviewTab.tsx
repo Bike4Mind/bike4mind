@@ -32,7 +32,12 @@ import { RevokeAccessDialog } from './RevokeAccessDialog';
 const DORMANT_DAYS_DEFAULT = 90;
 
 /** A live admin row, or an account whose access this review already revoked. */
-type ReviewRow = { live: AccessReviewRow | null; revoked: WireAccessReviewDecision | null; userId: string };
+type ReviewRow = {
+  live: AccessReviewRow | null;
+  revoked: WireAccessReviewDecision | null;
+  userId: string;
+  reviewComplete: boolean;
+};
 
 const sameId = (a: string | undefined, b: string) => !!a && a.toLowerCase() === b.toLowerCase();
 
@@ -55,7 +60,20 @@ function PermissionsCell({ row }: { row: ReviewRow }) {
 
 function DecisionCell({ row }: { row: ReviewRow }) {
   const decision = decisionOf(row);
-  if (!decision) return <Typography level="body-sm">Pending</Typography>;
+  if (!decision && row.reviewComplete)
+    return (
+      <Tooltip title="Access granted after this quarter's review was completed. It is included in the next quarterly review.">
+        <Chip size="sm" variant="soft" color="neutral" data-testid="admin-access-review-added-after-chip">
+          Added after review
+        </Chip>
+      </Tooltip>
+    );
+  if (!decision)
+    return (
+      <Typography level="body-sm" data-testid="admin-access-review-pending-text">
+        Pending
+      </Typography>
+    );
   return (
     <Stack>
       <Chip size="sm" color={decision.decision === 'revoked' ? 'danger' : 'success'}>
@@ -148,11 +166,12 @@ export default function AccessReviewTab() {
 
   const rows = useMemo<ReviewRow[]>(() => {
     if (!data) return [];
-    const live = data.admins.map(admin => ({ live: admin, revoked: null, userId: admin.userId }));
+    const reviewComplete = Boolean(data.record?.completedAt);
+    const live = data.admins.map(admin => ({ live: admin, revoked: null, userId: admin.userId, reviewComplete }));
     const listed = new Set(data.admins.map(admin => admin.userId));
     const revoked = (data.record?.decisions ?? [])
       .filter(entry => entry.decision === 'revoked' && !listed.has(entry.userId))
-      .map(entry => ({ live: null, revoked: entry, userId: entry.userId }));
+      .map(entry => ({ live: null, revoked: entry, userId: entry.userId, reviewComplete }));
     return [...live, ...revoked];
   }, [data]);
 
@@ -197,7 +216,7 @@ export default function AccessReviewTab() {
     const menu = (
       <RowActionsMenu
         testId="admin-access-review-row-actions"
-        ariaLabel={`Actions for ${label({ live, revoked: null, userId: live.userId })}`}
+        ariaLabel={`Actions for ${label({ live, revoked: null, userId: live.userId, reviewComplete: false })}`}
         disabled={own}
       >
         <MenuItem
