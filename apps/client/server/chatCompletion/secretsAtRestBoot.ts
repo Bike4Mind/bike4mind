@@ -5,7 +5,7 @@ import type { Logger } from '@bike4mind/observability';
  * Registers the at-rest key on the utils instance this (CommonJS) process graph resolves, which is
  * the one @bike4mind/services reads. connectDB only configures the ESM copy its own graph loads
  * (see esmWorkspacePackages.mjs), so without this the services-side decryptAtRest has no key.
- * Returns false (and logs) when no usable key ended up registered. Exported for tests.
+ * Returns false (and logs) when no usable key ended up registered. Called at ChatCompletion boot.
  */
 export function registerSecretsAtRest(
   logger: Pick<Logger, 'error'>,

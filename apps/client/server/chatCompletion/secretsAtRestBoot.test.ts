@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -31,7 +32,7 @@ describe('registerSecretsAtRest', () => {
 describe('registerSecretsAtRest in a CommonJS tsx process', () => {
   let dir: string;
   beforeAll(() => {
-    dir = mkdtempSync(join(clientDir, '.secrets-at-rest-boot-'));
+    dir = mkdtempSync(join(tmpdir(), 'secrets-at-rest-boot-'));
     writeFileSync(
       join(dir, 'probe.ts'),
       `
