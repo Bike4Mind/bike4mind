@@ -21,6 +21,11 @@ import { useGetSettingsValue, useSettingsFromServer, useUpdateSettings } from '@
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { AdminDialog, AdminDialogFooter, ErrorState, LoadingState, StatusChip, UnsavedChangesGuard } from '../shared';
 import { leavesAdminSettingsPage, useRouteAdminTabSwitches } from '../shared/adminTabSwitches';
+import {
+  DEFAULT_SECURITY_VIEW,
+  SECURITY_DASHBOARD_SEARCH_PARSERS,
+  SECURITY_VIEW_PARAM,
+} from '../securityDashboardSearch';
 
 interface SlackWorkspace {
   id: string;
@@ -30,6 +35,16 @@ interface SlackWorkspace {
 }
 
 const TEST_ID = 'security-issue-filing-settings';
+
+/** The editor belongs to Scans; other Security views unmount it just like another admin tab. */
+export function leavesIssueFilingSettings(
+  current: Parameters<typeof leavesAdminSettingsPage>[0],
+  next: Parameters<typeof leavesAdminSettingsPage>[1]
+): boolean {
+  if (leavesAdminSettingsPage(current, next)) return true;
+  const value = SECURITY_VIEW_PARAM in next.search ? next.search[SECURITY_VIEW_PARAM] : undefined;
+  return (SECURITY_DASHBOARD_SEARCH_PARSERS[SECURITY_VIEW_PARAM](value) ?? DEFAULT_SECURITY_VIEW) !== 'scans';
+}
 
 // One count per form control: the two priority selects share the severityToPriority object.
 export function countChangedFields(draft: SecopsTriageConfig, saved: SecopsTriageConfig): number {
@@ -318,7 +333,8 @@ export function IssueFilingSettingsDialog({ onClose }: { onClose: () => void }) 
 
   const changeCount = config && savedConfig ? countChangedFields(config, savedConfig) : 0;
   const pending = updateSettings.isPending;
-  useRouteAdminTabSwitches(changeCount > 0);
+  const protectDraft = changeCount > 0 || pending;
+  useRouteAdminTabSwitches(protectDraft);
 
   const handleSave = useCallback(async () => {
     if (!config || changeCount === 0 || pending) return;
@@ -427,7 +443,7 @@ export function IssueFilingSettingsDialog({ onClose }: { onClose: () => void }) 
           </Button>
         </AdminDialogFooter>
       </AdminDialog>
-      <UnsavedChangesGuard dirty={changeCount > 0} pending={pending} isLeaving={leavesAdminSettingsPage} />
+      <UnsavedChangesGuard dirty={protectDraft} pending={pending} isLeaving={leavesIssueFilingSettings} />
     </AdminDialog>
   );
 }

@@ -6,7 +6,6 @@ import {
   useAttackSimulationData,
   useRunAttackSimulation,
   useRunCloudSecurityScan,
-  useRunProwlerScan,
   useRunWebSecurityScan,
   useSecopsTriageStatus,
   useSecurityDashboardOverview,
@@ -21,6 +20,7 @@ import { AdminPermissionAction, DataTable, formatUtc, RelativeTime, StatusChip, 
 import type { SecurityScan } from '../securityDashboardSearch';
 import { ACTIVE_DEFENSE_COOLDOWN_MS } from './ActiveDefenseTab';
 import { describeIssueOutcome, latestFilingRun } from './issueFiling';
+import { useProwlerScanRequest } from './ProwlerScanRequest';
 
 const DASH = '\u2014';
 
@@ -240,7 +240,7 @@ export function ScanSummaryTable({
   const filing = useSecopsTriageStatus();
   const runWeb = useRunWebSecurityScan();
   const runCloud = useRunCloudSecurityScan();
-  const runProwler = useRunProwlerScan();
+  const runProwler = useProwlerScanRequest();
   const runProbes = useRunAttackSimulation();
 
   const overviewState = { loading: !overview.data && !overview.isError, failed: !overview.data && overview.isError };
@@ -290,14 +290,12 @@ export function ScanSummaryTable({
         }),
     },
     prowler: {
-      label: 'Run Prowler scan',
-      pending: runProwler.isPending,
-      blockedReason: blockedReason(prowlerCooldown, prowler.data === undefined),
-      start: () =>
-        runProwler.mutate(undefined, {
-          onSuccess: () => toast.success('Prowler scan queued. Results arrive in about 10 minutes.'),
-          onError: notStarted('Prowler scan'),
-        }),
+      label: runProwler.queued ? 'Prowler scan queued' : 'Run Prowler scan',
+      pending: runProwler.pending,
+      blockedReason: runProwler.queued
+        ? 'Prowler scan queued; awaiting a new audit result'
+        : blockedReason(prowlerCooldown, prowler.data === undefined),
+      start: runProwler.start,
     },
     'active-defense': {
       label: 'Run active defense probes',

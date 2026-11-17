@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -24,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   currentUser: { isAdmin: true } as Record<string, unknown>,
 }));
 vi.mock('@client/app/hooks/data/admin', () => ({
+  SECURITY_DASHBOARD_PROWLER_QUERY_KEY: ['admin', 'security-dashboard', 'cloud-prowler'],
   useSecurityDashboardOverview: mocks.overview,
   useSecurityScanSchedules: mocks.schedules,
   useSecurityDashboardProwler: mocks.prowler,
@@ -38,6 +40,8 @@ vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUs
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { compactSeverityCounts, ScanSummaryTable } from './ScanSummaryTable';
+import { ProwlerScanRequestProvider } from './ProwlerScanRequest';
+import { SECURITY_DASHBOARD_PROWLER_QUERY_KEY } from '@client/app/hooks/data/admin';
 
 const theme = extendTheme({ ...getThemeConfig() });
 const NOW = new Date('2026-11-02T12:00:00.000Z');
@@ -123,10 +127,16 @@ const filing: SecopsTriageStatusResponse = {
 };
 
 const renderTable = (onSelect = vi.fn()) => {
+  const client = new QueryClient();
+  client.setQueryData(SECURITY_DASHBOARD_PROWLER_QUERY_KEY, mocks.prowler().data);
   render(
-    <CssVarsProvider theme={theme}>
-      <ScanSummaryTable activeScan="web" onSelect={onSelect} />
-    </CssVarsProvider>
+    <QueryClientProvider client={client}>
+      <ProwlerScanRequestProvider>
+        <CssVarsProvider theme={theme}>
+          <ScanSummaryTable activeScan="web" onSelect={onSelect} />
+        </CssVarsProvider>
+      </ProwlerScanRequestProvider>
+    </QueryClientProvider>
   );
   return onSelect;
 };
@@ -284,7 +294,10 @@ describe('ScanSummaryTable', () => {
 
       expect(runner.mutate).toHaveBeenCalledTimes(1);
       expect(onSelect).not.toHaveBeenCalled();
-      runner.mutate.mock.calls[0][1].onSuccess();
+      act(() => {
+        if (id === 'prowler') runner.mutate.mock.calls[0][1].onSuccess({ queued: true, environment: 'fixture' });
+        else runner.mutate.mock.calls[0][1].onSuccess();
+      });
       expect(toast.success).toHaveBeenCalledWith(message);
     });
 

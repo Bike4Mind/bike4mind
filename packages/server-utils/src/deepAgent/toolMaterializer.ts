@@ -13,7 +13,6 @@ import { usdToCredits } from '@bike4mind/utils';
 import {
   adminSettingsRepository,
   apiKeyRepository,
-  cacheRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
   fabFileChunkRepository,
@@ -43,6 +42,7 @@ import {
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { lakeWriteToolDb } from '../dataLakes/lakeWriteToolDb';
+import { buildAudioToolJobs } from '../generationJobs/audioJobWiring';
 import { getFilesStorage, getGeneratedImageStorage } from '../utils/storage/index';
 import type { ToolMaterializer } from '@bike4mind/agents';
 import { buildSystemApiKeyTable } from './resolveBackend';
@@ -235,8 +235,6 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         lakeAccessEvents: lakeAccessEventRepository,
         scopedSettings: scopedSettingsRepository,
         ...lakeWriteToolDb,
-        // ElevenLabs shared-key concurrency slots for audio_generation (runElevenLabsWithCapacity).
-        caches: cacheRepository,
       },
       storage: getFilesStorage(),
       imageGenerateStorage: getGeneratedImageStorage(),
@@ -270,6 +268,7 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         config: {
           deep_research: true,
           web_search: { imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value },
+          audio_generation: { jobs: buildAudioToolJobs() },
         },
         toolAvailability,
         orgToolPolicy,

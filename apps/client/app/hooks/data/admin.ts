@@ -419,9 +419,11 @@ export const useSecurityDashboardCloud = () => {
   });
 };
 
+export const SECURITY_DASHBOARD_PROWLER_QUERY_KEY = ['admin', 'security-dashboard', 'cloud-prowler'] as const;
+
 export const useSecurityDashboardProwler = () => {
   return useQuery<SecurityDashboardProwlerSnapshot | null>({
-    queryKey: ['admin', 'security-dashboard', 'cloud-prowler'],
+    queryKey: SECURITY_DASHBOARD_PROWLER_QUERY_KEY,
     queryFn: async () => {
       const res = await api.get<SecurityDashboardProwlerSnapshot | null>('/api/admin/security-dashboard/cloud-prowler');
       return res.data ?? null;

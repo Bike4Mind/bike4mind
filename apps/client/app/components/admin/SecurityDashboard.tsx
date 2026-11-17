@@ -11,7 +11,6 @@ import {
   useRunWebSecurityScan,
   useSecurityDashboardCloud,
   useSecurityDashboardProwler,
-  useRunProwlerScan,
   useRunCloudSecurityScan,
   useSecurityScanSchedule,
   useUpdateSecurityScanSchedule,
@@ -20,6 +19,7 @@ import { WafTrafficOverview } from './SecurityDashboard/WafTrafficOverview';
 import ActiveDefenseTab from './SecurityDashboard/ActiveDefenseTab';
 import { IncidentView } from './SecurityDashboard/IncidentView';
 import { ScanSummaryTable } from './SecurityDashboard/ScanSummaryTable';
+import { ProwlerScanRequestProvider, useProwlerScanRequest } from './SecurityDashboard/ProwlerScanRequest';
 import { IssueFilingCard } from './SecurityDashboard/IssueFilingCard';
 import { RecentFilingRunsCard } from './SecurityDashboard/RecentFilingRunsCard';
 import { useSecurityDashboardSearch } from './SecurityDashboard/useSecurityDashboardSearch';
@@ -770,21 +770,10 @@ const InfrastructureBaselineSubTab = ({ initialSnapshot }: { initialSnapshot?: S
 
 const ProwlerAuditSubTab = () => {
   const { data: snapshot, isLoading, isFetching, isError, refetch } = useSecurityDashboardProwler();
-  const runProwler = useRunProwlerScan();
+  const runProwler = useProwlerScanRequest();
   const { cooldownActive, hoursRemaining } = useSecurityScanCooldown(snapshot?.checkedAt);
   const [showAll, setShowAll] = useState(false);
-  const [queued, setQueued] = useState(false);
-  const [dispatchError, setDispatchError] = useState<string | null>(null);
-
-  const handleRunProwler = () => {
-    if (cooldownActive || runProwler.isPending) return;
-    setDispatchError(null);
-    runProwler.mutate(undefined, {
-      onSuccess: () => setQueued(true),
-      onError: () =>
-        setDispatchError('Failed to queue Prowler scan. Check that SECOPS_PROWLER_WORKFLOW_TOKEN is configured.'),
-    });
-  };
+  const { queued, error: dispatchError, start: handleRunProwler } = runProwler;
 
   if (isLoading) {
     return <LoadingState label="Loading Prowler audit" testId="security-scans-prowler-loading" />;
@@ -813,7 +802,7 @@ const ProwlerAuditSubTab = () => {
             color="primary"
             size="sm"
             onClick={handleRunProwler}
-            loading={runProwler.isPending}
+            loading={runProwler.pending}
             disabled={cooldownActive}
             data-testid="prowler-run-scan-btn"
             sx={{ alignSelf: 'flex-start' }}
@@ -860,7 +849,7 @@ const ProwlerAuditSubTab = () => {
               color="primary"
               size="sm"
               onClick={handleRunProwler}
-              loading={runProwler.isPending}
+              loading={runProwler.pending}
               disabled={cooldownActive}
               data-testid="prowler-run-scan-btn"
             >
@@ -986,7 +975,7 @@ const VIEW_TABS: readonly ViewTab[] = [
 
 const isSecurityView = (id: string): id is SecurityView => SECURITY_VIEWS.some(view => view === id);
 
-const SecurityDashboard: React.FC = () => {
+const SecurityDashboardContent: React.FC = () => {
   const { view, scan, setView, setScan } = useSecurityDashboardSearch();
   const navigate = useNavigate();
   // Navigate with the slug rather than setting the tab store: the store-to-URL mirror would drop the section.
@@ -1037,5 +1026,11 @@ const SecurityDashboard: React.FC = () => {
     </Stack>
   );
 };
+
+const SecurityDashboard: React.FC = () => (
+  <ProwlerScanRequestProvider>
+    <SecurityDashboardContent />
+  </ProwlerScanRequestProvider>
+);
 
 export default SecurityDashboard;

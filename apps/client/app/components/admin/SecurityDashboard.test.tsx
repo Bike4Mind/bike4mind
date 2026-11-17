@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -13,6 +14,7 @@ vi.mock('@client/app/hooks/data/admin', () => {
   const query = mocks.query;
   const mutation = { mutate: vi.fn(), isPending: false };
   return {
+    SECURITY_DASHBOARD_PROWLER_QUERY_KEY: ['admin', 'security-dashboard', 'cloud-prowler'],
     useSecurityDashboardWeb: () => query,
     useRunWebSecurityScan: () => mutation,
     useSecurityDashboardCloud: () => query,
@@ -58,9 +60,11 @@ import SecurityDashboard from './SecurityDashboard';
 const theme = extendTheme({ ...getThemeConfig() });
 const renderPage = () =>
   render(
-    <CssVarsProvider theme={theme}>
-      <SecurityDashboard />
-    </CssVarsProvider>
+    <QueryClientProvider client={new QueryClient()}>
+      <CssVarsProvider theme={theme}>
+        <SecurityDashboard />
+      </CssVarsProvider>
+    </QueryClientProvider>
   );
 
 describe('SecurityDashboard views', () => {
