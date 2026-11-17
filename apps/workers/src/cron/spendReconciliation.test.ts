@@ -107,6 +107,67 @@ describe('spendReconciliation cron', () => {
     expect(mockAppend).toHaveBeenCalledTimes(4);
   });
 
+  it('shares one absolute provider deadline across all four provider-months', async () => {
+    mockAnthropicFetch.mockImplementation(async () => {
+      vi.setSystemTime(Date.now() + 30_000);
+      return { providerUsd: 100, breakdown: {} };
+    });
+    mockOpenAIFetch.mockResolvedValue({ providerUsd: 100, breakdown: {} });
+
+    await runHandler();
+
+    const calls = [...mockAnthropicFetch.mock.calls, ...mockOpenAIFetch.mock.calls];
+    expect(calls).toHaveLength(4);
+    for (const call of calls) {
+      expect(call[2]).toBeUndefined();
+      expect(call[3]).toEqual({
+        deadlineMs: FIXED_NOW.getTime() + 240_000,
+        onDiagnostic: expect.any(Function),
+      });
+    }
+  });
+
+  it('stops admitting provider requests after the shared budget is exhausted', async () => {
+    mockAnthropicFetch.mockImplementationOnce(async () => {
+      vi.setSystemTime(FIXED_NOW.getTime() + 240_000);
+      throw new Error('Provider request deadline exceeded');
+    });
+
+    const result = await runHandler();
+
+    expect(JSON.parse(result.body)).toMatchObject({ reconciled: 0, failed: 4 });
+    expect(mockAnthropicFetch).toHaveBeenCalledTimes(1);
+    expect(mockOpenAIFetch).not.toHaveBeenCalled();
+    expect(mockAppend).not.toHaveBeenCalled();
+    expect(mockCloudWatchSend).toHaveBeenCalled();
+  });
+
+  it('reserves metrics headroom when the hosted invocation has less time remaining', async () => {
+    mockAnthropicFetch.mockResolvedValue(null);
+    mockOpenAIFetch.mockResolvedValue(null);
+    const { handler } = await import('./spendReconciliation');
+
+    await handler(undefined, { ...lambdaContext, getRemainingTimeInMillis: () => 45_000 });
+
+    expect(mockAnthropicFetch.mock.calls[0][3].deadlineMs).toBe(FIXED_NOW.getTime() + 15_000);
+    expect(mockOpenAIFetch.mock.calls[0][3].deadlineMs).toBe(FIXED_NOW.getTime() + 15_000);
+  });
+
+  it('includes database connection time in the hosted provider budget', async () => {
+    mockConnectDB.mockImplementationOnce(async () => {
+      vi.setSystemTime(FIXED_NOW.getTime() + 20_000);
+    });
+    const { handler } = await import('./spendReconciliation');
+
+    const result = await handler(undefined, { ...lambdaContext, getRemainingTimeInMillis: () => 45_000 });
+
+    expect(JSON.parse(result.body)).toMatchObject({ reconciled: 0, failed: 4 });
+    expect(mockAnthropicFetch).not.toHaveBeenCalled();
+    expect(mockOpenAIFetch).not.toHaveBeenCalled();
+    expect(mockAppend).not.toHaveBeenCalled();
+    expect(mockCloudWatchSend).toHaveBeenCalled();
+  });
+
   it('computes delta and deltaPct using max(provider, internal) as denominator', async () => {
     mockAnthropicFetch.mockResolvedValue({ providerUsd: 500, breakdown: {} });
     mockOpenAIFetch.mockResolvedValue(null); // skip OpenAI
@@ -171,7 +232,7 @@ describe('spendReconciliation cron', () => {
   });
 
   describe('with the admin key secret store', () => {
-    const errorLogger = { log: vi.fn(), error: vi.fn() };
+    const errorLogger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const storedKeys: Record<string, string | Error> = {};
 
     beforeEach(() => {
@@ -192,8 +253,18 @@ describe('spendReconciliation cron', () => {
 
       await runHandler();
 
-      expect(mockAnthropicFetch).toHaveBeenCalledWith('stored-anthropic-key', expect.any(String));
-      expect(mockOpenAIFetch).toHaveBeenCalledWith('stored-openai-key', expect.any(String));
+      expect(mockAnthropicFetch).toHaveBeenCalledWith(
+        'stored-anthropic-key',
+        expect.any(String),
+        undefined,
+        expect.objectContaining({ deadlineMs: FIXED_NOW.getTime() + 240_000 })
+      );
+      expect(mockOpenAIFetch).toHaveBeenCalledWith(
+        'stored-openai-key',
+        expect.any(String),
+        undefined,
+        expect.objectContaining({ deadlineMs: FIXED_NOW.getTime() + 240_000 })
+      );
     });
 
     it('skips a provider whose secret has no value yet', async () => {

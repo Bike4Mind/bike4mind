@@ -27,6 +27,9 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 import { type AdminKeyProvider, resolveProviderAdminKey } from './providerAdminKey';
 
+const PROVIDER_FETCH_BUDGET_MS = 240_000;
+const METRICS_HEADROOM_MS = 30_000;
+
 const contextToLogs = (context: Context) => ({
   requestId: context.awsRequestId ?? randomUUID(),
   functionName: context.functionName,
@@ -37,7 +40,7 @@ const contextToLogs = (context: Context) => ({
 interface ProviderConfig {
   provider: AdminKeyProvider;
   source: ISpendReconciliationInput['source'];
-  fetch: (key: string, month: string) => Promise<{ providerUsd: number; breakdown: Record<string, number> } | null>;
+  fetch: typeof spendReconciliationService.fetchAnthropicSpend;
 }
 
 const PROVIDERS: ProviderConfig[] = [
@@ -76,9 +79,11 @@ export interface SpendReconciliationResult {
 export async function runSpendReconciliation({
   logger,
   now = new Date(),
+  deadlineMs = Date.now() + PROVIDER_FETCH_BUDGET_MS,
 }: {
   logger: Logger;
   now?: Date;
+  deadlineMs?: number;
 }): Promise<SpendReconciliationResult> {
   let reconciled = 0;
   let skipped = 0;
@@ -121,7 +126,11 @@ export async function runSpendReconciliation({
   for (const { providerConfig, key } of configured) {
     for (const month of months) {
       try {
-        const result = await providerConfig.fetch(key, month);
+        if (Date.now() >= deadlineMs) throw new Error('Provider request deadline exceeded');
+        const result = await providerConfig.fetch(key, month, undefined, {
+          deadlineMs,
+          onDiagnostic: diagnostic => logger.warn('[SpendReconciliation] Provider request', diagnostic),
+        });
         if (!result) {
           skipped++;
           continue;
@@ -194,11 +203,16 @@ async function publishReconciliationMetrics({ reconciled, drifted }: SpendReconc
 
 export async function handler(_event: unknown, context: Context) {
   const logger = new Logger().withMetadata(contextToLogs(context));
+  const remainingMs =
+    typeof context.getRemainingTimeInMillis === 'function'
+      ? context.getRemainingTimeInMillis() - METRICS_HEADROOM_MS
+      : PROVIDER_FETCH_BUDGET_MS;
+  const deadlineMs = Date.now() + Math.max(0, Math.min(PROVIDER_FETCH_BUDGET_MS, remainingMs));
 
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage), logger);
   logger.log('[SpendReconciliation] Connected to database');
 
-  const result = await runSpendReconciliation({ logger });
+  const result = await runSpendReconciliation({ logger, deadlineMs });
   await publishReconciliationMetrics(result);
   return { statusCode: 200, body: JSON.stringify(result) };
 }
