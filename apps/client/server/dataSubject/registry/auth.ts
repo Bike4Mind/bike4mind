@@ -7,6 +7,7 @@ export const authHolders = {
     // Transient outbox for the post-deletion confirmation email; removed on send, after the bounded
     // retries, or by its TTL. Keyed by the erasure hash, not the person's id.
     references: [{ path: 'email', matchBy: 'email', action: 'deleteDocument' }],
+    secretPaths: ['leaseToken'],
     unrelatedPaths: ['idHash'],
   },
   // Notes about the person go with them: the account purge removes them through the raw collection,
