@@ -71,7 +71,7 @@ import HTTPTypes
 /// - `X-RateLimit-Remaining-Day`
 /// - `X-RateLimit-Reset-Day`
 ///
-/// Reset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait that long before retrying. This includes `POST /api/ai/v1/completions`, which rate-limits before it opens its event stream. `GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/video-models`, `GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations` and `/api/v1/music-generations`, and the poll endpoints listed under Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches the limiter and carries no rate-limit headers.
+/// Reset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait that long before retrying. This includes `POST /api/ai/v1/completions`, which rate-limits before it opens its event stream. `GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/image-models`, `GET /api/v1/video-models`, `GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations` and `/api/v1/music-generations`, and the poll endpoints listed under Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches the limiter and carries no rate-limit headers.
 ///
 /// ## Credits
 /// Generation endpoints spend credits from the balance shown at `credits.balance` on `GET /api/v1/me` (the caller's personal ledger). A key without `me:read` reads the same number from `GET /api/v1/credits`, which accepts `ai:chat`, `ai:generate` and `ai:decide` too. A synchronous call that cannot be paid for fails with `422` and `errorCode: "insufficient_credits"`. On a queued job the same code arrives on the polled result instead (see Async jobs), so check both places.
@@ -87,6 +87,7 @@ import HTTPTypes
 /// - **Agent runs** (`POST /api/v1/agent-executions`) return `202`. Poll `GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.
 /// - **Video generation** (`POST /api/v1/video-generations`) returns `202`. Poll `GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.
 /// - **Music generation** (`POST /api/v1/music-generations`) returns `202`. Poll `GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.
+/// - **Scene composition** (`POST /api/v1/scene-compositions`) returns `202`. Poll `GET /api/v1/scene-compositions/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.
 /// - **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.
 /// - **Audio** endpoints are synchronous and return the result directly.
 /// - **Transcriptions** (`POST /api/v1/transcriptions`) are synchronous too: after the upload, one call returns the text. Long audio can outlast the request timeout and fail with a `504`; see that endpoint for the limit.
