@@ -6,7 +6,7 @@ import ErrorIcon from '@mui/icons-material/Error';
 import { EmailCategory } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { getServerErrorField } from '@client/app/utils/error';
-import { getCapturedUnsubscribeToken } from './unsubscribeToken';
+import { EMAIL_UNSUBSCRIBE_PATH, getEmailLinkToken } from '@client/app/utils/emailLinkToken';
 
 interface PreferencesData {
   email: string;
@@ -41,7 +41,7 @@ const serverReason = (err: unknown) =>
   isAxiosError(err) && (err.response?.status ?? 500) < 500 ? getServerErrorField(err) : undefined;
 
 export default function UnsubscribePage() {
-  const [token] = useState(getCapturedUnsubscribeToken);
+  const [token] = useState(() => getEmailLinkToken(EMAIL_UNSUBSCRIBE_PATH));
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

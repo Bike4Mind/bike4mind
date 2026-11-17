@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getControlledScopes } from './slackManifestTemplate';
+import { getControlledManifestFields, getControlledScopes } from './slackManifestTemplate';
 
 /**
  * Scopes are granted once at install and cannot be widened by a running server, so a feature that
@@ -30,4 +30,11 @@ describe('Slack bot scopes required by the @datalake add surface', () => {
     first.push('admin');
     expect(getControlledScopes().bot).not.toContain('admin');
   });
+});
+
+it('provisions reaction events and permissions for opt-in feedback', () => {
+  expect(getControlledScopes().bot).toEqual(expect.arrayContaining(['reactions:read', 'reactions:write']));
+  expect(getControlledManifestFields('https://app.example').settings.event_subscriptions.bot_events).toContain(
+    'reaction_added'
+  );
 });

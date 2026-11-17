@@ -8,7 +8,7 @@ const { getSlackDeps, getSlackDb, invoke, findById, findByIdAndUpdate } = vi.hoi
   findByIdAndUpdate: vi.fn(),
 }));
 vi.mock('./di', () => ({ getSlackDeps, getSlackDb }));
-vi.mock('@bike4mind/services/llm/ChatCompletionInvoke', () => ({
+vi.mock('@bike4mind/services-core/llm/ChatCompletionInvoke', () => ({
   ChatCompletionInvoke: function MockChatCompletionInvoke() {
     return { invoke };
   },

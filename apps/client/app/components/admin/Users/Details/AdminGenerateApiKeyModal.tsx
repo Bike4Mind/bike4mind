@@ -145,7 +145,7 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
     [scopeOptions]
   );
   const allScopesSelected = selectAllScopeOptions.every(s => formData.scopes.includes(s.value));
-  const genericSelectedCount = formData.scopes.filter(s => !confinedScopeValues.has(s)).length;
+  const genericSelectedCount = scopeOptions.filter(scope => formData.scopes.includes(scope.value)).length;
 
   const toggleScope = (value: ApiKeyScopeValue, checked: boolean) => {
     let scopes: ApiKeyScopeValue[];

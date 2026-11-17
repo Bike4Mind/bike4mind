@@ -3680,6 +3680,72 @@ export interface components {
           delivery?: 'inline';
           audio: string;
         };
+    /**
+     * @example {
+     *       "id": "664f1c2b9a1e4d0012ab34cd",
+     *       "object": "speech_generation",
+     *       "state": "running",
+     *       "text": "Your password has been reset.",
+     *       "provider": "elevenlabs",
+     *       "model": null,
+     *       "voice": null,
+     *       "source": "api",
+     *       "error": null,
+     *       "output": null,
+     *       "credits": {
+     *         "reserved": 12,
+     *         "settled": null
+     *       },
+     *       "created_at": "2026-10-14T00:00:00.000Z",
+     *       "updated_at": "2026-10-14T00:00:30.000Z"
+     *     }
+     */
+    synthesizeSpeechResponse202: {
+      id: string;
+      /** @enum {string} */
+      object: 'speech_generation';
+      /** @enum {string} */
+      state: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+      text: string;
+      /**
+       * @description The provider asked for, with the default applied.
+       * @enum {string}
+       */
+      provider: 'openai' | 'elevenlabs';
+      /** @description The model you sent, or null for the provider default. */
+      model: string | null;
+      /** @description The voice you sent, or null for the default. */
+      voice: string | null;
+      /** @enum {string} */
+      source: 'api' | 'studio' | 'agent';
+      error: {
+        /** @enum {string} */
+        code: 'content_blocked' | 'provider_timeout' | 'provider_error' | 'output_too_large' | 'cancelled';
+        message: string;
+      } | null;
+      output: {
+        /**
+         * @description `ready`: url is set. `pending_scan`: the saved file is still being scanned. `unavailable`: the file was blocked by the scan or deleted and url will never be set.
+         * @enum {string}
+         */
+        availability: 'ready' | 'pending_scan' | 'unavailable';
+        /** @description Signed download URL, valid until expires_at. Set only when availability is `ready`, otherwise null. */
+        url: string | null;
+        /** @description ISO 8601. When url stops working; null whenever url is. */
+        expires_at: string | null;
+        content_type: string;
+        /** @description The length of the clip, or null when it could not be measured. */
+        duration_seconds: number | null;
+        /** @description The Files entry, or null when the clip was stored outside Files. */
+        file_id: string | null;
+      } | null;
+      credits: {
+        reserved: number | null;
+        settled: number | null;
+      };
+      created_at: string;
+      updated_at: string;
+    };
     synthesizeSpeechResponse400: {
       error: string;
       request_id?: string;
@@ -3696,7 +3762,10 @@ export interface components {
         | 'provider_not_configured'
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
-        | 'invalid_end_user_id';
+        | 'invalid_end_user_id'
+        | 'request_timeout';
+      jobId?: string;
+      message?: string;
     };
     synthesizeSpeechResponse401: {
       error: string;
@@ -3714,7 +3783,10 @@ export interface components {
         | 'provider_not_configured'
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
-        | 'invalid_end_user_id';
+        | 'invalid_end_user_id'
+        | 'request_timeout';
+      jobId?: string;
+      message?: string;
     };
     synthesizeSpeechResponse403: {
       error: string;
@@ -3762,7 +3834,10 @@ export interface components {
         | 'provider_not_configured'
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
-        | 'invalid_end_user_id';
+        | 'invalid_end_user_id'
+        | 'request_timeout';
+      jobId?: string;
+      message?: string;
     };
     synthesizeSpeechResponse413: {
       error: string;
@@ -3789,7 +3864,10 @@ export interface components {
         | 'provider_not_configured'
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
-        | 'invalid_end_user_id';
+        | 'invalid_end_user_id'
+        | 'request_timeout';
+      jobId?: string;
+      message?: string;
     };
     synthesizeSpeechResponse429: {
       error: string;
@@ -3807,7 +3885,10 @@ export interface components {
         | 'provider_not_configured'
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
-        | 'invalid_end_user_id';
+        | 'invalid_end_user_id'
+        | 'request_timeout';
+      jobId?: string;
+      message?: string;
     };
     synthesizeSpeechResponse502: {
       error: string;
@@ -3825,7 +3906,31 @@ export interface components {
         | 'provider_not_configured'
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
-        | 'invalid_end_user_id';
+        | 'invalid_end_user_id'
+        | 'request_timeout';
+      jobId?: string;
+      message?: string;
+    };
+    synthesizeSpeechResponse504: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      provider?: 'openai' | 'elevenlabs';
+      /** @enum {string} */
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id'
+        | 'request_timeout';
+      jobId?: string;
+      message?: string;
     };
     /**
      * @example {
@@ -3963,6 +4068,66 @@ export interface components {
           delivery?: 'inline';
           audio: string;
         };
+    /**
+     * @example {
+     *       "id": "664f1c2b9a1e4d0012ab34cd",
+     *       "object": "sound_effect_generation",
+     *       "state": "running",
+     *       "text": "heavy wooden door creaking open",
+     *       "provider": "elevenlabs",
+     *       "duration_seconds": 3,
+     *       "source": "api",
+     *       "error": null,
+     *       "output": null,
+     *       "credits": {
+     *         "reserved": 12,
+     *         "settled": null
+     *       },
+     *       "created_at": "2026-10-14T00:00:00.000Z",
+     *       "updated_at": "2026-10-14T00:00:30.000Z"
+     *     }
+     */
+    generateSoundEffectResponse202: {
+      id: string;
+      /** @enum {string} */
+      object: 'sound_effect_generation';
+      /** @enum {string} */
+      state: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+      text: string;
+      /** @enum {string} */
+      provider: 'elevenlabs';
+      /** @description The length requested, or null to let the provider choose. */
+      duration_seconds: number | null;
+      /** @enum {string} */
+      source: 'api' | 'studio' | 'agent';
+      error: {
+        /** @enum {string} */
+        code: 'content_blocked' | 'provider_timeout' | 'provider_error' | 'output_too_large' | 'cancelled';
+        message: string;
+      } | null;
+      output: {
+        /**
+         * @description `ready`: url is set. `pending_scan`: the saved file is still being scanned. `unavailable`: the file was blocked by the scan or deleted and url will never be set.
+         * @enum {string}
+         */
+        availability: 'ready' | 'pending_scan' | 'unavailable';
+        /** @description Signed download URL, valid until expires_at. Set only when availability is `ready`, otherwise null. */
+        url: string | null;
+        /** @description ISO 8601. When url stops working; null whenever url is. */
+        expires_at: string | null;
+        content_type: string;
+        /** @description The length of the clip, or null when it could not be measured. */
+        duration_seconds: number | null;
+        /** @description The Files entry, or null when the clip was stored outside Files. */
+        file_id: string | null;
+      } | null;
+      credits: {
+        reserved: number | null;
+        settled: number | null;
+      };
+      created_at: string;
+      updated_at: string;
+    };
     generateSoundEffectResponse403: {
       error: string;
       request_id?: string;
@@ -4004,6 +4169,32 @@ export interface components {
       name?: string;
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+    };
+    generateSoundEffectResponse502: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'request_timeout';
+      jobId?: string;
+      message?: string;
+    };
+    generateSoundEffectResponse504: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'request_timeout';
+      jobId?: string;
+      message?: string;
     };
     /**
      * @example {
@@ -6704,6 +6895,8 @@ export interface components {
       agentVideoClipsClaimed?: unknown;
       agentMusicTracksClaimed?: unknown;
       agentImagesClaimed?: unknown;
+      agentSpeechClipsClaimed?: unknown;
+      agentSoundEffectsClaimed?: unknown;
       oob?: unknown;
       promptMeta?: unknown;
       status?: unknown;
@@ -6759,6 +6952,8 @@ export interface components {
         agentVideoClipsClaimed?: unknown;
         agentMusicTracksClaimed?: unknown;
         agentImagesClaimed?: unknown;
+        agentSpeechClipsClaimed?: unknown;
+        agentSoundEffectsClaimed?: unknown;
         oob?: unknown;
         promptMeta?: unknown;
         status?: unknown;
@@ -13085,6 +13280,31 @@ export interface operations {
           'audio/pcm': string;
         };
       };
+      /** @description Returned only when the request sends `Prefer: respond-async` (RFC 7240), and echoed by `Preference-Applied: respond-async`. The speech took longer than this request can wait (about 55 seconds), so no audio is returned. Generation carries on: the body is the job as it stands. When it finishes, the audio is saved to the file browser if your storage quota still has room for it. Credits are settled only if it succeeds and returned otherwise. This job cannot be polled through the API yet; look for the saved file instead of retrying, which would generate (and bill) a second clip. */
+      202: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description `respond-async`, confirming the opt-in. */
+          'Preference-Applied'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['synthesizeSpeechResponse202'];
+        };
+      };
       /** @description Binary encoding only: the audio exceeds the ~4MB response ceiling, so it was offloaded to storage and `Location` is a time-limited signed GET for it. HTTP clients that follow redirects receive the audio transparently (they drop the `Authorization` header on the cross-origin hop, as the signed URL requires); browser callers should use `encoding: "base64"`, since the storage origin sends no CORS headers. Carries the same `X-B4M-*` headers as the 200. */
       303: {
         headers: {
@@ -13317,7 +13537,7 @@ export interface operations {
           'application/json': components['schemas']['synthesizeSpeechResponse429'];
         };
       };
-      /** @description The provider failed to generate speech. */
+      /** @description The provider failed to generate speech. When the clip was generated but could not be read back, the body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`. */
       502: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -13338,6 +13558,31 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['synthesizeSpeechResponse502'];
+        };
+      };
+      /** @description The speech took longer than this request can wait. Tagged `errorCode: "request_timeout"`. Two cases. (1) It would not be saved to the file browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved: the generation is cancelled and its credits returned, unless the provider had already started it, in which case that one finishes and is billed, and the response carries `jobId` (also `X-B4M-Generation-Job-Id`) and a `message`. Retrying generates a new clip. (2) It is being saved to the file browser but the request did not send `Prefer: respond-async`: the generation is NOT cancelled and carries on, the audio lands in the file browser when it finishes, and it is billed only if it succeeds. Do not retry, which would generate and bill a second clip. The body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`. */
+      504: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The job left running (case 2, or case 1 once the provider had started it). */
+          'X-B4M-Generation-Job-Id'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['synthesizeSpeechResponse504'];
         };
       };
     };
@@ -13717,6 +13962,31 @@ export interface operations {
           'audio/basic': string;
         };
       };
+      /** @description Returned only when the request sends `Prefer: respond-async` (RFC 7240), and echoed by `Preference-Applied: respond-async`. The sound effect took longer than this request can wait (about 55 seconds), so no audio is returned. Generation carries on: the body is the job as it stands. When it finishes, the audio is saved to the file browser if your storage quota still has room for it. Credits are settled only if it succeeds and returned otherwise. This job cannot be polled through the API yet; look for the saved file instead of retrying, which would generate (and bill) a second clip. */
+      202: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description `respond-async`, confirming the opt-in. */
+          'Preference-Applied'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['generateSoundEffectResponse202'];
+        };
+      };
       /** @description Binary encoding only: the audio exceeds the ~4MB response ceiling, so it was offloaded to storage and `Location` is a time-limited signed GET for it. HTTP clients that follow redirects receive the audio transparently (they drop the `Authorization` header on the cross-origin hop, as the signed URL requires); browser callers should use `encoding: "base64"`, since the storage origin sends no CORS headers. Carries the same `X-B4M-*` headers as the 200. */
       303: {
         headers: {
@@ -13935,7 +14205,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The provider failed to generate the effect; reserved credits are refunded. */
+      /** @description The provider failed to generate the effect; reserved credits are refunded. When the clip was generated but could not be read back, the body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`. */
       502: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -13955,7 +14225,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['generateSoundEffectResponse502'];
         };
       };
       /** @description No provider API key is configured for this deployment. */
@@ -13979,6 +14249,31 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The sound effect took longer than this request can wait. Tagged `errorCode: "request_timeout"`. Two cases. (1) It would not be saved to the file browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved: the generation is cancelled and its credits returned, unless the provider had already started it, in which case that one finishes and is billed, and the response carries `jobId` (also `X-B4M-Generation-Job-Id`) and a `message`. Retrying generates a new clip. (2) It is being saved to the file browser but the request did not send `Prefer: respond-async`: the generation is NOT cancelled and carries on, the audio lands in the file browser when it finishes, and it is billed only if it succeeds. Do not retry, which would generate and bill a second clip. The body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`. */
+      504: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The job left running (case 2, or case 1 once the provider had started it). */
+          'X-B4M-Generation-Job-Id'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['generateSoundEffectResponse504'];
         };
       };
     };

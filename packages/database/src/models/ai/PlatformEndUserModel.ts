@@ -1,9 +1,11 @@
 import mongoose, { Model, Schema } from 'mongoose';
+import { withTransaction } from '@bike4mind/db-core';
+import { lockRetentionCreator } from '../../utils/organizationRetention';
 
 const ModelName = 'PlatformEndUser';
 const DUPLICATE_KEY = 11000;
 
-// ms. lastSeenAt is refreshed at most this often, so a busy end user costs one write an hour, not one per request.
+// Minimum interval for refreshing lastSeenAt on the same key; a key change refreshes it immediately.
 export const PLATFORM_END_USER_SEEN_REFRESH_MS = 60 * 60 * 1000;
 
 /**
@@ -56,27 +58,30 @@ export const platformEndUserRepository = {
   /**
    * Upsert the row for an end user seen now. Matches only a row whose lastSeenAt is stale or whose
    * apiKeyId differs, so an up-to-date row turns the upsert into a duplicate-key insert, which is
-   * the cheap "nothing to do".
+   * a metadata no-op. The owner write fence and holder update commit together.
    */
   async recordSeen(input: RecordPlatformEndUserInput, now = new Date()): Promise<void> {
     const staleBefore = new Date(now.getTime() - PLATFORM_END_USER_SEEN_REFRESH_MS);
     try {
-      await PlatformEndUser.updateOne(
-        {
-          providerEndUserId: input.providerEndUserId,
-          $or: [
-            { lastSeenAt: { $lt: staleBefore } },
-            ...(input.apiKeyId ? [{ apiKeyId: { $ne: input.apiKeyId } }] : []),
-          ],
-        },
-        {
-          $setOnInsert: { keyOwnerId: input.keyOwnerId, endUserId: input.endUserId, firstSeenAt: now },
-          $set: { lastSeenAt: now, ...(input.apiKeyId && { apiKeyId: input.apiKeyId }) },
-        },
-        { upsert: true }
-      );
+      await withTransaction(async session => {
+        if (!(await lockRetentionCreator(input.keyOwnerId, session))) return;
+        await PlatformEndUser.updateOne(
+          {
+            providerEndUserId: input.providerEndUserId,
+            $or: [
+              { lastSeenAt: { $lt: staleBefore } },
+              ...(input.apiKeyId ? [{ apiKeyId: { $ne: input.apiKeyId } }] : []),
+            ],
+          },
+          {
+            $setOnInsert: { keyOwnerId: input.keyOwnerId, endUserId: input.endUserId, firstSeenAt: now },
+            $set: { lastSeenAt: now, ...(input.apiKeyId && { apiKeyId: input.apiKeyId }) },
+          },
+          { upsert: true, session, maxTimeMS: 15_000 }
+        );
+      });
     } catch (error) {
-      if ((error as { code?: number }).code === DUPLICATE_KEY) return;
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === DUPLICATE_KEY) return;
       throw error;
     }
   },
