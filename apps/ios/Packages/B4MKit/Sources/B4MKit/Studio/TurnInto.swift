@@ -65,8 +65,7 @@ public struct StudioSeed: Equatable, Sendable {
   }
 }
 
-/// A "Turn into..." target. Cases that need server work (scoring or soundtracking, lineage) are absent until the
-/// routes exist.
+/// A "Turn into..." target. Cases that need server work not built yet (scoring) are absent until the routes exist.
 public enum TurnIntoAction: Hashable, Sendable {
   /// Image to video: the image is the first frame.
   case animate
@@ -76,6 +75,10 @@ public enum TurnIntoAction: Hashable, Sendable {
   case morph
   /// Video to image: a frame is grabbed and then edited.
   case grabFrame
+  /// Video to Scene: a music track from the gallery is put under it.
+  case addMusic
+  /// Music to Scene: it becomes the soundtrack of a video from the gallery.
+  case putOnVideo
 
   public var title: String {
     switch self {
@@ -83,6 +86,8 @@ public enum TurnIntoAction: Hashable, Sendable {
     case .arriveAt: "Arrive at this"
     case .morph: "Morph into another image"
     case .grabFrame: "Grab a frame"
+    case .addMusic: "Add music..."
+    case .putOnVideo: "Put on a video..."
     }
   }
 
@@ -92,6 +97,7 @@ public enum TurnIntoAction: Hashable, Sendable {
     case .arriveAt: "flag.checkered"
     case .morph: "arrow.triangle.merge"
     case .grabFrame: "camera.viewfinder"
+    case .addMusic, .putOnVideo: "music.note.tv"
     }
   }
 
@@ -99,15 +105,18 @@ public enum TurnIntoAction: Hashable, Sendable {
   public var targetKind: MediaKind {
     self == .grabFrame ? .image : .video
   }
+
+  /// Whether the action composes a Scene rather than seeding the create bar.
+  public var composesScene: Bool { self == .addMusic || self == .putOnVideo }
 }
 
 public enum TurnInto {
-  /// The actions a finished item offers. Audio has none yet.
+  /// The actions a finished item offers.
   public static func actions(for item: MediaItem) -> [TurnIntoAction] {
     switch item.kind {
     case .image: [.animate, .arriveAt, .morph]
-    case .video: [.grabFrame]
-    case .audio: []
+    case .video: [.grabFrame, .addMusic]
+    case .audio: [.putOnVideo]
     }
   }
 
@@ -133,7 +142,7 @@ public enum TurnInto {
       return StudioSeed(
         kind: .video, prompt: prompt,
         inputs: [StudioInput(role: .firstFrame, item: item), StudioInput(role: .lastFrame, item: secondImage)] + kept)
-    case .grabFrame:
+    case .grabFrame, .addMusic, .putOnVideo:
       return nil
     }
   }

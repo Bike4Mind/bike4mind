@@ -1,8 +1,8 @@
 import Foundation
 
 /// Hand-written wire format for Studio's public v1 routes. Keep in sync with the contracts in
-/// b4m-core/common/src/api-contract/contracts (image generation and edit, video, music, models, quest poll,
-/// session create) and `GenerationJobUpdatedAction` in b4m-core/common/src/schemas/actions.ts.
+/// b4m-core/common/src/api-contract/contracts (image generation and edit, video, music, scene composition, models,
+/// quest poll, session create) and `GenerationJobUpdatedAction` in b4m-core/common/src/schemas/actions.ts.
 /// Hand-written rather than generated because the committed OpenAPI snapshot predates `edit_regions`.
 enum StudioWire {
   static let imageGenerationsPath = "api/v1/image-generations"
@@ -10,15 +10,25 @@ enum StudioWire {
   static let sessionsPath = "api/v1/sessions"
   static let modelsPath = "api/v1/models"
 
-  static func jobsPath(_ kind: GenerationKind) -> String {
-    kind == .video ? "api/v1/video-generations" : "api/v1/music-generations"
+  static let sceneCompositionsPath = "api/v1/scene-compositions"
+
+  /// The job collection a kind's handles live under; images are quests and have none.
+  static func jobsPath(_ kind: GenerationKind) -> String? {
+    switch kind {
+    case .image: nil
+    case .video: "api/v1/video-generations"
+    case .music: "api/v1/music-generations"
+    case .scene: sceneCompositionsPath
+    }
   }
 
-  static func modelsPath(_ kind: GenerationKind) -> String {
+  /// Nil for a Scene: it is composed from existing files and has no models.
+  static func modelsPath(_ kind: GenerationKind) -> String? {
     switch kind {
     case .image: modelsPath
     case .video: "api/v1/video-models"
     case .music: "api/v1/music-models"
+    case .scene: nil
     }
   }
 
@@ -139,6 +149,43 @@ enum StudioWire {
     }
   }
 
+  /// `CreateSceneCompositionBodySchema`: strict, so there is no `organization_id` (composing is free) and the
+  /// optional keys are left out rather than sent as null.
+  struct SceneBody: Encodable {
+    struct Audio: Encodable {
+      let fit: String
+      let fadeInSeconds: Double
+      let fadeOutSeconds: Double
+
+      enum CodingKeys: String, CodingKey {
+        case fit
+        case fadeInSeconds = "fade_in_seconds"
+        case fadeOutSeconds = "fade_out_seconds"
+      }
+    }
+    let videoFileID: String
+    let audioFileID: String
+    let audio: Audio
+    let coverFileID: String?
+    let title: String?
+
+    init(_ request: SceneRequest) {
+      videoFileID = request.videoFileID
+      audioFileID = request.audioFileID
+      audio = Audio(
+        fit: request.fit.rawValue, fadeInSeconds: request.fadeInSeconds, fadeOutSeconds: request.fadeOutSeconds)
+      coverFileID = request.coverFileID
+      title = request.title
+    }
+
+    enum CodingKeys: String, CodingKey {
+      case audio, title
+      case videoFileID = "video_file_id"
+      case audioFileID = "audio_file_id"
+      case coverFileID = "cover_file_id"
+    }
+  }
+
   struct SessionBody: Encodable {
     let name: String
   }
@@ -174,6 +221,12 @@ enum StudioWire {
     struct Output: Decodable {
       let availability: String?
       let url: String?
+      let fileID: String?
+
+      enum CodingKeys: String, CodingKey {
+        case availability, url
+        case fileID = "file_id"
+      }
     }
     let id: String
     let state: String
@@ -417,8 +470,9 @@ enum StudioWire {
   static func status(of job: Job) -> GenerationStatus {
     let phase = phase(
       jobState: job.state, progress: job.progress, errorCode: job.error?.code, availability: job.output?.availability)
-    let urls = phase == .succeeded ? [job.output?.url].compactMap { $0.flatMap(URL.init(string:)) } : []
-    return GenerationStatus(phase: phase, resultURLs: urls)
+    guard phase == .succeeded else { return GenerationStatus(phase: phase) }
+    let urls = [job.output?.url].compactMap { $0.flatMap(URL.init(string:)) }
+    return GenerationStatus(phase: phase, resultURLs: urls, resultFileID: job.output?.fileID)
   }
 
   /// A quest `stopped`, or `type: "error"`, is a failure even with a 200; `errorCode` is set only for credit
@@ -496,8 +550,11 @@ public struct StudioClient: StudioAPI {
         cursor = next
       }
       return models
+    case .scene:
+      return []
     case .video, .music:
-      let response = try await requester.send(method: "GET", path: StudioWire.modelsPath(kind))
+      guard let path = StudioWire.modelsPath(kind) else { return [] }
+      let response = try await requester.send(method: "GET", path: path)
       guard response.status == 200 else { throw APIError(status: response.status) }
       return try StudioWire.decode(StudioWire.JobModels.self, from: response.body).models
         .filter { $0.deprecationDate == nil }
@@ -521,12 +578,16 @@ public struct StudioClient: StudioAPI {
       return GenerationHandle(
         kind: .image, id: reply.quest.id, prompt: request.prompt, startedAt: startedAt, modelID: request.modelID,
         params: request.params)
+    case .scene:
+      throw StudioRequestError(
+        status: 422, code: "invalid_request", serverMessage: "A Scene is composed from files, not a prompt.")
     case .video, .music:
+      guard let path = StudioWire.jobsPath(request.kind) else { throw APIError.notFound }
       let body = try StudioWire.encode(
         StudioWire.JobBody(
           kind: request.kind, model: request.modelID, prompt: request.prompt, params: request.params,
           inputs: request.inputs))
-      let response = try await requester.send(method: "POST", path: StudioWire.jobsPath(request.kind), jsonBody: body)
+      let response = try await requester.send(method: "POST", path: path, jsonBody: body)
       guard response.status == 202 || response.status == 200 else {
         throw StudioWire.refusal(status: response.status, body: response.body)
       }
@@ -550,24 +611,33 @@ public struct StudioClient: StudioAPI {
     return GenerationHandle(kind: .image, id: quest.id, prompt: request.summaryPrompt, startedAt: startedAt)
   }
 
+  public func composeScene(_ request: SceneRequest) async throws -> GenerationHandle {
+    let body = try StudioWire.encode(StudioWire.SceneBody(request))
+    let startedAt = now()
+    let response = try await requester.send(method: "POST", path: StudioWire.sceneCompositionsPath, jsonBody: body)
+    guard response.status == 202 || response.status == 200 else {
+      throw StudioWire.refusal(status: response.status, body: response.body)
+    }
+    let job = try StudioWire.decode(StudioWire.Job.self, from: response.body)
+    return GenerationHandle(kind: .scene, id: job.id, prompt: request.label, startedAt: startedAt)
+  }
+
   public func status(of handle: GenerationHandle) async throws -> GenerationStatus {
     let id = try StudioWire.safeID(handle.id)
-    switch handle.kind {
-    case .image:
+    guard let jobsPath = StudioWire.jobsPath(handle.kind) else {
       let response = try await requester.send(method: "GET", path: "api/v1/quests/\(id)")
       guard response.status == 200 else { throw APIError(status: response.status) }
       return StudioWire.status(of: try StudioWire.decode(StudioWire.QuestPoll.self, from: response.body))
-    case .video, .music:
-      let response = try await requester.send(method: "GET", path: "\(StudioWire.jobsPath(handle.kind))/\(id)")
-      guard response.status == 200 else { throw APIError(status: response.status) }
-      return StudioWire.status(of: try StudioWire.decode(StudioWire.Job.self, from: response.body))
     }
+    let response = try await requester.send(method: "GET", path: "\(jobsPath)/\(id)")
+    guard response.status == 200 else { throw APIError(status: response.status) }
+    return StudioWire.status(of: try StudioWire.decode(StudioWire.Job.self, from: response.body))
   }
 
   public func cancel(_ handle: GenerationHandle) async throws {
-    guard handle.isCancellable else { return }
+    guard handle.isCancellable, let jobsPath = StudioWire.jobsPath(handle.kind) else { return }
     let id = try StudioWire.safeID(handle.id)
-    let response = try await requester.send(method: "POST", path: "\(StudioWire.jobsPath(handle.kind))/\(id)/cancel")
+    let response = try await requester.send(method: "POST", path: "\(jobsPath)/\(id)/cancel")
     guard response.status == 200 else { throw StudioWire.refusal(status: response.status, body: response.body) }
   }
 
