@@ -1,11 +1,15 @@
 import type {
   LegacyResearchRunLevers,
+  ResearchItemRule,
   ResearchRunLevers,
   ResearchSource,
   ResearchUnlistedSources,
 } from '../types/entities/DataLakeResearchTypes';
 import {
   RESEARCH_DOMAIN_LIST_MAX,
+  RESEARCH_ITEM_RULE_ACTIONS,
+  RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS,
+  RESEARCH_ITEM_RULES_MAX,
   RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
   RESEARCH_UNLISTED_SOURCES,
 } from '../types/entities/DataLakeResearchTypes';
@@ -72,6 +76,37 @@ export const isSameDomainSet = (a: readonly string[], b: readonly string[]): boo
   return setA.size === setB.size && [...setA].every(value => setB.has(value));
 };
 
+/** The one identity of a rule: trimmed, case-folded condition plus action. Normalizer, fingerprint and equality all use it. */
+export const researchItemRuleKey = (rule: ResearchItemRule): string =>
+  `${rule.action}\u0000${rule.condition.trim().toLowerCase()}`;
+
+const isResearchItemRuleAction = (value: unknown): value is ResearchItemRule['action'] =>
+  typeof value === 'string' && (RESEARCH_ITEM_RULE_ACTIONS as readonly string[]).includes(value);
+
+/** Trim, drop empty conditions and unknown actions, dedupe on the canonical key. No clamping. */
+export const canonicalItemRules = (values: readonly unknown[] | undefined): ResearchItemRule[] => {
+  const seen = new Set<string>();
+  const rules: ResearchItemRule[] = [];
+  for (const value of values ?? []) {
+    if (typeof value !== 'object' || value === null) continue;
+    const { condition, action } = value as { condition?: unknown; action?: unknown };
+    if (typeof condition !== 'string' || !isResearchItemRuleAction(action)) continue;
+    const rule = { condition: condition.trim(), action };
+    if (!rule.condition) continue;
+    const key = researchItemRuleKey(rule);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rules.push(rule);
+  }
+  return rules;
+};
+
+/** The stored-data backstop: `canonicalItemRules`, then clamped to the count and length limits. */
+export const normalizeItemRules = (values: readonly unknown[] | undefined): ResearchItemRule[] =>
+  canonicalItemRules(values)
+    .slice(0, RESEARCH_ITEM_RULES_MAX)
+    .map(rule => ({ ...rule, condition: rule.condition.slice(0, RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS) }));
+
 type TierFields = Pick<ResearchRunLevers, 'trustedDomains' | 'reviewDomains' | 'unlistedSources'>;
 
 /**
@@ -83,7 +118,7 @@ export const deriveLegacyAllowedDomains = (levers: TierFields): string[] =>
 
 type Upgraded<T extends LegacyResearchRunLevers> = Omit<
   T,
-  keyof TierFields | 'allowedDomains' | 'autoAdmitTrusted' | 'maxAutoAdmits' | 'source' | 'feedUrl'
+  keyof TierFields | 'allowedDomains' | 'autoAdmitTrusted' | 'maxAutoAdmits' | 'source' | 'feedUrl' | 'itemRules'
 > &
   TierFields & {
     allowedDomains: string[];
@@ -91,6 +126,7 @@ type Upgraded<T extends LegacyResearchRunLevers> = Omit<
     maxAutoAdmits: number;
     source: ResearchSource;
     feedUrl: string | null;
+    itemRules: ResearchItemRule[];
   };
 
 /**
@@ -110,6 +146,7 @@ export function upgradeLegacyResearchLevers<T extends LegacyResearchRunLevers>(l
     maxAutoAdmits: levers.maxAutoAdmits ?? RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
     source: levers.source === 'feed' ? ('feed' as const) : ('search' as const),
     feedUrl: levers.feedUrl ?? null,
+    itemRules: levers.itemRules ?? [],
   };
   const trusted = levers.trustedDomains ?? [];
   const allowed = levers.allowedDomains ?? [];

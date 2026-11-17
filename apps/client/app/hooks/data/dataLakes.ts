@@ -11,6 +11,7 @@ import type {
   IDataLakeResearchRunDocument,
   ResearchRunTrigger,
   ResearchScheduleCadence,
+  ResearchItemRule,
   ResearchUnlistedSources,
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
@@ -2504,6 +2505,7 @@ export type ResearchConfigInput = {
   minRelevance?: number;
   costCeilingMicroUsd?: number;
   proposedTags?: string[];
+  itemRules?: ResearchItemRule[];
 };
 
 // -- Detected corpus problems (#3039) ---------------------------------------
