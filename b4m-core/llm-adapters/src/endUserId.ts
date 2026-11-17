@@ -44,6 +44,7 @@ export function toProviderEndUserId(internalId: string | null | undefined): stri
  * The raw id a platform API key's own end user is attributed under, before toProviderEndUserId
  * hashes it. Prefixed with the key owner's user id so two platforms reusing the same end-user id
  * never collide, and so the digest cannot equal any account's own toProviderEndUserId(userId).
+ * The join is unambiguous only because owner ids (ObjectId hex) never contain ':'.
  */
 export function platformEndUserKey(ownerUserId: string, endUserId: string): string {
   return `${ownerUserId}:${endUserId}`;

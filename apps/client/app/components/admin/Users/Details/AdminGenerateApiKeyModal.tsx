@@ -54,8 +54,10 @@ const confinedScopeValues = new Set<ApiKeyScopeValue>(CONFINED_API_KEY_SCOPES);
 const ingestScopeOptions = ADMIN_ONLY_API_KEY_SCOPES.filter(
   s => s.value !== ApiKeyScope.OVERWATCH_INGEST_WRITE && confinedScopeValues.has(s.value)
 );
-// Admin-provisioned scopes that combine with the generic ones (e.g. ai:end-user-attribution).
-const platformScopeOptions = ADMIN_ONLY_API_KEY_SCOPES.filter(s => !confinedScopeValues.has(s.value));
+// Admin-provisioned scopes that combine with the generic ones. Listed explicitly so a new
+// admin-only scope is never offered here without a deliberate choice.
+const PLATFORM_SCOPE_VALUES: readonly ApiKeyScopeValue[] = [ApiKeyScope.AI_END_USER_ATTRIBUTION];
+const platformScopeOptions = ADMIN_ONLY_API_KEY_SCOPES.filter(s => PLATFORM_SCOPE_VALUES.includes(s.value));
 const platformScopeValues = new Set<ApiKeyScopeValue>(platformScopeOptions.map(s => s.value));
 
 const INGEST_FULL_ADMIN_ONLY = 'Only full administrators can create API keys with admin-provisioned scopes';
