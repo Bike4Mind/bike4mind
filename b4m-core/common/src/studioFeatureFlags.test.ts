@@ -4,10 +4,12 @@ import {
   STUDIO_FEATURE_AUDIENCE,
   STUDIO_FEATURE_FLAGS,
   STUDIO_FEATURE_PARENT,
-  isStudioFeatureOpen,
-  isStudioFeatureVisibleTo,
+  STUDIO_FEATURE_AUDIENCE_SETTING,
+  resolveStudioFeatureAccess,
+  studioFeatureAudience,
   studioFeatureSettingKeys,
   type StudioFeature,
+  type StudioFeatureAudience,
 } from './studioFeatureFlags';
 
 describe('STUDIO_FEATURE_FLAGS', () => {
@@ -38,19 +40,73 @@ describe('STUDIO_FEATURE_AUDIENCE', () => {
   );
 });
 
-describe('isStudioFeatureOpen', () => {
-  it.each(['createV2', 'image'] as const)('lets the setting alone decide %s, for admins and non-admins', feature => {
-    expect(isStudioFeatureOpen({ feature, isAdmin: true, flagEnabled: true })).toBe(true);
-    expect(isStudioFeatureOpen({ feature, isAdmin: false, flagEnabled: true })).toBe(true);
-    expect(isStudioFeatureOpen({ feature, isAdmin: true, flagEnabled: false })).toBe(false);
-    expect(isStudioFeatureOpen({ feature, isAdmin: false, flagEnabled: false })).toBe(false);
+describe('studioFeatureAudience', () => {
+  it('reads the audience setting for Productions', () => {
+    expect(studioFeatureAudience('productions', 'paid')).toBe('paid');
+    expect(studioFeatureAudience('productions', 'admins')).toBe('admins');
   });
 
-  it('opens Productions only for an admin with the flag on', () => {
-    expect(isStudioFeatureOpen({ feature: 'productions', isAdmin: true, flagEnabled: true })).toBe(true);
-    expect(isStudioFeatureOpen({ feature: 'productions', isAdmin: true, flagEnabled: false })).toBe(false);
-    expect(isStudioFeatureOpen({ feature: 'productions', isAdmin: false, flagEnabled: true })).toBe(false);
-    expect(isStudioFeatureVisibleTo('productions', false)).toBe(false);
+  it.each([undefined, null, '', 'everyone', 'PAID', 42])('falls back to admins for the unknown value %s', value => {
+    expect(studioFeatureAudience('productions', value)).toBe('admins');
+  });
+
+  it.each(['createV2', 'image'] as const)('ignores a setting value for %s, which has no audience setting', feature => {
+    expect(studioFeatureAudience(feature, 'paid')).toBe('everyone');
+  });
+
+  it('backs every overridable feature with a string setting that defaults to admins', () => {
+    for (const key of Object.values(STUDIO_FEATURE_AUDIENCE_SETTING)) {
+      expect(settingsMap[key!].defaultValue).toBe('admins');
+      expect(settingsMap[key!].schema.safeParse('paid').success).toBe(true);
+      expect(settingsMap[key!].schema.safeParse('everyone').success).toBe(false);
+    }
+  });
+});
+
+describe('resolveStudioFeatureAccess', () => {
+  const viewers = {
+    admin: { isAdmin: true, tags: [] as string[], paid: false },
+    developer: { isAdmin: false, tags: ['Developer'], paid: false },
+    paid: { isAdmin: false, tags: [] as string[], paid: true },
+    free: { isAdmin: false, tags: ['developer-ish'], paid: false },
+  };
+  const table: Record<StudioFeatureAudience, Record<keyof typeof viewers, 'open' | 'upgrade' | 'closed'>> = {
+    everyone: { admin: 'open', developer: 'open', paid: 'open', free: 'open' },
+    paid: { admin: 'open', developer: 'open', paid: 'open', free: 'upgrade' },
+    admins: { admin: 'open', developer: 'closed', paid: 'closed', free: 'closed' },
+  };
+
+  it.each(Object.keys(table) as StudioFeatureAudience[])('resolves the %s audience for each viewer', audience => {
+    for (const [name, v] of Object.entries(viewers) as [keyof typeof viewers, (typeof viewers)['admin']][]) {
+      expect(
+        resolveStudioFeatureAccess({
+          viewer: { isAdmin: v.isAdmin, tags: v.tags },
+          hasPaidPlan: v.paid,
+          flagEnabled: true,
+          audience,
+        }),
+        `${audience}/${name}`
+      ).toBe(table[audience][name]);
+    }
+  });
+
+  it.each(Object.keys(table) as StudioFeatureAudience[])('closes %s for everyone when the flag is off', audience => {
+    for (const v of Object.values(viewers)) {
+      expect(
+        resolveStudioFeatureAccess({
+          viewer: { isAdmin: v.isAdmin, tags: v.tags },
+          hasPaidPlan: v.paid,
+          flagEnabled: false,
+          audience,
+        })
+      ).toBe('closed');
+    }
+  });
+
+  it('treats missing tags and a null isAdmin as a free viewer', () => {
+    const base = { hasPaidPlan: false, flagEnabled: true, audience: 'paid' as const };
+    expect(resolveStudioFeatureAccess({ ...base, viewer: { isAdmin: null, tags: null } })).toBe('upgrade');
+    expect(resolveStudioFeatureAccess({ ...base, viewer: {} })).toBe('upgrade');
   });
 });
 

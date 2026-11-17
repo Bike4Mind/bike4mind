@@ -1,9 +1,25 @@
-import { IOrganization, toSafeOrganization } from '@bike4mind/common';
+import { IOrganizationDocument, IUserDocument, toSafeOrganization } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { User, userRepository } from '@bike4mind/database';
+import { User, organizationRepository, userRepository } from '@bike4mind/database';
 import { organizationService } from '@bike4mind/services';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+
+type PointerOwner = (Pick<IUserDocument, 'groups' | 'isAdmin'> & { _id: unknown }) | null;
+
+/**
+ * The pointer can outlive the membership (legacy pointers, removals that skipped the clear), so
+ * re-check it against the TARGET user's ACL. Platform admins keep theirs, matching
+ * clearStaleOrganizationPointers in packages/scripts.
+ */
+async function isStillAccessible(user: PointerOwner, organization: IOrganizationDocument): Promise<boolean> {
+  if (!user) return false;
+  if (user.isAdmin) return true;
+  // findAccessibleById reads only id and groups; the repository interface types a full document.
+  const aclUser = { id: String(user._id), groups: user.groups ?? [] } as unknown as IUserDocument;
+  const accessible = await organizationRepository.shareable.findAccessibleById(aclUser, String(organization.id));
+  return accessible !== null;
+}
 
 /**
  * A user's active organization: read it (GET) or clear the pointer (DELETE).
@@ -26,8 +42,9 @@ const handler = baseApi()
             path: 'logo',
           },
         })
-        .select('organizationId');
-      const organization = (user?.organizationId as unknown as IOrganization) || null;
+        .select('organizationId groups isAdmin');
+      const pointed = (user?.organizationId as unknown as IOrganizationDocument | null | undefined) ?? null;
+      const organization = pointed && (await isStillAccessible(user, pointed)) ? pointed : null;
 
       // The caller may be a member (not owner) of their primary org, so strip billing
       // identifiers unless they own it or are an admin.

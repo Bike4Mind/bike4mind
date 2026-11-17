@@ -26,6 +26,7 @@ import { createReviewGateTool, createReviewGateStore } from '../reviewGateTool.j
 import { createFindDefinitionTool } from '../findDefinitionTool.js';
 import { createGetFileStructureTool } from '../getFileStructure/index.js';
 import { createWorkItemTools } from '../workItemTools.js';
+import { createPeerTools } from '../peerTools.js';
 import { createSkillTool } from '../skillTool.js';
 import { CORE_TOOL_DESCRIPTORS } from './coreToolDescriptors.js';
 import { ToolCatalog } from './toolCatalog.js';
@@ -87,6 +88,7 @@ describe('core descriptor completeness', () => {
         findDefinitionTool: createFindDefinitionTool([]),
         getFileStructureTool: createGetFileStructureTool([]),
         workItemTools: createWorkItemTools({} as never),
+        peerTools: createPeerTools(() => null, vi.fn()),
         skillTool: createSkillTool({ customCommandStore: {} as never, permission: {} as never }),
         dynamicAgentTool: createDynamicAgentTool(orchestrator, 'session-1'),
         coordinateTaskTool: createCoordinateTaskTool(orchestrator, agentStore, 'session-1'),

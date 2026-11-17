@@ -75,6 +75,7 @@ import { slackToolDefinitions, createPendingActionToolDefs } from '@bike4mind/sl
 import { cancelPendingActionOnQuest } from '@bike4mind/server-utils/utils/pendingActionExecutor';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
 import { buildMusicToolConfig } from '@bike4mind/server-utils/musicGenerations/buildMusicToolConfig';
+import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
 import {
   getCreateImageJobsDeps,
   getCreateMusicJobDeps,
@@ -399,6 +400,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
       tokenizer: getSharedTokenizer(logger),
       sessionId: params.sessionId,
       user,
+      audioToolJobs: buildAudioToolJobs(),
       onStatusUpdate: liveActivity.onStatusUpdate,
       createCompletionMeter: ({ organizationId, featureLabel }) =>
         createCompletionMeter(user, logger, featureLabel, {

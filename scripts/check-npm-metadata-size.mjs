@@ -60,19 +60,100 @@ export function formatReport(rows) {
   return lines.join('\n');
 }
 
-async function measure(name, token) {
-  try {
-    const response = await fetch(`${REGISTRY}/${name.replace('/', '%2f')}`, {
+// Current 20-package inventory uses at most 400 seconds of asynchronous reads, leaving room
+// inside the 15-minute job for setup and reporting. The collection cap also bounds future growth.
+export const PACKAGE_TIMEOUT_MS = 20_000;
+export const COLLECTION_TIMEOUT_MS = 8 * 60_000;
+const TIMEOUT_MESSAGE = 'Metadata read timed out';
+
+function cancelResponseBody(response) {
+  if (!response?.body) return;
+  void (async () => {
+    try {
+      await response.body.cancel();
+    } catch {
+      // Native abort can close/lock the active reader. Disposal is best effort: preserve the
+      // primary HTTP/timeout failure instead of replacing it with an already-closed stream error.
+    }
+  })();
+}
+
+/** One absolute deadline covers headers and body. Defaults use native fetch and real abort. */
+export async function measure(
+  name,
+  token,
+  { fetch: fetchImpl = globalThis.fetch, deadline = Date.now() + PACKAGE_TIMEOUT_MS } = {}
+) {
+  if (Date.now() >= deadline) return { name, error: TIMEOUT_MESSAGE };
+  const controller = new AbortController();
+  const timeoutError = new Error(TIMEOUT_MESSAGE);
+  let response;
+  let timer;
+  const expired = () => controller.signal.aborted || Date.now() >= deadline;
+  const throwIfExpired = () => {
+    if (!expired()) return;
+    controller.abort(timeoutError);
+    cancelResponseBody(response);
+    throw timeoutError;
+  };
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort(timeoutError);
+      cancelResponseBody(response);
+      reject(timeoutError);
+    }, deadline - Date.now());
+  });
+  const work = (async () => {
+    response = await fetchImpl(`${REGISTRY}/${name.replace('/', '%2f')}`, {
       headers: { accept: 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      signal: controller.signal,
     });
-    if (!response.ok) return { name, error: `HTTP ${response.status}` };
+    throwIfExpired();
+    if (!response.ok) {
+      cancelResponseBody(response);
+      return { name, error: `HTTP ${response.status}` };
+    }
     const body = Buffer.from(await response.arrayBuffer());
+    throwIfExpired();
     const versions = Object.keys(JSON.parse(body.toString('utf8')).versions ?? {}).length;
+    throwIfExpired();
     return { name, bytes: body.length, versions, status: classify(body.length) };
+  })();
+  try {
+    // Both branches stay observed if a deliberately uncooperative transport settles after timeout.
+    return await Promise.race([work, timeout]);
   } catch (error) {
-    // One network or parse failure must not drop the report for every other package.
-    return { name, error: error instanceof Error ? error.message : String(error) };
+    return { name, error: expired() ? TIMEOUT_MESSAGE : error instanceof Error ? error.message : String(error) };
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+/** Keep every report row, including packages that cannot start before the collection deadline. */
+export async function collectMeasurements(
+  names,
+  token,
+  {
+    fetch: fetchImpl = globalThis.fetch,
+    packageTimeoutMs = PACKAGE_TIMEOUT_MS,
+    collectionTimeoutMs = COLLECTION_TIMEOUT_MS,
+  } = {}
+) {
+  const collectionDeadline = Date.now() + collectionTimeoutMs;
+  const rows = [];
+  for (const name of names) {
+    if (Date.now() >= collectionDeadline) {
+      rows.push({ name, error: 'Collection read budget exhausted' });
+      continue;
+    }
+    rows.push(
+      await measure(name, token, {
+        fetch: fetchImpl,
+        deadline: Math.min(collectionDeadline, Date.now() + packageTimeoutMs),
+      })
+    );
+  }
+  return { rows, failed: rows.some(row => row.error || row.status === 'fail') };
 }
 
 async function main() {
@@ -85,8 +166,7 @@ async function main() {
   }
 
   const token = process.env.NPM_READ_TOKEN;
-  const rows = [];
-  for (const name of names) rows.push(await measure(name, token));
+  const { rows, failed } = await collectMeasurements(names, token);
 
   const report = formatReport(rows);
   console.log(report);
@@ -114,7 +194,7 @@ async function main() {
     );
   }
 
-  if (failing.length > 0 || unreadable.length > 0) process.exit(1);
+  if (failed) process.exit(1);
   console.log(`OK: ${rows.length} packages measured, none at or above ${FAIL_MB} MB.`);
 }
 

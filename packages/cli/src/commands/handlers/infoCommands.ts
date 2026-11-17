@@ -29,6 +29,7 @@ Available commands:
   /usage - Show credit usage and balance
   /save <name> - Save current session
   /resume - List and resume saved sessions
+  /peers - Discover and message opted-in local CLI sessions
   /config - Show configuration
   /model [id-or-name] - Switch the active model (opens a picker, or matches an argument)
 
