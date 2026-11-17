@@ -46,7 +46,18 @@ shorten that. Judge the fix by the sweep's own count reaching 0, not by the alar
 ## Confirmation email retries
 
 The post-deletion confirmation is stored in the `AccountDeletionNotice` collection in the same
-transaction as the delete, sent once, and retried by each daily sweep up to five attempts in all. The
-address is removed once a send succeeds or after the last attempt (a 30-day TTL is the backstop). The
+transaction as the delete, sent once, and retried by each daily sweep. Five recorded delivery failures
+exhaust the notice. The address is removed once a send succeeds or after the last recorded failure
+(a 30-day TTL is the backstop). The
 sweep result carries `notices: { sent, failed, abandoned }`; an abandoned notice is logged at error.
 Nothing logs the address or the user id.
+
+Both the immediate post-commit send and each sweep first acquire the same atomic notice claim. A
+claim lasts for the existing one-hour retry window; only its token may remove or reschedule the row.
+Legacy rows without claim fields remain eligible, and a crashed sender can be retried after expiry.
+The first stored recipient and original 30-day TTL are unchanged. A crash after recording the final
+failure is cleaned up without sending a sixth email.
+
+This prevents ordinary overlapping senders while a claim is valid. External acceptance followed by a
+crash, cleanup failure, or a send outliving the claim can still result in a later duplicate; publication
+is not proof of physical email delivery.

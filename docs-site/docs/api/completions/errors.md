@@ -87,6 +87,14 @@ A 404 with `errorCode: "run_not_found"` means the `run.runId` in your request is
 
 A 400 with `errorCode: "unknown_model"` means the model id is not available to you. Check `GET /api/v1/models` for the ids you can use.
 
+## End user id not allowed
+
+A 400 with `errorCode: "end_user_id_not_allowed"` means the request sent `end_user_id` on an API key without the `ai:end-user-id` scope, or with a signed-in session. Remove the field, or ask your administrator to grant the scope to the key. See [End users of your product](./reference.md#end-users-of-your-product).
+
+## Invalid end user id
+
+A 400 with `errorCode: "invalid_end_user_id"` means `end_user_id` was empty, longer than 64 characters, or contained anything other than letters, digits, `_`, `:` and `-` (an email address is never valid). This is checked before the credential, so it applies to every caller. See [End users of your product](./reference.md#end-users-of-your-product).
+
 ## Related
 
 - [Streaming](./streaming.md)

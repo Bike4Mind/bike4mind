@@ -1,3 +1,4 @@
+import type { ClaimedAccountDeletionNotice } from '@bike4mind/database';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
@@ -14,6 +15,7 @@ const h = vi.hoisted(() => ({
   endRealtimeConnections: vi.fn(),
   sendComplete: vi.fn(),
   noticeRecord: vi.fn(),
+  noticeClaim: vi.fn<(idHash: string, dueBefore: Date) => Promise<ClaimedAccountDeletionNotice | null>>(),
   noticeMarkFailed: vi.fn(),
   noticeRemove: vi.fn(),
   recordAdminAction: vi.fn(),
@@ -35,6 +37,7 @@ vi.mock('@bike4mind/database', () => ({
   ACCOUNT_DELETION_NOTICE_RETRY_DELAY_MS: 60 * 60 * 1000,
   accountDeletionNoticeRepository: {
     record: h.noticeRecord,
+    claimDue: h.noticeClaim,
     markFailed: h.noticeMarkFailed,
     remove: h.noticeRemove,
   },
@@ -90,9 +93,21 @@ type HardDeleteContext = {
 };
 const deletedTarget = { name: 'Leaving User', username: 'leaving', email: 'leaving@example.com' };
 
+const claimedNotice = (idHash: string): ClaimedAccountDeletionNotice => ({
+  idHash,
+  email: 'leaving@example.com',
+  attempts: 0,
+  nextAttemptAt: NOW,
+  createdAt: NOW,
+  leaseToken: 'notice-owner',
+  leaseExpiresAt: new Date(NOW.getTime() + 60 * 60 * 1000),
+});
+
 beforeEach(() => {
   vi.resetAllMocks();
   h.order.length = 0;
+  h.noticeClaim.mockImplementation(async idHash => claimedNotice(idHash));
+  h.noticeMarkFailed.mockResolvedValue(1);
   h.exists.mockResolvedValue({ _id: USER_ID });
   h.claimUser.mockResolvedValue({ email: 'leaving@example.com' });
   h.organizationExists.mockResolvedValue(null);
@@ -300,7 +315,7 @@ describe('completeAccountDeletion', () => {
     expect(users.delete).toHaveBeenCalledWith(USER_ID);
     expect(h.sendComplete).toHaveBeenCalledWith('leaving@example.com');
     // The address stays in the outbox for the sweep's retry, and no log line carries it or the id.
-    expect(h.noticeMarkFailed).toHaveBeenCalledWith(`hash-${USER_ID}`, expect.any(Date));
+    expect(h.noticeMarkFailed).toHaveBeenCalledWith(`hash-${USER_ID}`, 'notice-owner', expect.any(Date));
     expect(h.noticeRemove).not.toHaveBeenCalled();
     // Every argument, Errors by name and message, as the real Logger writes them.
     for (const arg of [...logger.warn.mock.calls, ...logger.error.mock.calls].flat()) {
@@ -311,6 +326,10 @@ describe('completeAccountDeletion', () => {
   });
 
   it('records the notice inside the delete transaction and clears it after a successful send', async () => {
+    h.noticeClaim.mockImplementation(async idHash => {
+      h.order.push('claim');
+      return claimedNotice(idHash);
+    });
     h.noticeRecord.mockImplementation(async () => {
       h.order.push('notice');
     });
@@ -334,9 +353,10 @@ describe('completeAccountDeletion', () => {
       'notice',
       'audit',
       'committed',
+      'claim',
       'email',
     ]);
-    expect(h.noticeRemove).toHaveBeenCalledWith(`hash-${USER_ID}`);
+    expect(h.noticeRemove).toHaveBeenCalledWith(`hash-${USER_ID}`, 'notice-owner');
   });
 
   it('sends no completion email without an address', async () => {

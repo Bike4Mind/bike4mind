@@ -177,6 +177,16 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     action:
       'Find the purchase in Stripe and the credit ledger, grant the credits by hand, then check the webhook handler logs.',
   },
+  'account-deletion-deadline': {
+    title: 'Account deletion needs attention',
+    level: 'page',
+    category: 'jobs',
+    unit: 'overdue requests or missing reports',
+    meaning:
+      'An account deletion request is at least 25 days old and still open, or the sweep has not reported in its two-day window.',
+    action:
+      'Check accountDeletionSweep logs and its dead-letter queue, then distinguish overdue requests from missing OverdueDeletionRequests datapoints. Follow infra/account-deletion-deadline-alarm.md; recovery can take about two days after the count returns to zero.',
+  },
   'billing-event-ingest-failures': {
     title: 'Billing events not reaching Overwatch',
     level: 'page',

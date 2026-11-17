@@ -230,7 +230,7 @@ export async function completeAccountDeletion(
     return { deleted: true };
   }
   logger.info(`[AccountDeletion] Deleted user ${userId} whose deletion grace period ended`);
-  if (user.email) await sendPendingDeletionNotice(erasureIdHash(userId), user.email, { logger });
+  if (user.email) await sendPendingDeletionNotice(erasureIdHash(userId), { logger });
   return { deleted: true };
 }
 

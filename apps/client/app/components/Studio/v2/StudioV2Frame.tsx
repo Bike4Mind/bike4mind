@@ -4,7 +4,7 @@ import StudioSegmentedControl, { type StudioNavOption } from '../design/StudioSe
 import StudioThemeScope from '../design/StudioThemeScope';
 import { studioColor, studioRadius } from '../design/studioTokens';
 import type { StudioMedium } from '../studioModality';
-import { useStudioFeature } from '../useStudioFeature';
+import { useStudioFeature, useStudioFeatureAccess } from '../useStudioFeature';
 import StudioCreditsBalance from './StudioCreditsBalance';
 
 export type StudioArea = 'create' | 'productions' | 'library';
@@ -91,7 +91,8 @@ type StudioV2FrameProps = {
 /** The Studio stage every v2 area sits on: the header (title, area switcher, balance), an optional rail, then the area. */
 const StudioV2Frame = ({ area, testId, medium, rail, children }: StudioV2FrameProps) => {
   const isImageOpen = useStudioFeature('image');
-  const isProductionsOpen = useStudioFeature('productions');
+  // Free users of a paid Productions keep the tab: it leads to the upgrade prompt.
+  const showProductions = useStudioFeatureAccess('productions') !== 'closed';
 
   const areas: StudioNavOption<StudioArea>[] = [
     {
@@ -100,7 +101,7 @@ const StudioV2Frame = ({ area, testId, medium, rail, children }: StudioV2FramePr
       testId: 'studio-area-create',
       link: { to: '/studio/$modality', params: { modality: medium ?? (isImageOpen ? 'image' : 'video') } },
     },
-    ...(isProductionsOpen
+    ...(showProductions
       ? [
           {
             value: 'productions' as const,

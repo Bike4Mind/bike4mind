@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import mongoose, { Model, model, Schema } from 'mongoose';
 
 /**
@@ -6,18 +7,22 @@ import mongoose, { Model, model, Schema } from 'mongoose';
  * removed once a send succeeds (or retries run out). `idHash` is the same keyed hash as the
  * ErasureRecord, which stays hash-only; this collection is why it can.
  */
-export interface IAccountDeletionNotice {
+export type IAccountDeletionNotice = {
   idHash: string;
   email: string;
   attempts: number;
   nextAttemptAt: Date;
   createdAt: Date;
-}
+  leaseToken?: string;
+  leaseExpiresAt?: Date;
+};
+
+export type ClaimedAccountDeletionNotice = IAccountDeletionNotice & { leaseToken: string; leaseExpiresAt: Date };
 
 /** Backstop only: a notice normally ends on send or after the sweep's bounded attempts. */
 export const ACCOUNT_DELETION_NOTICE_TTL_SECONDS = 30 * 24 * 60 * 60;
 
-/** Delay before a notice is first due and between attempts; the daily sweep always finds it due. */
+/** Retry delay and claim window; both immediate and sweep sends acquire the same atomic claim. */
 export const ACCOUNT_DELETION_NOTICE_RETRY_DELAY_MS = 60 * 60 * 1000;
 
 const AccountDeletionNoticeSchema = new Schema<IAccountDeletionNotice>(
@@ -27,6 +32,8 @@ const AccountDeletionNoticeSchema = new Schema<IAccountDeletionNotice>(
     attempts: { type: Number, default: 0 },
     nextAttemptAt: { type: Date, required: true },
     createdAt: { type: Date, required: true },
+    leaseToken: { type: String },
+    leaseExpiresAt: { type: Date },
   },
   { versionKey: false }
 );
@@ -40,8 +47,8 @@ export const AccountDeletionNoticeModel: Model<IAccountDeletionNotice> =
 
 class AccountDeletionNoticeRepository {
   /**
-   * Upsert keyed on `idHash`; a retried delete keeps the first notice. Not due for an hour, so a
-   * concurrent drain cannot send while the immediate send is in flight. Joins an open transaction.
+   * Upsert keyed on `idHash`; a retried delete keeps the first notice. Joins the deletion transaction.
+   * Newly committed notices are due immediately; atomic claims arbitrate immediate and sweep sends.
    */
   async record(input: { idHash: string; email: string; now: Date }): Promise<void> {
     await AccountDeletionNoticeModel.updateOne(
@@ -51,7 +58,7 @@ class AccountDeletionNoticeRepository {
           idHash: input.idHash,
           email: input.email,
           attempts: 0,
-          nextAttemptAt: new Date(input.now.getTime() + ACCOUNT_DELETION_NOTICE_RETRY_DELAY_MS),
+          nextAttemptAt: input.now,
           createdAt: input.now,
         },
       },
@@ -71,18 +78,54 @@ class AccountDeletionNoticeRepository {
       .lean<IAccountDeletionNotice[]>();
   }
 
-  /** Counts a failed send and returns the new attempt count, or null when the notice is gone. */
-  async markFailed(idHash: string, nextAttemptAt: Date): Promise<number | null> {
+  private async claim(
+    idHash: string | undefined,
+    dueBefore: Date,
+    leaseNow: Date
+  ): Promise<ClaimedAccountDeletionNotice | null> {
+    const leaseToken = randomUUID();
+    const leaseExpiresAt = new Date(leaseNow.getTime() + ACCOUNT_DELETION_NOTICE_RETRY_DELAY_MS);
+    const notice = await AccountDeletionNoticeModel.findOneAndUpdate(
+      {
+        ...(idHash === undefined ? {} : { idHash }),
+        nextAttemptAt: { $lte: dueBefore },
+        $or: [{ leaseExpiresAt: null }, { leaseExpiresAt: { $lte: leaseNow } }],
+      },
+      { $set: { leaseToken, leaseExpiresAt } },
+      { new: true, sort: { nextAttemptAt: 1 }, projection: { _id: 0 } }
+    ).lean<IAccountDeletionNotice>();
+    if (!notice) return null;
+    return {
+      idHash: notice.idHash,
+      email: notice.email,
+      attempts: notice.attempts,
+      nextAttemptAt: notice.nextAttemptAt,
+      createdAt: notice.createdAt,
+      leaseToken,
+      leaseExpiresAt,
+    };
+  }
+
+  claimDue(idHash: string, dueBefore: Date, leaseNow = new Date()): Promise<ClaimedAccountDeletionNotice | null> {
+    return this.claim(idHash, dueBefore, leaseNow);
+  }
+
+  claimNextDue(dueBefore: Date, leaseNow = new Date()): Promise<ClaimedAccountDeletionNotice | null> {
+    return this.claim(undefined, dueBefore, leaseNow);
+  }
+
+  /** Only this claim may record failure; preserve its token through exhaustion cleanup. */
+  async markFailed(idHash: string, leaseToken: string, nextAttemptAt: Date): Promise<number | null> {
     const updated = await AccountDeletionNoticeModel.findOneAndUpdate(
-      { idHash },
-      { $inc: { attempts: 1 }, $set: { nextAttemptAt } },
+      { idHash, leaseToken },
+      { $inc: { attempts: 1 }, $set: { nextAttemptAt, leaseExpiresAt: nextAttemptAt } },
       { new: true, projection: { attempts: 1 } }
     ).lean<{ attempts: number }>();
     return updated?.attempts ?? null;
   }
 
-  async remove(idHash: string): Promise<void> {
-    await AccountDeletionNoticeModel.deleteOne({ idHash });
+  async remove(idHash: string, leaseToken: string): Promise<void> {
+    await AccountDeletionNoticeModel.deleteOne({ idHash, leaseToken });
   }
 }
 
