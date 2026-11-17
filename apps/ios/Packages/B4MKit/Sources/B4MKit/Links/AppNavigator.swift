@@ -101,6 +101,8 @@ public final class AppNavigator {
       }
     case .media:
       sessionPath = [.studio]
+    case .brief(let id):
+      sessionPath = [.brief(id: id)]
     case .lakes:
       externalURL = Self.webURLForLakes
     case .lake(let id):
@@ -108,6 +110,12 @@ public final class AppNavigator {
     case .web(let url):
       externalURL = url
     }
+  }
+
+  /// Opens the latest brief (the drawer row), which has no id to route by.
+  public func openLatestBrief() {
+    isDrawerOpen = false
+    sessionPath = [.brief(id: nil)]
   }
 
   /// Pushes a session whose summary is already known (a drawer row), so it is titled at once.
@@ -163,6 +171,7 @@ public final class AppNavigator {
     case .settings: return sessionPath.last == .settings
     case .session(let id): return sessionPath.last?.sessionID == id
     case .media: return sessionPath.last == .studio
+    case .brief(let id): return sessionPath.last == .brief(id: id)
     case .lakes, .lake, .web, .compose: return false
     }
   }
@@ -176,6 +185,8 @@ public enum SessionsDestination: Hashable, Sendable {
   case settings
   /// The Studio gallery (`Route.media`).
   case studio
+  /// A brief by id; a `nil` id is the latest brief (the drawer row).
+  case brief(id: String?)
 
   public var sessionID: String? {
     guard case .session(let session) = self else { return nil }

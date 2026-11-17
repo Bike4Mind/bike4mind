@@ -21,6 +21,22 @@ final class AppNavigatorTests: XCTestCase {
     XCTAssertNil(navigator.takeOpeningTurn(forSession: "s1"))
   }
 
+  func testBriefRoutePushesTheBriefAndReportsItShowing() {
+    let navigator = AppNavigator()
+    navigator.isDrawerOpen = true
+    navigator.apply(.brief(id: "b1"))
+    XCTAssertEqual(navigator.sessionPath, [.brief(id: "b1")])
+    XCTAssertFalse(navigator.isDrawerOpen)
+    XCTAssertTrue(navigator.isShowing(.brief(id: "b1")))
+    XCTAssertFalse(navigator.isShowing(.brief(id: "b2")))
+  }
+
+  func testOpenLatestBriefPushesAnIdlessBrief() {
+    let navigator = AppNavigator()
+    navigator.openLatestBrief()
+    XCTAssertEqual(navigator.sessionPath, [.brief(id: nil)])
+  }
+
   func testSameSessionDoesNotStackTwice() {
     let navigator = AppNavigator()
     navigator.apply(.session(id: "s1"))

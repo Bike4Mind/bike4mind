@@ -23,7 +23,10 @@ final class NotificationSettingsTests: XCTestCase {
   func testCategoryRawValuesMatchTheServerKeys() {
     XCTAssertEqual(
       Set(NotificationCategory.allCases.map(\.rawValue)),
-      ["agent_completed", "agent_failed", "approval_needed", "chat_completed", "generation_ready", "agent_message"])
+      [
+        "agent_completed", "agent_failed", "approval_needed", "chat_completed", "generation_ready", "agent_message",
+        "brief_ready",
+      ])
   }
 
   private func makeModel(
