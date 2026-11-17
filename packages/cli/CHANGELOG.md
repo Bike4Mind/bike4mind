@@ -1,5 +1,19 @@
 # @bike4mind/cli
 
+## 4.7.0
+
+### Minor Changes
+
+- [#7604](https://github.com/Bike4Mind/bike4mind/pull/7604) [`92b4837`](https://github.com/Bike4Mind/bike4mind/commit/92b483768e5c33d0c2027c8f707a290b8bca490f) Thanks [@angelolao](https://github.com/angelolao)! - add local peer session messaging
+
+### Patch Changes
+
+- [#7506](https://github.com/Bike4Mind/bike4mind/pull/7506) [`9292bd0`](https://github.com/Bike4Mind/bike4mind/commit/9292bd03611f9abbb1e70523fb1ac0883b5558cf) Thanks [@onoya](https://github.com/onoya)! - move the CLI default off Sonnet 4.5 and alert only on a sustained deprecated-model rate
+
+- [#7667](https://github.com/Bike4Mind/bike4mind/pull/7667) [`2e57e2e`](https://github.com/Bike4Mind/bike4mind/commit/2e57e2ee13d2ece2b33e8977ff3cbf33ead633ea) Thanks [@onoya](https://github.com/onoya)! - make browser file uploads create-only
+
+- [#7818](https://github.com/Bike4Mind/bike4mind/pull/7818) [`946319d`](https://github.com/Bike4Mind/bike4mind/commit/946319db9c6ddcf5c3a9018ab4a881eacd3c5d74) Thanks [@poysama](https://github.com/poysama)! - publish the services package as @bike4mind/services-core
+
 ## 4.6.0
 
 ### Minor Changes

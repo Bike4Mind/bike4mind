@@ -34,6 +34,7 @@ import { mapperDeps } from '@server/generations/routeDeps';
 import { SPEECH_GENERATION_PROJECTION, toPublicGenerationJob } from '@server/generations/toPublicGenerationJob';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
+import { resolvePlatformEndUser } from '@bike4mind/server-utils/auth/platformEndUser';
 
 /**
  * Unified, multi-provider Text-to-Speech endpoint (#724).
@@ -68,7 +69,11 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
     languageCode,
     preview,
     organization_id,
+    end_user_id,
   } = req.validated;
+  // Validated so a platform can send the field on every AI route; no TTS provider takes an end-user id.
+  resolvePlatformEndUser(end_user_id, { userId: req.user?.id, apiKeyInfo: req.apiKeyInfo });
+
   const vendor = provider ?? DEFAULT_TTS_PROVIDER;
 
   // Omitted keeps the historical personal default; a key bills its own account (resolveAudioBillingOrgId 403s any

@@ -9,7 +9,7 @@ const source = readFileSync(new URL('../chatCompletion.ts', import.meta.url), 'u
 const squashed = source.replace(/\s+/g, ' ');
 
 describe('ChatCompletion load balancer listener rules', () => {
-  it('forwards on 443 and redirects port 80 when the stage has an origin domain', () => {
+  it('configures HTTPS forwarding and a dormant HTTP redirect when the stage has an origin domain', () => {
     expect(squashed).toContain(
       "rules: originDomain ? [ { listen: '443/https', forward: '8080/http' }, { listen: '80/http', redirect: '443/https' }, ]"
     );

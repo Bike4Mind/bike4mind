@@ -214,7 +214,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   // Lambda's /process dispatch, which hairpins out through NAT to the ALB's public DNS). The
   // CHAT_COMPLETION_INTERNAL_SECRET bearer checked in internal/route.ts is then defense-in-depth.
   // With an origin domain the service URL is https://<originDomain>/, so both callers use the
-  // HTTPS listener and port 80 only redirects to it.
+  // HTTPS listener. Port 80 has a redirect action but is blocked by the security group below.
   loadBalancer: {
     public: true,
     ...(originDomain && originCertificateArn

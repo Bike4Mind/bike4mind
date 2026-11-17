@@ -4,7 +4,7 @@
  * DELETE /api/studio/compositions/:id - delete it. The FabFiles it references are untouched.
  *
  * Owner-only: another user's composition answers 404, the same as a missing one. Studio only, behind the
- * EnableStudioProductions flag, with no public contract.
+ * EnableStudioProductions flag and its audience (admins, or paid plans), with no public contract.
  */
 import { z } from 'zod';
 import {
