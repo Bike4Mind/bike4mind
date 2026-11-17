@@ -516,11 +516,6 @@ ul.custom-mentions-menu-upward > li[aria-selected="true"] {
   --Select-focusedHighlight: transparent !important;
 }
 
-[class*='JoySelect']:not(.Mui-focusVisible):focus,
-[class*='JoySelect']:not(.Mui-focusVisible):focus-within {
-  --Select-focusedHighlight: transparent !important;
-}
-
 /* Disable focus effects for MuiSelect-button */
 [class*='MuiSelect-button']:focus,
 [class*='MuiSelect-button']:focus-within,
