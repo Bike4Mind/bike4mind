@@ -14,6 +14,7 @@ export interface ProviderSpendFetchOptions {
   onDiagnostic?: (diagnostic: ProviderSpendDiagnostic) => void;
 }
 
+export const DEFAULT_SPEND_DEADLINE_MS = 240_000;
 const MAX_ATTEMPTS = 4;
 const ATTEMPT_TIMEOUT_MS = 30_000;
 const RESET_HEADERS = [
@@ -79,7 +80,7 @@ export async function fetchSpendJson<T>(
   fetchFn: typeof fetch,
   options: ProviderSpendFetchOptions = {}
 ): Promise<T> {
-  const deadline = options.deadlineMs ?? Date.now() + 240_000;
+  const deadline = options.deadlineMs ?? Date.now() + DEFAULT_SPEND_DEADLINE_MS;
   const report = (diagnostic: ProviderSpendDiagnostic) => {
     try {
       options.onDiagnostic?.(diagnostic);

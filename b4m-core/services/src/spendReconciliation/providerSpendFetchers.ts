@@ -7,7 +7,7 @@
  * so the cron can skip the month without persisting a false $0 snapshot.
  */
 
-import { fetchSpendJson, type ProviderSpendFetchOptions } from './spendFetchRetry';
+import { DEFAULT_SPEND_DEADLINE_MS, fetchSpendJson, type ProviderSpendFetchOptions } from './spendFetchRetry';
 export type { ProviderSpendFetchOptions, ProviderSpendDiagnostic } from './spendFetchRetry';
 
 export interface ProviderSpendResult {
@@ -36,7 +36,7 @@ export async function fetchAnthropicSpend(
   if (!adminApiKey || adminApiKey === 'not-configured') return null;
 
   const { startIso, endIso } = monthToIsoRange(month);
-  const requestOptions = { ...options, deadlineMs: options.deadlineMs ?? Date.now() + 240_000 };
+  const requestOptions = { ...options, deadlineMs: options.deadlineMs ?? Date.now() + DEFAULT_SPEND_DEADLINE_MS };
   const breakdown: Record<string, number> = {};
   let total = 0;
   let page: string | undefined;
@@ -119,7 +119,7 @@ export async function fetchOpenAISpend(
   if (!adminApiKey || adminApiKey === 'not-configured') return null;
 
   const { startTs, endTs } = monthToTimestampRange(month);
-  const requestOptions = { ...options, deadlineMs: options.deadlineMs ?? Date.now() + 240_000 };
+  const requestOptions = { ...options, deadlineMs: options.deadlineMs ?? Date.now() + DEFAULT_SPEND_DEADLINE_MS };
   const breakdown: Record<string, number> = {};
   let total = 0;
   let afterTs = startTs;
