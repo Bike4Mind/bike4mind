@@ -1,6 +1,6 @@
 import { registerOrchestrationIpc } from './orchestrationIpc';
 import { randomUUID } from 'node:crypto';
-import { copyFile, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { PERMISSION_LISTS, type PermissionRuleLists, type PermissionScope } from '@shared/permissions';
 import {
@@ -74,6 +74,7 @@ import { localContextSizing, localHardware, localLlamaServer, relistAfterSave } 
 import { findOnPath, resolveUserPath } from './tools/userPath';
 import { SidebarSectionStore } from './SidebarSectionStore';
 import { registerImageMenuIpc } from './imageMenuIpc';
+import { registerFilePathLinkIpc } from './filePathLinks';
 import { registerSessionExportIpc } from './sessionExportIpc';
 import { registerLocalDataExportIpc } from './localDataExportIpc';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
@@ -1290,6 +1291,15 @@ export function registerChat(
     copyFile: (from, to) => copyFile(from, to),
     reveal: path => shell.showItemInFolder(path),
     downloadsDirectory: () => app.getPath('downloads'),
+  });
+
+  registerFilePathLinkIpc(ipcMain, {
+    scopeFor: sessionId => service.fileLinkScope(sessionId),
+    protectedPaths: () => toolProtected.paths(),
+    home,
+    stat: path => stat(path),
+    openPath: path => shell.openPath(path),
+    reveal: path => shell.showItemInFolder(path),
   });
 
   registerSessionExportIpc(ipcMain, {

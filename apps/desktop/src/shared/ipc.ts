@@ -43,6 +43,7 @@ import type {
   ChatArtifactPublishProgress,
   ChatArtifactPublishRequest,
   ChatAttachmentInput,
+  ChatFilePathOpenResult,
   ChatImageAction,
   ChatImageActionResult,
   ChatImageRef,
@@ -271,6 +272,8 @@ export const IPC_CHANNELS = {
   chatDiscardDraftAttachments: 'chat:discard-draft-attachments',
   chatImageAction: 'chat:image-action',
   chatAttachImage: 'chat:attach-image',
+  chatCheckFilePaths: 'chat:check-file-paths',
+  chatOpenFilePath: 'chat:open-file-path',
   chatListArtifacts: 'chat:list-artifacts',
   chatReadArtifact: 'chat:read-artifact',
   chatPublishArtifact: 'chat:publish-artifact',
@@ -1040,6 +1043,13 @@ export interface DesktopApi {
     imageAction(image: ChatImageRef, action: ChatImageAction): Promise<ChatImageActionResult>;
     /** Add a thread image to this session's draft, through the same intake as a paste. */
     attachImage(sessionId: string, image: ChatImageRef): Promise<AddAttachmentsResult>;
+    /**
+     * For each path a reply names, its absolute path when it exists inside this session's shared
+     * folders, else null. Same order as `paths`; an over-long or malformed list answers empty.
+     */
+    checkFilePaths(sessionId: string, paths: string[]): Promise<(string | null)[]>;
+    /** Open a path a reply names in its default app, or reveal it when it would run. Never rejects. */
+    openFilePath(sessionId: string, path: string): Promise<ChatFilePathOpenResult>;
     /**
      * Answer a tool call sitting at 'awaiting-approval'. Unknown or already-answered ids are
      * ignored, so a double click cannot approve a second, different command.

@@ -499,6 +499,9 @@ export type ChatImageAction = 'copy' | 'save' | 'copy-path' | 'copy-markdown' | 
 /** `done` is false when the user cancelled a save dialog. */
 export type ChatImageActionResult = { ok: true; done: boolean } | { ok: false; error: string };
 
+/** `revealed` when the file would run rather than open, and was shown in its folder instead. */
+export type ChatFilePathOpenResult = { ok: true; opened: 'opened' | 'revealed' } | { ok: false; error: string };
+
 /**
  * Everything the artifact card needs to draw one, whether it came out of a reply or back off
  * the server.

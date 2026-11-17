@@ -294,6 +294,10 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatImageAction, image, action),
     attachImage: (sessionId: string, image: ChatImageRef) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatAttachImage, sessionId, image),
+    checkFilePaths: (sessionId: string, paths: string[]) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatCheckFilePaths, sessionId, paths),
+    openFilePath: (sessionId: string, path: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatOpenFilePath, sessionId, path),
     respondToApproval: (approvalId: string, answer: ChatApprovalAnswer) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatRespondToApproval, approvalId, answer),
     listArtifacts: () => ipcRenderer.invoke(IPC_CHANNELS.chatListArtifacts),
