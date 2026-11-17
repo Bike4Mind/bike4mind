@@ -61,13 +61,16 @@ const rowSurface = {
   '&:hover': { backgroundColor: 'background.level1' },
 } as const;
 
-const AVATAR_COLORS = ['primary', 'success', 'warning', 'neutral'] as const;
+// Admin status tones, as InitialsAvatar uses (admin/shared). The admin skin repaints Joy's solid
+// neutral/success/warning as white secondary buttons, so a Joy `color` cannot give a fill here.
+// Neutral is too faint on a light surface and bad reads as an error, so neither is offered.
+const AVATAR_TONES = ['info', 'good', 'warn'] as const;
 
-/** A stable avatar colour per user, so a person keeps theirs across visits. */
-const avatarColorFor = (seed: string): (typeof AVATAR_COLORS)[number] => {
+/** A stable avatar tone per user, so a person keeps theirs across visits. */
+const avatarToneFor = (seed: string): (typeof AVATAR_TONES)[number] => {
   let hash = 0;
   for (const character of seed) hash = (hash * 31 + character.charCodeAt(0)) | 0;
-  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+  return AVATAR_TONES[Math.abs(hash) % AVATAR_TONES.length];
 };
 
 const ExplainedDash: FC<{ explanation: string; testId: string }> = ({ explanation, testId }) => (
@@ -282,10 +285,12 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
     <Avatar
       className="organization-user-card-avatar"
       size="sm"
-      variant="solid"
-      color={avatarColorFor(user.id)}
       src={avatarUrl}
-      sx={{ fontWeight: 600 }}
+      data-tone={avatarToneFor(user.id)}
+      sx={theme => {
+        const tone = theme.vars.palette.admin.status[avatarToneFor(user.id)];
+        return { fontWeight: 600, color: tone.foreground, bgcolor: tone.background };
+      }}
     >
       {user.name.charAt(0).toUpperCase()}
     </Avatar>
