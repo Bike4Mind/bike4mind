@@ -158,6 +158,8 @@ import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnaps
  */
 export const IPC_CHANNELS = {
   studioGet: 'studio:get',
+  studioPage: 'studio:page',
+  studioJobAction: 'studio:job-action',
   studioPrepare: 'studio:prepare',
   studioCreate: 'studio:create',
   studioPickFiles: 'studio:pick-files',

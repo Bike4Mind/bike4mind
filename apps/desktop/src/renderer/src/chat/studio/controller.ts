@@ -1,7 +1,7 @@
 import type { StudioAsset, StudioContextSelection, StudioJob, StudioMediaKind } from '@shared/studio';
 
 export interface StudioSettingsByKind {
-  image: { size?: string };
+  image: { size?: string; model?: string };
   video: { durationSeconds?: number; aspectRatio?: string; resolution?: string };
   music: { durationSeconds?: number; instrumental?: boolean };
   speech: { voice?: string; format?: string };
@@ -59,6 +59,10 @@ export interface StudioController extends StudioIdentity {
     | { status: 'error'; error: string }
     | { status: 'ready'; assets: readonly StudioAsset[]; jobs: readonly StudioJob[] };
   busy?: boolean;
+  hasMoreAssets?: boolean;
+  hasMoreJobs?: boolean;
+  loadMore?: (collection: 'assets' | 'jobs') => Promise<void>;
+  jobAction?: (jobId: string, action: 'recheck' | 'cancel') => Promise<void>;
   pickFiles?: () => Promise<string[]>;
   prepareCreation(draft: StudioCreationDraft): Promise<StudioReview>;
   create(request: { draft: StudioCreationDraft; reviewId: string; preparedPrompt: string }): Promise<void>;

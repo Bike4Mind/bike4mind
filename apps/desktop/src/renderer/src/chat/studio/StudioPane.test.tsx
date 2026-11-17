@@ -110,6 +110,44 @@ describe('Studio layout', () => {
 });
 
 describe('Studio states', () => {
+  it('loads remaining history pages and prefills reusable settings without submitting', async () => {
+    const loadMore = vi.fn(async () => undefined);
+    const value = controller({
+      hasMoreAssets: true,
+      hasMoreJobs: true,
+      loadMore,
+      state: {
+        status: 'ready',
+        jobs: [],
+        assets: [
+          {
+            id: 'saved',
+            kind: 'image',
+            title: 'Saved',
+            originatingSessionId: 's1',
+            createdAt: '2026-01-01',
+            updatedAt: '2026-01-01',
+            url: 'b4m-media://media/bucket/image.png',
+            creation: { prompt: 'Saved prompt', settings: { size: '1024x1024', model: 'saved-model' } },
+          },
+        ],
+      },
+    });
+    await mount(value);
+    await click('studio-load-more-assets-btn');
+    expect(loadMore).toHaveBeenCalledWith('assets');
+    await click('studio-load-more-jobs-btn');
+    expect(loadMore).toHaveBeenCalledWith('jobs');
+    await click('studio-asset-saved-btn');
+    await click('studio-asset-reuse-btn');
+    expect((get('studio-prompt-input') as HTMLTextAreaElement).value).toBe('Saved prompt');
+    expect(value.prepareCreation).not.toHaveBeenCalled();
+    expect(value.create).not.toHaveBeenCalled();
+    await click('studio-prepare-btn');
+    expect(value.prepareCreation).toHaveBeenCalledWith(
+      expect.objectContaining({ settings: { size: '1024x1024', model: 'saved-model' } })
+    );
+  });
   it('shows five accessible tiles and honest unavailable reasons without services', async () => {
     await mount();
     for (const kind of ['image', 'video', 'music', 'speech', 'sound-effect'])

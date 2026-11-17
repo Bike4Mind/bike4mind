@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { z } from 'zod';
 import {
   CreateMusicGenerationBodySchema,
@@ -7,7 +8,7 @@ import {
   soundEffectsRequestSchema,
   ttsRequestSchema,
 } from '@bike4mind/common';
-import { studioProvenanceSchema, type StudioAsset, type StudioJob } from '@shared/studio';
+import { studioCreationSchema, studioProvenanceSchema, type StudioAsset, type StudioJob } from '@shared/studio';
 import { isTerminalQuest, type MediaApiClient } from '../../media/MediaApiClient';
 import { MediaStore, parseMediaUrl } from '../../media/MediaStore';
 import { resolveImageUrls } from '../../media/imageGeneration';
@@ -57,6 +58,14 @@ export class StudioGenerationService {
 
   constructor(private readonly deps: StudioGenerationDeps) {}
 
+  async pruneOrphans(activeWorkspaceIds: ReadonlySet<string>): Promise<void> {
+    const connection = this.requireConnection();
+    await this.deps.workspaces.pruneOrphans(activeWorkspaceIds, async (workspaceId, assetId) => {
+      this.assertConnection(connection);
+      await this.deps.media.forgetSession(bucketFor(connection.scope, workspaceId, assetId));
+    });
+  }
+
   async importChatAsset(sessionId: string, asset: StudioAsset): Promise<void> {
     const connection = this.requireConnection();
     const workspace = await this.requireWorkspace(sessionId, connection);
@@ -64,14 +73,14 @@ export class StudioGenerationService {
     if (!source || source.sessionId !== asset.originatingSessionId) throw new Error('Invalid chat asset location.');
     await this.lock(`${connection.scope}:${workspace.workspaceId}`, async () => {
       if (await this.deps.workspaces.getJob(sessionId, asset.id)) return;
-      const file = await this.deps.media.read(source.sessionId, source.name);
+      const file = await this.deps.media.locate(source.sessionId, source.name);
       this.assertConnection(connection);
       if (!file) return;
-      const stored = await this.deps.media.saveForContent(
+      const stored = await this.deps.media.saveStream(
         bucketFor(connection.scope, workspace.workspaceId, asset.id),
-        file.bytes,
-        file.bytes,
-        file.mimeType
+        createReadStream(file.path),
+        file.mimeType,
+        512 * 1024 * 1024
       );
       this.assertConnection(connection);
       if (
@@ -118,6 +127,7 @@ export class StudioGenerationService {
       idempotencyKey: randomUUID(),
       assetIds: [],
       provenance: request.provenance,
+      creation: creationFromRequest(request),
     };
     return this.lock(`${connection.scope}:${workspace.workspaceId}`, async () => {
       if (!(await this.deps.authorize({ sessionId, request: structuredClone(request) }))) {
@@ -270,8 +280,23 @@ export class StudioGenerationService {
     const jobs = await this.allJobs(sessionId, connection);
     const recovered: StudioJob[] = [];
     for (const job of jobs) {
+      if (job.recoveryExpired) {
+        recovered.push(job);
+        continue;
+      }
       if (terminal.has(job.state)) {
         recovered.push(job);
+        continue;
+      }
+      if (Date.now() - Date.parse(job.createdAt) > 7 * 24 * 60 * 60_000) {
+        const expired = {
+          ...job,
+          state: 'unknown' as const,
+          recoveryExpired: true,
+          error: 'Automatic recovery ended after 7 days. Remote outcome may differ; no new request was submitted.',
+        };
+        await this.saveJob(sessionId, expired, connection);
+        recovered.push(expired);
         continue;
       }
       try {
@@ -398,6 +423,9 @@ export class StudioGenerationService {
           createdAt: now,
           updatedAt: now,
           provenance: job.provenance,
+          creation: job.creation,
+          prompt: job.creation?.prompt,
+          model: job.creation?.settings.model,
         },
         connection.scope
       ))
@@ -469,4 +497,22 @@ export class StudioGenerationService {
       if (this.pending.get(key) === result) this.pending.delete(key);
     }
   }
+}
+
+function creationFromRequest(request: StudioGenerationRequest) {
+  const body = request.body as Record<string, unknown>;
+  return studioCreationSchema.parse({
+    prompt: body.prompt ?? body.text,
+    settings: {
+      model: body.model,
+      size: body.size,
+      durationSeconds: body.duration_seconds ?? body.durationSeconds,
+      aspectRatio: body.aspect_ratio,
+      resolution: body.resolution,
+      instrumental: body.instrumental,
+      voice: body.voice,
+      format: body.format,
+      promptInfluence: body.promptInfluence,
+    },
+  });
 }

@@ -24,6 +24,26 @@ export const studioProvenanceSchema = z.object({
 });
 export type StudioProvenance = z.infer<typeof studioProvenanceSchema>;
 
+export const studioSettingsSchema = z
+  .object({
+    model: z.string().min(1).max(256).optional(),
+    size: z.string().max(64).optional(),
+    durationSeconds: z.number().positive().max(600).optional(),
+    aspectRatio: z.string().max(32).optional(),
+    resolution: z.string().max(32).optional(),
+    instrumental: z.boolean().optional(),
+    voice: z.string().max(128).optional(),
+    format: z.string().max(32).optional(),
+    promptInfluence: z.number().min(0).max(1).optional(),
+  })
+  .strict();
+export const studioCreationSchema = z
+  .object({
+    prompt: z.string().min(1).max(32_768),
+    settings: studioSettingsSchema,
+  })
+  .strict();
+
 export const studioAssetSchema = z.object({
   id: studioIdSchema,
   kind: studioMediaKindSchema,
@@ -37,6 +57,7 @@ export const studioAssetSchema = z.object({
   model: z.string().optional(),
   jobId: studioIdSchema.optional(),
   provenance: studioProvenanceSchema.optional(),
+  creation: studioCreationSchema.optional(),
 });
 export type StudioAsset = z.infer<typeof studioAssetSchema>;
 
@@ -51,7 +72,9 @@ export const studioJobSchema = z.object({
   providerJobId: z.string().optional(),
   assetIds: z.array(studioIdSchema),
   error: z.string().optional(),
+  recoveryExpired: z.boolean().optional(),
   provenance: studioProvenanceSchema.optional(),
+  creation: studioCreationSchema.optional(),
 });
 export type StudioJob = z.infer<typeof studioJobSchema>;
 

@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import { studioIdSchema, studioMediaKindSchema, type StudioWorkspace } from './studio';
+import {
+  studioIdSchema,
+  studioMediaKindSchema,
+  studioSettingsSchema,
+  type StudioWorkspace,
+  type StudioAsset,
+  type StudioJob,
+} from './studio';
 
 export const studioDraftSchema = z
   .object({
@@ -15,18 +22,7 @@ export const studioDraftSchema = z
         files: z.array(z.string().min(1).max(4096)).max(32).optional(),
       })
       .strict(),
-    settings: z
-      .object({
-        size: z.string().max(64).optional(),
-        durationSeconds: z.number().positive().max(600).optional(),
-        aspectRatio: z.string().max(32).optional(),
-        resolution: z.string().max(32).optional(),
-        instrumental: z.boolean().optional(),
-        voice: z.string().max(128).optional(),
-        format: z.string().max(32).optional(),
-        promptInfluence: z.number().min(0).max(1).optional(),
-      })
-      .strict(),
+    settings: studioSettingsSchema,
   })
   .strict();
 export type StudioDraft = z.infer<typeof studioDraftSchema>;
@@ -52,6 +48,7 @@ export interface StudioLiveState {
   workspace: StudioWorkspace;
   sessions: { id: string; title: string }[];
   available: boolean;
+  unavailableKinds?: string[];
 }
 export const studioAssetActionSchema = z
   .object({
@@ -62,8 +59,21 @@ export const studioAssetActionSchema = z
   })
   .strict();
 export type StudioAssetAction = z.infer<typeof studioAssetActionSchema>;
+export const studioPageRequestSchema = z
+  .object({
+    sessionId: studioIdSchema,
+    collection: z.enum(['assets', 'jobs']),
+    cursor: studioIdSchema,
+  })
+  .strict();
+export type StudioPageRequest = z.infer<typeof studioPageRequestSchema>;
+export type StudioRecordsPage =
+  | { collection: 'assets'; items: StudioAsset[]; nextCursor?: string }
+  | { collection: 'jobs'; items: StudioJob[]; nextCursor?: string };
 export interface StudioApi {
+  jobAction(request: { sessionId: string; jobId: string; action: 'recheck' | 'cancel' }): Promise<void>;
   get(sessionId: string): Promise<StudioLiveState>;
+  page(request: StudioPageRequest): Promise<StudioRecordsPage>;
   prepare(draft: StudioDraft): Promise<StudioReview>;
   create(request: StudioCreate): Promise<void>;
   pickFiles(sessionId: string): Promise<string[]>;

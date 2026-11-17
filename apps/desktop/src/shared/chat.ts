@@ -1408,6 +1408,8 @@ export function normalizeSessionTitle(text: string): string {
 }
 
 export interface ChatSessionSummary extends ChatSessionMeta {
+  studioWorkspaceId?: string;
+  studioRootSessionId?: string;
   messageCount: number;
   /** How the last assistant turn ended; absent when the session has no assistant message. */
   lastOutcome?: ChildOutcome;

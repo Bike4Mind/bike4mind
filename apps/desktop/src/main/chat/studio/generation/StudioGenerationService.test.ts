@@ -139,6 +139,49 @@ describe('Studio generation', () => {
     { kind: 'speech', body: { text: 'hello' } },
     { kind: 'sound-effect', body: { text: 'a bicycle bell' } },
   ];
+  it('persists validated settings on outputs for reuse without another paid request', async () => {
+    const session = await sessions.create();
+    const job = await service.submit(session.id, image);
+    await service.reconcile(session.id, job.id);
+    const asset = await workspaces.getAsset(session.id, `${job.id}_0`);
+    expect(asset?.creation).toEqual(
+      expect.objectContaining({ prompt: 'a bicycle', settings: expect.objectContaining({ model: 'gpt-image-2' }) })
+    );
+    expect(client.generateImage).toHaveBeenCalledTimes(1);
+  });
+  it('imports a completed chat video into workspace storage without another provider call', async () => {
+    const session = await sessions.create();
+    const stored = await media.saveStream(session.id, Readable.from([Buffer.from('local video')]), 'video/mp4', 1024);
+    await service.importChatAsset(session.id, {
+      id: 'chat-video',
+      kind: 'video',
+      title: 'Clip',
+      originatingSessionId: session.id,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      url: stored.url,
+    });
+    const file = await service.locateAsset(session.id, 'chat-video');
+    expect(file && (await readFile(file.path, 'utf8'))).toBe('local video');
+    expect(client.createVideoGeneration).not.toHaveBeenCalled();
+  });
+  it('ends automatic polling after seven days without claiming cancellation or deleting the job', async () => {
+    const session = await sessions.create();
+    const job = await service.submit(session.id, image);
+    await workspaces.upsertJob(session.id, {
+      ...job,
+      createdAt: new Date(Date.now() - 8 * 24 * 60 * 60_000).toISOString(),
+    });
+    await service.recover(session.id);
+    const expired = await workspaces.getJob(session.id, job.id);
+    expect(expired).toEqual(
+      expect.objectContaining({ state: 'unknown', recoveryExpired: true, providerJobId: 'quest' })
+    );
+    expect(client.getQuest).not.toHaveBeenCalled();
+    await service.reconcile(session.id, job.id);
+    expect(client.getQuest).toHaveBeenCalledTimes(1);
+    expect(client.generateImage).toHaveBeenCalledTimes(1);
+  });
   it.each(requests)('adapts $kind with durable output and no repeated spend during recovery', async request => {
     const session = await sessions.create();
     const submitted = await service.submit(session.id, request);

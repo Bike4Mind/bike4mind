@@ -3,6 +3,8 @@ import type { StudioAsset, StudioJob, StudioProvenance } from '@shared/studio';
 import {
   studioCreateSchema,
   studioDraftSchema,
+  studioPageRequestSchema,
+  type StudioRecordsPage,
   type StudioDraft,
   type StudioLiveState,
   type StudioReview,
@@ -38,7 +40,6 @@ export class StudioLiveService {
   private readonly pending = new Set<AbortController>();
   private readonly collector: ContextCollector;
   private readonly preparing: ContextPreparationService;
-  private readonly recovering = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly deps: {
@@ -48,6 +49,7 @@ export class StudioLiveService {
       roots(sessionId: string): Promise<readonly string[]>;
       prepare(sessionId: string, system: string, input: string, signal: AbortSignal): Promise<string>;
       available(): boolean;
+      unavailableKinds?(): Promise<string[]>;
       generation: StudioGenerationPort;
       changed(event: { sessionId: string; workspaceId: string }): void;
     }
@@ -55,8 +57,15 @@ export class StudioLiveService {
     const sessions = deps.sessions;
     this.collector = new ContextCollector({
       scopeKey: () => sessions.scopeKey() ?? '',
-      listSessions: async (_requester, limit) => (await sessions.list()).slice(0, limit),
-      readSession: async (_requester, id) => {
+      listSessions: async (requester, limit) => (await this.family(requester)).slice(0, limit),
+      readSession: async (requester, id) => {
+        const scope = sessions.scopeKey();
+        const [source, target] = await Promise.all([
+          sessions.resolveStudioWorkspace(requester, scope),
+          sessions.resolveStudioWorkspace(id, scope),
+        ]);
+        if (!source || source.workspaceId !== target?.workspaceId || scope !== sessions.scopeKey())
+          return { status: 'denied' };
         const session = await sessions.get(id);
         return session ? { status: 'ok', value: session } : { status: 'missing' };
       },
@@ -103,6 +112,52 @@ export class StudioLiveService {
     this.pending.clear();
   }
 
+  async family(sessionId: string) {
+    const scope = this.deps.sessions.scopeKey();
+    const identity = await this.deps.sessions.resolveStudioWorkspace(sessionId, scope);
+    if (!identity) throw new Error('Studio session is unavailable.');
+    const all = await this.deps.sessions.list();
+    const current = all.find(session => session.id === sessionId);
+    if (!current) throw new Error('Studio session is unavailable.');
+    const members = [current];
+    for (const session of all) {
+      if (session.id === sessionId) continue;
+      const workspace = session.studioWorkspaceId
+        ? { workspaceId: session.studioWorkspaceId }
+        : await this.deps.sessions.resolveStudioWorkspace(session.id, scope);
+      if (scope !== this.deps.sessions.scopeKey()) throw new Error('Account changed.');
+      if (workspace?.workspaceId === identity.workspaceId) members.push(session);
+      if (members.length >= 256) break;
+    }
+    return members;
+  }
+
+  async page(raw: unknown): Promise<StudioRecordsPage> {
+    const request = studioPageRequestSchema.parse(raw);
+    const identity = await this.identity(request.sessionId);
+    const page =
+      request.collection === 'assets'
+        ? await this.deps.workspaces.listAssets(request.sessionId, { cursor: request.cursor })
+        : await this.deps.workspaces.listJobs(request.sessionId, { cursor: request.cursor });
+    if (!page || identity.scope !== this.deps.sessions.scopeKey()) throw new Error('Studio session is unavailable.');
+    return { collection: request.collection, ...page } as StudioRecordsPage;
+  }
+
+  async assertDeletable(sessionId: string): Promise<void> {
+    const scope = this.deps.sessions.scopeKey();
+    if ((await this.family(sessionId)).length > 1) return;
+    let cursor: string | undefined;
+    do {
+      const page = await this.deps.workspaces.listJobs(sessionId, { cursor });
+      if (!page || scope !== this.deps.sessions.scopeKey()) throw new Error('Account changed.');
+      if (page.items.some(job => !['completed', 'failed', 'cancelled'].includes(job.state) && !job.recoveryExpired))
+        throw new Error(
+          'This is the last session for unresolved Studio jobs. Keep it until jobs settle or the 7-day automatic recovery period ends.'
+        );
+      cursor = page.nextCursor;
+    } while (cursor);
+  }
+
   private async identity(sessionId: string) {
     const scope = this.deps.sessions.scopeKey();
     const [session, workspace] = await Promise.all([
@@ -123,19 +178,8 @@ export class StudioLiveService {
 
   async get(sessionId: string): Promise<StudioLiveState> {
     const identity = await this.identity(sessionId);
-    const key = `${identity.scope}:${identity.workspace.workspaceId}`;
-    let recovery = this.recovering.get(key);
-    if (!recovery) {
-      recovery = this.deps.generation.recover(sessionId);
-      this.recovering.set(key, recovery);
-      void recovery
-        .finally(() => {
-          if (this.recovering.get(key) === recovery) this.recovering.delete(key);
-        })
-        .catch(() => undefined);
-    }
-    await recovery;
-    const [workspace, sessions] = await Promise.all([this.deps.workspaces.get(sessionId), this.deps.sessions.list()]);
+    const [workspace, sessions] = await Promise.all([this.deps.workspaces.get(sessionId), this.family(sessionId)]);
+    const unavailableKinds = await this.deps.unavailableKinds?.();
     if (!workspace || identity.scope !== this.deps.sessions.scopeKey()) throw new Error('Account changed.');
     return {
       sessionId,
@@ -143,16 +187,24 @@ export class StudioLiveService {
       workspace,
       sessions: sessions.slice(0, 256).map(({ id, title }) => ({ id, title })),
       available: this.deps.available(),
+      unavailableKinds,
     };
   }
 
-  private context(draft: StudioDraft): ContextRequest {
+  private async context(draft: StudioDraft): Promise<ContextRequest> {
+    const family = await this.family(draft.sessionId);
+    const selected =
+      draft.selection.mode === 'custom' ? (draft.selection.sessionIds ?? []) : family.map(session => session.id);
+    if (selected.some(id => !family.some(session => session.id === id)))
+      throw new Error('Context session is outside this Studio family.');
     return {
       sessionId: draft.sessionId,
       selection:
         draft.selection.mode === 'custom'
           ? { kind: 'explicit', sessionIds: draft.selection.sessionIds ?? [] }
-          : { kind: draft.selection.mode === 'session-family' ? 'family' : 'current' },
+          : draft.selection.mode === 'session-family'
+            ? { kind: 'explicit', sessionIds: selected }
+            : { kind: 'current' },
       files: draft.selection.files,
     };
   }
@@ -173,7 +225,7 @@ export class StudioLiveService {
     try {
       const prepared = await this.preparing.prepare(
         {
-          context: this.context(draft),
+          context: await this.context(draft),
           kind: draft.kind === 'speech' ? 'script' : 'prompt',
           instruction: draft.prompt,
         },
@@ -226,7 +278,7 @@ export class StudioLiveService {
     const controller = new AbortController();
     this.pending.add(controller);
     try {
-      const current = await this.collector.collect(this.context(request.draft), controller.signal);
+      const current = await this.collector.collect(await this.context(request.draft), controller.signal);
       if (current.sha256 !== record.prepared.context.sha256)
         throw new Error('Context changed. Prepare and review again.');
       await this.validate(request.draft);
@@ -239,7 +291,7 @@ export class StudioLiveService {
         async () => {
           await this.validate(request.draft);
           controller.signal.throwIfAborted();
-          const latest = await this.collector.collect(this.context(request.draft), controller.signal);
+          const latest = await this.collector.collect(await this.context(request.draft), controller.signal);
           return record.scope === this.deps.sessions.scopeKey() && latest.sha256 === current.sha256;
         }
       );
@@ -252,14 +304,9 @@ export class StudioLiveService {
 
   async asset(sessionId: string, assetId: string): Promise<StudioAsset> {
     const identity = await this.identity(sessionId);
-    let cursor: string | undefined;
-    do {
-      const page = await this.deps.workspaces.listAssets(sessionId, { cursor });
-      if (!page || identity.scope !== this.deps.sessions.scopeKey()) throw new Error('Account changed.');
-      const asset = page.items.find(item => item.id === assetId);
-      if (asset) return asset;
-      cursor = page.nextCursor;
-    } while (cursor);
+    const asset = await this.deps.workspaces.getAsset(sessionId, assetId);
+    if (identity.scope !== this.deps.sessions.scopeKey()) throw new Error('Account changed.');
+    if (asset) return asset;
     throw new Error('Studio asset is unavailable.');
   }
 }

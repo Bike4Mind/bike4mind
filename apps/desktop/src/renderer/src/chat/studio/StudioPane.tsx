@@ -46,19 +46,21 @@ function CreationForm({
   controller,
   kind,
   onBack,
+  initial,
 }: {
   controller: StudioController;
   kind: StudioMediaKind;
   onBack: () => void;
+  initial?: StudioAsset['creation'];
 }) {
   const [draft, setDraft] = useState<StudioCreationDraft>(() => ({
     sessionId: controller.sessionId,
     workspaceId: controller.workspaceId,
     revision: controller.revision,
     kind,
-    prompt: '',
+    prompt: initial?.prompt ?? '',
     selection: { mode: 'session-family' },
-    settings: {},
+    settings: initial?.settings ?? {},
   }));
   const [review, setReview] = useState<StudioReview | null>(null);
   const [preparedPrompt, setPreparedPrompt] = useState('');
@@ -277,6 +279,9 @@ function CreationForm({
           {capability?.reason ?? 'This media type is not supported.'}
         </Alert>
       )}
+      <Typography level="body-xs">
+        Preparation uses your session model and may use credits. Creating media is a separate paid action.
+      </Typography>
       <Button
         size="sm"
         variant="soft"
@@ -407,7 +412,7 @@ function AssetPreview({
             ? (item: StudioAsset) => controller.renameAsset?.(item, title.trim()) ?? Promise.resolve()
             : undefined,
           export: controller.exportAsset,
-          reuse: controller.reuseAsset,
+          reuse: asset.creation ? controller.reuseAsset : undefined,
           delete: controller.deleteAsset,
         }[action];
         const reason =
@@ -430,7 +435,11 @@ function AssetPreview({
                 void run(() => callback(asset), action === 'delete');
               }}
             >
-              {action === 'delete' && confirmDelete ? 'Confirm delete' : `${action[0].toUpperCase()}${action.slice(1)}`}
+              {action === 'reuse'
+                ? 'Use settings again'
+                : action === 'delete' && confirmDelete
+                  ? 'Confirm delete'
+                  : `${action[0].toUpperCase()}${action.slice(1)}`}
             </Button>
             {reason && (
               <Typography level="body-xs" textColor="text.tertiary">
@@ -462,6 +471,9 @@ function AssetPreview({
 
 function StudioContent({ controller }: { controller?: StudioController }) {
   const [kind, setKind] = useState<StudioMediaKind | null>(null);
+  const [initial, setInitial] = useState<StudioAsset['creation']>();
+  const [pagingError, setPagingError] = useState<string | null>(null);
+  const [paging, setPaging] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const asset =
     controller?.state.status === 'ready' ? controller.state.assets.find(item => item.id === selected) : undefined;
@@ -471,11 +483,27 @@ function StudioContent({ controller }: { controller?: StudioController }) {
         key={`${controller.sessionId}:${controller.workspaceId}:${controller.revision}:${kind}`}
         controller={controller}
         kind={kind}
+        initial={initial}
         onBack={() => setKind(null)}
       />
     );
   if (controller && asset)
-    return <AssetPreview key={asset.id} asset={asset} controller={controller} onBack={() => setSelected(null)} />;
+    return (
+      <AssetPreview
+        key={asset.id}
+        asset={asset}
+        controller={{
+          ...controller,
+          reuseAsset: async item => {
+            if (!item.creation) throw new Error('Saved settings are unavailable for this legacy asset.');
+            setInitial(item.creation);
+            setKind(item.kind);
+            setSelected(null);
+          },
+        }}
+        onBack={() => setSelected(null)}
+      />
+    );
   return (
     <Stack spacing={2}>
       <Box
@@ -504,7 +532,10 @@ function StudioContent({ controller }: { controller?: StudioController }) {
                 color="neutral"
                 startDecorator={tile.icon}
                 disabled={!!reason}
-                onClick={() => setKind(tile.kind)}
+                onClick={() => {
+                  setInitial(undefined);
+                  setKind(tile.kind);
+                }}
                 aria-describedby={reason ? `studio-${tile.kind}-reason` : undefined}
                 data-testid={`studio-create-${tile.kind}-tile`}
                 sx={{ minHeight: 60, justifyContent: 'flex-start' }}
@@ -527,6 +558,39 @@ function StudioContent({ controller }: { controller?: StudioController }) {
       </Box>
       <Divider />
       <Typography level="title-sm">Assets and jobs</Typography>
+      <Typography level="body-xs">
+        After the last family session is deleted, local workspace data is retained for 30 days before cleanup. This does
+        not cancel provider jobs or imply a refund.
+      </Typography>
+      <Typography level="body-xs">
+        Jobs continue while Studio is closed. Automatic recovery runs for 7 days; switching accounts pauses it.
+        Unresolved jobs keep the last family session from being deleted during that period.
+      </Typography>
+      {(controller?.hasMoreAssets || controller?.hasMoreJobs) && (
+        <Typography level="body-xs">Partial history loaded. Load remaining pages to browse all records.</Typography>
+      )}
+      {(['assets', 'jobs'] as const).map(
+        collection =>
+          (collection === 'assets' ? controller?.hasMoreAssets : controller?.hasMoreJobs) && (
+            <Button
+              key={collection}
+              size="sm"
+              disabled={paging}
+              data-testid={`studio-load-more-${collection}-btn`}
+              onClick={() => {
+                setPaging(true);
+                setPagingError(null);
+                void controller
+                  ?.loadMore?.(collection)
+                  .catch(cause => setPagingError(errorText(cause)))
+                  .finally(() => setPaging(false));
+              }}
+            >
+              Load more {collection}
+            </Button>
+          )
+      )}
+      {pagingError && <Alert color="danger">{pagingError}</Alert>}
       {!controller && (
         <Typography level="body-sm" data-testid="studio-unavailable">
           Studio workspace services are not connected. Creation and saved assets will appear here when available.
@@ -591,6 +655,37 @@ function StudioContent({ controller }: { controller?: StudioController }) {
                         <Typography level="body-xs" color="danger">
                           {row.item.error}
                         </Typography>
+                      )}
+                      {controller.jobAction && !['completed', 'failed', 'cancelled'].includes(row.item.state) && (
+                        <Stack direction="row" spacing={1}>
+                          <Button
+                            size="sm"
+                            variant="plain"
+                            data-testid={`studio-job-${row.item.id}-recheck-btn`}
+                            onClick={() =>
+                              void controller.jobAction!(row.item.id, 'recheck').catch(cause =>
+                                setPagingError(errorText(cause))
+                              )
+                            }
+                          >
+                            Recheck status
+                          </Button>
+                          {['video', 'music'].includes(row.item.kind) && row.item.providerJobId && (
+                            <Button
+                              size="sm"
+                              color="danger"
+                              variant="plain"
+                              data-testid={`studio-job-${row.item.id}-cancel-btn`}
+                              onClick={() =>
+                                void controller.jobAction!(row.item.id, 'cancel').catch(cause =>
+                                  setPagingError(errorText(cause))
+                                )
+                              }
+                            >
+                              Cancel job
+                            </Button>
+                          )}
+                        </Stack>
                       )}
                     </Box>
                   )}

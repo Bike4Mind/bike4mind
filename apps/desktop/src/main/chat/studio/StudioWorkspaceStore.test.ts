@@ -39,6 +39,21 @@ describe('Studio workspace persistence', () => {
     };
   }
 
+  it('retains orphaned workspace outputs for 30 days and cleans only the active account', async () => {
+    const session = await sessions.create();
+    await workspaces.upsertAsset(session.id, asset(session.id));
+    const identity = await sessions.resolveStudioWorkspace(session.id);
+    await sessions.delete(session.id);
+    const removeMedia = vi.fn(async () => undefined);
+    await workspaces.pruneOrphans(new Set(), removeMedia);
+    expect(removeMedia).not.toHaveBeenCalled();
+    const marker = join(root, 'studio', sessionScopeKey(ALICE), identity!.workspaceId, '.orphaned-at');
+    await writeFile(marker, String(Date.now() - 31 * 24 * 60 * 60_000));
+    await workspaces.pruneOrphans(new Set(), removeMedia);
+    expect(removeMedia).toHaveBeenCalledWith(identity!.workspaceId, 'asset-one');
+    await expect(readFile(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   async function legacy(id: string, parent?: string) {
     await sessions.create();
     await writeFile(

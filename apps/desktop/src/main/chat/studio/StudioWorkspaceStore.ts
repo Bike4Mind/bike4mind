@@ -81,6 +81,46 @@ export class StudioWorkspaceStore {
     return this.record(sessionId, 'assets', id, studioAssetSchema);
   }
 
+  async pruneOrphans(
+    activeWorkspaceIds: ReadonlySet<string>,
+    removeMedia: (workspaceId: string, assetId: string) => Promise<void>
+  ): Promise<void> {
+    const scope = this.sessions.scopeKey();
+    if (!scope) return;
+    const directory = join(this.baseDirectory, assertScopeKey(scope));
+    const names = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    });
+    for (const id of names) {
+      if (!studioIdSchema.safeParse(id).success || this.sessions.scopeKey() !== scope) continue;
+      const folder = join(directory, id);
+      const marker = join(folder, '.orphaned-at');
+      if (activeWorkspaceIds.has(id)) {
+        await rm(marker, { force: true });
+        continue;
+      }
+      const recorded = await readFile(marker, 'utf8').catch(() => '');
+      if (!recorded) {
+        await writeFile(marker, String(Date.now()), { flag: 'wx' }).catch(() => undefined);
+        continue;
+      }
+      const since = Number(recorded);
+      if (!Number.isFinite(since) || Date.now() - since < 30 * 24 * 60 * 60_000) continue;
+      let cursor: string | undefined;
+      do {
+        const page = await this.records(folder, 'assets', studioAssetSchema, { cursor });
+        for (const asset of page.items) {
+          if (this.sessions.scopeKey() !== scope) return;
+          await removeMedia(id, asset.id);
+        }
+        cursor = page.nextCursor;
+      } while (cursor);
+      if (this.sessions.scopeKey() !== scope) return;
+      await rm(folder, { recursive: true, force: true });
+    }
+  }
+
   private async record<T>(sessionId: string, collection: string, id: string, schema: z.ZodType<T>): Promise<T | null> {
     studioIdSchema.parse(id);
     const scope = this.sessions.scopeKey();

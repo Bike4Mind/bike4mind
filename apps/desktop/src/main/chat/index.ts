@@ -655,7 +655,13 @@ export function registerChat(
         ? { client: new MediaApiClient(api), scope: `${scope.environmentUrl}|${scope.accountId}` }
         : null;
     },
-    emit: (sessionId, job) => broadcast({ type: 'video-job', sessionId, job }),
+    emit: (sessionId, job) => {
+      broadcast({ type: 'video-job', sessionId, job });
+      if (job.state === 'succeeded' && job.media)
+        void studioIntegration
+          .indexChatSession(sessionId, true)
+          .catch(error => logger.warn(`STUDIO: could not index video: ${String(error)}`));
+    },
     logger,
   });
 
@@ -840,6 +846,7 @@ export function registerChat(
     media,
     models,
     auth,
+    videoJobs: sessionId => videoJobs.list(sessionId),
     changed: event => send(IPC_CHANNELS.studioChanged, event),
   });
   service.studioDisposed = studioIntegration.dispose;
@@ -1190,6 +1197,7 @@ export function registerChat(
     if (typeof sessionId !== 'string' || (removeWorktree !== undefined && typeof removeWorktree !== 'boolean')) {
       throw new Error('Invalid delete request');
     }
+    await studioIntegration.live.assertDeletable(sessionId);
     await service.deleteSession(sessionId, removeWorktree === true);
     await pullRequests.forget(sessionId);
   });

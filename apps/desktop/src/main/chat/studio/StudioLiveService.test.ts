@@ -72,6 +72,83 @@ describe('Studio live orchestration', () => {
     await expect(live.create(request)).rejects.toThrow('Review expired');
     expect(submit).toHaveBeenCalledTimes(1);
   });
+  it('uses persistent family membership after root deletion and excludes unrelated sessions', async () => {
+    const parent = await sessions.create();
+    const child = await sessions.create(undefined, {
+      origin: { parentSessionId: parent.id, depth: 1, seedPrompt: '' },
+    });
+    const sibling = await sessions.create(undefined, {
+      origin: { parentSessionId: parent.id, depth: 1, seedPrompt: '' },
+    });
+    const unrelated = await sessions.create();
+    await sessions.delete(parent.id);
+    const state = await live.get(child.id);
+    expect(state.sessions.map(session => session.id).sort()).toEqual([child.id, sibling.id].sort());
+    const input: StudioDraft = {
+      sessionId: child.id,
+      workspaceId: state.workspace.workspaceId,
+      revision: state.revision,
+      kind: 'image',
+      prompt: 'Family context',
+      selection: { mode: 'session-family' },
+      settings: {},
+    };
+    const review = await live.prepare(input);
+    expect(review.sources.map(source => source.sessionId).sort()).toEqual([child.id, sibling.id].sort());
+    await expect(live.prepare({ ...input, selection: { mode: 'custom', sessionIds: [unrelated.id] } })).rejects.toThrow(
+      'outside this Studio family'
+    );
+  });
+  it('validates scoped record page requests', async () => {
+    const input = await draft();
+    expect(await live.page({ sessionId: input.sessionId, collection: 'assets', cursor: 'last' })).toEqual({
+      collection: 'assets',
+      items: [],
+    });
+    await expect(
+      live.page({ sessionId: input.sessionId, collection: 'assets', cursor: '../escape' })
+    ).rejects.toThrow();
+    scope = { environmentUrl: 'https://example.com', accountId: 'second' };
+    await expect(live.page({ sessionId: input.sessionId, collection: 'jobs', cursor: 'last' })).rejects.toThrow(
+      'unavailable'
+    );
+  });
+  it('keeps the last family session while a paid job is unresolved', async () => {
+    const input = await draft();
+    const store = new StudioWorkspaceStore(join(directory, 'studio'), sessions);
+    await store.upsertJob(input.sessionId, {
+      id: 'pending',
+      kind: 'image',
+      originatingSessionId: input.sessionId,
+      state: 'unknown',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      idempotencyKey: 'pending',
+      assetIds: [],
+    });
+    await expect(live.assertDeletable(input.sessionId)).rejects.toThrow('last session');
+    await sessions.create(undefined, { origin: { parentSessionId: input.sessionId, depth: 1, seedPrompt: '' } });
+    await expect(live.assertDeletable(input.sessionId)).resolves.toBeUndefined();
+  });
+  it('exposes records beyond the initial hundred through a validated cursor', async () => {
+    const input = await draft();
+    const store = new StudioWorkspaceStore(join(directory, 'studio'), sessions);
+    for (let index = 0; index < 101; index++)
+      await store.upsertAsset(input.sessionId, {
+        id: `asset-${String(index).padStart(3, '0')}`,
+        kind: 'image',
+        title: 'Page record',
+        originatingSessionId: input.sessionId,
+        createdAt: '2026-01-01',
+        updatedAt: '2026-01-01',
+        url: 'b4m-media://media/test/test.png',
+      });
+    const state = await live.get(input.sessionId);
+    expect(state.workspace.assets).toHaveLength(100);
+    expect(
+      await live.page({ sessionId: input.sessionId, collection: 'assets', cursor: state.workspace.nextAssetCursor })
+    ).toEqual({ collection: 'assets', items: [expect.objectContaining({ id: 'asset-100' })] });
+  });
   it('rejects changes to reviewed settings', async () => {
     const input = await draft();
     const review = await live.prepare(input);

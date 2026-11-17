@@ -63,6 +63,8 @@ import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewState } from '@sh
 const api: DesktopApi = {
   studio: {
     get: sessionId => ipcRenderer.invoke(IPC_CHANNELS.studioGet, sessionId),
+    page: request => ipcRenderer.invoke(IPC_CHANNELS.studioPage, request),
+    jobAction: request => ipcRenderer.invoke(IPC_CHANNELS.studioJobAction, request),
     prepare: draft => ipcRenderer.invoke(IPC_CHANNELS.studioPrepare, draft),
     create: request => ipcRenderer.invoke(IPC_CHANNELS.studioCreate, request),
     pickFiles: sessionId => ipcRenderer.invoke(IPC_CHANNELS.studioPickFiles, sessionId),

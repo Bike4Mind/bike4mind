@@ -10,11 +10,13 @@ export function useStudioController(
   const [state, setState] = useState<StudioLiveState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const epoch = useRef(0);
+  const pages = useRef({ assets: 1, jobs: 1 });
   useEffect(() => {
     const api = window.b4m.studio;
     const generation = ++epoch.current;
     setState(null);
     setError(null);
+    pages.current = { assets: 1, jobs: 1 };
     if (!enabled || !sessionId || !api) return;
     let pending = false;
     const refresh = async () => {
@@ -22,6 +24,20 @@ export function useStudioController(
       pending = true;
       try {
         const next = await api.get(sessionId);
+        for (const collection of ['assets', 'jobs'] as const) {
+          for (let page = 1; page < pages.current[collection]; page++) {
+            const cursor = collection === 'assets' ? next.workspace.nextAssetCursor : next.workspace.nextJobCursor;
+            if (!cursor || epoch.current !== generation) break;
+            const result = await api.page({ sessionId, collection, cursor });
+            if (result.collection === 'assets') {
+              next.workspace.assets.push(...result.items);
+              next.workspace.nextAssetCursor = result.nextCursor;
+            } else {
+              next.workspace.jobs.push(...result.items);
+              next.workspace.nextJobCursor = result.nextCursor;
+            }
+          }
+        }
         if (epoch.current === generation) {
           setState(next);
           setError(null);
@@ -62,10 +78,41 @@ export function useStudioController(
     revision: current?.revision ?? '',
     familyLabel: 'Session family',
     sessions: current?.sessions ?? [],
+    hasMoreAssets: !!current?.workspace.nextAssetCursor,
+    jobAction: async (jobId, action) => {
+      check();
+      await window.b4m.studio.jobAction({ sessionId, jobId, action });
+      check();
+    },
+    hasMoreJobs: !!current?.workspace.nextJobCursor,
+    loadMore: async collection => {
+      check();
+      const cursor = collection === 'assets' ? current?.workspace.nextAssetCursor : current?.workspace.nextJobCursor;
+      if (!cursor) return;
+      const page = await window.b4m.studio.page({ sessionId, collection, cursor });
+      check();
+      pages.current[collection]++;
+      setState(previous => {
+        if (!previous || previous.sessionId !== sessionId) return previous;
+        const workspace = { ...previous.workspace };
+        if (page.collection === 'assets') {
+          workspace.assets = [...new Map([...workspace.assets, ...page.items].map(item => [item.id, item])).values()];
+          workspace.nextAssetCursor = page.nextCursor;
+        } else {
+          workspace.jobs = [...new Map([...workspace.jobs, ...page.items].map(item => [item.id, item])).values()];
+          workspace.nextJobCursor = page.nextCursor;
+        }
+        return { ...previous, workspace };
+      });
+    },
     capabilities: Object.fromEntries(
       ['image', 'video', 'music', 'speech', 'sound-effect'].map(kind => [
         kind,
-        current?.available ? { status: 'available' } : { status: 'unavailable', reason: 'Sign in to create media.' },
+        current?.available
+          ? current.unavailableKinds?.includes(kind)
+            ? { status: 'unavailable', reason: 'No models are available on this server.' }
+            : { status: 'available' }
+          : { status: 'unavailable', reason: 'Sign in to create media.' },
       ])
     ),
     state: error
@@ -106,6 +153,5 @@ export function useStudioController(
       check();
       await window.b4m.studio.assetAction({ sessionId, assetId: asset.id, action: 'export' });
     },
-    assetActionReasons: { reuse: 'Export the asset, then attach it to a message.' },
   };
 }
