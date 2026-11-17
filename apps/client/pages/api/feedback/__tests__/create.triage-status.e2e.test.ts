@@ -23,8 +23,9 @@ const mockRefs = vi.hoisted(() => ({
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
-  type Chain = { get: () => Chain; post: (fn: (req: unknown, res: unknown) => unknown) => Chain };
+  type Chain = { use: () => Chain; get: () => Chain; post: (fn: (req: unknown, res: unknown) => unknown) => Chain };
   const chain: Chain = {
+    use: () => chain,
     get: () => chain,
     post: fn => {
       mockRefs.postHandler = fn;

@@ -10,7 +10,7 @@ import {
   type AdminRoleUpdate,
 } from '@bike4mind/common';
 import type { IAdminRoleRepository } from '@bike4mind/database';
-import type { AdminAuditWriter } from '@bike4mind/server-utils/utils/adminAudit';
+import { parseAdminActionReason, type AdminAuditWriter } from '@bike4mind/server-utils/utils/adminAudit';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 
 /**
@@ -98,7 +98,7 @@ export async function createAdminRole(
 export async function updateAdminRole(
   actor: Actor,
   roleId: string,
-  patch: AdminRoleUpdate,
+  { reason, ...patch }: AdminRoleUpdate,
   deps: AdminRolesDeps
 ): Promise<AdminRoleWithMembers> {
   assertCanEditRoles(actor);
@@ -108,7 +108,9 @@ export async function updateAdminRole(
     if (!before) throw notFound();
     // Adding a permission grants it to every member at once, so it needs the same proof a direct grant does.
     const requested = patch.permissions ? sortAdminPermissions(patch.permissions) : before.permissions;
-    if (diff(before.permissions, requested).granted.length > 0) await deps.requireStepUp();
+    const requestedDiff = diff(before.permissions, requested);
+    if (requestedDiff.granted.length > 0 || requestedDiff.revoked.length > 0) parseAdminActionReason(reason);
+    if (requestedDiff.granted.length > 0) await deps.requireStepUp();
     let after: AdminRole | null;
     try {
       after = await deps.roles.update(roleId, patch);
@@ -143,6 +145,7 @@ export async function updateAdminRole(
           ? `${permissionSummary} for ${memberCount} member${memberCount === 1 ? '' : 's'}`
           : `edited ${changes.map(change => change.field).join(', ')}`,
         changes,
+        reason,
         details: { granted, revoked, memberCount },
       });
     }

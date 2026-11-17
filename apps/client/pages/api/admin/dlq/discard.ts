@@ -5,7 +5,9 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDlqByLabel, getDlqUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { changeMessageVisibility, deleteFromQueue } from '@bike4mind/server-utils/utils/sqs';
 import { acquireDlqMessagesById } from '@bike4mind/server-utils/utils/dlqMessages';
-import { dlqReplayLogRepository } from '@bike4mind/database';
+import { dlqReplayLogRepository, adminAiSuggestionRepository, withTransaction } from '@bike4mind/database';
+import { visibleDlqSuggestion } from '@server/admin/dlq/triage';
+import { triageActionSchema } from '@server/admin/dlq/triagePolicy';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 
@@ -18,6 +20,10 @@ const TARGETED_VISIBILITY_SECONDS = 60;
 const BodySchema = z
   .object({
     queueLabel: z.string().min(1),
+    aiSuggestionId: z
+      .string()
+      .regex(/^[0-9a-f]{24}$/)
+      .optional(),
     reason: z.unknown().optional(),
     // Messages with receipt handles from a prior receive.
     messages: z
@@ -53,6 +59,36 @@ const handler = adminApi({
   const entry = getDlqByLabel(queueLabel);
   if (!entry) throw new BadRequestError(`Unknown DLQ: ${queueLabel}`);
   const dlqUrl = getDlqUrl(entry.label);
+
+  const aiSuggestionId = parsed.data.aiSuggestionId;
+  if (aiSuggestionId) {
+    if (parsed.data.messages || messageIds?.length !== 1)
+      throw new BadRequestError('Suggestion approval requires one message ID');
+    const suggestion = await visibleDlqSuggestion(queueLabel, messageIds[0]);
+    const action = triageActionSchema.safeParse(suggestion?.proposedAction);
+    if (
+      !suggestion ||
+      suggestion.id !== aiSuggestionId ||
+      !action.success ||
+      action.data.action !== 'discard' ||
+      action.data.queueLabel !== queueLabel ||
+      action.data.messageId !== messageIds[0]
+    )
+      throw new BadRequestError('Suggestion does not match this discard');
+    await withTransaction(async () => {
+      const decided = await adminAiSuggestionRepository.transition(aiSuggestionId, ['pending'], 'accepted', {
+        decidedBy: { userId: adminUserId, name: req.user!.name || req.user!.username },
+      });
+      if (!decided) throw new BadRequestError('Suggestion has already been decided');
+      await recordAdminActionFromRequest(req, {
+        action: 'ops.dlq.triage.accepted',
+        target: { kind: 'system', id: queueLabel, displayName: 'DLQ triage' },
+        summary: 'approved a dead-letter discard recommendation',
+        reason,
+        details: { aiSuggestionId, queueLabel, messageId: messageIds[0] },
+      });
+    });
+  }
 
   let messages = parsed.data.messages ?? [];
   let notFound: string[] = [];
@@ -163,6 +199,7 @@ const handler = adminApi({
       discardedMessageIds: discardedIds,
       historyPendingMessageIds: results.filter(result => result.historyPending).map(result => result.messageId),
       notFoundMessageIds: notFound,
+      ...(aiSuggestionId ? { aiSuggestionId } : {}),
     },
   });
   return res.json({

@@ -5,6 +5,7 @@ import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 import { CompletionRequestSchema, CompletionStreamEventSchema } from '../../schemas/cliCompletions';
 import {
   ApiErrorSchema,
+  ModelPolicyForbiddenErrorSchema,
   InsufficientCreditsErrorSchema,
   ProviderNotConfiguredErrorSchema,
   CompletionsBadRequestErrorSchema,
@@ -19,8 +20,8 @@ import {
  * resolveContractAuth, but owns the stream itself. See the api-contract README:
  * an SSE transport adapter is deferred until a second streaming endpoint exists.
  *
- * 401, the scope 403 and 405 are injected by registerContract; 405 cannot be declared
- * here because it is outside the conventions' status table.
+ * 401 and 405 are injected by registerContract; 405 cannot be declared here because
+ * it is outside the conventions' status table.
  */
 export const createCompletionContract = defineEndpoint({
   method: 'post',
@@ -67,7 +68,7 @@ export const createCompletionContract = defineEndpoint({
     '`400` rather than run without it.\n\n' +
     'ERRORS. Everything checked before the model provider is called fails with a JSON error body and ' +
     'a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, an `end_user_id` that is malformed or comes from a caller without the `ai:end-user-attribution` scope, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad ' +
-    'credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a body over 25 MB ' +
+    'credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a model the caller\'s organization policy does not allow `403` with `errorCode: "org_model_not_allowed"`, a body over 25 MB ' +
     '`413`, any other body that fails schema validation `422`, insufficient credits `422` with ' +
     '`errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: "run_not_found"`, and a catalogued model ' +
     'whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). ' +
@@ -115,6 +116,13 @@ export const createCompletionContract = defineEndpoint({
         'here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and ' +
         '`unknown_tool_reference` (a changed tool not in `tools`).',
       schema: CompletionsBadRequestErrorSchema,
+    },
+    403: {
+      description:
+        'The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), ' +
+        'a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), ' +
+        'or the caller\'s organization policy does not allow the model (`errorCode: "org_model_not_allowed"`).',
+      schema: ModelPolicyForbiddenErrorSchema,
     },
     404: {
       description:

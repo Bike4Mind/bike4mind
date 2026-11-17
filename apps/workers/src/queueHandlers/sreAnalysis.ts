@@ -39,6 +39,7 @@ import {
   postSreRateLimitedMessage,
   postSreAnalysisFailureMessage,
 } from '@bike4mind/server-utils/integrations/slack/sreSlackApproval';
+import { resolveDiagnosticianGate } from './sreAnalysisGate';
 import { escalateRecurrence } from '@workers/integrations/sre/escalation';
 import { buildWontFixCommentBody, WONT_FIX_COMMENT_MARKER } from '@workers/integrations/sre/wontFixComment';
 
@@ -578,17 +579,7 @@ export async function runSreAnalysis(payload: SreEventPayload, logger: Logger): 
 
   // 7. Gate logic: diagnosticianToSurgeon
   const gate = repoConfig.gates.diagnosticianToSurgeon;
-  let gateResult: 'auto' | 'ask' | 'stop' = 'auto';
-
-  if (gate.enabled) {
-    if (diagnosis.confidence >= gate.autoThreshold) {
-      gateResult = 'auto';
-    } else if (diagnosis.confidence >= gate.askThreshold) {
-      gateResult = 'ask';
-    } else {
-      gateResult = 'stop';
-    }
-  }
+  const gateResult = resolveDiagnosticianGate(gate, diagnosis.confidence, payload.source);
 
   if (isDryRun) {
     logger.info('DRY-RUN: Gate evaluation', {
@@ -599,6 +590,8 @@ export async function runSreAnalysis(payload: SreEventPayload, logger: Logger): 
       autoThreshold: gate.autoThreshold,
       askThreshold: gate.askThreshold,
       gateEnabled: gate.enabled,
+      autoDispatchSources: gate.autoDispatchSources,
+      source: payload.source,
     });
     // In dry-run mode: log the gate result but always dispatch to Surgeon to exercise the full pipeline.
     logger.info('DRY-RUN: Gate result: ' + gateResult, {

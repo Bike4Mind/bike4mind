@@ -7,8 +7,9 @@ vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
 }));
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType, ModelBackend } from '@bike4mind/common';
 import { toProviderEndUserId } from '@bike4mind/llm-adapters';
+import { createModelAdmission as createSharedModelAdmission } from '@bike4mind/services/llm/modelAdmission';
 import { createMocks } from 'node-mocks-http';
 
 const { mocks, InsufficientCreditsPreflightError, TtsProviderNotConfiguredError, UnprocessableEntityError } =
@@ -217,6 +218,33 @@ describe('POST /api/ai/tts - end_user_id', () => {
 });
 
 describe('POST /api/ai/tts', () => {
+  const openaiOnlyAdmission = () =>
+    createSharedModelAdmission({
+      user: {},
+      configs: [],
+      orgModelPolicy: { allowedProviders: [ModelBackend.OpenAI], allowedModels: null, allowedTools: null },
+    });
+
+  it('refuses an actual ElevenLabs dispatch with an OpenAI-looking model before holding or synthesizing', async () => {
+    vi.mocked(createModelAdmission).mockResolvedValueOnce(openaiOnlyAdmission());
+    const { promise } = run({ text: 'hi', provider: 'elevenlabs', model: 'gpt-4o-mini-tts' });
+    await expect(promise).rejects.toMatchObject({ statusCode: 403 });
+    expect(mocks.holdPreflightCredits).not.toHaveBeenCalled();
+    expect(mocks.synthesizeTts).not.toHaveBeenCalled();
+  });
+
+  it('admits a future OpenAI model by actual vendor and excludes the disallowed fallback', async () => {
+    vi.mocked(createModelAdmission).mockResolvedValueOnce(openaiOnlyAdmission());
+    await run({ text: 'hi', provider: 'openai', model: 'future-openai-voice' }).promise;
+    expect(mocks.synthesizeTts).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'openai',
+        model: 'future-openai-voice',
+        candidates: ['openai'],
+      })
+    );
+  });
+
   it('refuses an unlisted voice model before the hold and synthesis', async () => {
     const refusal = new Error('paid plan required');
     const assertAdmission = vi.fn(async (_modelId: string) => {
@@ -225,7 +253,7 @@ describe('POST /api/ai/tts', () => {
     vi.mocked(createModelAdmission).mockResolvedValueOnce({ assert: assertAdmission, admits: async () => false });
     const { promise } = run({ text: 'hi', model: 'tts-1-hd' });
     await expect(promise).rejects.toBe(refusal);
-    expect(assertAdmission).toHaveBeenCalledWith('tts-1-hd');
+    expect(assertAdmission).toHaveBeenCalledWith('tts-1-hd', { orgModelBackend: ModelBackend.OpenAI });
     expect(mocks.holdPreflightCredits).not.toHaveBeenCalled();
     expect(mocks.synthesizeTts).not.toHaveBeenCalled();
   });
@@ -236,7 +264,7 @@ describe('POST /api/ai/tts', () => {
     vi.mocked(createModelAdmission).mockResolvedValueOnce({ assert: async () => {}, admits });
     const { promise } = run({ text: 'hi', provider: 'openai' });
     await promise;
-    expect(admits).toHaveBeenCalledWith('eleven_multilingual_v2');
+    expect(admits).toHaveBeenCalledWith('eleven_multilingual_v2', { orgModelBackend: null });
     expect(mocks.synthesizeTts).toHaveBeenCalledWith(expect.objectContaining({ candidates: ['openai'] }));
   });
 

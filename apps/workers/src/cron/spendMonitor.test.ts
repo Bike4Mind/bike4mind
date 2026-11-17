@@ -9,8 +9,10 @@ const mocks = vi.hoisted(() => ({
   latestBucketStart: vi.fn(),
   log: vi.fn(),
   warn: vi.fn(),
+  error: vi.fn(),
   evaluateSpend: vi.fn(),
   postAlarmToSlack: vi.fn(),
+  runMarginCheck: vi.fn(),
 }));
 
 vi.mock('sst', () => ({ Resource: mocks.resource }));
@@ -31,6 +33,10 @@ vi.mock('@bike4mind/server-utils/lib/accounts/accountContext', () => ({ defaultA
 vi.mock('./spendMonitor/paidScopes', () => ({ defaultPaidScopeDeps: () => ({}) }));
 vi.mock('./spendMonitor/resolveScope', () => ({ defaultResolveScopeDeps: () => ({}) }));
 vi.mock('./spendMonitor/evaluate', () => ({ evaluateSpend: mocks.evaluateSpend }));
+vi.mock('./spendMonitor/marginCheck', async importOriginal => ({
+  ...(await importOriginal<typeof import('./spendMonitor/marginCheck')>()),
+  runMarginCheck: mocks.runMarginCheck,
+}));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: mocks.getSettingsMap,
   getSettingsValue: mocks.getSettingsValue,
@@ -38,7 +44,7 @@ vi.mock('@bike4mind/utils', () => ({
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     withMetadata() {
-      return { log: mocks.log, warn: mocks.warn, error: vi.fn() };
+      return { log: mocks.log, warn: mocks.warn, error: mocks.error };
     }
   },
 }));
@@ -68,6 +74,10 @@ const defaultSettings: Record<string, unknown> = {
   spendMonitorTrustedAccountIds: '',
   spendMonitorTrustedAccountSpikeFloorCredits: 20000,
   spendMonitorTrustedAccountCeilingCredits: 40000,
+  spendMonitorMarginEnabled: true,
+  spendMonitorMarginMinRatio: 1,
+  spendMonitorMarginWindowHours: 24,
+  spendMonitorMarginCostFloorUsd: 5,
 };
 
 const useSettings = (overrides: Record<string, unknown> = {}) => {
@@ -81,6 +91,7 @@ beforeEach(() => {
   useSettings();
   mocks.rollupBucket.mockResolvedValue({ docs: 3 });
   mocks.evaluateSpend.mockResolvedValue({ breaches: 0, posted: 0 });
+  mocks.runMarginCheck.mockResolvedValue({ checked: 0, flagged: 0 });
 });
 
 describe('spendMonitor handler', () => {
@@ -250,5 +261,71 @@ describe('spendMonitor handler', () => {
   it('throws on an event without a time', async () => {
     await expect(handler({})).rejects.toThrow();
     expect(mocks.connect).not.toHaveBeenCalled();
+  });
+});
+
+describe('spendMonitor handler margin check', () => {
+  const midnightEvent = { time: '2026-10-31T00:03:00Z' };
+
+  beforeEach(() => {
+    mocks.latestBucketStart.mockResolvedValue(new Date('2026-10-30T23:55:00.000Z'));
+  });
+
+  it('runs once a day on the midnight UTC tick with the admin thresholds', async () => {
+    useSettings({
+      spendMonitorMarginMinRatio: 1.1,
+      spendMonitorMarginWindowHours: 48,
+      spendMonitorMarginCostFloorUsd: 10,
+    });
+
+    await handler(midnightEvent);
+
+    expect(mocks.runMarginCheck).toHaveBeenCalledOnce();
+    const [deps, thresholds] = mocks.runMarginCheck.mock.calls[0];
+    expect(thresholds).toEqual({ minRatio: 1.1, windowHours: 48, costFloorUsd: 10 });
+    expect(deps.messageContext).toEqual({ creditUsd: expect.any(Number), stage: 'production' });
+  });
+
+  it('skips every other tick', async () => {
+    mocks.latestBucketStart.mockResolvedValue(new Date('2026-10-30T09:55:00.000Z'));
+
+    await handler(event);
+
+    expect(mocks.runMarginCheck).not.toHaveBeenCalled();
+  });
+
+  it('skips when the margin check is disabled', async () => {
+    useSettings({ spendMonitorMarginEnabled: false });
+
+    await handler(midnightEvent);
+
+    expect(mocks.runMarginCheck).not.toHaveBeenCalled();
+  });
+
+  it('routes the digest through the Slack toggle, so a disabled integration only logs', async () => {
+    mocks.runMarginCheck.mockImplementation(async (deps: { post: (message: { text: string }) => Promise<void> }) => {
+      await deps.post({ text: 'margin digest' });
+      return { checked: 1, flagged: 1 };
+    });
+
+    await handler(midnightEvent);
+
+    expect(mocks.postAlarmToSlack).not.toHaveBeenCalled();
+    expect(mocks.log).toHaveBeenCalledWith('spend-monitor-slack-disabled', { text: 'margin digest' });
+  });
+
+  it('logs a failed margin check and still completes the handler', async () => {
+    const failure = new Error('rollup read failed');
+    mocks.runMarginCheck.mockRejectedValue(failure);
+
+    await expect(handler(midnightEvent)).resolves.toEqual({ status: 'ok', rolled: expect.any(Number) });
+
+    expect(mocks.error).toHaveBeenCalledWith('spend-monitor-margin-failed', { error: failure });
+  });
+
+  it('fails loudly when a margin threshold resolves to no value', async () => {
+    useSettings({ spendMonitorMarginWindowHours: undefined });
+
+    await expect(handler(midnightEvent)).rejects.toThrow('spendMonitorMarginWindowHours');
   });
 });

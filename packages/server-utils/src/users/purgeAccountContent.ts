@@ -541,6 +541,7 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
     'Tag',
     'BriefcasePrompt',
     'ImageGenerationTemplate',
+    'StudioComposition',
     'ResearchData',
     'StockPortfolio',
     'StockTrade',
