@@ -28,7 +28,8 @@ export const readPlanStorageLimit = (priceMetadata: Stripe.Metadata | null | und
  * Writes the subscribed price's `storageLimitMb` to the owner's `planStorageLimit` while the subscription
  * is active or trialing. A price without the key, or with an unusable value, leaves the limit as it is.
  * Cancellation does not reset it. Callers: customerSubscriptionUpdated (every change) and
- * handleUserSubscriptionInvoice (first payment, which can land after the update event). Never throws:
+ * handleUserSubscriptionInvoice and handleOrganizationSubscriptionInvoice (first payment, which can land
+ * after the update event). `userId` is the owner id (a user or an org, per `ownerType`). Never throws:
  * a storage-limit failure must not fail the subscription sync that already committed.
  */
 export async function applyPlanStorageLimit(

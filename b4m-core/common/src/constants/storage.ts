@@ -7,8 +7,8 @@ export const BYTES_PER_STORAGE_MB = 1_000_000;
 export const DEFAULT_STORAGE_LIMIT_MB = 1000;
 
 /**
- * The limit applied when an organization's `storageLimit` is unset: one pool shared by every file the
- * org owns, so larger than a single user's default.
+ * The limit applied when an organization has neither an override nor a plan allowance: one pool shared
+ * by every file the org owns, so larger than a single user's default.
  */
 export const DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB = 10_000;
 

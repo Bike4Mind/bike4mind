@@ -187,6 +187,23 @@ describe('organization invoice storage synchronization', () => {
       )
     ).resolves.toBeUndefined();
     expect(logger.error).toHaveBeenCalled();
+    expect(emitMetric).toHaveBeenCalledWith('Lumina5/Entitlements', 'PlanStorageLimitFailed', 1, {
+      reason: 'owner_lookup_failed',
+    });
+  });
+
+  it('does not apply storage when the stored subscription belongs to a user', async () => {
+    vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockResolvedValue({
+      ownerType: SubscriptionOwnerType.User,
+      ownerId: 'stored-user',
+    } as NonNullable<Awaited<ReturnType<typeof subscriptionRepository.findByStripeSubscriptionId>>>);
+    await handleOrganizationSubscriptionInvoice(
+      buildInvoice(),
+      buildSubscription(),
+      { userId: 'u1', stage: 'test', ownerType: SubscriptionOwnerType.Organization },
+      logger
+    );
+    expect(mockApplyPlanStorageLimit).not.toHaveBeenCalled();
   });
 });
 

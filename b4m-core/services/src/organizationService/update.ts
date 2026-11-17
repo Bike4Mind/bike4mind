@@ -95,6 +95,8 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
 
   const updated = await adapters.db.organizations.update(update);
 
+  // Platform admin only, so a manager cannot raise their own org's quota. Lowering below usage deletes
+  // nothing; uploads are just refused.
   if (user.isAdmin && rest.storageLimit !== undefined) {
     const limited = await adapters.db.organizations.setStorageLimitOverride(id, rest.storageLimit);
     if (!limited) throw new NotFoundError('Organization not found');

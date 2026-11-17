@@ -330,4 +330,31 @@ describe('PUT /api/organizations/[id] - settings audit', () => {
 
     expect(credits.recordAdminAction).not.toHaveBeenCalled();
   });
+
+  it('records a storage override equal to the plan allowance against storageLimitOverride', async () => {
+    credits.findById.mockReset();
+    credits.findById.mockResolvedValueOnce({
+      id: 'org1',
+      name: 'Acme',
+      userId: 'owner1',
+      storageLimit: 5000,
+      planStorageLimit: 5000,
+    } as never);
+    update.mockResolvedValueOnce({
+      id: 'org1',
+      userId: 'owner1',
+      name: 'Acme',
+      storageLimit: 5000,
+      planStorageLimit: 5000,
+      storageLimitOverride: 5000,
+    } as never);
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true }, 'PUT');
+    Object.assign(req, { body: { storageLimit: 5000 } });
+    await mockRefs.putHandler!(req, res);
+
+    expect(credits.recordAdminAction).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ changes: [{ field: 'storageLimitOverride', before: null, after: 5000 }] })
+    );
+  });
 });

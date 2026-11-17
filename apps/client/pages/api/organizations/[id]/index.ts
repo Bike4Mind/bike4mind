@@ -23,6 +23,7 @@ import { creditService, organizationService } from '@bike4mind/services';
 import {
   CreditHolderType,
   MAX_STORAGE_LIMIT_MB,
+  resolveOrganizationStorageLimit,
   toSafeOrganization,
   OrganizationSharingPolicySchema,
   orgDomainPathIdSchema,
@@ -102,7 +103,6 @@ const AUDITED_SETTINGS_FIELDS = [
   'systemPrompt',
   'redactPushContent',
   'maxCreditsPerMember',
-  'storageLimit',
 ] as const;
 
 // The system prompt can run to 10,000 characters, so the entry records its length, not its text.
@@ -151,7 +151,9 @@ const handler = baseApi()
         );
 
       const auditedFields = AUDITED_SETTINGS_FIELDS.filter(field => profile[field] !== undefined);
-      const before = auditedFields.length > 0 ? await organizationRepository.findById(orgId) : null;
+      const auditsStorageOverride = profile.storageLimit !== undefined;
+      const before =
+        auditedFields.length > 0 || auditsStorageOverride ? await organizationRepository.findById(orgId) : null;
 
       const updatedOrganization =
         profile.sharingPolicy !== undefined || (req.user!.isAdmin && currentCredits !== undefined)
@@ -170,7 +172,7 @@ const handler = baseApi()
             })
           : await updateProfile();
 
-      const changes = before
+      const changes: { field: string; before: unknown; after: unknown }[] = before
         ? auditedFields
             .filter(field => (before[field] ?? null) !== (updatedOrganization[field] ?? null))
             .map(field => ({
@@ -179,6 +181,15 @@ const handler = baseApi()
               after: settingsAuditValue(field, updatedOrganization[field]),
             }))
         : [];
+      if (before && auditsStorageOverride) {
+        // storageLimit mirrors the effective limit, so the override itself is what gets audited.
+        const resolvedBefore = resolveOrganizationStorageLimit(before);
+        const overrideBefore = resolvedBefore.source === 'override' ? resolvedBefore.limitMb : null;
+        const overrideAfter = updatedOrganization.storageLimitOverride ?? null;
+        if (overrideBefore !== overrideAfter) {
+          changes.push({ field: 'storageLimitOverride', before: overrideBefore, after: overrideAfter });
+        }
+      }
       if (changes.length > 0) {
         await recordAdminActionFromRequest(req, {
           action: 'org.settings.updated',

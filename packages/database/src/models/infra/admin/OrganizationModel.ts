@@ -147,7 +147,8 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
       required: false,
       default: null,
     },
-    // MB; no schema default so an unset limit keeps tracking DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB.
+    // MB. Stored effective limit (override, else plan, else default); written only by setPlanStorageLimit
+    // and setStorageLimitOverride. No schema default so an unset limit tracks DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB.
     storageLimit: { type: Number, min: 0 },
     storageLimitOverride: { type: Number, min: 0 },
     planStorageLimit: { type: Number, min: 0 },

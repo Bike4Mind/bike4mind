@@ -477,6 +477,11 @@ export const handleOrganizationSubscriptionInvoice = async (
     }
   } catch (error) {
     logger.error(`Failed to resolve storage owner for subscription ${subscription.id}`, { error });
+    try {
+      await emitMetric('Lumina5/Entitlements', 'PlanStorageLimitFailed', 1, { reason: 'owner_lookup_failed' });
+    } catch (metricError) {
+      logger.warn(`Failed to emit storage owner lookup metric for subscription ${subscription.id}`, { metricError });
+    }
   }
   if (org?.users?.length) {
     promises.push(
