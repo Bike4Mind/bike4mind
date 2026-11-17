@@ -23,6 +23,10 @@ import {
   IUserRepository,
   IUserNote,
   IModerationHit,
+  IUserModeration,
+  MODERATION_REVIEW_STATUSES,
+  MODERATION_SEVERE_CATEGORIES,
+  ModerationReviewUser,
   ISignupRiskAutoApproval,
   ISignupRiskScore,
   RISK_EVIDENCE_TRIGGERS,
@@ -1658,6 +1662,57 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     );
   }
 
+  async findModerationReviewQueue(limit: number): Promise<ModerationReviewUser[]> {
+    const severe = [...MODERATION_SEVERE_CATEGORIES];
+    // The newest retained severe hit is after the last status change, so no admin has acted on it yet.
+    const latestSevereHitAt = {
+      $max: {
+        $map: {
+          input: {
+            $filter: {
+              input: { $ifNull: ['$moderation.hits', []] },
+              as: 'hit',
+              cond: { $gt: [{ $size: { $setIntersection: [{ $ifNull: ['$$hit.categories', []] }, severe] } }, 0] },
+            },
+          },
+          as: 'hit',
+          in: '$$hit.at',
+        },
+      },
+    };
+    const lastStatusChange = { $ifNull: ['$moderation.statusChangedAt', new Date(0)] };
+    const docs = await this.model
+      .find({
+        $or: [
+          { 'moderation.status': { $in: [...MODERATION_REVIEW_STATUSES] } },
+          {
+            'moderation.hits.categories': { $in: severe },
+            $expr: { $gt: [latestSevereHitAt, lastStatusChange] },
+          },
+        ],
+      })
+      .select('name email createdAt moderation')
+      .sort({ 'moderation.lastHitAt': -1, _id: -1 })
+      .limit(limit)
+      .maxTimeMS(5000)
+      .lean();
+    return docs.map(doc => {
+      const moderation = doc.moderation as IUserModeration;
+      const statusChangedAt = moderation.statusChangedAt ? new Date(moderation.statusChangedAt).getTime() : 0;
+      return {
+        id: String(doc._id),
+        name: doc.name ?? null,
+        email: doc.email ?? null,
+        createdAt: doc.createdAt ?? null,
+        moderation,
+        hasUnreviewedSevereHit: (moderation.hits ?? []).some(
+          hit =>
+            new Date(hit.at).getTime() > statusChangedAt && hit.categories?.some(category => severe.includes(category))
+        ),
+      };
+    });
+  }
+
   /**
    * Replaces the brief schedule and its due time together. A null `nextBriefAt` (schedule off) removes the field and drops the user from the
    * reconciler's index.
@@ -2430,6 +2485,11 @@ UserSchema.index({ createdAt: -1, _id: -1 }, { name: 'user_createdAt_id' });
 UserSchema.index({ lastActiveAt: -1, _id: -1 }, { name: 'user_lastActiveAt_id' });
 UserSchema.index({ currentCredits: -1, _id: -1 }, { name: 'user_currentCredits_id' });
 UserSchema.index({ isBanned: 1 }, { partialFilterExpression: { isBanned: true }, name: 'user_isBanned_true' });
+// Serve findModerationReviewQueue, one per $or branch. Not partial: a partial index is only chosen when
+// the query provably implies its filter, which an $in does not. Built by the
+// ensure-user-moderation-review-indexes migration.
+UserSchema.index({ 'moderation.status': 1 }, { name: 'user_moderation_status' });
+UserSchema.index({ 'moderation.hits.categories': 1 }, { name: 'user_moderation_hit_categories' });
 // The persona caps and expiry sweep read only persona accounts, a handful among all users.
 UserSchema.index(
   { isPersona: 1, personaExpiresAt: 1 },

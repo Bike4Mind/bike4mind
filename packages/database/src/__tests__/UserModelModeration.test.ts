@@ -100,3 +100,56 @@ describe('UserModel — moderation hit tracking', () => {
     expect(updated?.moderation?.status).toBe('suspended');
   });
 });
+
+describe('UserModel - findModerationReviewQueue', () => {
+  const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000);
+
+  it('lists users awaiting a decision and users with an unreviewed severe hit, most recent hit first', async () => {
+    const throttled = await User.create({ username: 'rq-throttled', name: 'Throttled' });
+    await userRepository.recordModerationHit(throttled.id, hit({ at: minutesAgo(30) }));
+    await userRepository.setModerationStatus(throttled.id, 'throttled', { throttledUntil: minutesAgo(-60) });
+
+    const pending = await User.create({ username: 'rq-pending', name: 'Pending' });
+    await userRepository.recordModerationHit(pending.id, hit({ at: minutesAgo(10) }));
+    await userRepository.setModerationStatus(pending.id, 'suspend_pending');
+
+    const severe = await User.create({ username: 'rq-severe', name: 'Severe' });
+    await userRepository.recordModerationHit(
+      severe.id,
+      hit({ at: minutesAgo(5), categories: ['sexual', 'sexual/minors'] })
+    );
+
+    const ordinary = await User.create({ username: 'rq-ordinary', name: 'Ordinary' });
+    await userRepository.recordModerationHit(ordinary.id, hit({ at: minutesAgo(1) }));
+    await User.create({ username: 'rq-clean', name: 'Clean' });
+
+    const queue = await userRepository.findModerationReviewQueue(10);
+
+    expect(queue.map(row => row.id)).toEqual([severe.id, pending.id, throttled.id]);
+    expect(queue[0]).toMatchObject({ name: 'Severe', hasUnreviewedSevereHit: true });
+    expect(queue[1]).toMatchObject({ hasUnreviewedSevereHit: false });
+    expect(queue[1].moderation.status).toBe('suspend_pending');
+  });
+
+  it('drops a severe-hit user once an admin acts after the hit, and lists them again on a newer one', async () => {
+    const user = await User.create({ username: 'rq-reviewed', name: 'Reviewed' });
+    await userRepository.recordModerationHit(user.id, hit({ at: minutesAgo(5), categories: ['sexual/minors'] }));
+    await userRepository.setModerationStatus(user.id, 'active');
+
+    expect(await userRepository.findModerationReviewQueue(10)).toEqual([]);
+
+    await userRepository.recordModerationHit(
+      user.id,
+      hit({ at: new Date(Date.now() + 1000), categories: ['sexual/minors'] })
+    );
+    expect((await userRepository.findModerationReviewQueue(10)).map(row => row.id)).toEqual([user.id]);
+  });
+
+  it('does not list a suspended user without a newer severe hit', async () => {
+    const user = await User.create({ username: 'rq-suspended', name: 'Suspended' });
+    await userRepository.recordModerationHit(user.id, hit({ at: minutesAgo(5) }));
+    await userRepository.setModerationStatus(user.id, 'suspended');
+
+    expect(await userRepository.findModerationReviewQueue(10)).toEqual([]);
+  });
+});

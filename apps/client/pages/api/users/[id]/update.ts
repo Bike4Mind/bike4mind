@@ -375,6 +375,17 @@ const handler = baseApi().put(
               ],
             });
           }
+          const moderationBefore = snapshot?.moderation?.status ?? 'active';
+          const moderationAfter = updated?.moderation?.status ?? 'active';
+          if (body.moderationStatus && updated && moderationBefore !== moderationAfter) {
+            await recordAdminActionFromRequest(req, {
+              action: 'user.moderation_status.changed',
+              target: auditTarget,
+              summary: `set the moderation status to ${moderationAfter}`,
+              reason: readAdminActionReason(body.statusChangeReason),
+              changes: [{ field: 'moderation.status', before: moderationBefore, after: moderationAfter }],
+            });
+          }
           if (creditAdjustment) {
             const { credits, previousBalance, resultingBalance, creditTransactionId } = creditAdjustment;
             await recordAdminActionFromRequest(req, {
