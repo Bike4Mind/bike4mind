@@ -93,6 +93,7 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  warmExchangeAttribution: async () => undefined,
   apiKeyRepository: {},
   cacheRepository: { sentinel: 'cacheRepository' },
   adminSettingsRepository: { sentinel: 'adminSettingsRepository' },
