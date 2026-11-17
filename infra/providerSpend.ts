@@ -304,7 +304,8 @@ if (isMonitoredStage) {
     }
 
     // Fires on the ProviderAdminKeyAgeDays datum the poller publishes each hour for a key it read
-    // from the store. Writing a new secret version resets the age.
+    // from the store. Writing a new secret version resets the age. One breaching hour in the last
+    // three keeps the state, so a run or two that publishes no age does not clear and re-fire it.
     for (const provider of PROVIDER_ADMIN_KEY_PROVIDERS) {
       const days = PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS[provider];
       new aws.cloudwatch.MetricAlarm(`ProviderAdminKeyAgeAlarm-${provider}`, {
@@ -316,7 +317,8 @@ if (isMonitoredStage) {
           namespace: LLM_SPEND_NAMESPACE,
         }),
         comparisonOperator: 'GreaterThanOrEqualToThreshold',
-        evaluationPeriods: 1,
+        evaluationPeriods: 3,
+        datapointsToAlarm: 1,
         metricName: 'ProviderAdminKeyAgeDays',
         namespace: LLM_SPEND_NAMESPACE,
         dimensions: { Provider: provider },
