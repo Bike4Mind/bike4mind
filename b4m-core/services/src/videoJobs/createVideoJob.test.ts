@@ -100,6 +100,20 @@ describe('createVideoJob', () => {
     expect(deps.enqueue).toHaveBeenCalledWith(expect.any(String), 0);
   });
 
+  it.each([
+    { extra: { draft: true }, code: 'unsupported_draft', field: 'draft' },
+    { extra: { keyframes: [{ fileId: 'f1', timeSeconds: 0 }] }, code: 'unsupported_keyframes', field: 'keyframes' },
+  ])('returns a field-specific 422 for $field before holding credits', async ({ extra, code, field }) => {
+    const { deps } = makeDeps();
+    expect(await createVideoJob({ user, request: { ...validRequest, ...extra }, source: 'api' }, deps)).toMatchObject({
+      ok: false,
+      status: 422,
+      code,
+      message: expect.stringContaining(field),
+    });
+    expect(holdCredits).not.toHaveBeenCalled();
+  });
+
   it('checks every keyframe owner and holds the draft rate on the persisted request', async () => {
     const loadInputImage = vi.fn<VideoJobDeps['loadInputImage']>(async () => ({
       bytes: Buffer.from('img'),
