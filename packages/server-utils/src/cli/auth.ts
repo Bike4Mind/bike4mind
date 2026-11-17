@@ -25,6 +25,7 @@ import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '../util
 import { toApiKeyAuthError } from '../auth/apiKeyAuthFailure';
 import { resolveUntrustedKeyLimits } from '../utils/apiKeyTrust';
 import { z } from 'zod';
+import { recordSideAppRefusal } from '../auth/sideAppRefusal';
 import { refuseIfSuspendedOwner } from '../auth/suspendedApiKeyRefusal';
 import { Logger } from '@bike4mind/observability';
 
@@ -283,7 +284,19 @@ async function assertOwnerAccountUsable(info: ApiKeyInfo) {
     Logger.globalInstance.warn('API key rejected: apiKeyAccess setting denies this owner', {
       keyId: info.keyId,
       userId: info.userId,
+      ...(info.oauthExchangeClientId ? { oauthClientId: info.oauthExchangeClientId } : {}),
     });
+    if (info.oauthExchangeClientId) {
+      recordSideAppRefusal({
+        verified: true,
+        clientId: info.oauthExchangeClientId,
+        stage: 'use',
+        reason: 'subscription_required',
+        status: 403,
+        userId: info.userId,
+        keyId: info.keyId,
+      });
+    }
     throw new ForbiddenError(API_KEY_ACCESS_DENIED_MESSAGE);
   }
   return user;
@@ -321,6 +334,20 @@ export async function verifyApiKey(
     }
 
     if (validation.oauthExchangeClientId && !options?.allowExchangeKeys) {
+      Logger.globalInstance.warn('API key rejected: exchange key used on a route that does not accept it', {
+        keyId: validation.keyId,
+        userId: validation.userId,
+        oauthClientId: validation.oauthExchangeClientId,
+      });
+      recordSideAppRefusal({
+        verified: true,
+        clientId: validation.oauthExchangeClientId,
+        stage: 'use',
+        reason: 'insufficient_scope',
+        status: 403,
+        userId: validation.userId,
+        keyId: validation.keyId,
+      });
       throw new ForbiddenError('This key cannot be used for this endpoint');
     }
 
@@ -334,6 +361,23 @@ export async function verifyApiKey(
 
     if (!hasRequiredScope) {
       const list = requiredScopes.join(' or ');
+      if (validation.oauthExchangeClientId) {
+        Logger.globalInstance.warn('API key rejected: missing required scope', {
+          keyId: validation.keyId,
+          userId: validation.userId,
+          oauthClientId: validation.oauthExchangeClientId,
+          requiredScopes,
+        });
+        recordSideAppRefusal({
+          verified: true,
+          clientId: validation.oauthExchangeClientId,
+          stage: 'use',
+          reason: 'insufficient_scope',
+          status: 403,
+          userId: validation.userId,
+          keyId: validation.keyId,
+        });
+      }
       throw new ForbiddenError(`API key does not have permission for this endpoint (requires ${list})`, {
         required_scopes: requiredScopes,
       });
