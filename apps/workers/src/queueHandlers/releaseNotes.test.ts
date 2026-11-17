@@ -194,7 +194,10 @@ describe('releaseNotes queue handler', () => {
     await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
     expect(slackPosts()).toHaveLength(0);
     expect(h.upsertGenerated).toHaveBeenCalledTimes(1);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Slack announcement failed'), expect.anything());
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Slack announcement failed'),
+      expect.objectContaining({ error: expect.stringMatching(/Token decryption failed/) })
+    );
     const logged = JSON.stringify(logger.warn.mock.calls);
     expect(logged).not.toContain(stored);
     expect(logged).not.toContain('xoxb-plain');
