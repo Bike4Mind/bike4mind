@@ -27,6 +27,7 @@ import {
   removeShot,
   removeTake,
   sendShotsToTimeline,
+  shotTimelineFileId,
   updateShot,
   type StudioShotPatch,
 } from './shotListEdits';
@@ -88,7 +89,14 @@ const ShotsBoard = ({ composition, timeline, onTimelineChange, onSendTake }: Sho
   const pickTakes = (shotId: string) =>
     pick({
       filter: { mode: 'initial', type: 'image' },
-      onPicked: files => edit(current => addTakes(current, shotId, files.map(file => file.id))),
+      onPicked: files =>
+        edit(current =>
+          addTakes(
+            current,
+            shotId,
+            files.map(file => file.id)
+          )
+        ),
     });
 
   const sendAll = () => {
@@ -101,7 +109,8 @@ const ShotsBoard = ({ composition, timeline, onTimelineChange, onSendTake }: Sho
   };
 
   const sendOne = (shot: StudioShot) => {
-    const file = shot.chosenFileId ? cachedFile(shot.chosenFileId) : undefined;
+    const fileId = shotTimelineFileId(shot);
+    const file = fileId ? cachedFile(fileId) : undefined;
     if (!file || !isVisual(file.id)) {
       toast.error('Pick an image or video take for this shot first.');
       return;
@@ -109,7 +118,7 @@ const ShotsBoard = ({ composition, timeline, onTimelineChange, onSendTake }: Sho
     onSendTake(file);
   };
 
-  const sendableCount = shots.filter(shot => shot.chosenFileId).length;
+  const sendableCount = shots.filter(shotTimelineFileId).length;
 
   return (
     <StudioPanel testId="production-shots-board" aria-label="Shots">
@@ -233,6 +242,14 @@ const ShotRow = ({
         </IconButton>
       </Stack>
 
+      <CommitInput
+        value={shot.voiceLine ?? ''}
+        ariaLabel={`Shot ${index + 1} voice line`}
+        placeholder="Voiceover or caption line"
+        maxLength={STUDIO_COMPOSITION_LIMITS.shotVoiceLineMaxLength}
+        testId={`${testId}-voice-line-input`}
+        onCommit={voiceLine => onPatch({ voiceLine })}
+      />
       <CommitTextarea
         value={shot.prompt ?? ''}
         ariaLabel={`Shot ${index + 1} prompt`}
@@ -257,6 +274,17 @@ const ShotRow = ({
             />
           );
         })}
+        {shot.clipFileId && (
+          <LibraryThumb
+            fileId={shot.clipFileId}
+            testId={`${testId}-clip`}
+            badge={
+              <Chip size="sm" variant="solid" sx={{ position: 'absolute', bottom: 2, left: 2 }}>
+                Clip
+              </Chip>
+            }
+          />
+        )}
         {shot.fileIds.length < STUDIO_COMPOSITION_LIMITS.shotFilesMax && (
           <Button size="sm" variant="outlined" onClick={onPickTakes} data-testid={`${testId}-add-takes-btn`}>
             {shot.fileIds.length === 0 ? 'Add takes from Library' : 'Add takes'}
@@ -265,7 +293,7 @@ const ShotRow = ({
         <Button
           size="sm"
           variant="plain"
-          disabled={!shot.chosenFileId}
+          disabled={!shotTimelineFileId(shot)}
           onClick={onSend}
           data-testid={`${testId}-send-btn`}
           sx={{ marginLeft: 'auto' }}
@@ -310,6 +338,7 @@ const CommitInput = ({
   ariaLabel,
   maxLength,
   testId,
+  placeholder,
   ...props
 }: CommitFieldProps & { sx?: Record<string, unknown> }) => {
   const field = useCommitText(props);
@@ -317,6 +346,7 @@ const CommitInput = ({
     <Input
       size="sm"
       variant="plain"
+      placeholder={placeholder}
       {...field}
       onKeyDown={event => event.key === 'Enter' && event.currentTarget.querySelector('input')?.blur()}
       sx={sx}

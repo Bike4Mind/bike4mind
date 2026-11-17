@@ -31,6 +31,7 @@ type FileReference = { fileId: string; path: (string | number)[]; kinds?: readon
 
 // Shot files are candidates of any media kind; the brief and brand kit hold pictures (and product clips).
 const PRODUCT_PHOTO_KINDS: readonly StudioFileMediaKind[] = ['image'];
+const CLIP_KINDS: readonly StudioFileMediaKind[] = ['video'];
 const LOGO_KINDS: readonly StudioFileMediaKind[] = ['image'];
 const PRODUCT_KINDS: readonly StudioFileMediaKind[] = ['image', 'video'];
 
@@ -63,9 +64,12 @@ const validateFileReferences = (
       path: ['brandKit', 'productFileIds', index],
       kinds: PRODUCT_KINDS,
     })),
-    ...content.shots.flatMap((shot, shotIndex) =>
-      shot.fileIds.map((fileId, index) => ({ fileId, path: ['shots', shotIndex, 'fileIds', index] }))
-    ),
+    ...content.shots.flatMap((shot, shotIndex) => [
+      ...shot.fileIds.map((fileId, index) => ({ fileId, path: ['shots', shotIndex, 'fileIds', index] })),
+      ...(shot.clipFileId
+        ? [{ fileId: shot.clipFileId, path: ['shots', shotIndex, 'clipFileId'], kinds: CLIP_KINDS }]
+        : []),
+    ]),
   ];
   return references.flatMap(({ fileId, path, kinds }): StudioCompositionIssue[] => {
     if (knownFileIds && !knownFileIds.has(fileId)) {

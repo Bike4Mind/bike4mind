@@ -12,7 +12,10 @@ import { MIN_CLIP_MS, mintTimelineId } from './timelineEdits';
  * alternatives are the rest. Each edit returns a new list and never validates: the server runs the shared rules.
  */
 
-export type StudioShotPatch = Partial<Pick<StudioShot, 'title' | 'prompt' | 'intent'>>;
+export type StudioShotPatch = Partial<Pick<StudioShot, 'title' | 'prompt' | 'intent' | 'voiceLine'>>;
+
+/** What a shot puts on the timeline: its animated clip when it has one, else its chosen take. */
+export const shotTimelineFileId = (shot: StudioShot): string | undefined => shot.clipFileId ?? shot.chosenFileId;
 
 const NEW_SHOT_TITLE = 'New shot';
 
@@ -46,7 +49,7 @@ export const updateShot = (shots: StudioShot[], shotId: string, patch: StudioSho
   mapShot(shots, shotId, shot => {
     const next: StudioShot = { ...shot };
     if (patch.title !== undefined && patch.title.trim()) next.title = patch.title.trim();
-    for (const key of ['prompt', 'intent'] as const) {
+    for (const key of ['prompt', 'intent', 'voiceLine'] as const) {
       if (patch[key] === undefined) continue;
       const value = patch[key].trim();
       if (value) next[key] = value;
@@ -94,7 +97,7 @@ const videoClip = (fileId: string, startMs: number, durationMs: number): StudioV
 });
 
 /**
- * Lays every shot's chosen take end to end on the first video track, replacing what that track held. A shot with its
+ * Lays every shot's clip or chosen take end to end on the first video track, replacing what that track held. A shot with its
  * own `durationMs` keeps it; the others share the remaining length equally, so a 4-shot board fills a 15s ad.
  * Shots without a visual chosen take are skipped. Throws when nothing can be sent or the shots overrun the length.
  */
@@ -103,7 +106,10 @@ export const sendShotsToTimeline = (
   shots: StudioShot[],
   isVisual: IsVisualTake
 ): StudioTimeline => {
-  const sendable = shots.filter(shot => shot.chosenFileId && isVisual(shot.chosenFileId));
+  const sendable = shots.flatMap(shot => {
+    const fileId = shotTimelineFileId(shot);
+    return fileId && isVisual(fileId) ? [{ fileId, durationMs: shot.durationMs }] : [];
+  });
   if (sendable.length === 0) throw new Error('Pick an image or video take for at least one shot first.');
 
   const fixedMs = sendable.reduce((total, shot) => total + (shot.durationMs ?? 0), 0);
@@ -116,7 +122,7 @@ export const sendShotsToTimeline = (
   let startMs = 0;
   const clips = sendable.map(shot => {
     const durationMs = shot.durationMs ?? shareMs;
-    const clip = videoClip(shot.chosenFileId as string, startMs, durationMs);
+    const clip = videoClip(shot.fileId, startMs, durationMs);
     startMs += durationMs;
     return clip;
   });

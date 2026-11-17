@@ -42,6 +42,7 @@ export const STUDIO_COMPOSITION_LIMITS = {
   shotFilesMax: 20,
   shotPromptMaxLength: 4000,
   shotIntentMaxLength: 500,
+  shotVoiceLineMaxLength: 500,
   listLimitMax: 100,
 } as const;
 
@@ -91,6 +92,10 @@ export const StudioShotSchema = z.object({
   intent: z.string().trim().max(limits.shotIntentMaxLength).optional(),
   // Must be one of `fileIds` (validateStudioComposition).
   chosenFileId: StudioFileIdSchema.optional(),
+  // A video animated from the chosen take; sent to the timeline in its place when present.
+  clipFileId: StudioFileIdSchema.optional(),
+  // The voiceover or caption line spoken over this shot.
+  voiceLine: z.string().trim().max(limits.shotVoiceLineMaxLength).optional(),
 });
 export type StudioShot = z.infer<typeof StudioShotSchema>;
 
@@ -290,14 +295,16 @@ export const defaultStudioShots = (template: StudioCompositionTemplate): StudioS
 export type StudioCompositionReferences = Pick<StudioCompositionContent, 'brief' | 'brandKit' | 'shots' | 'timeline'>;
 
 /** Every FabFile id the composition references (brief, brand kit, shots, timeline), deduplicated. */
-export const studioCompositionFileIds = (
-  content: StudioCompositionReferences
-): string[] => {
+export const studioCompositionFileIds = (content: StudioCompositionReferences): string[] => {
   const ids = [
     ...(content.brief.productFileId ? [content.brief.productFileId] : []),
     ...(content.brandKit.logoFileId ? [content.brandKit.logoFileId] : []),
     ...content.brandKit.productFileIds,
-    ...content.shots.flatMap(shot => [...shot.fileIds, ...(shot.chosenFileId ? [shot.chosenFileId] : [])]),
+    ...content.shots.flatMap(shot => [
+      ...shot.fileIds,
+      ...(shot.chosenFileId ? [shot.chosenFileId] : []),
+      ...(shot.clipFileId ? [shot.clipFileId] : []),
+    ]),
     ...studioTimelineFileIds(content.timeline),
   ];
   return [...new Set(ids)];

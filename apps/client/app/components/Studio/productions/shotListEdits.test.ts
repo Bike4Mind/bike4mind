@@ -81,12 +81,12 @@ describe('sendShotsToTimeline', () => {
     expect(sent.tracks).toHaveLength(timeline.tracks.length);
   });
 
-  it('keeps a shot length, splits the rest, and skips shots without a visual take', () => {
+  it('keeps a shot length, splits the rest, prefers clips and skips shots without a visual take', () => {
     const shots = [
       shot('fixed', { fileIds: [FILE_A], chosenFileId: FILE_A, durationMs: 5000 }),
       shot('empty'),
       shot('audio', { fileIds: [AUDIO], chosenFileId: AUDIO }),
-      shot('flex', { fileIds: [FILE_B], chosenFileId: FILE_B }),
+      shot('flex', { fileIds: [FILE_B], chosenFileId: FILE_B, clipFileId: FILE_C }),
     ];
     const sent = sendShotsToTimeline(defaultStudioTimeline('ad_campaign'), shots, isVisual);
     const video = sent.tracks.find(track => track.kind === 'video');
@@ -94,6 +94,8 @@ describe('sendShotsToTimeline', () => {
       [0, 5000],
       [5000, 10_000],
     ]);
+    // A shot's animated clip goes on the timeline in place of its chosen take.
+    expect(video?.clips.map(clip => ('fileId' in clip ? clip.fileId : null))).toEqual([FILE_A, FILE_C]);
   });
 
   it('adds a video track when the timeline has none', () => {

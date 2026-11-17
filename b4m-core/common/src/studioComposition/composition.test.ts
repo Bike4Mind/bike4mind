@@ -17,6 +17,7 @@ const FILE_A = 'a'.repeat(24);
 const FILE_B = 'b'.repeat(24);
 const FILE_C = 'c'.repeat(24);
 const FILE_D = 'd'.repeat(24);
+const FILE_E = 'e'.repeat(24);
 
 describe('defaultStudioTimeline', () => {
   it.each(STUDIO_COMPOSITION_TEMPLATES)('gives %s a schema-valid, rule-valid empty timeline', template => {
@@ -89,7 +90,15 @@ describe('composition references', () => {
     brief: { summary: 'Cold brew, hot summer', productFileId: FILE_D },
     brandKit: { logoFileId: FILE_A, productFileIds: [FILE_B] },
     shots: [
-      { id: 'shot-1', title: 'Opening', prompt: 'A can on ice', fileIds: [FILE_B, FILE_C], chosenFileId: FILE_C },
+      {
+        id: 'shot-1',
+        title: 'Opening',
+        prompt: 'A can on ice',
+        voiceLine: 'Summer, served cold.',
+        fileIds: [FILE_B, FILE_C],
+        chosenFileId: FILE_C,
+        clipFileId: FILE_E,
+      },
       { id: 'shot-1', title: 'Duplicate', chosenFileId: FILE_A },
     ],
     timeline: {
@@ -99,17 +108,25 @@ describe('composition references', () => {
   });
 
   it('collects every referenced file once', () => {
-    expect(studioCompositionFileIds(content)).toEqual([FILE_D, FILE_A, FILE_B, FILE_C]);
+    expect(studioCompositionFileIds(content)).toEqual([FILE_D, FILE_A, FILE_B, FILE_C, FILE_E]);
   });
 
   it('reports timeline issues under `timeline`, duplicate shots, stray chosen takes and unknown files', () => {
-    const issues = validateStudioComposition(content, { knownFileIds: new Set([FILE_A, FILE_C, FILE_D]) });
+    const issues = validateStudioComposition(content, { knownFileIds: new Set([FILE_A, FILE_C, FILE_D, FILE_E]) });
     expect(issues.map(issue => [issue.code, issue.path.join('.')])).toEqual([
       ['clip_out_of_bounds', 'timeline.tracks.0.clips.0'],
       ['duplicate_id', 'shots.1.id'],
       ['unknown_take', 'shots.1.chosenFileId'],
       ['unknown_file', 'brandKit.productFileIds.0'],
       ['unknown_file', 'shots.0.fileIds.0'],
+    ]);
+  });
+
+  it('accepts only a video as a shot clip', () => {
+    const issues = validateStudioComposition(content, { fileKinds: new Map([[FILE_E, 'image' as const]]) });
+    expect(issues.map(issue => [issue.code, issue.path.join('.')])).toContainEqual([
+      'unsupported_file_kind',
+      'shots.0.clipFileId',
     ]);
   });
 
