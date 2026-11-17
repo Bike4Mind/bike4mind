@@ -43,5 +43,9 @@ export interface ISpendFreezeRepository {
     limit: number;
     cursor?: string;
   }): Promise<{ items: ISpendFreeze[]; nextCursor: string | null }>;
-  listHistory(scope: SpendFreezeScope, limit: number): Promise<ISpendFreeze[]>;
+  listHistory(
+    scope: SpendFreezeScope,
+    limit: number,
+    cursor?: string
+  ): Promise<{ items: ISpendFreeze[]; nextCursor: string | null }>;
 }

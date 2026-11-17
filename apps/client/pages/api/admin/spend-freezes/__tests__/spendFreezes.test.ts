@@ -127,6 +127,20 @@ describe('spend freeze admin routes', () => {
       );
     });
 
+    it('403s freezing an API key whose owner has admin access when the admin is only a delegate', async () => {
+      h.keyFindById.mockResolvedValue({ id: SCOPE_ID, keyPrefix: 'b4m_live_abc', userId: 'owner-1' });
+      h.userFindById.mockResolvedValue({ id: 'owner-1', isAdmin: true });
+
+      await expect(
+        run(indexRoute, {
+          method: 'POST',
+          body: { ...validBody, scopeType: 'apiKey' },
+          user: { id: 'delegate-1', isAdmin: false, adminPermissions: ['credits:adjust'] },
+        })
+      ).rejects.toBeInstanceOf(ForbiddenError);
+      expect(h.freezeSpend).not.toHaveBeenCalled();
+    });
+
     it('reports created:false for a repeated freeze', async () => {
       h.freezeSpend.mockResolvedValue({ freeze, created: false });
 
@@ -281,17 +295,34 @@ describe('spend freeze admin routes', () => {
 
   describe('GET /spend-freezes/history', () => {
     it('returns the scope history', async () => {
-      h.getFreezeHistory.mockResolvedValue([freeze]);
+      h.getFreezeHistory.mockResolvedValue({ items: [freeze], nextCursor: 'c2' });
 
       const res = await run(historyRoute, {
         method: 'GET',
         query: { scopeType: 'Organization', scopeId: SCOPE_ID },
       });
 
-      expect(res._getJSONData()).toEqual({ items: [freeze] });
+      expect(res._getJSONData()).toEqual({ items: [freeze], nextCursor: 'c2' });
       expect(h.getFreezeHistory).toHaveBeenCalledWith(
         { scopeType: 'Organization', scopeId: SCOPE_ID },
         50,
+        undefined,
+        expect.anything()
+      );
+    });
+
+    it('passes the cursor and limit through', async () => {
+      h.getFreezeHistory.mockResolvedValue({ items: [], nextCursor: null });
+
+      await run(historyRoute, {
+        method: 'GET',
+        query: { scopeType: 'Organization', scopeId: SCOPE_ID, limit: '10', cursor: 'c1' },
+      });
+
+      expect(h.getFreezeHistory).toHaveBeenCalledWith(
+        { scopeType: 'Organization', scopeId: SCOPE_ID },
+        10,
+        'c1',
         expect.anything()
       );
     });

@@ -9,6 +9,7 @@ const MAX_LIMIT = 200;
 
 const historyQuerySchema = scopeSchema.extend({
   limit: z.coerce.number().int().min(1).max(MAX_LIMIT).default(50),
+  cursor: z.string().min(1).optional(),
 });
 
 // Every freeze (active and lifted) a scope has had, newest first.
@@ -16,10 +17,15 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'support:re
   asyncHandler(async (req, res) => {
     const parsed = historyQuerySchema.safeParse(req.query);
     if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'Invalid query');
-    const { limit, ...scope } = parsed.data;
+    const { limit, cursor, ...scope } = parsed.data;
 
-    const items = await spendFreezeService.getFreezeHistory(scope, limit, buildSpendFreezeAdapters(req.logger));
-    return res.json({ items });
+    const { items, nextCursor } = await spendFreezeService.getFreezeHistory(
+      scope,
+      limit,
+      cursor,
+      buildSpendFreezeAdapters(req.logger)
+    );
+    return res.json({ items, nextCursor });
   })
 );
 

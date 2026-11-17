@@ -55,7 +55,7 @@ export const buildSpendFreezeChange = async (req: AuditRequest, reason: string) 
 });
 
 /**
- * 404s when the scope does not exist; a user scope also passes the admin-outranks-target guard.
+ * 404s when the scope does not exist; a user scope, or an API key scope via its owner, also passes the admin-outranks-target guard.
  * A lift passes `mustExist: false` so a freeze on a since-deleted scope can still be released.
  */
 export const assertScopeExists = async (
@@ -72,12 +72,19 @@ export const assertScopeExists = async (
     assertCanActOnAdminTarget(admin, user, 'change spend freezes for');
     return;
   }
+  if (scope.scopeType === 'apiKey') {
+    const apiKey = await userApiKeyRepository.findById(scope.scopeId);
+    if (!apiKey) {
+      if (mustExist) throw new NotFoundError('API key not found');
+      return;
+    }
+    // An orphaned key (owner deleted) has no admin access to protect.
+    const owner = await userRepository.findById(apiKey.userId);
+    if (owner) assertCanActOnAdminTarget(admin, owner, 'change spend freezes for');
+    return;
+  }
   if (!mustExist) return;
-  const found =
-    scope.scopeType === 'Organization'
-      ? await organizationRepository.findById(scope.scopeId)
-      : await userApiKeyRepository.findById(scope.scopeId);
-  if (!found) throw new NotFoundError(`${scope.scopeType === 'Organization' ? 'Organization' : 'API key'} not found`);
+  if (!(await organizationRepository.findById(scope.scopeId))) throw new NotFoundError('Organization not found');
 };
 
 /** Human label per freeze id: email, organization name or key prefix. Batched per scope type. */

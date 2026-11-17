@@ -8,5 +8,6 @@ export const listActiveFreezes = (
 export const getFreezeHistory = (
   scope: Parameters<ISpendFreezeRepository['listHistory']>[0],
   limit: number,
+  cursor: string | undefined,
   adapters: { db: { spendFreezes: Pick<ISpendFreezeRepository, 'listHistory'> } }
-) => adapters.db.spendFreezes.listHistory(scope, limit);
+) => adapters.db.spendFreezes.listHistory(scope, limit, cursor);
