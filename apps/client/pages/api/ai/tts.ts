@@ -28,6 +28,7 @@ import {
   retryAfterSecondsOf,
   savedCopyOf,
   STILL_GENERATING_MESSAGE,
+  UNDELIVERABLE_MAY_BILL_MESSAGE,
 } from '@server/generations/syncAudioJob';
 import { mapperDeps } from '@server/generations/routeDeps';
 import { SPEECH_GENERATION_PROJECTION, toPublicGenerationJob } from '@server/generations/toPublicGenerationJob';
@@ -149,6 +150,16 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
         cancel: waited.cancel,
         provider: vendor,
       });
+      if (waited.cancel !== 'requested') {
+        res.setHeader(GENERATION_JOB_ID_HEADER, waited.job.id);
+        return res.status(504).json({
+          error: 'Speech generation took too long',
+          message: UNDELIVERABLE_MAY_BILL_MESSAGE,
+          provider: vendor,
+          errorCode: REQUEST_TIMEOUT_ERROR_CODE,
+          jobId: waited.job.id,
+        });
+      }
       return res.status(504).json({
         error: 'Speech generation took too long',
         provider: vendor,
@@ -188,7 +199,8 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
   } catch (error) {
     // The clip exists and is billed; it stays in the caller's Files when it was saved there.
     req.logger.error('TTS job output could not be read back', { jobId: job.id, error, provider: vendor });
-    return res.status(502).json({ error: 'Failed to generate speech', provider: vendor });
+    res.setHeader(GENERATION_JOB_ID_HEADER, job.id);
+    return res.status(502).json({ error: 'Failed to generate speech', provider: vendor, jobId: job.id });
   }
   const usedVendor = producedBy?.provider ?? vendor;
   const fallbackFrom = usedVendor !== vendor ? vendor : undefined;

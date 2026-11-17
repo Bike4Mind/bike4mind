@@ -23,6 +23,7 @@ import {
   retryAfterSecondsOf,
   savedCopyOf,
   STILL_GENERATING_MESSAGE,
+  UNDELIVERABLE_MAY_BILL_MESSAGE,
 } from '@server/generations/syncAudioJob';
 import { providerBusyHttpError } from '@server/utils/providerBusyHttpError';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
@@ -122,6 +123,15 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
         cancel: waited.cancel,
         provider,
       });
+      if (waited.cancel !== 'requested') {
+        res.setHeader(GENERATION_JOB_ID_HEADER, waited.job.id);
+        return res.status(504).json({
+          error: 'Sound generation took too long',
+          message: UNDELIVERABLE_MAY_BILL_MESSAGE,
+          errorCode: REQUEST_TIMEOUT_ERROR_CODE,
+          jobId: waited.job.id,
+        });
+      }
       return res.status(504).json({ error: 'Sound generation took too long', errorCode: REQUEST_TIMEOUT_ERROR_CODE });
     case 'ended':
       break;
@@ -148,7 +158,8 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
   } catch (error) {
     // The clip exists and is billed; it stays in the caller's Files when it was saved there.
     req.logger.error('Sound-effects job output could not be read back', { jobId: job.id, error });
-    return res.status(502).json(GENERATION_FAILED);
+    res.setHeader(GENERATION_JOB_ID_HEADER, job.id);
+    return res.status(502).json({ ...GENERATION_FAILED, jobId: job.id });
   }
 
   return deliverGeneratedAudio(res, {

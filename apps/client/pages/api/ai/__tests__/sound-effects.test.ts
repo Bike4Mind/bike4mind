@@ -82,6 +82,7 @@ vi.mock('@server/generations/routeDeps', () => ({
   mapperDeps: { sign: vi.fn(), now: () => new Date('2026-10-06T00:02:00Z') },
 }));
 
+import { UNDELIVERABLE_MAY_BILL_MESSAGE } from '@server/generations/syncAudioJob';
 import handler from '../sound-effects';
 
 const AUDIO = Buffer.from('boom');
@@ -426,6 +427,15 @@ describe('POST /api/ai/sound-effects', () => {
     expect(res._getStatusCode()).toBe(502);
   });
 
+  it('answers 502 with the job id when the stored clip cannot be read back', async () => {
+    mocks.readAudioJobOutput.mockRejectedValue(new Error('s3 down'));
+    const { res, promise } = run({ text: 'door creak' });
+    await promise;
+    expect(res._getStatusCode()).toBe(502);
+    expect(res.getHeader('X-B4M-Generation-Job-Id')).toBe('job-1');
+    expect(res._getJSONData()).toEqual({ error: 'Sound generation failed', jobId: 'job-1' });
+  });
+
   describe('a clip that outlasts the request and is not saved to Files', () => {
     const unsaved = () => soundJob({ state: 'pending' }, { saveToFiles: false, output: undefined });
 
@@ -442,7 +452,18 @@ describe('POST /api/ai/sound-effects', () => {
         await promise;
         expect(mocks.requestAudioJobCancel).toHaveBeenCalledWith(expect.objectContaining({ id: 'job-1' }));
         expect(res._getStatusCode()).toBe(504);
-        expect(res._getJSONData()).toEqual({ error: 'Sound generation took too long', errorCode: 'request_timeout' });
+        if (status === 'requested') {
+          expect(res.getHeader('X-B4M-Generation-Job-Id')).toBeUndefined();
+          expect(res._getJSONData()).toEqual({ error: 'Sound generation took too long', errorCode: 'request_timeout' });
+        } else {
+          expect(res.getHeader('X-B4M-Generation-Job-Id')).toBe('job-1');
+          expect(res._getJSONData()).toEqual({
+            error: 'Sound generation took too long',
+            message: UNDELIVERABLE_MAY_BILL_MESSAGE,
+            errorCode: 'request_timeout',
+            jobId: 'job-1',
+          });
+        }
         expect(logger.warn).toHaveBeenCalledWith(
           expect.stringContaining('not saved to Files'),
           expect.objectContaining({ jobId: 'job-1', cancel: status })

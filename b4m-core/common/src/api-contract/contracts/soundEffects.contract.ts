@@ -28,6 +28,7 @@ import { SoundEffectGenerationSchema } from '../../schemas/audioGenerations';
 const soundEffectsTimeoutErrorSchema = ApiErrorSchema.extend({
   errorCode: z.literal('request_timeout').optional(),
   jobId: z.string().optional(),
+  message: z.string().optional(),
 });
 
 const exampleOutlastedJob = {
@@ -113,8 +114,10 @@ export const generateSoundEffectContract = defineEndpoint({
       headers: { 'Retry-After': 'Seconds to wait before retrying.' },
     },
     502: {
-      description: 'The provider failed to generate the effect; reserved credits are refunded.',
-      schema: ApiErrorSchema,
+      description:
+        'The provider failed to generate the effect; reserved credits are refunded. When the clip was generated ' +
+        'but could not be read back, the body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`.',
+      schema: soundEffectsTimeoutErrorSchema,
     },
     503: { description: 'No provider API key is configured for this deployment.', schema: ApiErrorSchema },
     504: unretrievableAudioResponse({ noun: 'sound effect', schema: soundEffectsTimeoutErrorSchema }),

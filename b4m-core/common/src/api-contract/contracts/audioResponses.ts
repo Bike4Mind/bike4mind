@@ -118,12 +118,14 @@ export function unretrievableAudioResponse(options: { noun: string; schema: z.Zo
       `The ${options.noun} took longer than this request can wait. Tagged \`errorCode: "request_timeout"\`. ` +
       'Two cases. (1) It would not be saved to the file browser (a `preview` call, or a storage quota with no ' +
       'room for it), so it could never be retrieved: the generation is cancelled and its credits returned, ' +
-      'unless the provider had already started it, in which case that one finishes and is billed. Retrying ' +
-      'generates a new clip. (2) It is being saved to the file browser but the request did not send ' +
+      'unless the provider had already started it, in which case that one finishes and is billed, and the ' +
+      'response carries `jobId` (also `X-B4M-Generation-Job-Id`) and a `message`. Retrying generates a new clip. (2) It is being saved to the file browser but the request did not send ' +
       '`Prefer: respond-async`: the generation is NOT cancelled and carries on, the audio lands in the file ' +
       'browser when it finishes, and it is billed only if it succeeds. Do not retry, which would generate and ' +
       'bill a second clip. The body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`.',
-    headers: { 'X-B4M-Generation-Job-Id': 'The job left running (case 2 only).' },
+    headers: {
+      'X-B4M-Generation-Job-Id': 'The job left running (case 2, or case 1 once the provider had started it).',
+    },
     schema: options.schema,
   };
 }

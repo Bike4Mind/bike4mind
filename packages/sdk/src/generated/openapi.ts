@@ -3585,6 +3585,7 @@ export interface components {
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'request_timeout';
       jobId?: string;
+      message?: string;
     };
     synthesizeSpeechResponse401: {
       error: string;
@@ -3599,6 +3600,7 @@ export interface components {
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'request_timeout';
       jobId?: string;
+      message?: string;
     };
     synthesizeSpeechResponse403: {
       error: string;
@@ -3643,6 +3645,7 @@ export interface components {
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'request_timeout';
       jobId?: string;
+      message?: string;
     };
     synthesizeSpeechResponse413: {
       error: string;
@@ -3666,6 +3669,7 @@ export interface components {
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'request_timeout';
       jobId?: string;
+      message?: string;
     };
     synthesizeSpeechResponse429: {
       error: string;
@@ -3680,6 +3684,7 @@ export interface components {
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'request_timeout';
       jobId?: string;
+      message?: string;
     };
     synthesizeSpeechResponse502: {
       error: string;
@@ -3694,6 +3699,7 @@ export interface components {
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'request_timeout';
       jobId?: string;
+      message?: string;
     };
     synthesizeSpeechResponse504: {
       error: string;
@@ -3708,6 +3714,7 @@ export interface components {
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'request_timeout';
       jobId?: string;
+      message?: string;
     };
     /**
      * @example {
@@ -3945,6 +3952,19 @@ export interface components {
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
     };
+    generateSoundEffectResponse502: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'request_timeout';
+      jobId?: string;
+      message?: string;
+    };
     generateSoundEffectResponse504: {
       error: string;
       request_id?: string;
@@ -3956,6 +3976,7 @@ export interface components {
       /** @enum {string} */
       errorCode?: 'request_timeout';
       jobId?: string;
+      message?: string;
     };
     /**
      * @example {
@@ -13102,7 +13123,7 @@ export interface operations {
           'application/json': components['schemas']['synthesizeSpeechResponse429'];
         };
       };
-      /** @description The provider failed to generate speech. */
+      /** @description The provider failed to generate speech. When the clip was generated but could not be read back, the body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`. */
       502: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -13125,12 +13146,12 @@ export interface operations {
           'application/json': components['schemas']['synthesizeSpeechResponse502'];
         };
       };
-      /** @description The speech took longer than this request can wait. Tagged `errorCode: "request_timeout"`. Two cases. (1) It would not be saved to the file browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved: the generation is cancelled and its credits returned, unless the provider had already started it, in which case that one finishes and is billed. Retrying generates a new clip. (2) It is being saved to the file browser but the request did not send `Prefer: respond-async`: the generation is NOT cancelled and carries on, the audio lands in the file browser when it finishes, and it is billed only if it succeeds. Do not retry, which would generate and bill a second clip. The body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`. */
+      /** @description The speech took longer than this request can wait. Tagged `errorCode: "request_timeout"`. Two cases. (1) It would not be saved to the file browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved: the generation is cancelled and its credits returned, unless the provider had already started it, in which case that one finishes and is billed, and the response carries `jobId` (also `X-B4M-Generation-Job-Id`) and a `message`. Retrying generates a new clip. (2) It is being saved to the file browser but the request did not send `Prefer: respond-async`: the generation is NOT cancelled and carries on, the audio lands in the file browser when it finishes, and it is billed only if it succeeds. Do not retry, which would generate and bill a second clip. The body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`. */
       504: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
-          /** @description The job left running (case 2 only). */
+          /** @description The job left running (case 2, or case 1 once the provider had started it). */
           'X-B4M-Generation-Job-Id'?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
@@ -13770,7 +13791,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The provider failed to generate the effect; reserved credits are refunded. */
+      /** @description The provider failed to generate the effect; reserved credits are refunded. When the clip was generated but could not be read back, the body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`. */
       502: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -13790,7 +13811,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['generateSoundEffectResponse502'];
         };
       };
       /** @description No provider API key is configured for this deployment. */
@@ -13816,12 +13837,12 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The sound effect took longer than this request can wait. Tagged `errorCode: "request_timeout"`. Two cases. (1) It would not be saved to the file browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved: the generation is cancelled and its credits returned, unless the provider had already started it, in which case that one finishes and is billed. Retrying generates a new clip. (2) It is being saved to the file browser but the request did not send `Prefer: respond-async`: the generation is NOT cancelled and carries on, the audio lands in the file browser when it finishes, and it is billed only if it succeeds. Do not retry, which would generate and bill a second clip. The body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`. */
+      /** @description The sound effect took longer than this request can wait. Tagged `errorCode: "request_timeout"`. Two cases. (1) It would not be saved to the file browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved: the generation is cancelled and its credits returned, unless the provider had already started it, in which case that one finishes and is billed, and the response carries `jobId` (also `X-B4M-Generation-Job-Id`) and a `message`. Retrying generates a new clip. (2) It is being saved to the file browser but the request did not send `Prefer: respond-async`: the generation is NOT cancelled and carries on, the audio lands in the file browser when it finishes, and it is billed only if it succeeds. Do not retry, which would generate and bill a second clip. The body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`. */
       504: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
-          /** @description The job left running (case 2 only). */
+          /** @description The job left running (case 2, or case 1 once the provider had started it). */
           'X-B4M-Generation-Job-Id'?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;

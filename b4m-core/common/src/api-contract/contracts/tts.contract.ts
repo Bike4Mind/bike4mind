@@ -119,7 +119,12 @@ export const synthesizeSpeechContract = defineEndpoint({
       schema: ttsErrorResponseSchema,
     },
     429: { description: 'The provider rate-limited the request.', schema: ttsErrorResponseSchema },
-    502: { description: 'The provider failed to generate speech.', schema: ttsErrorResponseSchema },
+    502: {
+      description:
+        'The provider failed to generate speech. When the clip was generated but could not be read back, the body ' +
+        'carries `jobId`, also sent as `X-B4M-Generation-Job-Id`.',
+      schema: ttsErrorResponseSchema,
+    },
     504: unretrievableAudioResponse({ noun: 'speech', schema: ttsErrorResponseSchema }),
   },
   // Served by baseApi, so apiKeyRateLimit sets the windowed X-RateLimit-* headers.

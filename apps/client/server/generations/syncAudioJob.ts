@@ -61,6 +61,11 @@ export const STILL_GENERATING_MESSAGE =
   'The clip is still being generated and will be saved to your Files when it finishes. It is billed only if it ' +
   'succeeds. Retrying makes and bills a second clip.';
 
+/** The 504 message when the provider call had already started, so the clip still finishes and is billed. */
+export const UNDELIVERABLE_MAY_BILL_MESSAGE =
+  'The clip was already being generated and may still be billed, but it cannot be saved to your Files. Retrying ' +
+  'generates and bills another clip.';
+
 type AudioJobKind = 'speech' | 'sound_effect';
 
 /**

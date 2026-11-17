@@ -81,6 +81,7 @@ vi.mock('@server/generations/routeDeps', () => ({
   mapperDeps: { sign: vi.fn(), now: () => new Date('2026-10-06T00:02:00Z') },
 }));
 
+import { UNDELIVERABLE_MAY_BILL_MESSAGE } from '@server/generations/syncAudioJob';
 import handler from '../tts';
 
 const AUDIO = Buffer.from([1, 2, 3]);
@@ -497,11 +498,23 @@ describe('POST /api/ai/tts', () => {
         await promise;
         expect(mocks.requestAudioJobCancel).toHaveBeenCalledWith(expect.objectContaining({ id: 'job-1' }));
         expect(res._getStatusCode()).toBe(504);
-        expect(res._getJSONData()).toEqual({
-          error: 'Speech generation took too long',
-          provider: 'openai',
-          errorCode: 'request_timeout',
-        });
+        if (status === 'requested') {
+          expect(res.getHeader('X-B4M-Generation-Job-Id')).toBeUndefined();
+          expect(res._getJSONData()).toEqual({
+            error: 'Speech generation took too long',
+            provider: 'openai',
+            errorCode: 'request_timeout',
+          });
+        } else {
+          expect(res.getHeader('X-B4M-Generation-Job-Id')).toBe('job-1');
+          expect(res._getJSONData()).toEqual({
+            error: 'Speech generation took too long',
+            message: UNDELIVERABLE_MAY_BILL_MESSAGE,
+            provider: 'openai',
+            errorCode: 'request_timeout',
+            jobId: 'job-1',
+          });
+        }
         expect(logger.warn).toHaveBeenCalledWith(
           expect.stringContaining('not saved to Files'),
           expect.objectContaining({ jobId: 'job-1', cancel: status })
@@ -545,6 +558,8 @@ describe('POST /api/ai/tts', () => {
     const { res, promise } = run({ text: 'hi' });
     await promise;
     expect(res._getStatusCode()).toBe(502);
+    expect(res.getHeader('X-B4M-Generation-Job-Id')).toBe('job-1');
+    expect(res._getJSONData()).toEqual({ error: 'Failed to generate speech', provider: 'openai', jobId: 'job-1' });
   });
 
   describe('billing account', () => {
