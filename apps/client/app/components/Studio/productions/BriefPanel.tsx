@@ -83,7 +83,12 @@ const BriefPanel = ({ composition }: { composition: StudioCompositionResponse })
               onRemove={() => set(current => withField(current, 'productFileId', ''))}
             />
           )}
-          <Button size="sm" variant="outlined" onClick={pickProductPhoto} data-testid="production-brief-product-photo-btn">
+          <Button
+            size="sm"
+            variant="outlined"
+            onClick={pickProductPhoto}
+            data-testid="production-brief-product-photo-btn"
+          >
             {brief.productFileId ? 'Replace' : 'Choose from Library'}
           </Button>
         </Stack>

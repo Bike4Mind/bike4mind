@@ -2,24 +2,42 @@ import { useState, type FormEvent } from 'react';
 import { Button, Input, Modal, ModalClose, ModalDialog, Stack, Textarea, Typography } from '@mui/joy';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { STUDIO_COMPOSITION_LIMITS, type StudioCompositionResponse } from '@bike4mind/common';
+import {
+  STUDIO_COMPOSITION_LIMITS,
+  studioFileMediaKind,
+  type IFabFileDocument,
+  type StudioCompositionResponse,
+} from '@bike4mind/common';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { studioCompositionKeys, useCreateStudioComposition } from '@client/app/hooks/data/studioCompositions';
 import { StudioSectionLabel } from '../design/StudioPanel';
 import { hookVariationBody } from './hookVariation';
 import LibraryThumb from './LibraryThumb';
 
-const variationTitle = (title: string) =>
-  `${title} - new hook`.slice(0, STUDIO_COMPOSITION_LIMITS.titleMaxLength);
+const variationTitle = (title: string) => `${title} - new hook`.slice(0, STUDIO_COMPOSITION_LIMITS.titleMaxLength);
 
 /**
  * "Hook variation": copies the production with a different opener (line, prompt or take) and opens the copy. It
- * copies the last saved version, which the editor's autosave keeps within a moment of the screen.
+ * copies the last saved version, so it waits while the editor holds unsaved edits.
  */
-const HookVariationButton = ({ composition }: { composition: StudioCompositionResponse }) => {
+const HookVariationButton = ({
+  composition,
+  hasUnsavedEdits,
+}: {
+  composition: StudioCompositionResponse;
+  hasUnsavedEdits: boolean;
+}) => {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <Button size="sm" variant="outlined" onClick={() => setOpen(true)} data-testid="production-hook-variation-btn">
+      <Button
+        size="sm"
+        variant="outlined"
+        onClick={() => setOpen(true)}
+        disabled={hasUnsavedEdits}
+        title={hasUnsavedEdits ? 'Saving your latest edits first' : undefined}
+        data-testid="production-hook-variation-btn"
+      >
         Hook variation
       </Button>
       {open && <HookVariationDialog composition={composition} onClose={() => setOpen(false)} />}
@@ -38,6 +56,12 @@ const HookVariationDialog = ({
   const source =
     queryClient.getQueryData<StudioCompositionResponse>(studioCompositionKeys.detail(composition.id)) ?? composition;
   const opening = source.shots[0];
+  // Only an image or video take can open the cut; a file whose kind is not known yet is left out.
+  const visualTakes = (opening?.fileIds ?? []).filter(fileId => {
+    const file = queryClient.getQueryData<IFabFileDocument>(fabFileKeys.doc(fileId));
+    const kind = file ? studioFileMediaKind(file.mimeType) : undefined;
+    return kind === 'image' || kind === 'video';
+  });
   const [title, setTitle] = useState(variationTitle(source.title));
   const [openingLine, setOpeningLine] = useState(opening?.title ?? '');
   const [openingPrompt, setOpeningPrompt] = useState(opening?.prompt ?? '');
@@ -105,7 +129,9 @@ const HookVariationDialog = ({
                   />
                 </Stack>
                 <Stack spacing={0.5}>
-                  <StudioSectionLabel htmlFor="production-hook-variation-prompt">Opening shot prompt</StudioSectionLabel>
+                  <StudioSectionLabel htmlFor="production-hook-variation-prompt">
+                    Opening shot prompt
+                  </StudioSectionLabel>
                   <Textarea
                     size="sm"
                     minRows={2}
@@ -120,11 +146,11 @@ const HookVariationDialog = ({
                     }}
                   />
                 </Stack>
-                {opening.fileIds.length > 1 && (
+                {visualTakes.length > 1 && (
                   <Stack spacing={0.5}>
                     <StudioSectionLabel>Opening take</StudioSectionLabel>
                     <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                      {opening.fileIds.map(fileId => (
+                      {visualTakes.map(fileId => (
                         <LibraryThumb
                           key={fileId}
                           fileId={fileId}
@@ -140,10 +166,12 @@ const HookVariationDialog = ({
                 )}
               </>
             ) : (
-              <Typography level="body-xs">This production has no shots yet, so the copy is an exact duplicate.</Typography>
+              <Typography level="body-xs">
+                This production has no shots yet, so the copy is an exact duplicate.
+              </Typography>
             )}
             <Stack direction="row" spacing={1} justifyContent="flex-end">
-              <Button size="sm" variant="plain" onClick={onClose}>
+              <Button size="sm" variant="plain" onClick={onClose} data-testid="production-hook-variation-cancel-btn">
                 Cancel
               </Button>
               <Button

@@ -249,21 +249,20 @@ describe('ProductionEditor', () => {
     await waitFor(() => expect(clipsIn('video')).toHaveLength(1));
 
     await waitFor(() =>
-      expect(h.updateMutate).toHaveBeenCalledWith(
-        { shots: [expect.objectContaining({ id: 'shot-1', chosenFileId: takes[1].id }), expect.anything()] },
-        expect.anything()
-      )
+      expect(h.updateMutate).toHaveBeenCalledWith({
+        shots: [expect.objectContaining({ id: 'shot-1', chosenFileId: takes[1].id }), expect.anything()],
+      })
     );
   });
 
   it('saves the brief as it is typed', async () => {
     renderEditor(composition());
-    fireEvent.change(screen.getByTestId('production-brief-summary-input'), { target: { value: 'Cold brew, hot summer' } });
-    await waitFor(() =>
-      expect(h.updateMutate).toHaveBeenCalledWith({ brief: { summary: 'Cold brew, hot summer' } }, expect.anything())
-    );
+    fireEvent.change(screen.getByTestId('production-brief-summary-input'), {
+      target: { value: 'Cold brew, hot summer' },
+    });
+    await waitFor(() => expect(h.updateMutate).toHaveBeenCalledWith({ brief: { summary: 'Cold brew, hot summer' } }));
     fireEvent.change(screen.getByTestId('production-brief-summary-input'), { target: { value: '' } });
-    await waitFor(() => expect(h.updateMutate).toHaveBeenLastCalledWith({ brief: {} }, expect.anything()));
+    await waitFor(() => expect(h.updateMutate).toHaveBeenLastCalledWith({ brief: {} }));
   });
 
   it('removes the selected clip from the inspector', () => {

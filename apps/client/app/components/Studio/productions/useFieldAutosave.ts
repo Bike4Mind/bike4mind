@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { StudioCompositionUpdateBody } from '@bike4mind/common';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { isAxiosError } from 'axios';
+import { toast } from 'sonner';
+import type { StudioCompositionContent, StudioCompositionUpdateBody } from '@bike4mind/common';
 import {
   compositionErrorIssues,
   compositionErrorMessage,
@@ -10,61 +12,97 @@ export type AutosavedField = 'brief' | 'brandKit' | 'shots';
 
 export const FIELD_AUTOSAVE_DELAY_MS = 600;
 
-export type FieldSaveStatus = { kind: 'saved' } | { kind: 'saving' } | { kind: 'error'; message: string };
+export type FieldSaveStatus =
+  { kind: 'saved' } | { kind: 'pending' } | { kind: 'saving' } | { kind: 'error'; message: string };
+
+/** Lets the editor know which fields hold unsaved edits, so closing the tab can ask first. */
+export const FieldDirtyReporterContext = createContext<((field: AutosavedField, isDirty: boolean) => void) | null>(
+  null
+);
+
+const saveErrorMessage = (error: unknown) =>
+  compositionErrorIssues(error)[0]?.message ?? compositionErrorMessage(error);
 
 /**
  * A local draft of one composition field that saves itself (PATCH replaces the field whole) shortly after the last
- * edit, and on unmount when an edit is still waiting. The timeline has its own autosave (useTimelineAutosave); the
- * fields never share a PATCH, so the two never overwrite each other.
+ * edit. Saves are queued, so an older draft never lands after a newer one. A failed draft is not retried while
+ * mounted until it changes; on unmount an unsent or failed draft gets one more try (unless the server rejected its
+ * content) and a failure toasts. The timeline has its own autosave (useTimelineAutosave) and never shares a PATCH
+ * with these fields, so the two never overwrite each other.
  */
 export function useFieldAutosave<Field extends AutosavedField>(
   compositionId: string,
   field: Field,
-  initial: NonNullable<StudioCompositionUpdateBody[Field]>
+  initial: StudioCompositionContent[Field]
 ) {
   type Value = typeof initial;
   const [value, setValue] = useState<Value>(initial);
-  const [status, setStatus] = useState<FieldSaveStatus>({ kind: 'saved' });
-  const update = useUpdateStudioComposition(compositionId);
-  const savedRef = useRef<Value>(initial);
-  const pendingRef = useRef<Value | null>(null);
-  const mutateRef = useRef(update.mutate);
-  useEffect(() => {
-    mutateRef.current = update.mutate;
-  }, [update.mutate]);
+  const [saved, setSaved] = useState<Value>(initial);
+  const [failure, setFailure] = useState<{ value: Value; message: string; isRejected: boolean } | null>(null);
+  const [savingCount, setSavingCount] = useState(0);
+  const { mutateAsync } = useUpdateStudioComposition(compositionId);
+  const sentRef = useRef<Value | null>(null);
+  const queueRef = useRef<Promise<unknown>>(Promise.resolve());
 
-  const save = useCallback(
+  const enqueueSave = useCallback(
     (next: Value) => {
-      pendingRef.current = null;
-      setStatus({ kind: 'saving' });
-      mutateRef.current({ [field]: next } as StudioCompositionUpdateBody, {
-        onSuccess: () => {
-          savedRef.current = next;
-          setStatus({ kind: 'saved' });
-        },
-        onError: error => {
-          const [issue] = compositionErrorIssues(error);
-          setStatus({ kind: 'error', message: issue?.message ?? compositionErrorMessage(error) });
-        },
-      });
+      sentRef.current = next;
+      const run = queueRef.current.then(() => mutateAsync({ [field]: next } as StudioCompositionUpdateBody));
+      queueRef.current = run.catch(() => undefined);
+      return run;
     },
-    [field]
+    [field, mutateAsync]
   );
+
+  const isDirty = value !== saved;
+  const isFailedDraft = failure?.value === value;
 
   useEffect(() => {
-    if (value === savedRef.current) return;
-    pendingRef.current = value;
-    const timer = setTimeout(() => save(value), FIELD_AUTOSAVE_DELAY_MS);
+    if (!isDirty || isFailedDraft || value === sentRef.current) return;
+    const timer = setTimeout(() => {
+      setSavingCount(count => count + 1);
+      enqueueSave(value)
+        .then(
+          () => setSaved(value),
+          (error: unknown) => {
+            if (sentRef.current === value) sentRef.current = null;
+            setFailure({
+              value,
+              message: saveErrorMessage(error),
+              isRejected: isAxiosError(error) && error.response?.status === 422,
+            });
+          }
+        )
+        .finally(() => setSavingCount(count => count - 1));
+    }, FIELD_AUTOSAVE_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [value, save]);
+  }, [isDirty, isFailedDraft, value, enqueueSave]);
 
-  // An edit still inside the debounce window is sent as the editor unmounts rather than dropped.
-  useEffect(
-    () => () => {
-      if (pendingRef.current !== null) save(pendingRef.current);
-    },
-    [save]
-  );
+  const exitSaveRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    const isUnsent = isDirty && value !== sentRef.current;
+    exitSaveRef.current =
+      isUnsent && !(isFailedDraft && failure?.isRejected)
+        ? () => {
+            enqueueSave(value).catch((error: unknown) =>
+              toast.error(`Your last edit was not saved: ${saveErrorMessage(error)}`)
+            );
+          }
+        : null;
+  });
+  useEffect(() => () => exitSaveRef.current?.(), []);
 
-  return { value, set: setValue, status };
+  const reportDirty = useContext(FieldDirtyReporterContext);
+  useEffect(() => {
+    reportDirty?.(field, isDirty);
+  }, [reportDirty, field, isDirty]);
+  useEffect(() => () => reportDirty?.(field, false), [reportDirty, field]);
+
+  const status = ((): FieldSaveStatus => {
+    if (isFailedDraft && failure) return { kind: 'error', message: failure.message };
+    if (savingCount > 0) return { kind: 'saving' };
+    return isDirty ? { kind: 'pending' } : { kind: 'saved' };
+  })();
+
+  return { value, set: setValue, status, isDirty };
 }

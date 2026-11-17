@@ -1,7 +1,11 @@
 import { Typography } from '@mui/joy';
 import type { FieldSaveStatus as Status } from './useFieldAutosave';
 
-const LABEL: Record<Exclude<Status['kind'], 'error'>, string> = { saved: 'Saved', saving: 'Saving...' };
+const LABEL: Record<Exclude<Status['kind'], 'error'>, string> = {
+  saved: 'Saved',
+  pending: 'Unsaved changes',
+  saving: 'Saving...',
+};
 
 /** The quiet save line a planning panel shows beside its heading. */
 const FieldSaveStatus = ({ status, testId }: { status: Status; testId: string }) => (

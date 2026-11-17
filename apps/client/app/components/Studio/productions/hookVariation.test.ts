@@ -18,7 +18,14 @@ const source: StudioCompositionResponse = {
   brief: { summary: 'Cold brew, hot summer', productFileId: FILE_C },
   brandKit: { colors: ['#112233'], productFileIds: [] },
   shots: [
-    { id: 'shot-1', title: 'Hook', intent: 'hook', prompt: 'A can on ice', fileIds: [FILE_A, FILE_B], chosenFileId: FILE_A },
+    {
+      id: 'shot-1',
+      title: 'Hook',
+      intent: 'hook',
+      prompt: 'A can on ice',
+      fileIds: [FILE_A, FILE_B],
+      chosenFileId: FILE_A,
+    },
     { id: 'shot-2', title: 'Product', fileIds: [FILE_C], chosenFileId: FILE_C },
   ],
   timeline: {
@@ -28,8 +35,28 @@ const source: StudioCompositionResponse = {
         ? {
             ...track,
             clips: [
-              { id: 'c1', fileId: FILE_A, startMs: 0, durationMs: 5000, trimStartMs: 0, volume: 1, fadeInMs: 0, fadeOutMs: 0, fit: 'cover' as const },
-              { id: 'c2', fileId: FILE_C, startMs: 5000, durationMs: 5000, trimStartMs: 0, volume: 1, fadeInMs: 0, fadeOutMs: 0, fit: 'cover' as const },
+              {
+                id: 'c1',
+                fileId: FILE_A,
+                startMs: 0,
+                durationMs: 5000,
+                trimStartMs: 0,
+                volume: 1,
+                fadeInMs: 0,
+                fadeOutMs: 0,
+                fit: 'cover' as const,
+              },
+              {
+                id: 'c2',
+                fileId: FILE_C,
+                startMs: 5000,
+                durationMs: 5000,
+                trimStartMs: 0,
+                volume: 1,
+                fadeInMs: 0,
+                fadeOutMs: 0,
+                fit: 'cover' as const,
+              },
             ],
           }
         : track
@@ -40,6 +67,26 @@ const source: StudioCompositionResponse = {
 };
 
 describe('hookVariationBody', () => {
+  it('swaps only the earliest clip of the old opener and drops a clip animated from the old take', () => {
+    const withClip: StudioCompositionResponse = {
+      ...source,
+      shots: [{ ...source.shots[0], clipFileId: FILE_C }, source.shots[1]],
+      timeline: {
+        ...source.timeline,
+        tracks: source.timeline.tracks.map(track =>
+          track.kind === 'video' ? { ...track, clips: track.clips.map(clip => ({ ...clip, fileId: FILE_C })) } : track
+        ),
+      },
+    };
+    const body = hookVariationBody(withClip, { title: 'B', openingTakeFileId: FILE_B });
+
+    expect(body.shots?.[0]).not.toHaveProperty('clipFileId');
+    const videoFiles = body.timeline?.tracks.flatMap(track =>
+      track.kind === 'video' ? track.clips.map(clip => clip.fileId) : []
+    );
+    expect(videoFiles).toEqual([FILE_B, FILE_C]);
+  });
+
   it('copies the production with a new opening line, prompt and take, swapping the take on the timeline', () => {
     const body = hookVariationBody(source, {
       title: ' Spring ad - B ',

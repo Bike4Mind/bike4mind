@@ -2,11 +2,7 @@ import { useState } from 'react';
 import { styled } from '@mui/system';
 import { Autocomplete, Button, IconButton, Option, Select, Stack, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
-import {
-  STUDIO_COMPOSITION_LIMITS,
-  type StudioBrandKit,
-  type StudioCompositionResponse,
-} from '@bike4mind/common';
+import { STUDIO_COMPOSITION_LIMITS, type StudioBrandKit, type StudioCompositionResponse } from '@bike4mind/common';
 import { useStudioCompositions } from '@client/app/hooks/data/studioCompositions';
 import { StudioPanel, StudioSectionLabel } from '../design/StudioPanel';
 import { studioColor, studioRadius } from '../design/studioTokens';
@@ -69,7 +65,10 @@ const BrandKitPanel = ({ composition }: { composition: StudioCompositionResponse
           const added = files.map(file => file.id).filter(id => !current.productFileIds.includes(id));
           return {
             ...current,
-            productFileIds: [...current.productFileIds, ...added].slice(0, STUDIO_COMPOSITION_LIMITS.brandProductFilesMax),
+            productFileIds: [...current.productFileIds, ...added].slice(
+              0,
+              STUDIO_COMPOSITION_LIMITS.brandProductFilesMax
+            ),
           };
         }),
     });
@@ -99,9 +98,7 @@ const BrandKitPanel = ({ composition }: { composition: StudioCompositionResponse
             <LibraryThumb
               fileId={kit.logoFileId}
               testId="production-brand-kit-logo"
-              onRemove={() =>
-                set(({ logoFileId: _removed, ...rest }) => rest)
-              }
+              onRemove={() => set(({ logoFileId: _removed, ...rest }) => rest)}
             />
           )}
           <Button size="sm" variant="outlined" onClick={pickLogo} data-testid="production-brand-kit-logo-btn">
@@ -121,7 +118,10 @@ const BrandKitPanel = ({ composition }: { composition: StudioCompositionResponse
                 size="sm"
                 variant="plain"
                 aria-label={`Remove ${color}`}
-                onClick={() => patch({ colors: kit.colors.filter(candidate => candidate !== color) })}
+                data-testid={`production-brand-kit-color-${color.slice(1)}-remove-btn`}
+                onClick={() =>
+                  set(current => ({ ...current, colors: current.colors.filter(candidate => candidate !== color) }))
+                }
                 sx={{ '--IconButton-size': '20px' }}
               >
                 <CloseIcon sx={{ fontSize: 14 }} />
@@ -169,7 +169,9 @@ const BrandKitPanel = ({ composition }: { composition: StudioCompositionResponse
               fileId={fileId}
               size={56}
               testId={`production-brand-kit-product-${fileId}`}
-              onRemove={() => patch({ productFileIds: kit.productFileIds.filter(id => id !== fileId) })}
+              onRemove={() =>
+                set(current => ({ ...current, productFileIds: current.productFileIds.filter(id => id !== fileId) }))
+              }
             />
           ))}
           {kit.productFileIds.length < STUDIO_COMPOSITION_LIMITS.brandProductFilesMax && (
@@ -185,13 +187,7 @@ const BrandKitPanel = ({ composition }: { composition: StudioCompositionResponse
 };
 
 /** Copies the kit of another of the user's productions over this one. Hidden until there is one to copy. */
-const CopyKitFrom = ({
-  compositionId,
-  onCopy,
-}: {
-  compositionId: string;
-  onCopy: (kit: StudioBrandKit) => void;
-}) => {
+const CopyKitFrom = ({ compositionId, onCopy }: { compositionId: string; onCopy: (kit: StudioBrandKit) => void }) => {
   const compositions = useStudioCompositions();
   const sources = (compositions.data ?? []).filter(row => row.id !== compositionId && hasContent(row.brandKit));
   if (sources.length === 0) return null;

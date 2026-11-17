@@ -116,6 +116,15 @@ describe('createComposition', () => {
     expect(adapters.db.fabFiles.findAccessibleInIds).not.toHaveBeenCalled();
   });
 
+  it("starts with the template's shots when none are sent, and keeps an explicit empty list", async () => {
+    const adapters = createFakeAdapters();
+    const starter = await create(adapters, { title: 'Launch', template: 'ad_campaign' });
+    const empty = await create(adapters, { title: 'Copy', template: 'ad_campaign', shots: [] });
+
+    expect(starter.shots.map(shot => shot.title)).toEqual(['Hook', 'Product', 'Benefit', 'Call to action']);
+    expect(empty.shots).toEqual([]);
+  });
+
   it('checks every referenced file against what the caller can read', async () => {
     const adapters = createFakeAdapters();
     const codes = await issueCodes(
@@ -225,6 +234,19 @@ describe('updateComposition', () => {
       ['unsupported_file_kind', 'timeline.tracks.0.clips.0.fileId'],
       ['unsupported_file_kind', 'brandKit.logoFileId'],
     ]);
+  });
+
+  it('checks a product photo sent in a brief-only edit, but keeps a stored one valid', async () => {
+    const adapters = createFakeAdapters([FILE_NEW]);
+    const created = await create(adapters, { title: 'Launch', brief: { productFileId: FILE_NEW } });
+
+    expect(await issueCodes(update(adapters, created.id, { brief: { productFileId: FILE_THEIRS } }))).toEqual([
+      ['unknown_file', 'brief.productFileId'],
+    ]);
+
+    adapters.db.fabFiles.findAccessibleInIds.mockImplementation(async () => []);
+    const kept = await update(adapters, created.id, { brief: { productFileId: FILE_NEW, summary: 'Cold brew' } });
+    expect(kept.brief).toEqual({ productFileId: FILE_NEW, summary: 'Cold brew' });
   });
 
   it('skips the file lookup for a content-free edit', async () => {

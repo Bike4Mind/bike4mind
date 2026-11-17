@@ -15,6 +15,7 @@ import {
   type StudioTimeline,
 } from '@bike4mind/common';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
+import { getFabFileByIdFromServer } from '@client/app/utils/filesAPICalls';
 import { StudioPanel, StudioSectionLabel } from '../design/StudioPanel';
 import { studioColor, studioRadius } from '../design/studioTokens';
 import FieldSaveStatus from './FieldSaveStatus';
@@ -71,9 +72,19 @@ const ShotsBoard = ({ composition, timeline, onTimelineChange, onSendTake }: Sho
   const { pick, picker } = useLibraryPicker();
   const queryClient = useQueryClient();
 
-  const cachedFile = (fileId: string) => queryClient.getQueryData<IFabFileDocument>(fabFileKeys.doc(fileId));
-  const isVisual = (fileId: string) => {
-    const file = cachedFile(fileId);
+  // Loads (or reads the cached) file docs for the takes about to be sent, so a thumbnail still loading is not
+  // mistaken for a non-visual take.
+  const loadFiles = async (fileIds: string[]) => {
+    const files = await Promise.all(
+      fileIds.map(fileId =>
+        queryClient
+          .ensureQueryData({ queryKey: fabFileKeys.doc(fileId), queryFn: () => getFabFileByIdFromServer(fileId) })
+          .catch(() => undefined)
+      )
+    );
+    return new Map(files.flatMap(file => (file ? [[file.id, file] as const] : [])));
+  };
+  const isVisualFile = (file: IFabFileDocument | undefined) => {
     const kind = file ? studioFileMediaKind(file.mimeType) : undefined;
     return kind === 'image' || kind === 'video';
   };
@@ -99,19 +110,20 @@ const ShotsBoard = ({ composition, timeline, onTimelineChange, onSendTake }: Sho
         ),
     });
 
-  const sendAll = () => {
+  const sendAll = async () => {
+    const files = await loadFiles(shots.flatMap(shot => shotTimelineFileId(shot) ?? []));
     try {
-      onTimelineChange(sendShotsToTimeline(timeline, shots, isVisual));
+      onTimelineChange(sendShotsToTimeline(timeline, shots, fileId => isVisualFile(files.get(fileId))));
       toast.success('Shots sent to the timeline');
     } catch (error) {
       toast.error(errorText(error));
     }
   };
 
-  const sendOne = (shot: StudioShot) => {
+  const sendOne = async (shot: StudioShot) => {
     const fileId = shotTimelineFileId(shot);
-    const file = fileId ? cachedFile(fileId) : undefined;
-    if (!file || !isVisual(file.id)) {
+    const file = fileId ? (await loadFiles([fileId])).get(fileId) : undefined;
+    if (!file || !isVisualFile(file)) {
       toast.error('Pick an image or video take for this shot first.');
       return;
     }
@@ -134,7 +146,12 @@ const ShotsBoard = ({ composition, timeline, onTimelineChange, onSendTake }: Sho
         >
           Add shot
         </Button>
-        <Button size="sm" onClick={sendAll} disabled={sendableCount === 0} data-testid="production-shots-send-all-btn">
+        <Button
+          size="sm"
+          onClick={() => void sendAll()}
+          disabled={sendableCount === 0}
+          data-testid="production-shots-send-all-btn"
+        >
           Send all to timeline
         </Button>
       </Stack>
@@ -157,7 +174,7 @@ const ShotsBoard = ({ composition, timeline, onTimelineChange, onSendTake }: Sho
               onPickTakes={() => pickTakes(shot.id)}
               onChoose={fileId => edit(current => chooseTake(current, shot.id, fileId))}
               onRemoveTake={fileId => edit(current => removeTake(current, shot.id, fileId))}
-              onSend={() => sendOne(shot)}
+              onSend={() => void sendOne(shot)}
             />
           ))}
         </ShotList>
@@ -348,7 +365,7 @@ const CommitInput = ({
       variant="plain"
       placeholder={placeholder}
       {...field}
-      onKeyDown={event => event.key === 'Enter' && event.currentTarget.querySelector('input')?.blur()}
+      onKeyDown={event => event.key === 'Enter' && event.target instanceof HTMLElement && event.target.blur()}
       sx={sx}
       slotProps={{ input: { maxLength, 'aria-label': ariaLabel, 'data-testid': testId } }}
     />
