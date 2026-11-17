@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   verifyApiKey: vi.fn(),
   assertAccountStateUsable: vi.fn(),
   assertRealtimeSessionActive: vi.fn(),
+  isMfaEnrollmentOwed: vi.fn(),
 }));
 
 const GATEWAY_CAP_EXPIRY = new Date('2030-01-01T02:00:00Z');
@@ -53,6 +54,10 @@ vi.mock('@server/auth/tokenGenerator', () => ({ authTokenGenerator: { verifyToke
 vi.mock('@bike4mind/server-utils/cli/auth', () => ({ verifyApiKey: h.verifyApiKey }));
 vi.mock('@bike4mind/server-utils/auth/assertAccountStateUsable', () => ({
   assertAccountStateUsable: h.assertAccountStateUsable,
+}));
+vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
+  isMfaEnrollmentOwed: h.isMfaEnrollmentOwed,
+  MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
 }));
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   UnauthorizedError: class UnauthorizedError extends Error {},
@@ -89,6 +94,16 @@ describe('web $connect ticket path', () => {
     );
     // no scopes on a ticket connection
     expect(h.connectionCreate.mock.calls[0][0]).not.toHaveProperty('scopes');
+  });
+
+  it('leaves the enrollment gate to the ticket mint, which runs behind the REST gate', async () => {
+    (h.consume as Mock).mockResolvedValue({ userId: 'u1', tokenVersion: 5, used: true });
+    (h.isMfaEnrollmentOwed as Mock).mockResolvedValue(true);
+
+    const res = await call(eventWith({ ticket: 't-abc' }));
+
+    expect(res.statusCode).toBe(200);
+    expect(h.isMfaEnrollmentOwed).not.toHaveBeenCalled();
   });
 
   it("records the ticket's sid, tokenVersion and auth expiry on the connection", async () => {

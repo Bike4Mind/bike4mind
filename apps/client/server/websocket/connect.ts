@@ -4,6 +4,7 @@ import { Logger } from '@bike4mind/observability';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { assertNoPendingDeletion } from '@bike4mind/server-utils/auth/deletionPendingGate';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/services';
 import { verifyApiKey } from '@bike4mind/server-utils/cli/auth';
 import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
@@ -195,6 +196,10 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
     }
     assertAccountStateUsable(user);
     assertNoPendingDeletion(user);
+    // A web ticket was minted behind the REST enrollment gate, and an API key is not a sign-in.
+    if (!ticketIdentity && !auth.apiKeyId && (await isMfaEnrollmentOwed(user))) {
+      throw new ForbiddenError(MFA_ENROLLMENT_REQUIRED_MESSAGE);
+    }
     await assertRealtimeSessionActive(auth.sid);
     // Completions and agent runs stream over this socket, so an admin's `all` IP block refuses the connection.
     if (!user.isAdmin) {
