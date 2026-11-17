@@ -372,6 +372,7 @@ export const SettingKeySchema = z.enum([
   'BedrockGuardrailVersion',
   'ImageModerationEnabled',
   'ImageModerationReviewerEmails',
+  'ImageModerationEscalationEmails',
   'tagLineMain',
   'tagLineSub',
   'defaultTags',
@@ -828,6 +829,9 @@ export const SettingKeySchema = z.enum([
 
   // IMAGE GENERATION
   'agentImagesPerRun',
+  // AUDIO GENERATION (agent-mode caps)
+  'agentSpeechClipsPerRun',
+  'agentSoundEffectsPerRun',
 
   // MODEL DISCOVERY (live model registry)
   'enableModelDiscovery',
@@ -906,6 +910,7 @@ export const OrchestrationDefaultsSchema = z.object({
     'edit_image',
     // Only offered when the run gets a music config, which enforces agentMusicTracksPerRun.
     'music_generation',
+    // Speech and sound effects are capped per run by agentSpeechClipsPerRun / agentSoundEffectsPerRun.
     'audio_generation',
     'excel_generation',
     // Only offered when the run gets a video config, which enforces agentVideoClipsPerRun.
@@ -3961,6 +3966,16 @@ export const settingsMap = {
     // partitionEmailList.
     schema: z.array(z.string()),
   }),
+  ImageModerationEscalationEmails: makeObjectSetting<string[]>({
+    key: 'ImageModerationEscalationEmails',
+    name: 'Image Moderation Escalation Emails',
+    defaultValue: [],
+    description:
+      'Email addresses for the second review step, one per line: alerted when an image moderation incident is escalated, by a reviewer or automatically when it waits too long for a verdict. The email carries incident metadata and an admin link only, never the image or user content. Empty sends no escalation email.',
+    category: 'AI Moderation',
+    // Same shape and read rules as ImageModerationReviewerEmails.
+    schema: z.array(z.string()),
+  }),
   SkillMarketHighRiskTools: makeStringSetting({
     key: 'SkillMarketHighRiskTools',
     name: 'Skill Market High-Risk Tools',
@@ -6881,7 +6896,7 @@ export const settingsMap = {
     name: 'Enable Studio Create v2',
     defaultValue: false,
     description:
-      'Admin-only preview of the restructured Studio Create area. Non-admins never see it, whatever this is set to.',
+      'The restructured Studio Create area, for every user. Off, everyone gets the legacy Studio tabs; this is the kill switch.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 300,
@@ -6890,7 +6905,8 @@ export const settingsMap = {
     key: 'EnableStudioImage',
     name: 'Enable Image in Studio',
     defaultValue: false,
-    description: 'Admin-only preview of the Image tab in Studio. Non-admins never see it, whatever this is set to.',
+    description:
+      'The Image medium in Studio Create, for every user. Needs Enable Studio Create v2; off, the Image medium is hidden.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 301,
@@ -8577,6 +8593,32 @@ export const settingsMap = {
     category: 'AI',
     order: 149,
     // Consumed by apps/workers/src/queueHandlers/agentExecutor.imageToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  agentSpeechClipsPerRun: makeNumberSetting({
+    key: 'agentSpeechClipsPerRun',
+    name: 'Agent Speech Clips Per Run',
+    defaultValue: 10,
+    min: 0,
+    int: true,
+    description:
+      'Most audio_generation speech clips one agent-mode run may start, counted across the run and all of its subagents. 0 refuses speech in agent mode. Each clip still holds and settles its own credits.',
+    category: 'AI',
+    order: 150,
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.audioToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  agentSoundEffectsPerRun: makeNumberSetting({
+    key: 'agentSoundEffectsPerRun',
+    name: 'Agent Sound Effects Per Run',
+    defaultValue: 10,
+    min: 0,
+    int: true,
+    description:
+      'Most audio_generation sound effects one agent-mode run may start, counted across the run and all of its subagents. 0 refuses sound effects in agent mode. Each effect still holds and settles its own credits.',
+    category: 'AI',
+    order: 151,
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.audioToolConfig.ts.
     scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   enableModelDiscovery: makeBooleanSetting({

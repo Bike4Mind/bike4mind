@@ -1,5 +1,5 @@
 {
-  "name": "@bike4mind/services",
+  "name": "@bike4mind/services-core",
   "description": "This packages contains all the core business logic",
   "version": "27.0.0",
   "publishConfig": {
@@ -138,6 +138,16 @@
       "require": {
         "types": "./dist/musicJobs/index.d.cts",
         "default": "./dist/musicJobs/index.cjs"
+      }
+    },
+    "./audioJobs": {
+      "import": {
+        "types": "./dist/audioJobs/index.d.mts",
+        "default": "./dist/audioJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/audioJobs/index.d.cts",
+        "default": "./dist/audioJobs/index.cjs"
       }
     },
     "./agentProactiveMessagingService": {
@@ -537,7 +547,7 @@
     "diff": "^9.0.0",
     "disposable-domains": "^2.0.7",
     "file-type": "^22.1.0",
-    "glob": "^13.0.6",
+    "glob": "^14.0.2",
     "lodash": "^4.18.1",
     "marked": "^15.0.11",
     "mathjs": "^15.2.0",

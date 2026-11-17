@@ -21,7 +21,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
  * Drives the REAL service through the REAL write adapters against a real database, because the
  * defect lived in the adapter, not in the service.
  *
- * Run `pnpm --filter @bike4mind/services build` (or `pnpm turbo:core:build`) first. This imports
+ * Run `pnpm --filter @bike4mind/services-core build` (or `pnpm turbo:core:build`) first. This imports
  * the service from the built dist, not from src, so a stale dist reports green against whatever
  * was last compiled - on exactly the service this file exists to guard. CI builds core fresh, so
  * the hazard is local only.

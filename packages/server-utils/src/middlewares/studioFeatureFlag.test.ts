@@ -26,11 +26,27 @@ describe('isStudioFeatureEnabled', () => {
     await expect(isStudioFeatureEnabled('image', { isAdmin: true })).resolves.toBe(false);
   });
 
-  it('stays closed to a non-admin with the flag on, without reading the setting', async () => {
+  it('keeps admin-only Productions closed to a non-admin with the flag on, without reading the setting', async () => {
     getSettingByNameMock.mockResolvedValue(true);
-    await expect(isStudioFeatureEnabled('image', { isAdmin: false })).resolves.toBe(false);
-    await expect(isStudioFeatureEnabled('image', undefined)).resolves.toBe(false);
+    await expect(isStudioFeatureEnabled('productions', { isAdmin: false })).resolves.toBe(false);
     expect(getSettingByNameMock).not.toHaveBeenCalled();
+  });
+
+  it('stays closed with no user, without reading the setting', async () => {
+    getSettingByNameMock.mockResolvedValue(true);
+    await expect(isStudioFeatureEnabled('createV2', undefined)).resolves.toBe(false);
+    await expect(isStudioFeatureEnabled('image', null)).resolves.toBe(false);
+    expect(getSettingByNameMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['createV2', 'image'] as const)('opens %s to a non-admin when its settings are on', async feature => {
+    getSettingByNameMock.mockResolvedValue(true);
+    await expect(isStudioFeatureEnabled(feature, { isAdmin: false })).resolves.toBe(true);
+  });
+
+  it('keeps Create v2 closed to a non-admin when the setting is off', async () => {
+    getSettingByNameMock.mockResolvedValue(false);
+    await expect(isStudioFeatureEnabled('createV2', { isAdmin: false })).resolves.toBe(false);
   });
 
   it('opens for an admin with the flag on, reading that feature setting', async () => {
@@ -48,10 +64,27 @@ describe('isStudioFeatureEnabled', () => {
 });
 
 describe('requireStudioFeature', () => {
-  it('answers 403 to a non-admin when the flag is on', async () => {
+  it('admits a non-admin to Create v2 when the flag is on', async () => {
     getSettingByNameMock.mockResolvedValue(true);
+    const { req, res, next } = mkCtx({ isAdmin: false });
+    await requireStudioFeature('createV2')(req, res, next);
+    expect(next).toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('answers 403 to a non-admin on Create v2 when the flag is off', async () => {
+    getSettingByNameMock.mockResolvedValue(false);
     const { req, res, next, json } = mkCtx({ isAdmin: false });
     await requireStudioFeature('createV2')(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(json).toHaveBeenCalledWith({ error: 'Feature not available', code: 'FEATURE_DISABLED', request_id: 'r1' });
+  });
+
+  it('answers 403 to a non-admin on admin-only Productions when the flag is on', async () => {
+    getSettingByNameMock.mockResolvedValue(true);
+    const { req, res, next, json } = mkCtx({ isAdmin: false });
+    await requireStudioFeature('productions')(req, res, next);
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(403);
     expect(json).toHaveBeenCalledWith({ error: 'Feature not available', code: 'FEATURE_DISABLED', request_id: 'r1' });
