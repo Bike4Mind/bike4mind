@@ -1,5 +1,11 @@
 // GET/PATCH/DELETE /api/spaces/:id
-import { organizationRepository, spaceRepository, inviteRepository, withTransaction } from '@bike4mind/database';
+import {
+  organizationRepository,
+  orgDomainClaimRepository,
+  spaceRepository,
+  inviteRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import { spaceService } from '@bike4mind/services';
 import { SPACE_DESCRIPTION_MAX, SPACE_NAME_MAX } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -43,7 +49,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
         spaceService.remove(
           req.user!,
           { spaceId: req.query.id ?? '' },
-          { db: { spaces: spaceRepository, invites: inviteRepository } }
+          { db: { spaces: spaceRepository, invites: inviteRepository, orgDomainClaims: orgDomainClaimRepository } }
         )
       );
       res.status(204).end();
