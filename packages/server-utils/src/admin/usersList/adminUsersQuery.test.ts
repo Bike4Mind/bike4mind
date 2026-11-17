@@ -97,6 +97,12 @@ describe('buildAdminUsersMatch', () => {
     ]);
   });
 
+  it('matches the holders of one admin role', () => {
+    expect(conditionsOf(buildAdminUsersMatch({ adminRole: '0123456789abcdef01234567' }, context))).toEqual([
+      { adminRoleIds: { objectId: '0123456789abcdef01234567' } },
+    ]);
+  });
+
   it('maps the signup chart window, end exclusive, alongside a signed-up window', () => {
     expect(
       conditionsOf(

@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
-import { CssVarsProvider } from '@mui/joy/styles';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 
 const { mockLoadRedditPixel, mockLoadMetaPixel } = vi.hoisted(() => ({
   mockLoadRedditPixel: vi.fn(),
@@ -102,6 +102,16 @@ describe('CookieConsentBanner', () => {
 
     expect(screen.getByRole('region', { name: 'Cookie settings' })).toBeInTheDocument();
     expect(document.body).toHaveFocus();
+  });
+
+  it('sits under the modal layer so an open dialog is never covered by it', () => {
+    render(
+      <TestWrapper>
+        <CookieConsentBanner />
+      </TestWrapper>
+    );
+    const { zIndex } = getComputedStyle(screen.getByTestId('cookie-consent-banner'));
+    expect(Number(zIndex)).toBe(extendTheme().zIndex.modal - 1);
   });
 
   it('hides banner when consent was previously granted', () => {
