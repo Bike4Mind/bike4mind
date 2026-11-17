@@ -42,6 +42,7 @@ import { checkFreeTierDailySpendCap, isFreeTierDailyCapError } from '../billing/
 import { newAccountSpendCapAdaptersWithAlert } from '../billing/newAccountSpendCapWithAlert';
 import { recordInsufficientCredits } from '../billing/userLimitEvents';
 import { getFilesStorage, getGeneratedImageStorage } from '../utils/storage/index';
+import { resolveApiKeyOrTest, withTestAudioFallback } from './audioTestFallback';
 import {
   checkStorageFor,
   enqueueGenerationJob,
@@ -217,17 +218,23 @@ const baseDeps = (): AudioJobDeps => ({
 });
 
 // Set only on non-production stages by infra (TEST_GENERATION_PROVIDER_ENVIRONMENT); never registered in production.
-// A test provider replaces the real one for its vendor, so a stage can exercise the job path without a key.
+// A stage with no audio key runs the job path on the test providers; one with a key still calls the vendor.
 const testAudioProvidersEnabled = () => process.env.ENABLE_TEST_AUDIO_PROVIDER === 'true';
+
+const SPEECH_VENDORS: readonly VoiceGenerationVendor[] = ['openai', 'elevenlabs'];
+const SOUND_EFFECT_VENDORS: readonly SoundGenerationVendor[] = ['elevenlabs'];
 
 let speechJobDeps: SpeechJobDeps | undefined;
 export const getSpeechJobDeps = (): SpeechJobDeps => {
+  const testFallback = testAudioProvidersEnabled();
+  const speechProvider = (vendor: VoiceGenerationVendor) =>
+    testFallback
+      ? withTestAudioFallback(createSpeechProvider(vendor), testSpeechProvider)
+      : createSpeechProvider(vendor);
   speechJobDeps ??= {
     ...baseDeps(),
-    providers: testAudioProvidersEnabled()
-      ? { openai: testSpeechProvider }
-      : { openai: createSpeechProvider('openai'), elevenlabs: createSpeechProvider('elevenlabs') },
-    resolveApiKey: testAudioProvidersEnabled() ? async () => 'test-key' : resolveAudioApiKey,
+    providers: { openai: speechProvider('openai'), elevenlabs: speechProvider('elevenlabs') },
+    resolveApiKey: testFallback ? resolveApiKeyOrTest(SPEECH_VENDORS, resolveAudioApiKey) : resolveAudioApiKey,
     resolveVoice: resolveSpeechVoice,
     recordUsage: recordSpeechUsage,
   };
@@ -236,12 +243,12 @@ export const getSpeechJobDeps = (): SpeechJobDeps => {
 
 let soundEffectJobDeps: SoundEffectJobDeps | undefined;
 export const getSoundEffectJobDeps = (): SoundEffectJobDeps => {
+  const testFallback = testAudioProvidersEnabled();
+  const elevenlabs = createSoundEffectProvider('elevenlabs');
   soundEffectJobDeps ??= {
     ...baseDeps(),
-    providers: testAudioProvidersEnabled()
-      ? { elevenlabs: testSoundEffectProvider }
-      : { elevenlabs: createSoundEffectProvider('elevenlabs') },
-    resolveApiKey: testAudioProvidersEnabled() ? async () => 'test-key' : resolveAudioApiKey,
+    providers: { elevenlabs: testFallback ? withTestAudioFallback(elevenlabs, testSoundEffectProvider) : elevenlabs },
+    resolveApiKey: testFallback ? resolveApiKeyOrTest(SOUND_EFFECT_VENDORS, resolveAudioApiKey) : resolveAudioApiKey,
     runWithCapacity: runSoundEffectWithCapacity,
     recordUsage: recordSoundEffectUsage,
   };
