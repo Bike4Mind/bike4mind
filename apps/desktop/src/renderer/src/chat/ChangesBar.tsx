@@ -63,7 +63,15 @@ export function ChangesBar({ changes }: { changes: WorkspaceChanges }) {
           variant="plain"
           color="neutral"
           endDecorator={<CaretDownIcon />}
-          sx={{ fontWeight: 'md', minHeight: 26, px: 0.75, ml: -0.75, '--Button-gap': '6px' }}
+          sx={{
+            fontSize: 'xs',
+            fontWeight: 'sm',
+            color: 'text.secondary',
+            minHeight: 26,
+            px: 0.75,
+            ml: -0.75,
+            '--Button-gap': '6px',
+          }}
           slotProps={{ root: { 'data-testid': 'changes-bar-files-btn' } }}
         >
           {filesChangedLabel(changes)}

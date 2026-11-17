@@ -535,6 +535,17 @@ describe('sync hints', () => {
     expect(get).toHaveBeenCalledTimes(2);
   });
 
+  it('skips the session listing and the web count once the empty-sidebar card is dismissed', async () => {
+    const { service, get } = await hintSetup();
+    await service.dismissHint('sidebar-empty');
+    service.onScopeChanged();
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const { hints } = await service.state();
+    expect(get).not.toHaveBeenCalled();
+    expect(hints.webNotebooks).toBeNull();
+    expect(hints.codeSessions).not.toBe(1);
+  });
+
   it('keeps a dismissal for the account across a restart, and ignores unknown ids', async () => {
     const { service, make } = await hintSetup();
     expect((await service.dismissHint('claude-code')).hints.dismissed).toEqual(['claude-code']);
