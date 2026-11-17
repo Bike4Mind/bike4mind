@@ -116,9 +116,14 @@ describe('web $connect ticket path', () => {
 
   it('registers handoff metadata only for a session-bound ticket', async () => {
     h.consume.mockResolvedValue({ userId: 'u1', tokenVersion: 5, sid: 'sid-1' });
-    await call(eventWith({ ticket: 't', handoffPlatform: 'desktop', handoffName: 'My Mac' }));
+    await call(eventWith({ ticket: 't', handoffPlatform: 'desktop', handoffName: 'My Mac', handoffClientId: 'tab-1' }));
     expect(h.connectionCreate).toHaveBeenLastCalledWith(
-      expect.objectContaining({ handoffPlatform: 'desktop', handoffName: 'My Mac', sid: 'sid-1' })
+      expect.objectContaining({
+        handoffPlatform: 'desktop',
+        handoffName: 'My Mac',
+        handoffClientId: 'tab-1',
+        sid: 'sid-1',
+      })
     );
     h.consume.mockResolvedValue({ userId: 'u1', tokenVersion: 5 });
     await call(eventWith({ ticket: 't2', handoffPlatform: 'web', handoffName: 'Browser' }));

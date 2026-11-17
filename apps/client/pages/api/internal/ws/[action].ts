@@ -48,11 +48,12 @@ const handler = baseApi({ auth: false }).post(
     }
 
     const action = String((req.query as { action?: string }).action ?? '');
-    const { connectionId, ticket, headers, body, handoffPlatform, handoffName } = (req.body ?? {}) as {
+    const { connectionId, ticket, headers, body, handoffPlatform, handoffName, handoffClientId } = (req.body ?? {}) as {
       connectionId?: string;
       ticket?: string;
       handoffPlatform?: string;
       handoffName?: string;
+      handoffClientId?: string;
       headers?: Record<string, string>;
       body?: string;
     };
@@ -66,7 +67,7 @@ const handler = baseApi({ auth: false }).post(
       // header instead. Forwarding `token` here would leave the browser socket credential-less.
       const event = {
         requestContext: { connectionId },
-        queryStringParameters: ticket ? { ticket, handoffPlatform, handoffName } : {},
+        queryStringParameters: ticket ? { ticket, handoffPlatform, handoffName, handoffClientId } : {},
         headers: headers ?? {},
       };
       const result = await connectFunc(event as never, lambdaContext('selfhost_ws_connect'));

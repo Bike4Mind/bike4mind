@@ -6,7 +6,6 @@ import type { BackgroundProcessInfo } from '@shared/chat';
 import type { OutputStream } from './outputBuffer';
 import { CappedOutput } from './cappedOutput';
 import { guardForm, isWithin, realpathNearest, resolveWithinRoots, withinGuarded } from './paths';
-import { writesOwnRepository } from './ownRepository';
 import {
   inUngrantedDistro,
   scanShell,
@@ -35,7 +34,6 @@ import {
   requireString,
   type ApprovalPart,
   type ApprovalPrompt,
-  type PartAskKind,
   type ToolContext,
   type ToolDefinition,
 } from './types';
@@ -457,32 +455,13 @@ function readsSecret(scan: ShellScan, protectedPaths: readonly string[]): boolea
 }
 
 /** Why one part of a script needs a decision of its own, or undefined when the mode may decide it. */
-async function partAsk(entry: ShellScan['commands'][number]): Promise<ApprovalPart['ask']> {
-  const reasons: string[] = [];
-  const kinds: PartAskKind[] = [];
-  if (entry.unread) {
-    reasons.push('Desktop cannot follow what this part runs or where it acts.');
-    kinds.push('unread');
-  }
-  const target = entry.outbound?.target;
-  if (entry.outbound && !(target && (await writesOwnRepository(target).catch(() => false)))) {
-    reasons.push(`Can send data off this computer (${entry.outbound.reason}).`);
-    kinds.push('outbound');
-  }
-  if (entry.envFiles?.length) {
-    reasons.push(`Reads ${entry.envFiles.join(', ')}, which usually holds secrets.`);
-    kinds.push('env');
-  }
-  if (entry.gitUnlisted) {
-    reasons.push(`Runs git in a form Desktop does not list as safe (${entry.gitUnlisted}).`);
-    kinds.push('gitUnlisted');
-  }
-  if (kinds.length === 0) return undefined;
+function partAsk(entry: ShellScan['commands'][number]): ApprovalPart['ask'] {
+  if (!entry.envFiles?.length) return undefined;
   // Only reading secrets stops 'auto' here.
   return {
-    mode: kinds.includes('env') ? 'auto' : 'ask',
-    reason: reasons.join(' '),
-    kinds,
+    mode: 'auto',
+    reason: `Reads ${entry.envFiles.join(', ')}, which usually holds secrets.`,
+    kinds: ['env'],
   };
 }
 
@@ -562,7 +541,7 @@ export async function shellApproval(
   const partEnvFiles = new Set(scan.commands.flatMap(entry => entry.envFiles ?? []));
   const envScript = scan.envFiles.some(path => !partEnvFiles.has(path));
   // A part that can send data out says so on the card but does not stop auto mode.
-  const parts = await Promise.all(scan.commands.map(entry => partAsk(entry)));
+  const parts = scan.commands.map(entry => partAsk(entry));
   const gitUnlisted = [...new Set(scan.commands.flatMap(entry => entry.gitUnlisted ?? []))];
   const opaque =
     gitUnlisted.length > 0 ||
@@ -625,6 +604,9 @@ export async function shellApproval(
       : []),
     ...(gitUnlisted.length > 0
       ? [`Runs git in a form Desktop does not list as safe (${gitUnlisted.join(', ')}).`]
+      : []),
+    ...(uncheckedSettingsWrite
+      ? ['Names a permission or hook settings file in a command Desktop cannot follow, so it may write there.']
       : []),
     ...(writesWhileUnresolved
       ? ['May write while Desktop cannot resolve a protected folder, so where it writes cannot be checked.']

@@ -211,6 +211,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
     const handoff = LiveHandoffRegistrationSchema.safeParse({
       platform: event.queryStringParameters?.handoffPlatform,
       name: event.queryStringParameters?.handoffName,
+      clientId: event.queryStringParameters?.handoffClientId,
     });
     await Connection.create({
       connectionId: event.requestContext.connectionId,
@@ -221,6 +222,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
         handoff.success && {
           handoffPlatform: handoff.data.platform,
           handoffName: handoff.data.name,
+          handoffClientId: handoff.data.clientId,
         }),
       ...(scopes !== undefined && { scopes }),
       ...(auth.sid && { sid: auth.sid }),

@@ -124,6 +124,25 @@ describe('S3Storage browser-facing signing endpoint', () => {
     expect(url.searchParams.get('X-Amz-SignedHeaders')?.split(';')).not.toContain('content-length');
   });
 
+  it('signs a create-only PUT so the upload must carry If-None-Match', async () => {
+    const url = new URL(
+      await new S3Storage('exports-bucket').getSignedUrl('uploads/fixture.txt', 'put', {
+        ContentLength: 1234,
+        IfNoneMatch: '*',
+      })
+    );
+    expect(url.searchParams.get('X-Amz-SignedHeaders')?.split(';')).toEqual(
+      expect.arrayContaining(['content-length', 'if-none-match'])
+    );
+  });
+
+  it('leaves a PUT without the create-only option unconditional', async () => {
+    const url = new URL(
+      await new S3Storage('exports-bucket').getSignedUrl('uploads/fixture.txt', 'put', { ContentLength: 1234 })
+    );
+    expect(url.searchParams.get('X-Amz-SignedHeaders')?.split(';')).not.toContain('if-none-match');
+  });
+
   it('keeps server signing private when a browser endpoint is configured', async () => {
     vi.stubEnv('S3_PRESIGN_ENDPOINT', 'http://localhost:19000');
     const storage = new S3Storage('exports-bucket', 'us-east-2');

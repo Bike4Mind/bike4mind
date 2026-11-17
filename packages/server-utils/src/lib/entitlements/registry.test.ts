@@ -663,7 +663,7 @@ describe('built-in rows with no contribution', () => {
 
     expect(__registryRows.contributedRows).toEqual({});
     expect(__registryRows.rejectedContributions).toEqual([]);
-    expect(fingerprint).toBe('4e5400a11bf767b3b2d2465d121289d496bf1396aaec41e50006f0b77b5f6e37');
+    expect(fingerprint).toBe('4201e7148dd54ada54d262647f3f9ff67306f1afc3b14f784a77f1ef85540067');
   });
 
   it('keep every built-in key known', () => {

@@ -31,6 +31,13 @@ import type { Request, Response } from 'express';
 /** Coarse Content-Length pre-check ceiling; the exact MaxFileSize cap is enforced mid-stream. */
 const BODY_CEILING_BYTES = 512 * 1024 * 1024;
 
+/** S3 and MinIO answer a create-only PUT onto an existing key with 412 PreconditionFailed. */
+function isPreconditionFailed(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const { name, $metadata } = err as { name?: unknown; $metadata?: { httpStatusCode?: unknown } };
+  return name === 'PreconditionFailed' || $metadata?.httpStatusCode === 412;
+}
+
 const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES, requiredScopes: FILES_WRITE_SCOPES }).put(
   asyncHandler(async (req: Request, res: Response) => {
     if (process.env.B4M_SELF_HOST !== 'true') {
@@ -93,10 +100,17 @@ const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES, requiredScopes: FILES
 
     // Write to the FabFile's own storage key (from the DB, never client-supplied) so the caller
     // can't target an arbitrary key and the webhook fires on the expected object.
-    await getFilesStorage().upload(body, filePath, {
-      ContentType: fabFile.mimeType || (req.headers['content-type'] as string) || 'application/octet-stream',
-      ContentLength: body.length,
-    });
+    // Create-only, so two concurrent PUTs on a still-pending row cannot both write.
+    try {
+      await getFilesStorage().upload(body, filePath, {
+        ContentType: fabFile.mimeType || (req.headers['content-type'] as string) || 'application/octet-stream',
+        ContentLength: body.length,
+        IfNoneMatch: '*',
+      });
+    } catch (err) {
+      if (isPreconditionFailed(err)) return res.status(409).json({ error: 'File has already been uploaded' });
+      throw err;
+    }
 
     // A successful write proves the object landed, so mark complete here rather than depending on
     // the webhook. A lost webhook then only skips the chunk enqueue, which the safety-net scan

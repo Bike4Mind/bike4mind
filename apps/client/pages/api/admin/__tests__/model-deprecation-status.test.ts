@@ -177,6 +177,44 @@ describe('GET /api/admin/model-deprecation-status', () => {
     ]);
   });
 
+  it('answers only the queue and its rates for view=queue, asking no provider', async () => {
+    const { res, run } = call({ method: 'GET', query: { view: 'queue' } });
+    await run();
+    const body = res._getJSONData();
+
+    expect(Object.keys(body).sort()).toEqual(['perMTokRates', 'queue']);
+    expect(body.queue).toEqual([
+      { modelId: 'gpt-sunset', suggestion: expect.objectContaining({ replacedBy: 'gpt-live' }) },
+    ]);
+    expect(body.perMTokRates['gpt-live']).toBeDefined();
+    expect(mockGetAvailableModels).not.toHaveBeenCalled();
+    expect(mockRowsInForce).not.toHaveBeenCalled();
+    expect(mockReadModelListRevision).not.toHaveBeenCalled();
+  });
+
+  it('carries the miss count of an absence-raised suggestion in the queue view, still reading no catalog', async () => {
+    mockPendingSuggestions.mockResolvedValue([
+      { modelId: 'gpt-sunset', missCount: 0, suggestion: SUGGESTION },
+      { modelId: 'ghost-model', missCount: 5, suggestion: { ...SUGGESTION, source: 'absence' } },
+    ]);
+    const { res, run } = call({ method: 'GET', query: { view: 'queue' } });
+    await run();
+
+    expect(res._getJSONData().queue).toEqual([
+      { modelId: 'gpt-sunset', suggestion: expect.any(Object) },
+      { modelId: 'ghost-model', missCount: 5, suggestion: expect.objectContaining({ source: 'absence' }) },
+    ]);
+    expect(mockRowsInForce).not.toHaveBeenCalled();
+  });
+
+  it('builds the full report for any other view value', async () => {
+    const { res, run } = call({ method: 'GET', query: { view: 'everything' } });
+    await run();
+
+    expect(res._getJSONData()).toHaveProperty('staleReferences');
+    expect(mockGetAvailableModels).toHaveBeenCalled();
+  });
+
   it('tags queue items with the backend and, for absence, the miss count the accept note cites', async () => {
     mockPendingSuggestions.mockResolvedValue([
       { modelId: 'gpt-live', missCount: 0, suggestion: SUGGESTION },

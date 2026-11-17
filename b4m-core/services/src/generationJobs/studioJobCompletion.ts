@@ -27,6 +27,14 @@ export const studioCompletionTitle = (prompt: string | undefined): string => {
   return `${(lastSpace > room / 2 ? cut.slice(0, lastSpace) : cut).trimEnd()}${ELLIPSIS}`;
 };
 
+// A cutout's prompt is the server's fixed instruction, so it is named for what it is; matches ImageJobCard's caption.
+const groupTitle = (payload: object & { request: { prompt?: string } }, readyCount: number): string => {
+  if ('purpose' in payload && payload.purpose === 'cutout') {
+    return readyCount > 0 ? 'Background removed' : 'Background removal';
+  }
+  return studioCompletionTitle(payload.request.prompt);
+};
+
 /** Announces a finished Studio group as `studio.job.completed`, the event every Studio surface subscribes to. */
 export const studioCompletionSubscriber = (
   publish: (event: StudioJobCompletedEvent) => Promise<void>
@@ -44,7 +52,7 @@ export const studioCompletionSubscriber = (
       readyCount,
       failedCount,
       cancelledCount,
-      title: studioCompletionTitle(anchor.payload.request.prompt),
+      title: groupTitle(anchor.payload, readyCount),
       link: studioCompletionLink(medium, groupId),
       completedAt: completedAt.toISOString(),
     });

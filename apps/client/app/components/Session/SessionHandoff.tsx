@@ -8,6 +8,7 @@ import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 
 export function SessionHandoffButton({ sessionId, compact = false }: { sessionId: string; compact?: boolean }) {
+  const { clientId } = useWebsocket();
   const [open, setOpen] = useState(false);
   const [devices, setDevices] = useState<HandoffDevice[]>([]);
   const [message, setMessage] = useState('');
@@ -21,7 +22,11 @@ export function SessionHandoffButton({ sessionId, compact = false }: { sessionId
     api
       .get('/api/v1/handoff-devices')
       .then(response => {
-        if (!cancelled) setDevices(HandoffDevicesResponseSchema.parse(response.data).devices);
+        if (!cancelled) {
+          setDevices(
+            HandoffDevicesResponseSchema.parse(response.data).devices.filter(device => device.clientId !== clientId)
+          );
+        }
       })
       .catch(() => {
         if (!cancelled) setMessage('Could not load devices. Try again.');
@@ -32,7 +37,7 @@ export function SessionHandoffButton({ sessionId, compact = false }: { sessionId
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, clientId]);
   const send = async (deviceId: string) => {
     setBusy(true);
     setMessage('');

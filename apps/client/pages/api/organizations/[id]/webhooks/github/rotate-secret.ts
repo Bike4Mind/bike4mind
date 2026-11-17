@@ -18,11 +18,11 @@ import { webhookSubscriptionRepository } from '@bike4mind/database/infra';
 import { generateWebhookSecret } from '@server/integrations/github/webhookUtils';
 import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { NotFoundError, TooManyRequestsError } from '@bike4mind/utils';
 import { cacheRepository } from '@bike4mind/database';
 import { IOrgWebhookConfigResponse } from '@bike4mind/common';
-import { Logger } from '@bike4mind/observability';
 
 /**
  * Mask the secret for display
@@ -48,7 +48,7 @@ function getWebhookUrl(routingToken: string): string {
 }
 
 const handler = baseApi().post(
-  asyncHandler<{}, IOrgWebhookConfigResponse, unknown, { id?: string }>(async (req, res) => {
+  asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const orgId = req.query.id!;
     const user = req.user!;
 
@@ -65,7 +65,7 @@ const handler = baseApi().post(
       );
     }
 
-    await verifyOrgOwner(user, orgId);
+    const org = await verifyOrgOwner(user, orgId);
 
     const existingConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
     if (!existingConfig) {
@@ -90,11 +90,13 @@ const handler = baseApi().post(
       throw new Error('Failed to update webhook configuration');
     }
 
-    // Audit trail for a security-sensitive action
-    Logger.info('[WEBHOOK-SECRET-ROTATION] Secret rotated', {
-      organizationId: orgId,
-      userId: user.id,
-      timestamp: new Date().toISOString(),
+    // The entry names the config only; the secret never reaches the audit trail.
+    await recordAdminActionFromRequest(req, {
+      action: 'org.webhook.secret_rotated',
+      actorScope: 'organization',
+      target: { kind: 'organization', id: org.id, displayName: org.name },
+      summary: 'rotated the GitHub webhook secret',
+      details: { webhookConfigId: existingConfig.id },
     });
 
     const subscriberCount = await webhookSubscriptionRepository.countByOrganization(orgId);

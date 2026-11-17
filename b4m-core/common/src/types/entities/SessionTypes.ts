@@ -266,7 +266,7 @@ export interface IChatHistoryItem {
   /** Legacy: video jobs started before `generationJobs`; read through questGenerationJobs, never written. */
   videoJobIds?: string[];
 
-  /** Generation jobs (video, music) this quest started, one live card each. Read through questGenerationJobs. */
+  /** Generation jobs (video, music, image) this quest started, one live card each. Read through questGenerationJobs. */
   generationJobs?: GenerationJobRef[];
 
   /** Agent-mode video clips this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
@@ -274,6 +274,9 @@ export interface IChatHistoryItem {
 
   /** Agent-mode songs this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
   agentMusicTracksClaimed?: number;
+
+  /** Agent-mode images this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentImagesClaimed?: number;
 
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;

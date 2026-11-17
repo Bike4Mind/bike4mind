@@ -19,10 +19,11 @@ export class InactiveHandoffDeviceError extends Error {
 export async function listHandoffDevices(userId: string, deps: HandoffAdapters): Promise<HandoffDevice[]> {
   const rows = await deps.destinations(userId);
   const live = await deps.liveSids([...new Set(rows.map(row => row.sid))]);
-  return rows.map(({ id, name, platform, available, sid }) => ({
+  return rows.map(({ id, name, platform, available, sid, clientId }) => ({
     id,
     name,
     platform,
+    ...(clientId && { clientId }),
     available: available && live.has(sid),
   }));
 }

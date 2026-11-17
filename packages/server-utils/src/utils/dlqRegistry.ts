@@ -203,20 +203,10 @@ const DLQ_REGISTRY = [
     description: 'Writes release notes or weekly highlights and announces them in Slack.',
     replay: 'unsafe',
     replayNote:
-      'Nothing records that the Slack announcement went out, so a replay regenerates the note and posts again. Only a human-edited note is left alone.',
+      'Nothing records that the Slack announcement went out, so a replay regenerates the release note or highlights and posts again. Only a human-edited release note is left alone.',
     owner: 'Release notes',
-    describe: entityAt('Release', 'releaseTag'),
-  },
-  {
-    label: 'whats-new-highlights',
-    displayName: "What's New Highlights",
-    application: 'WhatsNewGeneration',
-    sourceQueue: 'whatsNewHighlightsQueue',
-    description: "Builds the weekly What's New highlights and posts them to Slack.",
-    replay: 'unsafe',
-    replayNote: 'Nothing records an earlier Slack post, so a replay posts the highlights again.',
-    owner: 'Release notes',
-    describe: entityAt('Highlights run', 'correlationId'),
+    // One DLQ for both kinds of whatsNewJob message: a release names its tag, a highlights run its correlation id.
+    describe: firstEntity(entityAt('Release', 'releaseTag'), entityAt('Highlights run', 'correlationId')),
   },
   {
     label: 'notebook-curation',
@@ -614,6 +604,17 @@ const DLQ_REGISTRY = [
       'A job superseded by a newer version is dropped; otherwise the thumbnail is rendered and stored again, with nothing sent outside.',
     owner: 'Published artifacts',
     describe: entityAt('Published artifact', 'publicId'),
+  },
+  {
+    label: 'dlq-triage-sweep',
+    displayName: 'DLQ Triage Sweep',
+    application: 'LiveOps',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed DLQ triage sweep invocations for inspection.',
+    replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
+    owner: 'LiveOps',
+    describe: noEntity,
   },
   {
     label: 'young-account-spend-alert',

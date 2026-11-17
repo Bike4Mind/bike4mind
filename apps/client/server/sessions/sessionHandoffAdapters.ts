@@ -36,6 +36,7 @@ export const sessionHandoffAdapters: HandoffAdapters = {
         platform: row.handoffPlatform ?? ('web' as const),
         sid: row.sid!,
         connectionId: row.connectionId,
+        clientId: row.handoffClientId,
         available: !!row.authExpiresAt && row.authExpiresAt.getTime() > now,
       })),
       ...tokens.map(row => ({

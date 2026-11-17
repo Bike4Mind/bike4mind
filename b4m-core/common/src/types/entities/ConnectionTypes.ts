@@ -8,6 +8,7 @@ export interface IConnection {
   userId: string;
   handoffPlatform?: 'web' | 'desktop';
   handoffName?: string;
+  handoffClientId?: string;
   source?: ConnectionSource;
   /** Scopes of the API key the socket was authenticated with at $connect, if
    *  any. Used by WS action handlers as a cheap defense-in-depth layer so a

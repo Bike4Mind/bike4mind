@@ -228,8 +228,9 @@ export class MediaApiClient {
     }
     try {
       const target = new URL(upload.upload_url, this.api.getAxiosInstance().defaults.baseURL ?? undefined);
+      // Create-only: upload_url names a freshly minted key, so the PUT must never overwrite one.
       await axios.put(target.toString(), bytes, {
-        headers: { 'Content-Type': mimeType },
+        headers: { 'Content-Type': mimeType, 'If-None-Match': '*' },
         timeout: TIMEOUT_MS.download,
         maxBodyLength: Infinity,
       });

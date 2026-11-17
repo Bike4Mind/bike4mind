@@ -5,6 +5,7 @@ export const HandoffDeviceSchema = z.object({
   name: z.string(),
   platform: z.enum(['web', 'desktop', 'ios', 'android']),
   available: z.boolean(),
+  clientId: z.string().optional(),
 });
 export type HandoffDevice = z.infer<typeof HandoffDeviceSchema>;
 export const HandoffDevicesResponseSchema = z.object({ devices: z.array(HandoffDeviceSchema) });
@@ -22,4 +23,5 @@ export const SessionHandoffAction = z.object({
 export const LiveHandoffRegistrationSchema = z.object({
   platform: z.enum(['web', 'desktop']),
   name: z.string().trim().min(1).max(80),
+  clientId: z.string().min(1).max(80).optional(),
 });

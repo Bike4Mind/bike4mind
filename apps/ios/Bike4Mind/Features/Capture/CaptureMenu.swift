@@ -10,13 +10,15 @@ struct CaptureMenu: View {
   @Environment(AppServices.self) private var services
 
   private enum Flow: Identifiable {
-    case camera
+    case camera(ask: Bool)
+    case scanner
     case voice
-    case composer([ShareItem])
+    case composer([ShareItem], ask: Bool = false)
 
     var id: String {
       switch self {
       case .camera: "camera"
+      case .scanner: "scanner"
       case .voice: "voice"
       case .composer: "composer"
       }
@@ -27,15 +29,21 @@ struct CaptureMenu: View {
   @State private var isPickingPhotos = false
   @State private var pickedPhotos: [PhotosPickerItem] = []
   @State private var problem: String?
+  @State private var pendingCapture: (url: URL, ask: Bool)?
   /// Items that did load when some did not: the composer opens once the notice about the rest is dismissed.
   @State private var afterProblem: [ShareItem]?
 
   var body: some View {
     Menu {
       if CameraPicker.isAvailable {
-        Button("Take Photo", systemImage: "camera") { flow = .camera }
+        Button("Point and Ask", systemImage: "camera.viewfinder") { flow = .camera(ask: true) }
+          .accessibilityIdentifier("capture-ask-btn")
+        Button("Take Photo", systemImage: "camera") { flow = .camera(ask: false) }
           .accessibilityIdentifier("capture-camera-btn")
       }
+      Button("Scan Document", systemImage: "doc.viewfinder") { flow = .scanner }
+        .disabled(!DocumentScanner.isAvailable)
+        .accessibilityIdentifier("capture-scan-btn")
       Button("Choose Photos", systemImage: "photo.on.rectangle") { isPickingPhotos = true }
         .accessibilityIdentifier("capture-photos-btn")
       Button("Voice Note", systemImage: "mic") { flow = .voice }
@@ -51,11 +59,23 @@ struct CaptureMenu: View {
       pickedPhotos = []
       Task { await load(picked) }
     }
-    .fullScreenCover(item: cameraBinding) { _ in
-      CameraPicker { url in
-        flow = nil
-        guard let url else { return }
-        Task { await present(files: [url]) }
+    .fullScreenCover(item: cameraBinding, onDismiss: completeCapture) { current in
+      Group {
+        if case .scanner = current {
+          DocumentScanner { result in
+            flow = nil
+            switch result {
+            case .success(let url): pendingCapture = (url, false)
+            case .failure: problem = "The scan couldn't be saved. Please try again."
+            case nil: break
+            }
+          }
+        } else if case .camera(let ask) = current {
+          CameraPicker { url in
+            flow = nil
+            if let url { pendingCapture = (url, ask) }
+          }
+        }
       }
       .ignoresSafeArea()
     }
@@ -65,10 +85,11 @@ struct CaptureMenu: View {
         VoiceRecorderPanel(
           onTranscript: { text in flow = .composer([.text(text)]) },
           onCancel: { flow = nil })
-      case .composer(let items):
+      case .composer(let items, let ask):
         ShareComposerView(
-          model: services.capture.composerModel(items: items), onFinish: { flow = nil }, onCancel: { flow = nil })
-      case .camera:
+          model: services.capture.composerModel(items: items), onFinish: { flow = nil }, onCancel: { flow = nil },
+          asksQuestion: ask)
+      case .camera, .scanner:
         EmptyView()
       }
     }
@@ -87,11 +108,29 @@ struct CaptureMenu: View {
   }
 
   private var cameraBinding: Binding<Flow?> {
-    Binding(get: { if case .camera = flow { flow } else { nil } }, set: { if $0 == nil { flow = nil } })
+    Binding(
+      get: {
+        switch flow {
+        case .camera, .scanner: flow
+        default: nil
+        }
+      }, set: { if $0 == nil { flow = nil } })
   }
 
   private var sheetBinding: Binding<Flow?> {
-    Binding(get: { if case .camera = flow { nil } else { flow } }, set: { if $0 == nil { flow = nil } })
+    Binding(
+      get: {
+        switch flow {
+        case .camera, .scanner: nil
+        default: flow
+        }
+      }, set: { if $0 == nil { flow = nil } })
+  }
+
+  private func completeCapture() {
+    guard let capture = pendingCapture else { return }
+    pendingCapture = nil
+    Task { await present(files: [capture.url], ask: capture.ask) }
   }
 
   private func load(_ picked: [PhotosPickerItem]) async {
@@ -112,13 +151,13 @@ struct CaptureMenu: View {
     await present(files: urls, alreadyFailed: failed)
   }
 
-  private func present(files: [URL], alreadyFailed: Int = 0) async {
+  private func present(files: [URL], alreadyFailed: Int = 0, ask: Bool = false) async {
     let sources = files.map { LocalFileAttachment(fileURL: $0, type: Self.type(of: $0)) }
     let loaded = await ShareItemLoader().load(sources)
     let failed = alreadyFailed + loaded.skippedCount
     guard !loaded.items.isEmpty else {
       afterProblem = nil
-      problem = "None of the selected photos could be read."
+      problem = "The capture couldn't be read. Please try again."
       return
     }
     guard failed == 0 else {
@@ -129,7 +168,7 @@ struct CaptureMenu: View {
         : "\(failed) photos couldn't be read. The rest are ready to save."
       return
     }
-    flow = .composer(loaded.items)
+    flow = .composer(loaded.items, ask: ask)
   }
 
   private static let logger = Logger(subsystem: "com.bike4mind.app", category: "capture")

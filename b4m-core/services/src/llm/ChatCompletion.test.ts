@@ -102,7 +102,7 @@ import { LakeMemoryFeature } from './ChatCompletionFeatures';
 import type { ISkill, IDataLakeDocument } from '@bike4mind/common';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
 import { INCOMPLETE_ANSWER_NOTICE, TRUNCATED_ANSWER_NOTICE } from './earlyStopStamp';
-import { insufficientCreditsError } from '@bike4mind/common';
+import { AiAccessRefusedError, insufficientCreditsError } from '@bike4mind/common';
 import { FlaggedContentError, BedrockGuardrailsService, OpenaiModerationsService } from '@bike4mind/utils';
 import { applyModerationHit } from '../userService/moderationPolicy';
 
@@ -6305,6 +6305,61 @@ describe('ChatCompletionProcess', () => {
       expect(mockDb.creditTransactions.createTransaction).not.toHaveBeenCalled();
     });
 
+    it('settles a mid-turn account refusal on the quest without rethrowing, and refunds the hold', async () => {
+      const { complete } = reservationOrgSetup();
+      const message = 'Your account has been suspended.';
+      complete.mockImplementation(async () => {
+        throw new AiAccessRefusedError(message);
+      });
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+
+      await expect(service.process({ body: reservationBody(), logger: mockLogger })).resolves.toBeUndefined();
+
+      expect(mockQuest.type).toBe('error');
+      expect(mockQuest.reply).toBe(message);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', expectedHold);
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('[Account refusal]'));
+    });
+
+    it('bills delivered tool charges when a later tool call is refused for account standing', async () => {
+      const { complete } = reservationOrgSetup();
+      complete.mockImplementation(
+        async (
+          _model: string,
+          _messages: unknown,
+          _options: unknown,
+          callback: (texts: string[], info: { inputTokens: number; outputTokens: number }) => Promise<void>
+        ) => {
+          await callback(['partial answer'], { inputTokens: 10, outputTokens: 1000 });
+          const billing = service as unknown as {
+            toolCreditsMap: Map<string, number[]>;
+            toolCreditModels: Set<string>;
+          };
+          billing.toolCreditsMap.set('image_generation', [18]);
+          billing.toolCreditModels.add('image-model');
+          throw new AiAccessRefusedError('Your account has been suspended.');
+        }
+      );
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+
+      await expect(service.process({ body: reservationBody(), logger: mockLogger })).resolves.toBeUndefined();
+
+      const charged = mockDb.creditTransactions.createTransaction.mock.calls.reduce(
+        (total: number, [, row]: [string, { credits: number }]) => total - row.credits,
+        0
+      );
+      expect(charged).toBeGreaterThan(18);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenCalledTimes(2);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', expectedHold - charged);
+      expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
+        'tool_usage',
+        expect.objectContaining({ credits: -18, model: 'image-model' })
+      );
+      expect(mockQuest.creditsUsed).toBe(charged);
+    });
+
     // A Stop that lands after a cross-model failover bills the model that was answering, not the
     // requested one that failed.
     it('bills a thrown abort after a failover on the fallback model', async () => {
@@ -7798,6 +7853,72 @@ describe('ChatCompletionProcess', () => {
         await service.process({ body: personalBody(), logger: mockLogger });
 
         expect(state.balance).toBe(BALANCE - used);
+      });
+
+      it.each([
+        ['image_generation', 'absent'],
+        ['image_generation', 'present'],
+        ['image_generation', 'cleared'],
+        ['edit_image', 'absent'],
+        ['edit_image', 'present'],
+        ['edit_image', 'cleared'],
+      ])('settles %s reservations exactly once when tool telemetry is %s', async (toolName, telemetry) => {
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const toolCharge = 200;
+        const textCharge = 60;
+        const complete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          const billing = service as unknown as {
+            toolCreditsMap: Map<string, number[]>;
+            toolCreditModels: Set<string>;
+          };
+          billing.toolCreditsMap.set(toolName, [120, 80]);
+          billing.toolCreditModels.add('image-model');
+          await cb(['Images delivered'], {
+            inputTokens: 10,
+            outputTokens: 50,
+            ...(telemetry === 'absent'
+              ? {}
+              : {
+                  toolsUsed: [
+                    { name: toolName, arguments: '{}' },
+                    { name: toolName, arguments: '{}' },
+                  ],
+                }),
+          });
+          if (telemetry === 'cleared') {
+            await cb(['Images delivered.'], { inputTokens: 10, outputTokens: 50 });
+          }
+        });
+        setupPersonalTurn(incrementCredits, complete);
+        mockedUsdToCreditsStochastic.mockReturnValue(textCharge);
+        mockQuest.sessionId = 'session1';
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        const hold = -incrementCredits.mock.calls[0][1];
+        expect(incrementCredits).toHaveBeenCalledTimes(2);
+        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - textCharge - toolCharge);
+        expect(state.balance).toBe(BALANCE - textCharge - toolCharge);
+        expect(mockQuest.creditsUsed).toBe(textCharge + toolCharge);
+        const breakdown = (mockQuest.promptMeta?.functionCalls ?? []).reduce(
+          (sum, call) => sum + (call.creditsUsed ?? 0),
+          0
+        );
+        expect(breakdown).toBe(toolCharge);
+        expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledTimes(2);
+        expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
+          'tool_usage',
+          expect.objectContaining({
+            credits: -toolCharge,
+            model: 'image-model',
+            questId: mockQuest.id,
+            description: `Tool usage: ${toolName}`,
+          })
+        );
+        expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
+          'text_generation_usage',
+          expect.objectContaining({ credits: -textCharge })
+        );
       });
 
       // The thrown-abort settlement (settleReservation) floors text the same way; tools are never floored.

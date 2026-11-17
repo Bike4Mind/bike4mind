@@ -212,8 +212,8 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     const sentToken = String(response.config?.headers?.Authorization ?? '').replace(/^Bearer /, '');
     ticketTokenRef.current = sentToken || null;
     const desktop = navigator.userAgent.includes('B4M-Server-Conversations');
-    return `${url}?ticket=${encodeURIComponent(response.data.ticket)}&handoffPlatform=${desktop ? 'desktop' : 'web'}&handoffName=${desktop ? 'Desktop%20server%20conversations' : 'Web%20browser'}`;
-  }, [url]);
+    return `${url}?ticket=${encodeURIComponent(response.data.ticket)}&handoffPlatform=${desktop ? 'desktop' : 'web'}&handoffName=${desktop ? 'Desktop%20server%20conversations' : 'Web%20browser'}&handoffClientId=${encodeURIComponent(clientId)}`;
+  }, [url, clientId]);
 
   const { sendJsonMessage, sendMessage, readyState } = useBaseWebsocket(shouldConnect ? getWebsocketUrl : null, {
     shouldReconnect: () => !didUnmount.current,

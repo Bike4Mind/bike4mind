@@ -14,7 +14,7 @@ const h = vi.hoisted(() => ({
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: h.get, post: h.post } }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => h.navigate }));
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
-  useWebsocket: () => ({ subscribeToAction: subscribe }),
+  useWebsocket: () => ({ subscribeToAction: subscribe, clientId: 'this-tab' }),
 }));
 const subscribe = (_action: string, callback: (message: IMessageDataToClient) => Promise<void>) => {
   h.receive = callback;
@@ -33,6 +33,7 @@ describe('session handoff UI', () => {
     h.get.mockResolvedValue({
       data: {
         devices: [
+          { id: 'live:self', name: 'This tab', platform: 'web', available: true, clientId: 'this-tab' },
           { id: 'live:one', name: 'Mac', platform: 'desktop', available: true },
           { id: 'push:two', name: 'Phone', platform: 'ios', available: false },
         ],
