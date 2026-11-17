@@ -15,6 +15,7 @@ const StoredInputsSchema = z.object({
   inputs: z.array(VideoInputSchema).optional(),
   inputImageFileId: shape.inputImageFileId,
   inputGeneratedImageKey: shape.inputGeneratedImageKey,
+  keyframes: shape.keyframes,
 });
 
 function restoreModel(stored: unknown, models: NonEmptyList<VideoModel>, notices: string[]): VideoModel {
@@ -41,6 +42,10 @@ function restoreFirstFrame(
     return null;
   }
   let firstFrame: VideoInputImage | null = null;
+  if (stored.data.keyframes) {
+    notices.push("Create does not take keyframes yet, so the take's keyframes were left out.");
+    return null;
+  }
   for (const input of videoRequestInputs(stored.data)) {
     if (input.role !== 'first_frame') {
       notices.push(`Create does not take a ${roleNoun(input.role)} yet, so the take's was left out.`);
