@@ -99,6 +99,19 @@ describe('listUsableVideoModels', () => {
 });
 
 describe('toPublicVideoModel card copy', () => {
+  it('publishes keyframe support and HD draft pricing only for capable models', () => {
+    const model = toPublicVideoModel('flux-3-video');
+    expect(VideoModelSchema.parse(model)).toEqual(model);
+    expect(model).toMatchObject({
+      keyframes: { max: 10 },
+      draft: {
+        resolutions: ['720p'],
+        credits_per_second: usdToCredits(0.06),
+      },
+    });
+    expect(toPublicVideoModel('gemini-omni-1.1-flash')).toMatchObject({ keyframes: null, draft: null });
+  });
+
   it('pins a non-empty blurb and provider label on every catalog model', () => {
     for (const id of Object.keys(VIDEO_MODEL_CATALOG) as VideoModelId[]) {
       const model = toPublicVideoModel(id);

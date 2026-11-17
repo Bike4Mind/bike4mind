@@ -1,9 +1,15 @@
 import { usdToCredits } from '../pricing';
 import type { VideoGenerationRequest } from './request';
 import type { VideoModelCapabilities } from './types';
-import { validateAgainstCapabilities } from './validate';
+import { isVideoDurationAllowed } from './validate';
 
 export const estimateVideoCostUsd = (caps: VideoModelCapabilities, request: VideoGenerationRequest): number => {
+  if (request.draft) {
+    if (!caps.draft || !caps.draft.resolutions.includes(request.resolution)) {
+      throw new Error(`${caps.displayName}: no draft price for ${request.resolution}`);
+    }
+    return caps.draft.usdPerSecond * request.durationSeconds;
+  }
   const { pricing } = caps;
   if (pricing.unit === 'per_second') {
     const rate = pricing.usdByResolution[request.resolution];
@@ -36,5 +42,5 @@ export const billedVideoRequest = (
 ): VideoGenerationRequest => {
   if (reportedDurationSeconds === undefined) return request;
   const reported = { ...request, durationSeconds: reportedDurationSeconds };
-  return validateAgainstCapabilities(reported, caps).ok ? reported : request;
+  return isVideoDurationAllowed(reportedDurationSeconds, caps.duration) ? reported : request;
 };

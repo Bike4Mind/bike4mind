@@ -884,11 +884,6 @@
       "count": 1
     }
   },
-  "apps/client/app/routes/email/unsubscribe.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 3
-    }
-  },
   "apps/client/app/routes/integrations/atlassian/select-site.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 3
@@ -897,16 +892,6 @@
   "apps/client/app/routes/subscribe.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 3
-    }
-  },
-  "apps/client/app/routes/verify-change.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/client/app/routes/verify-email.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
     }
   },
   "apps/client/app/services/adminTools/AdminToolService.ts": {
@@ -3134,8 +3119,73 @@
       "count": 23
     }
   },
+  "apps/workers/src/cron/accountCampaignSweep.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/cron/accountCampaignSweep.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/cron/accountDeletionSweep.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/cron/accountDeletionSweep.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/cron/adminMorningBrief.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/cron/adminMorningBrief.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/cron/apiProbeScoring.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/cron/apiProbeScoring.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/cron/loopScheduler.e2e.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 6
+    }
+  },
+  "apps/workers/src/cron/personaExpirySweep.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
   "apps/workers/src/cron/spendReconciliation.test.ts": {
     "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/events/dlqTriage.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/events/dlqTriage.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/events/sessionSummarization.test.ts": {
+    "b4m/no-workers-server-bridge": {
       "count": 1
     }
   },
@@ -3184,9 +3234,69 @@
       "count": 2
     }
   },
+  "apps/workers/src/organizations/retentionCleanup.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/organizations/retentionErasure.e2e.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/queueHandlers/accountDataExport.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 3
+    }
+  },
+  "apps/workers/src/queueHandlers/accountDataExport.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 2
+    }
+  },
+  "apps/workers/src/queueHandlers/accountDataExportCollections.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/queueHandlers/accountErasure.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/queueHandlers/accountErasure.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/queueHandlers/agentExecutor.confidenceGate.e2e.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 4
+    }
+  },
+  "apps/workers/src/queueHandlers/agentExecutor.push.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/queueHandlers/agentExecutor.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 2
+    }
+  },
   "apps/workers/src/queueHandlers/emailJobOrchestrator.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
+    }
+  },
+  "apps/workers/src/queueHandlers/generatedMediaPurge.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 4
+    }
+  },
+  "apps/workers/src/queueHandlers/generatedMediaPurge.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 2
     }
   },
   "apps/workers/src/queueHandlers/notebookCuration.test.ts": {
@@ -3197,6 +3307,11 @@
   "apps/workers/src/queueHandlers/notebookCuration.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
+    }
+  },
+  "apps/workers/src/queueHandlers/researchEngineQueue.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
     }
   },
   "apps/workers/src/queueHandlers/researchEngineQueue.ts": {
@@ -3222,6 +3337,16 @@
   "apps/workers/src/queueHandlers/whatsNewHighlights.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
+    }
+  },
+  "apps/workers/src/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/selfhost/notebookCurationLive.e2e.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 2
     }
   },
   "apps/workers/src/utils/eventContext.ts": {

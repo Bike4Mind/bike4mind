@@ -39,7 +39,6 @@ export type ExperimentalFeature =
   | 'enableDeepResearch'
   | 'enableRapidReply'
   | 'enableResearchEngine'
-  | 'enableBmPi'
   | 'enableLattice'
   | 'enableBriefcase'
   | 'enableHearth'
@@ -123,7 +122,6 @@ const defaultSettings: UserSettings = {
     enableDeepResearch: false,
     enableRapidReply: false,
     enableResearchEngine: false,
-    enableBmPi: false,
     enableLattice: false,
     enableHearth: false,
     enableBriefcase: false,

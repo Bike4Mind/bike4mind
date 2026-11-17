@@ -606,6 +606,17 @@ const DLQ_REGISTRY = [
     describe: entityAt('Published artifact', 'publicId'),
   },
   {
+    label: 'dlq-triage-sweep',
+    displayName: 'DLQ Triage Sweep',
+    application: 'LiveOps',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed DLQ triage sweep invocations for inspection.',
+    replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
+    owner: 'LiveOps',
+    describe: noEntity,
+  },
+  {
     label: 'young-account-spend-alert',
     displayName: 'Young Account Spend Alert',
     application: 'Signup',

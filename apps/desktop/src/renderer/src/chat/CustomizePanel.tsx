@@ -583,7 +583,7 @@ export function CustomizeScreen({
               gap: 2,
             }}
           >
-            {['DataLake', 'QuestMaster', 'Tavern', 'Studio'].map(name => (
+            {['DataLake', 'QuestMaster', 'Studio'].map(name => (
               <Sheet
                 key={name}
                 component="article"

@@ -44,6 +44,33 @@ import './businessMetricAlerts';
 import './imageModerationReviewSweep';
 import './adminMorningBrief';
 import './organizationRetention';
+import { secrets } from './secrets';
+import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
+import { dlqTriagePermissions } from './dlqTriagePermissions';
+
+if (runsScheduledJobs && dlqTriageSweepDeadLetter) {
+  const deadLetter = dlqTriageSweepDeadLetter;
+  const sweep = new sst.aws.Cron('dlqTriageSweep', {
+    schedule: 'cron(0 8 * * ? *)',
+    function: {
+      vpc: lambdaVpc,
+      handler: 'apps/workers/src/cron/dlqTriage.handler',
+      runtime: 'nodejs24.x',
+      timeout: '5 minutes',
+      retries: 0,
+      link: [secrets.MONGODB_URI, secrets.SLACK_ALARMS_WEBHOOK_URL, secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
+      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      permissions: [
+        deadLetter.sendPermission,
+        { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
+        dlqTriagePermissions(),
+      ],
+      transform: deadLetter.functionTarget,
+    },
+    transform: { target: { ...deadLetter.ruleTarget.target, input: undefined } },
+  });
+  deadLetter.allowRules([$util.output(sweep)]);
+}
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',

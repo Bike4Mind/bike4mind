@@ -53,6 +53,16 @@ const wired = (
 // Reviewed snapshots, never automatically refreshed by CI. Portable means wiring only.
 export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   broker(
+    'queue:infra/dlqTriageSweepDeadLetter.ts:dlqTriageSweepDlq',
+    '8f974196323d71a6029e7255756ddbdb5aa7d14e75e50a745de4d75a1fdff72d'
+  ),
+  hostedOnly(
+    'schedule:infra/cron.ts:dlqTriageSweep',
+    '38acecc248ea7557053ca90c3f3623e71d8119281f5af6461b316749ce158107',
+    'Hosted CloudWatch alarm and SQS dead-letter sampling; portable deployments do not run the hosted alarm sweep.',
+    ['cloudwatch:DescribeAlarms', 'import:@aws-sdk/client-cloudwatch']
+  ),
+  broker(
     'queue:infra/organizationRetention.ts:organizationRetentionDlq',
     'ac4a28905799e117ee2ab119fd37de18b424e94ff7d5cdad2a86d248d914f5cf'
   ),
@@ -1272,7 +1282,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    '4e44fa0cc623338c6b8ecdabdc02e3791addc8805e24d81ad42b05e8ed6d4d38',
+    'fb9427f9a234d8c335c1f021c0cc7a9b7d2a21f5fd24e3e0ff8b8b896217e78f',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gap('service:infra/searxng.ts:Searxng', 'fef5f4ce5e094d32525bb4a13828a34b67ba75a38ab72c70e526ba908c31f049'),
@@ -1286,8 +1296,8 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:DlqAlarmTopic',
-    'ad1f3e24fc4d4363c612889929d74def12d50e753fcee4af64995d29e7327a08',
-    ['ssm:GetParameter']
+    'f27b400cd1e2f5fddc61613dde994f0a4e04898c9aa66282bde4c2c6d96fab1c',
+    ['cloudwatch:DescribeAlarms', 'ssm:GetParameter']
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:OobAlarmTopicEmailSub',
