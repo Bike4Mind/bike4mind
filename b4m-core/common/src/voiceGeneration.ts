@@ -3,6 +3,7 @@ import type { ApiErrorCode } from './apiErrorCodes';
 // The specific file, not the `./schemas` barrel - the barrel drags in an unbuilt
 // dist in the CI openapi job (same note as tts.contract.ts).
 import { ApiErrorSchema, MeteredBillingOrganizationForbiddenErrorSchema } from './schemas/chat';
+import { EndUserIdSchema } from './schemas/endUserId';
 import {
   extendGeneratedAudioResponseSchema,
   generatedAudioRequestFields,
@@ -102,6 +103,7 @@ export const ttsRequestSchema = z.object({
         "organization: omit this or set it to the key's organization; any other value, null included, is " +
         'rejected with a 403 (`errorCode: billing_organization_mismatch`).'
     ),
+  end_user_id: EndUserIdSchema.optional(),
   ...generatedAudioRequestFields,
 });
 
@@ -150,6 +152,8 @@ export const TTS_ERROR_CODES = [
   'insufficient_credits',
   'provider_not_configured',
   'provider_rejected',
+  'end_user_id_not_allowed',
+  'invalid_end_user_id',
   // The 504 of a clip that outlasted the request and could never be retrieved (unretrievableAudioResponse).
   'request_timeout',
 ] as const satisfies readonly ApiErrorCode[];

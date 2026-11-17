@@ -44,6 +44,10 @@ export const createCompletionContract = defineEndpoint({
     "Check the model's " +
     '`supports_assistant_prefill` field from `GET /api/v1/models` before sending one. ' +
     'Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
+    'END USERS. A key that serves many end users of your own product, and that an administrator has granted ' +
+    '`ai:end-user-id`, may send `end_user_id` (your opaque id for the end user) so that, on models served directly by ' +
+    'OpenAI or Anthropic, the model provider sees each end user separately rather than your whole account as one ' +
+    '(other providers receive no end-user identifier).\n\n' +
     'RUNS AND SETTLEMENT. To group the spend of a multi-agent run (a root session and the workers it spawns), ' +
     'mint a run id with `POST /api/v1/completion-runs` and send it as `run` on each request. Spend is recorded ' +
     'against the run, never charged twice. The `settled` event (`{ type, requestId, creditsCharged, usdCost, runId }`) ' +
@@ -112,7 +116,9 @@ export const createCompletionContract = defineEndpoint({
         'naming a tool not in `tools`, or carrying no string `tool_name`). Mid-conversation tool changes are refused with: ' +
         '`tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it ' +
         'here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and ' +
-        '`unknown_tool_reference` (a changed tool not in `tools`).',
+        '`unknown_tool_reference` (a changed tool not in `tools`). `end_user_id` sent on a credential other than an ' +
+        'API key holding `ai:end-user-id` is refused with `end_user_id_not_allowed`; a malformed `end_user_id` is ' +
+        'refused with `invalid_end_user_id`.',
       schema: CompletionsBadRequestErrorSchema,
     },
     403: {

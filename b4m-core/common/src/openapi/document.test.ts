@@ -167,6 +167,8 @@ describe('buildOpenApiDocument', () => {
       'unknown_tool_reference',
       'tool_changes_unsupported',
       'invalid_tool_change',
+      'end_user_id_not_allowed',
+      'invalid_end_user_id',
     ]);
     expect(json('413')).toEqual(ref('ErrorResponse'));
     expect(json('422')).toEqual(ref('createCompletionResponse422'));

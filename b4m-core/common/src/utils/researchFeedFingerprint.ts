@@ -3,12 +3,13 @@ import type {
   ResearchFeedStatus,
   ResearchRunLevers,
 } from '../types/entities/DataLakeResearchTypes';
+import { canonicalItemRules, researchItemRuleKey } from './researchSourceTiers';
 
 export type ResearchFeedFingerprintLevers = Pick<
   ResearchRunLevers,
   'feedUrl' | 'query' | 'minRelevance' | 'trustedDomains' | 'reviewDomains' | 'unlistedSources' | 'allowedDomains'
 > &
-  Partial<Pick<ResearchRunLevers, 'model' | 'recencyDays' | 'blockedDomains'>>;
+  Partial<Pick<ResearchRunLevers, 'model' | 'recencyDays' | 'blockedDomains' | 'itemRules'>>;
 
 /** Pure-JS 53-bit hash (cyrb53), so the same value comes out of the node and browser builds. */
 const cyrb53 = (input: string, seed: number): string => {
@@ -30,9 +31,10 @@ const sortedUnique = (values: readonly string[] | undefined): string[] => [...ne
  * A stable hash of the levers that decide which feed items a run judges and how. A cursor written
  * under a different fingerprint is not trusted as-is: if the feed address is unchanged the newest
  * items are re-checked and items still waiting are kept, otherwise the feed starts fresh.
- * Site lists are order-insensitive.
+ * Site lists and item rules are order-insensitive.
  */
 export const researchFeedFingerprint = (levers: ResearchFeedFingerprintLevers): string => {
+  const itemRules = canonicalItemRules(levers.itemRules).map(researchItemRuleKey).sort();
   const canonical = JSON.stringify([
     levers.feedUrl ?? null,
     levers.query,
@@ -44,6 +46,8 @@ export const researchFeedFingerprint = (levers: ResearchFeedFingerprintLevers): 
     levers.unlistedSources,
     sortedUnique(levers.allowedDomains),
     sortedUnique(levers.blockedDomains),
+    // Appended only when set: an unconditional element would change every existing config's hash.
+    ...(itemRules.length > 0 ? [itemRules] : []),
   ]);
   return cyrb53(canonical, 0) + cyrb53(canonical, 1);
 };

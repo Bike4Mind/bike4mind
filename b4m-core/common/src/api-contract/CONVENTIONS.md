@@ -159,6 +159,8 @@ re-deciding per endpoint:
 | A `tool_reference` (native tool search models only) or a `tool_addition` / `tool_removal` block (native tool changes models only) names a tool absent from the request's `tools`, or a `tool_reference` carries no string `tool_name` | `400` | `unknown_tool_reference` |
 | A `tool_addition` / `tool_removal` system message is sent for a model that cannot serve it on this route | `400` | `tool_changes_unsupported` |
 | A `tool_addition` / `tool_removal` message is malformed (not strictly typed `tool_reference` blocks only) or misplaced | `400` | `invalid_tool_change` |
+| `end_user_id` sent on a credential other than an API key holding `ai:end-user-id` (a well-formed value) | `400` | `end_user_id_not_allowed` |
+| `end_user_id` that is not 1-64 characters of letters, digits, `_`, `:` and `-` (checked before the credential) | `400` | `invalid_end_user_id` |
 | The model's provider is not configured on this deployment, or the self-hosted model server that lists it (Ollama, local image) is unreachable | `503` | `provider_not_configured` |
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
