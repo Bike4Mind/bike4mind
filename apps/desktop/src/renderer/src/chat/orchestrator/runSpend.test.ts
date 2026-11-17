@@ -50,8 +50,8 @@ describe('describeRunSpend', () => {
     const view = describeRunSpend(settled(27));
     expect(view?.chip).toBe('30 credits settled');
     expect(view?.lines).toEqual([
-      'Root 10 credits · Workers 20 credits over 2 attempts',
-      'Turns 27 credits · Titles 1 credit · Summaries 2 credits',
+      'Root 10 credits \u00b7 Workers 20 credits over 2 attempts',
+      'Turns 27 credits \u00b7 Titles 1 credit \u00b7 Summaries 2 credits',
       'Turn charges match what this device recorded',
       `Server total as of ${formatCheckedAt('2026-11-10T00:05:00.000Z')}`,
     ]);
@@ -66,7 +66,7 @@ describe('describeRunSpend', () => {
 
   it('marks a worker attempt count that the server cut short', () => {
     const view = describeRunSpend(settled(27, usage({ byAttemptTruncated: true })));
-    expect(view?.lines[0]).toBe('Root 10 credits · Workers 20 credits over 2+ attempts');
+    expect(view?.lines[0]).toBe('Root 10 credits \u00b7 Workers 20 credits over 2+ attempts');
   });
 
   it("falls back to this device's charges, marked as partial, when the server total is unavailable", () => {

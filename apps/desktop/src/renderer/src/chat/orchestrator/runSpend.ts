@@ -23,7 +23,7 @@ const PURPOSE_LABELS: Record<Purpose, string> = {
 };
 
 const credits = (value: number) => formatAgentCost(undefined, value);
-const SEPARATOR = ' · ';
+const SEPARATOR = ' \u00b7 ';
 // Credits are fractional; a difference this small is float noise, not a missing charge.
 const EPSILON = 1e-6;
 
