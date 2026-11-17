@@ -27,8 +27,8 @@ export const PRUNED_TRACE_PATTERNS = [
   // next's optional @playwright/test peer pulls in a second version. About 23 MB together.
   /\/node_modules\/(?:playwright|playwright-core|@playwright\/[^/]+)(?:\/|$)/,
   // tiktoken's node entry (tiktoken.cjs) reads only tiktoken_bg.wasm, which embeds every
-  // encoding's ranks. encoders/ and lite/ serve the `tiktoken/lite` and `tiktoken/load` entry
-  // points, which nothing here imports. About 18 MB.
+  // encoding's ranks. lite/ is the `tiktoken/lite` entry point and encoders/ the rank files it is
+  // fed; nothing here imports either. About 18 MB.
   /\/node_modules\/tiktoken\/(?:encoders|lite)(?:\/|$)/,
 ];
 
@@ -38,14 +38,18 @@ export function isPrunedTracePath(tracedPath) {
   return PRUNED_TRACE_PATTERNS.some(pattern => pattern.test(normalized));
 }
 
-function findTraceFiles(dir) {
+// Skipped at the .next root only, so a route directory that happens to share one of these names
+// is still pruned. The standalone tree is a copy Next already made; OpenNext reads its traces
+// from the .next root, not from there.
+const SKIPPED_ROOT_DIRS = new Set(['standalone', 'cache']);
+
+function findTraceFiles(dir, isRoot = true) {
   const found = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
-    // The standalone tree is a copy Next already made; its traces are not what OpenNext reads.
-    if (entry.isDirectory() && entry.name !== 'standalone' && entry.name !== 'cache')
-      found.push(...findTraceFiles(full));
-    else if (entry.isFile() && entry.name.endsWith('.nft.json')) found.push(full);
+    if (entry.isDirectory()) {
+      if (!(isRoot && SKIPPED_ROOT_DIRS.has(entry.name))) found.push(...findTraceFiles(full, false));
+    } else if (entry.isFile() && entry.name.endsWith('.nft.json')) found.push(full);
   }
   return found;
 }

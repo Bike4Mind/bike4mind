@@ -85,6 +85,16 @@ describe('pruneServerTrace.mjs', () => {
     expect(readTrace(standaloneTrace)).toEqual(PRUNED);
   });
 
+  it('still prunes a route directory that shares a name with a skipped root directory', () => {
+    const nextDir = path.join(tmpRoot, '.next');
+    fs.mkdirSync(path.join(nextDir, 'standalone'), { recursive: true });
+    const routeTrace = path.join(nextDir, 'server', 'pages', 'api', 'cache', 'purge.js.nft.json');
+    writeTrace(routeTrace, [...KEPT, ...PRUNED]);
+
+    expect(runScript(['--if-standalone', nextDir]).status).toBe(0);
+    expect(readTrace(routeTrace)).toEqual(KEPT);
+  });
+
   it('is a no-op with --if-standalone when the build wrote no standalone output', () => {
     const nextDir = path.join(tmpRoot, '.next');
     const trace = path.join(nextDir, 'server', 'pages', 'index.js.nft.json');
