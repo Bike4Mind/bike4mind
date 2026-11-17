@@ -114,4 +114,8 @@ describe('describeRunSpend', () => {
     expect(describeRunSpend({ status: 'unattributed' })).toBeUndefined();
     expect(describeRunSpend(undefined)).toBeUndefined();
   });
+
+  it('describes nothing for a value it does not recognise, such as an empty bridge reply', () => {
+    expect(describeRunSpend({} as RunSpend)).toBeUndefined();
+  });
 });

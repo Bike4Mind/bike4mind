@@ -55,8 +55,7 @@ function purposeLine(usage: CompletionRunUsage): string {
  * to store their charge on.
  */
 export function describeRunSpend(spend: RunSpend | undefined): RunSpendView | undefined {
-  if (!spend || spend.status === 'unattributed') return undefined;
-  if (spend.status === 'unavailable') {
+  if (spend?.status === 'unavailable') {
     // Nothing recorded under the run is unknown, not zero: the card keeps its own estimate.
     if (spend.local.requests === 0) return undefined;
     return {
@@ -65,6 +64,8 @@ export function describeRunSpend(spend: RunSpend | undefined): RunSpendView | un
       reconciled: false,
     };
   }
+  // Match `settled` explicitly: the value crosses IPC, so anything unrecognised keeps the estimate.
+  if (spend?.status !== 'settled') return undefined;
   const { server, local } = spend;
   const turns = server.byPurpose.find(entry => entry.purpose === 'turn')?.creditsCharged ?? 0;
   const reconciled = Math.abs(turns - local.creditsCharged) < EPSILON;
