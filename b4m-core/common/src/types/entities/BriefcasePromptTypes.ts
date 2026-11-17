@@ -142,6 +142,11 @@ export interface IResolvedPromptDispatch {
    *   a host (`hostCreateSession`) ignores it.
    */
   systemContext?: string;
+  /**
+   * Route this one send to agent mode, as the composer's Agent toggle would. Still gated on the agent-mode
+   * feature flag, so a user without agent mode gets a plain chat send.
+   */
+  forceAgent?: boolean;
 }
 
 /**

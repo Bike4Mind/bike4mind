@@ -18,6 +18,7 @@ import { StudioPanel, StudioSectionLabel } from '../design/StudioPanel';
 import StudioSegmentedControl from '../design/StudioSegmentedControl';
 import { studioColor } from '../design/studioTokens';
 import ClipInspector from './ClipInspector';
+import DirectButton from './DirectButton';
 import { probeMediaDurationMs } from './probeMediaDuration';
 import SecondsField from './SecondsField';
 import { formatTimecode } from './timelinePlayback';
@@ -219,15 +220,17 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
             ))}
           </Stack>
         </Stack>
-        <Chip
-          variant="soft"
-          color={STATUS_COLOR[status.kind]}
-          data-testid="production-save-status"
-          data-status={status.kind}
-          sx={{ marginLeft: 'auto' }}
-        >
-          {status.kind === 'error' ? `${STATUS_LABEL.error}: ${status.message}` : STATUS_LABEL[status.kind]}
-        </Chip>
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ marginLeft: 'auto' }}>
+          <DirectButton composition={composition} blocked={blocksNavigation} />
+          <Chip
+            variant="soft"
+            color={STATUS_COLOR[status.kind]}
+            data-testid="production-save-status"
+            data-status={status.kind}
+          >
+            {status.kind === 'error' ? `${STATUS_LABEL.error}: ${status.message}` : STATUS_LABEL[status.kind]}
+          </Chip>
+        </Stack>
       </Toolbar>
 
       <Workspace>

@@ -237,6 +237,7 @@ import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentE
 import { buildAgentMusicToolConfig, getAgentMusicToolConfigDeps } from './agentExecutor.musicToolConfig';
 import { buildAgentAudioToolJobs, getAgentAudioToolJobsDeps } from './agentExecutor.audioToolConfig';
 import { buildAgentImageToolConfig, getAgentImageToolConfigDeps } from './agentExecutor.imageToolConfig';
+import { buildAgentProductionToolConfig, getAgentProductionToolConfigDeps } from './agentExecutor.productionToolConfig';
 import { buildAgentRecentImagesNote, withRecentImagesNote } from './agentExecutor.recentImagesNote';
 import { resolveImageJobFiles } from '@server/generations/resolveImageJobFiles';
 import { publishRunGenerationJobs } from './agentExecutor.generationJobs';
@@ -273,6 +274,7 @@ import {
   resolveShadowRouting,
 } from '@bike4mind/services/llm/shadowTier';
 import { applyOrgToolPolicy } from '@bike4mind/services/llm/orgToolPolicy';
+import { PRODUCTION_TOOL_NAMES } from '@bike4mind/services/llm/tools';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
@@ -2365,53 +2367,80 @@ async function runExecution(
       executionEnableLattice: execution.enableLattice,
     });
 
+    // The production tools drive the same capped image, video and music jobs, so they need those configs even
+    // when the toolbelt does not name the plain media tools (the media tools are offered only when named).
+    const productionToolsEnabled = PRODUCTION_TOOL_NAMES.some(name => profileEnabledTools.includes(name));
+    const imageJobConfig = await buildAgentImageToolConfig(
+      {
+        userId: execution.userId,
+        organizationId: execution.organizationId,
+        apiKeyId: execution.apiKeyId,
+        questId: runQuestId,
+        selection: execution.imageConfig,
+        toolEnabled:
+          productionToolsEnabled ||
+          profileEnabledTools.includes('image_generation') ||
+          profileEnabledTools.includes('edit_image'),
+      },
+      getAgentImageToolConfigDeps(logger)
+    );
+    const videoConfig = await buildAgentVideoToolConfig(
+      {
+        userId: execution.userId,
+        organizationId: execution.organizationId,
+        apiKeyId: execution.apiKeyId,
+        questId: runQuestId,
+        toolEnabled: productionToolsEnabled || profileEnabledTools.includes('video_generation'),
+      },
+      getAgentVideoToolConfigDeps(logger)
+    );
+    const musicConfig = await buildAgentMusicToolConfig(
+      {
+        userId: execution.userId,
+        organizationId: execution.organizationId,
+        apiKeyId: execution.apiKeyId,
+        questId: runQuestId,
+        toolEnabled: productionToolsEnabled || profileEnabledTools.includes('music_generation'),
+      },
+      getAgentMusicToolConfigDeps(logger)
+    );
+    const audioJobs = await buildAgentAudioToolJobs(
+      {
+        userId: execution.userId,
+        organizationId: execution.organizationId,
+        apiKeyId: execution.apiKeyId,
+        questId: runQuestId,
+        toolEnabled: productionToolsEnabled || profileEnabledTools.includes('audio_generation'),
+      },
+      getAgentAudioToolJobsDeps(logger)
+    );
+    const productionConfig = await buildAgentProductionToolConfig(
+      {
+        user: user as IUserDocument,
+        apiKeyId: execution.apiKeyId,
+        questId: runQuestId,
+        toolEnabled: productionToolsEnabled,
+        image: imageJobConfig,
+        video: videoConfig,
+        music: musicConfig,
+        imageSelection: execution.imageConfig,
+        audioSettings: execution.audioConfig,
+        audioJobs,
+      },
+      getAgentProductionToolConfigDeps(logger)
+    );
+
     const subagentToolConfig = buildSubagentToolConfig({
       model: agentModel,
       // An OpenAI key swaps the analysis model; restricted users keep their own.
       apiKeyTable: shadowSettings ? undefined : (apiKeyTable as ApiKeyTable),
       imageConfig: execution.imageConfig,
       audioConfig: execution.audioConfig,
-      audioJobs: await buildAgentAudioToolJobs(
-        {
-          userId: execution.userId,
-          organizationId: execution.organizationId,
-          apiKeyId: execution.apiKeyId,
-          questId: runQuestId,
-          toolEnabled: profileEnabledTools.includes('audio_generation'),
-        },
-        getAgentAudioToolJobsDeps(logger)
-      ),
-      imageJobConfig: await buildAgentImageToolConfig(
-        {
-          userId: execution.userId,
-          organizationId: execution.organizationId,
-          apiKeyId: execution.apiKeyId,
-          questId: runQuestId,
-          selection: execution.imageConfig,
-          toolEnabled: profileEnabledTools.includes('image_generation') || profileEnabledTools.includes('edit_image'),
-        },
-        getAgentImageToolConfigDeps(logger)
-      ),
-      videoConfig: await buildAgentVideoToolConfig(
-        {
-          userId: execution.userId,
-          organizationId: execution.organizationId,
-          apiKeyId: execution.apiKeyId,
-          questId: runQuestId,
-          toolEnabled: profileEnabledTools.includes('video_generation'),
-        },
-        getAgentVideoToolConfigDeps(logger)
-      ),
-      musicConfig: await buildAgentMusicToolConfig(
-        {
-          userId: execution.userId,
-          organizationId: execution.organizationId,
-          apiKeyId: execution.apiKeyId,
-          questId: runQuestId,
-          toolEnabled: profileEnabledTools.includes('music_generation'),
-        },
-        getAgentMusicToolConfigDeps(logger)
-      ),
+      audioJobs,
+      imageJobConfig,
+      videoConfig,
+      musicConfig,
+      productionConfig,
       imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });
 

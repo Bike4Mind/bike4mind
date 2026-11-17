@@ -25,6 +25,19 @@ const validateShotIds = (content: Pick<StudioCompositionContent, 'shots'>): Stud
   });
 };
 
+// A shot's pick and its clip must be among its files, so the ownership check on fileIds covers them too.
+const PICK_FIELDS = ['chosenFileId', 'clipFileId'] as const;
+
+const validateShotPicks = (content: Pick<StudioCompositionContent, 'shots'>): StudioCompositionIssue[] =>
+  content.shots.flatMap((shot, shotIndex) =>
+    PICK_FIELDS.flatMap((field): StudioCompositionIssue[] => {
+      const fileId = shot[field];
+      return fileId && !shot.fileIds.includes(fileId)
+        ? [{ code: 'unknown_file', path: ['shots', shotIndex, field], message: "Must be one of the shot's files" }]
+        : [];
+    })
+  );
+
 type FileReference = { fileId: string; path: (string | number)[]; kinds?: readonly StudioFileMediaKind[] };
 
 // Shot files are candidates of any media kind; the brand kit holds pictures (and product clips).
@@ -62,7 +75,7 @@ const validateFileReferences = (
 
 /**
  * Every rule a parsed composition must meet beyond its schema: the timeline rules (paths prefixed with
- * `timeline`), unique shot ids, and, given the context, that the brand kit and shots reference only known files of a
+ * `timeline`), unique shot ids, shot picks drawn from the shot's own files, and, given the context, that the brand kit and shots reference only known files of a
  * kind their slot accepts.
  */
 export const validateStudioComposition = (
@@ -71,5 +84,6 @@ export const validateStudioComposition = (
 ): StudioCompositionIssue[] => [
   ...validateStudioTimeline(content.timeline, context).map(issue => ({ ...issue, path: ['timeline', ...issue.path] })),
   ...validateShotIds(content),
+  ...validateShotPicks(content),
   ...validateFileReferences(content, context),
 ];

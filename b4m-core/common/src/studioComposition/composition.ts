@@ -38,6 +38,9 @@ export const STUDIO_COMPOSITION_LIMITS = {
   shotTitleMaxLength: 200,
   shotDescriptionMaxLength: 4000,
   shotFilesMax: 20,
+  shotPromptMaxLength: 4000,
+  shotIntentMaxLength: 500,
+  shotVoiceLineMaxLength: 500,
   listLimitMax: 100,
 } as const;
 
@@ -75,6 +78,14 @@ export const StudioShotSchema = z.object({
   description: z.string().trim().max(limits.shotDescriptionMaxLength).optional(),
   durationMs: z.number().int().positive().optional(),
   fileIds: z.array(StudioFileIdSchema).max(limits.shotFilesMax).default([]),
+  prompt: z.string().trim().max(limits.shotPromptMaxLength).optional(),
+  intent: z.string().trim().max(limits.shotIntentMaxLength).optional(),
+  /** The picked take; one of fileIds. */
+  chosenFileId: StudioFileIdSchema.optional(),
+  /** The clip animated from chosenFileId; it stands in for the take on the timeline. */
+  clipFileId: StudioFileIdSchema.optional(),
+  /** The voiceover and caption line spoken over this shot. */
+  voiceLine: z.string().trim().max(limits.shotVoiceLineMaxLength).optional(),
 });
 export type StudioShot = z.infer<typeof StudioShotSchema>;
 
