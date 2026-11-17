@@ -1,8 +1,23 @@
 import { RUN_BUDGET_EXHAUSTED_ERROR_CODE, UnprocessableEntityError, type RunBudgetClaim } from '@bike4mind/common';
 import { completionRunRepository } from '@bike4mind/database';
 
-/** The deterministic refusal a client shows when a run has no headroom left; no model call writes it. */
-export function runBudgetExhaustedMessage(budgetCredits: number, committedCredits: number): string {
+/**
+ * The deterministic refusal a client shows when a run has no headroom left; no model call writes it.
+ * `neededCredits` is a paid call's whole hold: such a call is refused while the run still has room, so
+ * the message names the shortfall instead of calling the budget used up.
+ */
+export function runBudgetExhaustedMessage(
+  budgetCredits: number,
+  committedCredits: number,
+  neededCredits?: number
+): string {
+  const leftCredits = Math.max(0, budgetCredits - committedCredits);
+  if (neededCredits !== undefined && leftCredits > 0) {
+    return (
+      `This call needs ${neededCredits} credits, but this run has ${leftCredits} of its ${budgetCredits} ` +
+      'credits left. Retry once requests still running finish, or raise the run budget.'
+    );
+  }
   return (
     `This run's credit budget is used up: ${committedCredits} of its ${budgetCredits} credits are spent or ` +
     'reserved by requests still running. Retry once those requests finish, or raise the run budget.'
@@ -19,12 +34,15 @@ export async function claimRunBudget(claim: {
   runId: string;
   wantedCredits: number;
   minimumCredits: number;
+  /** Named in the refusal: set by an all-or-nothing claim (runBudgetExhaustedMessage). */
+  neededCredits?: number;
 }): Promise<number | undefined> {
   const outcome = await completionRunRepository.claimBudget(claim.runId, claim.wantedCredits, claim.minimumCredits);
   if (outcome.kind === 'exhausted') {
-    throw new UnprocessableEntityError(runBudgetExhaustedMessage(outcome.budgetCredits, outcome.committedCredits), {
-      errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE,
-    });
+    throw new UnprocessableEntityError(
+      runBudgetExhaustedMessage(outcome.budgetCredits, outcome.committedCredits, claim.neededCredits),
+      { errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE }
+    );
   }
   return outcome.kind === 'claimed' ? outcome.credits : undefined;
 }
@@ -39,7 +57,7 @@ export async function assertRunBudgetHeadroom(runId: string, credits: number): P
   if (run?.budgetCredits === undefined) return;
   const committedCredits = run.committedCredits ?? 0;
   if (credits > run.budgetCredits - committedCredits) {
-    throw new UnprocessableEntityError(runBudgetExhaustedMessage(run.budgetCredits, committedCredits), {
+    throw new UnprocessableEntityError(runBudgetExhaustedMessage(run.budgetCredits, committedCredits, credits), {
       errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE,
     });
   }
@@ -51,7 +69,12 @@ export async function assertRunBudgetHeadroom(runId: string, credits: number): P
  */
 export async function claimPaidCallRunBudget(runId: string, credits: number): Promise<RunBudgetClaim | undefined> {
   if (credits <= 0) return undefined;
-  const claimed = await claimRunBudget({ runId, wantedCredits: credits, minimumCredits: credits });
+  const claimed = await claimRunBudget({
+    runId,
+    wantedCredits: credits,
+    minimumCredits: credits,
+    neededCredits: credits,
+  });
   return claimed === undefined ? undefined : { runId, credits: claimed };
 }
 
