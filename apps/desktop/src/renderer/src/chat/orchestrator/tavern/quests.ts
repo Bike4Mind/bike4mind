@@ -43,9 +43,14 @@ function isAwaitingOutcome(agent: AgentView, snapshot: OpenSnapshot): boolean {
   return agent.updatedAt === snapshot.updatedAt || (agent.state === 'idle' && agent.outcome === undefined);
 }
 
+/** A re-run reading `done` from the previous run's stored outcome, before the new outcome lands. */
+function isStaleDone(agent: AgentView, snapshot: OpenSnapshot): boolean {
+  return agent.outcome !== undefined && agent.outcome === snapshot.outcome && agent.updatedAt === snapshot.updatedAt;
+}
+
 /**
  * Folds a roster update into the ledger. An agent on an open quest that later turns `done` is checked
- * off at `now`, even across the gap before its outcome is stored (see isAwaitingOutcome). Failing, stopping or ending with no reply
+ * off at `now`, unless it is a re-run still reading its previous outcome (see isAwaitingOutcome). Failing, stopping or ending with no reply
  * ends the quest unchecked, and an agent already done when first seen is never added, so a reload
  * does not pin up quests that finished while nobody was looking.
  */
@@ -58,7 +63,12 @@ export function trackQuests(ledger: QuestLedger, agents: readonly AgentView[], n
       continue;
     }
     if (agent.state === 'done') {
-      const at = ledger.finished.get(agent.id) ?? (ledger.open.has(agent.id) ? now : undefined);
+      const snapshot = ledger.open.get(agent.id);
+      if (!ledger.finished.has(agent.id) && snapshot && isStaleDone(agent, snapshot)) {
+        open.set(agent.id, snapshot);
+        continue;
+      }
+      const at = ledger.finished.get(agent.id) ?? (snapshot ? now : undefined);
       if (at !== undefined) finished.set(agent.id, at);
       continue;
     }

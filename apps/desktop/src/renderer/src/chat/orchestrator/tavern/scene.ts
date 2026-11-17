@@ -66,6 +66,7 @@ export function noteCapacity(boardHeightPx: number, total: number, max: number =
   };
   if (total <= max && stack(total, false) <= room) return total;
   for (let pinned = Math.min(total, max) - 1; pinned >= 0; pinned--) {
+    if (pinned + 1 >= total) continue; // a capacity of `total` must mean the full stack fits
     if (stack(pinned, true) <= room) return pinned + 1;
   }
   return 0;

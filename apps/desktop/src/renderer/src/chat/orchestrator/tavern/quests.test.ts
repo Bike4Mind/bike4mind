@@ -73,6 +73,28 @@ describe('trackQuests', () => {
     }
   });
 
+  it("holds a re-run open while `done` is still the previous run's finished outcome, then drops it on failure", () => {
+    const ledger = track([
+      [agent('a', 'working', { outcome: 'finished' })],
+      [agent('a', 'done', { outcome: 'finished' })],
+    ]);
+    expect(ledger.finished.size).toBe(0);
+    expect(ledger.open.has('a')).toBe(true);
+    const failed = trackQuests(ledger, [ended('a', 'failed', 'failed')], 200);
+    expect(failed.open.size).toBe(0);
+    expect(failed.finished.size).toBe(0);
+  });
+
+  it('checks off a re-run once its done record is a new update', () => {
+    const ledger = track([
+      [agent('a', 'working', { outcome: 'finished' })],
+      [agent('a', 'done', { outcome: 'finished' })],
+      [ended('a', 'done', 'finished')],
+    ]);
+    expect(ledger.finished).toEqual(new Map([['a', 200]]));
+    expect(ledger.open.size).toBe(0);
+  });
+
   it('ends a re-run that fails again with the same outcome once the record updates', () => {
     const ledger = track([[agent('a', 'working', { outcome: 'failed' })], [ended('a', 'failed', 'failed')]]);
     expect(ledger.open.size).toBe(0);

@@ -114,7 +114,7 @@ describe('noteCapacity', () => {
   // Board heights (px) as measured live in the desktop app, from a large scene down to a tiny one.
   it.each([
     [145, 3],
-    [109, 3],
+    [109, 2],
     [77, 2],
     [70, 2],
     [55, 2],
@@ -134,6 +134,12 @@ describe('noteCapacity', () => {
     const { pinned, hidden } = pinNotes([1, 2, 3, 4, 5, 6], noteCapacity(height, 6));
     expect(pinned).toHaveLength(places - 1);
     expect(pinned.length + hidden.length).toBe(6);
+  });
+
+  it('never reports a capacity of every quest unless the full stack fits, so a clipped last note gets a "+N"', () => {
+    const { pinned, hidden } = pinNotes([1, 2, 3], noteCapacity(109, 3));
+    expect(pinned).toHaveLength(1);
+    expect(hidden).toHaveLength(2);
   });
 
   it('gives no place at all once not even the "+N" note fits, so the board is not drawn', () => {
