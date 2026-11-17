@@ -10,6 +10,7 @@ import {
   USER_ACCOUNT_SEGMENTS,
   type UserAccountSegment,
   type BriefSchedule,
+  ConflictError,
 } from '@bike4mind/common';
 import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import {
@@ -1246,36 +1247,48 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
 
   private async writePlanStorageLimit(userId: string, planStorageLimitMb: number | null): Promise<boolean> {
     if (!mongoose.isValidObjectId(userId)) return false;
-    const fieldMissing = (field: string) => ({ $eq: [{ $type: field }, 'missing'] });
-    const res = await this.model.updateOne({ _id: userId }, [
-      // A row without the override field (pre-backfill, or an OAuth signup) gets the override
-      // resolveUserStorageLimit would derive for it, since writing planStorageLimit (a limit or an
-      // explicit null) retires that fallback.
-      {
-        $set: {
-          storageLimitOverride: {
-            $cond: [
-              fieldMissing('$storageLimitOverride'),
-              {
-                $cond: [
-                  { $in: ['$storageLimit', [null, DEFAULT_STORAGE_LIMIT_MB]] },
-                  null,
-                  { $cond: [fieldMissing('$storageLimit'), null, '$storageLimit'] },
-                ],
-              },
-              '$storageLimitOverride',
-            ],
+    type StorageSnapshot = {
+      storageLimitOverride?: number | null;
+      planStorageLimit?: number | null;
+      storageLimit?: number | null;
+      __v?: number;
+    };
+    const fields = ['storageLimitOverride', 'planStorageLimit', 'storageLimit', '__v'] as const;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const snapshot = await this.model
+        .findById(userId, { storageLimitOverride: 1, planStorageLimit: 1, storageLimit: 1, __v: 1 })
+        .lean<StorageSnapshot>();
+      if (!snapshot) return false;
+      // Preserve a legacy custom limit before retiring the missing-override fallback. Field
+      // presence matters: an explicit null means use the plan, and zero is a manual override.
+      const override = Object.hasOwn(snapshot, 'storageLimitOverride')
+        ? (snapshot.storageLimitOverride ?? null)
+        : snapshot.storageLimit == null || snapshot.storageLimit === DEFAULT_STORAGE_LIMIT_MB
+          ? null
+          : snapshot.storageLimit;
+      const result = await this.model.updateOne(
+        {
+          _id: userId,
+          $and: fields.map(field => ({
+            [field]: Object.hasOwn(snapshot, field) ? { $eq: snapshot[field], $exists: true } : { $exists: false },
+          })),
+        },
+        {
+          $set: {
+            storageLimitOverride: override,
+            planStorageLimit: planStorageLimitMb,
+            storageLimit: override ?? planStorageLimitMb ?? DEFAULT_STORAGE_LIMIT_MB,
           },
+          // Even an equal-quantity grant must write: this fences a concurrent release's
+          // subscription snapshot. Timestamp changes alone can be elided in the same millisecond.
+          $inc: { __v: 1 },
         },
-      },
-      {
-        $set: {
-          planStorageLimit: planStorageLimitMb,
-          storageLimit: { $ifNull: ['$storageLimitOverride', planStorageLimitMb ?? DEFAULT_STORAGE_LIMIT_MB] },
-        },
-      },
-    ]);
-    return res.matchedCount === 1;
+        { runValidators: true }
+      );
+      if (result.matchedCount === 1) return true;
+      // Native transaction errors deliberately propagate so the entire transaction can retry.
+    }
+    throw new ConflictError('Storage allowance changed concurrently; retry the operation');
   }
 
   async findCurrentStorageSize(userId: string): Promise<number | null> {
