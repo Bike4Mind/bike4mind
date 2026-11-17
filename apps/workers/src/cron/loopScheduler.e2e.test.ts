@@ -2027,6 +2027,32 @@ describe('runLoopSchedulerTick - liveness', () => {
   });
 });
 
+/** Each started run gets a real execution doc carrying its creditCap, so later lanes' admission reserves it. */
+const persistRuns = () =>
+  h.startAgentExecution.mockImplementation(async (params: Record<string, unknown>) => {
+    const doc = await agentExecutionRepository.create({
+      userId: params.userId,
+      sessionId: params.sessionId,
+      questId: params.questId,
+      loopId: params.loopId,
+      query: 'q',
+      model: params.model,
+      status: 'running',
+      approvedTools: [],
+      deniedTools: [],
+      iterationBilling: [],
+      totalCreditsUsed: 0,
+      ...(params.creditCap !== undefined && { creditCap: params.creditCap }),
+      ...(params.loopRunKind !== undefined && { loopRunKind: params.loopRunKind }),
+      lambdaInvocationCount: 1,
+      childExecutionIds: [],
+      createdAt: NOW,
+    } as never);
+    executions[doc.id] = { status: 'running', updatedAt: NOW, createdAt: NOW };
+    return { ok: true, executionId: doc.id };
+  });
+const caps = () => h.startAgentExecution.mock.calls.map(call => call[0].creditCap as number);
+
 describe('runLoopSchedulerTick - parallel lanes', () => {
   const settings = (values: Record<string, unknown>) =>
     vi
@@ -2045,31 +2071,6 @@ describe('runLoopSchedulerTick - parallel lanes', () => {
     }
     return { loop, tickets };
   };
-  /** Each started run gets a real execution doc carrying its creditCap, so later lanes' admission reserves it. */
-  const persistRuns = () =>
-    h.startAgentExecution.mockImplementation(async (params: Record<string, unknown>) => {
-      const doc = await agentExecutionRepository.create({
-        userId: params.userId,
-        sessionId: params.sessionId,
-        questId: params.questId,
-        loopId: params.loopId,
-        query: 'q',
-        model: params.model,
-        status: 'running',
-        approvedTools: [],
-        deniedTools: [],
-        iterationBilling: [],
-        totalCreditsUsed: 0,
-        ...(params.creditCap !== undefined && { creditCap: params.creditCap }),
-        ...(params.loopRunKind !== undefined && { loopRunKind: params.loopRunKind }),
-        lambdaInvocationCount: 1,
-        childExecutionIds: [],
-        createdAt: NOW,
-      } as never);
-      executions[doc.id] = { status: 'running', updatedAt: NOW, createdAt: NOW };
-      return { ok: true, executionId: doc.id };
-    });
-  const caps = () => h.startAgentExecution.mock.calls.map(call => call[0].creditCap as number);
 
   it('runs one triage in a lane, and while it runs the other lanes work only tickets with a priority', async () => {
     persistRuns();
@@ -2716,6 +2717,54 @@ describe('dispatchLoopNow', () => {
     expect((await reload(waiting.id)).activeExecutionIds).toEqual(['exec-1']);
     expect((await reload(loop.id)).activeExecutionIds).toEqual(['exec-2']);
     expect(await ticketOf(ticket.id)).toMatchObject({ status: 'in_progress', executionId: 'exec-2' });
+  });
+
+  it('opens every free lane of a multi-lane loop in one call, and holds on its own lanes', async () => {
+    const loop = await createLoop({ maxConcurrent: 2 });
+    const tickets = [await createTicket(loop.id), await createTicket(loop.id), await createTicket(loop.id)];
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(2);
+    const started = h.startAgentExecution.mock.calls.map(call => call[0].workItemId);
+    expect(new Set(started).size).toBe(2);
+    expect(await reload(loop.id)).toMatchObject({
+      activeExecutionIds: ['exec-1', 'exec-2'],
+      hold: { kind: 'capacity', limit: 'loop' },
+    });
+    const statuses = await Promise.all(tickets.map(async t => (await ticketOf(t.id)).status));
+    expect(statuses.sort()).toEqual(['in_progress', 'in_progress', 'open']);
+  });
+
+  it('splits the budget across the lanes one call opens, as the tick does', async () => {
+    persistRuns();
+    // At 12:00 a 24-credit budget's paced allowance is 13: two lanes get 6.5 each.
+    const loop = await createLoop({ maxConcurrent: 2, budgetCreditsPerDay: 24 });
+    for (let i = 0; i < 3; i++) await createTicket(loop.id);
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(caps()).toHaveLength(2);
+    expect(caps()[0]).toBeCloseTo(6.5);
+    expect(caps()[1]).toBeCloseTo(6.5);
+    const after = await reload(loop.id);
+    expect(after.activeExecutionIds).toHaveLength(2);
+    expect(after.hold).toMatchObject({ kind: 'capacity', limit: 'loop' });
+  });
+
+  it('folds both finished lanes of a two-lane loop and refills both in one call', async () => {
+    const loop = await createLoop({ maxConcurrent: 2, activeExecutionIds: ['exec-a', 'exec-b'], nextRunAt: LATER });
+    await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-a' });
+    await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-b' });
+    await createTicket(loop.id);
+    await createTicket(loop.id);
+    executions['exec-a'] = { status: 'completed', result: { answer: 'done' } };
+    executions['exec-b'] = { status: 'completed', result: { answer: 'done' } };
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(2);
+    expect(await reload(loop.id)).toMatchObject({ activeExecutionIds: ['exec-1', 'exec-2'], runCount: 2 });
   });
 
   it('is a no-op for a loop that does not exist', async () => {

@@ -207,7 +207,7 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
 /**
  * Event-driven dispatch, from the loop dispatch queue (apps/workers/src/queueHandlers/loopDispatch.ts): folds
  * the loop's finished run, then fills free run slots one at a time through the tick's own `dispatchDue`, until
- * this loop is claimed or the cap is reached. Each claim takes the longest-due loop, so a run that frees a slot
+ * this loop has no free lane or ready ticket left, or the cap is reached. Each claim takes the longest-due loop, so a run that frees a slot
  * does not hand it straight back to its own loop, and a loop that went due silently (its interval) does not
  * keep this one waiting for the tick while slots are free. The claim's lease is the only gate, so the tick
  * and any number of events never start one loop twice. A no-op when nothing is due.
@@ -233,15 +233,21 @@ export async function dispatchLoopNow(loopId: string, now: Date, logger: Logger)
   const { maxActiveRuns, lanesPerUser } = await loopLaneLimits();
   const claimed: string[] = [];
   let serverFull = false;
-  for (let i = 0; i < maxActiveRuns && !claimed.includes(loopId); i++) {
-    if ((await loopRepository.countInFlight()) >= maxActiveRuns) {
+  let done = false;
+  for (let i = 0; i < maxActiveRuns && !done; i++) {
+    const inFlight = await loopRepository.countInFlight();
+    if (inFlight >= maxActiveRuns) {
       serverFull = true;
       break;
     }
-    const result = await dispatchDue(now, 1, lanesPerUser, logger);
+    // The real room left, so a multi-lane loop's budget splits across its lanes as on the tick.
+    const room = Math.min(MAX_DISPATCH_PER_TICK, maxActiveRuns - inFlight);
+    const result = await dispatchDue(now, 1, lanesPerUser, logger, room);
     claimed.push(...result.claimed);
     // Nothing started: nothing else is startable now.
     if (!result.capped) break;
+    // A loop left due with a free lane and another ready ticket fills it in this call, as on the tick.
+    done = result.claimed.includes(loopId) && !result.again.includes(loopId);
   }
 
   // dispatchDue already pushed for every loop it claimed, and held it on the owner's lane limit if that was full.
@@ -290,16 +296,19 @@ async function reopenParkedTickets(now: Date, logger: Logger): Promise<void> {
  * Opens up to `allowance` lanes on due loops, round-robin by owner: each pass opens at most one lane per user,
  * so one user's many due loops or lanes cannot keep another user's loop out of the tick. A loop left due with a
  * free lane may be claimed again in a later pass. A loop that opened nothing (deferred, paused, held, lease
- * released) is skipped for the rest of the tick so it is not re-claimed in a hot loop; `skipped` lists those, and
- * `claimed` every loop claimed.
+ * released) is skipped for the rest of the tick so it is not re-claimed in a hot loop; `skipped` lists those,
+ * `claimed` every loop claimed, and `again` those left due with a free lane. `room` is the run slots the lane
+ * credit split may assume (defaults to `allowance`).
  */
 async function dispatchDue(
   now: Date,
   allowance: number,
   lanesPerUser: number,
-  logger: Logger
-): Promise<{ claimed: string[]; skipped: string[]; capped: boolean }> {
+  logger: Logger,
+  room = allowance
+): Promise<{ claimed: string[]; skipped: string[]; again: string[]; capped: boolean }> {
   const claimed: string[] = [];
+  const again: string[] = [];
   const skip: string[] = [];
   let served: string[] = [];
   let started = 0;
@@ -314,17 +323,18 @@ async function dispatchDue(
     served.push(loop.userId);
     let opened: LaneOpened = false;
     try {
-      opened = await dispatchLoop(loop, now, logger, { lanesPerUser, allowanceLeft: allowance - started });
+      opened = await dispatchLoop(loop, now, logger, { lanesPerUser, allowanceLeft: room - started });
     } catch (error) {
       logger.error(`[Loops] Failed to dispatch loop ${loop.id}`, error as Error);
     }
     if (opened) started++;
-    if (opened !== 'again') skip.push(loop.id);
+    if (opened === 'again') again.push(loop.id);
+    else skip.push(loop.id);
     // Started, paused or deferred: each shows on the loop page.
     await pushLoopChanged(loop.userId, loop.id, logger);
   }
   // Stopping at MAX_CLAIMS_PER_TICK is not the run cap, so it does not count as capped.
-  return { claimed, skipped: skip, capped: started >= allowance };
+  return { claimed, skipped: skip, again, capped: started >= allowance };
 }
 
 /**
