@@ -183,7 +183,7 @@ describe('getQaSummary', () => {
     await seed({ hours: 3, suite: 'AI Latency', trigger: scheduled, failing: [TEST_A, TEST_B], metrics: [] });
     const [p] = (await getQaSummary(SUMMARY_FILTERS)).products;
     expect(p.e2e).toMatchObject({ runs: 1, cleanRuns: 1 });
-    expect(p.latency).toMatchObject({ runs: 1, passedRuns: 0, checks: 0, checkRate: null });
+    expect(p.latency).toMatchObject({ runs: 1, passedRuns: 0, checksWithinLimit: 0, checkRate: 0 });
   });
 });
 

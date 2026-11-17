@@ -53,8 +53,33 @@ describe('summarizeQaRuns', () => {
       { ...run({ suite: 'AI Latency', passed: 0 }), status: 'infra-error', metrics: [] },
       run({ suite: 'Core' }),
     ]);
-    expect(p.latency).toEqual({ runs: 3, passedRuns: 2, checks: 3, checksWithinLimit: 2, checkRate: 2 / 3 });
+    // The infra-error run ran no test, so it still counts one check over the limit.
+    expect(p.latency).toEqual({ runs: 3, passedRuns: 1, checks: 4, checksWithinLimit: 2, checkRate: 0.5 });
     expect(p.e2e).toMatchObject({ runs: 1, cleanRuns: 1 });
+  });
+
+  it('counts each test of a run that reported no check as a check over the limit', () => {
+    const ok = [latency(20, 60), latency(25, 60), latency(30, 60), latency(22, 60)];
+    const [p] = summarizeQaRuns([
+      run({ suite: 'AI Latency', passed: 4, metrics: ok }),
+      run({ suite: 'AI Latency', passed: 4, metrics: ok }),
+      { ...run({ suite: 'AI Latency', passed: 0, failed: 4 }), metrics: [] },
+    ]);
+    expect(p.latency).toEqual({ runs: 3, passedRuns: 2, checks: 12, checksWithinLimit: 8, checkRate: 8 / 12 });
+  });
+
+  it('does not count a run that reported latency values without a limit as crashed', () => {
+    const [p] = summarizeQaRuns([run({ suite: 'AI Latency', passed: 4, metrics: [latency(5), latency(7)] })]);
+    expect(p.latency).toEqual({ runs: 1, passedRuns: 1, checks: 0, checksWithinLimit: 0, checkRate: null });
+  });
+
+  it('passes a latency run only when its status passed and every check is within its limit', () => {
+    const [p] = summarizeQaRuns([
+      run({ suite: 'AI Latency', passed: 4, metrics: [latency(50, 60), latency(70, 60), latency(40, 60)] }),
+      run({ suite: 'AI Latency', passed: 3, failed: 1, metrics: [latency(10, 60)] }),
+      run({ suite: 'AI Latency', passed: 1, metrics: [latency(10, 60), latency(5)] }),
+    ]);
+    expect(p.latency).toMatchObject({ runs: 3, passedRuns: 1, checks: 5, checksWithinLimit: 4 });
   });
 
   it('counts a known latency suite as latency even when none of its runs here has a metric', () => {
@@ -65,7 +90,7 @@ describe('summarizeQaRuns', () => {
     ];
     const [a, b] = summarizeQaRuns(runs, new Map([['product-a', new Set(['AI Latency'])]]));
     expect(a.e2e).toMatchObject({ runs: 1, cleanRuns: 1, passRate: 1 });
-    expect(a.latency).toEqual({ runs: 1, passedRuns: 0, checks: 0, checksWithinLimit: 0, checkRate: null });
+    expect(a.latency).toEqual({ runs: 1, passedRuns: 0, checks: 4, checksWithinLimit: 0, checkRate: 0 });
     // Known suites are per product: product-b's AI Latency has no metric anywhere, so it stays E2E.
     expect(b.latency).toBeNull();
     expect(b.e2e).toMatchObject({ runs: 1, cleanRuns: 0 });

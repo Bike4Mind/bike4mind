@@ -39,7 +39,8 @@ const Figure: FC<{ label: string; value: string; detail: ReactNode; testId: stri
   detail,
   testId,
 }) => (
-  <Box data-testid={testId} sx={{ minWidth: 0 }}>
+  // Subgrid rows keep the two figures' values level when one label wraps (narrow screens).
+  <Box data-testid={testId} sx={{ minWidth: 0, display: 'grid', gridRow: 'span 3', gridTemplateRows: 'subgrid' }}>
     <Typography level="body-sm" textColor="text.tertiary">
       {label}
     </Typography>
@@ -120,7 +121,7 @@ const StatusSummary: FC<{
                 {p.e2e && (
                   <Figure
                     testId="qa-summary-e2e"
-                    label="E2E"
+                    label="E2E tests passed"
                     value={formatPercent(p.e2e.passRate)}
                     detail={runsLine(p.e2e.cleanRuns, p.e2e.runs, 'with no failures')}
                   />
@@ -128,7 +129,7 @@ const StatusSummary: FC<{
                 {p.latency && (
                   <Figure
                     testId="qa-summary-latency"
-                    label="Latency"
+                    label="Latency checks within limit"
                     value={formatPercent(p.latency.checkRate)}
                     detail={runsLine(p.latency.passedRuns, p.latency.runs, 'passed')}
                   />
@@ -140,7 +141,8 @@ const StatusSummary: FC<{
       )}
       <Typography level="body-xs">
         E2E: passed tests out of all tests, not-started included. A run with no failures has no failed or not-started
-        tests. Latency: model checks within their time limit.
+        tests. Latency: model checks within their time limit; a run that crashed before measuring counts each of its
+        tests as over the limit. A latency run passed when every check was within its limit.
       </Typography>
     </Stack>
   );

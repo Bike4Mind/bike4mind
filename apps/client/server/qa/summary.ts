@@ -8,8 +8,10 @@ import type { QaCounts, QaMetric, QaRunStatus } from '@bike4mind/common';
  * Definitions:
  * - E2E pass rate = passed / (passed + failed + skipped + notStarted), summed over runs.
  * - A run "with no failures" has failed 0, notStarted 0 and is not an infra-error.
- * - Latency check rate = checks within their threshold / checks with a threshold.
- * - A latency run passed when its status is passed.
+ * - Latency check rate = checks within their threshold / checks with a threshold. A latency run that
+ *   reported no latency result at all (it crashed before measuring) counts each of its tests, at
+ *   least one, as a check over the limit, so a crash lowers the rate instead of vanishing from it.
+ * - A latency run passed when its status is passed and every check is within its threshold.
  */
 
 /** CI sends "Run via Schedule" (or the raw GitHub event name "schedule"). */
@@ -37,7 +39,7 @@ export interface QaLatencyStats {
   passedRuns: number;
   checks: number;
   checksWithinLimit: number;
-  /** null when no run reported a check with a threshold. */
+  /** null only when no check was counted. */
   checkRate: number | null;
 }
 
@@ -69,25 +71,26 @@ function e2eStats(runs: QaSummaryRunInput[]): QaE2eStats {
   return { runs: runs.length, cleanRuns, passed, tests, passRate: ratio(passed, tests) };
 }
 
-const latencyChecks = (run: QaSummaryRunInput) =>
-  (run.metrics ?? []).filter(m => m.kind === 'latency' && m.threshold !== undefined);
+const latencyResults = (run: QaSummaryRunInput) => (run.metrics ?? []).filter(m => m.kind === 'latency');
 
 function latencyStats(runs: QaSummaryRunInput[]): QaLatencyStats {
   let checks = 0;
   let checksWithinLimit = 0;
+  let passedRuns = 0;
   for (const run of runs) {
-    for (const m of latencyChecks(run)) {
-      checks += 1;
-      if (m.value <= (m.threshold as number)) checksWithinLimit += 1;
+    const results = latencyResults(run);
+    const runChecks = results.filter(m => m.threshold !== undefined);
+    const within = runChecks.filter(m => m.value <= (m.threshold as number)).length;
+    if (results.length === 0) {
+      const { passed, failed, skipped, notStarted } = run.counts;
+      checks += Math.max(1, passed + failed + skipped + notStarted);
+    } else {
+      checks += runChecks.length;
+      checksWithinLimit += within;
+      if (run.status === 'passed' && within === runChecks.length) passedRuns += 1;
     }
   }
-  return {
-    runs: runs.length,
-    passedRuns: runs.filter(r => r.status === 'passed').length,
-    checks,
-    checksWithinLimit,
-    checkRate: ratio(checksWithinLimit, checks),
-  };
+  return { runs: runs.length, passedRuns, checks, checksWithinLimit, checkRate: ratio(checksWithinLimit, checks) };
 }
 
 function groupBy<T>(items: T[], key: (item: T) => string): Map<string, T[]> {
@@ -116,7 +119,7 @@ export function summarizeQaRuns(
     .map(([product, productRuns]) => {
       const latencySuites = new Set(knownLatencySuites.get(product));
       for (const r of productRuns) {
-        if ((r.metrics ?? []).some(m => m.kind === 'latency')) latencySuites.add(r.suite);
+        if (latencyResults(r).length > 0) latencySuites.add(r.suite);
       }
       const e2eRuns = productRuns.filter(r => !latencySuites.has(r.suite));
       const latencyRuns = productRuns.filter(r => latencySuites.has(r.suite));
