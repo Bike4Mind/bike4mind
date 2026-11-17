@@ -118,12 +118,12 @@ it('returns a retryable conflict for a callback before forward acceptance is rec
 });
 it('refuses callbacks after disconnect or opt-out', async () => {
   m.channel.mockResolvedValue(null);
-  expect((await request()).statusCode).toBe(409);
+  expect((await request()).statusCode).toBe(410);
   expect(m.post).not.toHaveBeenCalled();
 });
 it('refuses callbacks for a replaced workspace connection', async () => {
   m.workspace.mockResolvedValue({ id: 'ws-other', organizationId: 'org1' });
-  expect((await request()).statusCode).toBe(409);
+  expect((await request()).statusCode).toBe(410);
   expect(m.post).not.toHaveBeenCalled();
 });
 it('caps raw body size and rejects arbitrary status text', async () => {
@@ -161,8 +161,16 @@ it.each(['is_shared', 'is_org_shared', 'is_ext_shared', 'is_pending_ext_shared']
   'does not post status to %s',
   async flag => {
     m.info.mockResolvedValue({ channel: { is_member: true, [flag]: true } });
-    expect((await request()).statusCode).toBe(409);
+    expect((await request()).statusCode).toBe(410);
     expect(m.claim).not.toHaveBeenCalled();
     expect(m.post).not.toHaveBeenCalled();
   }
 );
+it('returns a retryable 503 without claiming when Slack lookup fails', async () => {
+  m.info.mockRejectedValue(new Error('xoxb-secret failure'));
+  const res = await request();
+  expect(res.statusCode).toBe(503);
+  expect(res._getJSONData()).toEqual({ error: 'Slack is unavailable' });
+  expect(m.claim).not.toHaveBeenCalled();
+  expect(m.post).not.toHaveBeenCalled();
+});

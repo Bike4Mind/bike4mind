@@ -212,3 +212,21 @@ it('does not overwrite accepted delivery state when audit persistence fails', as
   expect(mocks.update).toHaveBeenCalledWith(expect.anything(), { $set: { state: 'sent' } });
   expect(mocks.update).not.toHaveBeenCalledWith(expect.anything(), { $set: { state: 'failed' } });
 });
+it('settles a sending delivery as sent when the first sent write throws after acceptance', async () => {
+  mocks.update.mockImplementation(async (_filter: unknown, change: { $set: { state: string } }) => {
+    if (change.$set.state === 'sent' && mocks.update.mock.calls.filter(c => c[1].$set.state === 'sent').length === 1) {
+      throw new Error('write unavailable');
+    }
+  });
+  await forwardSlackReaction('T1', 'A1', event);
+  const sent = mocks.update.mock.calls.filter(c => c[1].$set.state === 'sent');
+  expect(sent).toHaveLength(2);
+  expect(sent[1][0]).toEqual({ _id: expect.any(String), state: 'sending' });
+  expect(mocks.update).not.toHaveBeenCalledWith(expect.anything(), { $set: { state: 'failed' } });
+});
+it('ignores a message whose author cannot be resolved', async () => {
+  mocks.user.mockResolvedValueOnce({});
+  await forwardSlackReaction('T1', 'A1', event);
+  expect(mocks.update).toHaveBeenCalledWith(expect.anything(), { $set: { state: 'ignored' } });
+  expect(mocks.fetch).not.toHaveBeenCalled();
+});

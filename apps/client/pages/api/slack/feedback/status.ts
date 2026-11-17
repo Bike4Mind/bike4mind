@@ -5,6 +5,7 @@ import {
   SlackFeedbackDelivery,
   slackAuditLogRepository,
 } from '@bike4mind/database/infra';
+import { Logger } from '@bike4mind/observability';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getFeedbackDestinations } from '@server/integrations/slack/reactionFeedback';
@@ -65,14 +66,23 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     workspace.organizationId !== delivery.organizationId ||
     !channel
   ) {
-    return res.status(409).json({ error: 'Integration is disabled' });
+    return res.status(410).json({ error: 'Integration is disabled' });
   }
   const token = decryptToken(workspace.slackBotToken);
-  if (!token) return res.status(409).json({ error: 'Integration is disabled' });
+  if (!token) return res.status(410).json({ error: 'Integration is disabled' });
   const client = new WebClient(token, { retryConfig: { retries: 0 }, timeout: 2000 });
-  const info = await client.conversations.info({ channel: delivery.channelId });
+  let info: Awaited<ReturnType<typeof client.conversations.info>>;
+  try {
+    info = await client.conversations.info({ channel: delivery.channelId });
+  } catch (error) {
+    Logger.warn('Slack feedback status: channel lookup failed', {
+      deliveryId,
+      error: error instanceof Error ? error.name : 'unknown',
+    });
+    return res.status(503).json({ error: 'Slack is unavailable' });
+  }
   if (!isFeedbackChannelEligible(info.channel)) {
-    return res.status(409).json({ error: 'Channel is not eligible' });
+    return res.status(410).json({ error: 'Channel is not eligible' });
   }
   // Claim before posting: a replay or ambiguous Slack timeout must never post a second reply.
   const claim = await SlackFeedbackDelivery.updateOne(

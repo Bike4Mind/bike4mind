@@ -4,7 +4,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
 
-export default function OrgSlackFeedback({ organizationId }: { organizationId: string }) {
+export default function OrgSlackFeedback({
+  organizationId,
+  canEnable,
+}: {
+  organizationId: string;
+  canEnable: boolean;
+}) {
   const path = `/api/organizations/${organizationId}/integrations/slack/feedback`;
   const queryClient = useQueryClient();
   const [channelId, setChannelId] = useState('');
@@ -49,36 +55,40 @@ export default function OrgSlackFeedback({ organizationId }: { organizationId: s
           </Button>
         </Stack>
       ))}
-      <Input
-        data-testid="slack-feedback-channel"
-        placeholder="Channel ID (C...)"
-        value={channelId}
-        onChange={event => setChannelId(event.target.value)}
-      />
-      <Input
-        data-testid="slack-feedback-destination"
-        placeholder="Provisioned destination ID"
-        value={destinationId}
-        onChange={event => setDestinationId(event.target.value)}
-      />
-      <Input
-        data-testid="slack-feedback-emoji"
-        placeholder="Emoji name"
-        value={emoji}
-        onChange={event => setEmoji(event.target.value)}
-      />
-      <Button
-        data-testid="slack-feedback-enable"
-        loading={mutation.isPending}
-        disabled={
-          !/^C[A-Z0-9]{8,}$/.test(channelId) ||
-          !data?.destinations.includes(destinationId) ||
-          !/^[a-z0-9_+-]{1,64}$/.test(emoji)
-        }
-        onClick={() => mutation.mutate({ channelId, destinationId, emoji, enabled: true })}
-      >
-        Enable forwarding for this channel
-      </Button>
+      {canEnable && (
+        <>
+          <Input
+            data-testid="slack-feedback-channel"
+            placeholder="Channel ID (C...)"
+            value={channelId}
+            onChange={event => setChannelId(event.target.value)}
+          />
+          <Input
+            data-testid="slack-feedback-destination"
+            placeholder="Provisioned destination ID"
+            value={destinationId}
+            onChange={event => setDestinationId(event.target.value)}
+          />
+          <Input
+            data-testid="slack-feedback-emoji"
+            placeholder="Emoji name"
+            value={emoji}
+            onChange={event => setEmoji(event.target.value)}
+          />
+          <Button
+            data-testid="slack-feedback-enable"
+            loading={mutation.isPending}
+            disabled={
+              !/^C[A-Z0-9]{8,}$/.test(channelId) ||
+              !data?.destinations.includes(destinationId) ||
+              !/^[a-z0-9_+-]{1,64}$/.test(emoji)
+            }
+            onClick={() => mutation.mutate({ channelId, destinationId, emoji, enabled: true })}
+          >
+            Enable forwarding for this channel
+          </Button>
+        </>
+      )}
     </Stack>
   );
 }

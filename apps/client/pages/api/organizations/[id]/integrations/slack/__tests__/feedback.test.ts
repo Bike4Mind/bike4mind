@@ -5,6 +5,7 @@ const m = vi.hoisted(() => ({
   options: [] as unknown[],
   org: vi.fn(),
   workspace: vi.fn(),
+  workspaceWithToken: vi.fn(),
   update: vi.fn(),
   list: vi.fn(),
   audit: vi.fn(),
@@ -28,7 +29,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@bike4mind/database/infra', () => ({
   organizationRepository: { findById: m.org },
-  orgSlackWorkspaceRepository: { findByOrganizationId: m.workspace, findByOrganizationIdWithToken: m.workspace },
+  orgSlackWorkspaceRepository: {
+    findByOrganizationId: m.workspace,
+    findByOrganizationIdWithToken: m.workspaceWithToken,
+  },
   SlackFeedbackChannel: { updateOne: m.update, find: () => ({ select: () => ({ lean: m.list }) }) },
   slackAuditLogRepository: { createLog: m.audit },
 }));
@@ -62,7 +66,9 @@ function request(body: unknown = update, userId = ownerId) {
 beforeEach(() => {
   vi.clearAllMocks();
   m.org.mockResolvedValue({ id: orgId, userId: ownerId });
-  m.workspace.mockResolvedValue({ id: 'ws1', enabled: true, slackTeamId: 'T1', slackBotToken: 'test-token' });
+  const connected = { id: 'ws1', enabled: true, slackTeamId: 'T1', slackBotToken: 'test-token' };
+  m.workspace.mockResolvedValue(connected);
+  m.workspaceWithToken.mockResolvedValue(connected);
   m.info.mockResolvedValue({ channel: { is_member: true } });
   m.list.mockResolvedValue([{ ...update, emoji: 'bug', secret: 'must-strip' }]);
 });
@@ -107,6 +113,13 @@ it('lists existing opt-ins while the workspace is disabled', async () => {
   const { req, res } = request();
   await m.handlers.GET(req, res);
   expect(res._getJSONData().channels).toHaveLength(1);
+});
+it('refuses to enable a channel while the workspace is disabled', async () => {
+  m.workspaceWithToken.mockResolvedValue(null);
+  const { req, res } = request();
+  await expect(m.handlers.PUT(req, res)).rejects.toThrow('No Slack workspace connected');
+  expect(m.info).not.toHaveBeenCalled();
+  expect(m.update).not.toHaveBeenCalled();
 });
 it('refuses a destination belonging to another org', async () => {
   const { req, res } = request({ ...update, destinationId: 'foreign' });

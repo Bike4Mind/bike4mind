@@ -59,7 +59,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       if (!getFeedbackDestinations().some(d => d.id === update.destinationId && d.organizationId === org.id)) {
         throw new BadRequestError('Destination is not provisioned for this organization');
       }
-      const token = workspace.enabled && decryptToken(workspace.slackBotToken);
+      const token = decryptToken(workspace.slackBotToken);
       if (!token) throw new BadRequestError('Reconnect Slack');
       const client = new WebClient(token, { retryConfig: { retries: 0 }, timeout: 2000 });
       const info = await client.conversations.info({ channel: update.channelId });

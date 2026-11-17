@@ -39,8 +39,9 @@ After accepting delivery, send `POST /api/slack/feedback/status` with exactly
 `{"deliveryId":"<id>","status":"filed"}`. Sign the exact body using the same
 headers and secret but the domain `v1:status:<timestamp>:<body>`. Other statuses:
 `in_progress`, `fixed_on_prod`, `rejected`. Free-form text and links are not accepted.
-The receiver must wait for forward acceptance before calling back (retry a 409 if
-acceptance has not yet been recorded). Each status posts
+The receiver must wait for forward acceptance before calling back. Callback
+responses: 409 means the forward is not yet confirmed (retry), 503 means Slack was
+transiently unavailable (retry), 410 is a final refusal (do not retry), and 502 is final. Each status posts
 at most once to the original message's thread, only while the opt-in is still enabled.
 
 ## Delivery and audit semantics
@@ -57,7 +58,7 @@ failure to add that indicator does not resend the webhook. Callback status claim
 similarly prevent reposting after an ambiguous Slack timeout.
 Callback HTTP 502 is final: the status was attempted and must not be retried.
 A later duplicate returns `posted: false`, meaning already attempted, not proof
-that Slack displayed the status. A 409 before forward confirmation may be retried.
+that Slack displayed the status. A 409 before forward confirmation, or a 503, may be retried; a 410 must not be.
 
 Factory API posts carry `b4m_api_post` metadata and are ignored, as are bot messages,
 message subtypes and bot/deleted reactors. The receiving product is not implemented here.

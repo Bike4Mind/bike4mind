@@ -199,6 +199,12 @@ export async function forwardSlackReaction(teamId: string, appId: string, input:
       accepted,
       errorType: error instanceof Error ? error.name : 'UnknownError',
     });
-    if (!accepted) await finish('failed');
+    if (accepted) {
+      await Promise.resolve(
+        SlackFeedbackDelivery.updateOne({ _id: id, state: 'sending' }, { $set: { state: 'sent' } })
+      ).catch(() => undefined);
+    } else {
+      await finish('failed');
+    }
   }
 }

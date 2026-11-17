@@ -163,7 +163,7 @@ const OrgSlackIntegration: FC<OrgSlackIntegrationProps> = ({ organization }) => 
           <OrgSlackApiPosting organizationId={organization.id} organizationName={organization.name} />
         )}
 
-        <OrgSlackFeedback organizationId={organization.id} />
+        <OrgSlackFeedback organizationId={organization.id} canEnable={workspace.enabled} />
 
         <Box>
           <Button
