@@ -27,6 +27,7 @@ import {
   IFabFileDocument,
   usdToCreditsStochastic,
   type PersistedCreditHold,
+  type ISpendFreezeRepository,
 } from '@bike4mind/common';
 import {
   isImageServeable,
@@ -72,6 +73,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
 import type { ImageCreditHolds } from './imageCreditHolds';
+import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
+import { spendFreezeSubjectForHold } from '../spendFreezeService/spendFreezeSubjectForHold';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
@@ -156,6 +159,8 @@ interface IImageEditServiceOptions {
     usageEvents?: IUsageEventRepository;
     organizations: IOrganizationRepository;
     imageModerationIncidents?: { record(input: ImageModerationIncidentInput): Promise<unknown> };
+    /** Checked before the provider call when credits are off; the credit hold checks it otherwise. */
+    spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
   } & GetEffectiveApiKeyAdapters['db'];
   startImageEditProcess: (body: ImageEditBody) => Promise<void>;
   /** Reserves the estimate before the provider call. Required so the app factory cannot drop the hold. */
@@ -677,6 +682,16 @@ export class ImageEditService {
         });
         quest.creditsUsed = requiredCredits;
         usageCostUsd = usdCost;
+      } else {
+        await assertSpendNotFrozen(
+          spendFreezeSubjectForHold({
+            userId,
+            organizationId: organization ? organization.id : null,
+            apiKeyId,
+            apiKeyBillingOwnerType,
+          }),
+          { db: { spendFreezes: this.db.spendFreezes } }
+        );
       }
 
       // Encode the prompt to tokens

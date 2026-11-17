@@ -108,11 +108,11 @@ const SITES: Record<string, Array<[call: string, why: string]>> = {
   'b4m-core/services/src/generationJobs/createJob.ts': [
     ['holdCredits(', 'gated-by assertSpendNotFrozen just before the hold'],
   ],
-  // Open defect: the hold (and with it holdCredits' freeze check) sits inside the enforceCredits branch,
-  // so with credits off a render starts with no freeze check.
-  'b4m-core/services/src/llm/ImageEdit.ts': [['creditHolds.hold(', `${VIA_HOLD}, only when credits are enforced`]],
+  'b4m-core/services/src/llm/ImageEdit.ts': [
+    ['creditHolds.hold(', `${VIA_HOLD}; the credits-off branch runs assertSpendNotFrozen itself`],
+  ],
   'b4m-core/services/src/llm/ImageGeneration.ts': [
-    ['creditHolds.hold(', `${VIA_HOLD}, only when credits are enforced`],
+    ['creditHolds.hold(', `${VIA_HOLD}; the credits-off branch runs assertSpendNotFrozen itself`],
   ],
   'b4m-core/services/src/llm/ChatCompletionProcess.ts': [
     ['incrementCredits(reservationOwnerId, -requiredCredits', 'gated-by the chat turn freeze check before the hold'],
