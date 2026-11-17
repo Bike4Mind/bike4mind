@@ -15,6 +15,7 @@
   "scripts": {
     "feedback-notes:scrub": "tsx src/scrubLegacyFeedbackNotes.ts",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "typecheck:native": "tsgo --noEmit --types node",
     "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
@@ -105,7 +106,8 @@
     "curated:publish": "tsx src/curatedCatalog/publishCurated.ts",
     "curated:schema": "tsx src/curatedCatalog/curatedSchema.ts",
     "curated:v2": "tsx src/curatedCatalog/curatedV2.ts",
-    "curated:check-build": "tsx src/curatedCatalog/checkDesktopBuild.ts"
+    "curated:check-build": "tsx src/curatedCatalog/checkDesktopBuild.ts",
+    "mobile-release": "tsx src/mobileRelease/main.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
@@ -147,6 +149,7 @@
     "@types/mailparser": "^3.9.0",
     "@types/speakeasy": "^2.0.10",
     "@types/yargs": "^17.0.35",
+    "@vitest/coverage-v8": "^4.1.12",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "aws-sdk-client-mock": "^4.1.0",
@@ -155,6 +158,7 @@
     "prettier": "^3.9.6",
     "speakeasy": "^2.0.0",
     "tsx": "^4.23.0",
-    "vitest": "^4.1.12"
+    "vitest": "^4.1.12",
+    "yaml": "^2.9.1"
   }
 }
