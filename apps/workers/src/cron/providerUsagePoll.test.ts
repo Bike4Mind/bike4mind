@@ -3,7 +3,7 @@ import type { Context } from 'aws-lambda';
 
 const mocks = vi.hoisted(() => ({
   send: vi.fn(async (_command: unknown) => undefined),
-  secretSend: vi.fn(async (_command: unknown): Promise<{ SecretString?: string }> => ({})),
+  secretSend: vi.fn(async (_command: unknown): Promise<{ SecretString?: string; CreatedDate?: Date }> => ({})),
   fetchAnthropicHourlyUsage: vi.fn(),
   fetchOpenAIHourlyUsage: vi.fn(),
   priceProviderUsage: vi.fn(),
@@ -193,6 +193,11 @@ describe('providerUsagePoll handler', () => {
     });
   });
 
+  it('publishes no key age datum for keys read from Config', async () => {
+    await handler({}, context);
+    expect(published().MetricData.some(d => d.MetricName === 'ProviderAdminKeyAgeDays')).toBe(false);
+  });
+
   it('publishes no skipped datum when every provider is configured', async () => {
     await handler({}, context);
     expect(published().MetricData.some(d => d.MetricName === 'ProviderUsagePollSkipped')).toBe(false);
@@ -210,6 +215,7 @@ describe('providerUsagePoll handler', () => {
 
   describe('with the admin key secret store', () => {
     const storedKeys: Record<string, string | Error> = {};
+    const createdDates: Record<string, Date | undefined> = {};
     const secretIds = { anthropic: 'anthropic-secret-arn', openai: 'openai-secret-arn' };
 
     beforeEach(() => {
@@ -217,11 +223,82 @@ describe('providerUsagePoll handler', () => {
       vi.stubEnv('PROVIDER_ADMIN_KEY_SECRET_OPENAI', secretIds.openai);
       storedKeys[secretIds.anthropic] = 'stored-anthropic-key';
       storedKeys[secretIds.openai] = 'stored-openai-key';
+      createdDates[secretIds.anthropic] = undefined;
+      createdDates[secretIds.openai] = undefined;
       mocks.secretSend.mockImplementation(async command => {
-        const value = storedKeys[(command as { input: { SecretId: string } }).input.SecretId];
+        const secretId = (command as { input: { SecretId: string } }).input.SecretId;
+        const value = storedKeys[secretId];
         if (value instanceof Error) throw value;
-        return { SecretString: value };
+        return { SecretString: value, CreatedDate: createdDates[secretId] };
       });
+    });
+
+    const DAY_MS = 86_400_000;
+    const daysBefore = (days: number) => new Date(NOW.getTime() - days * DAY_MS);
+    const ageData = () => published().MetricData.filter(d => d.MetricName === 'ProviderAdminKeyAgeDays');
+    const ageDatum = (provider: string, Value: number) => ({
+      MetricName: 'ProviderAdminKeyAgeDays',
+      Value,
+      Unit: 'None',
+      Dimensions: [{ Name: 'Provider', Value: provider }],
+      Timestamp: NOW,
+    });
+
+    it('publishes the age in days of each key version, in the same namespace as the spend metrics', async () => {
+      createdDates[secretIds.anthropic] = daysBefore(50);
+      createdDates[secretIds.openai] = daysBefore(80.5);
+
+      expect(await handler({}, context)).toEqual({ published: 2, skipped: 0 });
+
+      expect(mocks.send).toHaveBeenCalledTimes(1);
+      expect(published().Namespace).toBe('test-app/production/LLMSpend');
+      expect(ageData()).toEqual([ageDatum('anthropic', 50), ageDatum('openai', 80.5)]);
+      expect(published().MetricData).toHaveLength(8);
+    });
+
+    it('publishes an age of zero for a version dated after the run started', async () => {
+      createdDates[secretIds.anthropic] = new Date(NOW.getTime() + 5_000);
+
+      await handler({}, context);
+
+      expect(ageData()).toEqual([ageDatum('anthropic', 0)]);
+    });
+
+    it('publishes no age datum when the store reports no creation date', async () => {
+      await handler({}, context);
+      expect(ageData()).toEqual([]);
+    });
+
+    it.each([
+      ['has no value yet', Object.assign(new Error('no current value'), { name: 'ResourceNotFoundException' })],
+      ['holds the placeholder', 'not-configured'],
+    ])('publishes no age datum for a skipped provider whose secret %s', async (_label, stored) => {
+      createdDates[secretIds.anthropic] = daysBefore(50);
+      createdDates[secretIds.openai] = daysBefore(80);
+      storedKeys[secretIds.openai] = stored;
+
+      expect(await handler({}, context)).toEqual({ published: 1, skipped: 1 });
+
+      expect(ageData()).toEqual([ageDatum('anthropic', 50)]);
+    });
+
+    it('publishes no age datum for a provider whose key lookup failed', async () => {
+      createdDates[secretIds.anthropic] = daysBefore(50);
+      createdDates[secretIds.openai] = daysBefore(80);
+      storedKeys[secretIds.anthropic] = Object.assign(new Error('not authorized'), { name: 'AccessDeniedException' });
+
+      await expect(handler({}, context)).rejects.toThrow('usage report failed for anthropic');
+
+      expect(ageData()).toEqual([ageDatum('openai', 80)]);
+    });
+
+    it('still publishes the age when the usage report for that key fails', async () => {
+      createdDates[secretIds.anthropic] = daysBefore(50);
+      mocks.fetchAnthropicHourlyUsage.mockRejectedValue(new Error('Anthropic API 401: bad key'));
+
+      await expect(handler({}, context)).rejects.toThrow('usage report failed for anthropic');
+
+      expect(ageData()).toEqual([ageDatum('anthropic', 50)]);
     });
 
     it('reads each key from its secret and never from Config', async () => {

@@ -1,3 +1,4 @@
+import type { AudioToolJobs } from './tools/implementation/audioGeneration';
 import {
   type EmbeddingRuntime,
   bindEmbeddingModel,
@@ -424,6 +425,8 @@ export interface IChatCompletionServiceOptions {
   db: DatabaseAdapters & GetEffectiveApiKeyAdapters['db'];
   storage: BaseStorage;
   imageGenerateStorage: BaseStorage;
+  /** The speech / sound-effect job functions the audio_generation tool bills through; unset leaves it unavailable. */
+  audioToolJobs?: AudioToolJobs;
   queue?: IQueueService;
   wsHttpsUrl: string;
   slackWebhookUrl: string;
