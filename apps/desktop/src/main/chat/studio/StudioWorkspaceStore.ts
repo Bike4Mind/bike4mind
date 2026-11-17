@@ -104,7 +104,23 @@ export class StudioWorkspaceStore {
         const workspace = await this.locate(sessionId, scope);
         if (!workspace) return false;
         const owner = await this.sessions.resolveStudioWorkspace(record.originatingSessionId, scope);
-        if (owner?.workspaceId !== workspace.identity.workspaceId) return false;
+        if (owner?.workspaceId !== workspace.identity.workspaceId) {
+          const schema = collection === 'assets' ? studioAssetSchema : studioJobSchema;
+          const existing = await readFile(join(workspace.directory, collection, `${record.id}.json`), 'utf8')
+            .then(text => schema.parse(JSON.parse(text)))
+            .catch(() => null);
+          const jobId = 'jobId' in record ? record.jobId : undefined;
+          const job = jobId
+            ? await readFile(join(workspace.directory, 'jobs', `${studioIdSchema.parse(jobId)}.json`), 'utf8')
+                .then(text => studioJobSchema.parse(JSON.parse(text)))
+                .catch(() => null)
+            : null;
+          if (
+            existing?.originatingSessionId !== record.originatingSessionId &&
+            job?.originatingSessionId !== record.originatingSessionId
+          )
+            return false;
+        }
         const directory = join(workspace.directory, collection);
         await mkdir(directory, { recursive: true });
         const temporary = join(directory, `${record.id}.${randomUUID()}.tmp`);
