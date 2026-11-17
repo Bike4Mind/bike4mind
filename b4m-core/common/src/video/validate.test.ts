@@ -306,6 +306,9 @@ describe('validateAgainstCapabilities why-not reasons', () => {
 
   // One sample detail per code; the it.each below fails when a code is added without one (tests are not type-checked).
   const SAMPLES = {
+    unsupported_keyframes: { model: 'Veo 3.1', code: 'unsupported_keyframes' },
+    invalid_keyframes: { model: 'FLUX 3', code: 'invalid_keyframes' },
+    unsupported_draft: { model: 'Veo 3.1', code: 'unsupported_draft' },
     unsupported_mode: { model: 'Veo 3.1', code: 'unsupported_mode', mode: 'image_to_video' },
     missing_input_image: { model: 'Veo 3.1', code: 'missing_input_image' },
     unexpected_input_image: { model: 'Veo 3.1', code: 'unexpected_input_image', cause: 'conflicting_image_fields' },

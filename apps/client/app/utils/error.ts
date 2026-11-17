@@ -1,4 +1,4 @@
-import { AxiosError, isAxiosError } from 'axios';
+import { AxiosError, AxiosHeaders, isAxiosError, type AxiosResponse, type RawAxiosHeaders } from 'axios';
 import type { ApiErrorCode } from '@bike4mind/common';
 
 export interface ErrorResponse {
@@ -18,13 +18,30 @@ export function getErrorMessage(error: unknown): string {
   return 'An unexpected error occurred.';
 }
 
+// A body that opens a tag: an HTML error page or an XML error document.
+const MARKUP_BODY = /^<[!?a-z]/i;
+
+/**
+ * True when a string body is markup rather than a message: a CDN or gateway error page (HTML or an
+ * XML error document) that no toast should show. Plain-text bodies are not markup and pass through.
+ */
+function isMarkupBody(body: string, headers: AxiosResponse['headers']): boolean {
+  // axios types a response's headers wider than AxiosHeaders.from accepts; at runtime it is either shape.
+  const trimmed = body.trim();
+  if (!trimmed) return false;
+  const contentType = String(AxiosHeaders.from(headers as RawAxiosHeaders | AxiosHeaders).get('content-type') ?? '');
+  return /\btext\/html\b/i.test(contentType) || MARKUP_BODY.test(trimmed);
+}
+
+const httpStatusMessage = (status: number) => `Error: ${status}`;
+
 function handleAxiosError(error: AxiosError<ErrorResponse>) {
   if (error.response) {
-    const data = error.response.data;
+    const { data, status, headers } = error.response;
     if (typeof data === 'string') {
-      return data;
+      return isMarkupBody(data, headers) ? httpStatusMessage(status) : data;
     }
-    return data.message || data.error || `Error: ${error.response.status}`;
+    return data.message || data.error || httpStatusMessage(status);
   } else if (error.request) {
     return 'No response received from the server.';
   } else {

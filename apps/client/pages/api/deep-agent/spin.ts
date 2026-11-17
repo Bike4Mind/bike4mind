@@ -15,6 +15,7 @@ import { createDeepAgentToolMaterializer } from '@bike4mind/server-utils/deepAge
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 import { loadLinkedAgentContext } from '@bike4mind/server-utils/deepAgent/missions';
 import { bridgeWakeToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
+import { userAiAccessDenial } from '@bike4mind/server-utils/deepAgent/wakeMetering';
 import { resolveThinkingVisibilityForUserId } from '@bike4mind/server-utils/utils/thinkingVisibility';
 
 /**
@@ -72,8 +73,13 @@ const handler = baseApi({ auth: 'jwtOnly' })
         if (existing.identity.ownerUserId !== ownerUserId && !req.user?.isAdmin) {
           return res.status(403).json({ error: 'not your agent' });
         }
+        // Spin is not credit-metered, so model admission never runs; refuse a restricted mission owner here.
+        const denial = await userAiAccessDenial(existing.identity.ownerUserId);
+        if (denial) return res.status(403).json({ error: denial });
         agentId = input.agentId;
       } else {
+        const denial = await userAiAccessDenial(ownerUserId);
+        if (denial) return res.status(403).json({ error: denial });
         // Enroll a fresh agent owned by the caller. No-op enqueue - we wake inline.
         const enrolled = await enrollDeepAgent(
           {

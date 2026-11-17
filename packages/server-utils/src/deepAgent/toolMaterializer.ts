@@ -7,6 +7,9 @@ import {
   type ToolBuilderCallbacks,
 } from '@bike4mind/services/llm';
 import { applyOrgToolPolicy } from '@bike4mind/services/llm/orgToolPolicy';
+import { assertOwnerHasCredits, creditService, estimateGeneratedMediaUsd } from '@bike4mind/services';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
+import { usdToCredits } from '@bike4mind/utils';
 import {
   adminSettingsRepository,
   apiKeyRepository,
@@ -23,9 +26,20 @@ import {
   sessionRepository,
   userRepository,
 } from '@bike4mind/database';
-import { getAvailableModels, type ApiKeyTable, type ICompletionBackend } from '@bike4mind/llm-adapters';
+import {
+  getAvailableModels,
+  type ApiKeyTable,
+  type ICompletionBackend,
+  type ICompletionOptionTools,
+} from '@bike4mind/llm-adapters';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
-import { readOrgModelPolicy, type IUserDocument } from '@bike4mind/common';
+import {
+  ForbiddenError,
+  insufficientCreditsError,
+  readOrgModelPolicy,
+  type IUserDocument,
+  type ModelInfo,
+} from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { lakeWriteToolDb } from '../dataLakes/lakeWriteToolDb';
 import { buildAudioToolJobs } from '../generationJobs/audioJobWiring';
@@ -34,6 +48,106 @@ import type { ToolMaterializer } from '@bike4mind/agents';
 import { buildSystemApiKeyTable } from './resolveBackend';
 import { resolveRequestBillingOrgId } from '../billing/resolveRequestBillingOrgId';
 import { imageModerationIncidents } from '../moderation/imageModerationIncidents';
+import { isCreditsEnforced, reserveCompletionCredits, settleCompletion } from '../billing/meterPlatformCompletion';
+
+// Generative tools whose provider cost is billed by the tool callbacks (see estimateGeneratedMediaUsd);
+// video and music jobs hold and settle their own credits.
+const MEDIA_TOOLS: ReadonlySet<string> = new Set(['image_generation', 'edit_image', 'audio_generation']);
+
+interface MediaBillingContext {
+  ownerUserId: string;
+  billingOrgId: string | null | undefined;
+  models: ModelInfo[];
+  logger: Logger;
+}
+
+function estimateMediaUsd(toolName: string, data: unknown, ctx: MediaBillingContext): number {
+  try {
+    return estimateGeneratedMediaUsd(toolName, data, ctx.models);
+  } catch (err) {
+    ctx.logger.warn(`deep agent tools: could not estimate ${toolName} media cost; not billed`, { err });
+    return 0;
+  }
+}
+
+/** Refuses a restricted owner with the AI-access 403; reloaded per call since standing can change mid-mission. */
+async function assertMediaOwnerStanding(ownerUserId: string): Promise<void> {
+  const owner = (await userRepository.findById(ownerUserId)) as IUserDocument | null;
+  if (!owner) throw new ForbiddenError(`deep agent tools: owner user ${ownerUserId} not found`);
+  const denial = aiAccessDeniedMessage(owner);
+  if (denial) throw new ForbiddenError(denial);
+}
+
+/**
+ * Media tools call onToolStart before their provider call, so with credits enforced this refuses there (422)
+ * when the owner's balance, or their org member cap, cannot cover the estimate.
+ */
+async function gateMediaToolStart(toolName: string, data: unknown, ctx: MediaBillingContext): Promise<void> {
+  if (!(await isCreditsEnforced())) return;
+  const usd = estimateMediaUsd(toolName, data, ctx);
+  if (usd <= 0) return;
+  const owner = (await userRepository.findById(ctx.ownerUserId)) as IUserDocument | null;
+  if (!owner) throw new ForbiddenError(`deep agent tools: owner user ${ctx.ownerUserId} not found`);
+  const requiredCredits = usdToCredits(usd);
+  const org = ctx.billingOrgId ? await organizationRepository.findById(ctx.billingOrgId) : null;
+  if (org && creditService.isMemberCreditCapExceeded(org, owner.id, requiredCredits)) {
+    throw insufficientCreditsError(creditService.MEMBER_CREDIT_CAP_MESSAGE);
+  }
+  assertOwnerHasCredits(org ?? owner, { requiredCredits });
+}
+
+/**
+ * Runs the media tools one call at a time behind the owner-standing check. The check sits on the tool itself
+ * because image_generation without a preset model returns its picker prompt before onToolStart; one at a time
+ * so each credit gate reads the balance after the previous call has settled.
+ */
+function gateMediaTools(tools: ICompletionOptionTools[], ownerUserId: string): ICompletionOptionTools[] {
+  let tail: Promise<unknown> = Promise.resolve();
+  return tools.map(tool => {
+    if (!MEDIA_TOOLS.has(tool.toolSchema.name)) return tool;
+    const run = async (parameters?: unknown, apiKey?: string) => {
+      await assertMediaOwnerStanding(ownerUserId);
+      return tool.toolFn(parameters, apiKey);
+    };
+    return {
+      ...tool,
+      toolFn: (parameters?: unknown, apiKey?: string) => {
+        const result = tail.then(() => run(parameters, apiKey));
+        tail = result.catch(() => undefined);
+        return result;
+      },
+    };
+  });
+}
+
+/**
+ * Charges a delivered image or clip to the owner (their org seat when present). Media tools call onToolFinish
+ * only on delivery, so a failed call is never billed; a refusal here is logged, never thrown, since the
+ * media already exists.
+ */
+async function settleMediaToolFinish(toolName: string, data: unknown, ctx: MediaBillingContext): Promise<void> {
+  const usd = estimateMediaUsd(toolName, data, ctx);
+  if (usd <= 0) return;
+  try {
+    const owner = (await userRepository.findById(ctx.ownerUserId)) as IUserDocument | null;
+    if (!owner) throw new Error(`owner user ${ctx.ownerUserId} not found`);
+    const req = { user: owner, logger: ctx.logger, headers: {} };
+    const reservation = await reserveCompletionCredits(req, usd, 'mission media', {
+      organizationId: ctx.billingOrgId,
+    });
+    const { model, provider, kind } = (data ?? {}) as { model?: string; provider?: string; kind?: string };
+    await settleCompletion(reservation, req, {
+      // Sound effects report no model, so label them by kind to keep them apart from speech in rollups.
+      model: model ?? (kind === 'sound_effect' ? kind : toolName),
+      provider: provider ?? ctx.models.find(m => m.id === model)?.backend ?? 'unknown',
+      usd,
+      inputTokens: 0,
+      outputTokens: 0,
+    });
+  } catch (err) {
+    ctx.logger.warn(`deep agent tools: could not charge delivered ${toolName} media`, { err, usd });
+  }
+}
 
 /**
  * Builds the owner-scoped b4m toolbelt for a deep agent's act step.
@@ -133,12 +247,17 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
       authOrigin: 'internal',
     };
 
-    // No-op callbacks: deep agents are headless (no websocket/quest doc to
-    // update); per-iteration billing is handled separately.
+    // Deep agents are headless (no websocket/quest doc to update). LLM calls are billed by the wake meter;
+    // only the media tools' provider cost is gated and charged here.
+    const media: MediaBillingContext = { ownerUserId, billingOrgId, models, logger: config.logger };
     const toolCallbacks: ToolBuilderCallbacks = {
       onStatusUpdate: async () => {},
-      onToolStart: async () => {},
-      onToolFinish: async () => {},
+      onToolStart: async (toolName, data) => {
+        if (MEDIA_TOOLS.has(toolName)) await gateMediaToolStart(toolName, data, media);
+      },
+      onToolFinish: async (toolName, data) => {
+        if (MEDIA_TOOLS.has(toolName)) await settleMediaToolFinish(toolName, data, media);
+      },
     };
 
     // deep_research is gated behind a config flag in generateTools; enable it so
@@ -154,6 +273,6 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         toolAvailability,
         orgToolPolicy,
       }) ?? [];
-    return applyOrgToolPolicy(tools, orgToolPolicy).tools;
+    return gateMediaTools(applyOrgToolPolicy(tools, orgToolPolicy).tools, ownerUserId);
   };
 }
