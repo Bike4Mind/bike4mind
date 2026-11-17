@@ -17,9 +17,20 @@ export const MAX_STORAGE_LIMIT_MB = 1_000_000_000;
 
 export const storageLimitToBytes = (storageLimitMb: number): number => storageLimitMb * BYTES_PER_STORAGE_MB;
 
-/** An organization's effective quota in bytes: its own `storageLimit`, else DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
-export const organizationStorageLimitBytes = (organization: { storageLimit?: number | null }): number =>
-  storageLimitToBytes(organization.storageLimit ?? DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB);
+export const resolveOrganizationStorageLimit = (allocation: UserStorageAllocation) => {
+  // Unlike users, orgs never had a schema default: every existing non-null limit was manually set.
+  const legacyOverride =
+    allocation.storageLimitOverride === undefined && allocation.planStorageLimit === undefined
+      ? allocation.storageLimit
+      : null;
+  const override = allocation.storageLimitOverride ?? legacyOverride;
+  if (override != null) return { limitMb: override, source: 'override' as const };
+  if (allocation.planStorageLimit != null) return { limitMb: allocation.planStorageLimit, source: 'plan' as const };
+  return { limitMb: DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB, source: 'default' as const };
+};
+
+export const organizationStorageLimitBytes = (organization: UserStorageAllocation): number =>
+  storageLimitToBytes(resolveOrganizationStorageLimit(organization).limitMb);
 
 export type UserStorageAllocation = {
   storageLimit?: number | null;

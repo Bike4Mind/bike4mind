@@ -19,7 +19,7 @@ const updateSchema = z.object({
   redactPushContent: z.boolean().optional(),
   sharingPolicy: OrganizationSharingPolicySchema.optional(),
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
-  /** Decimal MB; null clears the override back to DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
+  /** Decimal MB; null clears the override back to the plan or default. */
   storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
 });
 
@@ -93,14 +93,13 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
     update.maxCreditsPerMember = rest.maxCreditsPerMember ?? null;
   }
 
-  // Platform-admin only: a manager must not raise their own org's quota. Same null-not-undefined
-  // rule as maxCreditsPerMember, so a cleared limit falls back to the default. Lowering it below
-  // current usage deletes nothing; checkStorageLimit just refuses new uploads.
-  if (user.isAdmin && rest.storageLimit !== undefined) {
-    update.storageLimit = rest.storageLimit ?? null;
-  }
-
   const updated = await adapters.db.organizations.update(update);
+
+  if (user.isAdmin && rest.storageLimit !== undefined) {
+    const limited = await adapters.db.organizations.setStorageLimitOverride(id, rest.storageLimit);
+    if (!limited) throw new NotFoundError('Organization not found');
+    return limited;
+  }
 
   return updated ?? ({ ...plain, ...update } as typeof plain);
 };

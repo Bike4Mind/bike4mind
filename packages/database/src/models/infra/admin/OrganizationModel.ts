@@ -7,6 +7,7 @@ import {
   ORG_MEMBERSHIP_ACL_PERMISSIONS,
   OrgMemberPopulation,
   orgAclRowConfersMembership,
+  DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB,
 } from '@bike4mind/common';
 import mongoose, { type ClientSession, HydratedDocument, Model, Schema } from 'mongoose';
 import { softDeletePlugin } from '../../../utils/mongo';
@@ -148,6 +149,8 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     },
     // MB; no schema default so an unset limit keeps tracking DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB.
     storageLimit: { type: Number, min: 0 },
+    storageLimitOverride: { type: Number, min: 0 },
+    planStorageLimit: { type: Number, min: 0 },
     // Bytes owned by the org; written only through incrementCurrentStorage and the reconciliation's
     // setCurrentStorageIfUnchanged.
     currentStorageSize: { type: Number, min: 0 },
@@ -287,6 +290,48 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
 
   async findByStripeCustomerId(stripeCustomerId: string): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOne({ stripeCustomerId });
+  }
+
+  async setPlanStorageLimit(organizationId: string, limitMb: number): Promise<boolean> {
+    if (!mongoose.isValidObjectId(organizationId)) return false;
+    const res = await this.organizationModel.updateOne({ _id: organizationId }, [
+      {
+        $set: {
+          // Capture legacy manual limits before defining planStorageLimit retires the read fallback.
+          storageLimitOverride: {
+            $cond: [
+              { $eq: [{ $type: '$storageLimitOverride' }, 'missing'] },
+              {
+                $cond: [
+                  { $eq: [{ $type: '$planStorageLimit' }, 'missing'] },
+                  { $ifNull: ['$storageLimit', null] },
+                  null,
+                ],
+              },
+              '$storageLimitOverride',
+            ],
+          },
+        },
+      },
+      { $set: { planStorageLimit: limitMb, storageLimit: { $ifNull: ['$storageLimitOverride', limitMb] } } },
+    ]);
+    return res.matchedCount === 1;
+  }
+
+  async setStorageLimitOverride(organizationId: string, limitMb: number | null): Promise<IOrganizationDocument | null> {
+    const row = await this.organizationModel.findByIdAndUpdate(
+      organizationId,
+      [
+        {
+          $set: {
+            storageLimitOverride: limitMb,
+            storageLimit: limitMb ?? { $ifNull: ['$planStorageLimit', DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB] },
+          },
+        },
+      ],
+      { new: true }
+    );
+    return row?.toJSON() ?? null;
   }
 
   /** Seat counts keyed by Stripe customer id, in one query. Not on the interface: only the billing reconciliation needs it. */

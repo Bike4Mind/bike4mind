@@ -1,5 +1,5 @@
 import { MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
-import { userRepository } from '@bike4mind/database';
+import { organizationRepository, userRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import type Stripe from 'stripe';
@@ -25,7 +25,7 @@ export const readPlanStorageLimit = (priceMetadata: Stripe.Metadata | null | und
 };
 
 /**
- * Writes the subscribed price's `storageLimitMb` to the user's `planStorageLimit` while the subscription
+ * Writes the subscribed price's `storageLimitMb` to the owner's `planStorageLimit` while the subscription
  * is active or trialing. A price without the key, or with an unusable value, leaves the limit as it is.
  * Cancellation does not reset it. Callers: customerSubscriptionUpdated (every change) and
  * handleUserSubscriptionInvoice (first payment, which can land after the update event). Never throws:
@@ -34,7 +34,8 @@ export const readPlanStorageLimit = (priceMetadata: Stripe.Metadata | null | und
 export async function applyPlanStorageLimit(
   subscription: Stripe.Subscription,
   userId: string,
-  logger: Logger
+  logger: Logger,
+  ownerType: 'User' | 'Organization' = 'User'
 ): Promise<void> {
   const price = subscription.items.data[0]?.price;
   const reading = readPlanStorageLimit(price?.metadata);
@@ -45,14 +46,17 @@ export async function applyPlanStorageLimit(
   }
   if (!STORAGE_GRANTING_STATUSES.has(subscription.status)) return;
   try {
-    const applied = await userRepository.setPlanStorageLimit(userId, reading.limitMb);
+    const repository = ownerType === 'Organization' ? organizationRepository : userRepository;
+    const applied = await repository.setPlanStorageLimit(userId, reading.limitMb);
     if (applied) {
-      logger.info(`Set plan storage limit for user ${userId} to ${reading.limitMb} MB from price ${price?.id}`);
+      logger.info(`Set plan storage limit for ${ownerType} ${userId} to ${reading.limitMb} MB from price ${price?.id}`);
     } else {
-      logger.warn(`Plan storage limit not applied: user ${userId} not found for subscription ${subscription.id}`);
+      logger.warn(
+        `Plan storage limit not applied: ${ownerType} ${userId} not found for subscription ${subscription.id}`
+      );
     }
   } catch (error) {
-    logger.error(`Failed to apply plan storage limit for user ${userId}`, { error });
+    logger.error(`Failed to apply plan storage limit for ${ownerType} ${userId}`, { error });
     await emitMetric('Lumina5/Entitlements', 'PlanStorageLimitFailed', 1, { reason: 'write_failed' });
   }
 }

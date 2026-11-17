@@ -469,6 +469,15 @@ export const handleOrganizationSubscriptionInvoice = async (
   // sendToClient calls Connection.find() which, with transactionAsyncLocalStorage enabled,
   // would pick up the transaction session if called inside withTransaction.
   const org = organization as IOrganizationDocument | null;
+  // Only the persisted owner may receive storage, including after a duplicate checkout was refused.
+  try {
+    const storedSubscription = await subscriptionRepository.findByStripeSubscriptionId(subscription.id);
+    if (storedSubscription?.ownerType === SubscriptionOwnerType.Organization) {
+      await applyPlanStorageLimit(subscription, storedSubscription.ownerId, logger, SubscriptionOwnerType.Organization);
+    }
+  } catch (error) {
+    logger.error(`Failed to resolve storage owner for subscription ${subscription.id}`, { error });
+  }
   if (org?.users?.length) {
     promises.push(
       ...org.users.map(user =>

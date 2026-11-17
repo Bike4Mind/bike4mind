@@ -718,12 +718,12 @@ describe('customerSubscriptionUpdated - plan storage limit', () => {
     expect(mockApplyPlanStorageLimit).not.toHaveBeenCalled();
   });
 
-  it('skips an organization-owned row, even when metadata lost its ownerType', async () => {
+  it('applies the organization pool using the row even when metadata lost its ownerType', async () => {
     stripeReturns(buildUserSub({ metadata: { userId: 'u1', stage: 'test', ownerType: 'bogus' } }));
     rowFound({ ownerType: 'Organization', ownerId: 'org-a' });
 
     await run();
 
-    expect(mockApplyPlanStorageLimit).not.toHaveBeenCalled();
+    expect(mockApplyPlanStorageLimit).toHaveBeenCalledWith(expect.anything(), 'org-a', logger, 'Organization');
   });
 });
