@@ -17,7 +17,7 @@ const SKIP_DIRS = new Set(['node_modules', 'dist', '.next', '.sst', '.turbo', 'c
 const REPOSITORY_FILE = path.join('packages', 'database', 'src', 'models', 'billing', 'CreditTransactionModel.ts');
 
 const MODEL_WRITE =
-  /\bCreditTransaction(?:Model)?\s*\.\s*(?:create|insertMany|insertOne|bulkWrite|collection\s*\.\s*(?:insertOne|insertMany|bulkWrite|replaceOne))\b/;
+  /\bCreditTransaction(?:Model)?\s*\.\s*(?:create|insertMany|insertOne|bulkWrite|collection\s*\.\s*(?:insertOne|insertMany|bulkWrite|replaceOne))\b|\bcreditTransactionRepository\s*\.\s*create\s*\(/;
 const MODEL_CONSTRUCT = /\bnew\s+CreditTransaction(?:Model)?\s*\(/;
 const RAW_COLLECTION = /collection\s*(?:<[^>]*>)?\s*\(\s*['"`]credittransactions['"`]\s*\)/;
 const RAW_INSERT = /\.\s*(?:insertOne|insertMany|bulkWrite|replaceOne)\s*\(/;
@@ -54,6 +54,8 @@ describe('credit ledger writers', () => {
     expect(writesLedger('await CreditTransaction.collection.insertOne(row)')).toBe(true);
     expect(writesLedger('await CreditTransaction.collection.find({})')).toBe(false);
     expect(writesLedger("db.collection('credittransactions').insertOne(row)")).toBe(true);
+    expect(writesLedger('await creditTransactionRepository.create({})')).toBe(true);
+    expect(writesLedger('await creditTransactionRepository\n  .create(row)')).toBe(true);
     expect(writesLedger('await creditTransactionRepository.createTransaction(t, d)')).toBe(false);
   });
 });

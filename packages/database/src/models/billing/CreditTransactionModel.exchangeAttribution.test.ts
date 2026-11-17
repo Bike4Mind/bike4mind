@@ -100,14 +100,17 @@ describe('createTransaction exchange attribution', () => {
     vi.spyOn(UserApiKey, 'findById').mockImplementation(() => {
       throw new Error('db down');
     });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const tx = await charge(key, CreditHolderType.User, USER);
     expect(tx).not.toBeNull();
     expect(tx?.oauthClientId).toBeUndefined();
     expect(tx?.payerStanding).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('key read failed'), { apiKeyId: key });
   });
 
   it('never reads inside a transaction on a cold cache', async () => {
     const key = await exchangeKey('paid');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const spy = vi.spyOn(UserApiKey, 'findById');
     await withTransaction(async () => {
       await charge(key, CreditHolderType.User, USER);
@@ -115,6 +118,7 @@ describe('createTransaction exchange attribution', () => {
     expect(spy).not.toHaveBeenCalled();
     const row = await CreditTransaction.findOne({}).lean();
     expect(row?.oauthClientId).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('cold cache inside a transaction'), { apiKeyId: key });
   });
 
   it('stamps inside a transaction once the cache is warmed', async () => {

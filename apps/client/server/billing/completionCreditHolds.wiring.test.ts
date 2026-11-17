@@ -14,4 +14,12 @@ describe('hosted completion credit hold wiring', () => {
       expect(source).toContain("from '@server/billing/completionCreditHolds'");
     }
   );
+
+  it('sseRoute passes the exchange key id so settlement can warm attribution', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('../chatCompletion/external/sseRoute.ts', import.meta.url)),
+      'utf8'
+    );
+    expect(source).toContain('createCompletionCreditHolds(logger, apiKeyInfo?.keyId)');
+  });
 });

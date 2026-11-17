@@ -46,7 +46,10 @@ async function resolveFacts(apiKeyId: string): Promise<{ facts: ExchangeKeyFacts
   const cached = cache.get(apiKeyId);
   if (cached && cached.expiresAt > Date.now()) return { facts: cached.facts };
   // A read inside a transaction joins it, and a failed read aborts the whole settlement.
-  if (hasActiveTransaction()) return undefined;
+  if (hasActiveTransaction()) {
+    console.warn('[exchange-attribution] cold cache inside a transaction, attribution dropped', { apiKeyId });
+    return undefined;
+  }
   try {
     const facts = await loadFacts(apiKeyId);
     cache.delete(apiKeyId);
@@ -54,6 +57,7 @@ async function resolveFacts(apiKeyId: string): Promise<{ facts: ExchangeKeyFacts
     if (cache.size > CACHE_MAX_ENTRIES) cache.delete(cache.keys().next().value as string);
     return { facts };
   } catch {
+    console.warn('[exchange-attribution] key read failed, attribution dropped', { apiKeyId });
     return undefined;
   }
 }
