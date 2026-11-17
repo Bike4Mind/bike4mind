@@ -257,6 +257,13 @@ describe('completeAccountDeletion', () => {
     );
   });
 
+  it('hands the Stripe step the purge lease check', async () => {
+    await complete();
+    const { assertLease } = h.redactStripe.mock.calls[0][1] as { assertLease: () => Promise<void> };
+    h.exists.mockResolvedValue(null);
+    await expect(assertLease()).rejects.toThrow('purge lease lost');
+  });
+
   it('does not delete or email after losing its lease', async () => {
     h.exists.mockResolvedValueOnce({ _id: USER_ID }).mockResolvedValue(null);
     await expect(complete()).rejects.toThrow('purge lease lost');

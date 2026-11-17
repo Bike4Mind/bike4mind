@@ -258,16 +258,22 @@ export function readDocuments(
   model: string,
   filter: Record<string, unknown>,
   projection?: readonly string[],
-  session?: mongoose.ClientSession
+  { session, includeHidden = false }: { session?: mongoose.ClientSession; includeHidden?: boolean } = {}
 ): AsyncIterable<LeanDocument> {
   const { schema } = mongoose.model(model);
   const query = mongoose
     .model(model)
     .find(filter, projection ? projectionOf(projection) : undefined)
     .setOptions({ strictQuery: 'throw', includeDeleted: true, ...(session ? { session } : {}) })
-    .maxTimeMS(QUERY_MAX_TIME_MS)
-    .lean<LeanDocument[]>()
-    .cursor();
+    .maxTimeMS(QUERY_MAX_TIME_MS);
+  // Opt-in for the erasure plan only: `select: false` paths can still name the person, but the
+  // export must not ship them (internal leases, callbacks), so it reads without this.
+  const hidden =
+    projection || !includeHidden
+      ? []
+      : Object.keys(schema.paths).filter(path => schema.path(path).options?.select === false);
+  if (hidden.length > 0) query.select(hidden.map(path => `+${path}`).join(' '));
+  return query.lean<LeanDocument[]>().cursor();
 }
 
 /** An inclusion projection; a path under another listed path is dropped, since Mongo refuses the pair. */
