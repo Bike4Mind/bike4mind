@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { isAxiosError } from 'axios';
 import { Box, Button, Card, CircularProgress, Divider, Sheet, Stack, Typography, Alert } from '@mui/joy';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
@@ -35,6 +36,10 @@ const CATEGORY_DESCRIPTIONS: Record<EmailCategory, string> = {
 /** The link's token goes to the API in a header (pages/api/email/unsubscribe.ts), never the API URL. */
 const tokenHeader = (token: string) => ({ headers: { 'x-unsubscribe-token': token } });
 
+/** The API's reason for a 4xx. A 5xx, or a response with no status, gives undefined so the caller's fallback shows. */
+const serverReason = (err: unknown) =>
+  isAxiosError(err) && (err.response?.status ?? 500) < 500 ? getServerErrorField(err) : undefined;
+
 export default function UnsubscribePage() {
   const [token] = useState(getCapturedUnsubscribeToken);
 
@@ -56,7 +61,7 @@ export default function UnsubscribePage() {
         const response = await api.get('/api/email/unsubscribe', tokenHeader(token));
         setData(response.data);
       } catch (err) {
-        setError(getServerErrorField(err) || 'Failed to load preferences. The link may be invalid or expired.');
+        setError(serverReason(err) || 'Failed to load preferences. The link may be invalid or expired.');
       } finally {
         setLoading(false);
       }
@@ -83,7 +88,7 @@ export default function UnsubscribePage() {
         });
       }
     } catch (err) {
-      setError(getServerErrorField(err) || 'Failed to update preferences');
+      setError(serverReason(err) || 'Failed to update preferences');
     } finally {
       setProcessing(false);
     }
@@ -107,7 +112,7 @@ export default function UnsubscribePage() {
         });
       }
     } catch (err) {
-      setError(getServerErrorField(err) || 'Failed to update preferences');
+      setError(serverReason(err) || 'Failed to update preferences');
     } finally {
       setProcessing(false);
     }

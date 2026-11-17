@@ -44,6 +44,15 @@ const serverRejection = (data: Record<string, unknown>, status = 400) => ({
 /** The shared envelope the API sends for a thrown BadRequestError: the reason is in `error`. */
 const envelope = (error: string) => ({ name: 'BadRequestError', error });
 
+/** Raw text a server fault can put in `error`; the page must not show it. */
+const SERVER_FAULT_TEXT = 'MongoServerError: connection refused';
+
+const withServerFaultText = [
+  ['a 500 that carries an error field', serverRejection({ name: 'MongoServerError', error: SERVER_FAULT_TEXT }, 500)],
+  ['a 503 that carries an error field', serverRejection({ name: 'MongoServerError', error: SERVER_FAULT_TEXT }, 503)],
+  ['a response with no status', { isAxiosError: true, response: { data: { error: SERVER_FAULT_TEXT } } }],
+] as const;
+
 describe('UnsubscribePage', () => {
   beforeEach(() => {
     api.get.mockReset().mockResolvedValue({ data: PREFERENCES });
@@ -92,6 +101,17 @@ describe('UnsubscribePage', () => {
       await openLink('/email/unsubscribe#token=bad-token');
 
       expect(await screen.findByText(LOAD_FALLBACK)).toBeTruthy();
+    });
+  });
+
+  describe('when loading the preferences fails on the server', () => {
+    it.each(withServerFaultText)('keeps the generic text for %s', async (_case, rejection) => {
+      api.get.mockRejectedValue(rejection);
+
+      await openLink('/email/unsubscribe#token=bad-token');
+
+      expect(await screen.findByText(LOAD_FALLBACK)).toBeTruthy();
+      expect(screen.queryByText(SERVER_FAULT_TEXT)).toBeNull();
     });
   });
 
@@ -147,6 +167,20 @@ describe('UnsubscribePage', () => {
       fireEvent.click(await screen.findByTestId(testId));
 
       expect(await screen.findByText(UPDATE_FALLBACK)).toBeTruthy();
+    });
+
+    it.each(
+      ['unsubscribe-marketing', 'global-unsubscribe'].flatMap(testId =>
+        withServerFaultText.map(([label, rejection]) => [testId, label, rejection] as const)
+      )
+    )('keeps the generic text when %s fails with %s', async (testId, _case, rejection) => {
+      api.post.mockRejectedValue(rejection);
+      await openLink('/email/unsubscribe#token=good-token');
+
+      fireEvent.click(await screen.findByTestId(testId));
+
+      expect(await screen.findByText(UPDATE_FALLBACK)).toBeTruthy();
+      expect(screen.queryByText(SERVER_FAULT_TEXT)).toBeNull();
     });
 
     it("still shows the server's success message", async () => {
