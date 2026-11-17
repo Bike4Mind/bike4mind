@@ -8,6 +8,7 @@ import {
 import { deepAgentHandoffRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { assertOwnerHasCredits } from '@bike4mind/services';
+import { aiAccessDeniedMessage, isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
 import { usdToCredits } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import type { CompletionMeter } from '@bike4mind/services';
@@ -25,6 +26,14 @@ export const MISSION_NEEDS_CREDITS_BLOCKER =
   'stopped: the mission owner ran out of credits. Topping up does not restart it; start a new mission to continue';
 export const MISSION_MODEL_REFUSED_BLOCKER =
   'stopped: the mission model is not available to its owner. Start a new mission once it is available';
+
+// Every account-standing refusal can be lifted (dispute resolved, suspension or moderation lifted, deletion
+// cancelled, review approved), so the mission waits and rechecks instead of pausing.
+export const MISSION_OWNER_RESTRICTED_BLOCKER =
+  "waiting: the mission owner's account cannot use AI right now; the mission resumes on its own once that is resolved";
+
+/** How long a wake for a restricted owner waits before rechecking, in ms. One user read per recheck, no LLM. */
+export const ACCOUNT_HOLD_RECHECK_MS = 60 * 60 * 1000;
 
 /** A model-admission refusal during a wake, as opposed to any other ForbiddenError. */
 export class MissionModelRefusedError extends ForbiddenError {}
@@ -48,7 +57,9 @@ export async function missionWakeMeter(
       return await meter(...args);
     } catch (err) {
       // This meter runs admission and reservation only; provider errors occur after it returns.
-      // Disabled models use 400, while entitlement and pricing refusals use 403.
+      // Disabled models use 400, while entitlement and pricing refusals use 403. An account-standing
+      // refusal passes through as-is so the wake defers instead of pausing.
+      if (isAiAccessRefusal(err)) throw err;
       if (err instanceof ForbiddenError || err instanceof BadRequestError) {
         throw new MissionModelRefusedError(err.message, err.additionalInfo);
       }
@@ -114,4 +125,61 @@ export async function pauseMission(
     updatedAt: new Date().toISOString(),
   });
   logger.warn('deep agent wake: paused mission', { agentId, blocker });
+}
+
+/**
+ * The account-standing refusal for a user, or null when they may use AI (or no longer exist). Reads the user
+ * fresh and does not consult isCreditsEnforced: standing applies whether or not credits are enforced.
+ */
+export async function userAiAccessDenial(userId: string): Promise<string | null> {
+  const user = (await userRepository.findById(userId)) as IUserDocument | null;
+  return user ? aiAccessDeniedMessage(user) : null;
+}
+
+/** The account-standing refusal for a mission's owner, or null when the mission may run. */
+export async function ownerAiAccessDenial(store: DeepAgentStore, agentId: string): Promise<string | null> {
+  const charter = await store.loadCharter(agentId);
+  return charter ? userAiAccessDenial(charter.identity.ownerUserId) : null;
+}
+
+/** Throws the 403 an AI route gives a restricted account when the mission's owner may not use AI. */
+export async function assertMissionOwnerCanUseAi(store: DeepAgentStore, agentId: string): Promise<void> {
+  const denial = await ownerAiAccessDenial(store, agentId);
+  if (denial) throw new ForbiddenError(denial);
+}
+
+/**
+ * Hold a scheduled mission while its owner's account is restricted: show the blocker, keep the interval, and
+ * push the next wake out by ACCOUNT_HOLD_RECHECK_MS. A paused mission (no interval) stays paused.
+ */
+export async function deferWakeForAccountStanding(
+  store: DeepAgentStore,
+  agentId: string,
+  logger: Logger
+): Promise<void> {
+  const handoff = await store.loadHandoff(agentId);
+  if (!handoff) return;
+  if (!handoff.openBlockers.includes(MISSION_OWNER_RESTRICTED_BLOCKER)) {
+    await store.saveHandoff({
+      ...handoff,
+      openBlockers: [...handoff.openBlockers, MISSION_OWNER_RESTRICTED_BLOCKER],
+      updatedAt: new Date().toISOString(),
+    });
+  }
+  if (handoff.nextWakeIntervalMs == null) return;
+  // After the save: saving re-derives nextWakeAt from lastWakeAt + interval (DeepAgentHandoffModel.upsertForAgent).
+  const resumeAt = new Date(Date.now() + ACCOUNT_HOLD_RECHECK_MS);
+  await deepAgentHandoffRepository.releaseWakeClaim(agentId, resumeAt);
+  logger.warn('deep agent wake: owner account cannot use AI; deferring', { agentId, resumeAt });
+}
+
+/** Drop the account-standing blocker once the owner may use AI again. */
+export async function clearAccountStandingBlocker(store: DeepAgentStore, agentId: string): Promise<void> {
+  const handoff = await store.loadHandoff(agentId);
+  if (!handoff?.openBlockers.includes(MISSION_OWNER_RESTRICTED_BLOCKER)) return;
+  await store.saveHandoff({
+    ...handoff,
+    openBlockers: handoff.openBlockers.filter(b => b !== MISSION_OWNER_RESTRICTED_BLOCKER),
+    updatedAt: new Date().toISOString(),
+  });
 }
