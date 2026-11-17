@@ -737,7 +737,6 @@ export const SettingKeySchema = z.enum([
 
   // B4M PI SETTINGS
   'EnableBmPi',
-  'EnableBmPiDefault',
   'EnableBmPiJira',
 
   // OPTIHASHI SETTINGS
@@ -823,6 +822,8 @@ export const SettingKeySchema = z.enum([
   'musicGeneration',
   'agentMusicTracksPerRun',
 
+  // IMAGE GENERATION
+  'agentImagesPerRun',
   // AUDIO GENERATION (agent-mode caps)
   'agentSpeechClipsPerRun',
   'agentSoundEffectsPerRun',
@@ -896,9 +897,10 @@ export const OrchestrationDefaultsSchema = z.object({
     // instant without re-polluting the cached system prefix with a volatile
     // minute-precision date block.
     'current_datetime',
-    // Storage-backed artifact generation, opted into for agent mode: the agent
-    // writes these to generated-content storage, not user data, so they are safe
-    // to expose.
+    // Storage-backed artifact generation, opted into for agent mode. These only add
+    // new output (generated-content storage, or the user's Files for image jobs) and
+    // never modify existing user data, so they are safe to expose.
+    // Start capped image jobs when the run gets an image job config (agentImagesPerRun).
     'image_generation',
     'edit_image',
     // Only offered when the run gets a music config, which enforces agentMusicTracksPerRun.
@@ -2725,7 +2727,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableImageTemplates', order: 27 },
       { key: 'EnablePromptBuilder', order: 28 },
       { key: 'EnableBmPi', order: 30 },
-      { key: 'EnableBmPiDefault', order: 31 },
       { key: 'EnableBmPiJira', order: 32 },
       { key: 'EnableDeepResearch', order: 40 },
       { key: 'EnableDeepResearchDefault', order: 41 },
@@ -8159,16 +8160,6 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 30,
   }),
-  EnableBmPiDefault: makeBooleanSetting({
-    key: 'EnableBmPiDefault',
-    name: 'B4M Pi: On by default for users',
-    defaultValue: false,
-    description: 'When enabled, B4M Pi is active for users who have never explicitly toggled it.',
-    category: 'Experimental',
-    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 31,
-    dependsOn: 'EnableBmPi',
-  }),
   EnableBmPiJira: makeBooleanSetting({
     key: 'EnableBmPiJira',
     name: 'Enable B4M Pi — Jira Integration',
@@ -8520,6 +8511,19 @@ export const settingsMap = {
     // Consumed by apps/workers/src/queueHandlers/agentExecutor.musicToolConfig.ts.
     scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
+  agentImagesPerRun: makeNumberSetting({
+    key: 'agentImagesPerRun',
+    name: 'Agent Images Per Run',
+    defaultValue: 12,
+    min: 1,
+    int: true,
+    description:
+      'Most images image_generation and edit_image may start as jobs in one agent-mode run, counted across the run and all of its subagents. Each image still holds and settles its own credits.',
+    category: 'AI',
+    order: 149,
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.imageToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
   agentSpeechClipsPerRun: makeNumberSetting({
     key: 'agentSpeechClipsPerRun',
     name: 'Agent Speech Clips Per Run',
@@ -8529,7 +8533,7 @@ export const settingsMap = {
     description:
       'Most audio_generation speech clips one agent-mode run may start, counted across the run and all of its subagents. 0 refuses speech in agent mode. Each clip still holds and settles its own credits.',
     category: 'AI',
-    order: 149,
+    order: 150,
     // Consumed by apps/workers/src/queueHandlers/agentExecutor.audioToolConfig.ts.
     scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
@@ -8542,7 +8546,7 @@ export const settingsMap = {
     description:
       'Most audio_generation sound effects one agent-mode run may start, counted across the run and all of its subagents. 0 refuses sound effects in agent mode. Each effect still holds and settles its own credits.',
     category: 'AI',
-    order: 150,
+    order: 151,
     // Consumed by apps/workers/src/queueHandlers/agentExecutor.audioToolConfig.ts.
     scope: { settableAt: [SettingScopeLevel.Organization] },
   }),

@@ -8,6 +8,7 @@ import {
   type GenerationJobState,
   type IGenerationJobDocument,
   type IGenerationJobDocumentOf,
+  type ImageJobOutput,
   type MusicJobOutput,
   type VideoJobOutput,
 } from '@bike4mind/common';
@@ -20,6 +21,7 @@ import {
   type StoredOutputRef,
 } from '@bike4mind/server-utils/generations/signedOutput';
 import {
+  IMAGE_JOB_ERROR_COPY,
   MUSIC_JOB_ERROR_COPY,
   SOUND_EFFECT_JOB_ERROR_COPY,
   SPEECH_JOB_ERROR_COPY,
@@ -122,6 +124,7 @@ export async function toPublicGenerationJob<
 
 type VideoJob = IGenerationJobDocumentOf<'video'>;
 type MusicJob = IGenerationJobDocumentOf<'music'>;
+type ImageJob = IGenerationJobDocumentOf<'image'>;
 type SpeechJob = IGenerationJobDocumentOf<'speech'>;
 type SoundEffectJob = IGenerationJobDocumentOf<'sound_effect'>;
 
@@ -195,4 +198,23 @@ export const SOUND_EFFECT_GENERATION_PROJECTION = {
   statusFields: () => ({}),
   outputOf: (job: SoundEffectJob): AudioJobOutput | undefined => job.payload.output,
   outputFields: audioOutputFields,
+};
+
+/**
+ * The internal per-id image resource the chat job card reads (GET /api/image-jobs/[id]). Not published yet: the copy
+ * table covers every code, so nothing is folded.
+ */
+export const IMAGE_GENERATION_PROJECTION = {
+  object: 'image_generation' as const,
+  toPublicErrorCode: (code: GenerationJobErrorCode) => code,
+  errorCopy: IMAGE_JOB_ERROR_COPY,
+  requestFields: ({ payload: { request, groupId } }: ImageJob) => ({
+    model: request.model,
+    mode: request.mode,
+    prompt: request.prompt,
+    group_id: groupId ?? null,
+  }),
+  statusFields: () => ({}),
+  outputOf: (job: ImageJob): ImageJobOutput | undefined => job.payload.output,
+  outputFields: () => ({}),
 };

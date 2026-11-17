@@ -8,9 +8,10 @@ import { Quest, questRepository } from '../QuestModel';
 const counterField = {
   video: 'agentVideoClipsClaimed',
   music: 'agentMusicTracksClaimed',
+  image: 'agentImagesClaimed',
   speech: 'agentSpeechClipsClaimed',
   sound_effect: 'agentSoundEffectsClaimed',
-} as const;
+} as const satisfies Record<(typeof AGENT_GENERATION_SLOT_KINDS)[number], string>;
 
 // Real Mongo: the cap only holds if the conditional $inc is atomic and the counter path survives
 // Mongoose strict mode.

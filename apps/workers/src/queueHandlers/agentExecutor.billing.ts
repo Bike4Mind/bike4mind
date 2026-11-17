@@ -157,8 +157,10 @@ export function addToolUsage(pending: PendingToolUsage, usage: ToolUsageTotals):
  * by the callback phase that folds them. Images settle on finish: the tools' failure paths
  * return before onFinish, so an undelivered image is never billed. The start phase owns
  * nothing today; it stays so a tool can opt into it explicitly. video_generation,
- * music_generation and audio_generation bill in their job instead. Must stay in sync with the
- * tool implementations in b4m-core/services.
+ * music_generation and audio_generation bill in their job instead, and so do image_generation and
+ * edit_image when the run has an image job config (agentExecutor.imageToolConfig.ts): the job path
+ * never calls onFinish, so only the in-process path folds here. Must stay in sync with the tool
+ * implementations in b4m-core/services.
  */
 const MEDIA_COST_TOOLS_BY_PHASE = {
   start: [],

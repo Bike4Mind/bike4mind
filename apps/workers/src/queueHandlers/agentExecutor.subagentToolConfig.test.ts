@@ -34,6 +34,14 @@ describe('buildSubagentToolConfig', () => {
     expect(result.deep_research).toEqual({ model: 'claude-sonnet-4-6', apiKeys: undefined });
   });
 
+  it('hands both image tools the image job config when one is built, so they start capped jobs', () => {
+    const imageConfig = { model: 'gpt-image-2' } as const;
+    const imageJobConfig = { selection: imageConfig, createJobs: vi.fn() };
+    const result = buildSubagentToolConfig({ model: 'claude-sonnet-4-6', imageConfig, imageJobConfig });
+    expect(result.image_generation).toBe(imageJobConfig);
+    expect(result.edit_image).toBe(imageJobConfig);
+  });
+
   it('omits image tool config when imageConfig is undefined so a text-only run stays lean', () => {
     const result = buildSubagentToolConfig({ model: 'claude-sonnet-4-6', imageConfig: undefined });
     expect(result.image_generation).toBeUndefined();

@@ -42,17 +42,6 @@ const ORG_POLICY_MODEL_NOTE =
   'again will be refused the same way. Do not retry it this turn: tell the user, who can pick a model their ' +
   'organization allows in their settings.';
 
-/** paidPlanRefusalOrRethrow for a tool whose model is not a tool argument (see SETTINGS_MODEL_NOTE). */
-export function settingsModelRefusalOrRethrow(
-  context: Pick<ToolContext, 'logger'>,
-  error: unknown,
-  modelId: string,
-  toolName: string
-): string {
-  const note = isOrgModelNotAllowedError(error) ? ORG_POLICY_MODEL_NOTE : SETTINGS_MODEL_NOTE;
-  return paidPlanRefusalOrRethrow(context, error, modelId, toolName) + note;
-}
-
 /**
  * Asserts a tool's model is admitted; null when it is, the refusal text per paidPlanRefusalOrRethrow when not.
  * For tools whose model is not a tool argument (see SETTINGS_MODEL_NOTE).
@@ -71,4 +60,15 @@ export async function toolModelRefusal(
   } catch (error) {
     return settingsModelRefusalOrRethrow(context, error, modelId, toolName);
   }
+}
+
+/** paidPlanRefusalOrRethrow for a model taken from the user's settings (see SETTINGS_MODEL_NOTE / ORG_POLICY_MODEL_NOTE). */
+export function settingsModelRefusalOrRethrow(
+  context: Pick<ToolContext, 'logger'>,
+  error: unknown,
+  modelId: string,
+  toolName: string
+): string {
+  const note = isOrgModelNotAllowedError(error) ? ORG_POLICY_MODEL_NOTE : SETTINGS_MODEL_NOTE;
+  return paidPlanRefusalOrRethrow(context, error, modelId, toolName) + note;
 }

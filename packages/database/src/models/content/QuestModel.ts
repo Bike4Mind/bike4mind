@@ -647,6 +647,7 @@ export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schem
     // Agent-mode jobs claimed by this run, one per-run cap counter per kind (see claimAgentGenerationSlot).
     agentVideoClipsClaimed: { type: Number, required: false },
     agentMusicTracksClaimed: { type: Number, required: false },
+    agentImagesClaimed: { type: Number, required: false },
     agentSpeechClipsClaimed: { type: Number, required: false },
     agentSoundEffectsClaimed: { type: Number, required: false },
     oob: { type: String, required: false },
@@ -966,6 +967,7 @@ export function sessionKeysetFilter(sessionId: string, after?: { timestamp: Date
 const AGENT_GENERATION_SLOT_FIELDS = {
   video: 'agentVideoClipsClaimed',
   music: 'agentMusicTracksClaimed',
+  image: 'agentImagesClaimed',
   speech: 'agentSpeechClipsClaimed',
   sound_effect: 'agentSoundEffectsClaimed',
 } as const satisfies Record<AgentGenerationSlotKind, keyof IChatHistoryItem>;
@@ -1152,8 +1154,10 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       // Include pinned: IChatHistoryItemDocument types it, so omitting it hands every caller undefined.
       // Include status so history can skip a prompt stopped before any reply (see isStoppedBeforeReply
       // in @bike4mind/utils).
+      // Include generationJobs so the recent-images note can see job-made images (recentImageJobs in
+      // @bike4mind/utils).
       .select(
-        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob suggestedChoices pinned status _id'
+        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob suggestedChoices pinned status generationJobs _id'
       )
       .sort({ timestamp: -1 })
       .limit(limit)

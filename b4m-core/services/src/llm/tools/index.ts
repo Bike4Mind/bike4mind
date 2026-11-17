@@ -89,6 +89,12 @@ export {
   type AudioToolConfig,
   type AudioToolJobs,
 } from './implementation/audioGeneration';
+export {
+  isImageJobToolConfig,
+  type ImageLimitRefusal,
+  type ImageToolConfig,
+  type ImageToolJobsResult,
+} from './implementation/imageGeneration';
 export type { Searcher, SearchResult, ContentExtractionResult } from './implementation/deepResearch';
 
 /**

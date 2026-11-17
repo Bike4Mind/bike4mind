@@ -391,6 +391,44 @@ describe('Security tab params', () => {
 
 import { PAYMENT_REVIEW_SEARCH_KEYS } from './Revenue/paymentReviewSearch';
 
+describe('Integration Health and Audit Log summary window params', () => {
+  const ownerOf = (param: string) =>
+    Object.entries(ADMIN_TAB_PARAMS)
+      .filter(([, params]) => (params as readonly string[]).includes(param))
+      .map(([slug]) => slug);
+
+  it('registers each param under its own tab only', () => {
+    expect(ownerOf('healthRange')).toEqual(['integration-health']);
+    expect(ownerOf('healthIntegration')).toEqual(['integration-health']);
+    expect(ownerOf('auditWindow')).toEqual([ADMIN_AUDIT_LOG_TAB_SLUG]);
+  });
+
+  // The tab parses and falls back itself, so validateSearch must hand an invalid value through untouched.
+  it('passes raw values through validateSearch, invalid ones included', () => {
+    expect(
+      parseAdminSearch({
+        tab: 'integration-health',
+        healthRange: 'forever',
+        healthIntegration: 'bogus',
+        auditWindow: 7,
+      })
+    ).toMatchObject({ healthRange: 'forever', healthIntegration: 'bogus', auditWindow: '7' });
+  });
+
+  it('keeps them on their own tab and drops them on another', () => {
+    const search = { healthRange: '7d', healthIntegration: 'slack', auditWindow: '90' };
+    expect(adminSearchForTab(search, 'integration-health')).toMatchObject({
+      healthRange: '7d',
+      healthIntegration: 'slack',
+    });
+    expect(adminSearchForTab(search, 'integration-health').auditWindow).toBeUndefined();
+    expect(adminSearchForTab(search, ADMIN_AUDIT_LOG_TAB_SLUG)).toMatchObject({
+      auditWindow: '90',
+      healthRange: undefined,
+    });
+  });
+});
+
 describe('useAdminListUrlState keys', () => {
   // Every key set passed to useAdminListUrlState, by the name its caller imports it under.
   const LIST_SEARCH_KEYS: Readonly<Record<string, AdminListSearchKeys>> = {
