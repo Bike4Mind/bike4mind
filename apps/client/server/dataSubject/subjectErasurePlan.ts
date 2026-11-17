@@ -119,7 +119,9 @@ export class SubjectErasurePlan {
   private async decideSubject(model: string, references: readonly UserReference[]): Promise<Decision[]> {
     const { userId } = this.matcher.subject;
     const decisions: Decision[] = [];
-    for await (const document of readDocuments(model, { _id: userId }, this.parentKeyPathsOf(model), { session: this.session })) {
+    for await (const document of readDocuments(model, { _id: userId }, this.parentKeyPathsOf(model), {
+      session: this.session,
+    })) {
       decisions.push(this.keyed(model, document, DELETED));
     }
     // Their references on other people's User rows (who invited whom).
