@@ -16,6 +16,7 @@ export type FieldSpec =
   | (FieldBase & { kind: 'enum'; options: readonly string[]; nullable: boolean })
   | (FieldBase & { kind: 'number'; integer: boolean; min?: number; max?: number; exclusiveMin?: number })
   | (FieldBase & { kind: 'boolean' })
+  | (FieldBase & { kind: 'dlqQueueModes' })
   | (FieldBase & { kind: 'group'; fields: FieldSpec[] })
   // A shape this form has no control for; it stays editable through the JSON view.
   | (FieldBase & { kind: 'unsupported' });
@@ -98,6 +99,7 @@ const realBound = (bound: unknown) =>
 
 function describeNode(key: string, path: FieldPath, node: JsonSchemaNode): FieldSpec {
   const base: FieldBase = { key, path, label: node.title ?? humanize(key), help: node.description };
+  if (path.length === 1 && key === 'dlqQueueModes') return { ...base, kind: 'dlqQueueModes' };
   const variants = (node.anyOf ?? []).filter(isNode);
   const nullable = variants.some(variant => variant.type === 'null');
   const valueVariants = variants.filter(variant => variant.type !== 'null');
@@ -198,4 +200,12 @@ export function validateConfig(schema: z.ZodObject, fields: FieldSpec[], value: 
 }
 
 export const formatValue = (value: unknown) =>
-  value === null ? 'None' : typeof value === 'boolean' ? (value ? 'On' : 'Off') : String(value);
+  value === null
+    ? 'None'
+    : typeof value === 'boolean'
+      ? value
+        ? 'On'
+        : 'Off'
+      : typeof value === 'object'
+        ? JSON.stringify(value)
+        : String(value);

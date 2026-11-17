@@ -6,11 +6,18 @@ import { isFabFileScanInFlight, useGetFabFile } from '@client/app/hooks/data/fab
 import type { StudioImageJob } from '@client/app/hooks/data/studioImageJobs';
 import StudioTrailDialog from '@client/app/components/Studio/trail/StudioTrailDialog';
 import type { StudioTrailRestore } from '@client/app/components/Studio/trail/StudioTrail';
+import { CHECKERBOARD_SX } from '@client/app/components/Studio/checkerboard';
 
 const LIVE_LABELS: Partial<Record<GenerationJobState, string>> = {
   pending: 'Queued',
   running: 'Generating',
   storing: 'Saving',
+};
+
+// A cutout's prompt is the server's fixed instruction, so it is named for what it is instead.
+const jobCaption = (job: StudioImageJob): string => {
+  if (job.purpose !== 'cutout') return job.request.prompt;
+  return job.state === 'succeeded' ? 'Background removed' : 'Background removal';
 };
 
 /** How long (ms) a card waits on the moderation scan before it stops asking for the image. */
@@ -67,7 +74,7 @@ const JobBody = ({ job }: { job: StudioImageJob }) => {
   }
   if (job.state === 'succeeded') {
     return job.output?.fileId ? (
-      <ImageJobPreview fileId={job.output.fileId} prompt={job.request.prompt} />
+      <ImageJobPreview fileId={job.output.fileId} prompt={jobCaption(job)} />
     ) : (
       // Final: the worker kept the image outside Files (imageJobHandler's fallback), so there is no file to show.
       <Typography level="body-sm" textAlign="center" sx={{ px: 2 }} data-testid="image-job-unviewable">
@@ -92,10 +99,17 @@ type ImageJobCardProps = {
 const ImageJobCard = ({ job, onRestore }: ImageJobCardProps) => {
   const [isTrailOpen, setIsTrailOpen] = useState(false);
   const fileId = job.output?.fileId ?? null;
+  const deliveredCutout = job.purpose === 'cutout' && job.state === 'succeeded';
   return (
     <Card variant="outlined" data-testid={`image-job-card-${job.id}`} data-state={job.state}>
-      <AspectRatio ratio="1" objectFit="cover" variant="soft">
-        {/* AspectRatio centers, and covers an img in, only the DOM element that receives its data-first-child prop. */}
+      {/* A cutout is shown whole, on a checkerboard, so its transparent background reads as transparent. */}
+      <AspectRatio
+        ratio="1"
+        objectFit={deliveredCutout ? 'contain' : 'cover'}
+        variant="soft"
+        sx={deliveredCutout ? { '& > div': CHECKERBOARD_SX } : undefined}
+      >
+        {/* AspectRatio centers, and fits an img in, only the DOM element that receives its data-first-child prop. */}
         <div>
           <JobBody job={job} />
         </div>
@@ -105,7 +119,7 @@ const ImageJobCard = ({ job, onRestore }: ImageJobCardProps) => {
           level="body-sm"
           sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
         >
-          {job.request.prompt}
+          {jobCaption(job)}
         </Typography>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mt: 0.5 }}>
           <Chip size="sm" variant="soft">

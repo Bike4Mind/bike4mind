@@ -9,8 +9,8 @@ import { CreditHolderType, type CreditHoldRecord } from './CreditHolderTypes';
 export const GENERATION_JOB_KINDS = ['video', 'music', 'image'] as const;
 export type GenerationJobKind = (typeof GENERATION_JOB_KINDS)[number];
 
-/** The kinds a chat message can start. An image job is started from Studio only, so it never lands on a quest. */
-export const QUEST_GENERATION_JOB_KINDS = ['video', 'music'] as const satisfies readonly GenerationJobKind[];
+/** The kinds a chat message can start; every generation kind can now land on a quest. */
+export const QUEST_GENERATION_JOB_KINDS = ['video', 'music', 'image'] as const satisfies readonly GenerationJobKind[];
 export type QuestGenerationJobKind = (typeof QUEST_GENERATION_JOB_KINDS)[number];
 
 /** A job a chat message started, as stored on the quest: the kind picks the card and the endpoint that reads it. */
@@ -119,6 +119,10 @@ export type MusicJobPayload = {
 /** Same storage fields as VideoJobOutput minus the duration a still image does not have. */
 export type ImageJobOutput = Omit<VideoJobOutput, 'durationSeconds'>;
 
+/** Image job work beyond a plain render. `cutout`: remove the background of its edit_source (a product shot). */
+export const IMAGE_JOB_PURPOSES = ['cutout'] as const;
+export type ImageJobPurpose = (typeof IMAGE_JOB_PURPOSES)[number];
+
 /**
  * One image per job. Most providers return the finished image from one blocking call, so the output is moderated
  * and stored in the submit step. An async provider (BFL) queues a task instead: the handle is kept while the job
@@ -126,6 +130,8 @@ export type ImageJobOutput = Omit<VideoJobOutput, 'durationSeconds'>;
  */
 export type ImageJobPayload = {
   request: StoredImageRequest;
+  /** Absent for a plain render. Server-set: a client cannot ask for it on the image-jobs route. */
+  purpose?: ImageJobPurpose;
   providerId: ImageProviderId;
   providerHandle?: GenerationProviderJobHandle<ImageProviderId>;
   providerOutput?: ProviderOutput;

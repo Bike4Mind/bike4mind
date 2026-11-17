@@ -19,6 +19,7 @@ private struct GalleryContent: View {
   /// path, so a `NavigationLink(value: MediaItem)` has nowhere to go and silently does nothing.
   @State private var openItem: MediaItem?
   @State private var turnInto: TurnIntoRequest?
+  @State private var exporter: MediaExportPresenter
   @Environment(AppServices.self) private var services
   private let tracker: GenerationTracker
 
@@ -29,6 +30,7 @@ private struct GalleryContent: View {
     tracker: GenerationTracker
   ) {
     _model = State(initialValue: MediaGalleryViewModel(api: api, onLatestImage: onLatestImage))
+    _exporter = State(initialValue: MediaExportPresenter(media: api))
     _create = State(initialValue: StudioCreateViewModel(api: studio, tracker: tracker))
     self.tracker = tracker
   }
@@ -37,8 +39,8 @@ private struct GalleryContent: View {
     content
       .safeAreaInset(edge: .bottom, spacing: 0) {
         VStack(spacing: 0) {
-          GenerationTilesView(tracker: tracker, settings: create)
-          StudioCreateBar(model: create)
+          GenerationTilesView(tracker: tracker, settings: create, exporter: exporter)
+          StudioCreateBar(model: create, photoContext: editContext)
         }
       }
       // A finished generation is saved to the gallery server-side; pull it in.
@@ -52,6 +54,7 @@ private struct GalleryContent: View {
           .environment(\.studioEdit, editContext)
       }
       .turnIntoFlow(request: $turnInto, context: editContext)
+      .mediaExport(exporter)
       .task { await model.load() }
       .refreshable { await model.refresh() }
   }
@@ -123,6 +126,8 @@ private struct GalleryContent: View {
           }
           .buttonStyle(.plain)
           .contextMenu {
+            MediaExportButtons(item: item, presenter: exporter)
+            Divider()
             TurnIntoButtons(item: item) { turnInto = $0 }
           }
           .task { await model.loadMoreIfNeeded(currentItem: item) }

@@ -68,6 +68,9 @@ export type GetEffectiveLLMApiKeysAdapters = GetEffectiveApiKeyAdapters & {
 export const envKey = (name: string): string | null =>
   (process.env.B4M_SELF_HOST === 'true' && process.env[name]?.trim()) || null;
 
+/** What getEffectiveLLMApiKeys returns in place of a user's own key once it has expired. */
+export const EXPIRED_API_KEY = 'expired';
+
 export const getSerperKey = async (adapters: GetEffectiveApiKeyAdapters) => {
   const { db } = adapters;
   const settings = await db.adminSettings.findBySettingName('SerperKey');
@@ -266,7 +269,7 @@ export const getEffectiveLLMApiKeys = async (
   const ollamaEnabled = enableOllama === 'true' || (enableOllama as unknown) === true;
   const keyOrExpired = (apiKey: IApiKeyDocument | null) => {
     if (!apiKey) return null;
-    if (apiKey.expiresAt && apiKey.expiresAt < new Date()) return 'expired';
+    if (apiKey.expiresAt && apiKey.expiresAt < new Date()) return EXPIRED_API_KEY;
     return apiKey.apiKey;
   };
 

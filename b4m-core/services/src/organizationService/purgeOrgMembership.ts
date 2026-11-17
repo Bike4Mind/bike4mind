@@ -55,9 +55,9 @@ export const ORG_MEMBERSHIP_ENDED_REVOKE_REASON = 'org-membership-ended';
  * `organization.users`, which THIS purge doesn't touch, so it is not a substitute for pruning
  * `adminUserIds` here.)
  *
- * The same goes for lake authority: `findIdsWithAdminRights` matches `{ adminUserIds: userId }`, which
- * feeds `administeredOrgIds` and therefore `canManageLake`'s org rung, so a manager who kept their
- * entry would keep authority over every lake in the org after their own grants lapsed below.
+ * The same goes for lake authority: `findIdsWithAdminRights` (an `adminUserIds` entry with a `users[]`
+ * row) feeds `administeredOrgIds` and therefore `canManageLake`'s org rung; dropping the row already
+ * revokes that, so pruning the entry here is defence in depth.
  *
  * Lake access belongs here for the same reason: grants carry no membership qualifier either, so a
  * role held on one of this org's lakes outlived the membership it was issued for. Putting the step
