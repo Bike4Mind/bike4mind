@@ -1,0 +1,93 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { IAssistantBrief } from '@bike4mind/database';
+import { composeBrief, type BriefComposeDeps } from './briefCompose';
+
+const brief = (overrides: Partial<IAssistantBrief> = {}): IAssistantBrief =>
+  ({
+    _id: 'b1',
+    userId: 'u1',
+    status: 'composing',
+    periodStart: new Date('2026-11-16T00:00:00Z'),
+    periodEnd: new Date('2026-11-17T00:00:00Z'),
+    ...overrides,
+  }) as unknown as IAssistantBrief;
+
+const activeActivity = {
+  periodStart: new Date('2026-11-16T00:00:00Z'),
+  periodEnd: new Date('2026-11-17T00:00:00Z'),
+  runs: [{ id: 'r1', query: 'q', status: 'completed', finishedAt: undefined, errorMessage: undefined }],
+  approvals: [{ questId: 'q1', sessionId: 's1', pendingActionTs: 5, tool: 'send_reply', summary: '{}' }],
+};
+
+function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {
+  const deps = {
+    now: () => new Date('2026-11-17T01:00:00Z'),
+    users: { findById: vi.fn().mockResolvedValue({ id: 'u1' }) },
+    briefs: {
+      findById: vi.fn().mockResolvedValue(brief()),
+      markReady: vi.fn().mockResolvedValue(true),
+      markFailed: vi.fn().mockResolvedValue(true),
+    },
+    loadActivity: vi.fn().mockResolvedValue(activeActivity),
+    canCompose: vi.fn().mockResolvedValue('ok'),
+    complete: vi.fn().mockResolvedValue(JSON.stringify({ headline: 'Done.', handled: ['Did a thing.'] })),
+    push: vi.fn().mockResolvedValue(undefined),
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    ...overrides,
+  } as unknown as BriefComposeDeps & {
+    briefs: { markReady: ReturnType<typeof vi.fn>; markFailed: ReturnType<typeof vi.fn> };
+    push: ReturnType<typeof vi.fn>;
+    complete: ReturnType<typeof vi.fn>;
+  };
+  return deps;
+}
+
+describe('composeBrief', () => {
+  it('composes, stores and pushes brief_ready with the brief id', async () => {
+    const deps = makeDeps();
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1' });
+
+    expect(deps.briefs.markReady).toHaveBeenCalledOnce();
+    const stored = deps.briefs.markReady.mock.calls[0][1];
+    expect(stored.decisions[0].approval).toEqual({ questId: 'q1', sessionId: 's1', pendingActionTs: 5 });
+    expect(deps.push).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u1', category: 'brief_ready', briefId: 'b1', body: '1 decision needs you.' })
+    );
+  });
+
+  it('settles an empty window without calling the model', async () => {
+    const deps = makeDeps({ loadActivity: vi.fn().mockResolvedValue({ ...activeActivity, runs: [], approvals: [] }) });
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1' });
+
+    expect(deps.complete).not.toHaveBeenCalled();
+    expect(deps.briefs.markReady.mock.calls[0][1].headline).toBe('Nothing new since your last brief.');
+  });
+
+  it('fails the brief, and sends no push, when the balance gate refuses', async () => {
+    const deps = makeDeps({ canCompose: vi.fn().mockResolvedValue('insufficient_credits') });
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1' });
+
+    expect(deps.briefs.markFailed).toHaveBeenCalledWith('b1', 'insufficient_credits');
+    expect(deps.push).not.toHaveBeenCalled();
+  });
+
+  it('fails the brief on a malformed model reply', async () => {
+    const deps = makeDeps({ complete: vi.fn().mockResolvedValue('not json') });
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1' });
+
+    expect(deps.briefs.markFailed).toHaveBeenCalledWith('b1', 'composition_failed');
+    expect(deps.push).not.toHaveBeenCalled();
+  });
+
+  it('skips a brief owned by someone else or already settled', async () => {
+    const other = makeDeps();
+    other.briefs.findById = vi.fn().mockResolvedValue(brief({ userId: 'someone-else' }));
+    await composeBrief(other, { briefId: 'b1', userId: 'u1' });
+    expect(other.complete).not.toHaveBeenCalled();
+
+    const settled = makeDeps();
+    settled.briefs.findById = vi.fn().mockResolvedValue(brief({ status: 'ready' }));
+    await composeBrief(settled, { briefId: 'b1', userId: 'u1' });
+    expect(settled.briefs.markReady).not.toHaveBeenCalled();
+  });
+});
