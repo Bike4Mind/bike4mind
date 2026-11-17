@@ -6,10 +6,8 @@ const mocks = vi.hoisted(() => ({
   rowsInForce: vi.fn(),
 }));
 
+vi.mock('@bike4mind/fab-pipeline', () => ({ createS3Client: () => ({ send: mocks.send }) }));
 vi.mock('@aws-sdk/client-s3', () => ({
-  S3Client: class {
-    send = mocks.send;
-  },
   PutObjectCommand: class {
     constructor(public readonly input: Record<string, unknown>) {}
   },

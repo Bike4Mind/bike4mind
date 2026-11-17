@@ -1,10 +1,8 @@
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { createS3Client } from '@bike4mind/fab-pipeline';
 import { modelPriceRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import { MODEL_PRICE_SNAPSHOT_KEY, type IModelPriceSnapshot } from '@bike4mind/common';
-
-/** Name set by infra/cron.ts where the snapshot bucket exists; the usage poller reads the same one. */
-export const MODEL_PRICE_SNAPSHOT_BUCKET_ENV = 'MODEL_PRICE_SNAPSHOT_BUCKET';
+import { MODEL_PRICE_SNAPSHOT_BUCKET_ENV, MODEL_PRICE_SNAPSHOT_KEY, type IModelPriceSnapshot } from '@bike4mind/common';
 
 /**
  * Publishes the per-token ModelPrice rows in force for the usage poller, which has no database.
@@ -21,7 +19,7 @@ export async function publishModelPriceSnapshot(logger: Logger, now = new Date()
       generatedAt: now.toISOString(),
       rows: rows.filter(row => row.unit === 'per_token').map(row => ({ modelId: row.modelId, pricing: row.pricing })),
     };
-    await new S3Client({}).send(
+    await createS3Client().send(
       new PutObjectCommand({
         Bucket: bucket,
         Key: MODEL_PRICE_SNAPSHOT_KEY,

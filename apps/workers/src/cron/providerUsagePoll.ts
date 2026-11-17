@@ -22,12 +22,16 @@ import { CloudWatchClient, PutMetricDataCommand, type MetricDatum } from '@aws-s
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { Context } from 'aws-lambda';
 import { Logger } from '@bike4mind/observability';
-import { MODEL_PRICE_SNAPSHOT_KEY, ModelPriceSnapshot, type IModelPriceSnapshot } from '@bike4mind/common';
+import {
+  MODEL_PRICE_SNAPSHOT_BUCKET_ENV,
+  MODEL_PRICE_SNAPSHOT_KEY,
+  ModelPriceSnapshot,
+  type IModelPriceSnapshot,
+} from '@bike4mind/common';
 import { randomUUID } from 'crypto';
 import { spendReconciliationService } from '@bike4mind/services';
 import { Resource } from 'sst';
 import { resolveProviderAdminKey } from './providerAdminKey';
-import { MODEL_PRICE_SNAPSHOT_BUCKET_ENV } from './modelPriceSnapshotWriter';
 
 type ProviderHourlyUsage = spendReconciliationService.ProviderHourlyUsage;
 type UsageReportProvider = spendReconciliationService.UsageReportProvider;
@@ -66,12 +70,12 @@ export function previousHourWindow(now: Date): { start: Date; end: Date } {
   return { start: new Date(end.getTime() - HOUR_MS), end };
 }
 
-/** Null on any failure: the hour is then priced from the static tables alone, as before the snapshot existed. */
-async function loadModelPriceSnapshot(logger: Logger, now: Date): Promise<IModelPriceSnapshot | null> {
+/** Undefined on any failure: the hour is then priced from the static tables alone, as before the snapshot existed. */
+async function loadModelPriceSnapshot(logger: Logger, now: Date): Promise<IModelPriceSnapshot | undefined> {
   const bucket = process.env[MODEL_PRICE_SNAPSHOT_BUCKET_ENV];
   if (!bucket) {
     logger.warn('[ProviderUsagePoll] model price snapshot bucket not configured, using static prices');
-    return null;
+    return undefined;
   }
   try {
     const object = await new S3Client({}).send(new GetObjectCommand({ Bucket: bucket, Key: MODEL_PRICE_SNAPSHOT_KEY }));
@@ -79,13 +83,16 @@ async function loadModelPriceSnapshot(logger: Logger, now: Date): Promise<IModel
     logger.info(
       `[ProviderUsagePoll] model price snapshot generatedAt=${snapshot.generatedAt} rows=${snapshot.rows.length}`
     );
-    if (now.getTime() - Date.parse(snapshot.generatedAt) > SNAPSHOT_STALE_MS) {
-      logger.warn(`[ProviderUsagePoll] model price snapshot is older than 24h (generatedAt=${snapshot.generatedAt})`);
+    const ageMs = now.getTime() - Date.parse(snapshot.generatedAt);
+    if (Number.isNaN(ageMs) || ageMs > SNAPSHOT_STALE_MS || ageMs < -HOUR_MS) {
+      logger.warn(
+        `[ProviderUsagePoll] model price snapshot timestamp is stale or implausible (generatedAt=${snapshot.generatedAt})`
+      );
     }
     return snapshot;
   } catch (err) {
     logger.warn('[ProviderUsagePoll] model price snapshot unavailable, using static prices', err);
-    return null;
+    return undefined;
   }
 }
 
@@ -99,7 +106,7 @@ export async function handler(_event: unknown, context: Context) {
   const failed: string[] = [];
   let published = 0;
   let skipped = 0;
-  const snapshot = (await loadModelPriceSnapshot(logger, now)) ?? undefined;
+  const snapshot = await loadModelPriceSnapshot(logger, now);
 
   for (const { provider, fetch } of PROVIDERS) {
     let key: string | undefined;

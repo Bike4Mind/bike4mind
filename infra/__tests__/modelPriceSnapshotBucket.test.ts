@@ -38,11 +38,11 @@ describe('model price snapshot wiring in infra/cron.ts', () => {
   });
 
   it('reads the env var name the workers use', () => {
-    const writer = readFileSync(
-      new URL('../../apps/workers/src/cron/modelPriceSnapshotWriter.ts', import.meta.url),
+    const common = readFileSync(
+      new URL('../../b4m-core/common/src/types/entities/ModelPriceSnapshot.ts', import.meta.url),
       'utf8'
     );
-    expect(writer).toContain("'MODEL_PRICE_SNAPSHOT_BUCKET'");
+    expect(common).toContain("'MODEL_PRICE_SNAPSHOT_BUCKET'");
     expect(source).toContain('MODEL_PRICE_SNAPSHOT_BUCKET: modelPriceSnapshotBucket.name');
   });
 });

@@ -322,7 +322,14 @@ describe('providerUsagePoll model price snapshot', () => {
   it('warns when the snapshot is older than 24h but still uses it', async () => {
     mocks.s3Send.mockResolvedValue(snapshotBody({ generatedAt: '2026-10-30T13:00:00.000Z' }));
     await handler({}, context);
-    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining('older than 24h'));
+    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining('stale or implausible'));
+    expect(snapshotArg()).toBeDefined();
+  });
+
+  it('warns when the snapshot is dated in the future but still uses it', async () => {
+    mocks.s3Send.mockResolvedValue(snapshotBody({ generatedAt: '2026-11-03T00:00:00.000Z' }));
+    await handler({}, context);
+    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining('stale or implausible'));
     expect(snapshotArg()).toBeDefined();
   });
 

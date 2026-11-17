@@ -963,7 +963,12 @@ const modelPriceSnapshotObjectArn = modelPriceSnapshotBucket
   ? $interpolate`${modelPriceSnapshotBucket.arn}/${MODEL_PRICE_SNAPSHOT_KEY}`
   : undefined;
 // Discovery writes the object, the poller reads it; each gets only that one key.
-const modelPriceSnapshotAccess = {
+interface ModelPriceSnapshotAccess {
+  environment: Record<string, $util.Output<string>>;
+  write: { actions: string[]; resources: $util.Output<string>[] }[];
+  read: { actions: string[]; resources: $util.Output<string>[] }[];
+}
+const modelPriceSnapshotAccess: ModelPriceSnapshotAccess = {
   environment: modelPriceSnapshotBucket ? { MODEL_PRICE_SNAPSHOT_BUCKET: modelPriceSnapshotBucket.name } : {},
   write: modelPriceSnapshotObjectArn ? [{ actions: ['s3:PutObject'], resources: [modelPriceSnapshotObjectArn] }] : [],
   read: modelPriceSnapshotObjectArn ? [{ actions: ['s3:GetObject'], resources: [modelPriceSnapshotObjectArn] }] : [],

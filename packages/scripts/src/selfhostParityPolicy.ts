@@ -1052,7 +1052,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'schedule:infra/cron.ts:modelDiscoveryCron',
-    '6c33a39dd7f6a9ba57d195bc8bc6906665d2573e0fc7f492ed486d84a8b536b0',
+    '7f54c87d76d28adbb51b23f078e98f3a064f2d7fca9c4017ced0b640f4c018bf',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'schedule:modelDiscovery',
@@ -1081,7 +1081,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/cron.ts:providerUsagePoll',
-    '0efe87f7fb65efd31bd4b6954832cff26f9da8db51ec29556071702237c3a1bf',
+    'cf9858cd4ac206f993b34bf8e0c940d4f5c441daf7ef4f66dc5c21b823be76da',
     'Publishes provider-reported spend to hosted CloudWatch alarms on monitored stages; no local metric or alarm destination is configured.',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
