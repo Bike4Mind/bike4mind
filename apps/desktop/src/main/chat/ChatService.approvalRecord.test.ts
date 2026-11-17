@@ -426,6 +426,14 @@ describe('ChatService approval record', () => {
       expect(entry.approval.askedBecause).toContain('Could not read this command');
     });
 
+    it.each(['ask', 'auto'] as const)('adds no Full access reason in %s mode', async mode => {
+      vi.spyOn(shellScanner, 'scanShell').mockResolvedValue(null);
+      await run(mode, 'ls notes.txt');
+      const { card, entry } = await askedAndLogged('c1');
+      expect(card.approvalDetail).not.toContain('Could not read this command');
+      expect(entry.approval.askedBecause ?? '').not.toContain('Full access');
+    });
+
     it('names why it asked before deleting a conversation, which cannot be undone', async () => {
       const created = await service.createCodeSession({ directory: root, branch: '', workspace: false });
       const other = await service.createCodeSession({ directory: root, branch: '', workspace: false });
