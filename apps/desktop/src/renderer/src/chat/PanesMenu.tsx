@@ -9,9 +9,9 @@ import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
-import { CheckIcon, CubeIcon, GlobeIcon, PanesIcon, PhoneIcon, SearchIcon, TerminalIcon } from './icons';
+import { CheckIcon, CubeIcon, GlobeIcon, PanesIcon, PhoneIcon, SearchIcon, SparkIcon, TerminalIcon } from './icons';
 
-export type PaneId = 'terminal' | 'browser' | 'simulator' | 'model';
+export type PaneId = 'terminal' | 'browser' | 'simulator' | 'model' | 'studio';
 
 /** One pane the header can open, as ChatShell knows it right now. */
 export interface PaneControl {
@@ -64,9 +64,16 @@ const PANES: Record<PaneId, PaneInfo> = {
     showLabel: 'Show the 3D model',
     hideLabel: 'Hide the 3D model',
   },
+  studio: {
+    name: 'Studio',
+    icon: <SparkIcon />,
+    buttonTestId: 'chat-toggle-studio-btn',
+    showLabel: 'Show Studio',
+    hideLabel: 'Hide Studio',
+  },
 };
 
-const PANE_ORDER: readonly PaneId[] = ['terminal', 'browser', 'simulator', 'model'];
+const PANE_ORDER: readonly PaneId[] = ['terminal', 'browser', 'simulator', 'model', 'studio'];
 
 /** The panes in the header's fixed order, whatever order they were opened or listed in. */
 export function inPaneOrder<T extends { id: PaneId }>(panes: readonly T[]): T[] {
