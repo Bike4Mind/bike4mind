@@ -2,9 +2,15 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import { issueSessionForRequest } from '@server/auth/issueSession';
-import { userRepository } from '@bike4mind/database';
+import { adminRoleRepository, userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
-import { PREDEFINED_USER_TAGS, CURRENT_POLICY_VERSION, AdminPermissionsSchema } from '@bike4mind/common';
+import {
+  PREDEFINED_USER_TAGS,
+  CURRENT_POLICY_VERSION,
+  AdminPermissionsSchema,
+  AdminRoleIdsSchema,
+  sortAdminRoleIds,
+} from '@bike4mind/common';
 import { E2E_USERNAME_SUFFIX_PATTERN } from '@server/utils/e2eCleanupScope';
 import { isValidE2eTestSecret } from '@server/auth/e2eTestSecret';
 import { Request } from 'express';
@@ -23,6 +29,9 @@ interface CreateTestUserBody {
   // Delegated admin grants (e.g. ['settings:manage']) without full isAdmin. Unknown or repeated
   // values are rejected with a 400.
   adminPermissions?: string[];
+  // Admin roles to hold (ids from POST /api/admin/admin-roles), e.g. to mint a role-only delegate.
+  // Malformed, repeated or unknown ids are rejected with a 400.
+  adminRoleIds?: string[];
   emailVerified?: boolean;
   tags?: string[];
   // PREDEFINED_USER_TAGS are prepended to `tags` by default. Pass exactly false to get only the
@@ -65,6 +74,7 @@ const handler = baseApi({ auth: false }).post(
       password,
       isAdmin,
       adminPermissions,
+      adminRoleIds,
       emailVerified,
       tags,
       includePredefinedTags,
@@ -89,6 +99,15 @@ const handler = baseApi({ auth: false }).post(
       return res.status(400).json({ error: 'Invalid adminPermissions', details: parsedPermissions.error.issues });
     }
 
+    const parsedRoleIds = adminRoleIds === undefined ? undefined : AdminRoleIdsSchema.safeParse(adminRoleIds);
+    if (parsedRoleIds && !parsedRoleIds.success) {
+      return res.status(400).json({ error: 'Invalid adminRoleIds', details: parsedRoleIds.error.issues });
+    }
+    const roleIds = parsedRoleIds ? sortAdminRoleIds(parsedRoleIds.data) : undefined;
+    if (roleIds && (await adminRoleRepository.findByIds(roleIds)).length !== roleIds.length) {
+      return res.status(400).json({ error: 'Unknown adminRoleIds' });
+    }
+
     const newUser = await userService.createUser(
       {
         username,
@@ -103,6 +122,7 @@ const handler = baseApi({ auth: false }).post(
           // to /accept-policies on first load. Defaults on; opt out to test the gate itself.
           ...((acceptedPolicies ?? true) ? { aupAcceptedVersion: CURRENT_POLICY_VERSION } : {}),
           apiKeyTrustApproved: apiKeyTrustApproved === true,
+          ...(roleIds ? { adminRoleIds: roleIds } : {}),
         },
         isAdmin: isAdmin ?? false,
         adminPermissions: parsedPermissions?.data,

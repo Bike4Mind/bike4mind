@@ -165,6 +165,10 @@ export const operations = {
     method: 'POST',
     path: '/api/ai/v1/tools',
   },
+  fetchWebPage: {
+    method: 'POST',
+    path: '/api/v1/tools/web-fetch',
+  },
   generateAgentAvatar: {
     method: 'POST',
     path: '/api/v1/agents/{id}/generate-avatar',
@@ -221,9 +225,17 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/client-config',
   },
+  getCompletionRunUsage: {
+    method: 'GET',
+    path: '/api/v1/completion-runs/{runId}/usage',
+  },
   getCreditBalance: {
     method: 'GET',
     path: '/api/v1/credits',
+  },
+  getCurrentWeather: {
+    method: 'POST',
+    path: '/api/v1/tools/weather',
   },
   getDataLake: {
     method: 'GET',
@@ -256,6 +268,10 @@ export const operations = {
   getProject: {
     method: 'GET',
     path: '/api/v1/projects/{id}',
+  },
+  getPublicClientConfig: {
+    method: 'GET',
+    path: '/api/v1/client-config/public',
   },
   getQuest: {
     method: 'GET',
@@ -324,6 +340,10 @@ export const operations = {
   listFiles: {
     method: 'GET',
     path: '/api/v1/files',
+  },
+  listImageModels: {
+    method: 'GET',
+    path: '/api/v1/image-models',
   },
   listModels: {
     method: 'GET',
@@ -460,6 +480,10 @@ export const operations = {
   searchSessions: {
     method: 'POST',
     path: '/api/v1/sessions/semantic-search',
+  },
+  searchWeb: {
+    method: 'POST',
+    path: '/api/v1/tools/web-search',
   },
   sendChatMessage: {
     method: 'POST',

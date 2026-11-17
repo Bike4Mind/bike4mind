@@ -133,6 +133,18 @@ async function handleChat(
 
   const simplifiedRequest = req.validated;
 
+  // Billing target is an explicit, opt-in choice - never an automatic consequence of the
+  // caller's home-org field. When the request names an organizationId we validate the caller
+  // actually belongs to it (resolveActiveOrg; throws 403/404 otherwise) and bill + scope
+  // team-wide prompts to it; when omitted, the turn is personal (CreditHolderType.User). This
+  // is what lets an org member whose org pool is empty still spend their own credits.
+  // An org-billed API key is the exception: its org pays whether or not the body names one, the
+  // same rule as sseRoute and the v1 routes (resolveRequestBillingOrgId). An org-owned key's
+  // service account is on no roster, so resolveActiveOrg's membership check would refuse it.
+  const organizationId = apiKeyBillingOrgId(req.apiKeyInfo)
+    ? ((await resolveRequestBillingOrgId(req, simplifiedRequest.organizationId)) ?? undefined)
+    : await resolveActiveOrg(req, simplifiedRequest.organizationId);
+
   // An explicit request model wins. Otherwise fall back to the admin default, which on a
   // local-only self-host box may itself need a fallback (see resolveDefaultChatModel), so
   // only probe when no explicit model was sent.
@@ -144,7 +156,7 @@ async function handleChat(
       logger: req.logger,
     });
     // A free account must not start on a paid-only admin default.
-    model = await resolveCallerDefaultModel(resolved.model, req.user, req.logger);
+    model = await resolveCallerDefaultModel(resolved.model, req.user, req.logger, { organizationId });
     // Self-host, no-explicit-model guard: apiKeys/models are populated only on self-host.
     // If even the resolved default is unusable (no provider key and no local model), fail
     // fast with actionable guidance instead of a cryptic backend error deep in the pipeline.
@@ -187,18 +199,6 @@ async function handleChat(
       `POST /api/chat dropped ${unrecognizedIds.size} unrecognized tool id(s): ${unrecognizedTools.join(', ')}`
     );
   }
-
-  // Billing target is an explicit, opt-in choice - never an automatic consequence of the
-  // caller's home-org field. When the request names an organizationId we validate the caller
-  // actually belongs to it (resolveActiveOrg; throws 403/404 otherwise) and bill + scope
-  // team-wide prompts to it; when omitted, the turn is personal (CreditHolderType.User). This
-  // is what lets an org member whose org pool is empty still spend their own credits.
-  // An org-billed API key is the exception: its org pays whether or not the body names one, the
-  // same rule as sseRoute and the v1 routes (resolveRequestBillingOrgId). An org-owned key's
-  // service account is on no roster, so resolveActiveOrg's membership check would refuse it.
-  const organizationId = apiKeyBillingOrgId(req.apiKeyInfo)
-    ? ((await resolveRequestBillingOrgId(req, simplifiedRequest.organizationId)) ?? undefined)
-    : await resolveActiveOrg(req, simplifiedRequest.organizationId);
 
   // Refuse capped turns before creating a notebook or quest.
   await checkFreeTierDailySpendCap({

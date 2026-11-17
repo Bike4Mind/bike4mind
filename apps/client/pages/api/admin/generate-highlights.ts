@@ -5,6 +5,7 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { AdminSettings } from '@bike4mind/database';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { Resource } from 'sst';
 import type { WhatsNewHighlightsJob } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 import { Logger } from '@bike4mind/observability';
@@ -123,14 +124,9 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' }, requir
         manualTrigger: true,
       };
 
-      // Dispatch to queue
-      // Type assertion needed: SST types are generated after first deploy
-      const queueResource = (Resource as unknown as Record<string, { url: string } | undefined>)
-        .whatsNewGenerationQueue;
-      if (!queueResource?.url) {
-        return res.status(500).json({ error: 'whatsNewGenerationQueue not deployed - SQS queue URL unavailable' });
-      }
-      await sendToQueue(queueResource.url, payload);
+      // The web Lambda reaches this queue through the sourceQueueUrls Linkable, not a direct link,
+      // so reading Resource.whatsNewGenerationQueue would throw (infra/web.ts).
+      await sendToQueue(getSourceQueueUrl('whatsNewGenerationQueue'), payload);
 
       // Update settings with dispatch info
       await AdminSettings.findOneAndUpdate(

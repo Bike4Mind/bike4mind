@@ -8,18 +8,28 @@ import { createModelAdmission } from './meterPlatformCompletion';
 export async function assertMediaModelAdmission(
   user: string | IUserDocument,
   modelId: string,
-  adminRoleWithheld?: boolean
+  adminRoleWithheld?: boolean,
+  organizationId?: string | null
 ): Promise<void> {
   const loaded = typeof user === 'string' ? await userRepository.findById(user) : user;
   if (!loaded) throw new NotFoundError('User not found');
-  await (await createModelAdmission(adminRoleWithheld ? withholdAdminRole(loaded) : loaded)).assert(modelId);
+  const admission = await createModelAdmission(
+    adminRoleWithheld ? withholdAdminRole(loaded) : loaded,
+    undefined,
+    false,
+    {
+      organizationId,
+    }
+  );
+  await admission.assert(modelId);
 }
 
 export async function filterAdmittedMediaModels<Model extends { id: string }>(
   user: IUserDocument,
-  models: Model[]
+  models: Model[],
+  organizationId?: string | null
 ): Promise<Model[]> {
-  const admission = await createModelAdmission(user);
+  const admission = await createModelAdmission(user, undefined, false, { organizationId });
   const admitted = await Promise.all(models.map(model => admission.admits(model.id)));
   return models.filter((_model, index) => admitted[index]);
 }

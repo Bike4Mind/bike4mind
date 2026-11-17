@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   listContext: vi.fn(),
   record: vi.fn(),
   userWrite: vi.fn(),
+  aiDecision: vi.fn(),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 // The permission gate itself is adminApi's (covered by its own tests); these assert each route declares it.
@@ -54,6 +55,10 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: h.record,
+}));
+vi.mock('@server/admin/ai/assessmentSuggestion', () => ({ recordDetectionAssessmentDecision: h.aiDecision }));
+vi.mock('@server/admin/ai/audit', () => ({
+  withAiSuggestionId: (details: Record<string, unknown>, aiSuggestionId: string) => ({ ...details, aiSuggestionId }),
 }));
 
 const loadRoutes = async () => {
@@ -106,6 +111,7 @@ beforeEach(async () => {
   h.list.mockReset().mockResolvedValue({ data: [], truncated: false });
   h.summarize.mockReset().mockResolvedValue([]);
   h.addVerdict.mockReset();
+  h.aiDecision.mockReset();
   h.addVerdicts.mockReset();
   h.listContext.mockReset().mockResolvedValue({ accounts: [], burstPeers: [], reviewers: [] });
   h.record.mockReset().mockResolvedValue(null);
@@ -213,6 +219,52 @@ describe('POST /api/admin/shadow-detections/verdict', () => {
       })
     );
     expect(h.userWrite).not.toHaveBeenCalled();
+  });
+
+  it('records a grade taken from the assessment against its suggestion and links it in the audit entry', async () => {
+    h.addVerdict.mockResolvedValue({ status: 'updated', item: item({ verdict: 'confirmed_abuse', revision: 1 }) });
+    h.aiDecision.mockResolvedValue('c'.repeat(24));
+    const aiDecision = { assessmentId: 'a'.repeat(24), overrideReason: 'Missing context' };
+    const { req, res } = request('POST', { body: verdictBody({ aiDecision }) });
+
+    await h.handlers.verdict.post(req, res);
+
+    expect(h.aiDecision).toHaveBeenCalledWith({
+      detectionId: DETECTION_ID,
+      verdict: 'confirmed_abuse',
+      aiDecision,
+      fallbackReason: REASON,
+      decidedBy: { userId: ADMIN_ID, name: expect.any(String) },
+    });
+    expect(h.record).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ details: expect.objectContaining({ aiSuggestionId: 'c'.repeat(24) }) })
+    );
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('records no suggestion decision for a grade made without the assessment', async () => {
+    h.addVerdict.mockResolvedValue({ status: 'updated', item: item({ verdict: 'confirmed_abuse', revision: 1 }) });
+    const { req, res } = request('POST', { body: verdictBody() });
+
+    await h.handlers.verdict.post(req, res);
+
+    expect(h.aiDecision).not.toHaveBeenCalled();
+    expect(h.record).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ details: expect.not.objectContaining({ aiSuggestionId: expect.anything() }) })
+    );
+  });
+
+  it('keeps the saved verdict when the suggestion write throws, and logs it', async () => {
+    h.addVerdict.mockResolvedValue({ status: 'updated', item: item({ verdict: 'confirmed_abuse', revision: 1 }) });
+    h.aiDecision.mockRejectedValue(new Error('Assessment is for another detection'));
+    const { req, res } = request('POST', { body: verdictBody({ aiDecision: { assessmentId: 'a'.repeat(24) } }) });
+
+    await h.handlers.verdict.post(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.record).toHaveBeenCalledOnce();
   });
 
   it('still answers 200 with the saved verdict when the audit write throws, and logs it', async () => {

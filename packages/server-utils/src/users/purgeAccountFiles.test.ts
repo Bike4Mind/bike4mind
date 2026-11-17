@@ -16,6 +16,8 @@ const h = vi.hoisted(() => ({
   importStorageDelete: vi.fn(),
   generatedDelete: vi.fn(),
   deletePrefix: vi.fn(),
+  importPrefixDelete: vi.fn(),
+  backupReferenced: vi.fn(),
   hardDelete: vi.fn(),
   indexModels: vi.fn(),
   indexDelete: vi.fn(),
@@ -53,6 +55,7 @@ vi.mock('@bike4mind/database', () => ({
       },
     }),
     findOne: (...args: unknown[]) => ({ setOptions: () => ({ select: () => h.otherFile(...args) }) }),
+    exists: (...args: unknown[]) => ({ setOptions: () => h.backupReferenced(...args) }),
   },
   AppFile: {
     collection: {
@@ -80,11 +83,25 @@ vi.mock('@bike4mind/database', () => ({
     },
   },
 }));
+vi.mock('./accountFilePurgeLease', () => ({
+  claimAccountFilePurgeLease: async (_id: string, assertActive: () => Promise<void>) => ({
+    assertActive,
+    initialize: async () => ({ complete: true }),
+    release: async () => {},
+  }),
+}));
+vi.mock('@bike4mind/database/infra', () => ({ OrganizationAuditEventModel: {} }));
+vi.mock('../utils/organizationDataExport', () => ({
+  organizationExportPrefix: (id: string) => `exports/organization-data/${encodeURIComponent(id)}/`,
+  legacyOrganizationExportLocator: {},
+  legacyOrganizationExportKey: vi.fn(),
+}));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.openSearchEnabled }));
 vi.mock('@bike4mind/fab-pipeline', () => ({
   FabFileChunkSearchIndex: { deleteByFabFileIdOrThrow: h.indexDelete },
   S3Storage: class {
     deletePermanently = h.importStorageDelete;
+    deletePrefixPermanently = h.importPrefixDelete;
   },
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -125,6 +142,7 @@ beforeEach(() => {
   h.importFind.mockResolvedValue([]);
   h.findLakes.mockResolvedValue([]);
   h.otherFile.mockResolvedValue(null);
+  h.backupReferenced.mockResolvedValue(null);
   h.indexModels.mockResolvedValue(['model-1']);
   h.deleteObjects.mockImplementation(
     async (
@@ -155,10 +173,30 @@ describe('purgeAccountFiles', () => {
       ['exports/account-data/u1/'],
       ['exports/curated-notebooks/u1/'],
       ['curated-notebooks/u1/'],
+      ['text-edit-backups/u1/'],
+      ['shared-email-files/u1/'],
+      ['files/u1/backups/'],
+      ['exports/organization-data/u1/'],
     ]);
+    expect(h.importPrefixDelete).toHaveBeenCalledExactlyOnceWith('notebooks/u1/');
     expect(h.find).toHaveBeenCalledWith(
       expect.objectContaining({ $or: [{ userId: 'u1' }, { organizationId: { $in: [] } }] })
     );
+  });
+
+  it('looks up surviving references to legacy edit backups by an anchored path prefix', async () => {
+    await purgeAccountFiles('u1', options);
+    expect(h.backupReferenced).toHaveBeenCalledExactlyOnceWith({ filePath: { $regex: '^files/u1/backups/' } });
+  });
+
+  it('keeps legacy edit backups when a surviving file points under that prefix', async () => {
+    h.backupReferenced.mockResolvedValue({ _id: 'org-file' });
+    await purgeAccountFiles('u1', options);
+    expect(h.deletePrefix).not.toHaveBeenCalledWith('files/u1/backups/');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('legacy edit backups'), {
+      prefix: 'files/u1/backups/',
+    });
+    expect(h.importPrefixDelete).toHaveBeenCalledWith('notebooks/u1/');
   });
 
   it('keeps the metadata retry locator when a retained version cannot be deleted', async () => {

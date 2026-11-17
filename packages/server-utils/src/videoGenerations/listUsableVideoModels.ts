@@ -47,6 +47,10 @@ export const toPublicVideoModel = (id: VideoModelId): VideoModel => {
       resolution: caps.defaults.resolution,
     },
     audio: caps.audio,
+    keyframes: caps.keyframes ?? null,
+    draft: caps.draft
+      ? { resolutions: [...caps.draft.resolutions], credits_per_second: usdToCredits(caps.draft.usdPerSecond) }
+      : null,
     credits_per_second:
       pricing.unit === 'per_second'
         ? Object.fromEntries(

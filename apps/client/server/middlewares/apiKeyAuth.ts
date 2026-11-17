@@ -33,6 +33,7 @@ import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@bike4mind
 import { resolveRouteTemplate } from '@bike4mind/server-utils/utils/resolveRouteTemplate';
 import { refuseIfSuspendedOwner } from '@bike4mind/server-utils/auth/suspendedApiKeyRefusal';
 import { apiKeyGrantsAdmin, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { resolveUntrustedKeyLimits } from '@bike4mind/server-utils/utils/apiKeyTrust';
 import { resolveOrgApiKeyReach } from '@server/organizations/orgApiKeyReach';
 
@@ -193,6 +194,8 @@ export const apiKeyAuth = (
       }
       // The same gate the JWT/CLI/WebSocket surfaces use, so the two cannot drift.
       assertAccountStateUsable(user);
+      // Before withholdAdminRole, which then hides the role permissions too for a key without the admin scope.
+      await resolveRoleAdminPermissions(user);
 
       // Must run before withholdAdminRole: admins bypass the paid-only switch.
       if (

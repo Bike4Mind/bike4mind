@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { escapeHtml, buildEmailLogoImg } from './emailHelpers';
+import { escapeHtml, buildEmailLogoImg, generateVerificationLink } from './emailHelpers';
 
 describe('escapeHtml', () => {
   it('escapes ampersands, angle brackets and both quote styles', () => {
@@ -42,5 +42,20 @@ describe('buildEmailLogoImg', () => {
   it('escapes a double-quote in the logo URL so the attribute stays well-formed', () => {
     const html = buildEmailLogoImg('Acme', 'https://x/logo.png?a="b"');
     expect(html).toContain('src="https://x/logo.png?a=&quot;b&quot;"');
+  });
+});
+
+describe('generateVerificationLink', () => {
+  const appUrl = process.env.APP_URL;
+  afterEach(() => {
+    if (appUrl === undefined) delete process.env.APP_URL;
+    else process.env.APP_URL = appUrl;
+  });
+
+  it('carries the token in the fragment, never the query, so no server log or Referer sees it', () => {
+    process.env.APP_URL = 'https://app.example.com';
+    const link = generateVerificationLink('3f2a9c1e-0b7d-4e6a-9f10-2c5d8e7b4a61');
+    expect(link).toBe('https://app.example.com/verify-email#token=3f2a9c1e-0b7d-4e6a-9f10-2c5d8e7b4a61');
+    expect(new URL(link).search).toBe('');
   });
 });

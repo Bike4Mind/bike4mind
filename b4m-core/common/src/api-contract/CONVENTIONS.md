@@ -177,11 +177,13 @@ re-deciding per endpoint:
 | Generated payload exceeds the platform ceiling, raw-bytes response | `303` | - (`Location` is a signed URL for the payload) |
 | Generated payload exceeds the platform ceiling and could not be offloaded | `413` | - |
 | Referenced resource does not exist | `404` | - |
-| A completion's `run` does not exist or was minted by another user or billing owner (indistinguishable on purpose) | `404` | `run_not_found` (mint one with `POST /api/v1/completion-runs`) |
+| A completion's `run`, or the run whose usage is read, does not exist or was minted by another user or billing owner (indistinguishable on purpose) | `404` | `run_not_found` (mint one with `POST /api/v1/completion-runs`) |
 | Malformed path/query resource id | `404` | - |
 | Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
 | Free-tier account calls a model that needs a paid plan (admin-set free-tier allowlist) | `403` | `model_requires_subscription` (upgrade, or choose a free-tier model from `GET /api/v1/models`) |
 | Org-billed API key names a billing organization other than its own | `403` | `billing_organization_mismatch` |
+| The caller's organization policy does not allow the requested model | `403` | `org_model_not_allowed` (choose a model from `GET /api/v1/models`, which lists only allowed ones) |
+| The request names a built-in tool the caller's organization policy does not allow | `403` | `org_tool_not_allowed` (drop the tool from the request) |
 | Org-billed API key's organization is gone, or its holder has left it | `400` | - (re-mint the key) |
 | Cancel of a job the provider is already rendering and billing | `409` | `not_cancellable` (do not retry; the job runs to its end and is charged if it produces output) |
 | Declared client build (`X-Client-Name` + `X-Client-Version`) is below the minimum served for that client | `426` | `upgrade_required` (the body carries `client_name` and `minimum_version`; answered by every transport, auto-documented on every operation, see [section 9](#9-client-versions)) |

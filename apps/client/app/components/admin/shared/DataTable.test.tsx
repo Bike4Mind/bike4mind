@@ -149,6 +149,17 @@ describe('DataTable', () => {
     expect(row).not.toHaveAttribute('aria-keyshortcuts');
   });
 
+  it('ignores x and disables every checkbox while selection is disabled', () => {
+    const onSelectionChange = vi.fn();
+    renderTable({ selection: { mode: 'explicit', ids: [] }, onSelectionChange, selectionDisabled: true });
+    const row = screen.getByTestId('admin-table-row-1');
+
+    fireEvent.keyDown(row, { key: 'x' });
+    expect(onSelectionChange).not.toHaveBeenCalled();
+    expect(within(screen.getByTestId('admin-table-select-1')).getByRole('checkbox')).toBeDisabled();
+    expect(within(screen.getByTestId('admin-table-select-page')).getByRole('checkbox')).toBeDisabled();
+  });
+
   it('renders every supplied row without local pagination when the caller owns paging', () => {
     renderTable({ pagination: false });
     expect(tableRows()).toHaveLength(101);
@@ -204,6 +215,40 @@ describe('DataTable', () => {
     renderTable({ selection: { mode: 'allMatching' }, onSelectionChange: change });
     fireEvent.click(within(screen.getByTestId('admin-table-select-1')).getByRole('checkbox'));
     expect(change).toHaveBeenCalledWith({ mode: 'explicit', ids: rows.slice(1).map(row => row.id) });
+  });
+
+  it('never activates the row from a click in the selection cell, enabled or disabled', () => {
+    const activate = vi.fn();
+    const onSelectionChange = vi.fn();
+    const props = { selection: { mode: 'explicit' as const, ids: [] }, onSelectionChange, onRowActivate: activate };
+    const rendered = renderTable({ ...props, selectionDisabled: true });
+    fireEvent.click(screen.getByTestId('admin-table-select-1'));
+    fireEvent.click(screen.getByTestId('admin-table-select-1').closest('td') as HTMLElement);
+    expect(activate).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByTestId('admin-table-row-1')).getByText('101'));
+    expect(activate).toHaveBeenCalledOnce();
+
+    activate.mockClear();
+    rendered.rerender(
+      <CssVarsProvider theme={theme}>
+        <DataTable {...defaults} {...props} />
+      </CssVarsProvider>
+    );
+    fireEvent.click(within(screen.getByTestId('admin-table-select-1')).getByRole('checkbox'));
+    expect(onSelectionChange).toHaveBeenCalledOnce();
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  it('advertises the x shortcut only while selection is enabled', () => {
+    const selection = { mode: 'explicit' as const, ids: [] };
+    const rendered = renderTable({ selection, onSelectionChange: vi.fn(), selectionDisabled: true });
+    expect(screen.getByTestId('admin-table-row-1')).not.toHaveAttribute('aria-keyshortcuts');
+    rendered.rerender(
+      <CssVarsProvider theme={theme}>
+        <DataTable {...defaults} selection={selection} onSelectionChange={vi.fn()} />
+      </CssVarsProvider>
+    );
+    expect(screen.getByTestId('admin-table-row-1')).toHaveAttribute('aria-keyshortcuts', 'x');
   });
 
   it('activates rows with click and keyboard while isolating cell controls', () => {

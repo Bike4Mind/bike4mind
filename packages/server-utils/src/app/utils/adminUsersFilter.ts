@@ -99,6 +99,12 @@ export const AdminUsersFilterFieldsSchema = z.object({
   funnelStep: z.enum(USER_FUNNEL_STEP_FILTERS).optional(),
   // Accounts the AI advisory currently flags (see listAiAbuseAdvisories); needs no window of its own.
   aiVerdict: z.enum(USER_AI_VERDICT_FILTERS).optional(),
+  // Holders of one admin role (AdminRole id, b4m-core/common adminRoles.ts).
+  adminRole: z
+    .string()
+    .regex(/^[0-9a-f]{24}$/i, 'Expected an id')
+    .transform(id => id.toLowerCase())
+    .optional(),
   // UTC days with AI activity, both ends inclusive; set together.
   activeFrom: utcDay.optional(),
   activeTo: utcDay.optional(),

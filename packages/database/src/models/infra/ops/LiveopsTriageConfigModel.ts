@@ -73,6 +73,7 @@ export interface ILiveopsTriageConfigDocument extends IMongoDocument {
   regressionLookbackDays: number;
   regressionGracePeriodHours: number;
   autoCreateIssues: boolean;
+  approverIds?: string;
   postWhenNoErrors: boolean;
 
   // Tracking & Idempotency
@@ -123,6 +124,7 @@ export interface CreateLiveopsTriageConfigInput {
   regressionLookbackDays?: number;
   regressionGracePeriodHours?: number;
   autoCreateIssues?: boolean;
+  approverIds?: string;
   postWhenNoErrors?: boolean;
 }
 
@@ -165,6 +167,7 @@ export interface UpdateLiveopsTriageConfigInput {
   regressionLookbackDays?: number;
   regressionGracePeriodHours?: number;
   autoCreateIssues?: boolean;
+  approverIds?: string;
   postWhenNoErrors?: boolean;
 }
 
@@ -242,6 +245,7 @@ const LiveopsTriageConfigSchema = new Schema<ILiveopsTriageConfigDocument>(
     regressionLookbackDays: { type: Number, default: 30 },
     regressionGracePeriodHours: { type: Number, default: 48 },
     autoCreateIssues: { type: Boolean, default: false },
+    approverIds: { type: String, default: '' },
     postWhenNoErrors: { type: Boolean, default: true },
 
     // Tracking & Idempotency

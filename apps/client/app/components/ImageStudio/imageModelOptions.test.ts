@@ -31,8 +31,8 @@ describe('imageModelCards', () => {
     const cards = imageModelCards(available, EMPTY_IMAGE_INTENT);
     expect(cards.map(card => card.id)).toEqual([
       ImageModels.GPT_IMAGE_1_5,
-      ImageModels.GEMINI_3_1_FLASH_IMAGE,
       ImageModels.FLUX_PRO_ULTRA,
+      ImageModels.GEMINI_3_1_FLASH_IMAGE,
       ImageModels.FLUX_KONTEXT_PRO,
     ]);
     expect(cardOf(cards, ImageModels.GPT_IMAGE_1_5)).toMatchObject({
@@ -57,8 +57,8 @@ describe('imageModelCards', () => {
     const cards = imageModelCards(available, { ...EMPTY_IMAGE_INTENT, size: '1024x1536' });
     expect(cards.map(card => card.id)).toEqual([
       ImageModels.GPT_IMAGE_1_5,
-      ImageModels.GEMINI_3_1_FLASH_IMAGE,
       ImageModels.FLUX_PRO_ULTRA,
+      ImageModels.GEMINI_3_1_FLASH_IMAGE,
       ImageModels.FLUX_KONTEXT_PRO,
     ]);
     expect(cardOf(cards, ImageModels.GEMINI_3_1_FLASH_IMAGE)).toMatchObject({
@@ -74,9 +74,10 @@ describe('imageModelCards', () => {
     expect(kontext.unavailableReason).not.toBe('');
   });
 
-  it('makes a model whose job provider is not wired temporarily unavailable', () => {
+  // The server lists only models the caller can run, so a FLUX or Grok model it lists is runnable.
+  it('leaves a listed FLUX model available', () => {
     const ultra = cardOf(imageModelCards(available, EMPTY_IMAGE_INTENT), ImageModels.FLUX_PRO_ULTRA);
-    expect(ultra.unavailableReason).toBe('Temporarily unavailable in Studio.');
+    expect(ultra.unavailableReason).toBeNull();
   });
 
   it('makes a retired model that the job route serves under its successor unavailable', () => {

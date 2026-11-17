@@ -5,6 +5,7 @@ import { agentRepository, userRepository } from '@bike4mind/database';
 import type { IUserDocument } from '@bike4mind/common';
 import { assertOwnerCanFundWake, isInsufficientCredits } from '@bike4mind/server-utils/deepAgent/wakeMetering';
 import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
+import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertAgentsReadScope, assertAgentsWriteScope, AGENTS_READ_OR_WRITE_SCOPES } from '@server/agents/agentScopes';
 import { assertAgentAccess, type AgentAccess, type AgentAccessShape } from '@server/agents/assertAgentAccess';
@@ -165,6 +166,7 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
       const message = (error as Error).message;
       if (/not your agent|no agent /.test(message)) return res.status(404).json({ error: AGENT_NOT_FOUND_MESSAGE });
       if (isInsufficientCredits(error)) return res.status(422).json({ error: message });
+      if (isAiAccessRefusal(error)) return res.status(403).json({ error: message });
       logger.error('mission create failed', error as Error);
       return res.status(500).json({ error: message });
     }

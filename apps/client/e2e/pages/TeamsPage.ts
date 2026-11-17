@@ -11,6 +11,7 @@ export type TeamTab =
   | 'Usage'
   | 'Analysis'
   | 'Integrations'
+  | 'Domains'
   | 'Billing'
   | 'API keys'
   | 'Audit'
@@ -24,6 +25,7 @@ export const ALL_TEAM_TABS: TeamTab[] = [
   'Usage',
   'Analysis',
   'Integrations',
+  'Domains',
   'Billing',
   'API keys',
   'Audit',
@@ -108,6 +110,18 @@ export class TeamsPage extends BasePage {
     await expect(confirmBtn).toBeVisible({ timeout: TIMEOUTS.MODAL });
     await confirmBtn.click();
     await expect(this.page.getByTestId('confirmation-modal')).toBeHidden({ timeout: TIMEOUTS.MODAL });
+  }
+
+  deleteTeamDialog(): Locator {
+    return this.page.getByTestId('delete-organization-modal');
+  }
+
+  deleteTeamNameInput(): Locator {
+    return this.deleteTeamDialog().getByTestId('delete-organization-name-input');
+  }
+
+  deleteTeamConfirm(): Locator {
+    return this.deleteTeamDialog().getByTestId('delete-organization-confirm-btn');
   }
 
   /**

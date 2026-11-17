@@ -1,3 +1,4 @@
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { adminService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
@@ -71,6 +72,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'users:imp
         notify: {
           send: async () => undefined,
         },
+        resolveAdminRoles: resolveRoleAdminPermissions,
       }
     );
 

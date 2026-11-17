@@ -38,7 +38,7 @@ afterEach(async () => {
 const NOW = new Date('2026-09-28T12:00:00.000Z');
 const hoursAgo = (h: number) => new Date(NOW.getTime() - h * 3_600_000).toISOString();
 const ZERO_RAN = { passed: 0, failed: 0, skipped: 0, notStarted: 2, ran: 0, total: 0 };
-const FILTERS = { product: 'product-a', branch: 'main', rangeDays: 7 as const };
+const FILTERS = { product: 'product-a', branch: 'main', from: new Date(hoursAgo(24 * 7)), to: NOW };
 let seq = 0;
 
 /** One run of TEST_A + TEST_B; `failing` lists the keys that fail. */
@@ -83,7 +83,7 @@ describe('getQaOverview', () => {
     await seed({ hours: 20, failing: [TEST_B] });
     await seed({ hours: 10, failing: [TEST_B] });
     await seed({ hours: 5, env: 'production' });
-    const { tiles } = await getQaOverview(FILTERS, NOW);
+    const { tiles } = await getQaOverview(FILTERS);
     expect(tiles.map(t => [t.suite, t.env, t.status, t.nonPassingRuns, t.failedCount])).toEqual([
       ['Core', 'production', 'passed', 0, 0],
       ['Core', 'staging', 'failed', 2, 1],
@@ -94,7 +94,7 @@ describe('getQaOverview', () => {
   it('applies tenant and env filters', async () => {
     await seed({ hours: 2, tenant: 'tenant-a' });
     await seed({ hours: 2 });
-    const { tiles } = await getQaOverview({ ...FILTERS, tenant: 'tenant-a' }, NOW);
+    const { tiles } = await getQaOverview({ ...FILTERS, tenant: 'tenant-a' });
     expect(tiles).toHaveLength(1);
     expect(tiles[0].tenant).toBe('tenant-a');
   });
@@ -103,7 +103,7 @@ describe('getQaOverview', () => {
     await seed({ hours: 24 * 8 });
     await seed({ hours: 48, failing: [TEST_B] });
     await seed({ hours: 24, counts: { passed: 0, failed: 0, skipped: 0, notStarted: 2, ran: 0, total: 0 }, tests: [] });
-    const { series } = await getQaOverview(FILTERS, NOW);
+    const { series } = await getQaOverview(FILTERS);
     expect(series.map(p => [p.startedAt, p.passRate, p.status])).toEqual([
       [hoursAgo(48), 0.5, 'failed'],
       [hoursAgo(24), null, 'infra-error'],
@@ -115,7 +115,7 @@ describe('getQaOverview', () => {
     await seed({ hours: 30, failing: [TEST_A] });
     await seed({ hours: 20, failing: [TEST_A] });
     await seed({ hours: 10, failing: [TEST_A] });
-    const { flaky } = await getQaOverview(FILTERS, NOW);
+    const { flaky } = await getQaOverview(FILTERS);
     expect(flaky).toEqual([
       { testKey: TEST_B, title: 'Notebook > saves', failures: 1, total: 4, rate: 0.25, lastStatus: 'passed' },
     ]);
@@ -124,7 +124,7 @@ describe('getQaOverview', () => {
   it('lists a test that needed a retry on every run', async () => {
     const flakyA = { ...passedTest(TEST_A), status: 'flaky' as const, retries: 1 };
     for (const hours of [30, 20, 10]) await seed({ hours, tests: [flakyA, passedTest(TEST_B)] });
-    const { flaky } = await getQaOverview(FILTERS, NOW);
+    const { flaky } = await getQaOverview(FILTERS);
     expect(flaky).toEqual([
       { testKey: TEST_A, title: 'Notebook > creates', failures: 3, total: 3, rate: 1, lastStatus: 'flaky' },
     ]);
@@ -141,7 +141,7 @@ describe('getQaOverview', () => {
         status: 'passed',
       }))
     );
-    const { series } = await getQaOverview(FILTERS, NOW);
+    const { series } = await getQaOverview(FILTERS);
     expect(series).toHaveLength(QA_SERIES_MAX_RUNS);
     // Oldest first, and the one dropped is the oldest run.
     expect(series[series.length - 1].startedAt).toBe(new Date(newest).toISOString());
@@ -160,6 +160,14 @@ describe('listQaRuns', () => {
     const second = await listQaRuns(FILTERS, { limit: 2, before: new Date(first.nextBefore as string) });
     expect(second.runs.map(r => r.startedAt)).toEqual([hoursAgo(3)]);
     expect(second.nextBefore).toBeUndefined();
+  });
+
+  it('lists only runs inside the date range', async () => {
+    await seed({ hours: 24 * 8 });
+    await seed({ hours: 30 });
+    await seed({ hours: 2 });
+    const { runs } = await listQaRuns({ ...FILTERS, from: new Date(hoursAgo(48)), to: new Date(hoursAgo(12)) });
+    expect(runs.map(r => r.startedAt)).toEqual([hoursAgo(30)]);
   });
 });
 

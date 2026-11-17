@@ -103,7 +103,8 @@ export class AdminPage extends BasePage {
 
   async navigateToInviteCenter() {
     await this.expandUserOps();
-    await (await this.revealSidebarItem('admin-invite-center-tab-btn', 'people')).click();
+    await (await this.revealSidebarItem('admin-waitlist-tab-btn', 'people')).click();
+    await this.page.getByTestId('invite-center-sections-invites-btn').click();
     await expect(this.page.getByTestId('invite-center-codes-tab')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   }
 

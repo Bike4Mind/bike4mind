@@ -53,6 +53,16 @@ const wired = (
 // Reviewed snapshots, never automatically refreshed by CI. Portable means wiring only.
 export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   broker(
+    'queue:infra/dlqTriageSweepDeadLetter.ts:dlqTriageSweepDlq',
+    '8f974196323d71a6029e7255756ddbdb5aa7d14e75e50a745de4d75a1fdff72d'
+  ),
+  hostedOnly(
+    'schedule:infra/cron.ts:dlqTriageSweep',
+    '38acecc248ea7557053ca90c3f3623e71d8119281f5af6461b316749ce158107',
+    'Hosted CloudWatch alarm and SQS dead-letter sampling; portable deployments do not run the hosted alarm sweep.',
+    ['cloudwatch:DescribeAlarms', 'import:@aws-sdk/client-cloudwatch']
+  ),
+  broker(
     'queue:infra/organizationRetention.ts:organizationRetentionDlq',
     'ac4a28905799e117ee2ab119fd37de18b424e94ff7d5cdad2a86d248d914f5cf'
   ),
@@ -249,6 +259,24 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'eventRule:infra/serviceHealthAlarms.ts:EcsTaskFailedToStartRule',
     '01f62b8ab1bf553612fc628bc26d6241b1c4eafcb75c213306a47abc62679d7e'
   ),
+  hostedOnly(
+    'eventRule:infra/providerSpend.ts:ProviderAdminKeyChangeRule',
+    'e328076166277ffd3a5b0f613c21a58d4b0702f4c234dbc8d4e7084195eb07ff',
+    'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
+    ['cloudwatch:PutMetricData']
+  ),
+  hostedOnly(
+    'eventRule:infra/providerSpend.ts:ProviderAdminKeyKmsChangeRule',
+    '05121631419d2d44923ae27f0802b510498356aed77bd5d4e460434b6cbe5a36',
+    'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
+    ['cloudwatch:PutMetricData']
+  ),
+  hostedOnly(
+    'eventRule:infra/providerSpend.ts:ProviderAdminKeyReadRule',
+    '196fb966bed4c123fe7b1412bd0ac904b73d0d475c71f7b3da99be9b65d654dd',
+    'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
+    ['cloudwatch:PutMetricData']
+  ),
   gap(
     'function:infra/agentExecutor.ts:AgentExecutor',
     '2fd40549c54518a28a38bfdc250df5269720c41921f278c1949775403c9bbfaf',
@@ -262,7 +290,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   gap('function:infra/database.ts:DatabaseSeeder', '653abf813d7a9c59d9a6d53bf9d9be0a6c5e36669cc53860b896b9cee574cc5a', [
     'ssm:GetParameter',
   ]),
-  gap('function:infra/dataSyncer.ts:DataSyncer', '6b34c84dc682604d934700c4c8156e0127c4779ea369a3de7a3d02649fae6b9b'),
+  gap('function:infra/dataSyncer.ts:DataSyncer', '3c215ebb7ff8e4c86aef66974ee68f921878325b54610d1c5774f18da50ef5bb'),
   gap(
     'function:infra/imageProcessor.ts:ImageProcessor',
     'c5e9f27f05e17f199f30caf0c9d784d11c16095ef237b4ebd8df1fa2a68f8b47'
@@ -798,21 +826,6 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:whatsNewGenerationQueueDLQ',
     'e57a7345766ccd52531a45ce89ad2c994bc132aae123cf9664c62a15dad70b47'
   ),
-  gapBecause(
-    'queue:infra/queues.ts:whatsNewHighlightsQueue',
-    '4b33ee03bb5d034852e26a4c3e9c7c78a09d5a4d76cdf807829e4fdc2fc33384',
-    'Not registered. Legacy highlights queue retained to drain hosted in-flight messages; the admin route now produces to whatsNewGenerationQueue.',
-    [
-      'bedrock:InvokeModel',
-      'bedrock:InvokeModelWithResponseStream',
-      'cloudwatch:PutMetricData',
-      'import:@aws-sdk/client-cloudwatch',
-    ]
-  ),
-  broker(
-    'queue:infra/queues.ts:whatsNewHighlightsQueueDLQ',
-    '132ea676c87ab70c72d8f1f1e6fa195c3f0ecac4af6383acd0ea59e22c4427fc'
-  ),
   broker(
     'queue:infra/revenueSnapshotDeadLetter.ts:revenueSnapshotDlq',
     'fd103df5f8b6caa0d4d0e1b4397e7324565612ed1e7ac29cc5c7facecb6fdec9'
@@ -1068,7 +1081,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/cron.ts:providerUsagePoll',
-    'f9125f32b52a6ffb55b719c473439e3b4746edeef5f6fb26f774ab78fa496340',
+    '5f00804579eaf0eb3b4ed3b5dca53ece8b19f8457fd8604091d1432f4066eac0',
     'Publishes provider-reported spend to hosted CloudWatch alarms on monitored stages; no local metric or alarm destination is configured.',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
@@ -1136,12 +1149,13 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'schedule:infra/cron.ts:spendReconciliation',
-    '61025c6700b007379156ef0b8fdfc06ca05bb1b10aa774948e8ff410ca9f7975',
+    '6a96103f82cb2ef45a2792808a671cb33a37194c6f804478a5e902400ceffd60',
     {
       source: 'apps/workers/src/selfhost/spendReconciliation.ts',
       symbol: 'registerSpendReconciliation',
       fingerprint: 'ca9cbea76249daab2f0359e7faecad3f4dcd80c3269a0481a74e9a69a41a6d8b',
-    }
+    },
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
   wired(
     'schedule:infra/cron.ts:storageReconciliation',
@@ -1250,7 +1264,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    '7f82c9a6daf1298781ec962e6a7ecff9022aa54eaf8c2b4d02c82cdc40d12ab7',
+    'fb9427f9a234d8c335c1f021c0cc7a9b7d2a21f5fd24e3e0ff8b8b896217e78f',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gap('service:infra/searxng.ts:Searxng', 'fef5f4ce5e094d32525bb4a13828a34b67ba75a38ab72c70e526ba908c31f049'),
@@ -1264,8 +1278,8 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:DlqAlarmTopic',
-    'ad1f3e24fc4d4363c612889929d74def12d50e753fcee4af64995d29e7327a08',
-    ['ssm:GetParameter']
+    'f27b400cd1e2f5fddc61613dde994f0a4e04898c9aa66282bde4c2c6d96fab1c',
+    ['cloudwatch:DescribeAlarms', 'ssm:GetParameter']
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:OobAlarmTopicEmailSub',

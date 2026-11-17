@@ -37,6 +37,7 @@ export * from './generatedAudio';
 export * from './elevenLabsAudioFormat';
 export * from './voiceGeneration';
 export * from './voicePricing';
+export * from './mediaModelBackend';
 export * from './generation';
 export * from './video';
 export * from './image';
@@ -48,6 +49,7 @@ export * from './soundGeneration';
 export * from './soundPricing';
 export * from './musicGeneration';
 export * from './studioFeatureFlags';
+export * from './studioComposition';
 export * from './schemas';
 export * from './modelHub';
 export { personalEmailProviders } from './organizationUtils';
@@ -233,6 +235,7 @@ export * from './storageOwner';
 export * from './storageBreakdown';
 export * from './organizationStorage';
 export * from './adminPermissions';
+export * from './adminRoles';
 
 export { VERIFIED_SLACK_IDENTITY_FILTER } from './slackIdentity';
 

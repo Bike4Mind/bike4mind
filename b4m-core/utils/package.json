@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/utils",
-  "version": "11.1.0",
+  "version": "11.2.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -18,6 +18,16 @@
       "require": {
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
+      }
+    },
+    "./cache/ApplicationCache": {
+      "import": {
+        "types": "./dist/cache/ApplicationCache.d.mts",
+        "default": "./dist/cache/ApplicationCache.mjs"
+      },
+      "require": {
+        "types": "./dist/cache/ApplicationCache.d.cts",
+        "default": "./dist/cache/ApplicationCache.cjs"
       }
     },
     "./artifactParser": {
@@ -68,6 +78,16 @@
       "require": {
         "types": "./dist/imageModeration/index.d.cts",
         "default": "./dist/imageModeration/index.cjs"
+      }
+    },
+    "./imageCutout": {
+      "import": {
+        "types": "./dist/imageCutout.d.mts",
+        "default": "./dist/imageCutout.mjs"
+      },
+      "require": {
+        "types": "./dist/imageCutout.d.cts",
+        "default": "./dist/imageCutout.cjs"
       }
     },
     "./imageResize": {

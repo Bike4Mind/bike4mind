@@ -12,7 +12,13 @@ import type { MetadataFilter } from '@server/analytics/metadataFilterContract';
 import { api } from '@client/app/contexts/ApiContext';
 import { uploadFileToUrl } from './uploadFileToUrl';
 
-export const updateUserToServer = async (userId: string, userData: Partial<IUser>) => {
+/** Request flags the update route reads alongside the user fields. */
+export interface UserUpdateRequestFlags {
+  /** Run the telemetry opt-out deletion with this save even when the stored level is already `none`. */
+  rerunTelemetryDeletion?: boolean;
+}
+
+export const updateUserToServer = async (userId: string, userData: Partial<IUser> & UserUpdateRequestFlags) => {
   const { data } = await api.put(`/api/users/${userId}/update`, userData);
 
   return data;

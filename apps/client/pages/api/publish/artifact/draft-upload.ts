@@ -38,16 +38,9 @@ const handler = baseApi({ auth: false, maxBodySize: PUBLISH_LIMITS.maxFileBytes 
       return res.status(404).json({ error: 'Not found' });
     }
 
-    // Exactly one string token; a missing or repeated value is malformed -> reject.
-    // `?token=` is DEPRECATED, kept for CLI and desktop builds that predate the
-    // header; remove after one release of each.
+    // Exactly one string token, from the header only; a missing or repeated value is malformed -> reject.
     const headerToken = req.headers[DRAFT_UPLOAD_TOKEN_HEADER];
-    const token =
-      typeof headerToken === 'string' && headerToken
-        ? headerToken
-        : typeof req.query.token === 'string'
-          ? req.query.token
-          : undefined;
+    const token = typeof headerToken === 'string' && headerToken ? headerToken : undefined;
     if (!token) {
       return res.status(401).json({ error: 'Missing upload token' });
     }

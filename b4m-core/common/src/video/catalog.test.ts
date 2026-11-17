@@ -31,7 +31,7 @@ describe.each(VIDEO_MODEL_IDS)('catalog entry %s', id => {
   });
 
   // Otherwise the model would offer a mode no valid request can reach (or a first frame it can never use).
-  it('accepts a first_frame input exactly when it offers image_to_video', () => {
+  it('accepts a first_frame exactly when it offers image_to_video', () => {
     expect(Boolean(caps.inputs.first_frame)).toBe(caps.modes.includes('image_to_video'));
   });
 
@@ -68,6 +68,9 @@ describe('gemini-omni-1.1-flash', () => {
     expect(caps).toEqual({
       provider: 'gemini-omni',
       displayName: 'Gemini Omni Flash',
+      tier: 'fast',
+      releasedAt: '2026-08-27',
+      preview: false,
       modes: ['text_to_video', 'image_to_video'],
       inputs: { first_frame: { max: 1 } },
       duration: { kind: 'range', min: 3, max: 10, step: 1 },
@@ -118,6 +121,9 @@ describe('grok-imagine-video-1.5', () => {
     expect(caps).toEqual({
       provider: 'xai',
       displayName: 'Grok Imagine Video 1.5',
+      tier: 'flagship',
+      releasedAt: '2026-06-16',
+      preview: false,
       modes: ['text_to_video', 'image_to_video'],
       inputs: { first_frame: { max: 1 } },
       duration: { kind: 'range', min: 1, max: 15, step: 1 },
@@ -195,6 +201,9 @@ describe('veo-3.1-fast-generate-preview', () => {
     expect(caps).toEqual({
       provider: 'veo',
       displayName: 'Veo 3.1 Fast',
+      tier: 'fast',
+      releasedAt: '2025-10-15',
+      preview: true,
       modes: ['text_to_video', 'image_to_video'],
       inputs: { first_frame: { max: 1 } },
       duration: { kind: 'discrete', values: [4, 6, 8] },

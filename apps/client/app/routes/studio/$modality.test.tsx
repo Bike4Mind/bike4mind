@@ -16,7 +16,10 @@ const h = vi.hoisted(() => ({
   featuresLoading: false,
 }));
 
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => h.navigate }));
+vi.mock('@tanstack/react-router', async () => {
+  const { createLinkStub } = await import('@client/app/components/Studio/testUtils/routerLinkMock');
+  return { useNavigate: () => h.navigate, createLink: createLinkStub };
+});
 vi.mock('@client/app/components/NotFound', () => ({ default: () => <div data-testid="not-found-stub" /> }));
 vi.mock('@client/app/components/Studio/useStudioFeature', () => ({
   useStudioFeature: (feature: string) => h.studioFeatures[feature] ?? false,
@@ -54,6 +57,8 @@ vi.mock('@client/app/components/Session/AISettings/AudioGenerationSettings', () 
   AudioGenerationSettings: () => <div data-testid="audio-settings-stub" />,
 }));
 
+// The header balance reads the live account; StudioCreditsBalance.test.tsx covers it.
+vi.mock('@client/app/components/Studio/v2/StudioCreditsBalance', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: h.useDocumentTitle }));
 vi.mock('@client/app/hooks/data/videoGenerations', () => ({
   useVideoModels: () => h.models,
@@ -226,7 +231,7 @@ describe('StudioPage with Create v2 off', () => {
     renderPage();
     expect(screen.getByTestId('studio-tabs')).toBeInTheDocument();
     expect(screen.queryByTestId('studio-tab-image')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('studio-area-tabs')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('studio-area-nav')).not.toBeInTheDocument();
     expect(screen.queryByTestId('studio-medium-rail')).not.toBeInTheDocument();
   });
 
@@ -254,7 +259,7 @@ describe('StudioPage with Create v2 on', () => {
     h.models = { data: [rangeModel], isPending: false, isError: false };
     renderPage();
     expect(screen.queryByTestId('studio-tabs')).not.toBeInTheDocument();
-    expect(screen.getByTestId('studio-area-create')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('studio-area-create')).toHaveAttribute('aria-current', 'page');
     expect(screen.getByTestId('studio-area-library')).toBeInTheDocument();
     expect(screen.queryByTestId('studio-area-productions')).not.toBeInTheDocument();
     expect(screen.getByTestId('studio-rail-video')).toHaveAttribute('aria-current', 'page');
@@ -273,23 +278,14 @@ describe('StudioPage with Create v2 on', () => {
     expect(screen.getByTestId('speech-studio-form')).toBeInTheDocument();
   });
 
-  it('navigates between media and areas', () => {
+  it('links between media and areas', () => {
     h.models = { data: [rangeModel], isPending: false, isError: false };
     h.studioFeatures = { createV2: true, productions: true };
     renderPage();
-    fireEvent.click(screen.getByTestId('studio-rail-music'));
-    expect(h.navigate).toHaveBeenCalledWith({ to: '/studio/$modality', params: { modality: 'music' } });
-    fireEvent.click(screen.getByTestId('studio-area-productions'));
-    expect(h.navigate).toHaveBeenCalledWith({ to: '/studio/productions' });
-    fireEvent.click(screen.getByTestId('studio-area-library'));
-    expect(h.navigate).toHaveBeenCalledWith({ to: '/studio/library' });
-  });
-
-  it('does not navigate when the current medium is picked again', () => {
-    h.models = { data: [rangeModel], isPending: false, isError: false };
-    renderPage();
-    fireEvent.click(screen.getByTestId('studio-rail-video'));
-    expect(h.navigate).not.toHaveBeenCalled();
+    expect(screen.getByTestId('studio-rail-music')).toHaveAttribute('href', '/studio/music');
+    expect(screen.getByTestId('studio-area-productions')).toHaveAttribute('href', '/studio/productions');
+    expect(screen.getByTestId('studio-area-library')).toHaveAttribute('href', '/studio/library');
+    expect(screen.getByTestId('studio-area-create')).toHaveAttribute('href', '/studio/video');
   });
 
   it('leads the rail with Image and renders its workspace once the Image flag is open', () => {

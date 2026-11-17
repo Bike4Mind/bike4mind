@@ -129,9 +129,10 @@ async function executeWebFetch(url: string): Promise<string> {
  * Execute web search via server API
  */
 async function executeWebSearch(query: string, num_results: number = 3): Promise<string> {
+  const count = Number.isFinite(num_results) ? Math.min(10, Math.max(1, Math.round(num_results))) : 3;
   const { data } = await api.post('/api/tools/web-search', {
     query,
-    num_results,
+    num_results: count,
   });
 
   return data.result || 'No search results found.';
