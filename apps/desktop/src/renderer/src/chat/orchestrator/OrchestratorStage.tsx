@@ -16,7 +16,8 @@ import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
 import { ViewSwitcher } from './ViewSwitcher';
-import { toViewSnapshot } from './viewSnapshot';
+import { useQuickApprovals } from './quickApprovals';
+import { runViewAction, toViewSnapshot } from './viewSnapshot';
 import { acceptViewAction, type ViewAction } from '@shared/viewSnapshot';
 
 export interface AgentActions {
@@ -222,16 +223,20 @@ export function OrchestratorStage({
     settled: ambient?.settled === true,
   };
 
+  const approvals = useQuickApprovals(focused, rootId, agents, parent);
   const snapshot = useMemo(
-    () => (focused && rootId !== undefined ? toViewSnapshot(rootId, agents, parent) : undefined),
-    [focused, rootId, agents, parent]
+    () => (focused && rootId !== undefined ? toViewSnapshot(rootId, agents, parent, approvals) : undefined),
+    [focused, rootId, agents, parent, approvals]
   );
   // Through the same gate a view that does not ship with the app will go through.
-  const runViewAction = (action: ViewAction) => {
+  const onViewAction = async (action: ViewAction) => {
     const accepted = snapshot && acceptViewAction(snapshot, action);
     if (!accepted) return;
-    if (accepted.kind === 'open-root') onParentFocus?.();
-    else setSelectedId(accepted.agentId);
+    await runViewAction(accepted, {
+      openAgent: setSelectedId,
+      openRoot: () => onParentFocus?.(),
+      stop: actions.stop,
+    });
   };
 
   // The parent first: it is the one whose answer everything else is waiting behind.
@@ -332,7 +337,7 @@ export function OrchestratorStage({
               onExampleQuest={onExampleQuest}
             />
           ) : snapshot ? (
-            <FocusPanel snapshot={snapshot} onAction={runViewAction} />
+            <FocusPanel snapshot={snapshot} onAction={onViewAction} />
           ) : renderView ? (
             renderView(view, viewProps)
           ) : (

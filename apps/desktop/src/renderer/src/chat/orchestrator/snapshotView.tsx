@@ -3,7 +3,7 @@ import { useMemo, type ComponentType } from 'react';
 import { acceptViewAction, type ViewAction, type ViewSnapshot } from '@shared/viewSnapshot';
 import type { OrchestratorViewProps } from './OrchestratorStage';
 import { useScenePause, type ScenePauseOptions } from './tavern/useScenePause';
-import { toViewSnapshot } from './viewSnapshot';
+import { runViewAction, toViewSnapshot } from './viewSnapshot';
 
 /** All a snapshot view is given: the read-only picture, and the one way to ask the host for something. */
 export interface SnapshotViewProps {
@@ -32,11 +32,13 @@ export function snapshotView(
     );
     const paused = useScenePause(pause);
 
+    // This host reads no quick approvals and has no Stop, so of the rest only answering does anything.
     const onAction = (action: ViewAction) => {
       const accepted = acceptViewAction(snapshot, action);
       if (!accepted) return;
-      if (accepted.kind === 'open-root') onInnkeeperSelect?.();
-      else onSelect(accepted.agentId);
+      runViewAction(accepted, { openAgent: onSelect, openRoot: () => onInnkeeperSelect?.() }).catch((error: unknown) =>
+        console.error('A view action failed', error)
+      );
     };
 
     return (
