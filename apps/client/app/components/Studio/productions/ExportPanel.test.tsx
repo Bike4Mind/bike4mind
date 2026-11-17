@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   jobs: [] as unknown[],
   mutate: vi.fn(),
   mutation: { isPending: false, isError: false, error: null as unknown },
+  getFile: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/data/studioRenders', () => ({
@@ -19,7 +20,7 @@ vi.mock('@client/app/hooks/data/studioRenders', () => ({
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({ useGetSettingsValue: () => undefined }));
 vi.mock('@client/app/utils/filesAPICalls', () => ({
-  getFabFileByIdFromServer: async () => ({ fileName: 'out.mp4', presignedUrl: 'https://files.test/out.mp4' }),
+  getFabFileByIdFromServer: h.getFile,
 }));
 
 import { ExportPanel } from './ExportPanel';
@@ -74,6 +75,8 @@ beforeEach(() => {
   h.jobs = [];
   h.mutate.mockReset();
   h.mutation = { isPending: false, isError: false, error: null };
+  h.getFile.mockReset();
+  h.getFile.mockResolvedValue({ fileName: 'out.mp4', presignedUrl: 'https://files.test/out.mp4' });
 });
 
 describe('ExportPanel', () => {
@@ -125,6 +128,16 @@ describe('ExportPanel', () => {
     open();
     const link = await screen.findByTestId('production-export-download-link-j1');
     expect(link).toHaveAttribute('href', 'https://files.test/out.mp4');
+  });
+
+  it('keeps fetching the file until it serves a download URL', async () => {
+    h.getFile.mockResolvedValueOnce({ fileName: 'out.mp4', presignedUrl: null, fileUrl: null });
+    h.jobs = [job({ state: 'succeeded', file: { fileId: 'b'.repeat(24), bytes: 10, durationSeconds: 1 } })];
+    renderPanel();
+    open();
+    const link = await screen.findByTestId('production-export-download-link-j1', {}, { timeout: 5000 });
+    expect(link).toHaveAttribute('href', 'https://files.test/out.mp4');
+    expect(h.getFile).toHaveBeenCalledTimes(2);
   });
 
   it('shows the server error message once, without appending a second refund note', () => {

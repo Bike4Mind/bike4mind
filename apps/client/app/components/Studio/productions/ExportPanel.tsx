@@ -78,14 +78,22 @@ const groupByGroupId = (jobs: StudioRenderJob[]): StudioRenderJob[][] => {
   return [...groups.values()];
 };
 
+const DOWNLOAD_URL_RETRY_MS = 3000;
+
+type DownloadableFile = { presignedUrl?: string | null; fileUrl?: string | null };
+
+const downloadUrlOf = (file: DownloadableFile | undefined) => file?.presignedUrl ?? file?.fileUrl;
+
 const DownloadLink = ({ job }: { job: StudioRenderJob }) => {
   const fileId = job.file?.fileId ?? null;
   const { data: file } = useQuery({
     queryKey: fabFileKeys.doc(fileId ?? ''),
     queryFn: () => getFabFileByIdFromServer(fileId ?? ''),
     enabled: fileId !== null,
+    // The job can turn succeeded a moment before its file serves a URL; keep asking until it does.
+    refetchInterval: query => (downloadUrlOf(query.state.data) ? false : DOWNLOAD_URL_RETRY_MS),
   });
-  const url = file?.presignedUrl ?? file?.fileUrl;
+  const url = downloadUrlOf(file);
   if (!url) return null;
   return (
     <Link
