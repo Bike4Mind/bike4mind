@@ -3,6 +3,8 @@
   "compilerOptions": {
     "moduleResolution": "bundler",
     "noEmit": true,
+    // Tests import sibling packages' sources; tsgo defaults rootDir to this dir (tsc only infers it when emitting), so span the repo.
+    "rootDir": "../..",
     "lib": ["ESNext"],
     "types": ["node"]
   },
