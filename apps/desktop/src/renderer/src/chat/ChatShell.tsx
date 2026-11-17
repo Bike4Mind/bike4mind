@@ -1764,7 +1764,8 @@ export function ChatShell({
                 }}
               />
             )}
-            {updateNotice?.(panelShown)}
+            {/* A modal panel leaves no room for a second card; Home keeps the update controller mounted. */}
+            {(!panelShown || panelDocked) && updateNotice?.(panelShown)}
           </Box>
 
           {ambient.settled && (

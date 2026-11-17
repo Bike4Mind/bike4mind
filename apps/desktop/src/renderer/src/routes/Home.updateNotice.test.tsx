@@ -7,7 +7,12 @@ import { initialUpdateState, reduceUpdate, type UpdateBusyReport, type UpdateIns
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { Home } from './Home';
-import { SESSION_PANEL_INSET, SESSION_PANEL_SPACE, SESSION_PANEL_WIDTH } from '../chat/sessionPanelState';
+import {
+  SESSION_PANEL_INSET,
+  SESSION_PANEL_SPACE,
+  SESSION_PANEL_WIDTH,
+  writeSessionPanelOpen,
+} from '../chat/sessionPanelState';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -101,6 +106,7 @@ afterEach(() => {
   host?.remove();
   root = null;
   host = null;
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -123,6 +129,8 @@ const notices = () => Array.from(document.querySelectorAll<HTMLElement>('[data-t
 
 describe('the update card in the signed-in window', () => {
   it('moves left of the session panel while it is open, then returns when it closes', async () => {
+    writeSessionPanelOpen(false);
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0, 0, 1280, 720));
     const session = {
       id: 'with-loop',
       title: 'Loop session',
@@ -149,7 +157,7 @@ describe('the update card in the signed-in window', () => {
     expect(getComputedStyle(notices()[0]).right).toBe('12px');
 
     await act(async () => byTestId('chat-toggle-session-panel-btn')?.click());
-    expect(byTestId('session-panel')).not.toBeNull();
+    expect(byTestId('session-panel')?.getAttribute('role')).toBe('complementary');
     const rightInset = Number.parseFloat(getComputedStyle(notices()[0]).right);
     expect(rightInset).toBe(SESSION_PANEL_SPACE);
     expect(rightInset).toBeGreaterThan(SESSION_PANEL_INSET + SESSION_PANEL_WIDTH);
@@ -158,6 +166,55 @@ describe('the update card in the signed-in window', () => {
     await act(async () => byTestId('chat-toggle-session-panel-btn')?.click());
     expect(byTestId('session-panel')).toBeNull();
     expect(getComputedStyle(notices()[0]).right).toBe('12px');
+  });
+
+  it('hides the card behind a narrow modal panel without losing a pending restart confirmation', async () => {
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0, 0, 560, 720));
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    );
+    const session = {
+      id: 'with-loop',
+      title: 'Loop session',
+      mode: 'chat' as const,
+      model: 'test-model',
+      approvalMode: 'auto' as const,
+      reasoningEffort: 'default' as const,
+      messageCount: 1,
+      createdAt: '2026-10-01T00:00:00.000Z',
+      updatedAt: '2026-10-01T00:00:00.000Z',
+    };
+    window.b4m.chat.listSessions = vi.fn(async () => [session]);
+    window.b4m.chat.getSession = vi.fn(async () => ({ ...session, messages: [] }));
+    window.b4m.chat.getLoop = vi.fn(async () => ({
+      sessionId: session.id,
+      prompt: 'Check',
+      intervalMs: 30000,
+      phase: 'scheduled' as const,
+      nextRunAt: null,
+    }));
+    await mount();
+    await act(async () => byTestId('chat-session-item')?.click());
+    await act(async () => byTestId('account-attention-chip')?.querySelector('button')?.click());
+    expect(install).toHaveBeenCalledWith(false);
+    expect(byTestId('update-busy-alert')?.textContent).toContain('1 session is still working.');
+
+    await act(async () => byTestId('chat-toggle-session-panel-btn')?.click());
+    expect(byTestId('session-panel')?.getAttribute('role')).toBe('dialog');
+    expect(byTestId('session-panel')?.getAttribute('aria-modal')).toBe('true');
+    expect(notices()).toHaveLength(0);
+
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(byTestId('session-panel')).toBeNull();
+    expect(notices()).toHaveLength(1);
+    expect(byTestId('update-busy-alert')?.textContent).toContain('1 session is still working.');
+    await act(async () => byTestId('update-force-install-btn')?.click());
+    expect(install).toHaveBeenLastCalledWith(true);
   });
 
   it('anchors above the composer, outside the sidebar, whether the sidebar is open or collapsed', async () => {

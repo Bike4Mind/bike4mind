@@ -180,6 +180,19 @@ describe('studioCompletionSubscriber', () => {
     });
   });
 
+  it('titles a cutout for what it is, not by its internal prompt', async () => {
+    const t = setup();
+    const cutout = { ...(imagePayload(1) as object), purpose: 'cutout' } as unknown as IGenerationJob['payload'];
+    const [done] = await t.createGroup(['succeeded'], { payload: cutout });
+    await t.announce(done);
+    expect(t.published[0]).toMatchObject({ title: 'Background removed' });
+
+    const t2 = setup();
+    const [failed] = await t2.createGroup(['failed'], { payload: cutout });
+    await t2.announce(failed);
+    expect(t2.published[0]).toMatchObject({ title: 'Background removal' });
+  });
+
   it('falls back to the stored members for an image group made before groupSize existed', async () => {
     const t = setup();
     await t.create({ state: 'succeeded', payload: imagePayload() });

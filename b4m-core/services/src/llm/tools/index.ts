@@ -83,6 +83,12 @@ export type {
 
 export { isVideoToolConfig, type VideoToolConfig } from './implementation/videoGeneration';
 export { isMusicToolConfig, type MusicToolConfig } from './implementation/musicGeneration';
+export {
+  isImageJobToolConfig,
+  type ImageLimitRefusal,
+  type ImageToolConfig,
+  type ImageToolJobsResult,
+} from './implementation/imageGeneration';
 export type { Searcher, SearchResult, ContentExtractionResult } from './implementation/deepResearch';
 
 /**

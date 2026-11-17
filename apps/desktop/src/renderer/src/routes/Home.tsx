@@ -78,8 +78,23 @@ export function Home() {
   }
 
   return (
-    <Box sx={centeredScreenSx}>
-      <Card variant="outlined" sx={{ width: 'min(520px, 100%)', gap: 2 }}>
+    <Box
+      sx={{
+        ...centeredScreenSx,
+        background: 'radial-gradient(ellipse at 50% 35%, var(--joy-palette-primary-softBg) 0%, transparent 65%)',
+      }}
+    >
+      <Card
+        variant="outlined"
+        sx={{
+          width: 'min(440px, 100%)',
+          gap: 2,
+          p: { xs: 3, sm: 4 },
+          borderRadius: 'lg',
+          boxShadow: 'lg',
+          bgcolor: 'background.surface',
+        }}
+      >
         {!state || state.status === 'initializing' ? (
           <Stack direction="row" spacing={1.5} alignItems="center" data-testid="auth-loading-stack">
             <CircularProgress size="sm" />
@@ -91,7 +106,7 @@ export function Home() {
           <SignInCard state={state} />
         )}
         {(state?.status === 'signed-out' || state?.status === 'unconfigured') && (
-          <Button variant="outlined" onClick={() => setLocalChat(true)} data-testid="auth-local-chat-btn">
+          <Button variant="plain" color="neutral" onClick={() => setLocalChat(true)} data-testid="auth-local-chat-btn">
             Use local models
           </Button>
         )}
