@@ -38,8 +38,8 @@ const delegate = (...adminPermissions: AdminPermissionId[]) => ({ ...ADMIN, isAd
 const BODY = { target: { kind: 'filter', filter: { status: 'active' } }, action: { type: 'suspend' } };
 
 async function call(body: unknown, user: Record<string, unknown> = ADMIN) {
-  const { req, res } = createMocks({ method: 'POST', body });
-  Object.assign(req, { user });
+  const { req, res } = createMocks({ method: 'POST' });
+  Object.assign(req, { user, body });
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
   return res;
 }

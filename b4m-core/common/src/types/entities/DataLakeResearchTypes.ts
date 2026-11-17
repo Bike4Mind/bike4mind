@@ -133,6 +133,21 @@ export const RESEARCH_MAX_AUTO_ADMITS_LIMIT = 25;
 /** How many domains an allow or deny list may hold. Bounded so one config cannot become a corpus. */
 export const RESEARCH_DOMAIN_LIST_MAX = 50;
 
+/** Item rules a config may hold. Every rule is answered in one model call, so accuracy falls as this grows. */
+export const RESEARCH_ITEM_RULES_MAX = 10;
+export const RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS = 300;
+/** Fetched page text the rule check reads; the rest is cut before prompting. */
+export const RESEARCH_ITEM_RULE_TEXT_MAX_CHARS = 24_000;
+
+export const RESEARCH_ITEM_RULE_ACTIONS = ['block', 'review'] as const;
+export type ResearchItemRuleAction = (typeof RESEARCH_ITEM_RULE_ACTIONS)[number];
+
+/** A plain-language condition judged by a model against each item. A rule can only block or send to review. */
+export interface ResearchItemRule {
+  condition: string;
+  action: ResearchItemRuleAction;
+}
+
 /** What a run does with a hit that matches no listed site: queue it for review, or drop it. */
 export const RESEARCH_UNLISTED_SOURCES = ['review', 'drop'] as const;
 export type ResearchUnlistedSources = (typeof RESEARCH_UNLISTED_SOURCES)[number];
@@ -284,6 +299,8 @@ export interface ResearchRunLevers {
   costCeilingMicroUsd: number;
   /** Advisory tags the run suggests for anything it proposes. The queue sanitizes them. */
   proposedTags: string[];
+  /** Conditions checked against each item that would be proposed or auto-admitted. Empty = no check. */
+  itemRules: ResearchItemRule[];
 }
 
 /**
@@ -300,6 +317,7 @@ export type LegacyResearchRunLevers = Omit<
   | 'maxAutoAdmits'
   | 'source'
   | 'feedUrl'
+  | 'itemRules'
 > &
   Partial<
     Pick<
@@ -312,6 +330,7 @@ export type LegacyResearchRunLevers = Omit<
       | 'maxAutoAdmits'
       | 'source'
       | 'feedUrl'
+      | 'itemRules'
     >
   >;
 
@@ -422,7 +441,7 @@ export type IDataLakeResearchConfigResponse = Omit<IDataLakeResearchConfigDocume
 
 /**
  * What the run loop counted. Every candidate lands in exactly one of the outcome buckets.
- * `autoAdmitted` and `autoAdmitSkipped` are not buckets: they are sub-counts of `proposed`.
+ * `autoAdmitted`, `autoAdmitSkipped` and `reviewedByRule` are not buckets: they are sub-counts of `proposed`.
  */
 export interface ResearchRunTotals {
   /** Hits the search provider returned. */
@@ -460,6 +479,10 @@ export interface ResearchRunTotals {
    * `proposal_limit` leave it 0, so their buckets can fall short. Older stored runs read it as 0.
    */
   notJudged: number;
+  /** Candidates an item rule with action `block` removed before they were proposed. */
+  blockedByRule: number;
+  /** Of `proposed`, the trusted results a review rule took out of auto-admit. */
+  reviewedByRule: number;
 }
 
 export const emptyResearchRunTotals = (): ResearchRunTotals => ({
@@ -476,6 +499,8 @@ export const emptyResearchRunTotals = (): ResearchRunTotals => ({
   suppressedByTombstone: 0,
   unusableSource: 0,
   notJudged: 0,
+  blockedByRule: 0,
+  reviewedByRule: 0,
 });
 
 export interface IDataLakeResearchRun {

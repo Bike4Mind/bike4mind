@@ -40,7 +40,7 @@ vi.mock('@server/admin/search/searchEntities', () => ({ searchAdminEntities: sea
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit }));
 import handler from '../search';
 
-async function call(q: unknown, user: unknown = { id: 'admin', isAdmin: true }, method = 'GET') {
+async function call(q: unknown, user: unknown = { id: 'admin', isAdmin: true }, method: 'GET' | 'POST' = 'GET') {
   const { req, res } = createMocks({ method, query: { q } });
   Object.assign(req, { user });
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);

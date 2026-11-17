@@ -39,6 +39,10 @@ const Config = {
   // stage has always had them linked with a default, so callers assume `string` and
   // are out of scope for the premium-overlay eager-read fix below - left untouched.
   SLACK_WEBHOOK_URL: Resource.SLACK_WEBHOOK_URL.value,
+  SLACK_FEEDBACK_DESTINATIONS: readOptionalSecret(
+    'SLACK_FEEDBACK_DESTINATIONS',
+    () => Resource.SLACK_FEEDBACK_DESTINATIONS.value
+  ),
   SLACK_ERROR_REPORTING_WEBHOOK_URL: Resource.SLACK_ERROR_REPORTING_WEBHOOK_URL.value,
   GOOGLE_CLIENT_ID: Resource.GOOGLE_CLIENT_ID.value,
   GOOGLE_CLIENT_SECRET: Resource.GOOGLE_CLIENT_SECRET.value,
