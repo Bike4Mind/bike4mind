@@ -261,6 +261,18 @@ describe('AgentExecutionRepository', () => {
       expect(count).toBe(ACTIVE_STATUSES.length);
     });
 
+    it('excludes a loop run parked at the confidence gate, but not a gate-paused chat run', async () => {
+      const userId = new mongoose.Types.ObjectId().toString();
+      const pendingGate = { iteration: 1, confidence: 0.2, reason: 'thin', requestedAt: new Date() };
+      await agentExecutionRepository.create(
+        makeBaseExecution({ userId, status: 'paused', loopId: 'loop-1', pendingGate })
+      );
+      await agentExecutionRepository.create(makeBaseExecution({ userId, status: 'paused', pendingGate }));
+      await agentExecutionRepository.create(makeBaseExecution({ userId, status: 'running', loopId: 'loop-1' }));
+
+      expect(await agentExecutionRepository.countActiveByUserId(userId)).toBe(2);
+    });
+
     it('excludes terminal statuses from the count', async () => {
       const userId = new mongoose.Types.ObjectId().toString();
 

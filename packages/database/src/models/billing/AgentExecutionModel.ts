@@ -1275,9 +1275,8 @@ const MAX_VIEWER_CONNECTIONS = 10;
  * possibly for days, so the stale sweeps must not abort it (see `reconcileLoop` in `loopScheduler.ts`).
  * A desktop loop run is ended by its lease instead (`releaseExpiredRunnerLeases`), which also reopens its ticket.
  */
-const NOT_LOOP_PARKED = {
-  $nor: [{ status: 'paused', loopId: { $exists: true }, pendingGate: { $exists: true } }, { runner: 'desktop' }],
-};
+const LOOP_PARKED = { status: 'paused', loopId: { $exists: true }, pendingGate: { $exists: true } };
+const NOT_LOOP_PARKED = { $nor: [LOOP_PARKED, { runner: 'desktop' }] };
 
 /** A run's credits, or its `creditCap` while it is still in flight and that is higher (a budget reservation). */
 const RESERVED_CREDITS = {
@@ -1518,7 +1517,8 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * Synchronous in-process subagents (have `parentExecutionId` and no
    * `isBackgroundExecution`) are excluded since they're a transient side effect of an
    * already-counted parent. Desktop loop runs use no executor and have their own cap
-   * (`countActiveDesktopByUserId`).
+   * (`countActiveDesktopByUserId`). A loop run parked at the confidence gate holds no executor while it
+   * waits on its owner, possibly for days, so it does not take a slot (`LOOP_PARKED`); resuming it clears the gate.
    */
   async countActiveByUserId(userId: string): Promise<number> {
     return this.model.countDocuments({
@@ -1526,6 +1526,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       status: { $in: ACTIVE_AGENT_EXECUTION_STATUSES },
       runner: { $exists: false },
       $or: [{ parentExecutionId: { $exists: false } }, { isBackgroundExecution: true }],
+      $nor: [LOOP_PARKED],
     });
   }
 
