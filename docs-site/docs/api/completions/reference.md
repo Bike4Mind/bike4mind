@@ -27,7 +27,7 @@ Send your API key as `Authorization: Bearer b4m_live_<key>`, or with the legacy 
 
 ## End users of your product
 
-If you call the API from your own product on behalf of many end users, one key normally looks to the model provider like a single end user. A key that an administrator has granted the `ai:end-user-id` scope can attribute each request to one of your end users by sending `end_user_id`:
+If you call the API from your own product on behalf of many end users, one key normally looks to the model provider like a single end user. A key that an administrator has granted the `ai:end-user-id` scope can attribute each request to one of your end users by sending `end_user_id` (on models served directly by OpenAI or Anthropic; other providers receive no end-user identifier):
 
 ```json
 {
@@ -38,7 +38,7 @@ If you call the API from your own product on behalf of many end users, one key n
 ```
 
 - `end_user_id` is your own opaque identifier for the end user: 1 to 64 characters, letters, digits, `_`, `:` and `-` only. Never send an email address or other personal data; a value containing `@` is rejected.
-- The provider receives an identifier derived from your account and this value, not the value itself, so your end users never collide with each other or with another account's.
+- For models served directly by OpenAI or Anthropic, the provider receives an identifier derived from your account and this value, not the value itself, so your end users never collide with each other or with another account's. Other providers receive no end-user identifier.
 - Billing, rate limits and every other check still apply to your key and account, not to the end user.
 - A value that breaks the format rules returns `400` with `errorCode: "invalid_end_user_id"`, whatever the credential. Sending `end_user_id` with a key that lacks `ai:end-user-id`, or with a signed-in session instead of a key, returns `400` with `errorCode: "end_user_id_not_allowed"`; the field is never silently ignored.
 - `POST /api/ai/tts` accepts the same field under the same rules.

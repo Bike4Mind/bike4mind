@@ -44,8 +44,9 @@ export const createCompletionContract = defineEndpoint({
     '`supports_assistant_prefill` field from `GET /api/v1/models` before sending one. ' +
     'Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
     'END USERS. A key that serves many end users of your own product, and that an administrator has granted ' +
-    '`ai:end-user-id`, may send `end_user_id` (your opaque id for the end user) so the model provider sees each ' +
-    'end user separately rather than your whole account as one.\n\n' +
+    '`ai:end-user-id`, may send `end_user_id` (your opaque id for the end user) so that, on models served directly by ' +
+    'OpenAI or Anthropic, the model provider sees each end user separately rather than your whole account as one ' +
+    '(other providers receive no end-user identifier).\n\n' +
     'RUNS AND SETTLEMENT. To group the spend of a multi-agent run (a root session and the workers it spawns), ' +
     'mint a run id with `POST /api/v1/completion-runs` and send it as `run` on each request. Spend is recorded ' +
     'against the run, never charged twice. The `settled` event (`{ type, requestId, creditsCharged, usdCost, runId }`) ' +
