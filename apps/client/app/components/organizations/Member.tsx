@@ -394,7 +394,7 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
                 color="danger"
               >
                 {canBuySeats
-                  ? "You've reached your seat limit. Upgrade your plan to add more members."
+                  ? t('organization.access_notice.seat_limit_upgrade')
                   : t('organization.access_notice.seat_limit_ask_owner')}
               </Typography>
             )}
@@ -431,7 +431,7 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
                   if (maxSeats > 0 && ids.length > availableSeats) {
                     toast.error(
                       canBuySeats
-                        ? `You can only add up to ${availableSeats} more members with your current plan`
+                        ? t('organization.access_notice.add_limit_upgrade', { available: availableSeats })
                         : t('organization.access_notice.add_limit_ask_owner', { available: availableSeats })
                     );
                     return;

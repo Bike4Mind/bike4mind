@@ -639,7 +639,7 @@ describe('OrganizationMembers invite plumbing', () => {
   it('refuses a selection larger than the free seats', () => {
     renderMembers(buildOrg({}));
     fireEvent.click(screen.getByTestId('select-three'));
-    expect(mocks.toast.error).toHaveBeenCalledWith('You can only add up to 2 more members with your current plan');
+    expect(mocks.toast.error).toHaveBeenCalledWith('organization.access_notice.add_limit_upgrade');
     expect(screen.getByTestId('selected-count')).toHaveTextContent('0');
   });
 

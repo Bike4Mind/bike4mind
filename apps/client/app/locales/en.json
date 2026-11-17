@@ -221,11 +221,13 @@
       "seats_value": "{{current}} of {{max}}",
       "integrations_locked": "Setting up Slack, GitHub and webhooks",
       "owner_only_label": "Owner only:",
-      "ask_owner_suffix": ". Ask the team owner; the Members tab shows who that is.",
+      "owner_only_detail": "{{what}}. Ask the team owner; the Members tab shows who that is.",
       "settings_locked": "Exporting team data, transferring ownership and deleting the team",
       "no_seats_ask_owner": "No seats available. Ask the team owner to add seats.",
       "seat_limit_ask_owner": "You've reached your seat limit. Ask the team owner to add seats.",
-      "add_limit_ask_owner": "You can only add up to {{available}} more members. Ask the team owner to add seats."
+      "add_limit_ask_owner": "You can only add up to {{available}} more members. Ask the team owner to add seats.",
+      "seat_limit_upgrade": "You've reached your seat limit. Upgrade your plan to add more members.",
+      "add_limit_upgrade": "You can only add up to {{available}} more members with your current plan"
     }
   },
   "session": {

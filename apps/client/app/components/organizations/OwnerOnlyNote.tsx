@@ -1,11 +1,11 @@
 import { Alert, Typography } from '@mui/joy';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
-import { FC, ReactNode } from 'react';
+import { FC } from 'react';
 import { useTranslation } from 'react-i18next';
 
 interface OwnerOnlyNoteProps {
   /** What only the owner can do, as a sentence fragment: "Changing the plan and seats". */
-  children: ReactNode;
+  children: string;
   testId: string;
 }
 
@@ -18,8 +18,8 @@ const OwnerOnlyNote: FC<OwnerOnlyNoteProps> = ({ children, testId }) => {
   return (
     <Alert variant="soft" color="neutral" startDecorator={<LockOutlinedIcon />} data-testid={testId}>
       <Typography level="body-sm">
-        <Typography fontWeight="lg">{t('organization.access_notice.owner_only_label')}</Typography> {children}
-        {t('organization.access_notice.ask_owner_suffix')}
+        <Typography fontWeight="lg">{t('organization.access_notice.owner_only_label')}</Typography>{' '}
+        {t('organization.access_notice.owner_only_detail', { what: children, interpolation: { escapeValue: false } })}
       </Typography>
     </Alert>
   );
