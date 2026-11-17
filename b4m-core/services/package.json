@@ -1,5 +1,5 @@
 {
-  "name": "@bike4mind/services",
+  "name": "@bike4mind/services-core",
   "description": "This packages contains all the core business logic",
   "version": "27.0.0",
   "publishConfig": {
