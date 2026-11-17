@@ -101,7 +101,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           },
           "reply": {
@@ -184,7 +185,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           },
           "reply": {
@@ -279,7 +281,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           },
           "reply": {
@@ -385,7 +388,8 @@
                 "type": "string",
                 "enum": [
                   "insufficient_credits",
-                  "spend_cap_exceeded"
+                  "spend_cap_exceeded",
+                  "free_quest_limit_reached"
                 ]
               },
               "tools": {
@@ -654,7 +658,8 @@
                 "type": "string",
                 "enum": [
                   "insufficient_credits",
-                  "spend_cap_exceeded"
+                  "spend_cap_exceeded",
+                  "free_quest_limit_reached"
                 ]
               },
               "tools": {
@@ -739,6 +744,7 @@
             "enum": [
               "account_suspended",
               "model_requires_subscription",
+              "free_quest_limit_reached",
               "org_model_not_allowed",
               "org_tool_not_allowed"
             ]
@@ -2007,7 +2013,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           }
         },
@@ -2069,7 +2076,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           }
         },
@@ -2347,6 +2355,7 @@
                 "enum": [
                   "insufficient_credits",
                   "spend_cap_exceeded",
+                  "free_quest_limit_reached",
                   "invalid_request",
                   "provider_error",
                   "provider_rejected",
@@ -2520,7 +2529,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           }
         },
@@ -4464,7 +4474,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           }
         },
@@ -4722,7 +4733,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           }
         },
@@ -7472,7 +7484,8 @@
                 "type": "string",
                 "enum": [
                   "insufficient_credits",
-                  "spend_cap_exceeded"
+                  "spend_cap_exceeded",
+                  "free_quest_limit_reached"
                 ]
               },
               "reply": {
@@ -7944,7 +7957,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           },
           "reply": {
@@ -9677,7 +9691,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           }
         },
@@ -10628,7 +10643,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           },
           "reply": {
@@ -11330,7 +11346,8 @@
                   "type": "string",
                   "enum": [
                     "insufficient_credits",
-                    "spend_cap_exceeded"
+                    "spend_cap_exceeded",
+                    "free_quest_limit_reached"
                   ],
                   "description": "Machine-readable failure class, present only on `type: \"error\"` turns that have one."
                 },
@@ -11660,7 +11677,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           }
         },
@@ -12335,7 +12353,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           }
         },
@@ -15690,7 +15709,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           }
         },
@@ -17301,7 +17321,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           }
         },
@@ -17372,7 +17393,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           }
         },
@@ -18800,7 +18822,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           }
         },
@@ -18851,7 +18874,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           }
         },
@@ -18889,7 +18913,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           }
         },
@@ -18927,7 +18952,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           }
         },
@@ -19007,7 +19033,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           }
         },
@@ -19150,7 +19177,8 @@
             "type": "string",
             "enum": [
               "insufficient_credits",
-              "spend_cap_exceeded"
+              "spend_cap_exceeded",
+              "free_quest_limit_reached"
             ]
           }
         },
@@ -23243,7 +23271,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes, the account is suspended (`errorCode: \"account_suspended\"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: \"model_requires_subscription\"`), organization-policy preflight refuses the model (`errorCode: \"org_model_not_allowed\"`), or an API-key caller named a built-in tool the organization does not allow (`errorCode: \"org_tool_not_allowed\"`).",
+            "description": "The API key does not hold any of the required scopes, the account is suspended (`errorCode: \"account_suspended\"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: \"model_requires_subscription\"`), a free account already started its QuestMaster quest (`errorCode: \"free_quest_limit_reached\"`), organization-policy preflight refuses the model (`errorCode: \"org_model_not_allowed\"`), or an API-key caller named a built-in tool the organization does not allow (`errorCode: \"org_tool_not_allowed\"`).",
             "content": {
               "application/json": {
                 "schema": {

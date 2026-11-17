@@ -2292,7 +2292,7 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -2322,7 +2322,7 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -2354,7 +2354,7 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -2379,7 +2379,7 @@ export interface components {
           /** @enum {string} */
           type: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
           /** @enum {string} */
-          errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+          errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
           tools?: {
             /** @enum {string} */
             toolMode?: 'fast' | 'smart';
@@ -2441,7 +2441,7 @@ export interface components {
           /** @enum {string} */
           type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
           /** @enum {string} */
-          errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+          errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
           tools?: {
             /** @enum {string} */
             toolMode?: 'fast' | 'smart';
@@ -2465,7 +2465,11 @@ export interface components {
       name?: string;
       /** @enum {string} */
       errorCode?:
-        'account_suspended' | 'model_requires_subscription' | 'org_model_not_allowed' | 'org_tool_not_allowed';
+        | 'account_suspended'
+        | 'model_requires_subscription'
+        | 'free_quest_limit_reached'
+        | 'org_model_not_allowed'
+        | 'org_tool_not_allowed';
       suspension?: {
         /**
          * @description Which Terms of Service rule the account was suspended under. New categories may be added.
@@ -2918,7 +2922,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -2949,7 +2953,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -3070,6 +3074,7 @@ export interface components {
           code?:
             | 'insufficient_credits'
             | 'spend_cap_exceeded'
+            | 'free_quest_limit_reached'
             | 'invalid_request'
             | 'provider_error'
             | 'provider_rejected'
@@ -3143,7 +3148,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
     };
     createCompletionResponse503: {
       error: string;
@@ -3862,7 +3867,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -3965,7 +3970,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -4966,7 +4971,7 @@ export interface components {
         /** @enum {string} */
         type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
         /** @enum {string} */
-        errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+        errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
         reply?: string | null;
         replies?: string[];
         fallbackInfo?: {
@@ -5172,7 +5177,7 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -5803,7 +5808,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
     };
     createTextRefinementResponse503: {
       error: string;
@@ -6221,7 +6226,7 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -6440,7 +6445,7 @@ export interface components {
          * @description Machine-readable failure class, present only on `type: "error"` turns that have one.
          * @enum {string}
          */
-        errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+        errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
         /**
          * Format: date-time
          * @description When the turn started; the sort key of the listing.
@@ -6608,7 +6613,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -6906,7 +6911,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
     };
     searchDataLakeResponse503: {
       error: string;
@@ -8049,7 +8054,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
     };
     createVoiceSessionResponse503: {
       error: string;
@@ -8694,7 +8699,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -8725,7 +8730,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
     };
     createTranscriptionResponse503: {
       error: string;
@@ -9144,7 +9149,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
     };
     /** @example {} */
     generateAgentAvatarRequest: {
@@ -9164,7 +9169,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
     };
     generateAgentSystemPromptResponse200: {
       /** @description The generated system prompt, already saved to the agent. */
@@ -9179,7 +9184,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
     };
     enhanceAgentFieldResponse200: {
       /** @description The enhanced text. It is returned, not saved to the agent. */
@@ -9194,7 +9199,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -9227,7 +9232,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -9270,7 +9275,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -10495,7 +10500,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), organization-policy preflight refuses the model (`errorCode: "org_model_not_allowed"`), or an API-key caller named a built-in tool the organization does not allow (`errorCode: "org_tool_not_allowed"`). */
+      /** @description The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), a free account already started its QuestMaster quest (`errorCode: "free_quest_limit_reached"`), organization-policy preflight refuses the model (`errorCode: "org_model_not_allowed"`), or an API-key caller named a built-in tool the organization does not allow (`errorCode: "org_tool_not_allowed"`). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
