@@ -50,7 +50,7 @@ function isStaleDone(agent: AgentView, snapshot: OpenSnapshot): boolean {
 
 /**
  * Folds a roster update into the ledger. An agent on an open quest that later turns `done` is checked
- * off at `now`, unless it is a re-run still reading its previous outcome (see isAwaitingOutcome). Failing, stopping or ending with no reply
+ * off at `now`, unless it is a re-run still reading its previous outcome (see isStaleDone). Failing, stopping or ending with no reply
  * ends the quest unchecked, and an agent already done when first seen is never added, so a reload
  * does not pin up quests that finished while nobody was looking.
  */
