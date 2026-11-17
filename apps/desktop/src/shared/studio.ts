@@ -27,6 +27,22 @@ export type StudioProvenance = z.infer<typeof studioProvenanceSchema>;
 export const studioSettingsSchema = z
   .object({
     model: z.string().min(1).max(256).optional(),
+    provider: z.enum(['openai', 'elevenlabs']).optional(),
+    count: z.number().int().min(1).max(4).optional(),
+    quality: z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'auto', 'standard', 'hd']).optional(),
+    references: z
+      .array(z.object({ fileId: z.string().regex(/^[0-9a-f]{24}$/), name: z.string().max(256) }).strict())
+      .max(16)
+      .optional(),
+    mode: z.enum(['text_to_video', 'image_to_video']).optional(),
+    audio: z.boolean().optional(),
+    lyrics: z.string().max(10_000).optional(),
+    stability: z.number().min(0).max(1).optional(),
+    similarityBoost: z.number().min(0).max(1).optional(),
+    languageCode: z
+      .string()
+      .regex(/^[a-z]{2}$/)
+      .optional(),
     size: z.string().max(64).optional(),
     durationSeconds: z.number().positive().max(600).optional(),
     aspectRatio: z.string().max(32).optional(),
@@ -70,6 +86,10 @@ export const studioJobSchema = z.object({
   updatedAt: z.string(),
   idempotencyKey: z.string(),
   providerJobId: z.string().optional(),
+  providerJobIds: z.array(z.string()).max(4).optional(),
+  providerGroupId: z.string().optional(),
+  imageBatch: z.boolean().optional(),
+  outputErrors: z.array(z.string()).optional(),
   assetIds: z.array(studioIdSchema),
   error: z.string().optional(),
   recoveryExpired: z.boolean().optional(),

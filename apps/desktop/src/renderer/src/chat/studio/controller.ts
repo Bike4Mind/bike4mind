@@ -1,12 +1,7 @@
 import type { StudioAsset, StudioContextSelection, StudioJob, StudioMediaKind } from '@shared/studio';
+import type { StudioCatalog, StudioDraft } from '@shared/studioIpc';
 
-export interface StudioSettingsByKind {
-  image: { size?: string; model?: string };
-  video: { durationSeconds?: number; aspectRatio?: string; resolution?: string };
-  music: { durationSeconds?: number; instrumental?: boolean };
-  speech: { voice?: string; format?: string };
-  'sound-effect': { durationSeconds?: number; promptInfluence?: number };
-}
+export type StudioSettingsByKind = Record<StudioMediaKind, StudioDraft['settings']>;
 
 type SettingField<K extends StudioMediaKind> = {
   [P in keyof StudioSettingsByKind[K]]: {
@@ -48,12 +43,16 @@ export interface StudioReview {
   exclusions: readonly string[];
   truncation: readonly string[];
   warnings: readonly string[];
+  count?: number;
+  estimatedCredits?: number | null;
 }
 
 export interface StudioController extends StudioIdentity {
   familyLabel: string;
   sessions: readonly { id: string; title: string }[];
   capabilities: StudioCapabilities;
+  catalog?: StudioCatalog;
+  uploadReference?: () => Promise<{ fileId: string; name: string } | null>;
   state:
     | { status: 'loading' }
     | { status: 'error'; error: string }

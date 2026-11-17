@@ -27,6 +27,9 @@ describe('Studio generation', () => {
   let deps: StudioGenerationDeps;
   let service: StudioGenerationService;
   const client = {
+    createStudioImages: vi.fn(),
+    listStudioImages: vi.fn(),
+    getFile: vi.fn(),
     generateImage: vi.fn(),
     getQuest: vi.fn(),
     fetchGenerated: vi.fn(),
@@ -105,6 +108,39 @@ describe('Studio generation', () => {
     await expect(service.submit(session.id, image)).rejects.toThrow('not approved');
     expect(client.generateImage).not.toHaveBeenCalled();
     expect((await workspaces.get(session.id))?.jobs).toEqual([]);
+  });
+  it('submits one image batch, durably recovers child IDs, and keeps partial successes beside failures', async () => {
+    const session = await sessions.create();
+    client.createStudioImages.mockResolvedValue({ groupId: 'group', jobs: [{ id: 'one' }, { id: 'two' }] });
+    client.listStudioImages.mockResolvedValue({
+      data: [
+        { id: 'one', state: 'succeeded', output: { fileId: 'file-one' }, error: null },
+        { id: 'two', state: 'failed', output: null, error: { message: 'Image two failed' } },
+      ],
+      next_cursor: null,
+    });
+    client.getFile.mockResolvedValue({ moderation_status: 'clean', download_url: '/output', mime_type: 'image/png' });
+    const job = await service.submit(session.id, {
+      kind: 'image',
+      count: 2,
+      body: { model: 'gpt-image-2', mode: 'generate', prompt: 'Two images', size: '1024x1024' },
+    });
+    expect(client.createStudioImages).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gpt-image-2', size: '1024x1024' }),
+      2,
+      expect.any(String)
+    );
+    expect((await workspaces.getJob(session.id, job.id))?.providerJobIds).toEqual(['one', 'two']);
+    service = new StudioGenerationService(deps);
+    await service.recover(session.id);
+    const recovered = await workspaces.getJob(session.id, job.id);
+    expect(recovered).toEqual(
+      expect.objectContaining({ state: 'completed', assetIds: [`${job.id}_0`], outputErrors: ['Image two failed'] })
+    );
+    expect((await workspaces.getAsset(session.id, `${job.id}_0`))?.creation?.settings.count).toBe(2);
+    await service.recover(session.id);
+    expect(client.createStudioImages).toHaveBeenCalledTimes(1);
+    expect(client.generateImage).not.toHaveBeenCalled();
   });
 
   it('copies chat media into family storage and never reimports deleted assets', async () => {

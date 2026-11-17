@@ -40,6 +40,7 @@ const EXTENSION_BY_MIME: Record<string, string> = {
   'audio/aac': 'aac',
   'audio/flac': 'flac',
   'audio/x-flac': 'flac',
+  'audio/pcm': 'pcm',
   'video/mp4': 'mp4',
   'video/webm': 'webm',
 };

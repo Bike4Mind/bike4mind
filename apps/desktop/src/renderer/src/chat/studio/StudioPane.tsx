@@ -18,13 +18,14 @@ import { CloseIcon, ImageIcon, MusicIcon, SoundIcon, VideoIcon, VoiceIcon } from
 import { thinScrollbarSx } from '../layout';
 import type { StudioController, StudioCreationDraft, StudioReview } from './controller';
 import { STUDIO_PANE_WIDTH } from './layout';
+import { StudioSettings, defaultStudioSettings } from './StudioSettings';
 
-export const STUDIO_TILES: readonly { kind: StudioMediaKind; label: string; icon: ReactNode }[] = [
-  { kind: 'image', label: 'Image', icon: <ImageIcon /> },
-  { kind: 'video', label: 'Video', icon: <VideoIcon /> },
-  { kind: 'music', label: 'Music', icon: <MusicIcon /> },
-  { kind: 'speech', label: 'Voice', icon: <VoiceIcon /> },
-  { kind: 'sound-effect', label: 'Sound FX', icon: <SoundIcon /> },
+export const STUDIO_TILES: readonly { kind: StudioMediaKind; label: string; icon: ReactNode; accent: string }[] = [
+  { kind: 'image', label: 'Image', icon: <ImageIcon />, accent: 'primary' },
+  { kind: 'video', label: 'Video', icon: <VideoIcon />, accent: 'warning' },
+  { kind: 'music', label: 'Music', icon: <MusicIcon />, accent: 'success' },
+  { kind: 'speech', label: 'Voice', icon: <VoiceIcon />, accent: 'primary' },
+  { kind: 'sound-effect', label: 'Sound FX', icon: <SoundIcon />, accent: 'danger' },
 ];
 
 const mediaLabel = (kind: StudioMediaKind) => STUDIO_TILES.find(tile => tile.kind === kind)?.label ?? kind;
@@ -60,7 +61,7 @@ function CreationForm({
     kind,
     prompt: initial?.prompt ?? '',
     selection: { mode: 'session-family' },
-    settings: initial?.settings ?? {},
+    settings: initial?.settings ?? defaultStudioSettings(kind, controller),
   }));
   const [review, setReview] = useState<StudioReview | null>(null);
   const [preparedPrompt, setPreparedPrompt] = useState('');
@@ -125,7 +126,7 @@ function CreationForm({
       component="form"
       ref={form}
       onSubmit={event => event.preventDefault()}
-      spacing={1.5}
+      spacing={2}
       data-testid="studio-creation-form"
     >
       <Button
@@ -135,14 +136,18 @@ function CreationForm({
         onClick={onBack}
         disabled={phase === 'creating'}
         data-testid="studio-creation-back-btn"
+        sx={{ alignSelf: 'flex-start', px: 0 }}
       >
         Back to Studio
       </Button>
-      <Typography level="title-sm">Create {mediaLabel(kind)}</Typography>
+      <Typography level="h4" sx={{ fontSize: 20, letterSpacing: '-0.02em' }}>
+        Create {mediaLabel(kind)}
+      </Typography>
+      <StudioSettings controller={controller} draft={draft} disabled={locked} edit={edit} />
       <FormControl disabled={locked}>
         <FormLabel>{kind === 'speech' ? 'Script or instructions' : 'What would you like to create?'}</FormLabel>
         <Textarea
-          minRows={3}
+          minRows={5}
           value={draft.prompt}
           onChange={event => edit({ ...draft, prompt: event.target.value })}
           slotProps={{ textarea: { 'data-testid': 'studio-prompt-input' } }}
@@ -222,7 +227,8 @@ function CreationForm({
           ))}
         </Stack>
       )}
-      {capability?.status === 'available' &&
+      {!controller.catalog &&
+        capability?.status === 'available' &&
         capability.fields?.map(field => {
           if (!field) return null;
           const value = draft.settings[field.key as keyof typeof draft.settings];
@@ -259,7 +265,7 @@ function CreationForm({
               ) : (
                 <Input
                   type="number"
-                  value={value ?? ''}
+                  value={typeof value === 'number' || typeof value === 'string' ? value : ''}
                   onChange={event => change(event.target.value === '' ? undefined : Number(event.target.value))}
                   slotProps={{
                     input: {
@@ -294,12 +300,20 @@ function CreationForm({
       >
         Review context and {kind === 'speech' ? 'script' : 'prompt'}
       </Button>
-      <Typography level="body-xs">
-        Preparation uses your session model and may use credits. Creating media is a separate paid action.
-      </Typography>
       {review && (
-        <Stack spacing={1} data-testid="studio-context-review">
+        <Stack
+          spacing={1.25}
+          data-testid="studio-context-review"
+          sx={{ p: 1.75, borderRadius: 'md', bgcolor: 'background.level1' }}
+        >
           <Typography level="title-sm">Review before creating</Typography>
+          <Typography level="body-sm">
+            {review.count && review.count > 1 ? `${review.count} images` : mediaLabel(kind)}
+            {' \u00b7 '}
+            {review.estimatedCredits == null
+              ? 'Cost calculated by provider'
+              : `Estimated total: ${review.estimatedCredits.toLocaleString()} credits`}
+          </Typography>
           <Typography level="body-xs">Included sessions</Typography>
           {review.sources.map(source => (
             <Typography level="body-xs" key={source.sessionId}>
@@ -510,7 +524,7 @@ function StudioContent({ controller }: { controller?: StudioController }) {
         role="group"
         aria-label="Create media"
         data-testid="studio-creation-tiles"
-        sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1 }}
+        sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1.25 }}
       >
         {STUDIO_TILES.map(tile => {
           const capability = controller?.capabilities[tile.kind];
@@ -528,9 +542,21 @@ function StudioContent({ controller }: { controller?: StudioController }) {
               <Button
                 fullWidth
                 size="sm"
-                variant="soft"
+                variant="outlined"
                 color="neutral"
-                startDecorator={tile.icon}
+                startDecorator={
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      p: 0.75,
+                      borderRadius: 'sm',
+                      color: `${tile.accent}.softColor`,
+                      bgcolor: `${tile.accent}.softBg`,
+                    }}
+                  >
+                    {tile.icon}
+                  </Box>
+                }
                 disabled={!!reason}
                 onClick={() => {
                   setInitial(undefined);
@@ -538,7 +564,18 @@ function StudioContent({ controller }: { controller?: StudioController }) {
                 }}
                 aria-describedby={reason ? `studio-${tile.kind}-reason` : undefined}
                 data-testid={`studio-create-${tile.kind}-tile`}
-                sx={{ minHeight: 60, justifyContent: 'flex-start' }}
+                title={reason ?? `Create ${tile.label}`}
+                sx={{
+                  minHeight: 62,
+                  px: 1.25,
+                  gap: 1,
+                  justifyContent: 'flex-start',
+                  borderColor: 'divider',
+                  borderRadius: 'md',
+                  bgcolor: 'background.surface',
+                  fontWeight: 500,
+                  '&:hover': { borderColor: `${tile.accent}.outlinedBorder`, bgcolor: 'background.level1' },
+                }}
               >
                 {tile.label}
               </Button>
@@ -547,7 +584,7 @@ function StudioContent({ controller }: { controller?: StudioController }) {
                   id={`studio-${tile.kind}-reason`}
                   level="body-xs"
                   textColor="text.tertiary"
-                  sx={{ mt: 0.5 }}
+                  sx={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)' }}
                 >
                   {reason}
                 </Typography>
@@ -557,14 +594,8 @@ function StudioContent({ controller }: { controller?: StudioController }) {
         })}
       </Box>
       <Divider />
-      <Typography level="title-sm">Assets and jobs</Typography>
-      <Typography level="body-xs">
-        After the last family session is deleted, local workspace data is retained for 30 days before cleanup. This does
-        not cancel provider jobs or imply a refund.
-      </Typography>
-      <Typography level="body-xs">
-        Jobs continue while Studio is closed. Automatic recovery runs for 7 days; switching accounts pauses it.
-        Unresolved jobs keep the last family session from being deleted during that period.
+      <Typography level="title-sm" sx={{ pt: 0.5 }}>
+        Your creations
       </Typography>
       {(controller?.hasMoreAssets || controller?.hasMoreJobs) && (
         <Typography level="body-xs">Partial history loaded. Load remaining pages to browse all records.</Typography>
@@ -614,12 +645,22 @@ function StudioContent({ controller }: { controller?: StudioController }) {
           const rows = [
             ...assets.map(item => ({ type: 'asset' as const, item })),
             ...controller.state.jobs
-              .filter(job => !deliveredJobIds.has(job.id) && !job.assetIds.some(id => assetIds.has(id)))
+              .filter(
+                job =>
+                  job.state !== 'completed' ||
+                  !!job.error ||
+                  (!deliveredJobIds.has(job.id) && !job.assetIds.some(id => assetIds.has(id)))
+              )
               .map(item => ({ type: 'job' as const, item })),
           ].sort((a, b) => b.item.createdAt.localeCompare(a.item.createdAt));
           return rows.length === 0 ? (
-            <Typography level="body-sm" textColor="text.tertiary" data-testid="studio-empty">
-              No assets yet. Choose a tile above to create something with your session context.
+            <Typography
+              level="body-sm"
+              textColor="text.tertiary"
+              data-testid="studio-empty"
+              sx={{ textAlign: 'center', py: 5 }}
+            >
+              Your creations will appear here.
             </Typography>
           ) : (
             <Stack component="ul" spacing={1} sx={{ p: 0, m: 0, listStyle: 'none' }} data-testid="studio-asset-list">
@@ -628,25 +669,62 @@ function StudioContent({ controller }: { controller?: StudioController }) {
                   {row.type === 'asset' ? (
                     <Button
                       fullWidth
-                      variant="outlined"
+                      variant="plain"
                       color="neutral"
                       onClick={() => setSelected(row.item.id)}
                       data-testid={`studio-asset-${row.item.id}-btn`}
-                      sx={{ justifyContent: 'flex-start', textAlign: 'left', minWidth: 0 }}
+                      sx={{
+                        justifyContent: 'flex-start',
+                        textAlign: 'left',
+                        minWidth: 0,
+                        gap: 1.5,
+                        p: 1,
+                        borderRadius: 'md',
+                      }}
                     >
+                      {row.item.kind === 'image' ? (
+                        <Box
+                          component="img"
+                          src={row.item.url}
+                          alt=""
+                          sx={{
+                            width: 44,
+                            height: 44,
+                            objectFit: 'cover',
+                            borderRadius: 'sm',
+                            bgcolor: 'background.level1',
+                          }}
+                        />
+                      ) : (
+                        <Box
+                          sx={{
+                            width: 44,
+                            height: 44,
+                            display: 'grid',
+                            placeItems: 'center',
+                            borderRadius: 'sm',
+                            bgcolor: 'background.level1',
+                            color: 'text.secondary',
+                          }}
+                        >
+                          {STUDIO_TILES.find(tile => tile.kind === row.item.kind)?.icon}
+                        </Box>
+                      )}
                       <Box sx={{ minWidth: 0 }}>
                         <Typography level="title-sm" sx={{ overflowWrap: 'anywhere' }}>
                           {row.item.title}
                         </Typography>
-                        <Typography level="body-xs">
-                          {mediaLabel(row.item.kind)} - {row.item.createdAt}
+                        <Typography level="body-xs" textColor="text.tertiary">
+                          {mediaLabel(row.item.kind)}
+                          {' \u00b7 '}
+                          {new Date(row.item.createdAt).toLocaleDateString()}
                         </Typography>
                       </Box>
                     </Button>
                   ) : (
                     <Box
                       data-testid={`studio-job-${row.item.id}`}
-                      sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'sm', p: 1 }}
+                      sx={{ borderBottom: '1px solid', borderColor: 'divider', px: 1, py: 1.5 }}
                     >
                       <Typography level="body-sm">
                         {mediaLabel(row.item.kind)} - {row.item.state}

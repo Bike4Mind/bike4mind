@@ -5,6 +5,7 @@ import {
   CreateMusicGenerationBodySchema,
   CreateVideoGenerationBodySchema,
   GenerateImageRequestBodySchema,
+  ImageJobRequestSchema,
   soundEffectsRequestSchema,
   ttsRequestSchema,
 } from '@bike4mind/common';
@@ -17,7 +18,13 @@ import type { StudioWorkspaceStore } from '../StudioWorkspaceStore';
 export const studioGenerationRequestSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('image'),
-    body: GenerateImageRequestBodySchema.pick({ prompt: true, model: true }).extend({ size: z.string().optional() }),
+    body: z.union([
+      ImageJobRequestSchema,
+      GenerateImageRequestBodySchema.pick({ prompt: true, model: true })
+        .extend({ size: z.string().optional() })
+        .strict(),
+    ]),
+    count: z.number().int().min(1).max(4).optional(),
   }),
   z.object({ kind: z.literal('video'), body: CreateVideoGenerationBodySchema }),
   z.object({ kind: z.literal('music'), body: CreateMusicGenerationBodySchema }),
@@ -141,8 +148,24 @@ export class StudioGenerationService {
       try {
         this.assertConnection(connection);
         if (request.kind === 'image') {
-          const result = await connection.client.generateImage({ ...request.body, prompt_resolution: 'literal' });
-          job = { ...job, state: 'queued', providerJobId: result.questId };
+          if ('mode' in request.body) {
+            const result = await connection.client.createStudioImages(
+              request.body,
+              request.count ?? 1,
+              job.idempotencyKey
+            );
+            job = {
+              ...job,
+              state: 'queued',
+              imageBatch: true,
+              providerGroupId: result.groupId,
+              providerJobId: result.jobs[0].id,
+              providerJobIds: result.jobs.map(child => child.id),
+            };
+          } else {
+            const result = await connection.client.generateImage({ ...request.body, prompt_resolution: 'literal' });
+            job = { ...job, state: 'queued', providerJobId: result.questId };
+          }
         } else if (request.kind === 'video' || request.kind === 'music') {
           const result =
             request.kind === 'video'
@@ -197,6 +220,7 @@ export class StudioGenerationService {
     return this.lock(`${connection.scope}:${workspace.workspaceId}`, async () => {
       let job = await this.findJob(sessionId, jobId, connection);
       if (terminal.has(job.state)) return job;
+      if (job.imageBatch) return this.reconcileImages(sessionId, workspace.workspaceId, job, connection);
       if (job.kind === 'speech' || job.kind === 'sound-effect') {
         const asset = await this.findAsset(sessionId, `${job.id}_0`, connection);
         if (asset && (await this.locateAsset(sessionId, asset.id))) {
@@ -274,6 +298,65 @@ export class StudioGenerationService {
       await this.saveJob(sessionId, job, connection);
       return job;
     });
+  }
+
+  private async reconcileImages(
+    sessionId: string,
+    workspaceId: string,
+    job: StudioJob,
+    connection: StudioGenerationConnection
+  ): Promise<StudioJob> {
+    const ids = job.providerJobIds ?? [];
+    if (!ids.length) return job;
+    const remaining = new Set(ids);
+    const found = new Map<string, Awaited<ReturnType<MediaApiClient['listStudioImages']>>['data'][number]>();
+    let cursor: string | undefined;
+    do {
+      const page = await connection.client.listStudioImages(cursor);
+      this.assertConnection(connection);
+      for (const child of page.data) if (remaining.delete(child.id)) found.set(child.id, child);
+      cursor = page.next_cursor ?? undefined;
+    } while (cursor && remaining.size);
+    const assetIds: string[] = [];
+    const errors: string[] = [];
+    let unsettled = remaining.size > 0;
+    for (const [index, id] of ids.entries()) {
+      const child = found.get(id);
+      if (!child) continue;
+      if (child.state === 'failed' || child.state === 'cancelled' || child.state === 'blocked') {
+        errors.push(child.error?.message ?? `Image ${index + 1} ${child.state}.`);
+        continue;
+      }
+      if (child.state !== 'succeeded' || !child.output?.fileId) {
+        unsettled = true;
+        continue;
+      }
+      const assetId = `${job.id}_${index}`;
+      if (!(await this.findAsset(sessionId, assetId, connection))) {
+        const file = await connection.client.getFile(child.output.fileId);
+        this.assertConnection(connection);
+        if (file.moderation_status === 'blocked') {
+          errors.push(`Image ${index + 1} is unavailable.`);
+          continue;
+        }
+        if (!file.download_url) {
+          unsettled = true;
+          continue;
+        }
+        const output = await connection.client.fetchGenerated(file.download_url);
+        await this.storeOutput(sessionId, workspaceId, job, index, output.bytes, file.mime_type, connection);
+      }
+      assetIds.push(assetId);
+    }
+    const updated: StudioJob = {
+      ...job,
+      assetIds,
+      outputErrors: errors,
+      state: unsettled ? 'running' : errors.length === ids.length ? 'failed' : 'completed',
+      error: errors.length ? errors.join(' ') : undefined,
+    };
+    await this.saveJob(sessionId, updated, connection);
+    return updated;
   }
 
   async recover(sessionId: string): Promise<StudioJob[]> {
@@ -506,9 +589,23 @@ function creationFromRequest(request: StudioGenerationRequest) {
     prompt: body.prompt ?? body.text,
     settings: {
       model: body.model,
+      provider: body.provider,
+      count: request.kind === 'image' ? (request.count ?? 1) : undefined,
+      quality: body.quality,
+      references: Array.isArray(body.inputs)
+        ? body.inputs.map((input: { fileId: string }) => ({ fileId: input.fileId, name: 'Reference image' }))
+        : typeof body.input_image_file_id === 'string'
+          ? [{ fileId: body.input_image_file_id, name: 'First frame' }]
+          : undefined,
+      mode: request.kind === 'video' ? body.mode : undefined,
+      audio: body.audio,
+      lyrics: body.lyrics,
+      stability: body.stability,
+      similarityBoost: body.similarityBoost,
+      languageCode: body.languageCode,
       size: body.size,
       durationSeconds: body.duration_seconds ?? body.durationSeconds,
-      aspectRatio: body.aspect_ratio,
+      aspectRatio: body.aspect_ratio ?? body.aspectRatio,
       resolution: body.resolution,
       instrumental: body.instrumental,
       voice: body.voice,

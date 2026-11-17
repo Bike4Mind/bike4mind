@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import type { VideoModel } from '@bike4mind/common';
+import type { PublicMusicModel, ImageModelCatalogEntry } from '@bike4mind/common';
 import {
   studioIdSchema,
   studioMediaKindSchema,
@@ -41,6 +43,8 @@ export interface StudioReview {
   exclusions: readonly string[];
   truncation: readonly string[];
   warnings: readonly string[];
+  count?: number;
+  estimatedCredits?: number | null;
 }
 export interface StudioLiveState {
   sessionId: string;
@@ -49,6 +53,15 @@ export interface StudioLiveState {
   sessions: { id: string; title: string }[];
   available: boolean;
   unavailableKinds?: string[];
+  catalog?: StudioCatalog;
+}
+export interface StudioCatalog {
+  images: { id: string; name: string; capabilities: ImageModelCatalogEntry }[];
+  videos: VideoModel[];
+  music: PublicMusicModel[];
+  speech: ('openai' | 'elevenlabs')[];
+  soundEffects: 'elevenlabs'[];
+  voices: { id: string; name: string }[];
 }
 export const studioAssetActionSchema = z
   .object({
@@ -77,6 +90,7 @@ export interface StudioApi {
   prepare(draft: StudioDraft): Promise<StudioReview>;
   create(request: StudioCreate): Promise<void>;
   pickFiles(sessionId: string): Promise<string[]>;
+  uploadReference(sessionId: string): Promise<{ fileId: string; name: string } | null>;
   assetAction(request: StudioAssetAction): Promise<void>;
   onChanged(listener: (event: { sessionId: string; workspaceId: string }) => void): () => void;
 }

@@ -163,6 +163,7 @@ export const IPC_CHANNELS = {
   studioPrepare: 'studio:prepare',
   studioCreate: 'studio:create',
   studioPickFiles: 'studio:pick-files',
+  studioUploadReference: 'studio:upload-reference',
   studioAssetAction: 'studio:asset-action',
   studioChanged: 'studio:changed',
   getAppInfo: 'app:get-info',

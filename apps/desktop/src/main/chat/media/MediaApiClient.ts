@@ -1,4 +1,5 @@
 import type { Readable } from 'node:stream';
+import { z } from 'zod';
 import axios, { isAxiosError, type AxiosError } from 'axios';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import {
@@ -7,6 +8,9 @@ import {
   MusicGenerationSchema,
   VideoGenerationSchema,
   ttsBase64ResponseSchema,
+  ImageJobRequestSchema,
+  GENERATION_JOB_STATES,
+  type ImageJobRequest,
   type CreateFileUploadResponse,
   type CreateVideoGenerationBody,
   type FileResponse,
@@ -20,6 +24,15 @@ import {
 } from '@bike4mind/common';
 import type { ChatToolNotice } from '@shared/chat';
 import { parseMusicModels } from './musicModels';
+
+const studioImageJobSchema = z.object({
+  id: z.string(),
+  groupId: z.string().nullable(),
+  state: z.enum(GENERATION_JOB_STATES),
+  output: z.object({ fileId: z.string().nullable(), contentType: z.string(), bytes: z.number() }).nullable(),
+  error: z.object({ code: z.string(), message: z.string() }).nullable(),
+});
+export type StudioRemoteImageJob = z.infer<typeof studioImageJobSchema>;
 
 /**
  * A generation failure worth saying something specific about.
@@ -115,6 +128,25 @@ export function isTerminalQuest(quest: QuestPoll): boolean {
  */
 export class MediaApiClient {
   constructor(private readonly api: AuthenticatedApiClient) {}
+
+  async createStudioImages(request: ImageJobRequest, count: number, key: string) {
+    const body = { request: ImageJobRequestSchema.parse(request), count: z.number().int().min(1).max(4).parse(count) };
+    return z
+      .object({ groupId: z.string(), jobs: z.array(studioImageJobSchema).min(1).max(4) })
+      .parse(
+        await this.api.post<unknown>('/api/studio/image-jobs', body, {
+          timeout: TIMEOUT_MS.submit,
+          headers: { 'Idempotency-Key': key },
+        })
+      );
+  }
+
+  async listStudioImages(cursor?: string) {
+    const query = new URLSearchParams({ limit: '100', ...(cursor ? { cursor } : {}) });
+    return z
+      .object({ data: z.array(studioImageJobSchema), next_cursor: z.string().nullable() })
+      .parse(await this.api.get<unknown>(`/api/studio/image-jobs?${query}`, { timeout: TIMEOUT_MS.download }));
+  }
 
   /**
    * Queue an image generation. Returns the quest to poll, not an image: the route hands the

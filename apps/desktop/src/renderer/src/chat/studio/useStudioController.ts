@@ -80,6 +80,13 @@ export function useStudioController(
     revision: current?.revision ?? '',
     familyLabel: 'Session family',
     sessions: current?.sessions ?? [],
+    catalog: current?.catalog,
+    uploadReference: async () => {
+      check();
+      const reference = await window.b4m.studio.uploadReference(sessionId);
+      check();
+      return reference;
+    },
     hasMoreAssets: !!current?.workspace.nextAssetCursor,
     jobAction: async (jobId, action) => {
       check();

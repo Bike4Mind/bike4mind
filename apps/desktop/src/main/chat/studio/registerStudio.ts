@@ -1,11 +1,12 @@
 import { app, dialog, shell, type IpcMain } from 'electron';
-import { copyFile } from 'node:fs/promises';
+import { copyFile, open } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { basename, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { studioIdSchema } from '@shared/studio';
-import { studioAssetActionSchema, type StudioDraft } from '@shared/studioIpc';
+import { studioAssetActionSchema, type StudioCatalog } from '@shared/studioIpc';
 import type { AuthService } from '../../auth/AuthService';
 import type { SessionStore } from '../SessionStore';
 import type { ChatService } from '../ChatService';
@@ -14,16 +15,13 @@ import type { MediaStore } from '../media/MediaStore';
 import type { ModelCatalog } from '../ModelCatalog';
 import type { ChatVideoJob } from '@shared/chat';
 import { MediaApiClient } from '../media/MediaApiClient';
-import { planVideoRequest, resolveVideoModel } from '../media/videoModels';
-import { planMusicRequest } from '../media/musicModels';
+import { readStudioCatalog } from './StudioCatalog';
+import { planStudioCreation } from './StudioPlan';
+import { resolveWithinRoots } from '../tools/paths';
 import { StudioWorkspaceStore } from './StudioWorkspaceStore';
 import { StudioLiveService } from './StudioLiveService';
 import { StudioJobScheduler } from './StudioJobScheduler';
-import {
-  StudioGenerationService,
-  studioGenerationRequestSchema,
-  type StudioGenerationRequest,
-} from './generation/StudioGenerationService';
+import { StudioGenerationService, studioGenerationRequestSchema } from './generation/StudioGenerationService';
 
 export function registerStudio(deps: {
   ipc: IpcMain;
@@ -58,7 +56,17 @@ export function registerStudio(deps: {
     },
   });
   const authorizations = new Map<string, () => Promise<boolean>>();
-  let availability: { scope: string | null; expires: number; unavailable: string[] } | undefined;
+  let availability: { scope: string | null; expires: number; catalog: StudioCatalog } | undefined;
+  const catalog = async (): Promise<StudioCatalog> => {
+    const scope = sessions.scopeKey();
+    const api = auth.getApiClient();
+    if (!api) return { images: [], videos: [], music: [], speech: [], soundEffects: [], voices: [] };
+    if (availability?.scope === scope && availability.expires > Date.now()) return availability.catalog;
+    const value = await readStudioCatalog(api, deps.models);
+    if (scope !== sessions.scopeKey()) throw new Error('Account changed.');
+    availability = { scope, expires: Date.now() + 60_000, catalog: value };
+    return value;
+  };
   const live = new StudioLiveService({
     sessions,
     workspaces,
@@ -66,31 +74,32 @@ export function registerStudio(deps: {
     roots: id => deps.service.studioContextRoots(id),
     prepare: (...args) => deps.service.prepareStudioText(...args),
     available: () => !!auth.getApiClient(),
+    catalog,
+    plan: async (draft, prompt) => planStudioCreation(draft, prompt, await catalog()),
     unavailableKinds: async () => {
-      const scope = sessions.scopeKey();
-      const api = auth.getApiClient();
-      if (!api) return ['image', 'video', 'music', 'speech', 'sound-effect'];
-      if (availability?.scope === scope && availability.expires > Date.now()) return availability.unavailable;
-      const [images, videos, music] = await Promise.all([
-        deps.models.listImageModels(),
-        deps.models.listVideoModels(),
-        new MediaApiClient(api).listMusicModels().catch(() => []),
-      ]);
-      if (scope !== sessions.scopeKey()) throw new Error('Account changed.');
-      const unavailable = [
-        ...(!images.length ? ['image'] : []),
-        ...(!videos.length ? ['video'] : []),
-        ...(!music.length ? ['music'] : []),
+      const value = await catalog();
+      return [
+        ...(!value.images.length ? ['image'] : []),
+        ...(!value.videos.length ? ['video'] : []),
+        ...(!value.music.length ? ['music'] : []),
+        ...(!value.speech.length ? ['speech'] : []),
+        ...(!value.soundEffects.length ? ['sound-effect'] : []),
       ];
-      availability = { scope, expires: Date.now() + 60_000, unavailable };
-      return unavailable;
     },
     changed: deps.changed,
     generation: {
       recover: id => (auth.getApiClient() ? generation.recover(id) : Promise.resolve([])),
-      submit: async (sessionId, draft, prompt, provenance, authorize) => {
+      submit: async (sessionId, draft, prompt, provenance, authorize, planned) => {
         const scope = sessions.scopeKey();
-        const request = { ...studioGenerationRequestSchema.parse(await generationRequest(draft, prompt)), provenance };
+        if (!planned) throw new Error('Prepare and review these settings first.');
+        const body = { ...planned.body, ...('text' in planned.body ? { text: prompt } : { prompt }) };
+        const request = { ...studioGenerationRequestSchema.parse({ ...planned, body }), provenance };
+        const checked = planStudioCreation(draft, prompt, await catalog()).request;
+        if (
+          JSON.stringify(studioGenerationRequestSchema.parse({ ...planned, body })) !==
+          JSON.stringify(studioGenerationRequestSchema.parse(checked))
+        )
+          throw new Error('Model capabilities changed. Review again.');
         if (scope !== sessions.scopeKey()) throw new Error('Account changed.');
         const key = JSON.stringify({ scope, sessionId, request });
         authorizations.set(key, authorize);
@@ -102,64 +111,6 @@ export function registerStudio(deps: {
       },
     },
   });
-  async function generationRequest(draft: StudioDraft, prompt: string): Promise<StudioGenerationRequest> {
-    const settings = draft.settings;
-    switch (draft.kind) {
-      case 'image': {
-        const offered = await deps.models.listImageModels();
-        const model = settings.model ?? offered[0];
-        if (model && !offered.includes(model)) throw new Error('The saved image model is no longer available.');
-        if (!model) throw new Error('No image models are available.');
-        return { kind: 'image', body: { prompt, model, ...(settings.size ? { size: settings.size } : {}) } };
-      }
-      case 'video': {
-        const model = resolveVideoModel(await deps.models.listVideoModels(), settings.model);
-        const { request } = planVideoRequest(model, { prompt, withImage: false, ...settings });
-        return {
-          kind: 'video',
-          body: {
-            model: request.model,
-            mode: request.mode,
-            prompt,
-            duration_seconds: request.durationSeconds,
-            aspect_ratio: request.aspectRatio,
-            resolution: request.resolution,
-          },
-        };
-      }
-      case 'music': {
-        const api = auth.getApiClient();
-        if (!api) throw new Error('Sign in first.');
-        const offered = await new MediaApiClient(api).listMusicModels();
-        const real = offered.filter(model => model.provider !== 'test');
-        const pool = real.length ? real : offered;
-        const model = settings.model
-          ? offered.find(model => model.id === settings.model)
-          : (pool.find(model => !model.preview) ?? pool[0]);
-        if (!model) throw new Error('No music models are available.');
-        planMusicRequest(model, settings);
-        return {
-          kind: 'music',
-          body: {
-            model: model.id,
-            prompt,
-            duration_seconds: settings.durationSeconds,
-            instrumental: settings.instrumental,
-          },
-        };
-      }
-      case 'speech':
-        return studioGenerationRequestSchema.parse({
-          kind: 'speech',
-          body: { text: prompt, voice: settings.voice, format: settings.format },
-        });
-      case 'sound-effect':
-        return studioGenerationRequestSchema.parse({
-          kind: 'sound-effect',
-          body: { text: prompt, durationSeconds: settings.durationSeconds, promptInfluence: settings.promptInfluence },
-        });
-    }
-  }
   const indexed = new Map<string, string>();
   const indexedFamilies = new Set<string>();
   async function indexChatSession(sessionId: string, force = false) {
@@ -257,6 +208,54 @@ export function registerStudio(deps: {
       deps.changed({ sessionId: request.sessionId, workspaceId: workspace.workspaceId });
   });
   ipc.handle(IPC_CHANNELS.studioCreate, (_event, request: unknown) => live.create(request));
+  ipc.handle(IPC_CHANNELS.studioUploadReference, async (_event, raw: unknown) => {
+    const sessionId = studioIdSchema.parse(raw);
+    const scope = sessions.scopeKey();
+    const api = auth.getApiClient();
+    if (!api || !(await sessions.get(sessionId))) throw new Error('Sign in and open a session first.');
+    const picked = await dialog.showOpenDialog({
+      title: 'Upload reference image to Files',
+      buttonLabel: 'Upload image',
+      message: 'The selected image is uploaded to your account. Existing session folder permissions still apply.',
+      properties: ['openFile'],
+      filters: [{ name: 'Reference image', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+    });
+    if (picked.canceled || !picked.filePaths[0]) return null;
+    if (scope !== sessions.scopeKey()) throw new Error('Account changed.');
+    const path = await resolveWithinRoots(picked.filePaths[0], await deps.service.studioContextRoots(sessionId));
+    const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    let bytes: Buffer;
+    try {
+      const info = await file.stat();
+      if (!info.isFile() || info.size < 1 || info.size > 20 * 1024 * 1024)
+        throw new Error('Choose an image up to 20 MB.');
+      bytes = Buffer.alloc(info.size + 1);
+      let length = 0;
+      while (length < bytes.length) {
+        const read = await file.read(bytes, length, bytes.length - length, length);
+        if (!read.bytesRead) break;
+        length += read.bytesRead;
+      }
+      if (length !== info.size) throw new Error('The image changed. Select it again.');
+      bytes = bytes.subarray(0, length);
+    } finally {
+      await file.close();
+    }
+    await resolveWithinRoots(path, await deps.service.studioContextRoots(sessionId));
+    if (scope !== sessions.scopeKey() || !(await sessions.get(sessionId))) throw new Error('Session changed.');
+    const mime =
+      bytes[0] === 0x89 && bytes.subarray(1, 4).toString() === 'PNG'
+        ? 'image/png'
+        : bytes[0] === 0xff && bytes[1] === 0xd8
+          ? 'image/jpeg'
+          : bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP'
+            ? 'image/webp'
+            : null;
+    if (!mime) throw new Error('Choose a PNG, JPEG, or WebP image.');
+    const uploaded = await new MediaApiClient(api).uploadFile(basename(path), mime, bytes);
+    if (scope !== sessions.scopeKey()) throw new Error('Account changed.');
+    return { fileId: uploaded.id, name: basename(path) };
+  });
   ipc.handle(IPC_CHANNELS.studioPickFiles, async (_event, id: unknown) => {
     const sessionId = studioIdSchema.parse(id);
     const scope = sessions.scopeKey();

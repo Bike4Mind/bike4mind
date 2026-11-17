@@ -67,7 +67,8 @@ describe('Studio live orchestration', () => {
       input,
       'Edited prompt',
       expect.objectContaining({ sessions: expect.any(Array) }),
-      expect.any(Function)
+      expect.any(Function),
+      undefined
     );
     await expect(live.create(request)).rejects.toThrow('Review expired');
     expect(submit).toHaveBeenCalledTimes(1);

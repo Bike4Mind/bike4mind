@@ -16,6 +16,8 @@ import { boundedText, ContextCollector, hash } from './context/collector';
 import { createContextFileReader } from './context/fileReader';
 import { ContextPreparationService, type PreparedDraft } from './context/preparation';
 import type { ContextRequest, ContextSnapshot } from './context/types';
+import type { StudioCatalog } from '@shared/studioIpc';
+import type { StudioGenerationRequest } from './generation/StudioGenerationService';
 
 export interface StudioGenerationPort {
   submit(
@@ -23,7 +25,8 @@ export interface StudioGenerationPort {
     draft: StudioDraft,
     prompt: string,
     provenance: StudioProvenance,
-    authorize: () => Promise<boolean>
+    authorize: () => Promise<boolean>,
+    planned?: StudioGenerationRequest
   ): Promise<StudioJob>;
   recover(sessionId: string): Promise<unknown>;
 }
@@ -33,6 +36,7 @@ interface ReviewRecord {
   draft: string;
   prepared: PreparedDraft;
   expires: number;
+  planned?: StudioGenerationRequest;
 }
 
 export class StudioLiveService {
@@ -50,6 +54,11 @@ export class StudioLiveService {
       prepare(sessionId: string, system: string, input: string, signal: AbortSignal): Promise<string>;
       available(): boolean;
       unavailableKinds?(): Promise<string[]>;
+      catalog?(): Promise<StudioCatalog>;
+      plan?(
+        draft: StudioDraft,
+        prompt: string
+      ): Promise<{ request: StudioGenerationRequest; estimatedCredits: number | null }>;
       generation: StudioGenerationPort;
       changed(event: { sessionId: string; workspaceId: string }): void;
     }
@@ -181,6 +190,7 @@ export class StudioLiveService {
     const identity = await this.identity(sessionId);
     const [workspace, sessions] = await Promise.all([this.deps.workspaces.get(sessionId), this.family(sessionId)]);
     const unavailableKinds = await this.deps.unavailableKinds?.();
+    const catalog = await this.deps.catalog?.();
     if (!workspace || identity.scope !== this.deps.sessions.scopeKey()) throw new Error('Account changed.');
     return {
       sessionId,
@@ -189,6 +199,7 @@ export class StudioLiveService {
       sessions: sessions.slice(0, 256).map(({ id, title }) => ({ id, title })),
       available: this.deps.available(),
       unavailableKinds,
+      catalog,
     };
   }
 
@@ -224,6 +235,7 @@ export class StudioLiveService {
     this.pending.add(controller);
     const timer = setTimeout(() => controller.abort(), 90_000);
     try {
+      await this.deps.plan?.(draft, draft.prompt);
       const prepared = await this.preparing.prepare(
         {
           context: await this.context(draft),
@@ -233,6 +245,7 @@ export class StudioLiveService {
         controller.signal
       );
       await this.validate(draft);
+      const plan = await this.deps.plan?.(draft, prepared.text);
       if (identity.scope !== this.deps.sessions.scopeKey()) throw new Error('Account changed.');
       for (const [id, record] of this.reviews) if (record.expires < Date.now()) this.reviews.delete(id);
       if (this.reviews.size >= 64) this.reviews.delete(this.reviews.keys().next().value!);
@@ -241,6 +254,7 @@ export class StudioLiveService {
         scope: identity.scope,
         draft: JSON.stringify(draft),
         prepared,
+        planned: plan?.request,
         expires: Date.now() + 15 * 60_000,
       });
       const sessions = await this.deps.sessions.list();
@@ -248,6 +262,8 @@ export class StudioLiveService {
       return {
         id,
         preparedPrompt: prepared.text,
+        count: draft.kind === 'image' ? (draft.settings.count ?? 1) : 1,
+        estimatedCredits: plan?.estimatedCredits ?? null,
         sources: prepared.context.sessionIds.map(sessionId => ({
           sessionId,
           title: sessions.find(s => s.id === sessionId)?.title ?? sessionId,
@@ -294,7 +310,8 @@ export class StudioLiveService {
           controller.signal.throwIfAborted();
           const latest = await this.collector.collect(await this.context(request.draft), controller.signal);
           return record.scope === this.deps.sessions.scopeKey() && latest.sha256 === current.sha256;
-        }
+        },
+        record.planned
       );
       if (record.scope === this.deps.sessions.scopeKey())
         this.deps.changed({ sessionId: request.draft.sessionId, workspaceId: identity.workspace.workspaceId });

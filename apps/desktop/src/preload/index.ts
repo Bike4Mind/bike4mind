@@ -68,6 +68,7 @@ const api: DesktopApi = {
     prepare: draft => ipcRenderer.invoke(IPC_CHANNELS.studioPrepare, draft),
     create: request => ipcRenderer.invoke(IPC_CHANNELS.studioCreate, request),
     pickFiles: sessionId => ipcRenderer.invoke(IPC_CHANNELS.studioPickFiles, sessionId),
+    uploadReference: sessionId => ipcRenderer.invoke(IPC_CHANNELS.studioUploadReference, sessionId),
     assetAction: request => ipcRenderer.invoke(IPC_CHANNELS.studioAssetAction, request),
     onChanged: listener => {
       const handler = (_event: unknown, event: Parameters<typeof listener>[0]) => listener(event);

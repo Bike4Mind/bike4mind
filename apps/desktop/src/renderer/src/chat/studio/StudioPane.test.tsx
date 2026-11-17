@@ -7,6 +7,7 @@ import { desktopTheme } from '../../theme';
 import type { StudioController, StudioReview } from './controller';
 import { StudioPane } from './StudioPane';
 import { STUDIO_DOCK_MIN_WIDTH, studioPaneLayout } from './layout';
+import { IMAGE_MODEL_CATALOG } from '@bike4mind/common';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 window.matchMedia ??= ((query: string) => ({
@@ -110,6 +111,38 @@ describe('Studio layout', () => {
 });
 
 describe('Studio states', () => {
+  it('shows real image model/count controls and preserves settings through model changes', async () => {
+    const value = controller({
+      catalog: {
+        images: [
+          { id: 'gpt-image-2', name: 'GPT Image 2', capabilities: IMAGE_MODEL_CATALOG['gpt-image-2'] },
+          { id: 'flux-pro-1.1', name: 'Flux Pro', capabilities: IMAGE_MODEL_CATALOG['flux-pro-1.1'] },
+        ],
+        videos: [],
+        music: [],
+        speech: [],
+        soundEffects: [],
+        voices: [],
+      },
+    });
+    await mount(value);
+    await click('studio-create-image-tile');
+    expect((get('studio-setting-model') as HTMLSelectElement).value).toBe('gpt-image-2');
+    expect(get('studio-creation-form').textContent).not.toContain('Wet slate');
+    expect(get('studio-creation-form').textContent).not.toContain('Kitchen counter');
+    await input('studio-setting-count', '3');
+    await input('studio-setting-size', '1024x1024');
+    await input('studio-setting-quality', 'high');
+    await input('studio-setting-model', 'flux-pro-1.1');
+    expect((get('studio-setting-quality') as HTMLSelectElement).value).toBe('high');
+    await input('studio-prompt-input', 'Three bicycles');
+    await click('studio-prepare-btn');
+    expect(value.prepareCreation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        settings: expect.objectContaining({ model: 'flux-pro-1.1', count: 3, size: '1024x1024', quality: 'high' }),
+      })
+    );
+  });
   it('loads remaining history pages and prefills reusable settings without submitting', async () => {
     const loadMore = vi.fn(async () => undefined);
     const value = controller({
@@ -159,7 +192,9 @@ describe('Studio states', () => {
     await mount(controller());
     expect(get('studio-creation-tiles').textContent).toContain('Video is not supported.');
     expect(get('studio-creation-tiles').textContent).toContain('Loading models.');
-    expect(get('studio-empty')).toBeTruthy();
+    expect(get('studio-empty').textContent).toBe('Your creations will appear here.');
+    expect(get('studio-pane').textContent).not.toContain('30 days');
+    expect(get('studio-pane').textContent).not.toContain('Automatic recovery');
     await mount(controller({ state: { status: 'loading' } }));
     expect(get('studio-loading').getAttribute('role')).toBe('status');
     await mount(controller({ state: { status: 'error', error: 'Offline' } }));
