@@ -597,7 +597,7 @@ jobs:
           # unit lanes run in cli-desktop-workers and misc below.
           - name: services-workers-integration
             tier: medium
-            filter: '--filter @bike4mind/services'
+            filter: '--filter @bike4mind/services-core'
             workers: ''
             integration-filter: '--filter @bike4mind/workers --filter @bike4mind/server-utils'
           # The buckets below hold several packages, but the step runs them one at a time, so
@@ -627,7 +627,7 @@ jobs:
           # nothing. `!` needs no quoting either: history expansion is interactive-only.
           - name: misc
             tier: medium
-            filter: '--filter !@bike4mind/client --filter !@bike4mind/services --filter !@bike4mind/cli --filter !@bike4mind/slack --filter !@bike4mind/voice --filter !@bike4mind/desktop --filter !@bike4mind/workers --filter !@bike4mind/common --filter !@bike4mind/database --filter !@bike4mind/db-core --filter !@bike4mind/core'
+            filter: '--filter !@bike4mind/client --filter !@bike4mind/services-core --filter !@bike4mind/cli --filter !@bike4mind/slack --filter !@bike4mind/voice --filter !@bike4mind/desktop --filter !@bike4mind/workers --filter !@bike4mind/common --filter !@bike4mind/database --filter !@bike4mind/db-core --filter !@bike4mind/core'
             workers: ''
 
     steps:

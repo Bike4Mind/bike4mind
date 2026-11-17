@@ -4,6 +4,7 @@ import {
   COMPLETION_RUNS_PATH,
   MINT_FAILURE_BACKOFF_MS,
   createCompletionRunMinter,
+  readCompletionRunUsage,
   requestCompletionRun,
 } from './completionRuns';
 
@@ -89,5 +90,45 @@ describe('createCompletionRunMinter', () => {
     const axios = axiosWith(vi.fn());
     await Promise.all([mint('a', axios, 'root-a'), mint('b', axios, 'root-b')]);
     expect(request).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('readCompletionRunUsage', () => {
+  const spend = {
+    creditsCharged: 3,
+    requests: 2,
+    inputTokens: 10,
+    outputTokens: 4,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  };
+  const USAGE = {
+    runId: RUN.runId,
+    rootSessionId: 'root-1',
+    createdAt: RUN.createdAt,
+    settled: spend,
+    byRole: [{ ...spend, role: 'root' }],
+    byPurpose: [{ ...spend, purpose: 'turn' }],
+    byModel: [{ ...spend, model: 'claude-sonnet' }],
+    byAttempt: [{ ...spend, role: 'root' }],
+    byAttemptTruncated: false,
+  };
+  const axiosGet = (get: ReturnType<typeof vi.fn>) => ({ get }) as unknown as AxiosInstance;
+
+  it('reads the run usage and returns it parsed', async () => {
+    const get = vi.fn().mockResolvedValue({ status: 200, data: USAGE });
+    await expect(readCompletionRunUsage(axiosGet(get), RUN.runId)).resolves.toEqual({ ok: true, usage: USAGE });
+    expect(get).toHaveBeenCalledWith(`${COMPLETION_RUNS_PATH}/${RUN.runId}/usage`, expect.anything());
+  });
+
+  it('says why when the request fails', async () => {
+    const get = vi.fn().mockRejectedValue(new Error('offline'));
+    await expect(readCompletionRunUsage(axiosGet(get), RUN.runId)).resolves.toEqual({ ok: false, reason: 'offline' });
+  });
+
+  it('refuses a response that is not run usage', async () => {
+    const get = vi.fn().mockResolvedValue({ status: 200, data: { runId: RUN.runId } });
+    const result = await readCompletionRunUsage(axiosGet(get), RUN.runId);
+    expect(result.ok).toBe(false);
   });
 });

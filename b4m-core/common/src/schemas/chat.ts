@@ -11,6 +11,8 @@ import {
   OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   UNKNOWN_MODEL_ERROR_CODE,
   RUN_NOT_FOUND_ERROR_CODE,
+  END_USER_ID_NOT_ALLOWED_ERROR_CODE,
+  INVALID_END_USER_ID_ERROR_CODE,
   type ApiErrorCode,
 } from '../apiErrorCodes';
 import { StorageLimitErrorInfoSchema } from '../errors';
@@ -416,8 +418,8 @@ export const ProviderNotConfiguredErrorSchema = ApiErrorSchema.extend({
 });
 
 /**
- * 400 for provider-rejected caller input, a `model` the caller cannot use, or a refused tool search
- * request; `errorCode` is absent on the other 400s (e.g. malformed JSON).
+ * 400 for provider-rejected caller input, a `model` the caller cannot use, a refused tool search
+ * request, or an `end_user_id` the credential may not send; `errorCode` is absent on the other 400s (e.g. malformed JSON).
  */
 export const CompletionsBadRequestErrorSchema = ApiErrorSchema.extend({
   errorCode: z
@@ -426,6 +428,8 @@ export const CompletionsBadRequestErrorSchema = ApiErrorSchema.extend({
       UNKNOWN_MODEL_ERROR_CODE,
       ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,
       ...COMPLETION_TOOL_ERROR_CODES,
+      END_USER_ID_NOT_ALLOWED_ERROR_CODE,
+      INVALID_END_USER_ID_ERROR_CODE,
     ])
     .optional(),
 });

@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
-  dispatchWithLogger: (fn: (...a: unknown[]) => unknown) => fn,
+  dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => (event: unknown, context: unknown) =>
+    fn(event, context, h.logger),
 }));
 
 const h = vi.hoisted(() => ({
+  logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() },
   getSettingsByNames: vi.fn(),
   emitModalGenerationMetrics: vi.fn(),
   upsertGenerated: vi.fn(),
@@ -40,12 +42,9 @@ import { dispatch } from './whatsNewJob';
 import { GENERATION_BUDGET_MS } from './releaseNotes';
 import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 
-const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never as {
-  warn: ReturnType<typeof vi.fn>;
-  info: ReturnType<typeof vi.fn>;
-};
+const logger = h.logger;
 const run = (...bodies: string[]) =>
-  dispatch({ Records: bodies.map((body, i) => ({ body, messageId: `m${i}` })) } as never, {} as never, logger as never);
+  dispatch({ Records: bodies.map((body, i) => ({ body, messageId: `m${i}` })) } as never, {} as never);
 
 const validPayload = {
   kind: 'release-notes',

@@ -202,6 +202,8 @@ export interface paths {
      * Create a chat completion
      * @description OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, then one `settled` event once credits are committed (the charge can be 0), terminated by `data: [DONE]`. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. A final non-blank assistant message is an assistant prefill, except a server-tool continuation ending in `server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. Check the model's `supports_assistant_prefill` field from `GET /api/v1/models` before sending one. Authenticate with an API key (`b4m_live_`) or a JWT.
      *
+     *     END USERS. A key that serves many end users of your own product, and that an administrator has granted `ai:end-user-id`, may send `end_user_id` (your opaque id for the end user) so that, on models served directly by OpenAI or Anthropic, the model provider sees each end user separately rather than your whole account as one (other providers receive no end-user identifier).
+     *
      *     RUNS AND SETTLEMENT. To group the spend of a multi-agent run (a root session and the workers it spawns), mint a run id with `POST /api/v1/completion-runs` and send it as `run` on each request. Spend is recorded against the run, never charged twice. The `settled` event (`{ type, requestId, creditsCharged, usdCost, runId }`) arrives after the last content event and before `[DONE]`, once the charge is committed: `creditsCharged` is what the ledger recorded, which can be below the terminal event's `credits.used` when the balance capped it, and `requestId` is the `X-Request-ID` you sent (or a generated one). Use it to count a settled charge once when your client sees the same event twice (replay or reconnect). Send a fresh `X-Request-ID` per request: reusing one does not deduplicate charges, since the server charges every request.
      *
      *     TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `"anthropic"` or `"bedrock"`), a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: "anthropic", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: "pause_turn"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside a `tool_result`'s content. On every other model `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.
@@ -3094,7 +3096,9 @@ export interface components {
         | 'deferred_tool_cache_control'
         | 'unknown_tool_reference'
         | 'tool_changes_unsupported'
-        | 'invalid_tool_change';
+        | 'invalid_tool_change'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id';
     };
     createCompletionResponse403: {
       error: string;
@@ -3372,6 +3376,8 @@ export interface components {
         /** @description The `sessionId` of the session that spawned this one, for nested workers. */
         parentSessionId?: string;
       };
+      /** @description Your own opaque identifier for the end user this request is for (1-64 characters: letters, digits, `_`, `:`, `-`; never an email). A malformed value is refused with a 400 (`errorCode: "invalid_end_user_id"`). Accepted only on an API key holding `ai:end-user-id`, which an administrator grants to keys that serve many end users; any other credential sending it is refused with a 400 (`errorCode: "end_user_id_not_allowed"`). On models served directly by OpenAI or Anthropic, the provider then receives an identifier derived from your account and this value instead of one for your whole account; other providers receive no end-user identifier. */
+      end_user_id?: string;
       options?: {
         temperature?: number;
         maxTokens?: number;
@@ -3674,6 +3680,72 @@ export interface components {
           delivery?: 'inline';
           audio: string;
         };
+    /**
+     * @example {
+     *       "id": "664f1c2b9a1e4d0012ab34cd",
+     *       "object": "speech_generation",
+     *       "state": "running",
+     *       "text": "Your password has been reset.",
+     *       "provider": "elevenlabs",
+     *       "model": null,
+     *       "voice": null,
+     *       "source": "api",
+     *       "error": null,
+     *       "output": null,
+     *       "credits": {
+     *         "reserved": 12,
+     *         "settled": null
+     *       },
+     *       "created_at": "2026-10-14T00:00:00.000Z",
+     *       "updated_at": "2026-10-14T00:00:30.000Z"
+     *     }
+     */
+    synthesizeSpeechResponse202: {
+      id: string;
+      /** @enum {string} */
+      object: 'speech_generation';
+      /** @enum {string} */
+      state: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+      text: string;
+      /**
+       * @description The provider asked for, with the default applied.
+       * @enum {string}
+       */
+      provider: 'openai' | 'elevenlabs';
+      /** @description The model you sent, or null for the provider default. */
+      model: string | null;
+      /** @description The voice you sent, or null for the default. */
+      voice: string | null;
+      /** @enum {string} */
+      source: 'api' | 'studio' | 'agent';
+      error: {
+        /** @enum {string} */
+        code: 'content_blocked' | 'provider_timeout' | 'provider_error' | 'output_too_large' | 'cancelled';
+        message: string;
+      } | null;
+      output: {
+        /**
+         * @description `ready`: url is set. `pending_scan`: the saved file is still being scanned. `unavailable`: the file was blocked by the scan or deleted and url will never be set.
+         * @enum {string}
+         */
+        availability: 'ready' | 'pending_scan' | 'unavailable';
+        /** @description Signed download URL, valid until expires_at. Set only when availability is `ready`, otherwise null. */
+        url: string | null;
+        /** @description ISO 8601. When url stops working; null whenever url is. */
+        expires_at: string | null;
+        content_type: string;
+        /** @description The length of the clip, or null when it could not be measured. */
+        duration_seconds: number | null;
+        /** @description The Files entry, or null when the clip was stored outside Files. */
+        file_id: string | null;
+      } | null;
+      credits: {
+        reserved: number | null;
+        settled: number | null;
+      };
+      created_at: string;
+      updated_at: string;
+    };
     synthesizeSpeechResponse400: {
       error: string;
       request_id?: string;
@@ -3685,7 +3757,15 @@ export interface components {
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id'
+        | 'request_timeout';
+      jobId?: string;
+      message?: string;
     };
     synthesizeSpeechResponse401: {
       error: string;
@@ -3698,7 +3778,15 @@ export interface components {
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id'
+        | 'request_timeout';
+      jobId?: string;
+      message?: string;
     };
     synthesizeSpeechResponse403: {
       error: string;
@@ -3741,7 +3829,15 @@ export interface components {
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id'
+        | 'request_timeout';
+      jobId?: string;
+      message?: string;
     };
     synthesizeSpeechResponse413: {
       error: string;
@@ -3763,7 +3859,15 @@ export interface components {
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id'
+        | 'request_timeout';
+      jobId?: string;
+      message?: string;
     };
     synthesizeSpeechResponse429: {
       error: string;
@@ -3776,7 +3880,15 @@ export interface components {
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id'
+        | 'request_timeout';
+      jobId?: string;
+      message?: string;
     };
     synthesizeSpeechResponse502: {
       error: string;
@@ -3789,7 +3901,36 @@ export interface components {
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id'
+        | 'request_timeout';
+      jobId?: string;
+      message?: string;
+    };
+    synthesizeSpeechResponse504: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      provider?: 'openai' | 'elevenlabs';
+      /** @enum {string} */
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id'
+        | 'request_timeout';
+      jobId?: string;
+      message?: string;
     };
     /**
      * @example {
@@ -3812,6 +3953,8 @@ export interface components {
       languageCode?: string;
       /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your personal credits, as this endpoint always has. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
       organization_id?: string | null;
+      /** @description Your own opaque identifier for the end user this request is for (1-64 characters: letters, digits, `_`, `:`, `-`; never an email). A malformed value is refused with a 400 (`errorCode: "invalid_end_user_id"`). Accepted only on an API key holding `ai:end-user-id`, which an administrator grants to keys that serve many end users; any other credential sending it is refused with a 400 (`errorCode: "end_user_id_not_allowed"`). On models served directly by OpenAI or Anthropic, the provider then receives an identifier derived from your account and this value instead of one for your whole account; other providers receive no end-user identifier. */
+      end_user_id?: string;
       /** @enum {string} */
       encoding?: 'binary' | 'base64';
       preview?: boolean;
@@ -3925,6 +4068,66 @@ export interface components {
           delivery?: 'inline';
           audio: string;
         };
+    /**
+     * @example {
+     *       "id": "664f1c2b9a1e4d0012ab34cd",
+     *       "object": "sound_effect_generation",
+     *       "state": "running",
+     *       "text": "heavy wooden door creaking open",
+     *       "provider": "elevenlabs",
+     *       "duration_seconds": 3,
+     *       "source": "api",
+     *       "error": null,
+     *       "output": null,
+     *       "credits": {
+     *         "reserved": 12,
+     *         "settled": null
+     *       },
+     *       "created_at": "2026-10-14T00:00:00.000Z",
+     *       "updated_at": "2026-10-14T00:00:30.000Z"
+     *     }
+     */
+    generateSoundEffectResponse202: {
+      id: string;
+      /** @enum {string} */
+      object: 'sound_effect_generation';
+      /** @enum {string} */
+      state: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+      text: string;
+      /** @enum {string} */
+      provider: 'elevenlabs';
+      /** @description The length requested, or null to let the provider choose. */
+      duration_seconds: number | null;
+      /** @enum {string} */
+      source: 'api' | 'studio' | 'agent';
+      error: {
+        /** @enum {string} */
+        code: 'content_blocked' | 'provider_timeout' | 'provider_error' | 'output_too_large' | 'cancelled';
+        message: string;
+      } | null;
+      output: {
+        /**
+         * @description `ready`: url is set. `pending_scan`: the saved file is still being scanned. `unavailable`: the file was blocked by the scan or deleted and url will never be set.
+         * @enum {string}
+         */
+        availability: 'ready' | 'pending_scan' | 'unavailable';
+        /** @description Signed download URL, valid until expires_at. Set only when availability is `ready`, otherwise null. */
+        url: string | null;
+        /** @description ISO 8601. When url stops working; null whenever url is. */
+        expires_at: string | null;
+        content_type: string;
+        /** @description The length of the clip, or null when it could not be measured. */
+        duration_seconds: number | null;
+        /** @description The Files entry, or null when the clip was stored outside Files. */
+        file_id: string | null;
+      } | null;
+      credits: {
+        reserved: number | null;
+        settled: number | null;
+      };
+      created_at: string;
+      updated_at: string;
+    };
     generateSoundEffectResponse403: {
       error: string;
       request_id?: string;
@@ -3966,6 +4169,32 @@ export interface components {
       name?: string;
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+    };
+    generateSoundEffectResponse502: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'request_timeout';
+      jobId?: string;
+      message?: string;
+    };
+    generateSoundEffectResponse504: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'request_timeout';
+      jobId?: string;
+      message?: string;
     };
     /**
      * @example {
@@ -6666,6 +6895,8 @@ export interface components {
       agentVideoClipsClaimed?: unknown;
       agentMusicTracksClaimed?: unknown;
       agentImagesClaimed?: unknown;
+      agentSpeechClipsClaimed?: unknown;
+      agentSoundEffectsClaimed?: unknown;
       oob?: unknown;
       promptMeta?: unknown;
       status?: unknown;
@@ -6721,6 +6952,8 @@ export interface components {
         agentVideoClipsClaimed?: unknown;
         agentMusicTracksClaimed?: unknown;
         agentImagesClaimed?: unknown;
+        agentSpeechClipsClaimed?: unknown;
+        agentSoundEffectsClaimed?: unknown;
         oob?: unknown;
         promptMeta?: unknown;
         status?: unknown;
@@ -12560,7 +12793,7 @@ export interface operations {
           'text/event-stream': components['schemas']['createCompletionResponse200'];
         };
       };
-      /** @description Malformed or otherwise invalid request (no `errorCode`), a model that rejects a final assistant message (`errorCode: "assistant_prefill_unsupported"`), provider-rejected caller input (`errorCode: "invalid_request"`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), `deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` naming a tool not in `tools`, or carrying no string `tool_name`). Mid-conversation tool changes are refused with: `tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and `unknown_tool_reference` (a changed tool not in `tools`). */
+      /** @description Malformed or otherwise invalid request (no `errorCode`), a model that rejects a final assistant message (`errorCode: "assistant_prefill_unsupported"`), provider-rejected caller input (`errorCode: "invalid_request"`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), `deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` naming a tool not in `tools`, or carrying no string `tool_name`). Mid-conversation tool changes are refused with: `tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and `unknown_tool_reference` (a changed tool not in `tools`). `end_user_id` sent on a credential other than an API key holding `ai:end-user-id` is refused with `end_user_id_not_allowed`; a malformed `end_user_id` is refused with `invalid_end_user_id`. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -13047,6 +13280,31 @@ export interface operations {
           'audio/pcm': string;
         };
       };
+      /** @description Returned only when the request sends `Prefer: respond-async` (RFC 7240), and echoed by `Preference-Applied: respond-async`. The speech took longer than this request can wait (about 55 seconds), so no audio is returned. Generation carries on: the body is the job as it stands. When it finishes, the audio is saved to the file browser if your storage quota still has room for it. Credits are settled only if it succeeds and returned otherwise. This job cannot be polled through the API yet; look for the saved file instead of retrying, which would generate (and bill) a second clip. */
+      202: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description `respond-async`, confirming the opt-in. */
+          'Preference-Applied'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['synthesizeSpeechResponse202'];
+        };
+      };
       /** @description Binary encoding only: the audio exceeds the ~4MB response ceiling, so it was offloaded to storage and `Location` is a time-limited signed GET for it. HTTP clients that follow redirects receive the audio transparently (they drop the `Authorization` header on the cross-origin hop, as the signed URL requires); browser callers should use `encoding: "base64"`, since the storage origin sends no CORS headers. Carries the same `X-B4M-*` headers as the 200. */
       303: {
         headers: {
@@ -13082,7 +13340,7 @@ export interface operations {
         };
         content?: never;
       };
-      /** @description The billing organization could not be resolved. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
+      /** @description The billing organization could not be resolved. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. Also `end_user_id` sent on a credential other than an API key holding `ai:end-user-id` (`errorCode: "end_user_id_not_allowed"`), or a malformed `end_user_id` (`errorCode: "invalid_end_user_id"`). */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -13279,7 +13537,7 @@ export interface operations {
           'application/json': components['schemas']['synthesizeSpeechResponse429'];
         };
       };
-      /** @description The provider failed to generate speech. */
+      /** @description The provider failed to generate speech. When the clip was generated but could not be read back, the body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`. */
       502: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -13300,6 +13558,31 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['synthesizeSpeechResponse502'];
+        };
+      };
+      /** @description The speech took longer than this request can wait. Tagged `errorCode: "request_timeout"`. Two cases. (1) It would not be saved to the file browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved: the generation is cancelled and its credits returned, unless the provider had already started it, in which case that one finishes and is billed, and the response carries `jobId` (also `X-B4M-Generation-Job-Id`) and a `message`. Retrying generates a new clip. (2) It is being saved to the file browser but the request did not send `Prefer: respond-async`: the generation is NOT cancelled and carries on, the audio lands in the file browser when it finishes, and it is billed only if it succeeds. Do not retry, which would generate and bill a second clip. The body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`. */
+      504: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The job left running (case 2, or case 1 once the provider had started it). */
+          'X-B4M-Generation-Job-Id'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['synthesizeSpeechResponse504'];
         };
       };
     };
@@ -13679,6 +13962,31 @@ export interface operations {
           'audio/basic': string;
         };
       };
+      /** @description Returned only when the request sends `Prefer: respond-async` (RFC 7240), and echoed by `Preference-Applied: respond-async`. The sound effect took longer than this request can wait (about 55 seconds), so no audio is returned. Generation carries on: the body is the job as it stands. When it finishes, the audio is saved to the file browser if your storage quota still has room for it. Credits are settled only if it succeeds and returned otherwise. This job cannot be polled through the API yet; look for the saved file instead of retrying, which would generate (and bill) a second clip. */
+      202: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description `respond-async`, confirming the opt-in. */
+          'Preference-Applied'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['generateSoundEffectResponse202'];
+        };
+      };
       /** @description Binary encoding only: the audio exceeds the ~4MB response ceiling, so it was offloaded to storage and `Location` is a time-limited signed GET for it. HTTP clients that follow redirects receive the audio transparently (they drop the `Authorization` header on the cross-origin hop, as the signed URL requires); browser callers should use `encoding: "base64"`, since the storage origin sends no CORS headers. Carries the same `X-B4M-*` headers as the 200. */
       303: {
         headers: {
@@ -13897,7 +14205,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The provider failed to generate the effect; reserved credits are refunded. */
+      /** @description The provider failed to generate the effect; reserved credits are refunded. When the clip was generated but could not be read back, the body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`. */
       502: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -13917,7 +14225,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['generateSoundEffectResponse502'];
         };
       };
       /** @description No provider API key is configured for this deployment. */
@@ -13941,6 +14249,31 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The sound effect took longer than this request can wait. Tagged `errorCode: "request_timeout"`. Two cases. (1) It would not be saved to the file browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved: the generation is cancelled and its credits returned, unless the provider had already started it, in which case that one finishes and is billed, and the response carries `jobId` (also `X-B4M-Generation-Job-Id`) and a `message`. Retrying generates a new clip. (2) It is being saved to the file browser but the request did not send `Prefer: respond-async`: the generation is NOT cancelled and carries on, the audio lands in the file browser when it finishes, and it is billed only if it succeeds. Do not retry, which would generate and bill a second clip. The body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`. */
+      504: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The job left running (case 2, or case 1 once the provider had started it). */
+          'X-B4M-Generation-Job-Id'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['generateSoundEffectResponse504'];
         };
       };
     };

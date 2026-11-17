@@ -22,9 +22,11 @@ export function organizationNamesOf(filter: AdminUsersFilter): string[] | null {
 
 const OBJECT_ID = /^[0-9a-f]{24}$/i;
 // toProviderEndUserId output: what an LLM provider names in a safety notice about one of our users.
-const PROVIDER_END_USER_ID = /^[0-9a-f]{64}$/i;
+export const PROVIDER_END_USER_ID = /^[0-9a-f]{64}$/i;
 
-function searchCondition(search: string, toObjectId: (id: string) => unknown): Condition {
+function searchCondition(search: string, context: AdminUsersQueryContext): Condition {
+  const { toObjectId } = context;
+  const platformOwnerIds = (context.platformEndUserOwnerIds ?? []).filter(id => OBJECT_ID.test(id));
   const pattern = escapeRegex(search);
   return {
     $or: [
@@ -33,6 +35,7 @@ function searchCondition(search: string, toObjectId: (id: string) => unknown): C
       { email: { $regex: pattern, $options: 'i' } },
       ...(OBJECT_ID.test(search) ? [{ _id: toObjectId(search) }] : []),
       ...(PROVIDER_END_USER_ID.test(search) ? [{ providerEndUserId: search.toLowerCase() }] : []),
+      ...(platformOwnerIds.length > 0 ? [{ _id: { $in: platformOwnerIds.map(toObjectId) } }] : []),
     ],
   };
 }
@@ -69,6 +72,8 @@ export type AdminUsersQueryContext = {
   funnelStepUserIds?: string[];
   /** Users the AI advisory flags as abuse; required when the filter sets `aiVerdict`. */
   aiAbuseUserIds?: string[];
+  /** The platform account behind a searched provider id that names a platform key's end user. */
+  platformEndUserOwnerIds?: string[];
 };
 
 type ResolvedIdsKey = 'verdictUserIds' | 'activeUserIds' | 'funnelStepUserIds' | 'aiAbuseUserIds';
@@ -87,7 +92,7 @@ function resolvedIdsCondition(context: AdminUsersQueryContext, key: ResolvedIdsK
  */
 export function buildAdminUsersMatch(filter: AdminUsersFilter, context: AdminUsersQueryContext): Condition {
   const conditions: Condition[] = [];
-  if (filter.search) conditions.push(searchCondition(filter.search, context.toObjectId));
+  if (filter.search) conditions.push(searchCondition(filter.search, context));
   const tags = filter.tags && tagsCondition(filter.tags);
   if (tags) conditions.push(tags);
 

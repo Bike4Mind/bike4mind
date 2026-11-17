@@ -1,10 +1,8 @@
 import { IOrganizationDocument } from '@bike4mind/common';
 import { MemberCreditUsage } from './memberCreditBudget';
 
-export type MemberStatus = 'accepted' | 'pending';
 export type MemberRole = 'owner' | 'manager' | 'member';
 export type RoleFilter = MemberRole | 'all';
-export type StatusFilter = MemberStatus | 'all';
 export type RosterSortKey = 'name' | 'role' | 'usage';
 export type SortDirection = 'asc' | 'desc';
 
@@ -19,16 +17,14 @@ export interface RosterMember {
   id: string;
   name: string;
   email?: string | null;
-  status: MemberStatus;
   role: MemberRole;
-  /** Null for a pending invite, or when the viewer may not see member budgets. */
+  /** Null when the viewer may not see member budgets. */
   creditUsage: MemberCreditUsage | null;
 }
 
 export interface RosterFilters {
   search: string;
   role: RoleFilter;
-  status: StatusFilter;
 }
 
 /** One team role per row; sharing permissions are not roles (see the settings-access chip in UserCard). */
@@ -46,7 +42,6 @@ export function filterMembers<T extends RosterMember>(members: readonly T[], fil
   return members.filter(
     member =>
       (filters.role === 'all' || member.role === filters.role) &&
-      (filters.status === 'all' || member.status === filters.status) &&
       (!term || member.name.toLowerCase().includes(term) || !!member.email?.toLowerCase().includes(term))
   );
 }

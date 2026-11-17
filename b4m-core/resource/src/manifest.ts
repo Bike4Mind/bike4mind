@@ -79,6 +79,7 @@ export const DEFAULT_MANIFEST = {
   SLACK_COST_ALARMS_WEBHOOK_URL: { kind: 'secret', optional: true },
   SLACK_ERROR_REPORTING_WEBHOOK_URL: { kind: 'secret', optional: true },
   SLACK_WEBHOOK_URL: { kind: 'secret', optional: true },
+  SLACK_FEEDBACK_DESTINATIONS: { kind: 'secret', optional: true },
   STRIPE_PUBLISHABLE_KEY: { kind: 'secret', optional: true },
   STRIPE_SECRET_KEY: { kind: 'secret', optional: true },
   STRIPE_WEBHOOK_SECRET: { kind: 'secret', optional: true },

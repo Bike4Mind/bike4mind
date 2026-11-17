@@ -121,8 +121,14 @@
     "active_subscription": "Active Subscription",
     "no_subscription": "No Subscription",
     "payment_issue": "Payment Issue",
-    "team_plan": "Team Plan",
-    "no_active_plan": "No Active Plan",
+    "plan_states": {
+      "none": "No Active Plan",
+      "payment_issue": "Payment Issue",
+      "ending": "Team Plan (ending)",
+      "trialing": "Team Plan (trial)",
+      "granted": "Team Plan (granted)",
+      "active": "Team Plan"
+    },
     "x_members_one": "{{count}} member",
     "x_members_other": "{{count}} members",
     "x_credits_one": "{{amount}} credit",
@@ -166,8 +172,8 @@
     },
     "descriptions": {
       "domains": "Manage the email domains associated with your team.",
-      "overview": "Plan, credits and seat usage for this team.",
-      "members": "{{current}} of {{max}} seats used. Invite people and manage their roles.",
+      "overview": "Plan and credits for this team.",
+      "members": "Seats, pending invitations and roles for everyone on the team.",
       "library": "Shared definitions the team owns. They stay available when their author leaves.",
       "groups": "Appoint managers and organize members into groups.",
       "usage": "Credit spend across the team.",
@@ -199,12 +205,7 @@
       "canceling": "Canceling",
       "active": "Active",
       "next_billing": "Next Billing",
-      "not_available": "N/A",
-      "seats_utilization": "Seats Utilization",
-      "seats_utilization_label": "Seats utilization: {{current}} of {{max}} seats used",
-      "x_active": "{{count}} Active",
-      "x_pending": "{{count}} Pending",
-      "x_available": "{{count}} Available"
+      "not_available": "N/A"
     },
     "api_keys": {
       "member_keys": "Member API keys"

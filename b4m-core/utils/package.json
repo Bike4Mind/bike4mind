@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/utils",
-  "version": "11.2.0",
+  "version": "11.3.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -258,6 +258,16 @@
       "require": {
         "types": "./dist/musicProviders/index.d.cts",
         "default": "./dist/musicProviders/index.cjs"
+      }
+    },
+    "./audioProviders": {
+      "import": {
+        "types": "./dist/audioProviders/index.d.mts",
+        "default": "./dist/audioProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/audioProviders/index.d.cts",
+        "default": "./dist/audioProviders/index.cjs"
       }
     },
     "./security": {

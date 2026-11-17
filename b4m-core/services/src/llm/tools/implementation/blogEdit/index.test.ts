@@ -2,7 +2,9 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IUserDocument } from '@bike4mind/common';
 
 // The SSRF guard resolves DNS; default every host to a public IP. Individual tests override.
-const dnsLookup = vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]);
+const dnsLookup = vi.fn<(...args: unknown[]) => Promise<{ address: string; family: number }[]>>(async () => [
+  { address: '93.184.216.34', family: 4 },
+]);
 vi.mock('node:dns/promises', () => ({ lookup: (...args: unknown[]) => dnsLookup(...args) }));
 
 import { configureSecretsAtRest, encryptSecret, generateEncryptionKey } from '@bike4mind/utils/security';
