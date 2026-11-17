@@ -405,6 +405,9 @@ const OrganizationPage: FC = () => {
                     <Option
                       key={entry.tab}
                       value={entry.tab}
+                      // Joy takes a non-string child's label from innerText, so name it explicitly: the
+                      // closed Select then shows the tab name alone, without the lock icon's title.
+                      label={t(`organization.tabs.${entry.tab}`)}
                       data-testid={
                         locked
                           ? `organization-tabs-option-locked-${entry.tab}`
