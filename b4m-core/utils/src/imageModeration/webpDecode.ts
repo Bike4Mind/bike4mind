@@ -1,4 +1,4 @@
-import { WEBP_DECODER_WASM_BASE64 } from './webpDecoderWasm.generated';
+import { WEBP_DECODER_WASM_HEX } from './webpDecoderWasm.generated';
 
 export type DecodedImage = { data: Uint8ClampedArray; width: number; height: number };
 
@@ -28,7 +28,7 @@ let ready: Promise<WebpModule> | undefined;
 const loadModule = (): Promise<WebpModule> => {
   ready ??= (async () => {
     const { default: factory } = await import('@jsquash/webp/codec/dec/webp_dec.js');
-    const wasmBinary = Buffer.from(WEBP_DECODER_WASM_BASE64, 'base64');
+    const wasmBinary = Buffer.from(WEBP_DECODER_WASM_HEX, 'hex');
     return (await factory({ noInitialRun: true, wasmBinary, locateFile: (file: string) => file })) as WebpModule;
   })().catch(err => {
     ready = undefined;
@@ -42,6 +42,7 @@ const loadModule = (): Promise<WebpModule> => {
  * Error for an animated or malformed file.
  */
 export async function decodeWebp(bytes: Buffer): Promise<DecodedImage> {
+  if (!isWebp(bytes)) throw new Error('not a WebP file');
   const webp = await loadModule();
   const decoded = webp.decode(bytes);
   if (!decoded) throw new Error('WebP could not be decoded (animated or malformed)');
