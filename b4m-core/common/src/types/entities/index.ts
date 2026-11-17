@@ -129,6 +129,7 @@ export * from './SecopsTriageTypes';
 export * from './MarketingReportTypes';
 export * from './BriefcasePromptTypes';
 export * from './ImageGenerationTemplateTypes';
+export * from './StudioCompositionTypes';
 export * from './AudienceVariantTypes';
 export * from './UserComplianceTypes';
 export * from './AdminSupportAccessTypes';

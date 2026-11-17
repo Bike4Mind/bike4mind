@@ -75,7 +75,7 @@ export const API_ERROR_CODES = [
   OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   /** A 426: the declared X-Client-Version is below the minimum set for that X-Client-Name; remediation is upgrading the client. */
   UPGRADE_REQUIRED_ERROR_CODE,
-  /** A 404: the completion's `run` was not created by this user and billing owner (or does not exist); mint one with POST /api/v1/completion-runs. */
+  /** A 404: the completion's `run` (or the run whose usage is read) was not created by this user and billing owner, or does not exist; mint one with POST /api/v1/completion-runs. */
   RUN_NOT_FOUND_ERROR_CODE,
   /** A 403: the caller's organization policy does not allow this model; remediation is a model from GET /api/v1/models. */
   ORG_MODEL_NOT_ALLOWED_ERROR_CODE,

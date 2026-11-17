@@ -18,7 +18,6 @@ const read = (rel: string) => readFileSync(path.join(REPO_ROOT, rel), 'utf8');
 const OUTSIDE_VPC = [
   'apps/client/server/websocket/heartbeat.func',
   'apps/workers/src/cron/providerUsagePoll.handler',
-  'apps/workers/src/events/dlqAlarmToSlack.handler',
   'apps/workers/src/events/serviceHealthAlarmToSlack.handler',
   'apps/workers/src/events/wafAlarmToSlack.handler',
   'apps/workers/src/mcp/remoteMcpCall.handler',

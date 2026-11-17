@@ -5,6 +5,7 @@ import {
   resolveEmbeddingWithKeylessFallback,
 } from '@bike4mind/utils/embeddingProviders';
 import {
+  AiAccessRefusedError,
   type AttachmentLakeAccess,
   IChatHistoryItemDocument,
   IFabFileDocument,
@@ -245,6 +246,7 @@ import { MongoAbility } from '@casl/ability';
 import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
+import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { resolveToolAvailability } from './toolAvailability';
 import { resolveToolConfigSafely } from './resolveToolConfigSafely';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
@@ -3129,10 +3131,13 @@ export class ChatCompletionProcess {
 
       if (adminModerationEnabled) {
         const moderationStartTime = Date.now();
-        // Only run OpenAI moderation if we have an OpenAI key available
-        if (apiKeyTable?.openai) {
+        const moderationOpenaiKey = resolveModerationOpenaiKey(
+          apiKeyTable?.openai,
+          getSettingsValue('openaiDemoKey', defaultAdminSettings)
+        );
+        if (moderationOpenaiKey) {
           try {
-            await new OpenaiModerationsService(apiKeyTable.openai, logger).checkPrompt(message);
+            await new OpenaiModerationsService(moderationOpenaiKey, logger).checkPrompt(message);
           } catch (moderationError) {
             // On a flag, record a per-user moderation hit and auto-escalate (throttle to
             // suspend_pending) BEFORE rethrowing to block this prompt. Recording
@@ -7881,14 +7886,16 @@ export class ChatCompletionProcess {
         );
       }
 
-      // A Stop or disconnect that threw, or a later tool call refused for credits, still bills what
-      // streamed and the tools already delivered; the rollback below then has nothing left to refund.
-      // Any other failure refunds the whole hold. Keyed on the basis, not the hold: a hold the caller
-      // already released (a stuck turn) still bills the full actual.
+      // A Stop or disconnect that threw, or a later tool call refused for credits or account standing,
+      // still bills what streamed and the tools already delivered; the rollback below then has nothing
+      // left to refund. Any other failure refunds the whole hold. Keyed on the basis, not the hold: a
+      // hold the caller already released (a stuck turn) still bills the full actual.
       if (
         this.reservationBasis &&
         this.reservedCreditsOwnerId &&
-        (isAbortError(err) || resolveQuestErrorCode(err) === 'insufficient_credits')
+        (isAbortError(err) ||
+          resolveQuestErrorCode(err) === 'insufficient_credits' ||
+          err instanceof AiAccessRefusedError)
       ) {
         await this.settleAbortedReservation(quest, processStartTime, logger).catch(settleError =>
           logger.error(`Failed to settle the aborted turn for quest ${questId}; refunding its hold`, settleError)
@@ -7959,9 +7966,11 @@ export class ChatCompletionProcess {
         quest.reply = combined.join('');
       };
       // Provider text on a restricted-tier turn can name the substitute. Credit errors keep their
-      // message; the categorized branches below overwrite this reply with fixed text anyway.
+      // message, as does an account refusal (fixed text from accountState); the categorized branches
+      // below overwrite this reply with fixed text anyway.
       const masksMessage =
-        this.shadowSubstitution && !(err instanceof InsufficientCreditsError || resolveQuestErrorCode(err));
+        this.shadowSubstitution &&
+        !(err instanceof InsufficientCreditsError || err instanceof AiAccessRefusedError || resolveQuestErrorCode(err));
       setErrorReply(masksMessage ? MODEL_UNAVAILABLE_ERROR_REPLY : (err as Error).message);
       quest.type = 'error';
       setTerminalQuestStatus(quest, 'done');
@@ -7985,6 +7994,11 @@ export class ChatCompletionProcess {
         // Terminal: nothing to retry until credits are added, so return without re-throwing
         // (a throw would route the queue handler to DLQ/retry). Quest already saved above.
         logger.log(`Insufficient credits for quest ${questId}`);
+        return;
+      } else if (err instanceof AiAccessRefusedError) {
+        // Terminal like the credit refusal: a media tool found the account blocked mid-turn. The
+        // quest already carries the refusal text; rethrowing would log it as a processing failure.
+        logger.warn(`[Account refusal] Quest ${questId}: ${err.message}`);
         return;
       } else if (err instanceof Error && (err.message.toLowerCase().includes('aborted') || err.name === 'AbortError')) {
         logger.log(`Chat completion was stopped by user for quest ${questId}: ${err.message}`);

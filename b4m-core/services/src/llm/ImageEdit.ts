@@ -73,6 +73,7 @@ import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
 import type { ImageCreditHolds } from './imageCreditHolds';
 import { moderateImageOrThrow } from './imageModerationGate';
+import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
 import { estimateImageCredits } from '../imageCost';
 import { getQuestErrorCode } from '@bike4mind/common';
@@ -695,8 +696,12 @@ export class ImageEditService {
           statusMessage: 'Checking prompt...',
         });
         // Only moderate if using OpenAI (BFL models have their own safety_tolerance)
-        if (provider !== 'bfl' && apiKeyTable.openai) {
-          await new OpenaiModerationsService(apiKeyTable.openai, logger).checkPrompt(prompt);
+        const moderationOpenaiKey = resolveModerationOpenaiKey(
+          apiKeyTable.openai,
+          getSettingsValue('openaiDemoKey', settings)
+        );
+        if (provider !== 'bfl' && moderationOpenaiKey) {
+          await new OpenaiModerationsService(moderationOpenaiKey, logger).checkPrompt(prompt);
         }
       }
 

@@ -40,6 +40,7 @@ export * as scopedSettingsService from './settings';
 export * as fileEmbeddingService from './fileEmbeddingService';
 export * as briefcaseService from './briefcaseService';
 export * as imageTemplateService from './imageTemplateService';
+export * as studioCompositionService from './studioCompositionService';
 export * as cheerioService from './lib/cheerio';
 export * as turndownService from './lib/turndown';
 export * as speechToTextService from './speech';
