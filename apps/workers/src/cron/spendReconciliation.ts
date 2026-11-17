@@ -123,12 +123,20 @@ export async function runSpendReconciliation({
   // getReconcileMonths() only ever uses the current and previous month.
   const internalCogs = await usageEventRepository.monthlyCogsByProvider(2);
 
-  for (const { providerConfig, key } of configured) {
+  for (const [providerIndex, { providerConfig, key }] of configured.entries()) {
+    const providerStartedAtMs = Date.now();
+    const remainingProviderCount = configured.length - providerIndex;
+    // Share the remaining time fairly, retaining unused time for later providers. Both
+    // months, all pages and every retry for this provider use the same absolute deadline.
+    const providerDeadlineMs = Math.min(
+      deadlineMs,
+      providerStartedAtMs + Math.floor(Math.max(0, deadlineMs - providerStartedAtMs) / remainingProviderCount)
+    );
     for (const month of months) {
       try {
-        if (Date.now() >= deadlineMs) throw new Error('Provider request deadline exceeded');
+        if (Date.now() >= providerDeadlineMs) throw new Error('Provider request deadline exceeded');
         const result = await providerConfig.fetch(key, month, undefined, {
-          deadlineMs,
+          deadlineMs: providerDeadlineMs,
           onDiagnostic: diagnostic => logger.warn('[SpendReconciliation] Provider request', diagnostic),
         });
         if (!result) {
