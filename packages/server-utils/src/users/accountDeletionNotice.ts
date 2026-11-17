@@ -93,16 +93,19 @@ export async function drainDeletionNotices({
   maxAttempts = ACCOUNT_DELETION_NOTICE_MAX_ATTEMPTS,
 }: NoticeOptions & { limit?: number }): Promise<DeletionNoticeDrainResult> {
   const result: DeletionNoticeDrainResult = { sent: 0, failed: 0, abandoned: 0 };
+  const claimedIdHashes: string[] = [];
   for (let claimed = 0; claimed < Math.min(limit, DRAIN_LIMIT); claimed++) {
     let notice: ClaimedAccountDeletionNotice | null;
     try {
       // Lease time is fresh for every claim, independently of the run's fixed due cutoff.
-      notice = await accountDeletionNoticeRepository.claimNextDue(now);
+      notice = await accountDeletionNoticeRepository.claimNextDue(now, new Date(), claimedIdHashes);
     } catch {
       logger.warn('Could not claim deletion-complete notices; they will be retried');
       break;
     }
     if (!notice) break;
+    // Retain the original once-per-drain cadence even if a send outlives its lease.
+    claimedIdHashes.push(notice.idHash);
     result[await sendClaimedNotice(notice, { logger, now, maxAttempts })]++;
   }
   return result;

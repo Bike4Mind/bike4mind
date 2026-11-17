@@ -81,13 +81,18 @@ class AccountDeletionNoticeRepository {
   private async claim(
     idHash: string | undefined,
     dueBefore: Date,
-    leaseNow: Date
+    leaseNow: Date,
+    excludedIdHashes: readonly string[] = []
   ): Promise<ClaimedAccountDeletionNotice | null> {
     const leaseToken = randomUUID();
     const leaseExpiresAt = new Date(leaseNow.getTime() + ACCOUNT_DELETION_NOTICE_RETRY_DELAY_MS);
     const notice = await AccountDeletionNoticeModel.findOneAndUpdate(
       {
-        ...(idHash === undefined ? {} : { idHash }),
+        ...(idHash !== undefined
+          ? { idHash }
+          : excludedIdHashes.length
+            ? { idHash: { $nin: [...excludedIdHashes] } }
+            : {}),
         nextAttemptAt: { $lte: dueBefore },
         $or: [{ leaseExpiresAt: null }, { leaseExpiresAt: { $lte: leaseNow } }],
       },
@@ -110,8 +115,12 @@ class AccountDeletionNoticeRepository {
     return this.claim(idHash, dueBefore, leaseNow);
   }
 
-  claimNextDue(dueBefore: Date, leaseNow = new Date()): Promise<ClaimedAccountDeletionNotice | null> {
-    return this.claim(undefined, dueBefore, leaseNow);
+  claimNextDue(
+    dueBefore: Date,
+    leaseNow = new Date(),
+    excludedIdHashes: readonly string[] = []
+  ): Promise<ClaimedAccountDeletionNotice | null> {
+    return this.claim(undefined, dueBefore, leaseNow, excludedIdHashes);
   }
 
   /** Only this claim may record failure; preserve its token through exhaustion cleanup. */

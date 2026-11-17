@@ -19,7 +19,7 @@ const h = vi.hoisted(() => ({
   fault: {} as { claim?: boolean; markFailed?: boolean; remove?: boolean },
 }));
 vi.mock('@bike4mind/database', () => {
-  const claim = (idHash: string | undefined, dueBefore: Date) => {
+  const claim = (idHash: string | undefined, dueBefore: Date, excludedIdHashes: readonly string[] = []) => {
     if (h.fault.claim) throw new Error('db down');
     const now = new Date();
     const notice = [...h.store.values()]
@@ -27,6 +27,7 @@ vi.mock('@bike4mind/database', () => {
       .find(
         row =>
           (idHash === undefined || row.idHash === idHash) &&
+          !excludedIdHashes.includes(row.idHash) &&
           row.nextAttemptAt <= dueBefore &&
           (!row.leaseExpiresAt || row.leaseExpiresAt <= now)
       );
@@ -39,7 +40,8 @@ vi.mock('@bike4mind/database', () => {
     ACCOUNT_DELETION_NOTICE_RETRY_DELAY_MS: 60 * 60 * 1000,
     accountDeletionNoticeRepository: {
       claimDue: async (idHash: string, now: Date) => claim(idHash, now),
-      claimNextDue: async (now: Date) => claim(undefined, now),
+      claimNextDue: async (now: Date, _leaseNow: Date, excludedIdHashes: readonly string[]) =>
+        claim(undefined, now, excludedIdHashes),
       markFailed: async (idHash: string, leaseToken: string, nextAttemptAt: Date) => {
         if (h.fault.markFailed) throw new Error('db down');
         const notice = h.store.get(idHash);

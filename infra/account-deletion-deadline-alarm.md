@@ -54,6 +54,7 @@ Nothing logs the address or the user id.
 
 Both the immediate post-commit send and each sweep first acquire the same atomic notice claim. A
 claim lasts for the existing one-hour retry window; only its token may remove or reschedule the row.
+Each drain attempts a given notice at most once, even if its send outlives that window.
 Legacy rows without claim fields remain eligible, and a crashed sender can be retried after expiry.
 The first stored recipient and original 30-day TTL are unchanged. A crash after recording the final
 failure is cleaned up without sending a sixth email.

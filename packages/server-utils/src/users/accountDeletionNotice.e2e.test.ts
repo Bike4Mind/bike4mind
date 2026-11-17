@@ -143,6 +143,30 @@ describe('real Mongo notice claims with a fake email transport', () => {
     expect(await repo.find(HASH)).toBeNull();
   });
 
+  it.each(['cleanup', 'failure-record'] as const)(
+    'attempts each notice only once per drain after a long send and %s failure',
+    async failure => {
+      await seed();
+      const secondHash = 'b'.repeat(64);
+      const secondEmail = 'second@example.test';
+      await repo.record({ idHash: secondHash, email: secondEmail, now: new Date(NOW.getTime() + 1) });
+      h.send.mockImplementationOnce(async () => {
+        vi.setSystemTime(new Date(LATER.getTime() + 1));
+        if (failure === 'failure-record') throw new Error('transport failed');
+      });
+      if (failure === 'cleanup') vi.spyOn(repo, 'remove').mockRejectedValueOnce(new Error('cleanup failed'));
+      else vi.spyOn(repo, 'markFailed').mockRejectedValueOnce(new Error('failure recording unavailable'));
+      expect(await drainDeletionNotices({ logger, now: DUE })).toEqual({
+        sent: failure === 'cleanup' ? 2 : 1,
+        failed: failure === 'cleanup' ? 0 : 1,
+        abandoned: 0,
+      });
+      expect(h.send.mock.calls.map(([email]) => email)).toEqual([EMAIL, secondEmail]);
+      expect(await repo.find(HASH)).not.toBeNull();
+      expect(await repo.find(secondHash)).toBeNull();
+    }
+  );
+
   it('keeps an accepted-but-uncleared notice leased, with an explicit later retry ambiguity', async () => {
     await seed();
     const remove = vi.spyOn(repo, 'remove').mockRejectedValueOnce(new Error('cleanup failed'));
