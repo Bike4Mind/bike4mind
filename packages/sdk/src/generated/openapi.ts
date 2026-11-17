@@ -6791,6 +6791,7 @@ export interface components {
       generationJobs?: unknown;
       agentVideoClipsClaimed?: unknown;
       agentMusicTracksClaimed?: unknown;
+      agentImagesClaimed?: unknown;
       oob?: unknown;
       promptMeta?: unknown;
       status?: unknown;
@@ -6845,6 +6846,7 @@ export interface components {
         generationJobs?: unknown;
         agentVideoClipsClaimed?: unknown;
         agentMusicTracksClaimed?: unknown;
+        agentImagesClaimed?: unknown;
         oob?: unknown;
         promptMeta?: unknown;
         status?: unknown;

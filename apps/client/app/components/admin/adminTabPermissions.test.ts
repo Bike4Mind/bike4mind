@@ -49,6 +49,12 @@ describe('canOpenAdminTab', () => {
     expect(canOpenAdminTab(delegate('users:moderate'), AdminTab.ToolDefinitions)).toBe(false);
   });
 
+  it('opens Roles to a support reader and not to other delegates', () => {
+    expect(canOpenAdminTab(delegate('support:read'), AdminTab.Roles)).toBe(true);
+    expect(canOpenAdminTab(delegate('settings:manage'), AdminTab.Roles)).toBe(false);
+    expect(canOpenAdminTab(delegate('credits:adjust', 'users:moderate'), AdminTab.Roles)).toBe(false);
+  });
+
   it('opens Models to a delegate holding support:read and to no other delegate', () => {
     expect(canOpenAdminTab(delegate('support:read'), AdminTab.Models)).toBe(true);
     expect(canOpenAdminTab(delegate('support:read', 'settings:manage'), AdminTab.Models)).toBe(true);

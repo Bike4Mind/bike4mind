@@ -77,11 +77,14 @@ import { cancelPendingActionOnQuest } from '@bike4mind/server-utils/utils/pendin
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
 import { buildMusicToolConfig } from '@bike4mind/server-utils/musicGenerations/buildMusicToolConfig';
 import {
+  getCreateImageJobsDeps,
   getCreateMusicJobDeps,
   getCreateVideoJobDeps,
   getMusicJobDeps,
   getVideoJobDeps,
 } from '@bike4mind/server-utils/generationJobs/wiring';
+import { createImageJobs } from '@bike4mind/services/imageJobs';
+import { resolveImageJobFiles } from '@server/generations/resolveImageJobFiles';
 import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
 import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
@@ -267,6 +270,15 @@ export const getMusicToolConfigResolver = (apiKeyId: string | undefined, userId:
   apiKeyId
     ? undefined
     : () => buildMusicToolConfig(userId, { availability: getMusicJobDeps(), createDeps: getCreateMusicJobDeps() });
+
+/**
+ * Session turns start image jobs (one card per image). An API-key turn keeps the in-process render: a job it
+ * started would bypass the image-generations contract's scope check and rate limit, as for video.
+ */
+export const getImageJobsResolver = (apiKeyId: string | undefined) =>
+  apiKeyId
+    ? undefined
+    : async () => (input: Parameters<typeof createImageJobs>[0]) => createImageJobs(input, getCreateImageJobsDeps());
 
 /**
  * Quest Processor - shared processing core.
@@ -461,6 +473,8 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
       externalTools,
       videoToolConfigResolver: getVideoToolConfigResolver(params.apiKeyId, user.id),
       musicToolConfigResolver: getMusicToolConfigResolver(params.apiKeyId, user.id),
+      imageJobsResolver: getImageJobsResolver(params.apiKeyId),
+      imageJobFilesResolver: resolveImageJobFiles,
     });
   } catch (error) {
     await liveActivity.end('failed');
