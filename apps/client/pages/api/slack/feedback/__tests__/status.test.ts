@@ -64,6 +64,7 @@ beforeEach(() => {
     channelId: 'C1',
     messageTs: '1.2',
     reactor: 'U1',
+    state: 'sent',
   });
   m.workspace.mockResolvedValue({ id: 'ws1', organizationId: 'org1', slackBotToken: 'test-token' });
   m.channel.mockResolvedValue({ enabled: true });
@@ -93,6 +94,12 @@ it('rejects invalid authentication without posting', async () => {
 it('does not post a replayed status', async () => {
   m.claim.mockResolvedValue({ modifiedCount: 0 });
   expect((await request())._getJSONData()).toEqual({ ok: true, posted: false });
+  expect(m.post).not.toHaveBeenCalled();
+});
+it('returns a retryable conflict for a callback before forward acceptance is recorded', async () => {
+  m.delivery.mockResolvedValue({ destinationId: 'receiver', organizationId: 'org1', state: 'sending' });
+  expect((await request()).statusCode).toBe(409);
+  expect(m.claim).not.toHaveBeenCalled();
   expect(m.post).not.toHaveBeenCalled();
 });
 it('refuses callbacks after disconnect or opt-out', async () => {

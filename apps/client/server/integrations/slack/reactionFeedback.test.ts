@@ -140,3 +140,15 @@ it('never adds eyes on rejected or ambiguous delivery', async () => {
   expect(mocks.reaction).not.toHaveBeenCalled();
   expect(mocks.audit).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
 });
+it('rechecks opt-in after message lookups before disclosing reporter content', async () => {
+  mocks.channel.mockResolvedValueOnce({ channelId: 'C123', destinationId: 'receiver' }).mockResolvedValueOnce(null);
+  await forwardSlackReaction('T1', 'A1', event);
+  expect(mocks.get).toHaveBeenCalledOnce();
+  expect(mocks.fetch).not.toHaveBeenCalled();
+});
+it('refuses a channel that became externally shared', async () => {
+  mocks.info.mockResolvedValue({ channel: { is_member: true, is_ext_shared: true } });
+  await forwardSlackReaction('T1', 'A1', event);
+  expect(mocks.get).not.toHaveBeenCalled();
+  expect(mocks.fetch).not.toHaveBeenCalled();
+});

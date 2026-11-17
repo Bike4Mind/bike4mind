@@ -41,6 +41,9 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
   ) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+  if (delivery.state !== 'sent') {
+    return res.status(409).json({ error: 'Delivery has not been confirmed' });
+  }
   const workspace = await orgSlackWorkspaceRepository.findBySlackTeamIdWithToken(delivery.slackTeamId);
   const channel = await SlackFeedbackChannel.findOne({
     _id: feedbackId(delivery.workspaceId, delivery.channelId),

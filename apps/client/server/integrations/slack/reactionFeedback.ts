@@ -133,6 +133,17 @@ export async function forwardSlackReaction(teamId: string, appId: string, input:
       text: (message.text ?? '').slice(0, 40000),
       fileNames: (message.files ?? []).slice(0, 50).map(file => (file.name ?? '').slice(0, 255)),
     });
+    const currentWorkspace = await orgSlackWorkspaceRepository.findBySlackTeamIdWithToken(teamId);
+    const currentChannel = await SlackFeedbackChannel.findOne({
+      _id: feedbackId(workspace.id, channel.channelId),
+      organizationId: workspace.organizationId,
+      enabled: true,
+      destinationId: destination.id,
+      emoji: event.reaction,
+    }).lean();
+    if (!currentWorkspace || currentWorkspace.id !== workspace.id || !currentChannel) {
+      return await finish('ignored');
+    }
     // Audit intent durably before the non-transactional external side effect. Claims are never retried.
     await SlackFeedbackDelivery.updateOne({ _id: id }, { $set: { state: 'sending' } });
     const timestamp = String(Math.floor(Date.now() / 1000));

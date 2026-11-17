@@ -39,7 +39,8 @@ After accepting delivery, send `POST /api/slack/feedback/status` with exactly
 `{"deliveryId":"<id>","status":"filed"}`. Sign the exact body using the same
 headers and secret but the domain `v1:status:<timestamp>:<body>`. Other statuses:
 `in_progress`, `fixed_on_prod`, `rejected`. Free-form text and links are not accepted.
-The receiver must wait for forward acceptance before calling back. Each status posts
+The receiver must wait for forward acceptance before calling back (retry a 409 if
+acceptance has not yet been recorded). Each status posts
 at most once to the original message's thread, only while the opt-in is still enabled.
 
 ## Delivery and audit semantics
