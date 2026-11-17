@@ -44,4 +44,16 @@ describe('PaymentModal', () => {
     expect(minWidth).not.toBe('400px');
     expect(maxWidth).toContain('100vw');
   });
+
+  it('fills the phone width instead of shrinking to the card form', () => {
+    renderModal();
+
+    // jsdom's computed width drops calc(), so read the rule emotion emitted for the dialog's class.
+    const dialogClasses = [...screen.getByTestId('payment-modal-dialog').classList];
+    const emitted = [...document.querySelectorAll('style')].map(style => style.textContent ?? '').join('\n');
+    const dialogRules = emitted
+      .split('}')
+      .filter(rule => dialogClasses.some(className => rule.includes(`.${className}`)));
+    expect(dialogRules.some(rule => /(^|[;{])width:calc\(100vw - 32px\)/.test(rule))).toBe(true);
+  });
 });
