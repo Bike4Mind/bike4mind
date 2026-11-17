@@ -4,6 +4,7 @@ import {
   deriveLegacyAllowedDomains,
   isResearchUnlistedSources,
   normalizeDomainList,
+  normalizeItemRules,
   upgradeLegacyResearchLevers,
   RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
   RESEARCH_COST_CEILING_MICRO_USD_LIMIT,
@@ -130,6 +131,8 @@ export function normalizeResearchLevers(input: ResearchLeversDraft): ResearchRun
     // Not sanitized for the reserved `datalake:` namespace here - `proposeDataLakeContent` strips
     // those at the queue door, and duplicating the rule is how the two copies drift.
     proposedTags: boundedStringList(input.proposedTags, RESEARCH_DOMAIN_LIST_MAX),
+    // A backstop for stored data: the service rejects over-limit input on the raw draft before this clamps it.
+    itemRules: normalizeItemRules(input.itemRules),
   };
 }
 

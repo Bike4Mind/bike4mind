@@ -309,13 +309,6 @@ export class ChatCompletionInvoke {
       }
     }
 
-    // Start sessions.update early (will await later in parallel with admin settings)
-    const sessionUpdatePromise = this.db.sessions.update({
-      id: sessionId,
-      lastUpdated: now,
-      updatedAt: now,
-    });
-
     // Initialize promptMeta for this completion attempt.
     const promptMeta: Partial<PromptMeta> = {
       model: {
@@ -513,8 +506,8 @@ export class ChatCompletionInvoke {
       loadFreeTierAllowedModels(this.db.adminSettings),
       this.db.adminSettings.getSettingsValue('AutoNameNotebook'),
 
-      // Session update (fire-and-forget but ensure completion)
-      sessionUpdatePromise,
+      // Begin only after allowance admission, and observe rejection with the other writes.
+      this.db.sessions.update({ id: sessionId, lastUpdated: now, updatedAt: now }),
     ]).catch(async err => {
       await releaseFreeStart();
       throw err;
@@ -529,6 +522,7 @@ export class ChatCompletionInvoke {
       return;
     }
 
+    let dispatchAttempted = false;
     try {
       if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
         throw new InternalServerError('Default embedding model not found or not supported');
@@ -644,6 +638,8 @@ export class ChatCompletionInvoke {
 
       if (this.invokeLambda && this.questStartParams) {
         this.logger.info('🌍 [SERVER] invokeLambda start:', new Date().toISOString());
+        // A rejected acknowledgement does not prove the receiver rejected the work.
+        dispatchAttempted = true;
         await this.invokeLambda(this.questStartParams);
         // Pinned only after the access check and dispatch: a model that cannot run must not stick to the session.
         if (session.lastUsedModel !== model.id) {
@@ -655,8 +651,8 @@ export class ChatCompletionInvoke {
         throw new InternalServerError('No invokeLambda function provided');
       }
     } catch (error) {
-      // Nothing was dispatched, so a failed turn must not spend the account's one free start.
-      await releaseFreeStart();
+      // Release only before dispatch. Once attempted, retain the claim on ambiguous failures.
+      if (!dispatchAttempted) await releaseFreeStart();
       let errorMessage = `Something went wrong. Please try again.`;
       if (isZodError(error)) {
         errorMessage = fromZodError(error).message;

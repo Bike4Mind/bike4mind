@@ -44,7 +44,8 @@ vi.mock('@bike4mind/services', async importOriginal => {
   return { ...actual, authSessionService: { ...actual.authSessionService, endRealtimeConnections: vi.fn() } };
 });
 
-import { completeAccountDeletion } from '@bike4mind/server-utils/users/completeAccountDeletion';
+import { completeAccountDeletion, type ErasureRegistry } from '@bike4mind/server-utils/users/completeAccountDeletion';
+import { PlatformEndUser, platformEndUserRepository } from '@bike4mind/database/ai';
 import { erasureIdHash } from '@bike4mind/server-utils/privacy/erasureHash';
 import { reapplyErasure } from '../users/reapplyErasure';
 import { erasureRegistry } from './erasureRegistry';
@@ -66,6 +67,7 @@ beforeAll(async () => {
   database = await createMongoReplSet();
   await mongoose.connect(database.getUri(), { autoIndex: false });
   await settleAutoIndexBuilds(mongoose);
+  await PlatformEndUser.createIndexes();
 });
 afterAll(async () => {
   await mongoose.disconnect();
@@ -650,5 +652,93 @@ describe('retained content settlement', () => {
     expect(await mongoose.model('User').exists({ _id: userId })).toBeNull();
     expect(await ErasureRecordModel.findOne({ idHash: erasureIdHash(userId) })).not.toBeNull();
     expect(String((await organizations.findOne({ _id: owner!._id }))!.userId)).toBe(DELETED_USER_ID);
+  });
+});
+
+function deletionBarrier() {
+  let release: () => void = () => {
+    throw new Error('Barrier not initialized');
+  };
+  const promise = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
+function endUserInput(userId: string) {
+  return {
+    providerEndUserId: userId.padEnd(64, 'a'),
+    keyOwnerId: userId,
+    apiKeyId: 'platform-key',
+    endUserId: 'customer_42',
+  };
+}
+
+describe('platform end-user metadata and real account deletion', () => {
+  it('refuses a late writer after holder erasure but before the final User deletion', async () => {
+    const { userId } = await seedAccount('self');
+    const input = endUserInput(userId);
+    await platformEndUserRepository.recordSeen(input);
+    const erased = deletionBarrier();
+    const resume = deletionBarrier();
+    const registry: ErasureRegistry = {
+      ...erasureRegistry,
+      async erase(subject, assertLease, stage, session) {
+        await erasureRegistry.erase(subject, assertLease, stage, session);
+        if (stage === 'beforeDelete' && subject.userId === userId) {
+          erased.release();
+          await resume.promise;
+        }
+      },
+    };
+    const deletion = completeAccountDeletion(userId, { logger, erasureRegistry: registry });
+    try {
+      await Promise.race([
+        erased.promise,
+        deletion.then(() => {
+          throw new Error('Deletion missed the barrier');
+        }),
+      ]);
+      expect(await PlatformEndUser.exists({ keyOwnerId: userId })).toBeNull();
+      const owner = await mongoose.model<{ deletion?: { purgeStartedAt?: Date } }>('User').findById(userId).lean();
+      expect(owner).not.toBeNull();
+      expect(owner?.deletion?.purgeStartedAt).toBeInstanceOf(Date);
+      await platformEndUserRepository.recordSeen(input);
+      expect(await PlatformEndUser.exists({ keyOwnerId: userId })).toBeNull();
+    } finally {
+      resume.release();
+      await deletion;
+    }
+    expect(await mongoose.model('User').exists({ _id: userId })).toBeNull();
+    expect(await PlatformEndUser.exists({ keyOwnerId: userId })).toBeNull();
+  });
+
+  it('refuses a queued metadata writer that resumes after final account deletion', async () => {
+    const { userId } = await seedAccount('self');
+    const input = endUserInput(userId);
+    await platformEndUserRepository.recordSeen(input);
+    const resume = deletionBarrier();
+    const writer = (async () => {
+      await resume.promise;
+      await platformEndUserRepository.recordSeen(input);
+    })();
+    try {
+      await expect(completeAccountDeletion(userId, { logger, erasureRegistry })).resolves.toEqual({ deleted: true });
+      expect(await mongoose.model('User').exists({ _id: userId })).toBeNull();
+      expect(await PlatformEndUser.exists({ keyOwnerId: userId })).toBeNull();
+    } finally {
+      resume.release();
+      await writer;
+    }
+    expect(await PlatformEndUser.exists({ keyOwnerId: userId })).toBeNull();
+  });
+
+  it('erases metadata committed while the owner was live and preserves another owner', async () => {
+    const { userId, other } = await seedAccount('self');
+    await platformEndUserRepository.recordSeen(endUserInput(userId));
+    await platformEndUserRepository.recordSeen(endUserInput(other));
+    await expect(completeAccountDeletion(userId, { logger, erasureRegistry })).resolves.toEqual({ deleted: true });
+    expect(await PlatformEndUser.exists({ keyOwnerId: userId })).toBeNull();
+    expect(await PlatformEndUser.exists({ keyOwnerId: other })).not.toBeNull();
   });
 });

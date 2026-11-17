@@ -9,6 +9,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 // -- Anthropic ----------------------------------------------------------
@@ -116,6 +117,8 @@ describe('fetchAnthropicSpend', () => {
     expect(url).toContain('ending_at=');
     expect(url).toContain('bucket_width=1d');
     expect(url).toContain('limit=31');
+    expect(new URL(url).searchParams.getAll('group_by[]')).toEqual(['description']);
+    expect(new URL(url).searchParams.has('group_by')).toBe(false);
     expect(opts.headers['x-api-key']).toBe('sk-ant-admin01-test');
   });
 
@@ -286,4 +289,53 @@ describe('fetchOpenAISpend', () => {
     expect(url).toContain('bucket_width=1d');
     expect(opts.headers.Authorization).toBe('Bearer sk-admin-test');
   });
+});
+
+describe('spend request serialization', () => {
+  it('uses an array query parameter for OpenAI line items and preserves fetch injection', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [] })));
+    await fetchOpenAISpend('test-admin-key', '2026-07', fetchFn);
+    const url = new URL(fetchFn.mock.calls[0][0]);
+    expect(url.searchParams.getAll('group_by[]')).toEqual(['line_item']);
+    expect(url.searchParams.has('group_by')).toBe(false);
+  });
+
+  it('retries a later page without counting the earlier page again', async () => {
+    vi.useFakeTimers();
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          data: [{ results: [{ amount: '100', description: 'cost' }] }],
+          has_more: true,
+          next_page: 'second',
+        })
+      )
+      .mockResolvedValueOnce(
+        Response.json({ error: { type: 'rate_limit_error' } }, { status: 429, headers: { 'retry-after': '1' } })
+      )
+      .mockResolvedValueOnce(
+        Response.json({ data: [{ results: [{ amount: '200', description: 'cost' }] }], has_more: false })
+      );
+    const pending = fetchAnthropicSpend('test-admin-key', '2026-07', fetchFn);
+    await vi.runAllTimersAsync();
+    expect(await pending).toEqual({ providerUsd: 3, breakdown: { cost: 3 } });
+    expect(fetchFn.mock.calls[1][0]).toBe(fetchFn.mock.calls[2][0]);
+    vi.useRealTimers();
+  });
+});
+
+it('rejects a failed later page rather than returning partial spend', async () => {
+  const fetchFn = vi
+    .fn()
+    .mockResolvedValueOnce(
+      Response.json({
+        data: [{ results: [{ amount: '100', description: 'cost' }] }],
+        has_more: true,
+        next_page: 'second',
+      })
+    )
+    .mockResolvedValueOnce(new Response('private response', { status: 400 }));
+  await expect(fetchAnthropicSpend('test-admin-key', '2026-07', fetchFn)).rejects.toThrow('Anthropic API 400');
+  expect(fetchFn).toHaveBeenCalledTimes(2);
 });

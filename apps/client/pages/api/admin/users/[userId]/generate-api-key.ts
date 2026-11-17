@@ -253,6 +253,13 @@ const handler = adminApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN], admi
         throw new ForbiddenError('Only full administrators can create API keys with admin-provisioned scopes');
       }
 
+      if (
+        requestedScopes.includes(ApiKeyScope.AI_END_USER_ID) &&
+        !requestedScopes.some(scope => scope === ApiKeyScope.AI_CHAT || scope === ApiKeyScope.AI_GENERATE)
+      ) {
+        throw new BadRequestError('ai:end-user-id only applies to a key that holds ai:chat or ai:generate');
+      }
+
       // Its audit entry must say why. Self-service-only keys keep the reason optional.
       const reason = requestedScopes.some(isAdminProvisionedApiKeyScope)
         ? parseAdminActionReason(rawReason)

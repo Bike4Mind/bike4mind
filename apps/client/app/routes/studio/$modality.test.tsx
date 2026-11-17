@@ -23,6 +23,7 @@ vi.mock('@tanstack/react-router', async () => {
 vi.mock('@client/app/components/NotFound', () => ({ default: () => <div data-testid="not-found-stub" /> }));
 vi.mock('@client/app/components/Studio/useStudioFeature', () => ({
   useStudioFeature: (feature: string) => h.studioFeatures[feature] ?? false,
+  useStudioFeatureAccess: (feature: string) => (h.studioFeatures[feature] ? 'open' : 'closed'),
   useStudioFeaturesLoading: () => h.featuresLoading,
 }));
 vi.mock('@client/app/components/ImageStudio/ImageStudioWorkspace', () => ({

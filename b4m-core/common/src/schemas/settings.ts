@@ -435,6 +435,7 @@ export const SettingKeySchema = z.enum([
   'EnableStudioCreateV2',
   'EnableStudioImage',
   'EnableStudioProductions',
+  'StudioProductionsAudience',
   'VectorThreshold',
   'bflApiKey',
   'EnableMCPServer',
@@ -1255,6 +1256,10 @@ export function isCalendarDate(value: string): boolean {
   const date = new Date(`${value}T00:00:00.000Z`);
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
+
+/** Who Studio Productions opens to once enabled: admins only (the preview), or admins, developers and paid plans. */
+export const STUDIO_PRODUCTIONS_AUDIENCES = ['admins', 'paid'] as const;
+export type StudioProductionsAudience = (typeof STUDIO_PRODUCTIONS_AUDIENCES)[number];
 
 function makeStringSetting(
   config: {
@@ -2794,6 +2799,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableStudioCreateV2', order: 300 },
       { key: 'EnableStudioImage', order: 301 },
       { key: 'EnableStudioProductions', order: 302 },
+      { key: 'StudioProductionsAudience', order: 303 },
     ],
   },
   NOTEBOOK: {
@@ -6917,11 +6923,23 @@ export const settingsMap = {
     name: 'Enable Studio Productions',
     defaultValue: false,
     description:
-      'Admin-only preview of Studio Productions (assembling many assets into one piece). Non-admins never see it, whatever this is set to.',
+      'Studio Productions (assembling many assets into one piece). Off, nobody sees it. On, who it opens to is set by Studio Productions Audience.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 302,
     dependsOn: 'EnableStudioCreateV2',
+  }),
+  StudioProductionsAudience: makeStringSetting({
+    key: 'StudioProductionsAudience',
+    name: 'Studio Productions Audience',
+    defaultValue: 'admins',
+    description:
+      "Who Studio Productions opens to once enabled. 'admins' is the preview. 'paid' opens it to admins, developer-tagged users and users on a paid plan; free users see an upgrade prompt.",
+    options: [...STUDIO_PRODUCTIONS_AUDIENCES],
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 303,
+    dependsOn: 'EnableStudioProductions',
   }),
   EnablePotionQuest: makeBooleanSetting({
     key: 'EnablePotionQuest',
