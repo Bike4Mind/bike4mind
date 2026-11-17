@@ -4,7 +4,7 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { ADMIN_USERS_LIST_MAX, AdminUsersQuerySchema } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import { adminUsersDomainGroups, listAdminUsers } from '@bike4mind/server-utils/admin/usersList/listAdminUsers';
-import { PROVIDER_END_USER_ID } from '@bike4mind/server-utils/admin/usersList/adminUsersQuery';
+import { providerIdSearchAudit } from '@bike4mind/server-utils/admin/usersList/providerIdSearchAudit';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import qs from 'qs';
 
@@ -33,33 +33,24 @@ const handler = adminApi({
       }
       res.setHeader('Cache-Control', 'private, no-store');
       const { groupBy, ...params } = parsed.data;
-      const providerEndUserId = params.search && PROVIDER_END_USER_ID.test(params.search) ? params.search : null;
-      const audit = (matched?: { id: string; displayName: string }[]) =>
-        recordAdminActionFromRequest(req, {
-          action: 'user.provider_id.resolved',
-          target:
-            matched?.length === 1
-              ? { kind: 'user', id: matched[0].id, displayName: matched[0].displayName }
-              : { kind: 'system', id: 'provider-end-user-id', displayName: 'Provider end-user identifier' },
-          summary: 'Searched the users list by provider end-user identifier',
-          details: {
-            providerEndUserId: providerEndUserId?.toLowerCase(),
-            source: 'users_list',
-            ...(matched && { matched: matched.length > 0, matchedCount: matched.length }),
-          },
-        });
+      const audit = async (matches?: Parameters<typeof providerIdSearchAudit>[2]) => {
+        const input = providerIdSearchAudit(params.search, 'users_list', matches);
+        if (input) await recordAdminActionFromRequest(req, input);
+      };
       if (groupBy) {
         const groups = await adminUsersDomainGroups(params);
-        if (providerEndUserId) await audit();
+        await audit();
         return res.json(groups);
       }
       const viewer = { userId: String(req.user.id), isAdmin: req.user.isAdmin === true };
       const list = await listAdminUsers(params, viewer, {
         logError: (message, error) => req.logger.error(message, error),
       });
-      if (providerEndUserId) {
-        await audit(list.users.map(row => ({ id: row.id, displayName: row.email ?? row.username })));
-      }
+      const [only] = list.users;
+      await audit({
+        count: list.users.length,
+        sole: list.users.length === 1 ? { id: only.id, displayName: only.email ?? only.username } : undefined,
+      });
       return res.json(list);
     })
   );
