@@ -72,7 +72,6 @@ describe('keyframes and draft', () => {
         { fileId: 'f1', timeSeconds: 0 },
         { fileId: 'f2', timeSeconds: 6 },
       ],
-      [],
     ].map(keyframes => ({ keyframes }))
   )('rejects invalid keyframe times or count: %j', ({ keyframes }) => {
     expect(validateAgainstCapabilities({ ...request, keyframes }, caps)).toMatchObject({
@@ -93,6 +92,40 @@ describe('keyframes and draft', () => {
         code: 'invalid_keyframes',
       });
     }
+  });
+
+  it('does not advertise first-frame image mode but admits keyframes, including the model count limit', () => {
+    expect(caps.modes).toEqual(['text_to_video']);
+    expect(
+      validateAgainstCapabilities({ ...request, keyframes: undefined, inputImageFileId: 'f1' }, caps)
+    ).toMatchObject({ ok: false, code: 'unsupported_mode' });
+    const keyframes = Array.from({ length: 11 }, (_, index) => ({ fileId: `f${index}`, timeSeconds: index / 2 }));
+    expect(VideoGenerationRequestSchema.safeParse({ ...request, keyframes }).success).toBe(true);
+    expect(
+      CreateVideoGenerationBodySchema.safeParse({
+        model: request.model,
+        prompt: 'p',
+        keyframes: keyframes.map(frame => ({ file_id: frame.fileId, time_seconds: frame.timeSeconds })),
+      }).success
+    ).toBe(true);
+    expect(validateAgainstCapabilities({ ...request, keyframes }, caps)).toMatchObject({
+      ok: false,
+      code: 'invalid_keyframes',
+    });
+  });
+
+  it('bills a shorter delivered keyframe clip without dropping its images or draft rate', () => {
+    const requested = {
+      ...request,
+      durationSeconds: 8,
+      keyframes: [
+        { fileId: 'f1', timeSeconds: 0 },
+        { fileId: 'f2', timeSeconds: 8 },
+      ],
+    };
+    const billed = billedVideoRequest(caps, requested, 5);
+    expect(billed).toEqual({ ...requested, durationSeconds: 5 });
+    expect(estimateVideoCostUsd(caps, billed)).toBeCloseTo(0.3);
   });
 
   it('uses the draft rate for estimates, holds and settlement, and full rate for false or omitted', () => {

@@ -30,7 +30,7 @@ const fail = (detail: VideoFailureDetail, message: string): VideoValidationResul
   detail,
 });
 
-const isDurationAllowed = (seconds: number, duration: DurationCapability): boolean => {
+export const isVideoDurationAllowed = (seconds: number, duration: DurationCapability): boolean => {
   if (duration.kind === 'discrete') return duration.values.includes(seconds);
   if (seconds < duration.min || seconds > duration.max) return false;
   // Float-safe step check: 3.5 on a step-1 range is rejected, 4 is accepted.
@@ -54,22 +54,18 @@ const checkInputs = (request: VideoGenerationRequest, caps: VideoModelCapabiliti
   const model = caps.displayName;
   const hasLegacyFile = Boolean(request.inputImageFileId);
   const hasLegacyGenerated = Boolean(request.inputGeneratedImageKey);
-  if (request.keyframes) {
-    if (!caps.keyframes) return fail({ model, code: 'unsupported_keyframes' }, `${model} does not support keyframes`);
+  const keyframes = caps.keyframes;
+  if (request.keyframes && keyframes) {
     if (request.inputs || hasLegacyFile || hasLegacyGenerated) {
       return fail(
         { model, code: 'invalid_keyframes' },
         'keyframes cannot be combined with inputs or legacy image fields'
       );
     }
-    if (
-      request.mode !== 'image_to_video' ||
-      request.keyframes.length === 0 ||
-      request.keyframes.length > caps.keyframes.max
-    ) {
+    if (request.mode !== 'image_to_video' || request.keyframes.length > keyframes.max) {
       return fail(
         { model, code: 'invalid_keyframes' },
-        `keyframes requires image_to_video and 1-${caps.keyframes.max} frames`
+        `keyframes requires image_to_video and 1-${keyframes.max} frames`
       );
     }
     for (const [index, frame] of request.keyframes.entries()) {
@@ -148,7 +144,9 @@ export const validateAgainstCapabilities = (
       `${caps.displayName} draft is ${caps.draft ? `only supported at ${caps.draft.resolutions.join(', ')}` : 'not supported'}`
     );
   }
-  if (!caps.modes.includes(request.mode)) {
+  const keyframeMode =
+    request.mode === 'image_to_video' && request.keyframes !== undefined && caps.keyframes !== undefined;
+  if (!caps.modes.includes(request.mode) && !keyframeMode) {
     return fail(
       { model: caps.displayName, code: 'unsupported_mode', mode: request.mode },
       `${caps.displayName} does not support ${request.mode}`
@@ -156,7 +154,7 @@ export const validateAgainstCapabilities = (
   }
   const inputsFailure = checkInputs(request, caps);
   if (inputsFailure) return inputsFailure;
-  if (!isDurationAllowed(request.durationSeconds, caps.duration)) {
+  if (!isVideoDurationAllowed(request.durationSeconds, caps.duration)) {
     return fail(
       {
         model: caps.displayName,

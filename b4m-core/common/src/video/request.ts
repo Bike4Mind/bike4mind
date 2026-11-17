@@ -24,7 +24,7 @@ export const VideoGenerationRequestSchema = z.object({
   keyframes: z
     .array(z.strictObject({ fileId: z.string().min(1), timeSeconds: z.number().nonnegative() }))
     .min(1)
-    .max(10)
+    .max(100)
     .optional(),
   draft: z.boolean().optional(),
   inputs: z.array(VideoInputSchema).max(VIDEO_INPUTS_MAX).optional(),

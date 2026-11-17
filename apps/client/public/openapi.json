@@ -12975,6 +12975,10 @@
               "4k"
             ]
           },
+          "draft": {
+            "type": "boolean",
+            "description": "Whether this job requested draft quality; absent for requests that omitted draft."
+          },
           "source": {
             "type": "string",
             "enum": [
@@ -13200,6 +13204,10 @@
               "1080p",
               "4k"
             ]
+          },
+          "draft": {
+            "type": "boolean",
+            "description": "Whether this job requested draft quality; absent for requests that omitted draft."
           },
           "source": {
             "type": "string",
@@ -13624,8 +13632,8 @@
               "additionalProperties": false
             },
             "minItems": 1,
-            "maxItems": 10,
-            "description": "Owned image files pinned to timestamps, in strictly increasing order starting at 0 and not exceeding duration_seconds. Cannot be combined with inputs or input_image_file_id. Requires model keyframes support."
+            "maxItems": 100,
+            "description": "Owned image files pinned to timestamps, in strictly increasing order starting at 0 and not exceeding duration_seconds. Cannot be combined with inputs or input_image_file_id. Requires model keyframes support; its max limits the count (FLUX 3: 10). Keyframe image mode is admitted separately from modes."
           },
           "draft": {
             "type": "boolean",
@@ -13712,6 +13720,10 @@
               "1080p",
               "4k"
             ]
+          },
+          "draft": {
+            "type": "boolean",
+            "description": "Whether this job requested draft quality; absent for requests that omitted draft."
           },
           "source": {
             "type": "string",
@@ -13943,6 +13955,10 @@
                     "1080p",
                     "4k"
                   ]
+                },
+                "draft": {
+                  "type": "boolean",
+                  "description": "Whether this job requested draft quality; absent for requests that omitted draft."
                 },
                 "source": {
                   "type": "string",

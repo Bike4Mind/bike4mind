@@ -7123,6 +7123,8 @@ export interface components {
       aspect_ratio: '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '3:2' | '2:3' | '21:9';
       /** @enum {string} */
       resolution: '360p' | '480p' | '720p' | '1080p' | '4k';
+      /** @description Whether this job requested draft quality; absent for requests that omitted draft. */
+      draft?: boolean;
       /** @enum {string} */
       source: 'api' | 'studio' | 'agent';
       progress: number | null;
@@ -7198,6 +7200,8 @@ export interface components {
       aspect_ratio: '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '3:2' | '2:3' | '21:9';
       /** @enum {string} */
       resolution: '360p' | '480p' | '720p' | '1080p' | '4k';
+      /** @description Whether this job requested draft quality; absent for requests that omitted draft. */
+      draft?: boolean;
       /** @enum {string} */
       source: 'api' | 'studio' | 'agent';
       progress: number | null;
@@ -7351,7 +7355,7 @@ export interface components {
       /** @description Deprecated: send inputs with role first_frame instead. Cannot be combined with inputs. */
       input_image_file_id?: string;
       audio?: boolean;
-      /** @description Owned image files pinned to timestamps, in strictly increasing order starting at 0 and not exceeding duration_seconds. Cannot be combined with inputs or input_image_file_id. Requires model keyframes support. */
+      /** @description Owned image files pinned to timestamps, in strictly increasing order starting at 0 and not exceeding duration_seconds. Cannot be combined with inputs or input_image_file_id. Requires model keyframes support; its max limits the count (FLUX 3: 10). Keyframe image mode is admitted separately from modes. */
       keyframes?: {
         file_id: string;
         time_seconds: number;
@@ -7399,6 +7403,8 @@ export interface components {
       aspect_ratio: '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '3:2' | '2:3' | '21:9';
       /** @enum {string} */
       resolution: '360p' | '480p' | '720p' | '1080p' | '4k';
+      /** @description Whether this job requested draft quality; absent for requests that omitted draft. */
+      draft?: boolean;
       /** @enum {string} */
       source: 'api' | 'studio' | 'agent';
       progress: number | null;
@@ -7452,6 +7458,8 @@ export interface components {
         aspect_ratio: '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '3:2' | '2:3' | '21:9';
         /** @enum {string} */
         resolution: '360p' | '480p' | '720p' | '1080p' | '4k';
+        /** @description Whether this job requested draft quality; absent for requests that omitted draft. */
+        draft?: boolean;
         /** @enum {string} */
         source: 'api' | 'studio' | 'agent';
         progress: number | null;

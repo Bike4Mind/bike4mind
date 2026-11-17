@@ -106,11 +106,12 @@ export const CreateVideoGenerationBodySchema = z.strictObject({
       })
     )
     .min(1)
-    .max(10)
+    .max(100)
     .optional()
     .describe(
       'Owned image files pinned to timestamps, in strictly increasing order starting at 0 and not exceeding duration_seconds. ' +
-        'Cannot be combined with inputs or input_image_file_id. Requires model keyframes support.'
+        'Cannot be combined with inputs or input_image_file_id. Requires model keyframes support; ' +
+        'its max limits the count (FLUX 3: 10). Keyframe image mode is admitted separately from modes.'
     ),
   draft: z
     .boolean()
@@ -136,6 +137,10 @@ export const VideoGenerationSchema = z.object({
   duration_seconds: z.number(),
   aspect_ratio: z.enum(ASPECT_RATIOS),
   resolution: z.enum(RESOLUTION_TIERS),
+  draft: z
+    .boolean()
+    .optional()
+    .describe('Whether this job requested draft quality; absent for requests that omitted draft.'),
   source: z.enum(GENERATION_JOB_SOURCES),
   progress: z.number().min(0).max(1).nullable(),
   error: z.object({ code: z.enum(VIDEO_JOB_PUBLIC_ERROR_CODES), message: z.string() }).nullable(),

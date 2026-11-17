@@ -1,7 +1,7 @@
 import { usdToCredits } from '../pricing';
 import type { VideoGenerationRequest } from './request';
 import type { VideoModelCapabilities } from './types';
-import { validateAgainstCapabilities } from './validate';
+import { isVideoDurationAllowed } from './validate';
 
 export const estimateVideoCostUsd = (caps: VideoModelCapabilities, request: VideoGenerationRequest): number => {
   if (request.draft) {
@@ -42,5 +42,5 @@ export const billedVideoRequest = (
 ): VideoGenerationRequest => {
   if (reportedDurationSeconds === undefined) return request;
   const reported = { ...request, durationSeconds: reportedDurationSeconds };
-  return validateAgainstCapabilities(reported, caps).ok ? reported : request;
+  return isVideoDurationAllowed(reportedDurationSeconds, caps.duration) ? reported : request;
 };
