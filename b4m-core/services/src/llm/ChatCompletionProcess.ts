@@ -2254,10 +2254,11 @@ export class ChatCompletionProcess {
       isQuestMasterCompatible(resolveSuccessorChain(body.params.model)) &&
       (await this.db.adminSettings.getSettingsValue('EnableQuestMaster')) === true
     ) {
+      // A message queued without admission (sent before this check shipped, or EnableQuestMaster turned on
+      // after invoke) is admitted here; the quest id stays the same across redelivery.
       if (!body.questMasterStartId || !body.questAdmittedAs) {
-        throw new BadRequestError('QuestMaster start admission is required');
-      }
-      if (body.questAdmittedAs === 'free') {
+        await this.admitQuestStart(this.user, body.questId);
+      } else if (body.questAdmittedAs === 'free') {
         await this.admitQuestStart(this.user, body.questMasterStartId);
       }
     }

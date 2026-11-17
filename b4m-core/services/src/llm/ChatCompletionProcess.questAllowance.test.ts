@@ -79,9 +79,10 @@ describe('QuestMaster process admission', () => {
     expect(findQuest).toHaveBeenCalledOnce();
   });
 
-  it('requires admission metadata for an eligible new plan', async () => {
+  it('admits an eligible plan queued without admission metadata under its quest id', async () => {
     const logger = { info: vi.fn() };
-    const admitQuestStart = vi.fn();
+    const refusal = new ForbiddenError('Free quest already started', { errorCode: 'free_quest_limit_reached' });
+    const admitQuestStart = vi.fn().mockRejectedValue(refusal);
     const process = new ChatCompletionProcess({
       logger,
       user: { id: 'user' },
@@ -93,7 +94,7 @@ describe('QuestMaster process admission', () => {
         body: { enableQuestMaster: true, params: { model: 'gpt-4' }, questId: 'quest' },
         logger,
       } as unknown as Parameters<ChatCompletionProcess['process']>[0])
-    ).rejects.toThrow('QuestMaster start admission is required');
-    expect(admitQuestStart).not.toHaveBeenCalled();
+    ).rejects.toBe(refusal);
+    expect(admitQuestStart).toHaveBeenCalledWith({ id: 'user' }, 'quest');
   });
 });
