@@ -8,6 +8,7 @@ public enum NotificationCategory: String, CaseIterable, Sendable, Codable, Ident
   case chatCompleted = "chat_completed"
   case generationReady = "generation_ready"
   case agentMessage = "agent_message"
+  case sessionHandoff = "session_handoff"
 
   public var id: String { rawValue }
 
@@ -19,6 +20,7 @@ public enum NotificationCategory: String, CaseIterable, Sendable, Codable, Ident
     case .chatCompleted: "Replies ready"
     case .generationReady: "Creations ready"
     case .agentMessage: "Agent messages"
+    case .sessionHandoff: "Device handoffs"
     }
   }
 
@@ -31,6 +33,7 @@ public enum NotificationCategory: String, CaseIterable, Sendable, Codable, Ident
     case .chatCompleted: "A long answer finished while you were away."
     case .generationReady: "Your image, video or music is done and waiting."
     case .agentMessage: "Your agent has something to tell you."
+    case .sessionHandoff: "A conversation you sent from another device is ready here."
     }
   }
 }

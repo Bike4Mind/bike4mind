@@ -213,6 +213,16 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
       name: event.queryStringParameters?.handoffName,
       clientId: event.queryStringParameters?.handoffClientId,
     });
+    if (ticketIdentity && auth.sid && !handoff.success) {
+      const supplied = ['handoffPlatform', 'handoffName', 'handoffClientId'].some(
+        key => event.queryStringParameters?.[key] !== undefined
+      );
+      if (supplied) {
+        logger.warn('[WS_CONNECT] handoff registration ignored', {
+          issuePaths: handoff.error.issues.map(issue => issue.path.join('.')),
+        });
+      }
+    }
     await Connection.create({
       connectionId: event.requestContext.connectionId,
       userId: user.id,

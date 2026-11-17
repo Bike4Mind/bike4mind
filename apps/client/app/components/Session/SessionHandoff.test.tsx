@@ -69,6 +69,17 @@ describe('session handoff UI', () => {
     fireEvent.click(screen.getByTestId('session-handoff-continue-btn'));
     expect(h.navigate).toHaveBeenCalledWith({ to: '/notebooks/$id', params: { id: sessionId } });
   });
+  it.each(['../x', '0123456789abcdef0123456', 'ZZZZZZZZZZZZZZZZZZZZZZZZ'])(
+    'ignores a handoff message whose session id %s is not a notebook id',
+    async badId => {
+      wrap(<SessionHandoffReceiver />);
+      await act(async () => {
+        await h.receive?.({ action: 'session_handoff', sessionId: badId });
+      });
+      expect(screen.queryByTestId('session-handoff-continue-btn')).toBeNull();
+      expect(h.navigate).not.toHaveBeenCalled();
+    }
+  );
   it('does not offer the previous list when refreshing destinations fails', async () => {
     wrap(<SessionHandoffButton sessionId={sessionId} />);
     fireEvent.click(screen.getByTestId('session-handoff-open-btn'));

@@ -130,6 +130,21 @@ describe('web $connect ticket path', () => {
     expect(h.connectionCreate.mock.calls.at(-1)?.[0]).not.toHaveProperty('handoffPlatform');
   });
 
+  it('still opens the connection without handoff metadata when the registration is invalid', async () => {
+    h.consume.mockResolvedValue({ userId: 'u1', tokenVersion: 5, sid: 'sid-1' });
+    const warn = vi.fn();
+    const res = await (func as unknown as Handler)(
+      eventWith({ ticket: 't', handoffPlatform: 'desktop', handoffName: 'x'.repeat(81), handoffClientId: 'tab-1' }),
+      {},
+      { warn, info: vi.fn() }
+    );
+    expect(res.statusCode).toBe(200);
+    const created = h.connectionCreate.mock.calls.at(-1)?.[0];
+    expect(created).toMatchObject({ connectionId: 'conn-1', sid: 'sid-1' });
+    for (const key of ['handoffPlatform', 'handoffName', 'handoffClientId']) expect(created).not.toHaveProperty(key);
+    expect(warn).toHaveBeenCalledWith('[WS_CONNECT] handoff registration ignored', { issuePaths: ['name'] });
+  });
+
   it('falls back to the gateway cap for a ticket minted without an expiry', async () => {
     (h.consume as Mock).mockResolvedValue({ userId: 'u1', tokenVersion: 5 });
 

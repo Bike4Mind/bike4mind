@@ -1,9 +1,12 @@
 import { createHash } from 'node:crypto';
-import { BrowserWindow, ipcMain, shell } from 'electron';
+import { BrowserWindow, ipcMain, session, shell } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { isExternallyOpenable } from '@shared/externalLinks';
 import { onAuthStateChanged, type AuthService } from '../auth';
 import { markCompanionWindow } from '../windows';
+
+const partitionFor = (scope: string) =>
+  `persist:server-conversations-${createHash('sha256').update(scope).digest('hex')}`;
 
 export function registerSessionHandoff(auth: AuthService): void {
   let window: BrowserWindow | null = null;
@@ -15,6 +18,12 @@ export function registerSessionHandoff(auth: AuthService): void {
   onAuthStateChanged(() => {
     if (scope === currentScope()) return;
     window?.close();
+    if (scope) {
+      session
+        .fromPartition(partitionFor(scope))
+        .clearStorageData()
+        .catch(error => console.warn('handoff: could not clear server conversations storage', error));
+    }
     window = null;
     scope = null;
   });
@@ -42,7 +51,7 @@ export function registerSessionHandoff(auth: AuthService): void {
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
-        partition: `persist:server-conversations-${createHash('sha256').update(nextScope).digest('hex')}`,
+        partition: partitionFor(nextScope),
       },
     });
     window = opened;

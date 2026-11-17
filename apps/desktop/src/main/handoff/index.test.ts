@@ -8,6 +8,8 @@ const h = vi.hoisted(() => ({
   options: [] as Record<string, unknown>[],
   loadURL: vi.fn(),
   close: vi.fn(),
+  clearStorageData: vi.fn().mockResolvedValue(undefined),
+  fromPartition: vi.fn(),
 }));
 vi.mock('electron', () => ({
   ipcMain: {
@@ -16,6 +18,7 @@ vi.mock('electron', () => ({
     },
   },
   shell: { openExternal: vi.fn() },
+  session: { fromPartition: h.fromPartition },
   BrowserWindow: class {
     constructor(options: Record<string, unknown>) {
       h.options.push(options);
@@ -38,6 +41,7 @@ describe('desktop server conversations handoff surface', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.options.length = 0;
+    h.fromPartition.mockReturnValue({ clearStorageData: h.clearStorageData });
   });
   it('uses a sandbox without a privileged preload, a scoped cookie partition, and normal web sign-in', async () => {
     const state = { status: 'signed-in', environment: { url: 'https://app.example.test' }, user: { id: 'user' } };
@@ -56,6 +60,8 @@ describe('desktop server conversations handoff surface', () => {
     state.status = 'signed-out';
     h.listener?.();
     expect(h.close).toHaveBeenCalledOnce();
+    expect(h.fromPartition).toHaveBeenCalledWith((h.options[0].webPreferences as { partition: string }).partition);
+    expect(h.clearStorageData).toHaveBeenCalledOnce();
   });
   it('does not open for a signed-out account', async () => {
     registerSessionHandoff({ getState: () => ({ status: 'signed-out' }) } as unknown as AuthService);
