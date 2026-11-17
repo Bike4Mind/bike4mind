@@ -11,6 +11,7 @@ import { SessionStore } from './SessionStore';
 import { CapabilityLedger } from './capabilities/CapabilityLedger';
 import { revokeSessionCapability } from './capabilities/approvalCapabilities';
 import type { ApprovalLogEntry } from './permissions/ApprovalLog';
+import { summarizeApprovals } from './permissions/approvalSummary';
 import { PermissionRuleSet, compileRule, parseRule, type CompiledRule, type RuleSource } from './permissions/rules';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
@@ -424,6 +425,7 @@ describe('ChatService approval record', () => {
       const { card, entry } = await askedAndLogged('c1');
       expect(card.approvalDetail).toContain('Could not read this command');
       expect(entry.approval.askedBecause).toContain('Could not read this command');
+      expect(entry.approval.askedBecause).toContain('This tool asks in every mode. Tool checks:');
     });
 
     it.each(['ask', 'auto'] as const)('adds no Full access reason in %s mode', async mode => {
@@ -448,8 +450,13 @@ describe('ChatService approval record', () => {
         })
       );
       streams[0].write(frame('[DONE]'));
-      const { entry } = await askedAndLogged('d1');
+      const { card, entry } = await askedAndLogged('d1');
+      const reason = 'It cannot be undone, so it is asked every time.';
       expect(entry.approval.askedBecause).toContain('cannot be undone');
+      expect(entry.approval.askedBecause).toContain(reason);
+      expect(card.approvalDetail).toContain(reason);
+      expect(card.approvalIrreversible).toBe(true);
+      expect(summarizeApprovals([entry]).reasons).toContainEqual({ reason: 'full access stop', count: 1 });
     });
   });
 });

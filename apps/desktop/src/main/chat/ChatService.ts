@@ -7494,13 +7494,18 @@ export class ChatService {
     // Full access asks only at its own stops; naming the stop keeps such a card from reading as
     // a mode that never applied. The card gains only a stop the tool's detail does not already say.
     const fullAccessStops = mode === 'full' ? fullAccessStopReasons(prompt) : [];
-    const unshownStops = prompt.askInFull
-      ? fullAccessStops.filter(reason => !asked.prompt.detail.includes(reason))
-      : [];
+    const unshownStops = fullAccessStops.filter(reason => !asked.prompt.detail.includes(reason));
+    const fullAccessExplanation = fullAccessStops.join(' ');
+    // A tool's reasons can include context that does not itself stop Full access. Name the
+    // every-mode floor separately instead of attributing that floor to every tool check.
+    const loggedFullAccessExplanation =
+      prompt.askInFull && !prompt.irreversible && prompt.reasons?.length
+        ? `This tool asks in every mode. Tool checks: ${fullAccessExplanation}`
+        : fullAccessExplanation;
     const askedBecause =
       [
         ...askedReasons,
-        ...(fullAccessStops.length > 0 ? [`${FULL_ACCESS_ASK_PREFIX} ${fullAccessStops.join(' ')}`] : []),
+        ...(fullAccessStops.length > 0 ? [`${FULL_ACCESS_ASK_PREFIX} ${loggedFullAccessExplanation}`] : []),
       ].join(' ') || undefined;
     // The tool's reasons plus this gate's own, so no reason to ask leaves the call looking quick.
     const approvalReasons = [...(asked.prompt.reasons ?? []), ...askedReasons];
