@@ -45,6 +45,19 @@ describe('joy emitter', () => {
     );
   });
 
+  it('emits every *Channel as an "r g b" triple', () => {
+    for (const mode of ['light', 'dark'] as const) {
+      for (const palette of Object.values(fragment.colorSchemes[mode].palette)) {
+        if (typeof palette !== 'object') continue;
+        for (const [key, value] of Object.entries(palette)) {
+          if (key.endsWith('Channel')) expect(value).toMatch(/^\d{1,3} \d{1,3} \d{1,3}$/);
+        }
+      }
+    }
+    expect(fragment.colorSchemes.light.palette.danger.mainChannel).toBe('218 49 49');
+    expect(fragment.colorSchemes.dark.palette.danger.mainChannel).toBe('239 68 68');
+  });
+
   it('carries the semantic groups and scalar tokens through', () => {
     expect(fragment.colorSchemes.dark.palette.divider).toBe(designTokens.color.schemes.dark.divider);
     expect(fragment.colorSchemes.light.palette.text).toEqual(designTokens.color.schemes.light.text);
