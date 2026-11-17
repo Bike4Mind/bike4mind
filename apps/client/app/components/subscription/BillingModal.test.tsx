@@ -333,6 +333,42 @@ describe('BillingModal', () => {
     expect(icon).toHaveAttribute('aria-hidden', 'true');
   });
 
+  describe('header balance layout', () => {
+    // globals.css sets `* { min-width: 0 }`, which removes a flex item's content-width floor. These rules
+    // put it back where it matters, so a large amount cannot be squeezed to overlap its unit.
+    it('keeps a 10,000,000 balance whole: it never shrinks, and the unit wraps below it', () => {
+      state.credits = 10000000;
+      renderModal();
+      const amount = screen.getByTestId('billing-balance-amount');
+      const unit = screen.getByTestId('billing-balance-unit');
+      const figure = screen.getByTestId('billing-balance-figure');
+      const row = screen.getByTestId('billing-balance-row');
+      expect(amount).toHaveTextContent('10,000,000');
+      expect(unit).toHaveTextContent('credits');
+
+      // The icon and the amount travel together; only the unit is free to move to the next line.
+      expect(figure).toContainElement(amount);
+      expect(figure).toContainElement(screen.getByTestId('billing-balance-icon'));
+      expect(figure).not.toContainElement(unit);
+      expect(row).toContainElement(figure);
+      expect(row).toContainElement(unit);
+
+      expect(getComputedStyle(figure).flexShrink).toBe('0');
+      expect(getComputedStyle(row).flexWrap).toBe('wrap');
+      // The balance box cannot be squeezed below the figure by the plan box beside it.
+      expect(getComputedStyle(screen.getByTestId('billing-balance')).minWidth).toBe('min-content');
+    });
+
+    it('keeps the plan box beside the balance', () => {
+      state.credits = 10000000;
+      renderModal();
+      const balance = screen.getByTestId('billing-balance');
+      const plan = screen.getByTestId('billing-current-plan');
+      expect(balance.parentElement).toBe(plan.parentElement);
+      expect(getComputedStyle(balance.parentElement as HTMLElement).flexWrap).not.toBe('wrap');
+    });
+  });
+
   describe('Team seat plan', () => {
     it('shows the team plan instead of Free and offers no plans to upgrade to', () => {
       state.seatPlan = { organizationId: 'org-1', organizationName: 'Acme', planName: 'Team' };
