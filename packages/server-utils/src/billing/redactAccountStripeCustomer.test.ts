@@ -117,20 +117,31 @@ describe('redactAccountStripeCustomer', () => {
   });
 
   it.each([
-    // [lease checks that pass, update, detach, deleteTaxId writes expected]
-    [0, 0, 0, 0],
-    [1, 1, 0, 0],
-    [3, 1, 2, 0],
-  ])('stops writing to Stripe once the lease is lost after %i checks', async (passes, update, detach, taxId) => {
-    assertLease.mockImplementation(async () => {
-      if (assertLease.mock.calls.length > passes) throw new Error('lease lost');
-    });
+    // [lease checks that pass, cancellation helper, update, detach, deleteTaxId calls expected]
+    [0, 0, 0, 0, 0],
+    [1, 1, 0, 0, 0],
+    [2, 1, 1, 0, 0],
+    [3, 1, 1, 1, 0],
+    [4, 1, 1, 2, 0],
+  ])(
+    'stops writing to Stripe once the lease is lost after %i checks',
+    async (passes, cancellations, update, detach, taxId) => {
+      assertLease.mockImplementation(async () => {
+        if (assertLease.mock.calls.length > passes) throw new Error('lease lost');
+      });
+      await expect(run()).rejects.toThrow('lease lost');
+      expect(mocks.cancel).toHaveBeenCalledTimes(cancellations);
+      expect(mocks.update).toHaveBeenCalledTimes(update);
+      expect(mocks.detach).toHaveBeenCalledTimes(detach);
+      expect(mocks.deleteTaxId).toHaveBeenCalledTimes(taxId);
+    }
+  );
 
-    await expect(run()).rejects.toThrow('lease lost');
-
-    expect(mocks.update).toHaveBeenCalledTimes(update);
-    expect(mocks.detach).toHaveBeenCalledTimes(detach);
-    expect(mocks.deleteTaxId).toHaveBeenCalledTimes(taxId);
+  it('does not enter cancellation after a failed initial lease check', async () => {
+    const error = new Error('lease lost before cancellation');
+    assertLease.mockRejectedValue(error);
+    await expect(run()).rejects.toBe(error);
+    noStripeWrites();
   });
 
   it('cancels subscriptions of that customer before redacting', async () => {
@@ -144,7 +155,7 @@ describe('redactAccountStripeCustomer', () => {
     await run();
 
     expect(mocks.cancel).toHaveBeenCalledWith(
-      { userId: 'user-1', reason: 'account_deleted', customerIds: ['cus_user'] },
+      { userId: 'user-1', reason: 'account_deleted', customerIds: ['cus_user'], beforeWrite: assertLease },
       logger
     );
     expect(order).toEqual(['cancel', 'update']);

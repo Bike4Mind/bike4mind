@@ -55,8 +55,9 @@ export async function redactAccountStripeCustomer(
     return { outcome: 'skippedShared' };
   }
 
+  await assertLease();
   const canceled = await cancelAccountSubscriptions(
-    { userId, reason: 'account_deleted', customerIds: [customerId] },
+    { userId, reason: 'account_deleted', customerIds: [customerId], beforeWrite: assertLease },
     logger
   );
   if (canceled.failed.length > 0) {

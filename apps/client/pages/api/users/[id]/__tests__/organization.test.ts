@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   deleteHandler: null as null | ((req: any, res: any) => unknown),
   userRepository: { update: vi.fn() },
   clearActiveOrganization: vi.fn(async () => undefined),
+  findAccessibleById: vi.fn(async (_user: unknown, id: string): Promise<unknown> => ({ id })),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -29,11 +30,16 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
+const selectedFields = vi.hoisted(() => [] as string[]);
 const findById = vi.hoisted(() =>
   vi.fn(() => ({
     populate: () => ({
-      select: () =>
-        Promise.resolve({
+      select: (fields: string) => {
+        selectedFields.push(fields);
+        return Promise.resolve({
+          _id: 'me',
+          groups: ['g1'],
+          isAdmin: false,
           // Org owned by someone else -> the profile owner is a member, not owner.
           organizationId: {
             id: 'org1',
@@ -42,11 +48,16 @@ const findById = vi.hoisted(() =>
             billingContact: 'billing@acme.com',
             stripeCustomerId: 'cus_SECRET',
           },
-        }),
+        });
+      },
     }),
   }))
 );
-vi.mock('@bike4mind/database', () => ({ User: { findById }, userRepository: h.userRepository }));
+vi.mock('@bike4mind/database', () => ({
+  User: { findById },
+  userRepository: h.userRepository,
+  organizationRepository: { shareable: { findAccessibleById: h.findAccessibleById } },
+}));
 vi.mock('@bike4mind/services', () => ({ organizationService: { clearActiveOrganization: h.clearActiveOrganization } }));
 
 import '@pages/api/users/[id]/organization';
@@ -87,6 +98,79 @@ describe('GET /api/users/[id]/organization - ownership gate', () => {
     const { req, res } = getMocks({ id: 'admin1', isAdmin: true }, 'someone-else');
     await h.getHandler!(req, res);
     expect(findById).toHaveBeenCalledWith('someone-else');
+  });
+});
+
+describe('GET /api/users/[id]/organization - stale home-org pointer', () => {
+  beforeEach(() => {
+    findById.mockClear();
+    h.findAccessibleById.mockClear();
+  });
+
+  it('returns the org when the target user can still access it, checking the target user ACL', async () => {
+    const { req, res } = getMocks({ id: 'admin1', isAdmin: true }, 'me');
+    await h.getHandler!(req, res);
+    expect(h.findAccessibleById).toHaveBeenCalledWith({ id: 'me', groups: ['g1'] }, 'org1');
+    expect(res._getJSONData().name).toBe('Acme');
+  });
+
+  it('loads the target user groups and admin flag the ACL check reads', async () => {
+    selectedFields.length = 0;
+    const { req, res } = getMocks({ id: 'me', isAdmin: false }, 'me');
+    await h.getHandler!(req, res);
+    expect(selectedFields[0].split(' ')).toEqual(expect.arrayContaining(['organizationId', 'groups', 'isAdmin']));
+  });
+
+  it('fails the read rather than serving the org when the ACL lookup fails', async () => {
+    h.findAccessibleById.mockRejectedValueOnce(new Error('db down'));
+    const { req, res } = getMocks({ id: 'me', isAdmin: false }, 'me');
+    await expect(h.getHandler!(req, res)).rejects.toThrow('db down');
+    expect(res._isEndCalled()).toBe(false);
+  });
+
+  it('returns null when the pointer names an org the user no longer belongs to', async () => {
+    h.findAccessibleById.mockResolvedValueOnce(null);
+    const { req, res } = getMocks({ id: 'me', isAdmin: false }, 'me');
+    await h.getHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toBeNull();
+  });
+
+  it('returns null for a stale pointer even when an admin is the caller', async () => {
+    h.findAccessibleById.mockResolvedValueOnce(null);
+    const { req, res } = getMocks({ id: 'admin1', isAdmin: true }, 'me');
+    await h.getHandler!(req, res);
+    expect(res._getJSONData()).toBeNull();
+  });
+
+  it('keeps the org for a target user who is a platform admin without an ACL row', async () => {
+    findById.mockReturnValueOnce({
+      populate: () => ({
+        select: () =>
+          Promise.resolve({
+            _id: 'staff',
+            groups: [],
+            isAdmin: true,
+            organizationId: { id: 'org1', userId: 'x', name: 'Acme' },
+          }),
+      }),
+    });
+    const { req, res } = getMocks({ id: 'staff', isAdmin: true }, 'staff');
+    await h.getHandler!(req, res);
+    expect(h.findAccessibleById).not.toHaveBeenCalled();
+    expect(res._getJSONData().name).toBe('Acme');
+  });
+
+  it('returns null without an ACL check when the user has no org pointer', async () => {
+    findById.mockReturnValueOnce({
+      populate: () => ({
+        select: () => Promise.resolve({ _id: 'me', groups: [], isAdmin: false, organizationId: null }),
+      }),
+    });
+    const { req, res } = getMocks({ id: 'me', isAdmin: false }, 'me');
+    await h.getHandler!(req, res);
+    expect(h.findAccessibleById).not.toHaveBeenCalled();
+    expect(res._getJSONData()).toBeNull();
   });
 });
 

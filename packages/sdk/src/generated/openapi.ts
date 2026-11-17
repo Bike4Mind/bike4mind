@@ -202,6 +202,8 @@ export interface paths {
      * Create a chat completion
      * @description OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, then one `settled` event once credits are committed (the charge can be 0), terminated by `data: [DONE]`. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. A final non-blank assistant message is an assistant prefill, except a server-tool continuation ending in `server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. Check the model's `supports_assistant_prefill` field from `GET /api/v1/models` before sending one. Authenticate with an API key (`b4m_live_`) or a JWT.
      *
+     *     END USERS. A key that serves many end users of your own product, and that an administrator has granted `ai:end-user-id`, may send `end_user_id` (your opaque id for the end user) so that, on models served directly by OpenAI or Anthropic, the model provider sees each end user separately rather than your whole account as one (other providers receive no end-user identifier).
+     *
      *     RUNS AND SETTLEMENT. To group the spend of a multi-agent run (a root session and the workers it spawns), mint a run id with `POST /api/v1/completion-runs` and send it as `run` on each request. Spend is recorded against the run, never charged twice. The `settled` event (`{ type, requestId, creditsCharged, usdCost, runId }`) arrives after the last content event and before `[DONE]`, once the charge is committed: `creditsCharged` is what the ledger recorded, which can be below the terminal event's `credits.used` when the balance capped it, and `requestId` is the `X-Request-ID` you sent (or a generated one). Use it to count a settled charge once when your client sees the same event twice (replay or reconnect). Send a fresh `X-Request-ID` per request: reusing one does not deduplicate charges, since the server charges every request.
      *
      *     TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `"anthropic"` or `"bedrock"`), a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: "anthropic", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: "pause_turn"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside a `tool_result`'s content. On every other model `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.
@@ -3094,7 +3096,9 @@ export interface components {
         | 'deferred_tool_cache_control'
         | 'unknown_tool_reference'
         | 'tool_changes_unsupported'
-        | 'invalid_tool_change';
+        | 'invalid_tool_change'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id';
     };
     createCompletionResponse403: {
       error: string;
@@ -3372,6 +3376,8 @@ export interface components {
         /** @description The `sessionId` of the session that spawned this one, for nested workers. */
         parentSessionId?: string;
       };
+      /** @description Your own opaque identifier for the end user this request is for (1-64 characters: letters, digits, `_`, `:`, `-`; never an email). A malformed value is refused with a 400 (`errorCode: "invalid_end_user_id"`). Accepted only on an API key holding `ai:end-user-id`, which an administrator grants to keys that serve many end users; any other credential sending it is refused with a 400 (`errorCode: "end_user_id_not_allowed"`). On models served directly by OpenAI or Anthropic, the provider then receives an identifier derived from your account and this value instead of one for your whole account; other providers receive no end-user identifier. */
+      end_user_id?: string;
       options?: {
         temperature?: number;
         maxTokens?: number;
@@ -3751,7 +3757,13 @@ export interface components {
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'request_timeout';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id'
+        | 'request_timeout';
       jobId?: string;
       message?: string;
     };
@@ -3766,7 +3778,13 @@ export interface components {
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'request_timeout';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id'
+        | 'request_timeout';
       jobId?: string;
       message?: string;
     };
@@ -3811,7 +3829,13 @@ export interface components {
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'request_timeout';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id'
+        | 'request_timeout';
       jobId?: string;
       message?: string;
     };
@@ -3835,7 +3859,13 @@ export interface components {
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'request_timeout';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id'
+        | 'request_timeout';
       jobId?: string;
       message?: string;
     };
@@ -3850,7 +3880,13 @@ export interface components {
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'request_timeout';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id'
+        | 'request_timeout';
       jobId?: string;
       message?: string;
     };
@@ -3865,7 +3901,13 @@ export interface components {
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'request_timeout';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id'
+        | 'request_timeout';
       jobId?: string;
       message?: string;
     };
@@ -3880,7 +3922,13 @@ export interface components {
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'request_timeout';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id'
+        | 'request_timeout';
       jobId?: string;
       message?: string;
     };
@@ -3905,6 +3953,8 @@ export interface components {
       languageCode?: string;
       /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your personal credits, as this endpoint always has. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
       organization_id?: string | null;
+      /** @description Your own opaque identifier for the end user this request is for (1-64 characters: letters, digits, `_`, `:`, `-`; never an email). A malformed value is refused with a 400 (`errorCode: "invalid_end_user_id"`). Accepted only on an API key holding `ai:end-user-id`, which an administrator grants to keys that serve many end users; any other credential sending it is refused with a 400 (`errorCode: "end_user_id_not_allowed"`). On models served directly by OpenAI or Anthropic, the provider then receives an identifier derived from your account and this value instead of one for your whole account; other providers receive no end-user identifier. */
+      end_user_id?: string;
       /** @enum {string} */
       encoding?: 'binary' | 'base64';
       preview?: boolean;
@@ -12743,7 +12793,7 @@ export interface operations {
           'text/event-stream': components['schemas']['createCompletionResponse200'];
         };
       };
-      /** @description Malformed or otherwise invalid request (no `errorCode`), a model that rejects a final assistant message (`errorCode: "assistant_prefill_unsupported"`), provider-rejected caller input (`errorCode: "invalid_request"`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), `deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` naming a tool not in `tools`, or carrying no string `tool_name`). Mid-conversation tool changes are refused with: `tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and `unknown_tool_reference` (a changed tool not in `tools`). */
+      /** @description Malformed or otherwise invalid request (no `errorCode`), a model that rejects a final assistant message (`errorCode: "assistant_prefill_unsupported"`), provider-rejected caller input (`errorCode: "invalid_request"`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), `deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` naming a tool not in `tools`, or carrying no string `tool_name`). Mid-conversation tool changes are refused with: `tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and `unknown_tool_reference` (a changed tool not in `tools`). `end_user_id` sent on a credential other than an API key holding `ai:end-user-id` is refused with `end_user_id_not_allowed`; a malformed `end_user_id` is refused with `invalid_end_user_id`. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -13290,7 +13340,7 @@ export interface operations {
         };
         content?: never;
       };
-      /** @description The billing organization could not be resolved. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
+      /** @description The billing organization could not be resolved. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. Also `end_user_id` sent on a credential other than an API key holding `ai:end-user-id` (`errorCode: "end_user_id_not_allowed"`), or a malformed `end_user_id` (`errorCode: "invalid_end_user_id"`). */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

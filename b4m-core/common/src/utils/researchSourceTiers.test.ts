@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   deriveLegacyAllowedDomains,
+  canonicalItemRules,
   isSameDomainSet,
   normalizeDomainEntry,
+  normalizeItemRules,
+  researchItemRuleKey,
   upgradeLegacyResearchLevers,
 } from './researchSourceTiers';
 import type { LegacyResearchRunLevers } from '../types/entities/DataLakeResearchTypes';
@@ -165,5 +168,48 @@ describe('upgradeLegacyResearchLevers - feed source', () => {
   it('reads an unknown source as search', () => {
     const upgraded = upgradeLegacyResearchLevers({ ...base, source: 'rss' as never });
     expect(upgraded.source).toBe('search');
+  });
+});
+
+describe('item rules', () => {
+  it('reads an absent itemRules as empty and keeps a stored list', () => {
+    expect(upgradeLegacyResearchLevers(base).itemRules).toEqual([]);
+    const itemRules = [{ condition: 'c', action: 'block' as const }];
+    expect(upgradeLegacyResearchLevers({ ...base, itemRules }).itemRules).toEqual(itemRules);
+  });
+
+  it('keys a rule on trimmed, case-folded condition plus action', () => {
+    expect(researchItemRuleKey({ condition: ' Abc ', action: 'block' })).toBe(
+      researchItemRuleKey({ condition: 'abc', action: 'block' })
+    );
+    expect(researchItemRuleKey({ condition: 'abc', action: 'review' })).not.toBe(
+      researchItemRuleKey({ condition: 'abc', action: 'block' })
+    );
+  });
+
+  it('trims, drops empty conditions and bad actions, and dedupes on the canonical key', () => {
+    expect(
+      canonicalItemRules([
+        { condition: ' A ', action: 'block' },
+        { condition: 'a', action: 'block' },
+        { condition: 'a', action: 'review' },
+        { condition: '   ', action: 'block' },
+        { condition: 'b', action: 'allow' },
+        { condition: 'c' },
+        { condition: 5, action: 'block' },
+        null,
+        'x',
+      ])
+    ).toEqual([
+      { condition: 'A', action: 'block' },
+      { condition: 'a', action: 'review' },
+    ]);
+  });
+
+  it('clamps count and condition length as a stored-data backstop', () => {
+    const many = Array.from({ length: 15 }, (_, i) => ({ condition: `rule ${i}`, action: 'block' }));
+    expect(normalizeItemRules(many)).toHaveLength(10);
+    expect(normalizeItemRules([{ condition: 'x'.repeat(400), action: 'review' }])[0].condition).toHaveLength(300);
+    expect(normalizeItemRules(undefined)).toEqual([]);
   });
 });

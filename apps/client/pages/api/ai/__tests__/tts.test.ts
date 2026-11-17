@@ -279,6 +279,40 @@ describe('POST /api/ai/tts', () => {
     expect(mocks.createSpeechJob).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['a session', undefined],
+    ['a key without ai:end-user-id', { keyId: 'k1', userId: 'u1', scopes: ['ai:generate'] }],
+  ])('refuses end_user_id from %s with a 400 before any provider cost', async (_name, apiKeyInfo) => {
+    const { res, promise } = run({ text: 'hi', end_user_id: 'customer_42' }, { id: 'u1' }, apiKeyInfo);
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'end_user_id_not_allowed' });
+    expect(mocks.createSpeechJob).not.toHaveBeenCalled();
+    expect(mocks.runAudioJobInline).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['empty', ''],
+    ['over 64 characters', 'a'.repeat(65)],
+    ['outside the charset', 'customer 42'],
+    ['an email', 'jane@example.com'],
+  ])('refuses an end_user_id that is %s with a 400 invalid_end_user_id, whatever the credential', async (_n, value) => {
+    const { res, promise } = run({ text: 'hi', end_user_id: value }, { id: 'u1' }, undefined);
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'invalid_end_user_id' });
+    expect(mocks.createSpeechJob).not.toHaveBeenCalled();
+    expect(mocks.runAudioJobInline).not.toHaveBeenCalled();
+  });
+
+  it('accepts end_user_id from a platform key', async () => {
+    const platformKey = { keyId: 'k1', userId: 'u1', scopes: ['ai:generate', 'ai:end-user-id'] };
+    const { res, promise } = run({ text: 'hi', end_user_id: 'customer_42' }, { id: 'u1' }, platformKey);
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.createSpeechJob).toHaveBeenCalled();
+  });
+
   it('maps an invalid_request refusal (e.g. an unsupported format) to 422', async () => {
     mocks.createSpeechJob.mockResolvedValue(
       refusal(422, 'invalid_request', "The elevenlabs provider does not support 'wav'")
