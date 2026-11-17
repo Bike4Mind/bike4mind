@@ -110,6 +110,8 @@ export const ADMIN_REASON_PRESETS = {
     'Organization billing contact resolved it',
     'Duplicate of another dispute',
   ],
+  spendFreeze: ['Abnormal spend spike', 'Suspected abuse', 'Requested by account owner'],
+  spendFreezeLift: ['Reviewed: spend is legitimate', 'Account owner contacted', 'Resolved with account owner'],
   stripeDisputeUndoContain: ['Customer verified as legitimate', 'Contained in error'],
   signupRiskReopen: ['Evidence needs a manual look', 'Linked to known abuse', 'Payment disputed or refunded'],
   shadowDetectionVerdict: [
