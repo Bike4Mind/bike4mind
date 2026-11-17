@@ -109,6 +109,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<Exclude<AdminTab, RetiredTab>, string>>
   [AdminTab.PreferenceArena]: 'preference-arena',
   [AdminTab.IntegrationDemand]: ADMIN_INTEGRATION_DEMAND_TAB_SLUG,
   [AdminTab.AuditLog]: ADMIN_AUDIT_LOG_TAB_SLUG,
+  [AdminTab.AccessReview]: 'access-review',
   [AdminTab.Approvals]: 'approvals',
   [AdminTab.Tutorials]: 'tutorials',
   [AdminTab.AiOperations]: 'ai-operations',

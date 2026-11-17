@@ -1,7 +1,13 @@
 import { defineEndpoint } from '../defineEndpoint';
 import { EXAMPLE_RESOURCE_ID } from '../exampleIds';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
-import { GENERATED_AUDIO_DESCRIPTION, generatedAudioResponses } from './audioResponses';
+import {
+  GENERATED_AUDIO_DESCRIPTION,
+  generatedAudioResponses,
+  outlastedAudioResponse,
+  unretrievableAudioResponse,
+} from './audioResponses';
+import { SpeechGenerationSchema } from '../../schemas/audioGenerations';
 // Import the specific schema files, NOT the barrel (`../../schemas`) - see the
 // note in tools.contract.ts (the barrel drags in an unbuilt dist in the CI
 // openapi job).
@@ -17,6 +23,22 @@ import {
   BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
 } from '../../schemas/billingOrganization';
 import { SPEND_FROZEN_FORBIDDEN_NOTE } from '../../schemas/chat';
+
+const exampleOutlastedJob = {
+  id: EXAMPLE_RESOURCE_ID,
+  object: 'speech_generation',
+  state: 'running',
+  text: 'Your password has been reset.',
+  provider: 'elevenlabs',
+  model: null,
+  voice: null,
+  source: 'api',
+  error: null,
+  output: null,
+  credits: { reserved: 12, settled: null },
+  created_at: '2026-10-14T00:00:00.000Z',
+  updated_at: '2026-10-14T00:00:30.000Z',
+} as const;
 
 /**
  * Contract for POST /api/ai/tts - multi-provider text-to-speech.
@@ -67,6 +89,7 @@ export const synthesizeSpeechContract = defineEndpoint({
       },
       tooLargeSchema: ttsResponseTooLargeSchema,
     }),
+    202: outlastedAudioResponse({ noun: 'speech', schema: SpeechGenerationSchema, example: exampleOutlastedJob }),
     401: {
       description:
         'Missing/invalid credentials, no provider has a usable key (`provider_not_configured`), or the ' +
@@ -97,7 +120,13 @@ export const synthesizeSpeechContract = defineEndpoint({
       schema: ttsErrorResponseSchema,
     },
     429: { description: 'The provider rate-limited the request.', schema: ttsErrorResponseSchema },
-    502: { description: 'The provider failed to generate speech.', schema: ttsErrorResponseSchema },
+    502: {
+      description:
+        'The provider failed to generate speech. When the clip was generated but could not be read back, the body ' +
+        'carries `jobId`, also sent as `X-B4M-Generation-Job-Id`.',
+      schema: ttsErrorResponseSchema,
+    },
+    504: unretrievableAudioResponse({ noun: 'speech', schema: ttsErrorResponseSchema }),
   },
   // Served by baseApi, so apiKeyRateLimit sets the windowed X-RateLimit-* headers.
   emitsRateLimitHeaders: true,

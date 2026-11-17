@@ -4,6 +4,7 @@ import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
 import { finaleStats, formatWallTime, questSucceeded } from './finale';
 import type { AgentView } from './roster';
+import type { RunSpendView } from './runSpend';
 import { INNKEEPER_ART } from './tavern/tavernArt';
 
 const unfurl = keyframes`
@@ -59,15 +60,18 @@ function StatChip({ label, alert = false, testId }: { label: string; alert?: boo
 
 /**
  * The finale card, muted when not every agent finished done. `scene` pins it over the top of the Tavern art;
- * `inline` sets it in the flow above a Board or Table so it never covers their rows.
+ * `inline` sets it in the flow above a Board or Table so it never covers their rows. `spend` is the run's
+ * settled total from the server; until it arrives, or when there is none, the card shows the local estimate.
  */
 export function FinaleBanner({
   agents,
   onRead,
   onDismiss,
   placement = 'scene',
+  spend,
 }: {
   agents: readonly AgentView[];
+  spend?: RunSpendView;
   onRead(): void;
   onDismiss(): void;
   placement?: 'scene' | 'inline';
@@ -78,7 +82,7 @@ export function FinaleBanner({
   const rule = succeeded ? GOLD : DUSK;
   const timing: FinaleChip[] = [
     { key: 'time', label: formatWallTime(stats.wallMs) },
-    { key: 'cost', label: stats.cost },
+    { key: 'cost', label: spend?.chip ?? stats.cost },
   ];
   // A clean run says so once; the per-outcome counts only earn their chips when they differ.
   const chips: FinaleChip[] = succeeded
@@ -172,6 +176,19 @@ export function FinaleBanner({
             />
           ))}
         </Box>
+        {spend && (
+          <Box
+            component="ul"
+            data-testid="orchestrator-finale-spend"
+            data-reconciled={spend.reconciled}
+            aria-label="Run spend"
+            sx={{ m: 0, p: 0, listStyle: 'none', color: INK_SOFT, fontSize: '12px', lineHeight: 1.5 }}
+          >
+            {spend.lines.map(line => (
+              <li key={line}>{line}</li>
+            ))}
+          </Box>
+        )}
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
           <Button
             size="sm"

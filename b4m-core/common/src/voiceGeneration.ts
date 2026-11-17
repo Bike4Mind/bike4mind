@@ -107,6 +107,20 @@ export const ttsRequestSchema = z.object({
 
 export type TTSRequest = z.infer<typeof ttsRequestSchema>;
 
+/** A speech job's request: the synthesis fields of ttsRequestSchema, without a route's delivery and billing options. */
+export const speechJobRequestSchema = ttsRequestSchema.pick({
+  text: true,
+  provider: true,
+  model: true,
+  voice: true,
+  format: true,
+  stability: true,
+  similarityBoost: true,
+  languageCode: true,
+});
+
+export type SpeechJobRequest = z.infer<typeof speechJobRequestSchema>;
+
 /**
  * JSON body of `POST /api/ai/tts` for `encoding: 'base64'`: the shared generated-audio
  * body plus the TTS fields. `provider`/`fallbackFrom` appear only when the requested
@@ -136,10 +150,12 @@ export const TTS_ERROR_CODES = [
   'insufficient_credits',
   'provider_not_configured',
   'provider_rejected',
+  // The 504 of a clip that outlasted the request and could never be retrieved (unretrievableAudioResponse).
+  'request_timeout',
 ] as const satisfies readonly ApiErrorCode[];
 
 /**
- * Error body for `POST /api/ai/tts`, shared by the 401, 422, 429 and 502; the 413
+ * Error body for `POST /api/ai/tts`, shared by the 401, 422, 429, 502 and 504; the 413
  * has a shape of its own (`ttsResponseTooLargeSchema`). `errorCode` is present only
  * on the conditions that carry a classifier; an ordinary validation 422 has none.
  *
@@ -172,6 +188,9 @@ export const ttsForbiddenResponseSchema = MeteredBillingOrganizationForbiddenErr
 export const ttsErrorResponseSchema = ApiErrorSchema.extend({
   provider: supportedVoiceGenerationVendor.optional(),
   errorCode: z.enum(TTS_ERROR_CODES).optional(),
+  /** The job a 504 left running (see unretrievableAudioResponse). */
+  jobId: z.string().optional(),
+  message: z.string().optional(),
 });
 
 /**

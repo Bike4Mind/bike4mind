@@ -17,7 +17,9 @@ const mockFindByOrganizationId = vi.fn();
 const mockWorkspaceUpdate = vi.fn();
 const mockWorkspaceCreate = vi.fn();
 const mockClearApiPosting = vi.fn();
+const mockClearFeedback = vi.fn();
 vi.mock('@bike4mind/database/infra', () => ({
+  SlackFeedbackChannel: { updateMany: (...args: unknown[]) => mockClearFeedback(...args) },
   organizationRepository: { findById: vi.fn(async () => ({ id: 'org-a', name: 'Org A' })) },
   orgSlackWorkspaceRepository: {
     findBySlackTeamIdAny: (...args: unknown[]) => mockFindBySlackTeamIdAny(...args),
@@ -82,6 +84,11 @@ describe('org-connect callback: API posting opt-ins', () => {
 
     expect(mockClearApiPosting).toHaveBeenCalledTimes(1);
     expect(mockClearApiPosting).toHaveBeenCalledWith('T-new', 'org-a');
+    expect(mockClearFeedback).toHaveBeenCalledWith(
+      { $or: [{ organizationId: 'org-a' }, { slackTeamId: 'T-new' }] },
+      { $set: { enabled: false } }
+    );
+    expect(mockClearFeedback.mock.invocationCallOrder[0]).toBeLessThan(mockWorkspaceCreate.mock.invocationCallOrder[0]);
     expect(mockRecordAudit).toHaveBeenCalledTimes(1);
     expect(mockRecordAudit).toHaveBeenCalledWith(
       expect.anything(),
@@ -99,6 +106,7 @@ describe('org-connect callback: API posting opt-ins', () => {
     await runCallback();
 
     expect(mockClearApiPosting).toHaveBeenCalledWith('T-old');
+    expect(mockClearFeedback.mock.invocationCallOrder[0]).toBeLessThan(mockWorkspaceUpdate.mock.invocationCallOrder[0]);
     expect(mockRecordAudit).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ userId: 'user-1', scope: 'organization' }),

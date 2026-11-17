@@ -25,7 +25,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
  * artifact schema is what made every import fail while reporting success - and both sibling e2e
  * files stub `createArtifact` out and never set `importArtifacts`, so neither can see it.
  *
- * Run `pnpm --filter @bike4mind/services build` first: the service comes from the built dist, so a
+ * Run `pnpm --filter @bike4mind/services-core build` first: the service comes from the built dist, so a
  * stale build reports green against whatever was last compiled.
  *
  * Runs on a replica set (createMongoReplSet) because the last describe drives the ref guard inside

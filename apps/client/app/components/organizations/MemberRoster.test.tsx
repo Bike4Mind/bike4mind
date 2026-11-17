@@ -62,7 +62,6 @@ const row = (overrides: Partial<OrganizationRosterRow> & { id: string }) =>
   ({
     name: overrides.id,
     email: `${overrides.id}@example.test`,
-    status: 'accepted',
     role: 'member',
     permissions: [],
     creditUsage: null,
@@ -77,7 +76,6 @@ const roster = [
   row({ id: 'ada', name: 'Ada Adams', email: 'ada@math.test', creditUsage: usage(30) }),
   row({ id: 'bob', name: 'Bob Brown', creditUsage: usage(20) }),
   row({ id: 'mgr', name: 'Max Manager', role: 'manager', creditUsage: usage(5) }),
-  row({ id: 'pat', name: 'Pat Pending', status: 'pending' }),
 ];
 
 type Props = Partial<Parameters<typeof MemberRoster>[0]>;
@@ -91,7 +89,6 @@ const renderRoster = (props: Props = {}) => {
       isError={false}
       onRetry={onRetry}
       currentUserId="me"
-      canInviteMembers
       canRevokeMembers
       canRevokeMember={id => id !== 'mgr'}
       canManageCreditBudgets
@@ -167,7 +164,6 @@ describe('MemberRoster header and controls', () => {
       'Search members by name or email',
       'Select all members on this page',
       'Filter by role',
-      'Filter by status',
       'Sort by',
       'Reverse sort order (currently ascending)',
       'Previous page',
@@ -209,28 +205,20 @@ describe('MemberRoster finding people', () => {
     expect(shownIds()).toEqual(['mgr', 'me']);
   });
 
-  it('filters by status', async () => {
-    renderRoster();
-    await choose('organization-members-status-filter', 'Pending');
-    expect(shownIds()).toEqual(['pat']);
-    await choose('organization-members-status-filter', 'Active');
-    expect(shownIds()).not.toContain('pat');
-  });
-
   it('sorts by name, role and usage, and reverses', async () => {
     renderRoster();
-    expect(shownIds()).toEqual(['ada', 'bob', 'mgr', 'me', 'owner', 'pat']);
+    expect(shownIds()).toEqual(['ada', 'bob', 'mgr', 'me', 'owner']);
     const reverse = screen.getByTestId('organization-members-sort-btn');
     fireEvent.click(reverse);
     expect(reverse).toHaveAttribute('aria-label', 'Reverse sort order (currently descending)');
-    expect(shownIds()).toEqual(['pat', 'owner', 'me', 'mgr', 'bob', 'ada']);
+    expect(shownIds()).toEqual(['owner', 'me', 'mgr', 'bob', 'ada']);
     fireEvent.click(reverse);
 
     await choose('organization-members-sort-key', 'Sort by role');
-    expect(shownIds()).toEqual(['owner', 'mgr', 'me', 'ada', 'bob', 'pat']);
+    expect(shownIds()).toEqual(['owner', 'mgr', 'me', 'ada', 'bob']);
 
     await choose('organization-members-sort-key', 'Sort by usage');
-    expect(shownIds()).toEqual(['me', 'mgr', 'owner', 'bob', 'ada', 'pat']);
+    expect(shownIds()).toEqual(['me', 'mgr', 'owner', 'bob', 'ada']);
   });
 
   it('offers no usage sort to a viewer who cannot see usage', async () => {
@@ -262,7 +250,7 @@ describe('MemberRoster pagination', () => {
   it('returns to page 1 when a filter changes', async () => {
     renderRoster({ members: many });
     fireEvent.click(screen.getByTestId('organization-members-next-page-btn'));
-    await choose('organization-members-status-filter', 'Active');
+    await choose('organization-members-role-filter', 'Member');
     expect(screen.getByText('Page 1 of 3')).toBeTruthy();
     fireEvent.click(screen.getByTestId('organization-members-next-page-btn'));
     await choose('organization-members-sort-key', 'Sort by role');
@@ -283,8 +271,8 @@ describe('MemberRoster bulk selection', () => {
   it('offers a checkbox only on rows that can be removed', () => {
     renderRoster();
     for (const name of ['Ada Adams', 'Bob Brown']) expect(screen.getByLabelText(`Select ${name}`)).toBeTruthy();
-    // Owner, yourself, a manager you may not remove, and a pending invite.
-    for (const name of ['Olive Owner', 'Mia Self', 'Max Manager', 'Pat Pending']) {
+    // Owner, yourself, and a manager you may not remove.
+    for (const name of ['Olive Owner', 'Mia Self', 'Max Manager']) {
       expect(screen.queryByLabelText(`Select ${name}`)).toBeNull();
     }
   });
