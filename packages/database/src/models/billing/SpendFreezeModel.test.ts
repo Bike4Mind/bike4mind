@@ -53,7 +53,8 @@ describe('SpendFreezeRepository', () => {
     expect(await spendFreezeRepository.findActive(scope)).toBeNull();
 
     const second = await spendFreezeRepository.createActive(freezeInput(scope, new Date('2026-11-03T00:00:00.000Z')));
-    const history = await spendFreezeRepository.listHistory(scope, 10);
+    const { items: history, nextCursor } = await spendFreezeRepository.listHistory(scope, 10);
+    expect(nextCursor).toBeNull();
     expect(history).toHaveLength(2);
     expect(history[0].id).toBe(second.id);
     expect(history[1].liftReason).toBe('resolved');
@@ -85,8 +86,27 @@ describe('SpendFreezeRepository', () => {
     expect(await spendFreezeRepository.findActiveForSubject({ userId: null, organizationId: undefined })).toBeNull();
   });
 
-  it('findActiveForSubject throws on an invalid id', async () => {
-    await expect(spendFreezeRepository.findActiveForSubject({ userId: 'not-an-id' })).rejects.toThrow();
+  it('findActiveForSubject skips a malformed id and still matches the valid ones', async () => {
+    expect(await spendFreezeRepository.findActiveForSubject({ userId: 'not-an-id' })).toBeNull();
+    const organizationId = newId();
+    const orgFreeze = await spendFreezeRepository.createActive(
+      freezeInput({ scopeType: 'Organization', scopeId: organizationId })
+    );
+    const found = await spendFreezeRepository.findActiveForSubject({ userId: 'not-an-id', organizationId });
+    expect(found?.id).toBe(orgFreeze.id);
+  });
+
+  it('listHistory pages with a cursor', async () => {
+    const scope: SpendFreezeScope = { scopeType: 'User', scopeId: newId() };
+    for (let day = 1; day <= 3; day += 1) {
+      await spendFreezeRepository.createActive(freezeInput(scope, new Date(`2026-11-0${day}T00:00:00.000Z`)));
+      await spendFreezeRepository.liftActive(scope, liftOf(new Date(`2026-11-0${day}T12:00:00.000Z`)));
+    }
+    const first = await spendFreezeRepository.listHistory(scope, 2);
+    expect(first.items.map(i => i.frozenAt.toISOString().slice(0, 10))).toEqual(['2026-11-03', '2026-11-02']);
+    const second = await spendFreezeRepository.listHistory(scope, 2, first.nextCursor as string);
+    expect(second.items.map(i => i.frozenAt.toISOString().slice(0, 10))).toEqual(['2026-11-01']);
+    expect(second.nextCursor).toBeNull();
   });
 
   it('listActive pages newest-first with nextCursor and filters by scope type', async () => {

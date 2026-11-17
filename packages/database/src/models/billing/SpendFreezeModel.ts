@@ -52,12 +52,15 @@ SpendFreezeSchema.index({ scopeType: 1, scopeId: 1, frozenAt: -1 });
 
 export type ISpendFreezeModel = Model<ISpendFreezeDocument>;
 
-const ACTIVE: FilterQuery<ISpendFreezeDocument> = { liftedAt: { $exists: false } };
+const ACTIVE: FilterQuery<ISpendFreezeDocument> = { active: true };
 
 const toObjectId = (id: string): Types.ObjectId => {
   if (!Types.ObjectId.isValid(id)) throw new Error(`Invalid spend freeze scope id: ${id}`);
   return new Types.ObjectId(id);
 };
+
+const objectIdOrNull = (id: string): Types.ObjectId | null =>
+  Types.ObjectId.isValid(id) ? new Types.ObjectId(id) : null;
 
 const toSpendFreeze = (doc: { toJSON(): unknown }): ISpendFreeze => {
   const { active: _active, ...json } = doc.toJSON() as ISpendFreeze & { scopeId: unknown; active?: boolean };
@@ -84,7 +87,10 @@ export class SpendFreezeRepository extends BaseRepository<ISpendFreezeDocument> 
       ['Organization', subject.organizationId],
       ['apiKey', subject.apiKeyId],
     ];
-    const clauses = candidates.flatMap(([scopeType, id]) => (id ? [{ scopeType, scopeId: toObjectId(id) }] : []));
+    const clauses = candidates.flatMap(([scopeType, id]) => {
+      const scopeId = id ? objectIdOrNull(id) : null;
+      return scopeId ? [{ scopeType, scopeId }] : [];
+    });
     if (clauses.length === 0) return null;
 
     const doc = await this.model.findOne({ ...ACTIVE, $or: clauses });
@@ -132,22 +138,37 @@ export class SpendFreezeRepository extends BaseRepository<ISpendFreezeDocument> 
       filter.$or = [{ frozenAt: { $lt: frozenAt } }, { frozenAt, _id: { $lt: id } }];
     }
 
+    return this.page(filter, q.limit);
+  }
+
+  private async page(
+    filter: FilterQuery<ISpendFreezeDocument>,
+    limit: number
+  ): Promise<{ items: ISpendFreeze[]; nextCursor: string | null }> {
     const docs = await this.model
       .find(filter)
       .sort({ frozenAt: -1, _id: -1 })
-      .limit(q.limit + 1);
-    const hasMore = docs.length > q.limit;
-    const items = docs.slice(0, q.limit).map(toSpendFreeze);
+      .limit(limit + 1);
+    const hasMore = docs.length > limit;
+    const items = docs.slice(0, limit).map(toSpendFreeze);
     const last = items[items.length - 1];
     return { items, nextCursor: hasMore && last ? encodeCursor(last) : null };
   }
 
-  async listHistory(scope: SpendFreezeScope, limit: number): Promise<ISpendFreeze[]> {
-    const docs = await this.model
-      .find({ scopeType: scope.scopeType, scopeId: toObjectId(scope.scopeId) })
-      .sort({ frozenAt: -1, _id: -1 })
-      .limit(limit);
-    return docs.map(toSpendFreeze);
+  async listHistory(
+    scope: SpendFreezeScope,
+    limit: number,
+    cursor?: string
+  ): Promise<{ items: ISpendFreeze[]; nextCursor: string | null }> {
+    const filter: FilterQuery<ISpendFreezeDocument> = {
+      scopeType: scope.scopeType,
+      scopeId: toObjectId(scope.scopeId),
+    };
+    if (cursor) {
+      const { frozenAt, id } = decodeCursor(cursor);
+      filter.$or = [{ frozenAt: { $lt: frozenAt } }, { frozenAt, _id: { $lt: id } }];
+    }
+    return this.page(filter, limit);
   }
 }
 
