@@ -48,7 +48,7 @@ export type BriefComposeDeps = {
   users: { findById(id: string): Promise<{ id: string } | null> };
   briefs: Pick<typeof assistantBriefRepository, 'findById' | 'markReady' | 'markFailed'>;
   loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefActivity>;
-  /** Null when the user's AI access is held or their balance cannot cover the call. */
+  /** Whether the call may run: 'ok', or why not (AI access held, or the balance cannot cover it). */
   canCompose(userId: string): Promise<'ok' | 'ai_access_held' | 'insufficient_credits'>;
   /** Sends the activity prompt to the model and returns its raw reply. */
   complete(userId: string, briefId: string, prompt: string): Promise<string>;

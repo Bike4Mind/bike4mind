@@ -145,7 +145,7 @@ export function assembleBrief(reply: string, activity: BriefActivity): ComposedB
   };
 }
 
-/** A short, content-light push body: counts only, since the brief itself is fetched with the user's credentials. */
+/** A short push body: the decision count when any, else the model-written headline; the full brief is fetched with the user's credentials. */
 export function briefPushBody(brief: ComposedBrief): string {
   if (brief.decisions.length > 0) {
     return brief.decisions.length === 1 ? '1 decision needs you.' : `${brief.decisions.length} decisions need you.`;

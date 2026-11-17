@@ -1369,11 +1369,6 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
-   * Stores the MCP write preview a Confirm card renders from, for runs that have no in-memory quest
-   * to assign it to (Agent mode). Replaces any earlier action, as classic chat does. No-op if no
-   * Quest matches.
-   */
-  /**
    * Approvals still waiting on the user in the given sessions: a `pendingAction` raised after
    * `raisedAfterTs` (ms epoch; older ones have lapsed). Bounded by the caller's session list, so it
    * needs no index of its own.
@@ -1401,6 +1396,11 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     }));
   }
 
+  /**
+   * Stores the MCP write preview a Confirm card renders from, for runs that have no in-memory quest
+   * to assign it to (Agent mode). Replaces any earlier action, as classic chat does. No-op if no
+   * Quest matches.
+   */
   async setPendingAction(questId: string, action: { tool: string; params: Record<string, unknown>; ts: number }) {
     await this.model.updateOne({ _id: convertId(questId) }, { $set: { pendingAction: action } });
   }
