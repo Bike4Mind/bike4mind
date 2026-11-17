@@ -156,8 +156,9 @@ export function accountDeletionCompleteEmailBody(
  * address it read before the delete. That runs from the daily sweep
  * (apps/workers/src/cron/accountDeletionSweep.ts) once `deletion.scheduledFor` passes.
  */
-export async function sendAccountDeletionCompleteEmail(to: string): Promise<void> {
-  await EmailEvents.Send.publish({
+/** Resolves with the bus result so a caller can see an entry PutEvents rejected without throwing. */
+export async function sendAccountDeletionCompleteEmail(to: string): Promise<{ FailedEntryCount?: number } | void> {
+  return EmailEvents.Send.publish({
     to,
     subject: 'Your account has been deleted',
     body: accountDeletionCompleteEmailBody(),

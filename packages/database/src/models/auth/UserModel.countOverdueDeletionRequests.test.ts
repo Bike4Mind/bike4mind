@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
-import { User, userRepository } from './UserModel';
+import { overdueDeletionRequestFilter, User, userRepository } from './UserModel';
 
 let mongod: MongoMemoryServer;
 
@@ -67,10 +67,7 @@ describe('UserRepository.countOverdueDeletionRequests', () => {
     await makeUser(26);
     await User.syncIndexes();
 
-    const plan = await User.find({
-      'deletion.scheduledFor': { $type: 'date' },
-      'deletion.requestedAt': { $lte: cutoff },
-    }).explain('queryPlanner');
+    const plan = await User.find(overdueDeletionRequestFilter(cutoff)).explain('queryPlanner');
     const winning = JSON.stringify((plan as { queryPlanner: { winningPlan: unknown } }).queryPlanner.winningPlan);
     expect(winning).toContain('user_deletion_scheduledFor');
     expect(winning).not.toContain('COLLSCAN');

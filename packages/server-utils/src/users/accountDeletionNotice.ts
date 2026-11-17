@@ -1,4 +1,4 @@
-import { accountDeletionNoticeRepository } from '@bike4mind/database';
+import { ACCOUNT_DELETION_NOTICE_RETRY_DELAY_MS, accountDeletionNoticeRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { sendAccountDeletionCompleteEmail } from './accountDeletionEmail';
 
@@ -8,8 +8,6 @@ export type DeletionNoticeDrainResult = Record<NoticeOutcome, number>;
 
 /** One failed send right after the delete, then one per daily sweep. */
 export const ACCOUNT_DELETION_NOTICE_MAX_ATTEMPTS = 5;
-// Short enough that the next daily sweep always finds it due.
-const RETRY_DELAY_MS = 60 * 60 * 1000;
 const DRAIN_LIMIT = 200;
 
 /**
@@ -27,21 +25,31 @@ export async function sendPendingDeletionNotice(
   }: { logger: NoticeLogger; now?: Date; maxAttempts?: number }
 ): Promise<NoticeOutcome> {
   try {
-    await sendAccountDeletionCompleteEmail(email);
+    // PutEvents reports a rejected entry as a normal response, not a throw.
+    const sent = await sendAccountDeletionCompleteEmail(email);
+    if (sent && sent.FailedEntryCount) throw new Error('EntryRejected');
   } catch (error) {
     const reason = error instanceof Error ? error.name : 'unknown';
+    let attempts: number | null = null;
     try {
-      const attempts = await accountDeletionNoticeRepository.markFailed(
+      attempts = await accountDeletionNoticeRepository.markFailed(
         idHash,
-        new Date(now.getTime() + RETRY_DELAY_MS)
+        new Date(now.getTime() + ACCOUNT_DELETION_NOTICE_RETRY_DELAY_MS)
       );
-      if (attempts !== null && attempts >= maxAttempts) {
+    } catch {
+      // The notice stays as it was; the next run retries.
+    }
+    // Gone already: a concurrent send succeeded, so there is nothing left to retry.
+    if (attempts === null) return 'failed';
+    if (attempts >= maxAttempts) {
+      try {
         await accountDeletionNoticeRepository.remove(idHash);
         logger.error(`Gave up sending a deletion-complete email after ${attempts} attempts (${reason})`);
         return 'abandoned';
+      } catch {
+        logger.error(`Could not remove a deletion-complete notice after ${attempts} attempts (${reason})`);
+        return 'failed';
       }
-    } catch {
-      // The notice stays as it was; the next run retries.
     }
     logger.warn(`Failed to send a deletion-complete email; it will be retried (${reason})`);
     return 'failed';
@@ -49,7 +57,7 @@ export async function sendPendingDeletionNotice(
   try {
     await accountDeletionNoticeRepository.remove(idHash);
   } catch {
-    // Sent but not cleared: the TTL removes it. A repeat send is better than none.
+    // Sent but not cleared: it stays due, so the next sweep sends again until a remove succeeds.
   }
   return 'sent';
 }

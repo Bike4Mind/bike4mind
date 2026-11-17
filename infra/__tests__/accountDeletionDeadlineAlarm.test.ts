@@ -15,7 +15,18 @@ const alarm = ALARMS_SOURCE.match(
   /new aws\.cloudwatch\.MetricAlarm\('accountDeletionDeadline', \{[\s\S]*?\n {4}\}\);/
 )?.[0];
 
+const sweepCron = read('infra/cron.ts').match(
+  /new sst\.aws\.Cron\('accountDeletionSweep', \{[\s\S]*?transform: accountDeletionSweepDeadLetter\.functionTarget/
+)?.[0];
+
 describe('accountDeletionDeadline alarm', () => {
+  // Without the grant every PutMetricData is denied and swallowed, so the alarm never gets a
+  // datapoint and sits in ALARM instead of paging on a real overdue request.
+  it('lets the sweep publish the metric the alarm reads', () => {
+    expect(sweepCron).toBeDefined();
+    expect(sweepCron).toMatch(/actions:\s*\['cloudwatch:PutMetricData'\]/);
+  });
+
   it('is defined in infra/alarms.ts, only where the sweep cron exists', () => {
     expect(alarm).toBeDefined();
     expect(ALARMS_SOURCE).toMatch(

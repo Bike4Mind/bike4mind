@@ -32,6 +32,7 @@ vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: {},
   mongoose: { modelNames: () => ['Alpha', 'Beta'] },
   adminAuditLogRepository: { append: vi.fn() },
+  ACCOUNT_DELETION_NOTICE_RETRY_DELAY_MS: 60 * 60 * 1000,
   accountDeletionNoticeRepository: {
     record: h.noticeRecord,
     markFailed: h.noticeMarkFailed,
@@ -285,13 +286,18 @@ describe('completeAccountDeletion', () => {
     // The address stays in the outbox for the sweep's retry, and no log line carries it or the id.
     expect(h.noticeMarkFailed).toHaveBeenCalledWith(`hash-${USER_ID}`, expect.any(Date));
     expect(h.noticeRemove).not.toHaveBeenCalled();
-    for (const [message] of [...logger.warn.mock.calls, ...logger.error.mock.calls]) {
-      expect(String(message)).not.toContain('leaving@example.com');
-      expect(String(message)).not.toContain(USER_ID);
+    // Every argument, Errors by name and message, as the real Logger writes them.
+    for (const arg of [...logger.warn.mock.calls, ...logger.error.mock.calls].flat()) {
+      const text = arg instanceof Error ? `${arg.name}: ${arg.message}` : String(arg);
+      expect(text).not.toContain('leaving@example.com');
+      expect(text).not.toContain(USER_ID);
     }
   });
 
   it('records the notice inside the delete transaction and clears it after a successful send', async () => {
+    h.noticeRecord.mockImplementation(async () => {
+      h.order.push('notice');
+    });
     h.hardDeleteUser.mockImplementation(async (_id: string, context: HardDeleteContext) => {
       await context.recordInTransaction?.(deletedTarget);
       h.order.push('committed');
@@ -303,7 +309,7 @@ describe('completeAccountDeletion', () => {
       email: 'leaving@example.com',
       now: expect.any(Date),
     });
-    expect(h.order).toEqual(['orgs', 'files', 'content', 'realtime', 'audit', 'committed', 'email']);
+    expect(h.order).toEqual(['orgs', 'files', 'content', 'realtime', 'notice', 'audit', 'committed', 'email']);
     expect(h.noticeRemove).toHaveBeenCalledWith(`hash-${USER_ID}`);
   });
 

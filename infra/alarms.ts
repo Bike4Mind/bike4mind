@@ -2015,7 +2015,9 @@ if (isMonitoredStage) {
    * Pages when any deletion request 25 days old or more is still open. The daily sweep emits the count
    * every run, so a healthy day is a 0 datapoint. The period is two days because one datapoint a day
    * can land minutes off the window edge, and FILL(m, 1) turns a window with no datapoint into a breach:
-   * a stopped sweep must page, and CloudWatch can otherwise reuse an older healthy datapoint.
+   * a stopped sweep must page, and CloudWatch can otherwise reuse an older healthy datapoint. The same
+   * window means a cleared request keeps the alarm in ALARM for up to about two days. A newly created
+   * alarm also pages once until the first sweep run emits.
    *
    * Metric emitted by: apps/workers/src/cron/accountDeletionSweep.ts
    * Namespace: Lumina5/AccountDeletion / OverdueDeletionRequests

@@ -17,6 +17,9 @@ export interface IAccountDeletionNotice {
 /** Backstop only: a notice normally ends on send or after the sweep's bounded attempts. */
 export const ACCOUNT_DELETION_NOTICE_TTL_SECONDS = 30 * 24 * 60 * 60;
 
+/** Delay before a notice is first due and between attempts; the daily sweep always finds it due. */
+export const ACCOUNT_DELETION_NOTICE_RETRY_DELAY_MS = 60 * 60 * 1000;
+
 const AccountDeletionNoticeSchema = new Schema<IAccountDeletionNotice>(
   {
     idHash: { type: String, required: true, unique: true },
@@ -36,7 +39,10 @@ export const AccountDeletionNoticeModel: Model<IAccountDeletionNotice> =
   model<IAccountDeletionNotice>('AccountDeletionNotice', AccountDeletionNoticeSchema);
 
 class AccountDeletionNoticeRepository {
-  /** Upsert keyed on `idHash`; a retried delete keeps the first notice. Joins an open transaction. */
+  /**
+   * Upsert keyed on `idHash`; a retried delete keeps the first notice. Not due for an hour, so a
+   * concurrent drain cannot send while the immediate send is in flight. Joins an open transaction.
+   */
   async record(input: { idHash: string; email: string; now: Date }): Promise<void> {
     await AccountDeletionNoticeModel.updateOne(
       { idHash: input.idHash },
@@ -45,7 +51,7 @@ class AccountDeletionNoticeRepository {
           idHash: input.idHash,
           email: input.email,
           attempts: 0,
-          nextAttemptAt: input.now,
+          nextAttemptAt: new Date(input.now.getTime() + ACCOUNT_DELETION_NOTICE_RETRY_DELAY_MS),
           createdAt: input.now,
         },
       },

@@ -398,6 +398,12 @@ const heldReviewTrancheFilter = {
   $expr: { $lt: ['$signupGrant.creditsReleased', '$signupGrant.signupCredits'] },
 };
 
+/** `$type` repeats the partial index's filter, without which the planner cannot use it. */
+export const overdueDeletionRequestFilter = (requestedBefore: Date) => ({
+  'deletion.scheduledFor': { $type: 'date' as const },
+  'deletion.requestedAt': { $lte: requestedBefore },
+});
+
 export class UserRepository extends BaseRepository<IUserDocument> implements IUserRepository {
   constructor(model: IUserModel) {
     super(model);
@@ -928,11 +934,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
 
   /** Deletion requests made at or before `requestedBefore` whose row still exists, i.e. not yet erased or cancelled. */
   async countOverdueDeletionRequests(requestedBefore: Date): Promise<number> {
-    // $type repeats the partial index's filter, without which the planner cannot use it.
-    return this.model.countDocuments({
-      'deletion.scheduledFor': { $type: 'date' },
-      'deletion.requestedAt': { $lte: requestedBefore },
-    });
+    return this.model.countDocuments(overdueDeletionRequestFilter(requestedBefore));
   }
 
   /** Stamps IUser.signupLanding once; a later call never overwrites it. */

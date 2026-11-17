@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   send: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({
+  ACCOUNT_DELETION_NOTICE_RETRY_DELAY_MS: 60 * 60 * 1000,
   accountDeletionNoticeRepository: {
     listDue: async (now: Date, limit: number) =>
       [...h.store.values()].filter(n => n.nextAttemptAt <= now).slice(0, limit),
@@ -31,7 +32,12 @@ const NOW = new Date('2026-11-04T05:00:00.000Z');
 const DAY = 24 * 60 * 60 * 1000;
 const logger = { warn: vi.fn(), error: vi.fn() };
 const seed = () => h.store.set(HASH, { idHash: HASH, email: EMAIL, attempts: 0, nextAttemptAt: NOW });
-const loggedText = () => JSON.stringify([...logger.warn.mock.calls, ...logger.error.mock.calls]);
+// Every argument of every call, Errors by name and message, as the real Logger writes them.
+const loggedText = () =>
+  [...logger.warn.mock.calls, ...logger.error.mock.calls]
+    .flat()
+    .map(arg => (arg instanceof Error ? `${arg.name}: ${arg.message}` : JSON.stringify(arg)))
+    .join('\n');
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -53,7 +59,25 @@ describe('sendPendingDeletionNotice', () => {
     await expect(sendPendingDeletionNotice(HASH, EMAIL, { logger, now: NOW })).resolves.toBe('failed');
 
     expect(h.store.get(HASH)).toMatchObject({ email: EMAIL, attempts: 1 });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(loggedText()).not.toContain(EMAIL);
+  });
+
+  it('treats a rejected PutEvents entry as a failed send and keeps the address', async () => {
+    h.send.mockResolvedValueOnce({ FailedEntryCount: 1 });
+
+    await expect(sendPendingDeletionNotice(HASH, EMAIL, { logger, now: NOW })).resolves.toBe('failed');
+
+    expect(h.store.get(HASH)).toMatchObject({ email: EMAIL, attempts: 1 });
+  });
+
+  it('does not log a retry when the notice is already gone', async () => {
+    h.store.clear();
+    h.send.mockRejectedValueOnce(new Error('bus down'));
+
+    await expect(sendPendingDeletionNotice(HASH, EMAIL, { logger, now: NOW })).resolves.toBe('failed');
+
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });
 

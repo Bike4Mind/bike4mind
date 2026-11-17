@@ -14,6 +14,14 @@ and a cancelled one has `deletion: null`.
 `FILL(m, 1)` and missing data counts as breaching, so a sweep that stopped running or emitting pages
 instead of silencing the alarm. Step 1 tells the two cases apart.
 
+**Expect one page on the first deploy.** A new alarm has no datapoint until the first 05:00 UTC sweep
+emits (0 on a healthy day), so it reads as breaching until then. If that page arrives right after the
+alarm is first created, wait for the next sweep run before acting.
+
+**Recovery is slow by design.** The period is two days and the statistic is `Maximum`, so after the last
+non-zero datapoint the alarm stays in ALARM for up to about 48 hours, and re-running the sweep does not
+shorten that. Judge the fix by the sweep's own count reaching 0, not by the alarm state.
+
 ## When it fires
 
 1. Did the sweep run and emit? Check the `accountDeletionSweep` Lambda logs and its dead-letter queue
@@ -26,8 +34,14 @@ instead of silencing the alarm. Step 1 tells the two cases apart.
    - a live data export or purge lease (`accountDataExportLease`, `deletion.purgeLeaseExpiresAt`): `busy`
    - the user still owns an organization with other members: the sweep refuses until ownership moves
    - a thrown error: the sweep log line `Failed to delete user`
+   - `deletion.scheduledFor` still in the future: a request that support logged late keeps its original
+     `requestedAt` but is scheduled 14 days from when it was logged, so it counts as overdue while the
+     sweep correctly reports it not due. Bring `scheduledFor` forward, or cancel the deletion and erase
+     the account by hand (step 4)
 4. Fix the cause and re-run the sweep, or complete the request by hand through the admin erasure path
-   before day 30. Once the row is gone the next run emits 0 and the alarm clears at the next evaluation.
+   before day 30. The admin erasure path refuses an account with a self-service deletion still pending,
+   so cancel that deletion first. Once the row is gone the next run emits 0, and the alarm clears within
+   about two days (see above).
 
 ## Confirmation email retries
 
