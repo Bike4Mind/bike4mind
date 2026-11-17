@@ -32,6 +32,27 @@ Sign-in is the server's own OAuth 2.0 + PKCE web flow in a Custom Tab, so email 
 
 A production build needs the server to register `b4m-android-app` and publish `/.well-known/assetlinks.json` first.
 
+## Push notifications (FCM)
+
+The app registers its FCM token through `POST /api/v1/push-tokens` (`platform: android`) while signed in and notifications
+are allowed, and withdraws it on sign-out or when the user turns notifications off (`kit/push`, twin of the iOS
+`PushRegistrationCoordinator`). The server sends through FCM HTTP v1 when its `FCM_SERVICE_ACCOUNT` secret is set (see the
+deployment secrets reference).
+
+Firebase is configured from Gradle properties, not a `google-services.json` and not the google-services plugin, so nothing
+project-specific is committed. Take the four values from the Firebase console (Project settings -> Your apps -> the
+`com.bike4mind.app` Android app; they are the fields of its `google-services.json`) and put them in
+`~/.gradle/gradle.properties` or pass them with `-P`:
+
+| Property | `google-services.json` field |
+| --- | --- |
+| `b4m.fcm.applicationId` | `client[0].client_info.mobilesdk_app_id` |
+| `b4m.fcm.apiKey` | `client[0].api_key[0].current_key` |
+| `b4m.fcm.projectId` | `project_info.project_id` |
+| `b4m.fcm.senderId` | `project_info.project_number` |
+
+With any of them unset the app builds and runs normally and simply never gets a push token (CI builds this way).
+
 ## Client identity
 
 Every request carries `X-Client-Name: b4m-android` and `X-Client-Version` (the app's `versionName`, padded to

@@ -45,9 +45,10 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
   {
     kind: 's3',
     bucket: 'fabFileBucket',
-    holds: 'Uploaded knowledge files, their versions and generated copies; account and notebook download exports',
+    holds:
+      'Uploaded knowledge files, their versions and generated copies; account, organization and notebook download exports',
     locatedBy:
-      'FabFile `filePath`, `versions.filePath`, `sourceMetadata.generatedCopyKey`; the `exports/account-data/<userId>/`, `exports/curated-notebooks/<userId>/` and `curated-notebooks/<userId>/` prefixes',
+      'FabFile `filePath`, `versions.filePath`, `sourceMetadata.generatedCopyKey`; the `exports/account-data/<userId>/`, `exports/curated-notebooks/<userId>/` `curated-notebooks/<userId>/` and `exports/organization-data/<encodedUserId>/` prefixes; validated original organization/requester/job locators from export.requested audit rows for legacy keys',
     // `purgeAccountFiles` keeps the objects of an organization's upload and of a file blocked by moderation.
     erasure: { action: 'erased', erasedBy: 'purgeAccountFiles' },
   },
@@ -156,6 +157,13 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
     holds: 'QA run media',
     locatedBy: 'Not keyed by user',
     erasure: { action: 'noPersonalData', note: 'Recordings of test runs against test accounts' },
+  },
+  {
+    kind: 's3',
+    bucket: 'turboCacheBucket',
+    holds: 'Build cache artifacts',
+    locatedBy: 'Not keyed by user',
+    erasure: { action: 'noPersonalData', note: 'Content-hash keyed build outputs; expires after 30 days' },
   },
 
   {

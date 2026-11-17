@@ -55,6 +55,7 @@ import {
 import { formatLongDay, formatShare, formatTrendDay, signedMoney, trendTakeaway } from './revenueFormat';
 import { subscriptionsViewSearch } from './revenueLinks';
 import { useAdminRevenue } from './useAdminRevenue';
+import { PaymentFulfillmentReview } from './PaymentFulfillmentReview';
 import { PaymentsView } from './payments/PaymentsView';
 import { useRevenueView } from './payments/usePaymentsTabParams';
 import type { RevenueView } from './revenueTabSearch';
@@ -563,6 +564,7 @@ const AdminRevenue: React.FC = () => {
   return (
     <Stack gap={ADMIN_REGION_GAP} sx={{ width: '100%', minWidth: 0 }} data-testid="admin-revenue-tab">
       {header}
+      <PaymentFulfillmentReview />
       <Stack
         direction="row"
         flexWrap="wrap"

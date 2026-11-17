@@ -21,11 +21,9 @@ import {
   countNewFeedback,
   oldestNewFeedbackAt,
 } from '@bike4mind/database';
-import { secretRotationRepository } from '@bike4mind/database/infra';
 import { Logger } from '@bike4mind/observability';
 import { getDlqRegistry, getDlqUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { getQueueAttributes } from '@bike4mind/server-utils/utils/sqs';
-import { getSecretRotationConfig } from '@bike4mind/server-utils/lib/secretRotation/constants';
 import {
   ADMIN_ACTION_COUNT_CAP,
   ADMIN_ACTION_COUNT_KEYS,
@@ -140,12 +138,6 @@ export const ADMIN_ACTION_COUNTERS: Record<AdminActionCountKey, AdminActionCount
   modelLifecycle: {
     access: 'settings:manage',
     count: ({ cap }) => modelDiscoveryStateRepository.countPendingSuggestions({ limit: cap }),
-  },
-  secretRotation: {
-    access: 'fullAdmin',
-    // Only configured keys, as the Secret Rotation page hides rows for keys removed from the config.
-    count: ({ now, cap }) =>
-      secretRotationRepository.countOverdue({ now, keyNames: Object.keys(getSecretRotationConfig()), limit: cap }),
   },
   sreAgent: {
     access: 'settings:manage',

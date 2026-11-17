@@ -35,7 +35,7 @@ const FIELD_MAX_WIDTH = '40rem';
 
 // FormHelperText is a flex row, which squeezes each text run and <code> into a column of its own
 // so they overlap at narrow widths; as a block the help wraps as one paragraph. Same trap as the
-// helpers in PartnerSignupRulesTab and ApiKeyScopePreflightTab, which wrap their text in one span.
+// helpers in PartnerSignupRuleFormDialog and ApiKeyScopePreflightTab, which wrap their text in one span.
 const helperSx = {
   display: 'block',
   mt: 0,

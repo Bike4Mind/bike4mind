@@ -4,7 +4,6 @@ import { z } from 'zod';
 const LEGACY_BRIEF_TABS: ReadonlyMap<string, string> = new Map([
   ['2', 'feedback'],
   ['12', 'waitlist'],
-  ['16', 'secrets-rotation'],
   ['26', 'security-dashboard'],
   ['42', 'dlq-replay'],
   ['44', 'sre-agent'],

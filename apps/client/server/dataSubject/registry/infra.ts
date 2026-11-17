@@ -113,6 +113,11 @@ export const infraHolders = {
       { path: 'targetId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG, where: { action: 'member.removed' } },
     ],
   },
+  // Platform-level admin roles; the only personal reference is the admin who created the role.
+  AdminRole: {
+    kind: 'holder',
+    references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
+  },
   // Append-only: the model rejects every update, so the entry cannot be anonymized in place. Free-text `summary`,
   // `changes` and `details` are not scanned for the person.
   AdminAuditLog: {
@@ -225,6 +230,10 @@ export const infraHolders = {
     ],
   },
   Counters: { kind: 'noUserData', note: 'Platform-wide named counters.' },
+  DlqTriageDelivery: {
+    kind: 'noUserData',
+    note: 'Notification deduplication keys derived from suggestion IDs, delivery state and timestamps only. No bodies or user references. Expires after 30 days.',
+  },
   DlqFailure: {
     kind: 'noUserData',
     note: 'Queue failure metadata keyed by SQS message ID, not a user reference. Thrown error text may contain incidental identifiers and expires after 15 days.',

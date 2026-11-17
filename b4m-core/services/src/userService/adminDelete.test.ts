@@ -50,6 +50,21 @@ describe('adminDeleteUser', () => {
     expect(users.delete).not.toHaveBeenCalled();
   });
 
+  it('counts a role-held users:delete on the re-read admin through resolveAdminRoles', async () => {
+    const { adapters, users } = makeAdapters();
+    users.findById.mockImplementation(async (id: string) =>
+      id === 'admin-1'
+        ? { id, isAdmin: false, adminPermissions: [], adminRoleIds: ['a'.repeat(24)] }
+        : { id, name: 'User' }
+    );
+    const resolveAdminRoles = vi.fn(async (user: object) => ({ ...user, roleAdminPermissions: ['users:delete'] }));
+
+    await adminDeleteUser('admin-1', { id: 'user-1' }, { ...adapters, resolveAdminRoles });
+
+    expect(resolveAdminRoles).toHaveBeenCalledWith(expect.objectContaining({ id: 'admin-1' }));
+    expect(users.delete).toHaveBeenCalledWith('user-1');
+  });
+
   it('refuses a delegate without users:delete', async () => {
     const { adapters, users } = makeAdapters();
     users.findById.mockImplementation(async (id: string) =>

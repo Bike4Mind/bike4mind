@@ -6,6 +6,7 @@ import {
   computeCosineSimilarity,
   fetchAndProcessPreviousMessages,
   fetchAgentConversationHistory,
+  fetchAgentRecentGeneratedImages,
   isStoppedBeforeReply,
   includeHardcodedSystemMessage,
   includeImagePromptSystemMessage,
@@ -1916,6 +1917,46 @@ describe('Context Management Tests', () => {
       });
     });
 
+    describe('recentImageJobs', () => {
+      it('collects image job ids newest turn first with their prompt, skipping other kinds', async () => {
+        const items = [
+          makeItem(4, { generationJobs: [{ id: 'j-current', kind: 'image' }] }),
+          makeItem(3, {
+            generationJobs: [
+              { id: 'v-1', kind: 'video' },
+              { id: 'j-3', kind: 'image' },
+            ],
+          }),
+          makeItem(2, {
+            generationJobs: [
+              { id: 'j-2a', kind: 'image' },
+              { id: 'j-2b', kind: 'image' },
+            ],
+          }),
+          makeItem(1),
+        ];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(meta.recentImageJobs).toEqual([
+          { jobId: 'j-3', prompt: 'prompt 3' },
+          { jobId: 'j-2a', prompt: 'prompt 2' },
+          { jobId: 'j-2b', prompt: 'prompt 2' },
+        ]);
+      });
+
+      it('caps the list at 6 jobs', async () => {
+        const generationJobs = Array.from({ length: 8 }, (_, i) => ({ id: `j${i}`, kind: 'image' as const }));
+        const items = [makeItem(3), makeItem(2, { generationJobs }), makeItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(meta.recentImageJobs).toHaveLength(6);
+      });
+    });
+
     describe('Research Mode turns', () => {
       // Research Mode stores its answers in researchModeResults and leaves replies empty.
       const makeResearchItem = (n: number, researchModeResults: unknown[]) =>
@@ -2349,6 +2390,42 @@ describe('Context Management Tests', () => {
         db: { quests: { getMostRecentChatHistory } },
       });
       expect(messages).toEqual([]);
+      expect(getMostRecentChatHistory).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('fetchAgentRecentGeneratedImages', () => {
+    it('returns legacy image keys and image job refs newest first, like the chat path', async () => {
+      const items = [
+        { id: '3', prompt: 'make it blue', generationJobs: [{ id: 'job-2', kind: 'image' }] },
+        { id: '2', prompt: 'a song', generationJobs: [{ id: 'music-1', kind: 'music' }] },
+        {
+          id: '1',
+          prompt: 'a fox',
+          images: ['fox.png', 'sheet.xlsx'],
+          generationJobs: [{ id: 'job-1', kind: 'image' }],
+        },
+      ];
+      const getMostRecentChatHistory = vi.fn().mockResolvedValue(items);
+
+      const result = await fetchAgentRecentGeneratedImages({ id: 'session1' }, 20, {
+        db: { quests: { getMostRecentChatHistory } },
+      });
+
+      expect(getMostRecentChatHistory).toHaveBeenCalledWith('session1', 20);
+      expect(result.recentGeneratedImages).toEqual([{ key: 'fox.png', prompt: 'a fox' }]);
+      expect(result.recentImageJobs).toEqual([
+        { jobId: 'job-2', prompt: 'make it blue' },
+        { jobId: 'job-1', prompt: 'a fox' },
+      ]);
+    });
+
+    it('returns empty without querying when questCount <= 0', async () => {
+      const getMostRecentChatHistory = vi.fn();
+      const result = await fetchAgentRecentGeneratedImages({ id: 'session1' }, 0, {
+        db: { quests: { getMostRecentChatHistory } },
+      });
+      expect(result).toEqual({ recentGeneratedImages: [], recentImageJobs: [] });
       expect(getMostRecentChatHistory).not.toHaveBeenCalled();
     });
   });

@@ -1,4 +1,10 @@
-import { IOrganizationDocument, WithId, isOrgOwnerOrCurrentAdmin, isOrgOwnerOrPlatformAdmin } from '@bike4mind/common';
+import {
+  IOrganizationDocument,
+  WithId,
+  isOrgOwnerOrCurrentAdmin,
+  isOrgOwnerOrPlatformAdmin,
+  canAdministerOrganization,
+} from '@bike4mind/common';
 import { AdminPageHeader, SegmentedControl } from '@client/app/components/admin/shared';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
@@ -14,6 +20,7 @@ import OrgSlackIntegration from '@client/app/components/organizations/OrgSlackIn
 import OrgWebhookConfig from '@client/app/components/organizations/OrgWebhookConfig';
 import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitHubConnectionTab';
 import OrgCustomMcpPolicySection from '@client/app/components/organizations/OrgCustomMcpPolicySection';
+import OrgModelPolicySection from '@client/app/components/organizations/OrgModelPolicySection';
 import OrgDomainsTab from '@client/app/components/organizations/OrgDomainsTab';
 import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSection';
 import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
@@ -28,6 +35,7 @@ import { useGetSubscriptionsByOwner } from '@client/app/hooks/data/subscriptions
 import { SubscriptionOwnerType, pickDisplayedSubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { getOrgPlanState, isLiveOrgPlan, orgPlanChipColor } from '@client/app/components/organizations/orgPlanState';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
+import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { creditBalanceParams, formatCreditAmount } from '@client/app/utils/formatCredits';
 import {
   Alert,
@@ -36,6 +44,8 @@ import {
   Card,
   Chip,
   CircularProgress,
+  Option,
+  Select,
   Stack,
   Tab,
   TabList,
@@ -75,7 +85,7 @@ import {
   type OrgTabAccess,
 } from '@client/app/routes/organizations/orgTabAccess';
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
-import { FC, Fragment, ReactNode, useEffect, useMemo } from 'react';
+import { FC, Fragment, ReactNode, useEffect, useId, useMemo, type AriaAttributes } from 'react';
 import { useTranslation } from 'react-i18next';
 
 type RailTab = {
@@ -149,6 +159,8 @@ const OrganizationPage: FC = () => {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as { tab?: string; section?: string };
   const { currentUser } = useUser();
+  const isMobile = useIsMobile();
+  const sectionId = useId();
 
   // A pre-merge ?tab=github|webhooks|connectors reads as the Integrations section it moved to, on the
   // first paint, and the effect below rewrites the URL to the current shape.
@@ -212,6 +224,8 @@ const OrganizationPage: FC = () => {
     [currentUser, organization]
   );
 
+  const canManageModelPolicy = !!currentUser && !!organization && canAdministerOrganization(currentUser, organization);
+
   // Only the billing owner or a platform admin may add or remove managers (admins route authz).
   const canSetAdmins = !!currentUser && !!organization && isOrgOwnerOrPlatformAdmin(currentUser, organization);
 
@@ -225,6 +239,18 @@ const OrganizationPage: FC = () => {
   const selectedTab = resolveAccessibleTab(requestedTab, access);
   const selectedSection = resolveIntegrationSection(requestedSection, access);
   const integrationSections = visibleIntegrationSections(access);
+  // Share current grouped tab order and access rules across the rail and phone selector.
+  const visibleTabs = RAIL_GROUPS.flatMap(group => group.tabs.filter(entry => entry.visible(access)));
+  const tabId = (tab: OrganizationTabs) => `${sectionId}-tab-${tab}`;
+  const panelId = (tab: OrganizationTabs) => `${sectionId}-panel-${tab}`;
+  const panelAccessibility = (
+    tab: OrganizationTabs
+  ): Pick<AriaAttributes, 'aria-label' | 'aria-labelledby'> & { id: string } => ({
+    id: panelId(tab),
+    ...(isMobile
+      ? { 'aria-labelledby': undefined, 'aria-label': t(`organization.tabs.${tab}`) }
+      : { 'aria-labelledby': tabId(tab) }),
+  });
 
   // Unlike tabs, a section this caller cannot see is rewritten: sections are renamed and regrouped
   // per role, so a stale link lands on the one they get. Waits for the load (gates deny until then)
@@ -298,11 +324,12 @@ const OrganizationPage: FC = () => {
 
   return (
     <Stack
-      gap="24px"
-      height="100vh"
+      gap={{ xs: '16px', sm: '24px' }}
       sx={theme => ({
+        height: '100vh',
+        '@supports (height: 100dvh)': { height: '100dvh' },
         backgroundColor: theme.palette.background.level1,
-        pt: '24px',
+        pt: { xs: '16px', sm: '24px' },
         '& ::-webkit-scrollbar-thumb': {
           backgroundColor: theme.palette.background.scrollbar,
           border: `2px solid ${theme.palette.background.scrollbarTrack}`,
@@ -316,7 +343,7 @@ const OrganizationPage: FC = () => {
         },
       })}
     >
-      <Box sx={{ mx: '24px' }}>
+      <Box sx={{ mx: { xs: 2, sm: 3 } }}>
         {currentUser?.id === organization.userId &&
           new URLSearchParams(window.location.search).get('team_created') === 'true' && (
             <Alert color="success" sx={{ mb: 2 }} data-testid="organization-created-confirmation">
@@ -336,7 +363,7 @@ const OrganizationPage: FC = () => {
 
       <Box sx={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <Tabs
-          orientation="vertical"
+          orientation={isMobile ? 'horizontal' : 'vertical'}
           sx={{
             borderRadius: 'sm',
             flex: 1,
@@ -346,54 +373,86 @@ const OrganizationPage: FC = () => {
           value={selectedTab}
           onChange={(_, value) => requestTab(value as OrganizationTabs)}
         >
-          <TabList
-            data-testid="organization-tabs"
-            sx={{
-              width: '240px',
-              borderRight: '1px solid',
-              borderColor: 'divider',
-              p: 2,
-              '& .MuiTab-root': {
-                justifyContent: 'flex-start',
-                px: 2,
-                py: 1.5,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1,
-                '& svg': { fontSize: 16 },
-                '&.Mui-selected': {
-                  backgroundColor: 'background.level2',
-                  fontWeight: 'bold',
+          {isMobile ? (
+            <Box sx={{ px: 2, pb: 1 }}>
+              <Select
+                value={selectedTab}
+                onChange={(_, value) => value && requestTab(value as OrganizationTabs)}
+                startDecorator={visibleTabs.find(entry => entry.tab === selectedTab)?.icon}
+                slotProps={{
+                  button: { 'aria-label': 'Team section', 'data-testid': 'organization-tabs-select' },
+                  listbox: { 'aria-label': 'Team sections' },
+                }}
+              >
+                {visibleTabs.map(entry => (
+                  <Option key={entry.tab} value={entry.tab} data-testid={`organization-tabs-option-${entry.tab}`}>
+                    {t(`organization.tabs.${entry.tab}`)}
+                  </Option>
+                ))}
+              </Select>
+            </Box>
+          ) : (
+            <TabList
+              data-testid="organization-tabs"
+              aria-label="Team sections"
+              sx={{
+                width: '240px',
+                flexShrink: 0,
+                borderRight: '1px solid',
+                borderColor: 'divider',
+                p: 2,
+                '& .MuiTab-root': {
+                  justifyContent: 'flex-start',
+                  px: 2,
+                  py: 1.5,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
+                  '& svg': { fontSize: 16 },
+                  '&.Mui-selected': {
+                    backgroundColor: 'background.level2',
+                    fontWeight: 'bold',
+                  },
                 },
-              },
-            }}
-          >
-            {RAIL_GROUPS.map(group => {
-              const tabs = group.tabs.filter(entry => entry.visible(access));
-              if (tabs.length === 0) return null;
-              return (
-                <Fragment key={group.key}>
-                  <Typography
-                    level="body-xs"
-                    role="presentation"
-                    data-testid={`organization-tab-group-${group.key}`}
-                    sx={{ px: 2, pt: 1.5, pb: 0.5, fontWeight: 600, color: 'text.tertiary' }}
-                  >
-                    {t(`organization.tab_groups.${group.key}`)}
-                  </Typography>
-                  {tabs.map(entry => (
-                    <Tab key={entry.tab} value={entry.tab} data-testid={entry.testId}>
-                      {entry.icon}
-                      {t(`organization.tabs.${entry.tab}`)}
-                    </Tab>
-                  ))}
-                </Fragment>
-              );
-            })}
-          </TabList>
+              }}
+            >
+              {RAIL_GROUPS.map(group => {
+                const tabs = group.tabs.filter(entry => entry.visible(access));
+                if (tabs.length === 0) return null;
+                return (
+                  <Fragment key={group.key}>
+                    <Typography
+                      level="body-xs"
+                      role="presentation"
+                      data-testid={`organization-tab-group-${group.key}`}
+                      sx={{ px: 2, pt: 1.5, pb: 0.5, fontWeight: 600, color: 'text.tertiary' }}
+                    >
+                      {t(`organization.tab_groups.${group.key}`)}
+                    </Typography>
+                    {tabs.map(entry => (
+                      <Tab
+                        key={entry.tab}
+                        value={entry.tab}
+                        id={tabId(entry.tab)}
+                        aria-controls={
+                          entry.tab === OrganizationTabs.Audit && selectedTab !== OrganizationTabs.Audit
+                            ? undefined
+                            : panelId(entry.tab)
+                        }
+                        data-testid={entry.testId}
+                      >
+                        {entry.icon}
+                        {t(`organization.tabs.${entry.tab}`)}
+                      </Tab>
+                    ))}
+                  </Fragment>
+                );
+              })}
+            </TabList>
+          )}
 
-          <Box sx={{ p: 3, flex: 1, overflow: 'auto' }}>
-            <TabPanel value={OrganizationTabs.Overview}>
+          <Box sx={{ p: { xs: 1, sm: 3 }, flex: 1, overflow: 'auto', minWidth: 0 }}>
+            <TabPanel value={OrganizationTabs.Overview} {...panelAccessibility(OrganizationTabs.Overview)}>
               {header(OrganizationTabs.Overview)}
               {currentUser?.id === organization.userId && !organization.personal && (
                 <TeamOnboardingChecklist
@@ -406,41 +465,41 @@ const OrganizationPage: FC = () => {
               <OrganizationOverviewSection organization={organization} />
               <OrganizationRetentionSection key={organization.id} organization={organization} />
             </TabPanel>
-            {selectedTab === OrganizationTabs.Library && (
-              <TabPanel value={OrganizationTabs.Library}>
-                {header(OrganizationTabs.Library)}
+            <TabPanel value={OrganizationTabs.Library} {...panelAccessibility(OrganizationTabs.Library)}>
+              {header(OrganizationTabs.Library)}
+              {selectedTab === OrganizationTabs.Library && (
                 <OrganizationLibrarySection
                   key={organization.id}
                   organizationId={organization.id}
                   canManage={!!currentUser && isOrgOwnerOrCurrentAdmin(currentUser, organization)}
                 />
-              </TabPanel>
-            )}
-            <TabPanel value={OrganizationTabs.Members}>
+              )}
+            </TabPanel>
+            <TabPanel value={OrganizationTabs.Members} {...panelAccessibility(OrganizationTabs.Members)}>
               {/* Seat numbers live only in the tab's seat summary (OrgSeatSummary). */}
               {header(OrganizationTabs.Members, { count: currentSeats - pendingSeats })}
               {currentUser && <OrganizationMembers organization={organization} />}
             </TabPanel>
             {access.canManageGroups && (
-              <TabPanel value={OrganizationTabs.Groups}>
+              <TabPanel value={OrganizationTabs.Groups} {...panelAccessibility(OrganizationTabs.Groups)}>
                 {header(OrganizationTabs.Groups)}
                 <OrganizationGroups organization={organization} canSetAdmins={canSetAdmins} />
               </TabPanel>
             )}
             {access.canViewUsage && (
-              <TabPanel value={OrganizationTabs.Usage}>
+              <TabPanel value={OrganizationTabs.Usage} {...panelAccessibility(OrganizationTabs.Usage)}>
                 {header(OrganizationTabs.Usage)}
                 <OrganizationUsageSection organization={organization} />
               </TabPanel>
             )}
             {access.canViewAnalysis && (
-              <TabPanel value={OrganizationTabs.Analysis}>
+              <TabPanel value={OrganizationTabs.Analysis} {...panelAccessibility(OrganizationTabs.Analysis)}>
                 {header(OrganizationTabs.Analysis)}
                 <OrganizationAnalysisSection organization={organization} />
               </TabPanel>
             )}
             {selectedSection && (
-              <TabPanel value={OrganizationTabs.Integrations}>
+              <TabPanel value={OrganizationTabs.Integrations} {...panelAccessibility(OrganizationTabs.Integrations)}>
                 {header(OrganizationTabs.Integrations)}
                 {integrationSections.length > 1 && (
                   <Box sx={{ mb: 3 }}>
@@ -460,19 +519,19 @@ const OrganizationPage: FC = () => {
               </TabPanel>
             )}
             {access.canViewBilling && (
-              <TabPanel value={OrganizationTabs.Billing}>
+              <TabPanel value={OrganizationTabs.Billing} {...panelAccessibility(OrganizationTabs.Billing)}>
                 {header(OrganizationTabs.Billing)}
                 <OrganizationBillingSection organization={organization} />
               </TabPanel>
             )}
             {access.canManageDomains && (
-              <TabPanel value={OrganizationTabs.Domains}>
+              <TabPanel value={OrganizationTabs.Domains} {...panelAccessibility(OrganizationTabs.Domains)}>
                 {header(OrganizationTabs.Domains)}
                 <OrgDomainsTab key={organization.id} organizationId={organization.id} />
               </TabPanel>
             )}
             {access.canManageConnectors && (
-              <TabPanel value={OrganizationTabs.ApiKeys}>
+              <TabPanel value={OrganizationTabs.ApiKeys} {...panelAccessibility(OrganizationTabs.ApiKeys)}>
                 {header(OrganizationTabs.ApiKeys)}
                 <OrgApiKeysSection key={organization.id} organizationId={organization.id} />
                 <Typography level="title-md" component="h3" sx={{ mt: 4, mb: 2 }}>
@@ -483,15 +542,20 @@ const OrganizationPage: FC = () => {
             )}
             {/* Mounted only while selected, so the audit query runs only when someone opens the tab. */}
             {access.canViewAudit && selectedTab === OrganizationTabs.Audit && (
-              <TabPanel value={OrganizationTabs.Audit}>
+              <TabPanel value={OrganizationTabs.Audit} {...panelAccessibility(OrganizationTabs.Audit)}>
                 {header(OrganizationTabs.Audit)}
                 <OrganizationAuditSection key={organization.id} organizationId={organization.id} />
               </TabPanel>
             )}
             {access.canManageOrg && (
-              <TabPanel value={OrganizationTabs.Settings}>
+              <TabPanel value={OrganizationTabs.Settings} {...panelAccessibility(OrganizationTabs.Settings)}>
                 {header(OrganizationTabs.Settings)}
                 <OrganizationSettingsSection organization={organization} />
+                {canManageModelPolicy && (
+                  <Box sx={{ mt: 4 }}>
+                    <OrgModelPolicySection key={organization.id} organization={organization} />
+                  </Box>
+                )}
               </TabPanel>
             )}
           </Box>
@@ -539,12 +603,18 @@ const OrganizationHeader: FC<{
   const { currentSeats, pendingSeats } = useOrganizationSeats(organization.id);
 
   return (
-    <Card variant="outlined" sx={{ mx: 3, p: 3 }}>
-      <Stack direction="row" spacing={3} alignItems="center">
-        <OrganizationAvatar organization={organization} size="lg" sx={{ '--Avatar-size': '64px' }} />
-        <Stack spacing={1} flex={1}>
-          <Stack direction="row" justifyContent="space-between" alignItems="center">
-            <Typography level="h3">{name}</Typography>
+    <Card variant="outlined" sx={{ mx: { xs: 2, sm: 3 }, p: { xs: 2, sm: 3 } }} data-testid="organization-header">
+      <Stack direction="row" spacing={{ xs: 2, sm: 3 }} alignItems={{ xs: 'flex-start', sm: 'center' }}>
+        <OrganizationAvatar
+          organization={organization}
+          size="lg"
+          sx={{ '--Avatar-size': { xs: '48px', sm: '64px' } }}
+        />
+        <Stack spacing={1} flex={1} minWidth={0}>
+          <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" useFlexGap gap={1}>
+            <Typography level="h3" sx={{ overflowWrap: 'anywhere' }}>
+              {name}
+            </Typography>
             {canManageOrg && (
               <Button
                 variant="outlined"
@@ -561,7 +631,7 @@ const OrganizationHeader: FC<{
           <Typography level="body-sm" color="neutral">
             {description}
           </Typography>
-          <Stack direction="row" spacing={2} mt={1}>
+          <Stack direction="row" spacing={{ xs: 1, sm: 2 }} mt={1} flexWrap="wrap" useFlexGap>
             <Chip size="sm" variant="soft" startDecorator={<GroupOutlinedIcon sx={{ fontSize: 14 }} />}>
               {t('organization.x_members', { count: currentSeats - pendingSeats })}
             </Chip>

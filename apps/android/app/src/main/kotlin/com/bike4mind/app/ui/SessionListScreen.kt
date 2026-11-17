@@ -115,6 +115,7 @@ fun SessionListScreen(graph: AppGraph, onOpen: (String) -> Unit, onNewChat: () -
                     TextButton(onClick = {
                         scope.launch {
                             try {
+                                graph.push.unregisterBeforeSignOut()
                                 graph.session.signOut()
                             } catch (cancelled: CancellationException) {
                                 throw cancelled

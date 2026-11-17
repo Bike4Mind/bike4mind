@@ -6,14 +6,18 @@ public struct NotificationPayload: Equatable, Sendable {
   public let sessionID: String?
   public let questID: String?
   public let category: NotificationCategory?
+  /// `approval_needed` pushes: the pending action the notification buttons answer.
+  public let approval: PendingActionTarget?
 
   public init(
-    deepLink: URL? = nil, sessionID: String? = nil, questID: String? = nil, category: NotificationCategory? = nil
+    deepLink: URL? = nil, sessionID: String? = nil, questID: String? = nil, category: NotificationCategory? = nil,
+    approval: PendingActionTarget? = nil
   ) {
     self.deepLink = deepLink
     self.sessionID = sessionID
     self.questID = questID
     self.category = category
+    self.approval = approval
   }
 
   /// Parses `UNNotificationContent.userInfo`. Unknown or malformed fields are dropped, never fatal.
@@ -24,6 +28,17 @@ public struct NotificationPayload: Equatable, Sendable {
     let rawCategory =
       (userInfo["category"] as? String) ?? (userInfo["aps"] as? [String: Any])?["category"] as? String
     category = rawCategory.flatMap(NotificationCategory.init(rawValue:))
+    approval = Self.approval(in: userInfo)
+  }
+
+  /// The server's `approval: {questId, pendingActionTs, actions}` object. Anything missing or malformed means
+  /// there is nothing to answer from the notification (it never falls back to a guess).
+  private static func approval(in userInfo: [AnyHashable: Any]) -> PendingActionTarget? {
+    guard let object = userInfo["approval"] as? [String: Any],
+      let questID = object["questId"] as? String, DeepLinkRouter.isValidIdentifier(questID),
+      let number = object["pendingActionTs"] as? NSNumber, number.int64Value > 0
+    else { return nil }
+    return PendingActionTarget(questID: questID, pendingActionTs: number.int64Value)
   }
 
   /// Where tapping the notification should go: the `deepLink` when it routes, else the session id.

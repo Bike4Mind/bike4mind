@@ -17,6 +17,7 @@
     static let pushTokenAPI: any PushTokenAPI = NoopPushTokenAPI()
     static let agentRunAPI: any AgentRunAPI = FixtureAgentRunAPI()
     static let account: any AccountAPI = FixtureAccountAPI()
+    static let pendingActionAPI: any PendingActionAPI = FixturePendingActionAPI()
     static let stepUp: any StepUpAPI = FixtureStepUpAPI()
     /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
     static let workingQuestID = "fixture-0-q4"
@@ -35,6 +36,25 @@
 
     static var accountScenario: AccountScenario {
       AccountScenario(rawValue: ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_ACCOUNT"] ?? "") ?? .success
+    }
+
+    /// `B4M_UI_FIXTURE_APPROVAL` picks how answering the fixture approval card ends: `replaced`, `expired`,
+    /// `resolved` (answered elsewhere) or `offline`; the default is success.
+    private struct FixturePendingActionAPI: PendingActionAPI {
+      func respond(
+        to target: PendingActionTarget, decision: PendingActionDecision
+      ) async throws
+        -> PendingActionResult
+      {
+        try await Task.sleep(for: .seconds(1))
+        switch ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_APPROVAL"] {
+        case "replaced": throw PendingActionFailure.replaced
+        case "expired": throw PendingActionFailure.expired
+        case "resolved": throw PendingActionFailure.alreadyResolved
+        case "offline": throw PendingActionFailure.api(.offline)
+        default: return PendingActionResult(decision: decision)
+        }
+      }
     }
 
     /// Every generation runs for a few seconds, then succeeds. No outputs: the gallery fixtures stay as they are.
@@ -324,6 +344,34 @@
       func media(id: String) async throws -> MediaItem {
         guard let item = Self.all.first(where: { $0.id == id }) else { throw APIError.notFound }
         return await Self.withContent(item)
+      }
+
+      /// Video 3 was animated from image 0: its trail has a parent and image 0's has a child.
+      func lineage(of id: String) async throws -> FileLineage {
+        func node(_ item: MediaItem, generator: String, request: JSONObject? = nil) -> LineageNode {
+          LineageNode(
+            id: item.id, kind: item.kind, fileName: item.fileName, mimeType: item.mimeType, generator: generator,
+            modelID: nil, prompt: "A fox in the snow", createdAt: item.createdAt, request: request)
+        }
+        let image = Self.all[0]
+        let video = Self.all[3]
+        let edge = LineageEdge(parentID: image.id, childID: video.id, role: .firstFrame)
+        switch id {
+        case video.id:
+          return FileLineage(
+            fileID: id,
+            ancestors: [
+              node(video, generator: "video", request: ["durationSeconds": .number(6)]),
+              node(image, generator: "image"),
+            ],
+            children: [], edges: [edge])
+        case image.id:
+          return FileLineage(
+            fileID: id, ancestors: [node(image, generator: "image")], children: [node(video, generator: "video")],
+            edges: [edge])
+        default:
+          return FileLineage(fileID: id, ancestors: [], children: [], edges: [])
+        }
       }
 
       private static func withContent(_ item: MediaItem) async -> MediaItem {

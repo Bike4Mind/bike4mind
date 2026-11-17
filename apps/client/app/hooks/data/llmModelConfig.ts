@@ -1,64 +1,34 @@
-import { getErrorMessage } from '@client/app/utils/error';
 import { api } from '@client/app/contexts/ApiContext';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { toast } from 'sonner';
+import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
-import {
-  LLMModelConfig,
-  ModelInfo,
-  MODEL_ACCESS_REVISION_HEADER,
-  type ModelAccessSaveRequest,
-  type ModelAccessSaveResult,
-} from '@bike4mind/common';
+import { LLMModelConfig, ModelInfo, MODEL_ACCESS_REVISION_HEADER } from '@bike4mind/common';
 import { MODEL_CONFIGURATIONS_QUERY_KEY } from './modelAccessRevision';
 import {
   ModelConfigurationsResponseSchema,
-  ModelAccessSaveResultSchema,
   loadedAccessEntry,
   type LoadedModelConfiguration,
+  type ModelConfigurationsRead,
 } from './modelAccessDraft';
 import { BASE_ENTITLEMENT_KEY } from '@bike4mind/server-utils/lib/entitlements/registry';
 
-/**
- * Hook to fetch LLM model configurations from admin settings
- */
+/** Model access entries. Writes go through the per-model and bulk access endpoints (hooks/data/adminModels.ts). */
 export function useLLMModelConfigurations() {
   return useQuery({
     queryKey: MODEL_CONFIGURATIONS_QUERY_KEY,
-    queryFn: async () => {
+    queryFn: async (): Promise<ModelConfigurationsRead> => {
       const response = await api.get<unknown>('/api/admin/llm-models/configurations');
       const parsed = ModelConfigurationsResponseSchema.parse(response.data);
       const revision: unknown = response.headers?.[MODEL_ACCESS_REVISION_HEADER];
-      return { configurations: parsed.settingValue, revision: typeof revision === 'string' ? revision : null };
+      return {
+        configurations: parsed.settingValue,
+        revision: typeof revision === 'string' && revision.length > 0 ? revision : null,
+      };
     },
-    select: read => read.configurations,
+    select: (read: ModelConfigurationsRead) => read.configurations,
     staleTime: 1000 * 30, // 30 seconds - reduced from 5 minutes for quicker updates
     refetchOnReconnect: true,
     refetchOnWindowFocus: true,
     refetchOnMount: false,
-  });
-}
-
-/**
- * Hook to save LLM model configurations to admin settings
- */
-export function useSaveLLMModelConfigurations(onSuccessCallback?: (result: ModelAccessSaveResult) => void) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async (request: ModelAccessSaveRequest): Promise<ModelAccessSaveResult> => {
-      const { data } = await api.put<unknown>('/api/admin/llm-models/configurations', request);
-      return ModelAccessSaveResultSchema.parse(data);
-    },
-    onSuccess: result => {
-      onSuccessCallback?.(result);
-      void queryClient.invalidateQueries({ queryKey: MODEL_CONFIGURATIONS_QUERY_KEY });
-      void queryClient.invalidateQueries({ queryKey: ['adminsettings'] });
-      toast.success('LLM model configurations saved successfully');
-    },
-    onError: (error: unknown) => {
-      toast.error(`Failed to save configurations: ${getErrorMessage(error)}`);
-    },
   });
 }
 

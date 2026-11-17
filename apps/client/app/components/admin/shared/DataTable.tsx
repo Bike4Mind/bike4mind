@@ -60,6 +60,8 @@ export type DataTableProps<Row> = {
   empty?: ReactNode;
   selection?: AdminSelection;
   onSelectionChange?: (selection: AdminSelection) => void;
+  /** Keeps the current selection but stops changes to it, for rows that are not yet the ones the filters match. */
+  selectionDisabled?: boolean;
   onRowActivate?: (row: Row) => void;
   /** Single-key commands on a focused row (A accept, O override); same modifier and IME guards as X. */
   rowShortcuts?: (row: Row) => Partial<Record<DataTableRowShortcut, () => void>>;
@@ -114,6 +116,7 @@ export function DataTable<Row>({
   empty,
   selection,
   onSelectionChange,
+  selectionDisabled = false,
   onRowActivate,
   rowShortcuts,
   activeRowId,
@@ -219,7 +222,7 @@ export function DataTable<Row>({
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       focusSiblingRow(event.currentTarget, event.key === 'ArrowDown' ? 1 : -1);
-    } else if (event.key.toLowerCase() === 'x' && selectable && plainKey) {
+    } else if (event.key.toLowerCase() === 'x' && selectable && !selectionDisabled && plainKey) {
       event.preventDefault();
       toggleRow(id, !isSelected(id), event.shiftKey);
     } else if (shortcut) {
@@ -232,7 +235,7 @@ export function DataTable<Row>({
   };
   const rowKeyShortcuts = (row: Row): string | undefined => {
     const keys = [
-      ...(selectable ? ['x'] : []),
+      ...(selectable && !selectionDisabled ? ['x'] : []),
       ...Object.entries(rowShortcuts?.(row) ?? {}).flatMap(([key, run]) => (run !== undefined ? [key] : [])),
     ];
     return keys.length ? keys.join(' ') : undefined;
@@ -241,6 +244,8 @@ export function DataTable<Row>({
     const target = event.target as HTMLElement;
     // Portalled cell content (a menu, a popover) bubbles here through React but sits outside the row.
     if (!event.currentTarget.contains(target) || target.closest(CELL_CONTROLS)) return;
+    // A disabled checkbox input swallows the click, so it lands on the wrapper, which CELL_CONTROLS does not match.
+    if (target.closest('[data-selection-cell]')) return;
     onRowActivate?.(row);
   };
 
@@ -363,7 +368,7 @@ export function DataTable<Row>({
                     data-testid="admin-table-select-page"
                     checked={visibleRows.length > 0 && selectedVisible === visibleRows.length}
                     indeterminate={selectedVisible > 0 && selectedVisible < visibleRows.length}
-                    disabled={loading}
+                    disabled={loading || selectionDisabled}
                     onChange={event => toggleRows(visibleIds, event.target.checked)}
                   />
                 </th>
@@ -459,12 +464,13 @@ export function DataTable<Row>({
                           style={{ cursor: onRowActivate ? 'pointer' : undefined }}
                         >
                           {selectable && (
-                            <td>
+                            <td data-selection-cell>
                               <Checkbox
                                 size="sm"
                                 aria-label={`Select ${id}`}
                                 data-testid={`admin-table-select-${id}`}
                                 checked={isSelected(id)}
+                                disabled={selectionDisabled}
                                 onChange={event =>
                                   toggleRow(
                                     id,

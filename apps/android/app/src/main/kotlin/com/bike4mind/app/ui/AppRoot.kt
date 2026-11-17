@@ -18,7 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
  * and tokens are left alone, so a lowered minimum (or the installed update) returns the user where they were.
  */
 @Composable
-fun AppRoot(app: B4MApplication, signInError: MutableStateFlow<String?>) {
+fun AppRoot(app: B4MApplication, signInError: MutableStateFlow<String?>, onSignedIn: () -> Unit = {}) {
     val graph = app.graph.collectAsStateWithLifecycle().value ?: return
     val upgrade by graph.upgradeSignal.notice.collectAsStateWithLifecycle()
     val signedIn by graph.session.isSignedIn.collectAsStateWithLifecycle()
@@ -29,6 +29,16 @@ fun AppRoot(app: B4MApplication, signInError: MutableStateFlow<String?>) {
     LaunchedEffect(graph) {
         graph.session.restore()
         restored = true
+    }
+
+    // Push registration follows the session; [onSignedIn] is where the host asks for the notification permission.
+    LaunchedEffect(graph, signedIn) {
+        if (signedIn) {
+            onSignedIn()
+            graph.startPush()
+        } else {
+            graph.push.sessionDidEnd()
+        }
     }
 
     // The upgrade screen leaves the current screen's view models alone, so the user returns to them intact.

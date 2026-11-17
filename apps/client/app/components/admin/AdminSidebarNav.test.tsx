@@ -293,6 +293,15 @@ describe('SidebarNav', () => {
       expect(filterInput()).toHaveValue('');
     });
 
+    it('lists Dependencies first for "dep"', () => {
+      const { onTabSelect } = renderNav();
+
+      fireEvent.change(filterInput(), { target: { value: 'dep' } });
+      fireEvent.keyDown(filterInput(), { key: 'Enter' });
+
+      expect(onTabSelect).toHaveBeenCalledExactlyOnceWith(AdminTab.Dependencies);
+    });
+
     it('does nothing on Enter when nothing matches', () => {
       const { onTabSelect } = renderNav();
 
@@ -499,5 +508,30 @@ describe('filterSidebarSections', () => {
   it('matches an item by a former name', () => {
     const items = filterSidebarSections(SIDEBAR_SECTIONS, allOpen, 'waitlist').flatMap(section => section.items);
     expect(items.map(item => item.label)).toEqual(['Invite Center']);
+  });
+
+  it('finds Models by the names of the pages folded into it', () => {
+    for (const query of [
+      'llm dashboard',
+      'model lifecycle',
+      'lifecycle',
+      'model pricing',
+      'model prices',
+      'discovery',
+    ]) {
+      const tabs = filterSidebarSections(SIDEBAR_SECTIONS, allOpen, query).flatMap(section =>
+        section.items.map(item => item.tab)
+      );
+      expect(tabs, query).toContain(AdminTab.Models);
+    }
+  });
+
+  it('keeps the Models aliases from outranking the pages that own a common query', () => {
+    const first = (query: string) =>
+      filterSidebarSections(SIDEBAR_SECTIONS, allOpen, query).flatMap(section => section.items)[0]?.tab;
+    expect(first('pricing')).toBe(AdminTab.GrowthPricing);
+    const settings = filterSidebarSections(SIDEBAR_SECTIONS, allOpen, 'settings').flatMap(section => section.items);
+    expect(settings.map(item => item.tab)).toContain(AdminTab.AdminSettings);
+    expect(settings.map(item => item.tab)).not.toContain(AdminTab.Models);
   });
 });

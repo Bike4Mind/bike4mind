@@ -24,6 +24,13 @@ import {
 import { NOTEBOOK_DOWNLOAD_KEY_PREFIX } from '../notebooks/downloadCopyKeys';
 import { Resource } from 'sst';
 import { z } from 'zod';
+import { OrganizationAuditEventModel } from '@bike4mind/database/infra';
+import { claimAccountFilePurgeLease, type AccountFilePurgeLease } from './accountFilePurgeLease';
+import {
+  legacyOrganizationExportKey,
+  legacyOrganizationExportLocator,
+  organizationExportPrefix,
+} from '../utils/organizationDataExport';
 
 const hasPrefixTag = (file: IFabFileDocument) => (file.tags ?? []).some(tag => tag?.name?.includes(':'));
 
@@ -258,7 +265,63 @@ async function purgeImportArchives(userId: string, assertLease: () => Promise<vo
 }
 
 /** Strict, resumable storage erasure. Row locators survive every failed object/index deletion. */
+async function purgeLegacyOrganizationExports(userId: string, lease: AccountFilePurgeLease): Promise<void> {
+  let progress = await lease.initialize();
+  while (!progress.complete) {
+    await lease.assertActive();
+    if (!progress.throughAuditId) throw new Error('Organization export purge boundary is missing');
+    const batch = await OrganizationAuditEventModel.find({
+      actorUserId: userId,
+      action: 'export.requested',
+      _id: { $lte: progress.throughAuditId, ...(progress.afterAuditId ? { $gt: progress.afterAuditId } : {}) },
+    })
+      .sort({ _id: 1 })
+      .limit(BATCH_SIZE)
+      .lean();
+    if (batch.length === 0) {
+      progress = await lease.advance(progress, progress.afterAuditId, true);
+      continue;
+    }
+    for (const row of batch) {
+      // Audit rows outlive ownership transfers and organization deletion. Validate the exact
+      // original locator; malformed metadata fails visibly without advancing the retry cursor.
+      const locator = legacyOrganizationExportLocator.parse(row);
+      if (locator.actorUserId !== userId) throw new Error('Organization export purge subject mismatch');
+      await lease.assertActive();
+      await getFilesStorage().deletePermanently(
+        legacyOrganizationExportKey(locator.organizationId, userId, locator.targetId)
+      );
+      progress = await lease.advance(progress, String(row._id), false);
+    }
+  }
+}
+
 export async function purgeAccountFiles(userId: string, options: PurgeOptions): Promise<void> {
+  const lease = await claimAccountFilePurgeLease(userId, options.assertLease, options.logger);
+  let failed = false;
+  const release = async () => {
+    try {
+      await lease.release();
+    } catch (error) {
+      if (!failed) throw error;
+      options.logger.error('Failed to release account file purge lease', { error });
+    }
+  };
+  try {
+    await purgeAccountFilesWithLease(userId, { ...options, assertLease: lease.assertActive });
+    await lease.assertActive();
+    await getFilesStorage().deletePrefixPermanently(organizationExportPrefix(userId));
+    await purgeLegacyOrganizationExports(userId, lease);
+    await lease.assertActive();
+  } catch (error) {
+    failed = true;
+    throw error;
+  } finally {
+    await release();
+  }
+}
+
+async function purgeAccountFilesWithLease(userId: string, options: PurgeOptions): Promise<void> {
   // Importing the repository registers its Mongoose model before the raw tombstone-inclusive read.
   void importHistoryJobRepository;
   // One CDN invalidation for everything erased, flushed even when a step throws: the bytes are gone either way.

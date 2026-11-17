@@ -1,8 +1,8 @@
-export type TimeRange = '24h' | '7d' | '30d';
+import type { IntegrationName } from './integrationHealthSearch';
+
+export type { IntegrationName, TimeRange } from './integrationHealthSearch';
 
 // These types mirror server-side definitions from @bike4mind/database - keep in sync
-export type IntegrationName = 'slack' | 'github' | 'jira' | 'confluence';
-
 export type IntegrationHealthStatus = 'healthy' | 'degraded' | 'unhealthy';
 
 /** Mirrors HealthSummaryStatus in integrationHealthService: 'no_data' means the integration was never checked. */

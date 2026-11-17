@@ -47,6 +47,7 @@ vi.mock('@bike4mind/database', () => ({
   fallbackLakeSettingsRepository: {},
   // ToolContext.db.organizations is required since #1674 (org membership set).
   organizationRepository: {
+    findById: vi.fn().mockResolvedValue(null),
     findMembershipOrgIds: vi.fn().mockResolvedValue([]),
     incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
   },
@@ -75,7 +76,8 @@ vi.mock('../utils/storage/index', () => ({
 }));
 
 const { createDeepAgentToolMaterializer } = await import('./toolMaterializer');
-const { questRepository, sessionRepository } = await import('@bike4mind/database');
+const { organizationRepository, questRepository, sessionRepository, userRepository } =
+  await import('@bike4mind/database');
 
 // A minimal backend stand-in; never invoked by the paths under test.
 const fakeLlm = { complete: vi.fn() } as unknown as ICompletionBackend;
@@ -106,6 +108,23 @@ describe('createDeepAgentToolMaterializer', () => {
     expect(getUserEntitlements).not.toHaveBeenCalled();
     await expect(toolDeps.getEntitlements()).resolves.toEqual(['plan:paid']);
     expect(getUserEntitlements).toHaveBeenCalledExactlyOnceWith({ _id: 'owner-1', id: 'owner-1' });
+  });
+
+  it("withholds built-in tools the owner's billing org policy does not allow", async () => {
+    vi.mocked(userRepository.findById).mockResolvedValueOnce({
+      _id: 'owner-1',
+      id: 'owner-1',
+      organizationId: 'org-1',
+    } as never);
+    vi.mocked(organizationRepository.findById).mockResolvedValueOnce({
+      id: 'org-1',
+      modelPolicy: { allowedTools: ['dice_roll'] },
+    } as never);
+    const tools = await materialize()(['weather_info', 'dice_roll'], 'owner-1');
+    expect(organizationRepository.findById).toHaveBeenCalledWith('org-1');
+    expect(tools.map(t => t.toolSchema.name)).toEqual(['dice_roll']);
+    const opts = buildSharedToolsSpy.mock.calls.at(-1)?.[2] as { orgToolPolicy?: unknown };
+    expect(opts.orgToolPolicy).toMatchObject({ allowedTools: ['dice_roll'] });
   });
 
   it('resolves availability for the OWNER, fail-closed', async () => {

@@ -120,7 +120,7 @@ export function verifyBackupCode(userBackupCodes: string[], providedCode: string
  * A persona holding any admin access is not exempt, matching isPersonaAccount in the persona module.
  */
 export function isMfaEnforcementExempt(
-  user: Pick<IUserDocument, 'isPersona' | 'isAdmin' | 'adminPermissions'>
+  user: Pick<IUserDocument, 'isPersona' | 'isAdmin' | 'adminPermissions' | 'adminRoleIds'>
 ): boolean {
   return user.isPersona === true && !user.isAdmin && !canAccessAdmin(user);
 }

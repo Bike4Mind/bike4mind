@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-import type {
-  ModelAccessBulkDryRun,
-  ModelAccessBulkResult,
-  ModelAccessPatchResult,
-  ModelAccessSaveResult,
+import {
+  MODEL_ACCESS_UNDO_EXPIRED_CODE,
+  type ModelAccessBulkDryRun,
+  type ModelAccessBulkResult,
+  type ModelAccessPatchResult,
+  type ModelAccessSaveResult,
 } from '@bike4mind/common';
 import {
   createMongoReplSet,
@@ -15,6 +16,7 @@ import {
 import { AdminAuditLogModel, AdminSettings, Cache, User, cacheRepository } from '@bike4mind/database';
 import { resolveAdminModelFilterIds } from '@server/admin/models/adminModelFilter';
 import { commitAccessEntry } from './modelAccessStore';
+import { ACCESS_TOKEN_TTL_MS } from './modelAccessTokens';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -466,6 +468,24 @@ describe('POST /api/admin/models/access/bulk', () => {
     expect((restored?.updatedAt as Date).getTime()).toBeGreaterThan((before?.updatedAt as Date).getTime());
     const undoAudits = (await audits()).filter(row => (row.details as { undoOf?: string }).undoOf === result.batchId);
     expect(undoAudits).toHaveLength(2);
+  });
+
+  it('refuses an undo past its expiry with a 409 coded as expired, and reverts nothing', async () => {
+    const change = { addTags: ['beta'] };
+    const preview = await dryRun(['model-0', 'model-1'], change);
+    const result = await apply(['model-0', 'model-1'], change, preview.token);
+    const applied = await storedValue();
+
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + ACCESS_TOKEN_TTL_MS + 1_000);
+    try {
+      await expect(bulk({ undoToken: result.undoToken, reason: REASON })).rejects.toMatchObject({
+        statusCode: 409,
+        additionalInfo: { code: MODEL_ACCESS_UNDO_EXPIRED_CODE },
+      });
+    } finally {
+      vi.mocked(Date.now).mockRestore();
+    }
+    expect(await storedValue()).toEqual(applied);
   });
 
   it('refuses a replayed preview with 409 after its batch was undone, and applies nothing', async () => {

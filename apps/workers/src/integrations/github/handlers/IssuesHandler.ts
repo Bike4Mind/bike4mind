@@ -3,11 +3,9 @@ import { findVerifiedGitHubAccounts } from '@bike4mind/slack';
  * GitHub Webhook - Issues Event Handler
  *
  * Handles `issues` events:
- *   - opened -> notify repo watchers (except issue author) + dispatch to SRE
+ *   - opened -> notify repo watchers (except issue author)
  *   - closed -> notify issue author (if closed by someone else)
  *   - assigned -> notify the assignee
- *   - labeled -> dispatch to SRE if labels now match the filter
- *   - reopened -> dispatch to SRE so the fix-loop guard can detect "fix didn't work"
  */
 
 import { IMcpServerDocument } from '@bike4mind/common';
@@ -28,10 +26,6 @@ import {
   buildIssueAssignedBlocks,
 } from '@bike4mind/slack';
 import { webhookSubscriptionRepository } from '@bike4mind/database';
-import {
-  dispatchIssueToSre,
-  syncSreIssueStateFromWebhook,
-} from '@bike4mind/server-utils/integrations/github/sreWebhookDispatch';
 import { emptyNotifyResult, mergeNotifyResults, toHandlerResult } from './notifyResultUtils';
 
 export class IssuesHandler implements GitHubEventHandler {
@@ -73,14 +67,6 @@ export class IssuesHandler implements GitHubEventHandler {
 
       case 'assigned':
         result = await this.handleAssigned(issues, repo, notifyOptions);
-        break;
-
-      case 'labeled':
-        await this.handleLabeled(issues, repo);
-        break;
-
-      case 'reopened':
-        await this.handleReopened(issues, repo);
         break;
 
       // 'unassigned' is intentionally not handled (low value notification)
@@ -206,18 +192,6 @@ export class IssuesHandler implements GitHubEventHandler {
       }
     }
 
-    // SRE Sentinel: dispatch opened issue if label filter matches
-    try {
-      await this.dispatchToSreIfMatching(issues, repo);
-    } catch (error) {
-      this.logger?.error('[SRE-SENTINEL] Failed to dispatch opened issue to SRE pipeline', {
-        issueNumber: issues.issue.number,
-        repo,
-        error,
-      });
-      // SRE dispatch failure must not affect existing notification flow
-    }
-
     return combined;
   }
 
@@ -226,10 +200,6 @@ export class IssuesHandler implements GitHubEventHandler {
     repo: string,
     options?: { orgId?: string }
   ): Promise<NotifyResult> {
-    // Keep the denormalized githubIssueState fresh for the SRE admin filter.
-    // Runs before the self-close early-return below so state is always recorded.
-    await syncSreIssueStateFromWebhook(issues, this.logger);
-
     const issueAuthor = issues.issue.user.login;
     const closedBy = issues.sender?.login || 'unknown';
 
@@ -289,52 +259,5 @@ export class IssuesHandler implements GitHubEventHandler {
         }),
       options
     );
-  }
-
-  /**
-   * Handle 'labeled' action - when a label is added to an existing issue,
-   * check if the updated label set now matches the SRE filter and dispatch.
-   */
-  private async handleLabeled(issues: GitHubIssuesPayload, repo: string): Promise<void> {
-    try {
-      await this.dispatchToSreIfMatching(issues, repo);
-    } catch (error) {
-      this.logger?.error('[SRE-SENTINEL] Failed to dispatch labeled issue to SRE pipeline', {
-        issueNumber: issues.issue.number,
-        repo,
-        error,
-      });
-      // SRE dispatch failure must not affect existing flows
-    }
-  }
-
-  /**
-   * Handle 'reopened' action - a reopened issue is the strongest "fix didn't
-   * work" signal we have for SRE-tracked bugs. Dispatch to the same shared
-   * path as `opened`; the fix-loop guard in `sreAnalysis.ts` detects the
-   * prior fix on the same fingerprint and escalates to a human.
-   */
-  private async handleReopened(issues: GitHubIssuesPayload, repo: string): Promise<void> {
-    // Record the reopen (issue is open again) before re-dispatching for analysis.
-    await syncSreIssueStateFromWebhook(issues, this.logger);
-
-    try {
-      await this.dispatchToSreIfMatching(issues, repo);
-    } catch (error) {
-      this.logger?.error('[SRE-SENTINEL] Failed to dispatch reopened issue to SRE pipeline', {
-        issueNumber: issues.issue.number,
-        repo,
-        error,
-      });
-      // SRE dispatch failure must not affect existing flows
-    }
-  }
-
-  /**
-   * Shared SRE dispatch logic for 'opened', 'labeled', and 'reopened' actions.
-   * Delegates to the shared dispatchIssueToSre() function.
-   */
-  private async dispatchToSreIfMatching(issues: GitHubIssuesPayload, _repo: string): Promise<void> {
-    await dispatchIssueToSre(issues, this.logger);
   }
 }

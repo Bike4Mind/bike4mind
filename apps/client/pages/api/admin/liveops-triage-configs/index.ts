@@ -66,6 +66,7 @@ const CreateConfigSchema = z.object({
   regressionLookbackDays: z.number().min(1).max(180).optional().default(30),
   regressionGracePeriodHours: z.number().min(1).max(168).optional().default(48),
   autoCreateIssues: z.boolean().optional().default(false),
+  approverIds: z.string().optional(),
   postWhenNoErrors: z.boolean().optional().default(true),
 });
 

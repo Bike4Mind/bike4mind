@@ -272,6 +272,21 @@ describe('ShadowDetectionAssessmentPanel', () => {
     expect(screen.queryByTestId('shadow-detection-assessment-suggestion-accept-btn')).toBeNull();
   });
 
+  it('reports the judged assessment id to the host, and null for an unknown result', () => {
+    const onLatestAssessment = vi.fn();
+    const { unmount } = renderPanel({ onLatestAssessment });
+    expect(onLatestAssessment).toHaveBeenLastCalledWith(makeItem().id);
+    unmount();
+    hooks.useAbuseAssessments.mockReturnValue({
+      data: [makeItem({ result: 'unknown' })],
+      isPending: false,
+      error: null,
+    });
+    const second = vi.fn();
+    renderPanel({ onLatestAssessment: second });
+    expect(second).toHaveBeenLastCalledWith(null);
+  });
+
   it('requests an assessment when Assess now is clicked', async () => {
     mutateAsync.mockResolvedValue({ status: 'assessed', cached: true, item: makeItem() });
     renderPanel();

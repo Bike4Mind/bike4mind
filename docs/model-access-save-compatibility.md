@@ -1,6 +1,6 @@
 # Model access saves during the dashboard transition
 
-The current LLM Dashboard remains usable while the Models console is developed separately. Its Save action asks for an audit reason and sends only changed entries, using the stamps loaded into the editor. Each entry's write and audit share one transaction, and the entire dashboard Save either commits or rolls back. Other models are not replaced. Fallback and rank removals are explicit changes.
+The compat endpoint below serves browser tabs that still run the previous app build; the current app has no caller for it. That build's dashboard Save asks for an audit reason and sends only changed entries, using the stamps loaded into the editor. Each entry's write and audit share one transaction, and the entire Save either commits or rolls back. Other models are not replaced. Fallback and rank removals are explicit changes.
 
 `PUT /api/admin/llm-models/configurations` accepts a full-administrator session and this conditional request:
 
@@ -25,4 +25,4 @@ Configuration GET retains the picker array body. Full administrators additionall
 
 Deploy the updated server and client together, drain the previous whole-array writer instances, and run the additive `20260921239998_stamp-model-access-entries` migration. The migration is idempotent and changes only unstamped entries. The independent replacement Models UI is not a prerequisite. Intentional preview environment seeding remains separate from an administrator's Save.
 
-Before release, verify the current dashboard on its preview: change one model, save with a reason, reload and confirm the result; edit the same model from two tabs and confirm the older editor receives 409 without overwriting the newer value; confirm that an open picker refreshes after another administrator changes access. Hosted CI and deployed QA are separate from local tests.
+Before release, verify the Models console on its preview: change one model, save with a reason, reload and confirm the result; edit the same model from two tabs and confirm the older editor receives 409 without overwriting the newer value; confirm that an open picker refreshes after another administrator changes access. Hosted CI and deployed QA are separate from local tests.

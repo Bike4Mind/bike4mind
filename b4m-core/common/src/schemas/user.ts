@@ -162,6 +162,8 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   groups: true,
   isAdmin: true,
   adminPermissions: true,
+  adminRoleIds: true,
+  roleAdminPermissions: true,
   storageLimit: true,
   storageLimitOverride: true,
   planStorageLimit: true,

@@ -15,6 +15,22 @@ item with the build and date.
 - [ ] To exercise the upgrade screen: an admin can set `minimumClientVersions["b4m-android"]` above the build's
       `versionName`.
 
+## Push notifications (FCM)
+
+Needs a physical device or a Google-APIs emulator image, a build with the `b4m.fcm.*` properties set (see README), and a
+server whose `FCM_SERVICE_ACCOUNT` secret belongs to the same Firebase project.
+
+- [ ] On Android 13+, the first sign-in shows the notification permission prompt once; allowing it registers the token
+      (a `POST /api/v1/push-tokens` with `platform: android` in the server log, a `pushtokens` row for the user).
+- [ ] A chat reply that finishes while the app is backgrounded (and no websocket is open) shows a "Reply ready"-style
+      notification; tapping it opens the app. While the app is in the foreground the same push is shown by the app.
+- [ ] An agent approval request (when the server publishes one) arrives the same way.
+- [ ] Denying the permission (or switching notifications off in system settings) removes the token row; switching them
+      back on registers again.
+- [ ] Sign out removes the token row; a different account signing in on the device registers it under that account.
+- [ ] Uninstalling the app and sending a push prunes the row (FCM answers `UNREGISTERED`).
+- [ ] A build without the `b4m.fcm.*` properties runs normally and registers no token.
+
 ## Server picker (debug builds)
 
 - [ ] A fresh debug install points at the build's `-Pb4m.serverUrl` (default staging); the sign-in screen shows it.
