@@ -7,6 +7,12 @@ const QUERY_TIMEOUT_MS = 350;
 // Bounds the rows scanned for a busy IP; the sort is backed by the (ipAddress, timestamp) index.
 const IP_USAGE_SCAN_LIMIT = 2000;
 const CI_COLLATION = { locale: 'en', strength: 2 };
+// isBanned is shown as "suspended" to match the admin user profile and list labels.
+const accountStatus = (user: {
+  deletedAt?: Date | null;
+  isBanned?: boolean;
+  moderation?: { status?: string } | null;
+}) => (user.deletedAt ? 'deleted' : user.isBanned ? 'suspended' : (user.moderation?.status ?? 'active'));
 const maskEmail = (email: string | null | undefined) => {
   if (!email) return 'No email';
   const [local, domain] = email.split('@');
@@ -75,24 +81,37 @@ export async function searchAdminEntities(query: string): Promise<AdminSearchRes
   const userFilter =
     kind === 'id'
       ? { _id: query }
-      : kind === 'email'
-        ? { email: query }
-        : kind === 'stripe'
-          ? { stripeCustomerId: query }
-          : recencyOrder
-            ? { _id: { $in: recencyOrder } }
-            : null;
+      : kind === 'providerEndUserId'
+        ? { providerEndUserId: query.toLowerCase() }
+        : kind === 'email'
+          ? { email: query }
+          : kind === 'stripe'
+            ? { stripeCustomerId: query }
+            : recencyOrder
+              ? { _id: { $in: recencyOrder } }
+              : null;
+  const userLookup = userFilter
+    ? User.find(userFilter)
+        .hint(
+          kind === 'email'
+            ? 'email_ci'
+            : kind === 'stripe'
+              ? 'user_stripeCustomerId'
+              : kind === 'providerEndUserId'
+                ? 'user_providerEndUserId'
+                : '_id_'
+        )
+        .select('_id name username email deletedAt isBanned moderation.status')
+        .sort({ _id: 1 })
+        .limit(GROUP_LIMIT)
+        .maxTimeMS(QUERY_TIMEOUT_MS)
+    : null;
+  // Canonical provider digests need only binary equality; DocumentDB 5 rejects collation options.
+  if (userLookup && kind !== 'providerEndUserId') {
+    userLookup.collation(kind === 'email' ? CI_COLLATION : { locale: 'simple' });
+  }
   const [users, namedOrganizations, identifiedOrganizations] = await Promise.all([
-    userFilter
-      ? User.find(userFilter)
-          .hint(kind === 'email' ? 'email_ci' : kind === 'stripe' ? 'user_stripeCustomerId' : '_id_')
-          .collation(kind === 'email' ? CI_COLLATION : { locale: 'simple' })
-          .select('_id name username email')
-          .sort({ _id: 1 })
-          .limit(GROUP_LIMIT)
-          .maxTimeMS(QUERY_TIMEOUT_MS)
-          .lean()
-      : [],
+    userLookup ? userLookup.lean() : [],
     kind === 'name'
       ? Organization.find({ name: query })
           .hint('organization_name_ci')
@@ -124,7 +143,9 @@ export async function searchAdminEntities(query: string): Promise<AdminSearchRes
       type: 'user' as const,
       id: String(user._id),
       displayName: user.name || user.username,
-      secondary: maskEmail(user.email),
+      // A provider notice is usually followed by an enforcement decision, so show the state inline.
+      secondary:
+        kind === 'providerEndUserId' ? `${maskEmail(user.email)} - ${accountStatus(user)}` : maskEmail(user.email),
     })),
     ...keys.map(key => ({
       type: 'key' as const,
