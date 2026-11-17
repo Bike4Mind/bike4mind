@@ -17,6 +17,9 @@ export interface PendingInviteRow {
   inviterName: string | null;
 }
 
+// The shape of inviteManager.maskEmail; a typed address may itself contain '*'.
+const MASKED_ADDRESS = /^.\*{3}@/;
+
 const toDate = (value: unknown): Date | null => {
   if (!value) return null;
   const date = new Date(value as string | Date);
@@ -37,7 +40,7 @@ export function buildPendingInviteRows(invites: readonly ISharerInviteView[]): P
       const named = names.get(entry);
       const isAddress = entry.includes('@');
       const target: PendingInviteTarget | null =
-        named !== undefined || !isAddress ? { userId: entry } : entry.includes('*') ? null : { email: entry };
+        named !== undefined || !isAddress ? { userId: entry } : MASKED_ADDRESS.test(entry) ? null : { email: entry };
       return {
         key: `${invite.id}:${entry}`,
         inviteId: invite.id,

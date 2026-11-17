@@ -50,6 +50,13 @@ describe('buildPendingInviteRows', () => {
     expect(row).toMatchObject({ label: 'a***@example.com', target: null });
   });
 
+  it('acts on a typed address that contains an asterisk', () => {
+    const [row] = buildPendingInviteRows([
+      invite({ recipients: { pending: ['first*last@example.com'], accepted: [], refused: [] } }),
+    ]);
+    expect(row).toMatchObject({ label: 'first*last@example.com', target: { email: 'first*last@example.com' } });
+  });
+
   it('acts on an unnamed id by id', () => {
     const [row] = buildPendingInviteRows([invite({ recipients: { pending: [USER_ID], accepted: [], refused: [] } })]);
     expect(row).toMatchObject({ label: 'Unknown user', target: { userId: USER_ID } });
