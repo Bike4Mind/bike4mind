@@ -1,8 +1,14 @@
+import { useState } from 'react';
 import { Button, CircularProgress, Typography } from '@mui/joy';
+import { useIsMutating } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { isAxiosError } from 'axios';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
-import { compositionErrorMessage, useStudioComposition } from '@client/app/hooks/data/studioCompositions';
+import {
+  compositionErrorMessage,
+  studioCompositionKeys,
+  useStudioComposition,
+} from '@client/app/hooks/data/studioCompositions';
 import { StudioPanel } from '../design/StudioPanel';
 import StudioV2Frame from '../v2/StudioV2Frame';
 import ProductionEditor from './ProductionEditor';
@@ -10,6 +16,11 @@ import ProductionEditor from './ProductionEditor';
 /** /studio/productions/$compositionId: one production in the timeline editor. */
 const ProductionEditorPage = ({ compositionId }: { compositionId: string }) => {
   const composition = useStudioComposition(compositionId);
+  // A save from a previous visit may still be in flight; the editor starts its draft from this data once, so it
+  // waits for that save to land in the cache. Latched, so the editor's own saves never unmount it.
+  const savesInFlight = useIsMutating({ mutationKey: studioCompositionKeys.update(compositionId) });
+  const [isReady, setIsReady] = useState(false);
+  if (!isReady && savesInFlight === 0 && composition.data) setIsReady(true);
   useDocumentTitle(composition.data ? `${composition.data.title} - Productions Studio` : 'Productions Studio');
 
   return (
@@ -24,7 +35,7 @@ const ProductionEditorPage = ({ compositionId }: { compositionId: string }) => {
       >
         All productions
       </Button>
-      {composition.isPending ? (
+      {composition.isPending || (composition.data && !isReady) ? (
         <CircularProgress size="sm" data-testid="production-editor-loading" />
       ) : composition.isError ? (
         <StudioPanel testId="production-editor-error">

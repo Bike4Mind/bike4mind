@@ -16,7 +16,13 @@ const h = vi.hoisted(() => ({
 vi.mock('@client/app/hooks/data/studioCompositions', () => ({
   compositionErrorMessage: () => 'failed',
   compositionErrorIssues: () => [],
-  useUpdateStudioComposition: () => ({ mutate: h.updateMutate, isPending: false, isError: false, error: null }),
+  useUpdateStudioComposition: () => ({
+    mutate: h.updateMutate,
+    mutateAsync: h.updateMutate,
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
 }));
 vi.mock('@client/app/utils/filesAPICalls', () => ({
   getFabFileByIdFromServer: async (id: string) => ({

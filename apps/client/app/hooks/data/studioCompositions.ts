@@ -22,6 +22,7 @@ export const studioCompositionKeys = {
   all: ['studioCompositions'] as const,
   list: ['studioCompositions', 'list'] as const,
   detail: (id: string) => ['studioCompositions', 'detail', id] as const,
+  update: (id: string) => ['studioCompositions', 'update', id] as const,
 };
 
 const parseComposition = (body: unknown): StudioCompositionResponse =>
@@ -46,11 +47,18 @@ export function useStudioComposition(id: string) {
   });
 }
 
-/** The route's message, or a generic one: what a toast or the editor's save status shows. */
+/**
+ * The route's error text, or a generic one: what a toast or the editor's save status shows. The shared error
+ * envelope (server/middlewares/errorHandler.ts) carries it under `error`; a route's inline 404 uses `message`.
+ */
 export const compositionErrorMessage = (error: unknown): string => {
   if (isAxiosError(error)) {
-    const message: unknown = error.response?.data?.message;
-    if (typeof message === 'string' && message.length > 0) return message;
+    const body: unknown = error.response?.data;
+    if (typeof body === 'object' && body !== null) {
+      const { error: text, message } = body as { error?: unknown; message?: unknown };
+      const found = [text, message].find(value => typeof value === 'string' && value.length > 0);
+      if (typeof found === 'string') return found;
+    }
   }
   return 'Something went wrong. Try again.';
 };
@@ -62,17 +70,15 @@ const isIssue = (value: unknown): value is StudioTimelineIssue =>
   Array.isArray((value as { path?: unknown }).path);
 
 /**
- * The spec issues a 422 carries. The browser validates without file context, so these are the checks only the
- * server can run (a file it cannot read, a file kind that does not fit its track, a trim past the source's end).
+ * The spec issues a 422 carries (top-level `issues` in the error envelope). The server checks file ownership
+ * (`unknown_file`), which the browser cannot.
  */
 export const compositionErrorIssues = (error: unknown): StudioTimelineIssue[] => {
   if (!isAxiosError(error) || error.response?.status !== 422) return [];
   const body: unknown = error.response.data;
   if (typeof body !== 'object' || body === null) return [];
-  const record = body as Record<string, unknown>;
-  const nested = [record.issues, (record.details as Record<string, unknown> | undefined)?.issues];
-  const issues = nested.find(Array.isArray) ?? [];
-  return (issues as unknown[]).filter(isIssue);
+  const { issues } = body as { issues?: unknown };
+  return Array.isArray(issues) ? issues.filter(isIssue) : [];
 };
 
 export function useCreateStudioComposition() {
@@ -92,6 +98,8 @@ export function useCreateStudioComposition() {
 export function useUpdateStudioComposition(id: string) {
   const queryClient = useQueryClient();
   return useMutation({
+    // Lets the editor page wait out a save still in flight from a previous visit (see ProductionEditorPage).
+    mutationKey: studioCompositionKeys.update(id),
     mutationFn: async (body: StudioCompositionUpdateBody) =>
       parseComposition((await api.patch(`${COMPOSITIONS_URL}/${id}`, body)).data),
     onSuccess: composition => {

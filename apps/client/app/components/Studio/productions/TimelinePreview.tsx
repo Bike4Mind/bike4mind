@@ -154,7 +154,8 @@ function useSyncedMedia(
       // A pause() racing this play() rejects it with AbortError; that is the clock moving on, not a failure.
       element.play().catch((error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return;
-        throw error;
+        // Blocked autoplay or an unplayable source: this element stays silent and the clock keeps the others going.
+        console.warn('Production preview could not play a clip', error);
       });
     }
   }, [mediaRef, clip, timeMs, isPlaying]);
@@ -228,7 +229,8 @@ const Caption = ({ clip }: { clip: StudioCaptionClip }) => {
         flexDirection: 'column',
         justifyContent: CAPTION_JUSTIFY[style.position],
         alignItems: CAPTION_ALIGN_ITEMS[style.align],
-        padding: `${CAPTION_INSET_PCT}cqh ${CAPTION_INSET_PCT}cqw`,
+        // Vertical inset only: the spec wraps at `maxWidthPct` of the full output width, so no side padding.
+        padding: `${CAPTION_INSET_PCT}cqh 0`,
         pointerEvents: 'none',
       }}
     >

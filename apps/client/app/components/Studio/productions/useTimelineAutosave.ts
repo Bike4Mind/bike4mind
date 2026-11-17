@@ -6,6 +6,7 @@ import {
   type StudioTimelineIssue,
   type StudioTimelineReferenceContext,
 } from '@bike4mind/common';
+import { toast } from 'sonner';
 import {
   compositionErrorIssues,
   compositionErrorMessage,
@@ -44,8 +45,9 @@ export const timelineIssues = (
 
 /**
  * Validates the editor's draft timeline on every edit and saves it after a short pause once it is valid; an invalid
- * draft waits until it is fixed. A save still pending when the editor unmounts is sent on the way out.
- * `stored` is the timeline as loaded, so an untouched draft never saves.
+ * draft waits until it is fixed. Saves go out one at a time, so an older draft can never land after a newer one.
+ * A save still pending when the editor unmounts is sent on the way out, and leaving the page with unsaved edits
+ * asks first. `stored` is the timeline as loaded, so an untouched draft never saves.
  */
 export function useTimelineAutosave(
   compositionId: string,
@@ -54,46 +56,59 @@ export function useTimelineAutosave(
   context: StudioTimelineReferenceContext
 ) {
   const [savedJson, setSavedJson] = useState(() => JSON.stringify(stored));
-  const update = useUpdateStudioComposition(compositionId);
+  // The draft the server last rejected: not retried until it changes, so a 422 or an outage cannot loop.
+  const [failedJson, setFailedJson] = useState<string | null>(null);
+  const { mutateAsync, isPending, isError, error } = useUpdateStudioComposition(compositionId);
   const draftJson = useMemo(() => JSON.stringify(draft), [draft]);
   const issues = useMemo(() => timelineIssues(draft, context), [draft, context]);
   const isDirty = draftJson !== savedJson;
+  const canSave = isDirty && issues.length === 0 && draftJson !== failedJson;
 
-  const save = useCallback(
-    (timeline: StudioTimeline, json: string) => {
-      update.mutate({ timeline }, { onSuccess: () => setSavedJson(json) });
+  const queueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const enqueueSave = useCallback(
+    (timeline: StudioTimeline) => {
+      const run = queueRef.current.then(() => mutateAsync({ timeline }));
+      queueRef.current = run.catch(() => undefined);
+      return run;
     },
-    // `mutate` is stable across renders; the mutation object itself is not.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [update.mutate]
+    [mutateAsync]
   );
 
   useEffect(() => {
-    if (!isDirty || issues.length > 0) return;
-    const handle = setTimeout(() => save(draft, draftJson), SAVE_DEBOUNCE_MS);
+    if (!canSave || isPending) return;
+    const handle = setTimeout(() => {
+      enqueueSave(draft).then(
+        () => setSavedJson(draftJson),
+        () => setFailedJson(draftJson)
+      );
+    }, SAVE_DEBOUNCE_MS);
     return () => clearTimeout(handle);
-  }, [draft, draftJson, isDirty, issues, save]);
+  }, [canSave, isPending, draft, draftJson, enqueueSave]);
 
-  const pendingRef = useRef<{ draft: StudioTimeline; json: string } | null>(null);
+  const exitSaveRef = useRef<(() => void) | null>(null);
   useEffect(() => {
-    pendingRef.current = isDirty && issues.length === 0 ? { draft, json: draftJson } : null;
-  }, [draft, draftJson, isDirty, issues]);
-  useEffect(
-    () => () => {
-      if (pendingRef.current) save(pendingRef.current.draft, pendingRef.current.json);
-    },
-    [save]
-  );
+    exitSaveRef.current = canSave
+      ? () => {
+          enqueueSave(draft).catch((exitError: unknown) =>
+            toast.error(`Your last edit was not saved: ${compositionErrorMessage(exitError)}`)
+          );
+        }
+      : null;
+  }, [canSave, draft, enqueueSave]);
+  useEffect(() => () => exitSaveRef.current?.(), []);
+
+  useEffect(() => {
+    if (!isDirty) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [isDirty]);
 
   const status = ((): TimelineSaveStatus => {
     if (issues.length > 0) return { kind: 'invalid', issues };
-    if (update.isPending) return { kind: 'saving' };
-    if (update.isError && isDirty) {
-      return {
-        kind: 'error',
-        message: compositionErrorMessage(update.error),
-        issues: compositionErrorIssues(update.error),
-      };
+    if (isPending) return { kind: 'saving' };
+    if (isError && isDirty) {
+      return { kind: 'error', message: compositionErrorMessage(error), issues: compositionErrorIssues(error) };
     }
     return isDirty ? { kind: 'pending' } : { kind: 'saved' };
   })();

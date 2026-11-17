@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { styled } from '@mui/system';
 import { Button, Chip, Input, Slider, Stack, Typography } from '@mui/joy';
 import { toast } from 'sonner';
@@ -109,15 +109,16 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
     timelineRef.current = timeline;
   }, [timeline]);
   const { files, context, reportDuration } = useTimelineFiles(timeline);
-  const { issues, status } = useTimelineAutosave(composition.id, timeline, composition.timeline, context);
+  const { status } = useTimelineAutosave(composition.id, timeline, composition.timeline, context);
   const clock = usePlaybackClock(timeline.durationMs);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [outputId, setOutputId] = useState(timeline.outputs[0].id);
   const output = timeline.outputs.find(candidate => candidate.id === outputId) ?? timeline.outputs[0];
   const pickerRef = useRef<EmbeddedFileBrowserHandle>(null);
   const [pickRequest, setPickRequest] = useState<PickRequest>('video');
-  const invalidClipIds = useMemo(() => invalidClipIdsOf(timeline, issues), [timeline, issues]);
   const statusIssues = status.kind === 'invalid' || status.kind === 'error' ? status.issues : [];
+  // statusIssues covers the server's 422 issues too (a file the user cannot read), so those clips are outlined.
+  const invalidClipIds = invalidClipIdsOf(timeline, statusIssues);
 
   const onAdd = ({ kind }: AddClipRequest) => {
     if (kind === 'captions') {
@@ -223,7 +224,7 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
               value={clock.timeMs}
               onChange={(_, value) => typeof value === 'number' && clock.seek(value)}
               sx={{ flex: 1, minWidth: '160px' }}
-              slotProps={{ input: { 'data-testid': 'production-seek-slider' } }}
+              slotProps={{ input: { 'aria-label': 'Playhead', 'data-testid': 'production-seek-slider' } }}
             />
             <StudioSegmentedControl
               aria-label="Preview size"
@@ -309,9 +310,13 @@ const TitleField = ({ compositionId, initialTitle }: { compositionId: string; in
         value={title}
         onChange={event => setTitle(event.target.value)}
         onBlur={commit}
-        onKeyDown={event => event.key === 'Enter' && event.currentTarget.querySelector('input')?.blur()}
+        onKeyDown={event => event.key === 'Enter' && event.currentTarget.blur()}
         slotProps={{
-          input: { maxLength: STUDIO_COMPOSITION_LIMITS.titleMaxLength, 'data-testid': 'production-title-input' },
+          input: {
+            maxLength: STUDIO_COMPOSITION_LIMITS.titleMaxLength,
+            'aria-label': 'Production title',
+            'data-testid': 'production-title-input',
+          },
         }}
       />
     </Stack>

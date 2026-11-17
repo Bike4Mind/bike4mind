@@ -49,5 +49,12 @@ export function usePlaybackClock(durationMs: number) {
 
   const pause = useCallback(() => setIsPlaying(false), []);
 
+  // rAF stops in a hidden tab, so the media elements would play on unsynced; pause the preview instead.
+  useEffect(() => {
+    const pauseWhenHidden = () => document.hidden && setIsPlaying(false);
+    document.addEventListener('visibilitychange', pauseWhenHidden);
+    return () => document.removeEventListener('visibilitychange', pauseWhenHidden);
+  }, []);
+
   return { timeMs: Math.min(timeMs, durationMs), isPlaying, play, pause, seek };
 }

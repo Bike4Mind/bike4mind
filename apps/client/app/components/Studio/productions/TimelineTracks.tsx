@@ -1,4 +1,4 @@
-import { useRef, type KeyboardEvent, type PointerEvent } from 'react';
+import { useRef, type Dispatch, type KeyboardEvent, type PointerEvent, type SetStateAction } from 'react';
 import { styled } from '@mui/system';
 import { Button } from '@mui/joy';
 import {
@@ -9,7 +9,7 @@ import {
   type StudioTimelineTrackKind,
 } from '@bike4mind/common';
 import { STUDIO_MICRO_LABEL, studioColor, studioRadius } from '../design/studioTokens';
-import { findClip, moveClip, removeClip, trimClipEnd, trimClipStart } from './timelineEdits';
+import { moveClip, removeClip, trimClipEnd, trimClipStart } from './timelineEdits';
 import { formatTimecode } from './timelinePlayback';
 import type { TimelineFile } from './useTimelineFiles';
 
@@ -71,6 +71,8 @@ const Lane = styled('div')({
   borderRadius: studioRadius('sm'),
   background: studioColor('sunken'),
   border: `1px solid ${studioColor('hairline')}`,
+  // A clip left past the end after the timeline is shortened stays inside its lane.
+  overflow: 'hidden',
 });
 
 const Ruler = styled('div')({
@@ -144,7 +146,7 @@ type TimelineTracksProps = {
   selectedClipId: string | null;
   invalidClipIds: ReadonlySet<string>;
   onSelect: (clipId: string | null) => void;
-  onChange: (timeline: StudioTimeline) => void;
+  onChange: Dispatch<SetStateAction<StudioTimeline>>;
   onSeek: (ms: number) => void;
   onAdd: (request: AddClipRequest) => void;
 };
@@ -173,7 +175,8 @@ const clipLabel = (clip: StudioTimelineClip, files: ReadonlyMap<string, Timeline
 
 /**
  * The timeline: a ruler to seek, then a lane per track with its clips placed by time. Drag a clip to move it, drag
- * its edges to trim; arrow keys nudge a selected clip and Delete removes it. Edits go straight to `onChange`, and
+ * its edges to trim. A focused clip opens in the inspector on Enter or Space, arrow keys nudge it and Delete
+ * removes it. Edits go straight to `onChange`, and
  * the shared validator flags any overlap they cause (outlined in red) rather than the drag refusing it.
  */
 const TimelineTracks = ({
@@ -191,7 +194,8 @@ const TimelineTracks = ({
     mode: DragMode;
     clipId: string;
     originX: number;
-    origin: StudioTimeline;
+    originStartMs: number;
+    originEndMs: number;
     laneWidth: number;
   } | null>(null);
   const { durationMs } = timeline;
@@ -211,19 +215,25 @@ const TimelineTracks = ({
     onSelect(clip.id);
     if (laneWidth === 0) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
-    dragRef.current = { mode, clipId: clip.id, originX: event.clientX, origin: timeline, laneWidth };
+    dragRef.current = {
+      mode,
+      clipId: clip.id,
+      originX: event.clientX,
+      originStartMs: clip.startMs,
+      originEndMs: clip.startMs + clip.durationMs,
+      laneWidth,
+    };
   };
 
   const continueDrag = (event: PointerEvent<HTMLElement>) => {
     const drag = dragRef.current;
     if (!drag) return;
     const deltaMs = ((event.clientX - drag.originX) / drag.laneWidth) * durationMs;
-    const clip = findClip(drag.origin, drag.clipId)?.clip;
-    if (!clip) return;
-    if (drag.mode === 'move') onChange(moveClip(drag.origin, drag.clipId, clip.startMs + deltaMs));
-    if (drag.mode === 'trim-start') onChange(trimClipStart(drag.origin, drag.clipId, clip.startMs + deltaMs));
-    if (drag.mode === 'trim-end')
-      onChange(trimClipEnd(drag.origin, drag.clipId, clip.startMs + clip.durationMs + deltaMs));
+    const { clipId, originStartMs, originEndMs } = drag;
+    // Applied to the live timeline, not a pointer-down snapshot, so a clip added mid-drag (a slow probe) survives.
+    if (drag.mode === 'move') onChange(current => moveClip(current, clipId, originStartMs + deltaMs));
+    if (drag.mode === 'trim-start') onChange(current => trimClipStart(current, clipId, originStartMs + deltaMs));
+    if (drag.mode === 'trim-end') onChange(current => trimClipEnd(current, clipId, originEndMs + deltaMs));
   };
 
   const endDrag = () => {
@@ -231,6 +241,11 @@ const TimelineTracks = ({
   };
 
   const onClipKeyDown = (event: KeyboardEvent<HTMLDivElement>, clip: StudioTimelineClip) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onSelect(clip.id);
+      return;
+    }
     if (event.key === 'Delete' || event.key === 'Backspace') {
       event.preventDefault();
       onChange(removeClip(timeline, clip.id));
@@ -268,15 +283,11 @@ const TimelineTracks = ({
       <Handle
         data-testid={`production-clip-${clip.id}-trim-start`}
         onPointerDown={event => startDrag(event, clip, 'trim-start')}
-        onPointerMove={continueDrag}
-        onPointerUp={endDrag}
       />
       <ClipLabel>{clipLabel(clip, files)}</ClipLabel>
       <Handle
         data-testid={`production-clip-${clip.id}-trim-end`}
         onPointerDown={event => startDrag(event, clip, 'trim-end')}
-        onPointerMove={continueDrag}
-        onPointerUp={endDrag}
       />
     </ClipBox>
   );

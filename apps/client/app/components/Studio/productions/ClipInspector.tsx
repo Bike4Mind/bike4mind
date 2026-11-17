@@ -72,7 +72,7 @@ const ClipInspector = ({ timeline, clipId, files, onChange, onDeselect }: ClipIn
                 step={0.05}
                 value={clip.volume}
                 onChange={(_, value) => typeof value === 'number' && patch({ volume: value })}
-                slotProps={{ input: { 'data-testid': 'production-inspector-volume-slider' } }}
+                slotProps={{ input: { 'aria-label': 'Volume', 'data-testid': 'production-inspector-volume-slider' } }}
               />
             </FormControl>
             <Stack direction="row" spacing={1}>

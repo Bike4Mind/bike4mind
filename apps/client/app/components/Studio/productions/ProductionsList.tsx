@@ -189,7 +189,11 @@ const ProductionRow = ({ composition }: { composition: StudioCompositionSummaryR
             onChange={event => setDraftTitle(event.target.value)}
             sx={{ flex: 1 }}
             slotProps={{
-              input: { maxLength: STUDIO_COMPOSITION_LIMITS.titleMaxLength, 'data-testid': `${testId}-rename-input` },
+              input: {
+                maxLength: STUDIO_COMPOSITION_LIMITS.titleMaxLength,
+                'aria-label': 'New title',
+                'data-testid': `${testId}-rename-input`,
+              },
             }}
           />
           <Button size="sm" type="submit" loading={update.isPending} data-testid={`${testId}-rename-save-btn`}>
