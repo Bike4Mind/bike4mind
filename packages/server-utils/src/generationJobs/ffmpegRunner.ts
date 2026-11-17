@@ -1,4 +1,3 @@
-import { execFile } from 'node:child_process';
 import { accessSync, chmodSync, constants, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import type { FfmpegRunner } from '@bike4mind/services/sceneJobs';
@@ -53,6 +52,9 @@ export const createFfmpegRunner = (resolveBinary: () => string = resolveFfmpegBi
         reject(error);
         return;
       }
+      // Fetched at call time, not imported: Turbopack reads a static execFile(binary, ...) as dynamic filesystem
+      // access and traces the whole project into the Next server Lambda (the trace is why the preview blew its size cap).
+      const { execFile } = process.getBuiltinModule('node:child_process');
       execFile(
         binary,
         [...args],
