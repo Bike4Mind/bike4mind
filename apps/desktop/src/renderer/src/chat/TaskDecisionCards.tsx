@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import Alert from '@mui/joy/Alert';
+import Box from '@mui/joy/Box';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { PendingDecision, PendingTaskDecision, TaskDecisionAnswer } from '@shared/orchestration';
-import { contentColumnSx } from './layout';
+import { contentColumnSx, scrollingColumnHostSx } from './layout';
 import { QuestionCard } from './QuestionCard';
 import { SessionLink } from './SessionLink';
 
@@ -124,31 +125,30 @@ export function TaskDecisionCards({
   const shown = decisions.filter(entry => entry.rootId === sessionId || entry.sessionId === sessionId);
   if (shown.length === 0) return null;
   return (
-    <Stack
-      spacing={0.75}
+    <Box
       role="region"
       aria-label="Decisions waiting on you"
       // Focusable so the list can be scrolled from the keyboard once it overflows.
       tabIndex={0}
       sx={{
-        ...contentColumnSx,
-        pt: 1.5,
+        ...scrollingColumnHostSx,
         flexShrink: 0,
         maxHeight: TASK_DECISION_LIST_MAX_HEIGHT,
-        overflowY: 'auto',
         overscrollBehavior: 'contain',
       }}
       data-testid="task-decision-list"
     >
-      {shown.map(entry => (
-        <TaskDecisionCard
-          key={entry.decision.id}
-          sessionId={entry.sessionId}
-          title={entry.title}
-          decision={entry.decision}
-          {...(entry.sessionId === sessionId ? {} : { onOpenSession })}
-        />
-      ))}
-    </Stack>
+      <Stack spacing={0.75} sx={{ ...contentColumnSx, pt: 1.5 }}>
+        {shown.map(entry => (
+          <TaskDecisionCard
+            key={entry.decision.id}
+            sessionId={entry.sessionId}
+            title={entry.title}
+            decision={entry.decision}
+            {...(entry.sessionId === sessionId ? {} : { onOpenSession })}
+          />
+        ))}
+      </Stack>
+    </Box>
   );
 }
