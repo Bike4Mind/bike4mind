@@ -64,6 +64,7 @@ const ImageModerationIncidentSchema = new Schema(
     escalatedBy: { type: String, required: false },
     escalationTrigger: { type: String, enum: INCIDENT_ESCALATION_TRIGGERS, required: false },
     escalationAlertedAt: { type: Date, required: false },
+    escalationLastReminderAt: { type: Date, required: false },
   },
   {
     timestamps: true,
@@ -261,6 +262,29 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   /** Stamps the time the escalation email for this incident was delivered. */
   async markEscalationAlerted(id: string, escalationAlertedAt = new Date()): Promise<void> {
     await this.model.updateOne({ _id: id }, { $set: { escalationAlertedAt } });
+  }
+
+  /**
+   * Escalated incidents still awaiting a verdict that are due another reminder to the second
+   * reviewers: both the escalation email and the last escalation reminder (when there is one) are at
+   * or before `notifiedBefore`. Oldest first.
+   */
+  async findDueForEscalationReminder(notifiedBefore: Date, limit: number): Promise<IImageModerationIncidentDocument[]> {
+    return this.model
+      .find({
+        reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES },
+        escalationAlertedAt: { $ne: null, $lte: notifiedBefore },
+        $or: [{ escalationLastReminderAt: null }, { escalationLastReminderAt: { $lte: notifiedBefore } }],
+      })
+      .sort({ createdAt: 1 })
+      .limit(limit)
+      .lean() as unknown as IImageModerationIncidentDocument[];
+  }
+
+  /** Stamps the time a reminder digest to the second reviewers covered these incidents. */
+  async markEscalationReminded(ids: string[], escalationLastReminderAt = new Date()): Promise<void> {
+    if (ids.length === 0) return;
+    await this.model.updateMany({ _id: { $in: ids } }, { $set: { escalationLastReminderAt } });
   }
 
   /** Returns unreviewed incidents (reviewStatus absent or 'pending_review'), oldest first. */

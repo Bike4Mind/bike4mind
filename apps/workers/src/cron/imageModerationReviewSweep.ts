@@ -2,7 +2,8 @@
  * Re-sends the reviewer alert for image moderation incidents nobody was told about (none configured
  * when it was recorded, or the send failed) and sends a daily reminder digest (counts only, one
  * email per reviewer) for incidents still awaiting a verdict. Escalates incidents that waited too
- * long to the second review step and sends any escalation email still owed. All of it is metadata
+ * long to the second review step, sends any escalation email still owed, and reminds the second
+ * reviewers daily on their own schedule. All of it is metadata
  * only and goes through the same delivery as the request path
  * (packages/server-utils/src/moderation/incidentReviewSweep.ts).
  *
@@ -58,6 +59,9 @@ const incidents: IncidentReviewSweepDeps['incidents'] = {
   findEscalationUnalerted: async limit =>
     (await imageModerationIncidentRepository.findEscalationUnalerted(limit)).map(toRecorded),
   markEscalationAlerted: (id, at) => imageModerationIncidentRepository.markEscalationAlerted(id, at),
+  findDueForEscalationReminder: async (notifiedBefore, limit) =>
+    (await imageModerationIncidentRepository.findDueForEscalationReminder(notifiedBefore, limit)).map(toRecorded),
+  markEscalationReminded: (ids, at) => imageModerationIncidentRepository.markEscalationReminded(ids, at),
 };
 
 export async function handler() {

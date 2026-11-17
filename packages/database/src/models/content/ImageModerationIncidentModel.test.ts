@@ -144,6 +144,51 @@ describe('ImageModerationIncidentRepository', () => {
       expect(found.map(incident => String(incident._id))).toEqual([timeout, manual]);
       expect(await imageModerationIncidentRepository.findEscalationUnalerted(1)).toHaveLength(1);
     });
+
+    it('findDueForEscalationReminder returns escalated unreviewed incidents whose last escalation notice is a day old', async () => {
+      const escalated = { escalatedAt: hoursAgo(90), escalationTrigger: 'timeout' };
+      const neverReminded = await seed({ ...escalated, createdAt: hoursAgo(50), escalationAlertedAt: hoursAgo(30) });
+      const remindedLongAgo = await seed({
+        ...escalated,
+        createdAt: hoursAgo(80),
+        escalationAlertedAt: hoursAgo(70),
+        escalationLastReminderAt: hoursAgo(25),
+      });
+      await seed({ ...escalated, createdAt: hoursAgo(40), escalationAlertedAt: hoursAgo(20) });
+      await seed({
+        ...escalated,
+        createdAt: hoursAgo(95),
+        escalationAlertedAt: hoursAgo(80),
+        escalationLastReminderAt: hoursAgo(2),
+      });
+      // The first list's stamps never make an incident due for the second list, or hold it back.
+      await seed({ createdAt: hoursAgo(60), alertedAt: hoursAgo(50) });
+      await seed({ ...escalated, createdAt: hoursAgo(60) });
+      await seed({
+        ...escalated,
+        createdAt: hoursAgo(60),
+        escalationAlertedAt: hoursAgo(50),
+        reviewStatus: 'no_action',
+      });
+
+      const found = await imageModerationIncidentRepository.findDueForEscalationReminder(hoursAgo(24), 10);
+
+      expect(found.map(incident => String(incident._id))).toEqual([remindedLongAgo, neverReminded]);
+      expect(await imageModerationIncidentRepository.findDueForEscalationReminder(hoursAgo(24), 1)).toHaveLength(1);
+    });
+
+    it('markEscalationReminded stamps escalationLastReminderAt and leaves lastReminderAt alone', async () => {
+      const covered = await imageModerationIncidentRepository.record(baseIncident());
+      const untouched = await imageModerationIncidentRepository.record(baseIncident());
+
+      await imageModerationIncidentRepository.markEscalationReminded([covered.id], NOW);
+      await imageModerationIncidentRepository.markEscalationReminded([], NOW);
+
+      const stored = await ImageModerationIncident.findById(covered._id).lean();
+      expect(stored?.escalationLastReminderAt).toEqual(NOW);
+      expect(stored?.lastReminderAt).toBeUndefined();
+      expect((await ImageModerationIncident.findById(untouched._id).lean())?.escalationLastReminderAt).toBeUndefined();
+    });
   });
 
   describe('escalate', () => {

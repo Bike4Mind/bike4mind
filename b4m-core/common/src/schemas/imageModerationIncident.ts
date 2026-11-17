@@ -94,6 +94,9 @@ export const ImageModerationIncidentSchema = z.object({
   escalationTrigger: z.enum(INCIDENT_ESCALATION_TRIGGERS).optional(),
   // When the escalation email was delivered. Absent means a later sweep still owes it.
   escalationAlertedAt: z.union([z.string(), z.date()]).optional(),
+  // When a sweep reminder digest to the second reviewers last covered this incident. Separate from
+  // lastReminderAt so the two lists are reminded independently of each other.
+  escalationLastReminderAt: z.union([z.string(), z.date()]).optional(),
   createdAt: z.union([z.string(), z.date()]).optional(),
   updatedAt: z.union([z.string(), z.date()]).optional(),
 });

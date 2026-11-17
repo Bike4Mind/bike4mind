@@ -30,6 +30,8 @@ function setup(
     unescalated?: RecordedIncident[];
     /** Escalated and still owed an escalation email. */
     escalationUnalerted?: RecordedIncident[];
+    /** Escalated and due a reminder to the second reviewers. */
+    escalationDue?: RecordedIncident[];
   } = {},
   overrides: Partial<IncidentReviewSweepDeps> = {}
 ) {
@@ -58,6 +60,8 @@ function setup(
       }),
       findEscalationUnalerted: vi.fn().mockImplementation(async (limit: number) => owed.slice(0, limit)),
       markEscalationAlerted: vi.fn().mockResolvedValue(undefined),
+      findDueForEscalationReminder: vi.fn().mockResolvedValue(data.escalationDue ?? []),
+      markEscalationReminded: vi.fn().mockResolvedValue(undefined),
     },
     getRecipients: vi.fn().mockResolvedValue(['reviewer-one@example.com']),
     getEscalationRecipients: vi.fn().mockResolvedValue([]),
@@ -421,10 +425,11 @@ describe('runIncidentReviewSweep', () => {
       expect(result.escalationAlerted).toBe(1);
     });
 
-    it('also sends the daily digest to the escalation list while an escalated incident is due', async () => {
+    it('sends the second reviewers their own digest for escalated incidents that are due, and stamps them', async () => {
       const deps = setup(
         {
-          due: [incident('inc-d1', 3000), escalatedIncident('inc-d2', 2600)],
+          due: [incident('inc-d1', 3000)],
+          escalationDue: [escalatedIncident('inc-d2', 2600)],
           oldestPending: incident('inc-d1', 3000),
           pendingCount: 4,
         },
@@ -439,27 +444,74 @@ describe('runIncidentReviewSweep', () => {
       expect(escalationDigest.html).toContain('>4<');
       expect(escalationDigest.html).toContain('50 hours');
       expect(escalationDigest.html).not.toContain('inc-d');
-      expect(deps.incidents.markReminded).toHaveBeenCalledExactlyOnceWith(['inc-d1', 'inc-d2'], NOW);
-      expect(result).toMatchObject({ reminded: 2, failed: 0 });
+      expect(deps.incidents.findDueForEscalationReminder).toHaveBeenCalledWith(
+        minutesAgo(DAY_MINUTES),
+        REVIEW_SWEEP_REMINDER_LIMIT
+      );
+      expect(deps.incidents.markReminded).toHaveBeenCalledExactlyOnceWith(['inc-d1'], NOW);
+      expect(deps.incidents.markEscalationReminded).toHaveBeenCalledExactlyOnceWith(['inc-d2'], NOW);
+      expect(result).toMatchObject({ reminded: 1, escalationReminded: 1, failed: 0 });
     });
 
-    it('holds the escalation digest back while the first digest is undelivered', async () => {
-      const deps = setup({ due: [escalatedIncident('inc-d4', 2600)] }, escalationList);
+    it('reminds the second reviewers while the first reviewer list is empty', async () => {
+      const deps = setup(
+        { escalationDue: [escalatedIncident('inc-d5', 2600)], oldestPending: incident('inc-d5', 2600) },
+        { ...escalationList, getRecipients: vi.fn().mockResolvedValue([]) }
+      );
+
+      const result = await runIncidentReviewSweep(deps, NOW);
+
+      expect(sentTo(deps)).toEqual(['second-one@example.com']);
+      expect(deps.incidents.markReminded).not.toHaveBeenCalled();
+      expect(deps.incidents.markEscalationReminded).toHaveBeenCalledExactlyOnceWith(['inc-d5'], NOW);
+      expect(result).toMatchObject({ reminded: 0, escalationReminded: 1, failed: 0 });
+    });
+
+    it('reminds the second reviewers even when the first digest is undelivered', async () => {
+      const deps = setup(
+        { due: [incident('inc-d6', 3000)], escalationDue: [escalatedIncident('inc-d4', 2600)] },
+        escalationList
+      );
+      vi.mocked(deps.sendEmail).mockImplementation(async to => {
+        if (to === 'reviewer-one@example.com') throw new Error('smtp down');
+        return { messageId: 'm-2' };
+      });
+
+      const result = await runIncidentReviewSweep(deps, NOW);
+
+      expect(deps.incidents.markReminded).not.toHaveBeenCalled();
+      expect(deps.incidents.markEscalationReminded).toHaveBeenCalledExactlyOnceWith(['inc-d4'], NOW);
+      expect(result).toMatchObject({ reminded: 0, escalationReminded: 1, failed: 1 });
+    });
+
+    it('leaves a failed escalation digest unstamped so the next run retries it', async () => {
+      const deps = setup({ escalationDue: [escalatedIncident('inc-d7', 2600)] }, escalationList);
       vi.mocked(deps.sendEmail).mockRejectedValue(new Error('smtp down'));
 
       const result = await runIncidentReviewSweep(deps, NOW);
 
-      expect(sentTo(deps)).toEqual(['reviewer-one@example.com']);
-      expect(deps.incidents.markReminded).not.toHaveBeenCalled();
-      expect(result).toMatchObject({ reminded: 0, failed: 1 });
+      expect(sentTo(deps)).toEqual(['second-one@example.com']);
+      expect(deps.incidents.markEscalationReminded).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ escalationReminded: 0, failed: 1 });
     });
 
-    it('keeps the digest to the first list only while nothing due is escalated', async () => {
+    it('keeps the digest to the first list only while no escalated incident is due', async () => {
       const deps = setup({ due: [incident('inc-d3', 3000)] }, escalationList);
 
       await runIncidentReviewSweep(deps, NOW);
 
       expect(sentTo(deps)).toEqual(['reviewer-one@example.com']);
+      expect(deps.incidents.markEscalationReminded).not.toHaveBeenCalled();
+    });
+
+    it('sends no escalation digest while the escalation list is empty', async () => {
+      const deps = setup({ escalationDue: [escalatedIncident('inc-d8', 2600)] });
+
+      const result = await runIncidentReviewSweep(deps, NOW);
+
+      expect(deps.sendEmail).not.toHaveBeenCalled();
+      expect(deps.incidents.markEscalationReminded).not.toHaveBeenCalled();
+      expect(result.escalationReminded).toBe(0);
     });
 
     it('keeps the escalation email metadata only', async () => {

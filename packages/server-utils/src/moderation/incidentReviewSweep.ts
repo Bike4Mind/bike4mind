@@ -47,6 +47,9 @@ export interface IncidentReviewSweepDeps extends IncidentEscalationDelivery {
     /** Escalated, unreviewed incidents with no delivered escalation email, oldest first. */
     findEscalationUnalerted(limit: number): Promise<RecordedIncident[]>;
     markEscalationAlerted(id: string, at: Date): Promise<void>;
+    /** Escalated, unreviewed incidents whose escalation email or last escalation reminder is at or before the cutoff, oldest first. */
+    findDueForEscalationReminder(notifiedBefore: Date, limit: number): Promise<RecordedIncident[]>;
+    markEscalationReminded(ids: string[], at: Date): Promise<void>;
   };
 }
 
@@ -58,6 +61,8 @@ export interface IncidentReviewSweepResult {
   escalated: number;
   /** Escalation emails delivered this run. */
   escalationAlerted: number;
+  /** Incidents covered by the reminder digest to the second reviewers this run. */
+  escalationReminded: number;
   failed: number;
   /** Age of the oldest incident still unalerted once the run is done; 0 when there is none. */
   oldestUnalertedAgeMinutes: number;
@@ -84,7 +89,8 @@ const ageMinutes = (incident: RecordedIncident | undefined, now: Date) =>
  * It also runs the second review step: an incident still pending REVIEW_ESCALATION_TIMEOUT_HOURS after
  * it was recorded is escalated (no admin actor, so the stamps are the record), and every escalated,
  * still-pending incident whose escalation email was not delivered gets it, whether a reviewer or this
- * sweep escalated it.
+ * sweep escalated it. The second reviewers get their own digest, one per run, for escalated incidents
+ * whose escalation email or last escalation digest is a full interval old.
  */
 export async function runIncidentReviewSweep(
   sweepDeps: IncidentReviewSweepDeps,
@@ -107,6 +113,7 @@ export async function runIncidentReviewSweep(
     reminded: 0,
     escalated: 0,
     escalationAlerted: 0,
+    escalationReminded: 0,
     failed: 0,
     oldestUnalertedAgeMinutes: 0,
     oldestPendingAgeMinutes: 0,
@@ -116,6 +123,11 @@ export async function runIncidentReviewSweep(
   const reviewersConfigured = partitionEmailList(recipients).valid.length > 0;
   const escalationConfigured = partitionEmailList(escalationRecipients).valid.length > 0;
   const oldestPending = await incidents.findOldestPending();
+  const reminderCutoff = new Date(now.getTime() - REVIEW_REMINDER_INTERVAL_HOURS * HOUR_MS);
+  const digestFor = async (due: RecordedIncident[]): Promise<IncidentReminderDigest> => ({
+    pendingCount: Math.max(await incidents.countPending(), due.length),
+    oldestAgeMinutes: ageMinutes(oldestPending ?? due[0], now),
+  });
 
   if (reviewersConfigured) {
     const graceCutoff = new Date(now.getTime() - REVIEW_SWEEP_MIN_INCIDENT_AGE_MINUTES * MINUTE_MS);
@@ -130,14 +142,9 @@ export async function runIncidentReviewSweep(
       }
     }
 
-    const reminderCutoff = new Date(now.getTime() - REVIEW_REMINDER_INTERVAL_HOURS * HOUR_MS);
     const due = await incidents.findDueForReminder(reminderCutoff, REVIEW_SWEEP_REMINDER_LIMIT);
     if (due.length > 0 && !outOfBudget()) {
-      const digest = {
-        pendingCount: Math.max(await incidents.countPending(), due.length),
-        oldestAgeMinutes: ageMinutes(oldestPending ?? due[0], now),
-      };
-      if (await sendDigest(digest, deps)) {
+      if (await sendDigest(await digestFor(due), deps)) {
         result.reminded = due.length;
         await stamp(
           () =>
@@ -149,11 +156,6 @@ export async function runIncidentReviewSweep(
           { covered: due.length },
           deps
         );
-        // Sent only once the first digest is stamped, so a first-list failure retried every run
-        // cannot repeat this one.
-        if (escalationConfigured && due.some(incident => incident.escalatedAt) && !outOfBudget()) {
-          if (!(await sendDigest(digest, deps, 'escalation'))) result.failed++;
-        }
       } else {
         result.failed++;
       }
@@ -187,6 +189,27 @@ export async function runIncidentReviewSweep(
           () => incidents.markEscalationAlerted(incident.id, now),
           'escalationAlertedAt',
           { incidentId: incident.id },
+          deps
+        );
+      } else {
+        result.failed++;
+      }
+    }
+
+    // Runs on its own stamp, not the first list's, so the second reviewers are reminded even while
+    // the first list is empty or its digest is failing.
+    const dueEscalated = await incidents.findDueForEscalationReminder(reminderCutoff, REVIEW_SWEEP_REMINDER_LIMIT);
+    if (dueEscalated.length > 0 && !outOfBudget()) {
+      if (await sendDigest(await digestFor(dueEscalated), deps, 'escalation')) {
+        result.escalationReminded = dueEscalated.length;
+        await stamp(
+          () =>
+            incidents.markEscalationReminded(
+              dueEscalated.map(incident => incident.id),
+              now
+            ),
+          'escalationLastReminderAt',
+          { covered: dueEscalated.length },
           deps
         );
       } else {
