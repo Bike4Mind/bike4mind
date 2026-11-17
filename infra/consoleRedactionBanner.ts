@@ -23,5 +23,5 @@ export function consoleRedactionBanner(root: string): string {
     legalComments: 'none',
     logLevel: 'silent',
   });
-  return `${result.outputFiles[0].text.trim()}\n/* deploy-timing t7 */`;
+  return `${result.outputFiles[0].text.trim()}\n/* deploy-timing t8 */`;
 }
