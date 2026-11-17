@@ -77,6 +77,7 @@ export interface GitHubIssue {
   created_at: string;
   updated_at: string;
   closed_at?: string | null; // Available for closed issues
+  state_reason?: string | null;
 }
 
 /**
@@ -99,6 +100,8 @@ export interface GitHubRepository {
   private: boolean;
   html_url: string;
   description: string | null;
+  archived?: boolean;
+  has_issues?: boolean;
 }
 
 /**
@@ -834,6 +837,7 @@ export class GitHubService {
           created_at: issue.created_at,
           updated_at: issue.updated_at,
           closed_at: issue.closed_at ?? null,
+          state_reason: issue.state_reason ?? null,
         }));
     });
   }
@@ -916,6 +920,7 @@ export class GitHubService {
           created_at: result.data.created_at,
           updated_at: result.data.updated_at,
           closed_at: result.data.closed_at ?? null,
+          state_reason: result.data.state_reason ?? null,
         };
       } catch (error) {
         if ((error as { status?: number }).status === 404) {
@@ -968,6 +973,7 @@ export class GitHubService {
         created_at: result.data.created_at,
         updated_at: result.data.updated_at,
         closed_at: result.data.closed_at ?? null,
+        state_reason: result.data.state_reason ?? null,
       };
     });
   }
@@ -1078,6 +1084,13 @@ export class GitHubService {
    */
   async closeIssue(repo: string, issueNumber: number): Promise<GitHubIssue | null> {
     return this.updateIssue(repo, issueNumber, { state: 'closed' });
+  }
+
+  /**
+   * Reopen a closed issue
+   */
+  async reopenIssue(repo: string, issueNumber: number): Promise<GitHubIssue | null> {
+    return this.updateIssue(repo, issueNumber, { state: 'open' });
   }
 
   // ============================================
@@ -1235,6 +1248,8 @@ export class GitHubService {
           private: result.data.private,
           html_url: result.data.html_url,
           description: result.data.description,
+          archived: result.data.archived,
+          has_issues: result.data.has_issues,
         };
       } catch (error) {
         if ((error as { status?: number }).status === 404) {
