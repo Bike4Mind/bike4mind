@@ -10,6 +10,7 @@ const { mockOctokit, mockRepository, mockConfig, mockDecryptToken, mockEncryptSe
         get: vi.fn(),
         update: vi.fn(),
         createComment: vi.fn(),
+        listForRepo: vi.fn(),
         listLabelsForRepo: vi.fn(),
         createLabel: vi.fn(),
       },
@@ -714,6 +715,65 @@ describe('GitHubService', () => {
       });
     });
 
+    describe('reopenIssue', () => {
+      it('reopens an issue by updating its state to open', async () => {
+        mockOctokit.issues.update.mockResolvedValue({
+          data: {
+            number: 7,
+            title: 'Test Issue',
+            body: 'Test body',
+            state: 'open',
+            state_reason: 'reopened',
+            html_url: 'https://github.com/owner/repo/issues/7',
+            labels: [],
+            assignees: [],
+            created_at: '2024-01-01T00:00:00Z',
+            updated_at: '2024-01-02T00:00:00Z',
+          },
+        });
+
+        const result = await service.reopenIssue('owner/repo', 7);
+
+        expect(result).toMatchObject({ number: 7, state: 'open', state_reason: 'reopened' });
+        expect(mockOctokit.issues.update).toHaveBeenCalledWith(
+          expect.objectContaining({ owner: 'owner', repo: 'repo', issue_number: 7, state: 'open' })
+        );
+      });
+    });
+
+    describe('listIssues', () => {
+      it('maps the state reason of closed issues and leaves pull requests out', async () => {
+        const issue = (number: number, extra: Record<string, unknown>) => ({
+          number,
+          title: `Issue ${number}`,
+          body: null,
+          html_url: `https://github.com/owner/repo/issues/${number}`,
+          labels: [],
+          assignees: [],
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+          ...extra,
+        });
+        mockOctokit.issues.listForRepo.mockResolvedValue({
+          data: [
+            issue(1, { state: 'closed', state_reason: 'not_planned', closed_at: '2024-01-03T00:00:00Z' }),
+            issue(2, { state: 'open' }),
+            issue(3, { state: 'open', pull_request: {} }),
+          ],
+        });
+
+        const result = await service.listIssues('owner/repo', { state: 'all', labels: 'a,b', page: 2 });
+
+        expect(result.map(i => [i.number, i.state, i.state_reason])).toEqual([
+          [1, 'closed', 'not_planned'],
+          [2, 'open', null],
+        ]);
+        expect(mockOctokit.issues.listForRepo).toHaveBeenCalledWith(
+          expect.objectContaining({ owner: 'owner', repo: 'repo', state: 'all', labels: 'a,b', page: 2 })
+        );
+      });
+    });
+
     describe('Error Handling', () => {
       it('updateIssue should propagate non-404 errors', async () => {
         mockOctokit.issues.update.mockRejectedValue({ status: 403, message: 'Forbidden' });
@@ -1088,6 +1148,29 @@ describe('GitHubService', () => {
 
       expect(repo).toBeNull();
       expect(mockOctokit.repos.get).not.toHaveBeenCalled();
+    });
+
+    it('maps whether the repository is archived and has issues enabled', async () => {
+      mockRepository.findByOrganizationIdWithCredentials.mockResolvedValue({
+        ...mockConnection,
+        allowedRepositories: ['owner/repo'],
+      });
+      mockOctokit.repos.get.mockResolvedValue({
+        data: {
+          id: 1,
+          name: 'repo',
+          full_name: 'owner/repo',
+          private: true,
+          html_url: 'url',
+          description: null,
+          archived: true,
+          has_issues: false,
+        },
+      });
+
+      const service = (await GitHubService.forOrganization('org-123', logger))!;
+
+      expect(await service.getRepository('owner/repo')).toMatchObject({ archived: true, has_issues: false });
     });
 
     // Guards against allowlist bypass via case or whitespace tricks

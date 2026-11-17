@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { deepAgentHandoffRepository } from '@bike4mind/database';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { deepAgentHandoffRepository, userRepository } from '@bike4mind/database';
+import { AI_ACCESS_DELETION_PENDING_MESSAGE } from '@bike4mind/services/userService/accountState';
 import { Logger } from '@bike4mind/observability';
 import {
   noopRunAct,
@@ -13,12 +14,19 @@ import {
   type WakeDeps,
   type WakeSteps,
 } from '@bike4mind/agents';
-import { insufficientCreditsError, spendFrozenError, TooManyRequestsError, type ModelInfo } from '@bike4mind/common';
+import {
+  ForbiddenError,
+  insufficientCreditsError,
+  spendFrozenError,
+  TooManyRequestsError,
+  type ModelInfo,
+} from '@bike4mind/common';
 import { meterCompletionBackend } from '@bike4mind/services';
 import { processWake, WakePayloadSchema } from './wakeHandler';
 import {
   MISSION_MODEL_REFUSED_BLOCKER,
   MISSION_NEEDS_CREDITS_BLOCKER,
+  MISSION_OWNER_RESTRICTED_BLOCKER,
   MISSION_SPEND_FROZEN_BLOCKER,
   MissionModelRefusedError,
 } from '@bike4mind/server-utils/deepAgent/wakeMetering';
@@ -136,6 +144,9 @@ describe('noopRunAct', () => {
 });
 
 describe('processWake', () => {
+  beforeEach(() => {
+    vi.spyOn(userRepository, 'findById').mockResolvedValue({ id: 'owner-1', tags: [] } as never);
+  });
   it('runs a wake cycle with injected deps and persists the episode + handoff', async () => {
     const store = new FakeStore();
     store.charters.set('agent-1', charter());
@@ -327,6 +338,78 @@ describe('processWake', () => {
       const [, resumeAt] = release.mock.calls[0];
       expect((resumeAt as Date).getTime()).toBeGreaterThanOrEqual(before + 3_600_000);
       expect((resumeAt as Date).getTime()).toBeLessThanOrEqual(Date.now() + 3_600_000);
+    });
+  });
+
+  describe('when the owner account cannot use AI', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    const seedStore = (openBlockers: string[] = []) => {
+      const store = new FakeStore();
+      store.charters.set('agent-1', charter());
+      store.handoffs.set('agent-1', {
+        agentId: 'agent-1',
+        wakeCount: 3,
+        lastWakeAt: ISO,
+        lastActionSummary: 'did a thing',
+        nextIntendedAction: 'next',
+        nextWakeIntervalMs: 60_000,
+        openBlockers,
+        updatedAt: ISO,
+      });
+      return store;
+    };
+
+    it('defers a wake refused mid-cycle by the account gate instead of pausing it', async () => {
+      const release = vi.spyOn(deepAgentHandoffRepository, 'releaseWakeClaim').mockResolvedValue(undefined as never);
+      const store = seedStore();
+      const steps: WakeSteps = {
+        ...STEPS,
+        async orient() {
+          throw new ForbiddenError(AI_ACCESS_DELETION_PENDING_MESSAGE);
+        },
+      };
+      const before = Date.now();
+
+      await processWake({ agentId: 'agent-1' }, new Logger(), { deps: { ...fakeDeps(store), steps } });
+
+      const handoff = store.handoffs.get('agent-1')!;
+      expect(handoff.nextWakeIntervalMs).toBe(60_000);
+      expect(handoff.openBlockers).toEqual([MISSION_OWNER_RESTRICTED_BLOCKER]);
+      expect(handoff.openBlockers).not.toContain(MISSION_MODEL_REFUSED_BLOCKER);
+      const [, resumeAt] = release.mock.calls[0];
+      expect((resumeAt as Date).getTime()).toBeGreaterThanOrEqual(before + 3_600_000);
+    });
+
+    it('defers before orient when the owner is already restricted', async () => {
+      vi.spyOn(userRepository, 'findById').mockResolvedValue({ id: 'owner-1', isModerated: true } as never);
+      const release = vi.spyOn(deepAgentHandoffRepository, 'releaseWakeClaim').mockResolvedValue(undefined as never);
+      const orient = vi.fn(STEPS.orient);
+      const store = seedStore();
+
+      await processWake({ agentId: 'agent-1' }, new Logger(), {
+        deps: { ...fakeDeps(store), steps: { ...STEPS, orient } },
+      });
+
+      expect(orient).not.toHaveBeenCalled();
+      expect(store.episodes).toHaveLength(0);
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(store.handoffs.get('agent-1')!.openBlockers).toEqual([MISSION_OWNER_RESTRICTED_BLOCKER]);
+    });
+
+    it('clears a stale account blocker and wakes once the owner is healthy again', async () => {
+      const store = seedStore([MISSION_OWNER_RESTRICTED_BLOCKER, 'other blocker']);
+      const lease = new Date(Date.now() + 15 * 60 * 1000);
+      vi.spyOn(deepAgentHandoffRepository, 'findByAgentId').mockResolvedValue({ nextWakeAt: lease } as never);
+      const release = vi.spyOn(deepAgentHandoffRepository, 'releaseWakeClaim').mockResolvedValue(undefined as never);
+
+      await processWake({ agentId: 'agent-1' }, new Logger(), { deps: fakeDeps(store) });
+
+      expect(store.episodes).toHaveLength(1);
+      expect(store.handoffs.get('agent-1')!.openBlockers).not.toContain(MISSION_OWNER_RESTRICTED_BLOCKER);
+      expect(release).toHaveBeenCalledWith('agent-1', lease);
     });
   });
 });

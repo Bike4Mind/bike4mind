@@ -884,11 +884,6 @@
       "count": 1
     }
   },
-  "apps/client/app/routes/email/unsubscribe.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 3
-    }
-  },
   "apps/client/app/routes/integrations/atlassian/select-site.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 3
@@ -3179,6 +3174,16 @@
       "count": 1
     }
   },
+  "apps/workers/src/events/dlqTriage.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/events/dlqTriage.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
   "apps/workers/src/events/sessionSummarization.test.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
@@ -3260,6 +3265,11 @@
     }
   },
   "apps/workers/src/queueHandlers/agentExecutor.push.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/queueHandlers/agentExecutor.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
     }

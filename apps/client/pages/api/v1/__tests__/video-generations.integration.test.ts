@@ -63,6 +63,30 @@ const post = (body: Record<string, unknown>, headers: Record<string, string> = {
 describe('POST /api/v1/video-generations', () => {
   beforeEach(resetHarness);
 
+  it.each([true, false])('maps keyframes, infers image mode and preserves draft=%s', async draft => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    const { req, res } = post({
+      model: 'flux-3-video',
+      prompt: 'p',
+      draft,
+      keyframes: [
+        { file_id: 'f1', time_seconds: 0 },
+        { file_id: 'f2', time_seconds: 5 },
+      ],
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    expect(h.createVideoJob.mock.calls[0][0].request).toMatchObject({
+      mode: 'image_to_video',
+      draft,
+      keyframes: [
+        { fileId: 'f1', timeSeconds: 0 },
+        { fileId: 'f2', timeSeconds: 5 },
+      ],
+    });
+  });
+
   it('rejects a key lacking ai:generate (403) before creating a job', async () => {
     validateWithScopes([ApiKeyScope.READ_FILES]);
     const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'a lighthouse' });
