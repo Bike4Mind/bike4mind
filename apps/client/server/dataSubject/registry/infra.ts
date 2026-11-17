@@ -517,6 +517,7 @@ export const infraHolders = {
   SlackFeedbackDelivery: {
     kind: 'noUserData',
     note: 'Organization delivery dedupe and audit. Reactor is an external Slack id, not a platform account id; no platform user mapping, message text or email is stored.',
+    unrelatedPaths: ['reactor'],
   },
   // `ownerUserId` is anonymized like an organization owner, so members keep the Space.
   Space: {
