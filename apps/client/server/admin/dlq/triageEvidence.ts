@@ -51,8 +51,13 @@ export function buildDlqTriageEvidence(input: {
   const sent = input.sentTimestamp?.trim() ? Number(input.sentTimestamp) : NaN;
   const retention = input.retentionSeconds;
   const expires =
-    Number.isFinite(sent) && sent > 0 && sent <= now &&
-    retention !== undefined && Number.isFinite(retention) && retention > 0 && retention <= 14 * 86400
+    Number.isFinite(sent) &&
+    sent > 0 &&
+    sent <= now &&
+    retention !== undefined &&
+    Number.isFinite(retention) &&
+    retention > 0 &&
+    retention <= 14 * 86400
       ? sent + retention * 1000
       : NaN;
   const knownExpiry = Number.isFinite(expires) && Number.isFinite(new Date(expires).getTime());

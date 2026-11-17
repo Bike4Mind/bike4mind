@@ -76,8 +76,8 @@ export function DlqTriageRecommendation({ queueLabel, messageId }: { queueLabel:
       </Typography>
       {suggestion.status === 'accepted' && (
         <Typography level="body-xs" data-testid={`dlq-triage-execution-${messageId}`}>
-          Execution outcome unconfirmed. Authorization does not prove replay, discard or consumer success. Inspect
-          DLQ history before acting again.
+          Execution outcome unconfirmed. Authorization does not prove replay, discard or consumer success. Inspect DLQ
+          history before acting again.
         </Typography>
       )}
       {evidence && (
