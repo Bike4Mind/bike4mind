@@ -10,7 +10,6 @@ import {
   BookMarked,
   BookOpen,
   Building2,
-  CalendarX,
   ChartColumn,
   ChartLine,
   ChartSpline,
@@ -63,7 +62,7 @@ import {
   Tag,
   Timer,
   TrendingUp,
-  UserPlus,
+  UserCheck,
   UserSearch,
   Users,
   UsersRound,
@@ -95,7 +94,7 @@ export enum AdminTab {
   SystemPrompts = 21,
   IdentityProviders = 22,
   AgentOps = 23,
-  LLMDashboard = 24,
+  Models = 24,
   RapidReply = 25,
   SecurityDashboard = 26,
   EmailVerification = 27,
@@ -127,6 +126,7 @@ export enum AdminTab {
   PublishedPages = 54,
   PartnerSignupRules = 55,
   EmbedKeys = 57,
+  /** Retired page: its slug aliases to the Models tab's Discovery section (adminTabSlugs.ts). */
   ModelLifecycle = 58,
   PrReport = 59,
   RetrievalRate = 60,
@@ -149,6 +149,8 @@ export enum AdminTab {
   Tutorials = 77,
   AiOperations = 78,
   LegacyApiKeys = 79,
+  Roles = 80,
+  AccessReview = 81,
 }
 
 /**
@@ -221,10 +223,9 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       },
       { Icon: Megaphone, tab: AdminTab.EmailMarketing, label: 'Email marketing' },
       { Icon: UsersRound, tab: AdminTab.Team, label: 'Team' },
-      { Icon: UserPlus, tab: AdminTab.RegistrationInvites, label: 'Invites', testid: 'admin-invite-center-tab-btn' },
+      { Icon: ShieldCheck, tab: AdminTab.Roles, label: 'Roles', testid: 'admin-roles-btn' },
       { Icon: MessageSquare, tab: AdminTab.Feedback, label: 'Feedback', badge: 'feedback' },
       { Icon: MailCheck, tab: AdminTab.EmailVerification, label: 'Email verification' },
-      { Icon: Handshake, tab: AdminTab.PartnerSignupRules, label: 'Partner signups' },
       { Icon: Handshake, tab: AdminTab.SignupDomainHolds, label: 'Signup domain holds', badge: 'signupDomainHolds' },
       {
         Icon: UserSearch,
@@ -282,6 +283,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         testid: 'admin-audit-log-btn',
         badge: 'unreviewedAudit',
       },
+      { Icon: UserCheck, tab: AdminTab.AccessReview, label: 'Access review', testid: 'admin-access-review-btn' },
       {
         Icon: ClipboardCheck,
         tab: AdminTab.Approvals,
@@ -309,20 +311,20 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     label: 'AI',
     items: [
       { Icon: Gauge, tab: AdminTab.AiOperations, label: 'AI operations', testid: 'admin-ai-operations-btn' },
-      { Icon: Brain, tab: AdminTab.LLMDashboard, label: 'Models' },
+      {
+        Icon: Brain,
+        tab: AdminTab.Models,
+        label: 'Models',
+        aliases: ['LLM Dashboard', 'Model lifecycle', 'Lifecycle', 'Model pricing', 'Model prices', 'Discovery'],
+        testid: 'admin-models-tab-btn',
+        badge: 'modelLifecycle',
+      },
       { Icon: Bot, tab: AdminTab.AgentOps, label: 'Agents' },
       { Icon: FileText, tab: AdminTab.SystemPrompts, label: 'System prompts' },
       { Icon: Wrench, tab: AdminTab.ToolDefinitions, label: 'Tools' },
       { Icon: Settings, tab: AdminTab.ManageGears, label: 'Gears' },
       { Icon: ChartColumn, tab: AdminTab.ModelMetrics, label: 'Model metrics' },
       { Icon: Scale, tab: AdminTab.PreferenceArena, label: 'Preference arena', testid: 'admin-preference-arena-btn' },
-      {
-        Icon: CalendarX,
-        tab: AdminTab.ModelLifecycle,
-        label: 'Model lifecycle',
-        testid: 'admin-model-lifecycle-btn',
-        badge: 'modelLifecycle',
-      },
       { Icon: ScanSearch, tab: AdminTab.RetrievalRate, label: 'Retrieval', testid: 'admin-retrieval-rate-btn' },
       {
         Icon: Layers,

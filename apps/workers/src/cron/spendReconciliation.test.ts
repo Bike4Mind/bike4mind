@@ -1,9 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { Context } from 'aws-lambda';
 
 // Mock the external dependencies before importing the handler.
 const mockConnectDB = vi.fn();
 const mockAppend = vi.fn();
 const mockMonthlyCogsByProvider = vi.fn();
+const mockCloudWatchSend = vi.fn();
+
+vi.mock('@aws-sdk/client-cloudwatch', () => ({
+  CloudWatchClient: class {
+    send = mockCloudWatchSend;
+  },
+  PutMetricDataCommand: class {
+    constructor(public readonly input: unknown) {}
+  },
+}));
 
 vi.mock('@bike4mind/database', () => ({
   connectDB: (...args: unknown[]) => mockConnectDB(...args),
@@ -24,7 +35,17 @@ vi.mock('@bike4mind/observability', () => {
   return { Logger: MockLogger };
 });
 
-vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
+vi.mock('sst', () => ({ Resource: { App: { name: 'test-app', stage: 'test' } } }));
+
+const mockSecretSend = vi.fn();
+vi.mock('@aws-sdk/client-secrets-manager', () => ({
+  SecretsManagerClient: class {
+    send = (command: unknown) => mockSecretSend(command);
+  },
+  GetSecretValueCommand: class {
+    constructor(public readonly input: unknown) {}
+  },
+}));
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
@@ -39,6 +60,7 @@ const mockOpenAIFetch = vi.fn();
 
 vi.mock('@bike4mind/services', () => ({
   spendReconciliationService: {
+    DEFAULT_SPEND_DEADLINE_MS: 240_000,
     fetchAnthropicSpend: (...args: unknown[]) => mockAnthropicFetch(...args),
     fetchOpenAISpend: (...args: unknown[]) => mockOpenAIFetch(...args),
   },
@@ -60,13 +82,23 @@ describe('spendReconciliation cron', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
-  const lambdaContext = {
+  const lambdaContext: Context = {
     awsRequestId: 'req-1',
     functionName: 'spendReconciliation',
     functionVersion: '1',
-  } as any;
+    callbackWaitsForEmptyEventLoop: false,
+    invokedFunctionArn: 'test-function',
+    memoryLimitInMB: '128',
+    logGroupName: 'test-group',
+    logStreamName: 'test-stream',
+    getRemainingTimeInMillis: () => 270_000,
+    done: () => {},
+    fail: () => {},
+    succeed: () => {},
+  };
 
   async function runHandler() {
     // Dynamic import so mocks are in place.
@@ -84,6 +116,113 @@ describe('spendReconciliation cron', () => {
     expect(mockAnthropicFetch).toHaveBeenCalledTimes(2);
     expect(mockOpenAIFetch).toHaveBeenCalledTimes(2);
     expect(mockAppend).toHaveBeenCalledTimes(4);
+  });
+
+  it('shares one provider deadline across its months and carries unused time forward', async () => {
+    mockAnthropicFetch.mockImplementation(async () => {
+      vi.setSystemTime(Date.now() + 10_000);
+      return { providerUsd: 100, breakdown: {} };
+    });
+    mockOpenAIFetch.mockResolvedValue({ providerUsd: 100, breakdown: {} });
+
+    await runHandler();
+
+    expect(mockAnthropicFetch).toHaveBeenCalledTimes(2);
+    expect(mockOpenAIFetch).toHaveBeenCalledTimes(2);
+    for (const call of mockAnthropicFetch.mock.calls) {
+      expect(call[2]).toBeUndefined();
+      expect(call[3]).toEqual({ deadlineMs: FIXED_NOW.getTime() + 120_000, onDiagnostic: expect.any(Function) });
+    }
+    for (const call of mockOpenAIFetch.mock.calls) {
+      expect(call[2]).toBeUndefined();
+      expect(call[3]).toEqual({ deadlineMs: FIXED_NOW.getTime() + 240_000, onDiagnostic: expect.any(Function) });
+    }
+    // The fast first group used only 20 seconds; the next one gets the remaining 220.
+    expect(Date.now()).toBe(FIXED_NOW.getTime() + 20_000);
+  });
+
+  it('reaches healthy OpenAI after Anthropic consumes its entire provider slice', async () => {
+    mockAnthropicFetch.mockImplementation(
+      async (_key: string, _month: string, _fetch: unknown, options: { deadlineMs: number }) => {
+        vi.setSystemTime(options.deadlineMs);
+        throw new Error('Provider request deadline exceeded');
+      }
+    );
+    mockOpenAIFetch.mockResolvedValue({ providerUsd: 210, breakdown: {} });
+
+    const result = await runHandler();
+
+    expect(mockAnthropicFetch).toHaveBeenCalledTimes(1);
+    expect(mockOpenAIFetch).toHaveBeenCalledTimes(2);
+    expect(mockAnthropicFetch.mock.calls[0][3].deadlineMs).toBe(FIXED_NOW.getTime() + 120_000);
+    expect(mockOpenAIFetch.mock.calls.every(call => call[3].deadlineMs === FIXED_NOW.getTime() + 240_000)).toBe(true);
+    expect(JSON.parse(result.body)).toMatchObject({ reconciled: 2, failed: 2 });
+    expect(mockAppend).toHaveBeenCalledTimes(2);
+    expect(mockAppend.mock.calls.every(call => call[0].provider === 'openai' && call[0].providerUsd === 210)).toBe(
+      true
+    );
+    expect(mockCloudWatchSend).toHaveBeenCalled();
+  });
+
+  it('gives a single configured provider all the remaining global budget', async () => {
+    const { Config } = await import('@bike4mind/server-utils/utils/config');
+    const config = Config as Record<string, unknown>;
+    const originalKey = config.ANTHROPIC_ADMIN_API_KEY;
+    config.ANTHROPIC_ADMIN_API_KEY = 'not-configured';
+    mockOpenAIFetch.mockResolvedValue({ providerUsd: 100, breakdown: {} });
+    try {
+      const result = await runHandler();
+      expect(JSON.parse(result.body)).toMatchObject({ reconciled: 2, failed: 0, skipped: 1 });
+      expect(mockAnthropicFetch).not.toHaveBeenCalled();
+      expect(mockOpenAIFetch).toHaveBeenCalledTimes(2);
+      for (const call of mockOpenAIFetch.mock.calls) {
+        expect(call[3].deadlineMs).toBe(FIXED_NOW.getTime() + 240_000);
+      }
+    } finally {
+      config.ANTHROPIC_ADMIN_API_KEY = originalKey;
+    }
+  });
+
+  it('stops admitting provider requests after the shared budget is exhausted', async () => {
+    mockAnthropicFetch.mockImplementationOnce(async () => {
+      vi.setSystemTime(FIXED_NOW.getTime() + 240_000);
+      throw new Error('Provider request deadline exceeded');
+    });
+
+    const result = await runHandler();
+
+    expect(JSON.parse(result.body)).toMatchObject({ reconciled: 0, failed: 4 });
+    expect(mockAnthropicFetch).toHaveBeenCalledTimes(1);
+    expect(mockOpenAIFetch).not.toHaveBeenCalled();
+    expect(mockAppend).not.toHaveBeenCalled();
+    expect(mockCloudWatchSend).toHaveBeenCalled();
+  });
+
+  it('reserves metrics headroom when the hosted invocation has less time remaining', async () => {
+    mockAnthropicFetch.mockResolvedValue(null);
+    mockOpenAIFetch.mockResolvedValue(null);
+    const { handler } = await import('./spendReconciliation');
+
+    await handler(undefined, { ...lambdaContext, getRemainingTimeInMillis: () => 45_000 });
+
+    expect(mockAnthropicFetch.mock.calls[0][3].deadlineMs).toBe(FIXED_NOW.getTime() + 7_500);
+    expect(mockAnthropicFetch.mock.calls[1][3].deadlineMs).toBe(FIXED_NOW.getTime() + 7_500);
+    expect(mockOpenAIFetch.mock.calls[0][3].deadlineMs).toBe(FIXED_NOW.getTime() + 15_000);
+  });
+
+  it('includes database connection time in the hosted provider budget', async () => {
+    mockConnectDB.mockImplementationOnce(async () => {
+      vi.setSystemTime(FIXED_NOW.getTime() + 20_000);
+    });
+    const { handler } = await import('./spendReconciliation');
+
+    const result = await handler(undefined, { ...lambdaContext, getRemainingTimeInMillis: () => 45_000 });
+
+    expect(JSON.parse(result.body)).toMatchObject({ reconciled: 0, failed: 4 });
+    expect(mockAnthropicFetch).not.toHaveBeenCalled();
+    expect(mockOpenAIFetch).not.toHaveBeenCalled();
+    expect(mockAppend).not.toHaveBeenCalled();
+    expect(mockCloudWatchSend).toHaveBeenCalled();
   });
 
   it('computes delta and deltaPct using max(provider, internal) as denominator', async () => {
@@ -149,8 +288,87 @@ describe('spendReconciliation cron', () => {
     expect(row.deltaPct).toBe(100);
   });
 
+  describe('with the admin key secret store', () => {
+    const errorLogger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const storedKeys: Record<string, string | Error> = {};
+
+    beforeEach(() => {
+      vi.stubEnv('PROVIDER_ADMIN_KEY_SECRET_ANTHROPIC', 'anthropic-secret-arn');
+      vi.stubEnv('PROVIDER_ADMIN_KEY_SECRET_OPENAI', 'openai-secret-arn');
+      storedKeys['anthropic-secret-arn'] = 'stored-anthropic-key';
+      storedKeys['openai-secret-arn'] = 'stored-openai-key';
+      mockSecretSend.mockImplementation(async command => {
+        const value = storedKeys[(command as { input: { SecretId: string } }).input.SecretId];
+        if (value instanceof Error) throw value;
+        return { SecretString: value };
+      });
+    });
+
+    it('fetches with the stored keys, not the Config ones', async () => {
+      mockAnthropicFetch.mockResolvedValue(null);
+      mockOpenAIFetch.mockResolvedValue(null);
+
+      await runHandler();
+
+      expect(mockAnthropicFetch).toHaveBeenCalledWith(
+        'stored-anthropic-key',
+        expect.any(String),
+        undefined,
+        expect.objectContaining({ deadlineMs: FIXED_NOW.getTime() + 120_000 })
+      );
+      expect(mockOpenAIFetch).toHaveBeenCalledWith(
+        'stored-openai-key',
+        expect.any(String),
+        undefined,
+        expect.objectContaining({ deadlineMs: FIXED_NOW.getTime() + 240_000 })
+      );
+    });
+
+    it('skips a provider whose secret has no value yet', async () => {
+      storedKeys['openai-secret-arn'] = Object.assign(new Error('no current value'), {
+        name: 'ResourceNotFoundException',
+      });
+      mockAnthropicFetch.mockResolvedValue(null);
+
+      const body = JSON.parse((await runHandler()).body);
+
+      expect(body.skipped).toBeGreaterThan(0);
+      expect(mockOpenAIFetch).not.toHaveBeenCalled();
+    });
+
+    it('counts a failed key lookup as a failed provider and still reconciles the other one', async () => {
+      storedKeys['anthropic-secret-arn'] = Object.assign(new Error('not authorized'), {
+        name: 'AccessDeniedException',
+      });
+      mockOpenAIFetch.mockResolvedValue({ providerUsd: 210, breakdown: {} });
+      const { runSpendReconciliation } = await import('./spendReconciliation');
+
+      const result = await runSpendReconciliation({ logger: errorLogger as never });
+
+      expect(result).toEqual({ reconciled: 2, skipped: 0, failed: 1, drifted: 0 });
+      expect(mockAnthropicFetch).not.toHaveBeenCalled();
+      expect(mockOpenAIFetch).toHaveBeenCalledTimes(2);
+      expect(errorLogger.error).toHaveBeenCalledWith(
+        '[SpendReconciliation] anthropic admin key lookup failed',
+        expect.any(Error)
+      );
+    });
+
+    it('reports every lookup failure when no provider key could be read', async () => {
+      const denied = Object.assign(new Error('not authorized'), { name: 'AccessDeniedException' });
+      storedKeys['anthropic-secret-arn'] = denied;
+      storedKeys['openai-secret-arn'] = denied;
+      const { runSpendReconciliation } = await import('./spendReconciliation');
+
+      const result = await runSpendReconciliation({ logger: errorLogger as never });
+
+      expect(result).toEqual({ reconciled: 0, skipped: 0, failed: 2, drifted: 0 });
+      expect(mockMonthlyCogsByProvider).not.toHaveBeenCalled();
+    });
+  });
+
   describe('runSpendReconciliation', () => {
-    const logger = { log: vi.fn(), error: vi.fn() } as never;
+    const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
 
     it('skips every provider without connecting when no admin key is set', async () => {
       const configMod = await import('@bike4mind/server-utils/utils/config');
@@ -161,7 +379,7 @@ describe('spendReconciliation cron', () => {
         const { runSpendReconciliation } = await import('./spendReconciliation');
         const result = await runSpendReconciliation({ logger });
 
-        expect(result).toEqual({ reconciled: 0, skipped: 2, failed: 0 });
+        expect(result).toEqual({ reconciled: 0, skipped: 2, failed: 0, drifted: 0 });
         expect(mockAnthropicFetch).not.toHaveBeenCalled();
         expect(mockOpenAIFetch).not.toHaveBeenCalled();
         expect(mockAppend).not.toHaveBeenCalled();
@@ -181,9 +399,85 @@ describe('spendReconciliation cron', () => {
       const result = await runSpendReconciliation({ logger, now: new Date('2027-01-02T06:00:00Z') });
 
       expect(mockOpenAIFetch.mock.calls.map(c => c[1])).toEqual(['2026-12', '2027-01']);
-      expect(result).toEqual({ reconciled: 2, skipped: 2, failed: 0 });
+      // The closed month 2026-12 has no internal COGS row, so $1 billed reads as 100% drift.
+      expect(result).toEqual({ reconciled: 2, skipped: 2, failed: 0, drifted: 1 });
       expect(mockAppend).toHaveBeenCalledTimes(2);
       expect(mockConnectDB).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('drift and nothing-reconciled metrics', () => {
+    function publishedMetrics(): Record<string, number> {
+      expect(mockCloudWatchSend).toHaveBeenCalledTimes(1);
+      const { Namespace, MetricData } = mockCloudWatchSend.mock.calls[0][0].input as {
+        Namespace: string;
+        MetricData: { MetricName: string; Value: number }[];
+      };
+      expect(Namespace).toBe('test-app/test/LLMSpend');
+      return Object.fromEntries(MetricData.map(datum => [datum.MetricName, datum.Value]));
+    }
+
+    it('counts a closed month whose drift exceeds the error band', async () => {
+      // 2026-07: provider $600 vs internal $450 -> 25% drift.
+      mockAnthropicFetch.mockImplementation(async (_key: string, month: string) =>
+        month === '2026-07' ? { providerUsd: 600, breakdown: {} } : { providerUsd: 120, breakdown: {} }
+      );
+      mockOpenAIFetch.mockResolvedValue(null);
+
+      const body = JSON.parse((await runHandler()).body);
+
+      expect(body.drifted).toBe(1);
+      expect(publishedMetrics()).toEqual({ SpendReconciliationDrift: 1, SpendReconciliationNothingReconciled: 0 });
+    });
+
+    it('does not count a drift at or under the error band', async () => {
+      // 2026-07: provider $500 vs internal $450 -> exactly 10%, the top of the warning band.
+      mockAnthropicFetch.mockImplementation(async (_key: string, month: string) =>
+        month === '2026-07' ? { providerUsd: 500, breakdown: {} } : { providerUsd: 120, breakdown: {} }
+      );
+      mockOpenAIFetch.mockResolvedValue(null);
+
+      const body = JSON.parse((await runHandler()).body);
+
+      expect(body).toMatchObject({ reconciled: 2, drifted: 0 });
+      expect(publishedMetrics()).toEqual({ SpendReconciliationDrift: 0, SpendReconciliationNothingReconciled: 0 });
+    });
+
+    it('leaves the accruing month out of the drift count', async () => {
+      // 2026-08: provider $10 vs internal $120 -> 92% drift on a month still accruing.
+      mockAnthropicFetch.mockImplementation(async (_key: string, month: string) =>
+        month === '2026-07' ? { providerUsd: 450, breakdown: {} } : { providerUsd: 10, breakdown: {} }
+      );
+      mockOpenAIFetch.mockResolvedValue(null);
+
+      const body = JSON.parse((await runHandler()).body);
+
+      expect(body.drifted).toBe(0);
+      expect(publishedMetrics().SpendReconciliationDrift).toBe(0);
+    });
+
+    it('flags a run where every provider-month failed or was skipped', async () => {
+      mockAnthropicFetch.mockRejectedValue(new Error('Anthropic API 500'));
+      mockOpenAIFetch.mockResolvedValue(null);
+
+      const body = JSON.parse((await runHandler()).body);
+
+      expect(body).toMatchObject({ reconciled: 0, failed: 2, skipped: 2 });
+      expect(publishedMetrics()).toEqual({ SpendReconciliationDrift: 0, SpendReconciliationNothingReconciled: 1 });
+    });
+
+    it('flags a run where no provider admin key is configured', async () => {
+      const configMod = await import('@bike4mind/server-utils/utils/config');
+      const cfg = configMod.Config as Record<string, unknown>;
+      cfg.ANTHROPIC_ADMIN_API_KEY = 'not-configured';
+      cfg.OPENAI_ADMIN_API_KEY = undefined;
+      try {
+        await runHandler();
+        expect(publishedMetrics()).toEqual({ SpendReconciliationDrift: 0, SpendReconciliationNothingReconciled: 1 });
+      } finally {
+        cfg.ANTHROPIC_ADMIN_API_KEY = 'sk-ant-admin01-test';
+        cfg.OPENAI_ADMIN_API_KEY = 'sk-openai-test';
+      }
     });
   });
 });

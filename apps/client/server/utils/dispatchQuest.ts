@@ -1,4 +1,5 @@
 import { Resource } from 'sst';
+import { chatCompletionBaseUrl } from './chatCompletionBaseUrl';
 import type { z } from 'zod';
 import type { QuestStartBodySchema } from '@bike4mind/services/llm';
 import type { Logger } from '@bike4mind/observability';
@@ -32,7 +33,7 @@ const RETRY_BACKOFF_MS = 300;
  * per-environment branching - the only difference is how the URL/secret resolve.
  */
 export async function dispatchQuest(params: QuestStartBody, logger: Logger): Promise<void> {
-  const url = `${Resource.ChatCompletion.url}/process`;
+  const url = `${chatCompletionBaseUrl()}/process`;
   const body = JSON.stringify(params);
   const deadline = Date.now() + DISPATCH_TIMEOUT_MS;
   let lastError: Error | undefined;

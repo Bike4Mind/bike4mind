@@ -29,10 +29,12 @@ interface ProviderBundleProps {
 }
 
 // Core data providers - grouped to reduce cascading re-renders.
-// MFAEnforcementWrapper sits directly under AdminSettingsProvider (it reads enforceMFA there) and
-// encloses everything else: while a session owes MFA enrollment the server 403s every route outside
-// its allowlist (mfaEnrollmentGate in server/auth/auth.ts), so the wrapper withholds the app until
-// enrollment is ruled out, except for a user remembered as enrolled, whose app a refusal withdraws.
+// MFAEnforcementWrapper sits directly under AdminSettingsProvider (it reads enforceMFA there as a
+// loading hint; the MFA status decides) and encloses everything else: while a session owes MFA
+// enrollment the server 403s every route outside its allowlist (mfaEnrollmentGate in
+// server/auth/auth.ts), so the wrapper withholds the app until enrollment is ruled out, except on
+// a hint that none is owed (remembered as enrolled, or settings say enforcement is off), whose app
+// a refusal withdraws.
 const CoreDataProviders: React.FC<{ children: ReactNode }> = ({ children }) => (
   <InboxProvider>
     <UserSettingsProvider>

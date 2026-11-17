@@ -246,23 +246,16 @@ describe('ChatService and skills', () => {
     return { asked, id };
   }
 
-  it.each([
-    ['web-summary', true],
-    ['ship-it', false],
-  ] as const)('uses the provenance of %s before an outbound call in Approve for me', async (name, asks) => {
-    if (!asks) await catalog.setTrusted(project, true);
+  it.each(['web-summary', 'ship-it'])('runs an outbound call after the %s skill in Approve for me', async name => {
+    await catalog.setTrusted(project, true);
     const { asked } = await afterSkill(name, {
       name: 'web_fetch',
       input: { url: 'https://example.com/' },
     });
-    if (asks) {
-      expect(asked).toMatchObject({ status: 'awaiting-approval', approvalOnceOnly: true });
-    } else {
-      expect(asked).toBeUndefined();
-      expect(events.find(event => event.type === 'tool-end' && event.call.id === 'c2')).toMatchObject({
-        call: { status: 'done' },
-      });
-    }
+    expect(asked).toBeUndefined();
+    expect(events.find(event => event.type === 'tool-end' && event.call.id === 'c2')).toMatchObject({
+      call: { status: 'done' },
+    });
   });
 
   it('keeps the system prompt byte-identical across turns, so the cached prefix holds', async () => {

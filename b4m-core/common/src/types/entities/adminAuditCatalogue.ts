@@ -66,6 +66,11 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.role.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
   'user.permissions.updated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.permissions.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'access_review.confirmed': { category: 'access', severity: 'notice', write: 'strict' },
+  'access_review.revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'access_review.completed': { category: 'access', severity: 'notice', write: 'strict' },
+  'access_review.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'access_review.exported': { category: 'access', severity: 'notice', write: 'bestEffort' },
   'user.impersonation.started': { category: 'access', severity: 'critical', write: 'strict' },
   'user.impersonation.escalated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.impersonation.ended': { category: 'access', severity: 'info', write: 'bestEffort' },
@@ -128,6 +133,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.domain.policy_updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.domain.removed': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.custom_mcp_policy.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.model_policy.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.slack_channel_api_posting.updated': { category: 'org', severity: 'notice', write: 'strict' },
   // Target the member, not the org, so the entry reaches the user's Admin log; organizationId names the org.
   'org.member.added': { category: 'org', severity: 'notice', write: 'strict' },
@@ -140,6 +146,23 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.api_key.callback_secret_rotated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.access_updated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.member_revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.settings.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  // A platform admin reading an org they do not belong to. strict, like the other staff read audits.
+  'org.viewed': { category: 'org', severity: 'info', write: 'strict' },
+  'org.logo.updated': { category: 'org', severity: 'info', write: 'bestEffort' },
+  // strict: written inside the delete transaction, so the delete never lands without its entry.
+  'org.deleted': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.slack.connected': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.created': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.deleted': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.secret_rotated': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.deliveries_replayed': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.github_connection.created': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.deleted': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.key_rotated': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.pat_rotated': { category: 'access', severity: 'notice', write: 'bestEffort' },
 
   'settings.admin_settings.updated': { category: 'settings', severity: 'notice', write: 'strict' },
   'settings.admin_settings.denied': { category: 'settings', severity: 'critical', write: 'bestEffort' },
@@ -274,6 +297,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },
   'user.api_key.restored': { category: 'access', severity: 'notice', write: 'strict' },
   'user.api_key.rotated': { category: 'access', severity: 'critical', write: 'strict' },
+  // Adds or removes ai:end-user-id on an existing key (pages/api/admin/user-api-keys/[id]/end-user-id.ts).
+  'user.api_key.end_user_id_updated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.api_keys.revoked_all': { category: 'access', severity: 'notice', write: 'strict' },
   'org.data_lake.embedding_spend_reset': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.storage.recalculated': { category: 'support', severity: 'info', write: 'bestEffort' },
@@ -297,6 +322,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'ops.sre.tracking_retried': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.dlq.replayed': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.dlq.discarded': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.dlq.triage.dismissed': { category: 'support', severity: 'notice', write: 'strict' },
+  'ops.dlq.triage.accepted': { category: 'support', severity: 'notice', write: 'strict' },
   'ops.agent_executions.cleaned_up': { category: 'support', severity: 'notice', write: 'bestEffort' },
   // Handler coverage: billing and model config
   'settings.model_price.repriced': { category: 'settings', severity: 'notice', write: 'strict' },
@@ -379,6 +406,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // bestEffort: the AbuseAssessment record is the source of truth; an advisory assessment never acts.
   'security.detection.assessed': { category: 'access', severity: 'info', write: 'bestEffort' },
   'security.detection.replayed': { category: 'access', severity: 'info', write: 'bestEffort' },
+  // An admin agreeing with an abuse assessment on a user queue; records the suggestion decision only.
+  'security.ai_assessment.accepted': { category: 'access', severity: 'info', write: 'strict' },
   // bestEffort: the AbuseEvalSet record is the source of truth; evaluation sets are grading data and never act.
   'abuse.eval_set.created': { category: 'access', severity: 'info', write: 'bestEffort' },
   'abuse.eval_set.verdict_recorded': { category: 'access', severity: 'info', write: 'bestEffort' },
@@ -391,6 +420,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'feedback.note_added': { category: 'support', severity: 'info', write: 'strict' },
   'feedback.deleted': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.incident.verdict_recorded': { category: 'support', severity: 'notice', write: 'strict' },
+  'moderation.incident.escalated': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.taken_down': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.takedown_reverted': { category: 'support', severity: 'notice', write: 'strict' },
 

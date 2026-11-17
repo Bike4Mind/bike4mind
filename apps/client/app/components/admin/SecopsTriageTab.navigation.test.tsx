@@ -28,7 +28,15 @@ vi.mock('@client/app/hooks/data/settings', () => ({
 }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({ useModelInfo: () => ({ data: [] }) }));
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { get: () => Promise.resolve({ data: { workspaces: [] } }) },
+  api: {
+    get: (url: string) =>
+      Promise.resolve({
+        data:
+          url === '/api/admin/secops-triage/status'
+            ? { stage: 'test', enabled: false, github: { connected: false, repo: '', check: null }, recentRuns: [] }
+            : { workspaces: [] },
+      }),
+  },
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 

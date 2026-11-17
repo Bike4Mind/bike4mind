@@ -69,4 +69,8 @@ export interface IPartnerSignupRuleRepository extends IBaseRepository<IPartnerSi
     limit: number;
     search?: string;
   }) => Promise<PaginatedResponse<IPartnerSignupRuleDocument>>;
+  listByGrantPackage: (
+    grantPackageId: string,
+    limit: number
+  ) => Promise<{ data: IPartnerSignupRuleDocument[]; truncated: boolean }>;
 }

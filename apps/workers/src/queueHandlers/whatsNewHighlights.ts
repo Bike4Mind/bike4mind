@@ -4,8 +4,6 @@ import {
   apiKeyRepository,
   adminSettingsRepository,
 } from '@bike4mind/database';
-import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
-import { WhatsNewHighlightsPayloadSchema } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 import type {
   WhatsNewHighlightsPayload,
   WhatsNewHighlightsConfig,
@@ -142,12 +140,6 @@ export async function runHighlightsJob(payload: WhatsNewHighlightsPayload, logge
     throw error; // Re-throw to trigger DLQ
   }
 }
-
-/** Entry point for the legacy highlights queue; removed once that queue is drained. */
-export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
-  const payload = WhatsNewHighlightsPayloadSchema.parse(JSON.parse(event.Records[0].body));
-  await runHighlightsJob(payload, logger);
-});
 
 async function processHighlightsGeneration(
   payload: WhatsNewHighlightsPayload,

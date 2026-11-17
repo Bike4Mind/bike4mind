@@ -30,7 +30,7 @@ describe('approval mode copy', () => {
     expect(notes).toMatch(/"Full access" asks before an action that cannot be undone/);
     expect(notes).not.toMatch(/credits/i);
     expect(notes).toMatch(/cannot be undone/i);
-    expect(notes).toMatch(/browser page you are signed in to/i);
+    expect(notes).toMatch(/opening a browser page you are signed in to/i);
     expect(notes).toMatch(/permission and hook settings/i);
     expect(notes).toMatch(/WSL distro this project has no folder in/i);
   });
@@ -39,23 +39,16 @@ describe('approval mode copy', () => {
     expect(approvalModeOption('auto').description).toMatch(/everything except/i);
     expect(approvalModeOption('auto').description).toMatch(/write outside this project/i);
     expect(approvalModeOption('auto').description).toMatch(/write protected settings/i);
+    expect(approvalModeOption('auto').description).toMatch(/cannot fully follow/i);
+    expect(approvalModeOption('auto').description).not.toMatch(/external content/i);
   });
 
-  it('says approve-for-me and full access ask for commands Desktop cannot follow', () => {
+  it('says approve-for-me and full access ask for commands Desktop cannot parse or fully follow', () => {
     const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
-    expect(notes).toMatch(
-      /"Approve for me" and "Full access" ask before commands Desktop cannot fully follow or parse/
-    );
-    expect(notes).toMatch(/unknown option or complex curl form asks in both modes/i);
-  });
-
-  it('names the post-content outbound check while preserving ordinary outside reads', () => {
-    const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
+    expect(notes).toMatch(/ask before a command Desktop cannot parse or fully follow/);
     expect(notes).toMatch(/only reads outside your folders runs/i);
-    expect(notes).toMatch(/send data off this computer/i);
-    expect(notes).toMatch(/after a reply reads web, MCP, browser/i);
-    expect(notes).toMatch(/start work in another conversation/i);
     expect(notes).toMatch(/explicit user permission rules still apply/i);
+    expect(notes).not.toMatch(/after a reply reads web/i);
   });
 
   it('names the folders file edits can never reach', () => {

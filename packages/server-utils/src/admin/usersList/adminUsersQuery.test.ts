@@ -45,6 +45,18 @@ describe('buildAdminUsersMatch', () => {
     expect(JSON.stringify(byText)).not.toContain('providerEndUserId');
   });
 
+  it('also matches the platform account behind a platform end-user digest', () => {
+    const digest = 'cd'.repeat(32);
+    const owner = '0123456789abcdef01234567';
+    const [byDigest] = conditionsOf(
+      buildAdminUsersMatch({ search: digest }, { ...context, platformEndUserOwnerIds: [owner, 'not-an-id'] })
+    );
+    expect((byDigest.$or as unknown[]).slice(-2)).toEqual([
+      { providerEndUserId: digest },
+      { _id: { $in: [{ objectId: owner }] } },
+    ]);
+  });
+
   it('reads the Admin tag as the isAdmin flag', () => {
     expect(conditionsOf(buildAdminUsersMatch({ tags: ['Admin'] }, context))).toEqual([{ isAdmin: true }]);
     expect(conditionsOf(buildAdminUsersMatch({ tags: ['Admin', 'beta'] }, context))).toEqual([
@@ -94,6 +106,12 @@ describe('buildAdminUsersMatch', () => {
       { emailVerified: { $ne: true } },
       { createdAt: { $gte: new Date('2026-10-27T11:00:00.000Z') } },
       { 'signupGrantAssessment.band': 'review' },
+    ]);
+  });
+
+  it('matches the holders of one admin role', () => {
+    expect(conditionsOf(buildAdminUsersMatch({ adminRole: '0123456789abcdef01234567' }, context))).toEqual([
+      { adminRoleIds: { objectId: '0123456789abcdef01234567' } },
     ]);
   });
 

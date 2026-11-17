@@ -321,7 +321,8 @@ describe('simulator_build', () => {
     await simulatorBuild.run({ project: `${project}/`, scheme: 'Foo' }, context);
     expect(driver.build.mock.calls[0][0]).toEqual({ container: project, scheme: 'Foo', udid: 'AAAA-1111' });
     const prompt = await simulatorBuild.approval?.({ project, scheme: 'Foo' }, context);
-    expect(prompt).toMatchObject({ key: `simulator_build\x00${project}\x00Foo`, askInAuto: true });
+    expect(prompt).toMatchObject({ key: `simulator_build\x00${project}\x00Foo` });
+    expect(prompt?.askInAuto).toBeUndefined();
   });
 });
 

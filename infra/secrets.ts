@@ -17,6 +17,7 @@ export const secrets = {
   SESSION_SECRET: new sst.Secret('SESSION_SECRET', 'my-secret-placeholder-value'),
   JWT_SECRET: new sst.Secret('JWT_SECRET', 'my-secret-placeholder-value'),
   SLACK_WEBHOOK_URL: new sst.Secret('SLACK_WEBHOOK_URL', 'not-configured'),
+  SLACK_FEEDBACK_DESTINATIONS: new sst.Secret('SLACK_FEEDBACK_DESTINATIONS', 'not-configured'),
   SLACK_ERROR_REPORTING_WEBHOOK_URL: new sst.Secret('SLACK_ERROR_REPORTING_WEBHOOK_URL', 'not-configured'),
   SLACK_ALARMS_WEBHOOK_URL: new sst.Secret('SLACK_ALARMS_WEBHOOK_URL', 'not-configured'),
   // Cost-category alarms (apps/workers/src/events/alarmSlackMessage.ts) post here when set;
@@ -70,6 +71,7 @@ export const secrets = {
   ANTHROPIC_API_KEY: new sst.Secret('ANTHROPIC_API_KEY', 'not-configured'),
   // Anthropic Admin API key for billing/spend reconciliation (cost_report endpoint).
   // Requires an admin-scoped key from console.anthropic.com.
+  // The spend crons read it from the store in infra/providerAdminKeys.ts where that exists; this is the fallback.
   ANTHROPIC_ADMIN_API_KEY: new sst.Secret('ANTHROPIC_ADMIN_API_KEY', 'not-configured'),
   // Cloudflare Turnstile secret key; the check stays off until a real value is set.
   TURNSTILE_SECRET_KEY: new sst.Secret('TURNSTILE_SECRET_KEY', 'not-configured'),
@@ -82,6 +84,7 @@ export const secrets = {
   OPENAI_API_KEY: new sst.Secret('OPENAI_API_KEY', 'not-configured'),
   // OpenAI admin API key for billing/spend reconciliation (usage endpoint).
   // Requires an org-admin-scoped key from platform.openai.com.
+  // The spend crons read it from the store in infra/providerAdminKeys.ts where that exists; this is the fallback.
   OPENAI_ADMIN_API_KEY: new sst.Secret('OPENAI_ADMIN_API_KEY', 'not-configured'),
   XAI_API_KEY: new sst.Secret('XAI_API_KEY', 'not-configured'),
   MOONSHOT_API_KEY: new sst.Secret('MOONSHOT_API_KEY', 'not-configured'),

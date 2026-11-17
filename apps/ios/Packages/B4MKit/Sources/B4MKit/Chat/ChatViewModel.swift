@@ -20,6 +20,8 @@ public final class ChatViewModel {
   public private(set) var isSending = false
   public private(set) var isRealtimeConnected = false
   public private(set) var hapticTrigger: HapticTrigger?
+  /// Answers given from this screen, per pending action (a replacement action has a new `ts`, so it starts open).
+  public private(set) var approvalStates: [PendingActionTarget: ApprovalCardState] = [:]
   /// When on, the next send starts a fire-and-forget agent run instead of a chat turn; it resets once a run
   /// starts, and stays on when the start failed so a retry is still a run.
   public var sendsAsAgentRun = false
@@ -32,6 +34,7 @@ public final class ChatViewModel {
   @ObservationIgnored private let title: String
   @ObservationIgnored private let activities: (any QuestActivityTracking)?
   @ObservationIgnored private let agentRuns: (any AgentRunStarting)?
+  @ObservationIgnored private let pendingActions: (any PendingActionAPI)?
   @ObservationIgnored private var hapticSequence = 0
   /// Optimistic turns whose quest id is not known yet, oldest first.
   @ObservationIgnored private var awaitingReceipt: [String] = []
@@ -61,12 +64,14 @@ public final class ChatViewModel {
     title: String = "",
     activities: (any QuestActivityTracking)? = nil,
     agentRuns: (any AgentRunStarting)? = nil,
+    pendingActions: (any PendingActionAPI)? = nil,
     firstTurn: QuestTurn? = nil
   ) {
     self.sessionID = sessionID
     self.title = title
     self.activities = activities
     self.agentRuns = agentRuns
+    self.pendingActions = pendingActions
     self.api = api
     self.realtime = realtime
     self.polling = polling
@@ -145,6 +150,35 @@ public final class ChatViewModel {
     for task in settleTasks.values { task.cancel() }
     settleTasks.removeAll()
     settledQuestIDs.removeAll()
+  }
+
+  // MARK: - Approvals
+
+  /// Whether the card can offer approve and deny: only when this build wires the pending-action routes.
+  public var canAnswerApprovals: Bool { pendingActions != nil }
+
+  public func approvalState(for action: PendingAction, questID: String) -> ApprovalCardState {
+    approvalStates[PendingActionTarget(questID: questID, pendingActionTs: action.timestampMillis)] ?? .open
+  }
+
+  /// Approves or denies the pending action the card shows. The server decides whether it is still current:
+  /// a lapsed, replaced or already-answered action comes back as a settled failure, after which the transcript
+  /// is refetched so the card reflects what really happened.
+  public func respond(to action: PendingAction, questID: String, decision: PendingActionDecision) async {
+    guard let pendingActions else { return }
+    let target = PendingActionTarget(questID: questID, pendingActionTs: action.timestampMillis)
+    guard approvalStates[target]?.offersDecision ?? true else { return }
+    approvalStates[target] = .submitting(decision)
+    do {
+      let result = try await pendingActions.respond(to: target, decision: decision)
+      approvalStates[target] = .answered(result)
+      await refresh()
+    } catch let failure as PendingActionFailure {
+      approvalStates[target] = .failed(failure)
+      if !failure.isRetryable { await refresh() }
+    } catch {
+      approvalStates[target] = .failed(.api(.malformedResponse))
+    }
   }
 
   // MARK: - Sending

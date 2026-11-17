@@ -43,7 +43,11 @@ const pressEscape = (init: KeyboardEventInit = {}) =>
 
 beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = {
-    chat: { getSession: vi.fn().mockResolvedValue(null), onQueueChanged: vi.fn(() => () => undefined) },
+    chat: {
+      getSession: vi.fn().mockResolvedValue(null),
+      onQueueChanged: vi.fn(() => () => undefined),
+      getRunSpend: vi.fn().mockResolvedValue({ status: 'unattributed' }),
+    },
   };
 });
 
@@ -411,6 +415,58 @@ describe('OrchestratorStage', () => {
       expect(banner.getAttribute('data-placement')).toBe('inline');
     });
 
+    it("replaces the local estimate with the run's settled total once the server answers", async () => {
+      const spend = (creditsCharged: number) => ({
+        creditsCharged,
+        requests: 1,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      });
+      const getRunSpend = vi.fn().mockResolvedValue({
+        status: 'settled',
+        runId: 'run-a',
+        local: { creditsCharged: 1750, requests: 2 },
+        checkedAt: '2026-10-01T00:11:00.000Z',
+        server: {
+          runId: 'run-a',
+          createdAt: '2026-10-01T00:00:00.000Z',
+          settled: spend(1800),
+          byRole: [
+            { ...spend(50), role: 'root' },
+            { ...spend(1750), role: 'worker' },
+          ],
+          byPurpose: [
+            { ...spend(1750), purpose: 'turn' },
+            { ...spend(50), purpose: 'title' },
+          ],
+          byModel: [],
+          byAttempt: [
+            { ...spend(1500), role: 'worker', taskId: 'a' },
+            { ...spend(250), role: 'worker', taskId: 'b' },
+          ],
+          byAttemptTruncated: false,
+        },
+      });
+      (window as unknown as { b4m: { chat: Record<string, unknown> } }).b4m.chat.getRunSpend = getRunSpend;
+      await renderRun([agentFixture('a', 'working'), agentFixture('b', 'working')], { status: 'processing' });
+      await renderRun(finished, { status: 'done' });
+      await settle();
+
+      expect(getRunSpend).toHaveBeenCalledWith('root');
+      const chips = [...el('orchestrator-finale-stats').querySelectorAll('li')].map(chip => chip.textContent);
+      expect(chips).toContain('1,800 credits settled');
+      const spendLines = el('orchestrator-finale-spend');
+      expect(spendLines.getAttribute('data-reconciled')).toBe('true');
+      expect([...spendLines.querySelectorAll('li')].map(line => line.textContent)).toEqual([
+        'Root 50 credits \u00B7 Workers 1,750 credits over 2 attempts',
+        'Turns 1,750 credits \u00B7 Titles 50 credits',
+        'Turn charges match what this device recorded',
+        expect.stringMatching(/^Server total as of /),
+      ]);
+    });
+
     it('says "Quest complete" only when every agent finished done', async () => {
       const allDone = [agentFixture('a', 'done'), agentFixture('b', 'done')];
       await renderRun([agentFixture('a', 'working'), agentFixture('b', 'working')], { status: 'processing' });
@@ -523,6 +579,37 @@ describe('OrchestratorStage', () => {
       await settle();
       expect(query('orchestrator-finale')).toBeNull();
     });
+  });
+
+  it('swaps the view for the Focus panel, whose Open buttons reach the drawer and the parent', async () => {
+    const onParentFocus = vi.fn();
+    const renderFocused = (on: boolean) =>
+      themed.render(
+        <OrchestratorStage
+          agents={FIXTURE}
+          parent={{ status: 'needs-action' }}
+          onParentFocus={onParentFocus}
+          rootId="root"
+          view="table"
+          onViewChange={onViewChange}
+          actions={actions}
+          introPlaying={false}
+          focus={{ on, onToggle: vi.fn() }}
+        />
+      );
+    await renderFocused(true);
+    expect(query('orchestrator-table-row-w1')).toBeNull();
+    const openButtons = () =>
+      Array.from(document.querySelectorAll<HTMLElement>('[data-testid="orchestrator-focus-open-btn"]'));
+    expect(openButtons()).toHaveLength(2);
+    await act(async () => openButtons()[0].click());
+    expect(onParentFocus).toHaveBeenCalledTimes(1);
+    await act(async () => openButtons()[1].click());
+    expect(el('orchestrator-peek-drawer').textContent).toContain('Agent n');
+
+    await renderFocused(false);
+    expect(query('orchestrator-focus-panel')).toBeNull();
+    expect(query('orchestrator-table-row-w1')).not.toBeNull();
   });
 
   it('opens the agent a notice asked for, once, and says it was taken', async () => {

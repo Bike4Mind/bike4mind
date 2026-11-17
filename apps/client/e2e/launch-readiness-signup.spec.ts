@@ -23,7 +23,7 @@ test.describe('A6.1 signup on a short screen and a slow link', { tag: ['@launch-
     test.skip(!openRegEnabled, 'Open registration disabled on this env.');
   });
 
-  test('a new user signs up with an email code, every step reachable at 375x667', async ({
+  test('A6.1 signup completes with an email code, every step reachable at 375x667 on a throttled link', async ({
     basePage,
     signupPage,
     page,

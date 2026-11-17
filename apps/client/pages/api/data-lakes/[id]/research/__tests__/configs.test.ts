@@ -285,6 +285,41 @@ describe('/api/data-lakes/[id]/research/configs', () => {
     });
   });
 
+  describe('item rules', () => {
+    const itemRules = [
+      { condition: 'Published by Acme', action: 'block' },
+      { condition: 'About sports', action: 'review' },
+    ];
+
+    it('round-trips itemRules to the service on create and update', async () => {
+      const { res } = makeRes();
+      await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', itemRules }), res);
+      await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, { itemRules }), res);
+      expect(h.createResearchConfig.mock.calls[0][3]).toMatchObject({ itemRules });
+      expect(h.updateResearchConfig.mock.calls[0][4]).toMatchObject({ itemRules });
+    });
+
+    it('returns itemRules on a listed configuration', async () => {
+      const stored = { ...savedConfig, itemRules };
+      h.listResearchConfigs.mockResolvedValue([stored]);
+      const { res, json } = makeRes();
+      await call(indexHandler, req('GET', { id: 'my-lake' }), res);
+      expect(json).toHaveBeenCalledWith({ data: [{ ...stored, feedStatus: null }], pendingProposals: 7 });
+    });
+
+    it('refuses an action other than block or review', async () => {
+      const { res } = makeRes();
+      await expect(
+        call(
+          indexHandler,
+          req('POST', { id: 'l' }, { name: 'n', query: 'q', itemRules: [{ condition: 'c', action: 'allow' }] }),
+          res
+        )
+      ).rejects.toThrow();
+      expect(h.createResearchConfig).not.toHaveBeenCalled();
+    });
+  });
+
   it('strips undeclared fields from each listed configuration, keeping pendingProposals', async () => {
     h.listResearchConfigs.mockResolvedValue([{ ...savedConfig, _id: 'raw-object-id', __v: 7, notInSchema: 'secret' }]);
     const { res, json } = makeRes();

@@ -49,6 +49,7 @@ export const ADMIN_REASON_PRESETS = {
   rateLimitReset: ['Support request', 'Key locked out', 'Counter correction'],
   productAccess: ['Pilot or partner access', 'Plan change', 'Support request'],
   systemMessage: ['Account notice', 'Support follow-up', 'Policy warning'],
+  rolePermissionsChange: ['Role scope updated for new duties', 'Role change on the team', 'Least-privilege cleanup'],
   permissionsChange: ['Joined the support rotation', 'Role change on the team', 'Access no longer needed'],
   roleChange: ['Joined the admin team', 'Left the admin team', 'Temporary on-call access'],
   subscriptionGrant: ['Pilot or partner access', 'Billing correction', 'Goodwill grant', 'Internal testing'],
@@ -130,7 +131,36 @@ export const ADMIN_REASON_PRESETS = {
   heldSignupGrantRevoke: ['Abuse / automated signups', 'Credit farming', 'Granted in error'],
   tutorialDraftDelete: ['Superseded by a newer draft', 'Captured in error', 'No longer needed'],
   knowledgeFileRemoval: ['File no longer needed', 'Outdated instructions', 'Missing file reference'],
+  modelAccess: [
+    'Ready for users',
+    'Limit to a test group',
+    'Provider issue',
+    'Cost control',
+    'Replaced by a newer model',
+  ],
+  modelLifecycleAccept: [
+    'Confirmed on the vendor page',
+    'Successor checked against the vendor page',
+    'Provider announced the deprecation',
+    'Experimental or early-access model',
+    'Confirmed with the provider',
+  ],
+  modelLifecycleDismiss: [
+    'Provider signal is wrong',
+    'Model is still supported',
+    'Experimental or early-access model',
+    'Duplicate of another suggestion',
+  ],
   dlqDiscard: ['Account refused', 'Job obsolete', 'Fixed with no replay needed', 'Bad payload', 'Other'],
+  // Moderation review reasons name the review step, never what the image shows.
+  moderationNoAction: ['Reviewed against the content policy', 'Agreed with the second reviewer'],
+  moderationFalsePositive: [
+    'Reviewed against the content policy',
+    'Known classifier mistake',
+    'Agreed with the second reviewer',
+  ],
+  moderationManualReport: ['Report filed on the web form', 'Filed after the second review'],
+  moderationEscalation: ['Needs a second opinion', 'Unsure which verdict applies', 'Outside my review remit'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;
@@ -142,7 +172,10 @@ export const EMPTY_ADMIN_REASON: AdminReasonDraft = { preset: null, note: '' };
 /** The reason an Accept on an AiSuggestion prefills; the admin can still edit it before applying. */
 export const ACCEPTED_AI_REASON: AdminReasonDraft = { preset: null, note: 'Accepted AI suggestion' };
 
-export const ADMIN_REASON_HINT = `Pick a reason or write at least ${ADMIN_ACTION_REASON_MIN_LENGTH} characters.`;
+export const adminReasonHint = (minLength = ADMIN_ACTION_REASON_MIN_LENGTH): string =>
+  minLength <= 1 ? 'Pick a reason or write one.' : `Pick a reason or write at least ${minLength} characters.`;
+
+export const ADMIN_REASON_HINT = adminReasonHint();
 
 const PRESET_SEPARATOR = ': ';
 
@@ -156,8 +189,13 @@ export const composeAdminReason = ({ preset, note }: AdminReasonDraft): string =
 /** The reason an undo carries: the original one, marked, and still within the shared maximum. */
 export const undoAdminReason = (reason: string): string => `Undo: ${reason}`.slice(0, ADMIN_ACTION_REASON_MAX_LENGTH);
 
-export const isAdminReasonComplete = (draft: AdminReasonDraft): boolean =>
-  isValidAdminActionReason(composeAdminReason(draft));
+/** `minLength` is for an endpoint whose own reason rule is looser than the shared one; omit it otherwise. */
+export const isAdminReasonComplete = (draft: AdminReasonDraft, minLength?: number): boolean => {
+  const reason = composeAdminReason(draft);
+  if (minLength === undefined) return isValidAdminActionReason(reason);
+  const length = reason.trim().length;
+  return length >= minLength && length <= ADMIN_ACTION_REASON_MAX_LENGTH;
+};
 
 /** Longest note that still keeps the composed reason within the shared maximum. */
 export const maxAdminReasonNoteLength = (preset: string | null): number =>

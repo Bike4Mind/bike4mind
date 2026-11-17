@@ -1,16 +1,21 @@
 import type {
   IDataLakeResearchConfigDocument,
   IDataLakeResearchConfigRepository,
+  ResearchItemRule,
   ResearchRunLevers,
   ResearchRunTrigger,
   ResearchScheduleCadence,
 } from '@bike4mind/common';
 import {
+  canonicalItemRules,
   deriveLegacyAllowedDomains,
   isSameDomainSet,
   normalizeDomainList,
+  researchItemRuleKey,
   RESEARCH_CONFIG_NAME_MAX_CHARS,
   RESEARCH_FEED_URL_MAX_CHARS,
+  RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS,
+  RESEARCH_ITEM_RULES_MAX,
   upgradeLegacyResearchLevers,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
@@ -18,6 +23,7 @@ import { isPublicSuffixEntry } from '@bike4mind/utils/registrableDomain';
 import {
   researchAutoAdmitChange,
   researchConfigChange,
+  researchItemRulesChange,
   researchSourceChange,
   researchTrustedSitesChange,
 } from '../dataLakeService/diffLakeConfig';
@@ -128,6 +134,23 @@ const assertFeedSource = (draft: ResearchLeversDraft): void => {
 };
 
 /**
+ * Limits on the raw draft, counted after trim, empty-drop and dedupe so a duplicate alone is not an
+ * error. Refused rather than truncated (a cut condition means something else), and checked here
+ * because the normalizer clamps, which would hide the problem.
+ */
+const assertItemRulesWithinLimits = (draft: ResearchLeversDraft): void => {
+  const rules = canonicalItemRules(draft.itemRules);
+  if (rules.length > RESEARCH_ITEM_RULES_MAX) {
+    throw new BadRequestError(`A research configuration can have at most ${RESEARCH_ITEM_RULES_MAX} item rules`);
+  }
+  if (rules.some(rule => rule.condition.length > RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS)) {
+    throw new BadRequestError(
+      `An item rule condition can be at most ${RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS} characters`
+    );
+  }
+};
+
+/**
  * An entry that is itself a public suffix (`com`, `github.io`) would let auto-admit trust every site
  * anyone can create under it. Checked on the merged levers so a toggle-only edit cannot enable a
  * stored list that already holds one.
@@ -182,6 +205,7 @@ export async function createResearchConfig(
   const cadence = resolveCadence(input, 'off');
   const firstRunAt = firstResearchRunAt(cadence, now());
   assertFeedSource(input);
+  assertItemRulesWithinLimits(input);
   const levers = normalizeResearchLevers(usesTierFields(input) ? withoutAllowedDomains(input) : input);
   assertSourcesReachable(levers);
   assertAutoAdmitEntriesSafe(levers);
@@ -209,6 +233,7 @@ export async function createResearchConfig(
       changes: [
         researchConfigChange(name, 'created'),
         ...(levers.autoAdmitTrusted ? [researchAutoAdmitChange(name, true)] : []),
+        ...itemRuleChanges(name, [], levers.itemRules),
       ],
     },
     { db, logger }
@@ -251,6 +276,20 @@ const LEVER_EQUALITY: {
   minRelevance: sameValue,
   costCeilingMicroUsd: sameValue,
   proposedTags: sameStringSet,
+  itemRules: (a, b) =>
+    sameStringSet(canonicalItemRules(a).map(researchItemRuleKey), canonicalItemRules(b).map(researchItemRuleKey)),
+};
+
+const itemRuleChanges = (
+  name: string,
+  before: readonly ResearchItemRule[] | undefined,
+  after: readonly ResearchItemRule[] | undefined
+) => {
+  const beforeKeys = new Set(canonicalItemRules(before).map(researchItemRuleKey));
+  const afterKeys = new Set(canonicalItemRules(after).map(researchItemRuleKey));
+  const added = [...afterKeys].filter(key => !beforeKeys.has(key)).length;
+  const removed = [...beforeKeys].filter(key => !afterKeys.has(key)).length;
+  return added > 0 || removed > 0 ? [researchItemRulesChange(name, added, removed)] : [];
 };
 
 const trustedSiteChanges = (name: string, before: readonly string[], after: readonly string[]) => {
@@ -309,6 +348,7 @@ export async function updateResearchConfig(
   const { allowedDomains: _derived, ...stored } = existing;
   const mergedDraft = { ...stored, ...resolveLegacyAllowedInput(input, existing) };
   assertFeedSource(mergedDraft);
+  assertItemRulesWithinLimits(mergedDraft);
   const merged = normalizeResearchLevers(mergedDraft);
   assertSourcesReachable(merged);
   assertAutoAdmitEntriesSafe(merged);
@@ -353,6 +393,7 @@ export async function updateResearchConfig(
             ? [researchAutoAdmitChange(updated.name, merged.autoAdmitTrusted)]
             : []),
           ...trustedSiteChanges(updated.name, existing.trustedDomains ?? [], merged.trustedDomains),
+          ...itemRuleChanges(updated.name, existing.itemRules, merged.itemRules),
           ...(LEVER_EQUALITY.source(merged.source, existing.source) &&
           LEVER_EQUALITY.feedUrl(merged.feedUrl, existing.feedUrl)
             ? []

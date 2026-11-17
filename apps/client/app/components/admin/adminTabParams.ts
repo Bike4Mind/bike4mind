@@ -6,7 +6,13 @@ import { ANALYTICS_TAB_PARAMS } from './Analytics/analyticsTabSearch';
 import { EVENTS_TAB_PARAMS } from './EventMetrics/eventsTabSearch';
 import { CAMPAIGN_WATCH_SEARCH_PARAM, SHADOW_DETECTION_TAB_PARAMS } from './shadowDetectionSearch';
 import { STRIPE_DISPUTE_TAB_PARAMS } from './stripeDisputeSearch';
+import { ADMIN_RATE_LIMITS_TAB_SLUG, RATE_LIMITS_TAB_PARAMS } from './RateLimits/rateLimitsSearch';
 import { MODEL_METRICS_TAB_PARAMS } from './ModelMetrics/modelMetricsSearch';
+import {
+  ADMIN_INTEGRATION_HEALTH_TAB_SLUG,
+  INTEGRATION_HEALTH_TAB_PARAMS,
+} from './IntegrationHealth/integrationHealthSearch';
+import { AUDIT_SUMMARY_WINDOW_PARAM } from './AuditLog/auditLogTabSearch';
 import { SIGNUP_DOMAIN_HOLDS_TAB_PARAMS } from './signupDomainHoldsSearch';
 import {
   SECURITY_DASHBOARD_SEARCH_PARSERS,
@@ -35,6 +41,7 @@ import {
   type WebhookAuditLogsSearch,
 } from './WebhookAuditLogs/webhookAuditLogsTabSearch';
 import { MODEL_LOGS_SEARCH_PARSERS, MODEL_LOGS_TAB_PARAMS, type ModelLogsSearch } from './modelLogsTabSearch';
+import { MODELS_SEARCH_PARSERS, MODELS_TAB_PARAMS, MODELS_TAB_SLUG, type ModelsSearch } from './Models/modelsSearch';
 import {
   ADMIN_ORGANIZATIONS_TAB_SLUG,
   ORGS_SEARCH_PARSERS,
@@ -76,7 +83,13 @@ export const ADMIN_SHADOW_DETECTIONS_TAB_SLUG = 'shadow-detections';
 export const ADMIN_SIGNUP_DOMAIN_HOLDS_TAB_SLUG = 'signup-domain-holds';
 export const ADMIN_WAITLIST_TAB_SLUG = 'waitlist';
 export const ADMIN_STRIPE_DISPUTES_TAB_SLUG = 'disputes';
-export { ADMIN_ORGANIZATIONS_TAB_SLUG, ADMIN_REVENUE_TAB_SLUG, ADMIN_SUBSCRIPTIONS_TAB_SLUG };
+export {
+  ADMIN_INTEGRATION_HEALTH_TAB_SLUG,
+  ADMIN_ORGANIZATIONS_TAB_SLUG,
+  ADMIN_RATE_LIMITS_TAB_SLUG,
+  ADMIN_REVENUE_TAB_SLUG,
+  ADMIN_SUBSCRIPTIONS_TAB_SLUG,
+};
 
 const EMERGENCY_ACCESS_PARAM = 'emergency_access';
 
@@ -96,14 +109,22 @@ export const ADMIN_TAB_PARAMS = {
   'credit-analytics': ['creditView', 'economyFrom', 'economyTo', 'economyOwner', 'economyFlow'],
   [ADMIN_USERS_TAB_SLUG]: USERS_TAB_PARAMS,
   [ADMIN_FEEDBACK_TAB_SLUG]: FEEDBACK_TAB_PARAMS,
-  [ADMIN_AUDIT_LOG_TAB_SLUG]: [...AUDIT_LOG_FILTER_PARAMS, AUDIT_ENTRY_ID_PARAM],
+  [ADMIN_AUDIT_LOG_TAB_SLUG]: [...AUDIT_LOG_FILTER_PARAMS, AUDIT_ENTRY_ID_PARAM, AUDIT_SUMMARY_WINDOW_PARAM],
   [ADMIN_SETTINGS_TAB_SLUG]: [ADMIN_SETTINGS_SECTION_PARAM, ADMIN_SETTINGS_SEARCH_PARAM],
   [ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG]: WEBHOOK_AUDIT_LOGS_TAB_PARAMS,
   [ADMIN_MODEL_LOGS_TAB_SLUG]: MODEL_LOGS_TAB_PARAMS,
   [ADMIN_INTEGRATION_DEMAND_TAB_SLUG]: INTEGRATION_DEMAND_TAB_PARAMS,
   [ADMIN_ORGANIZATIONS_TAB_SLUG]: ORGS_TAB_PARAMS,
   [ADMIN_SUBSCRIPTIONS_TAB_SLUG]: SUBSCRIPTIONS_TAB_PARAMS,
-  [ADMIN_REVENUE_TAB_SLUG]: REVENUE_TAB_PARAMS,
+  [ADMIN_REVENUE_TAB_SLUG]: [
+    ...REVENUE_TAB_PARAMS,
+    'paymentReview',
+    'paymentDays',
+    'paymentState',
+    'paymentOwner',
+    'paymentCursor',
+    'paymentSource',
+  ],
   [ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG]: SIGNUP_RISK_REVIEW_TAB_PARAMS,
   [ADMIN_ANALYTICS_TAB_SLUG]: ANALYTICS_TAB_PARAMS,
   [ADMIN_EVENTS_TAB_SLUG]: EVENTS_TAB_PARAMS,
@@ -114,7 +135,10 @@ export const ADMIN_TAB_PARAMS = {
   [ADMIN_WAITLIST_TAB_SLUG]: INVITE_CENTER_TAB_PARAMS,
   [ADMIN_STRIPE_DISPUTES_TAB_SLUG]: STRIPE_DISPUTE_TAB_PARAMS,
   [ADMIN_MODEL_METRICS_TAB_SLUG]: MODEL_METRICS_TAB_PARAMS,
+  [ADMIN_RATE_LIMITS_TAB_SLUG]: RATE_LIMITS_TAB_PARAMS,
+  [MODELS_TAB_SLUG]: MODELS_TAB_PARAMS,
   [ADMIN_DLQ_REPLAY_TAB_SLUG]: DLQ_TAB_PARAMS,
+  [ADMIN_INTEGRATION_HEALTH_TAB_SLUG]: INTEGRATION_HEALTH_TAB_PARAMS,
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 type AdminTabParam = (typeof ADMIN_TAB_PARAMS)[keyof typeof ADMIN_TAB_PARAMS][number];
@@ -135,7 +159,8 @@ type TypedAdminSearch = UsersSearch &
   SubscriptionsSearch &
   RevenueSearch &
   SecurityDashboardSearch &
-  InviteCenterSearch;
+  InviteCenterSearch &
+  ModelsSearch;
 
 /** Params with a typed parser; every other registered param is an optional string. */
 export type AdminSearch = Partial<Record<Exclude<AdminSearchParam, keyof TypedAdminSearch>, string>> & TypedAdminSearch;
@@ -152,6 +177,7 @@ const TYPED_PARAM_PARSERS: ReadonlyMap<string, (value: unknown, search: Record<s
     ...REVENUE_SEARCH_PARSERS,
     ...SECURITY_DASHBOARD_SEARCH_PARSERS,
     ...INVITE_CENTER_SEARCH_PARSERS,
+    ...MODELS_SEARCH_PARSERS,
     ...RECORD_ID_SEARCH_PARSERS,
   })
 );

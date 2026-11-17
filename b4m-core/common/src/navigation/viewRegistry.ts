@@ -327,7 +327,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
     section: 'admin',
     label: 'Credit Analytics',
     description:
-      'Credits per user and adjustments, the model pricing catalog, margins against provider invoices, org and API usage, and the transaction ledger',
+      'Credits per user and adjustments, margins against provider invoices, org and API usage, and the transaction ledger',
     navigationType: 'tab',
     target: '15', // AdminTab.CreditAnalytics
     keywords: ['credits', 'billing', 'usage', 'add credits', 'balance', 'cost'],
@@ -357,12 +357,22 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'admin.llm_dashboard',
     section: 'admin',
-    label: 'LLM Dashboard',
-    description:
-      'Enable or disable LLM models, set model rank and fallback, and choose which user tags and entitlements can use each model',
+    label: 'Models',
+    description: 'Models users can pick: status, access, rank, prices and discovery',
     navigationType: 'tab',
-    target: '24', // AdminTab.LLMDashboard
-    keywords: ['llm', 'model', 'ai', 'enable model', 'model access', 'entitlements'],
+    target: '24', // AdminTab.Models
+    keywords: [
+      'llm',
+      'models',
+      'model access',
+      'model pricing',
+      'prices',
+      'rank',
+      'ai',
+      'dashboard',
+      'enable model',
+      'entitlements',
+    ],
     requiresAdmin: true,
   },
   {
@@ -824,6 +834,17 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.access_review',
+    section: 'admin',
+    label: 'Access review',
+    description:
+      'Quarterly review of who holds admin access: confirm or revoke each admin, flag dormant and no-MFA accounts, export the signed-off review as CSV',
+    navigationType: 'tab',
+    target: '81', // AdminTab.AccessReview
+    keywords: ['access review', 'quarterly review', 'admin access', 'dormant admins', 'least privilege', 'compliance'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.approvals',
     section: 'admin',
     label: 'Approvals',
@@ -898,9 +919,10 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.model_lifecycle',
     section: 'admin',
     label: 'Model lifecycle',
-    description: 'Review detected LLM model deprecations, accept successor models and see stale model references',
+    description: 'Models > Discovery: discovery runs, lifecycle suggestions and stale model references',
     navigationType: 'tab',
-    target: '58', // AdminTab.ModelLifecycle
+    // AdminTab.ModelLifecycle, whose slug aliases to the Models tab's Discovery section.
+    target: '58',
     keywords: [
       'model lifecycle',
       'deprecation',
@@ -1002,6 +1024,17 @@ export const VIEW_REGISTRY: NavigableView[] = [
     navigationType: 'tab',
     target: '78',
     keywords: ['AI operations', 'AI spend', 'agreement', 'kill switch', 'autonomy', 'AI budget'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.roles',
+    section: 'admin',
+    label: 'Roles',
+    description:
+      'Create admin roles from templates, edit the permissions each role grants, and delete roles nobody holds',
+    navigationType: 'tab',
+    target: '80', // AdminTab.Roles
+    keywords: ['roles', 'admin roles', 'permissions', 'role templates', 'delegated admin', 'access', 'support role'],
     requiresAdmin: true,
   },
   {

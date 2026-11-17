@@ -120,7 +120,8 @@ describe('Organization Permissions', () => {
     // not the owner would get a Billing Portal button that rejects them. Admin -> Organizations is
     // where a platform admin acts on an org's billing.
     it('denies a platform admin who is not the owner', () => {
-      expect(canViewOrgBilling({ id: 'someoneelse', isAdmin: true }, org)).toBe(false);
+      const platformAdmin = { id: 'someoneelse', isAdmin: true };
+      expect(canViewOrgBilling(platformAdmin, org)).toBe(false);
     });
 
     it('denies a stranger', () => {
@@ -474,6 +475,7 @@ describe('canManageOrgDomains', () => {
       canManageGroups: false,
       canViewBilling: false,
       canManageConnectors: false,
+      canManageDomains: false,
     };
     expect(resolveAccessibleTab(OrganizationTabs.Domains, access)).toBe(OrganizationTabs.Overview);
     expect(resolveAccessibleTab(OrganizationTabs.Domains, { ...access, canManageDomains: true })).toBe(

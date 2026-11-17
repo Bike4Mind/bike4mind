@@ -22,6 +22,7 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
 }));
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useGetSubscriptions: () => ({ data: [] }),
+  useGetSeatPlan: () => ({ data: null, isLoading: false }),
 }));
 
 // useSelectedAccount lives in AccountSelector, which transitively imports LLMContext /

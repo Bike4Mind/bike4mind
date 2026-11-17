@@ -1,10 +1,19 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { User } from '@bike4mind/database';
+import { User, platformEndUserRepository } from '@bike4mind/database';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { z } from 'zod';
+
+type AccountRow = { _id: unknown; name?: string; username?: string; email?: string | null };
+
+const accountSummary = (user: AccountRow) => ({
+  id: String(user._id),
+  name: user.name,
+  username: user.username,
+  email: user.email ?? null,
+});
 
 const QuerySchema = z.object({
   id: z
@@ -17,7 +26,9 @@ const QuerySchema = z.object({
 /**
  * GET /api/admin/users/by-provider-id?id=<64 hex>: the account behind the end-user identifier an LLM
  * provider names in a safety notice (OpenAI `safety_identifier`, Anthropic `metadata.user_id`).
- * The value is toProviderEndUserId(user id), stored on the User model as `providerEndUserId`.
+ * The value is toProviderEndUserId(user id), stored on the User model as `providerEndUserId`
+ * (`kind: 'user'`), or, failing that, toPlatformEndUserProviderId for an end user a platform key named
+ * with `end_user_id` (`kind: 'platformEndUser'`, with the key owner as `account`).
  * `support:read` is what already opens a user's profile, so a support delegate can resolve a notice too.
  */
 const handler = adminApi({
@@ -37,8 +48,19 @@ const handler = adminApi({
       }
       res.setHeader('Cache-Control', 'private, no-store');
       const user = await User.findOne({ providerEndUserId: parsed.data.id }).select('_id name username email').lean();
-      if (!user) throw new NotFoundError('No account has this provider end-user identifier');
-      return res.json({ id: String(user._id), name: user.name, username: user.username, email: user.email ?? null });
+      if (user) return res.json({ kind: 'user', ...accountSummary(user) });
+
+      const endUser = await platformEndUserRepository.findByProviderEndUserId(parsed.data.id);
+      if (!endUser) throw new NotFoundError('No account has this provider end-user identifier');
+      const owner = await User.findById(endUser.keyOwnerId).select('_id name username email').lean();
+      return res.json({
+        kind: 'platformEndUser',
+        account: owner ? accountSummary(owner) : null,
+        endUserId: endUser.endUserId,
+        apiKeyId: endUser.apiKeyId ?? null,
+        firstSeenAt: endUser.firstSeenAt,
+        lastSeenAt: endUser.lastSeenAt,
+      });
     })
   );
 

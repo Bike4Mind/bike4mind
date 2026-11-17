@@ -4,12 +4,13 @@
  * it when a job finishes, which is what brings in the output file.
  */
 import { isAxiosError } from 'axios';
-import { useInfiniteQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import type { GenerationJobState, ImageJobRequest } from '@bike4mind/common';
+import type { GenerationJobState, ImageJobRequest, PublicImageModel } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { invalidateGenerationCreditBalances } from './generationCreditBalances';
+import { MODEL_CATALOG_QUERY_KEY } from './useModelInfo';
 import { GENERATION_RATE_LIMITED_MESSAGE } from './generationErrors';
 import { SOCKET_DOWN_POLL_MS, isTerminalGenerationState, movesLiveStateBackwards } from './generationJobPolling';
 
@@ -22,6 +23,8 @@ export const STUDIO_IMAGE_COUNT_MAX = 4;
 export type StudioImageJob = {
   id: string;
   groupId: string | null;
+  // 'cutout': a background removal of a reference (useCreateStudioImageCutout); null for a plain render.
+  purpose: 'cutout' | null;
   state: GenerationJobState;
   request: ImageJobRequest;
   error: { code: string; message: string } | null;
@@ -38,6 +41,18 @@ export const studioImageJobKeys = {
   all: ['studioImageJobs'] as const,
   list: ['studioImageJobs', 'list'] as const,
 };
+
+// Under the model catalog's key, so the model-list revision push (modelListRevision.ts) refetches it too.
+const IMAGE_MODELS_QUERY_KEY = [...MODEL_CATALOG_QUERY_KEY, 'image-jobs'] as const;
+
+/** The image models the user can run as jobs (GET /api/v1/image-models), best first for a plain request. */
+export function useImageModels() {
+  return useQuery({
+    queryKey: IMAGE_MODELS_QUERY_KEY,
+    queryFn: async () => (await api.get<{ models: PublicImageModel[] }>('/api/v1/image-models')).data.models,
+    staleTime: 5 * 60_000,
+  });
+}
 
 /** The gallery: the caller's image jobs, newest first. Polls only while the socket is down and a job is live. */
 export function useStudioImageJobs() {
@@ -153,5 +168,30 @@ export function useCreateStudioImageJobs() {
       toast.success(jobs.length === 1 ? 'Image generation started' : `${jobs.length} images started`);
     },
     onError: error => toast.error(describeStudioImageJobError(error)),
+  });
+}
+
+/**
+ * The refusal text for a cutout: the route's own message for a source it cannot cut out (its format or size), else
+ * the shared image-job message for the code.
+ */
+export function describeStudioImageCutoutError(error: unknown): string {
+  if (isAxiosError<{ error?: unknown; message?: unknown }>(error) && error.response?.status === 422) {
+    const { error: code, message } = error.response.data ?? {};
+    if (code === 'unsupported_input_image' && typeof message === 'string') return message;
+  }
+  return describeStudioImageJobError(error);
+}
+
+/** Starts a background removal of one of the caller's images; the job joins the gallery list like any image job. */
+export function useCreateStudioImageCutout() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (fileId: string) =>
+      (await api.post<{ job: StudioImageJob }>(`${STUDIO_IMAGE_JOBS_URL}/cutouts`, { fileId })).data.job,
+    onSuccess: job => {
+      prependStudioImageJobs(queryClient, [job]);
+      void invalidateGenerationCreditBalances(queryClient);
+    },
   });
 }

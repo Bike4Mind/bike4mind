@@ -1,12 +1,15 @@
 import {
+  isModelAllowedByOrgPolicy,
   isShadowTier,
   settingsMap,
+  type ReadOrgModelPolicy,
   type ICacheRepository,
   type IAdminSettingsRepository,
   type ModelInfo,
 } from '@bike4mind/common';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
+import { resolveSuccessorChain } from '@bike4mind/llm-adapters';
 
 type TierUser = Parameters<typeof isShadowTier>[0];
 type CounterCache = { cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow'> };
@@ -15,8 +18,11 @@ type CounterCache = { cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindo
 const TOKEN_WINDOW_TTL_MS = 26 * 60 * 60 * 1000;
 const NO_LIMIT = Number.MAX_SAFE_INTEGER;
 
-/** `requireTools` limits substitutes to models that support tool calls, for routes that run a tool loop. */
-type CandidateOptions = { requireTools?: boolean };
+/**
+ * `requireTools` limits substitutes to models that support tool calls, for routes that run a tool loop.
+ * `orgModelPolicy` limits them to models the billing org allows, since admission checks only the requested model.
+ */
+type CandidateOptions = { requireTools?: boolean; orgModelPolicy?: ReadOrgModelPolicy };
 
 /**
  * The substitute's ModelInfo for a restricted user whose requested text model is not allowlisted: the
@@ -45,9 +51,15 @@ export function resolveShadowModelInfo(
 export function shadowCandidates(
   models: ModelInfo[],
   allowlist: string[],
-  { requireTools = false }: CandidateOptions = {}
+  { requireTools = false, orgModelPolicy = null }: CandidateOptions = {}
 ): ModelInfo[] {
-  const runnable = models.filter(m => m.type === 'text' && !m.disabled && (!requireTools || m.supportsTools));
+  const runnable = models.filter(
+    m =>
+      m.type === 'text' &&
+      !m.disabled &&
+      (!requireTools || m.supportsTools) &&
+      isModelAllowedByOrgPolicy(orgModelPolicy, m, resolveSuccessorChain)
+  );
   return allowlist.flatMap(id => runnable.find(m => m.id === id) ?? []);
 }
 
@@ -78,16 +90,20 @@ export async function resolveShadowRouting({
   models,
   adminSettings,
   logger,
+  orgModelPolicy,
 }: {
   user: TierUser;
   requested: ModelInfo | undefined;
   models: ModelInfo[];
   adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
   logger?: Pick<Logger, 'warn'>;
+  orgModelPolicy?: ReadOrgModelPolicy;
 }): Promise<{ settings: ShadowTierSettings | null; modelInfo: ModelInfo | undefined }> {
   if (!isShadowTier(user)) return { settings: null, modelInfo: undefined };
   const settings = await loadShadowTierSettings(adminSettings);
-  const modelInfo = requested ? resolveShadowModelInfo(user, requested, models, settings.allowlist, logger) : undefined;
+  const modelInfo = requested
+    ? resolveShadowModelInfo(user, requested, models, settings.allowlist, logger, { orgModelPolicy })
+    : undefined;
   return { settings, modelInfo };
 }
 

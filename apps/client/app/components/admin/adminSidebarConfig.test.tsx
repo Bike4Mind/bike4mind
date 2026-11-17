@@ -61,7 +61,6 @@ describe('SIDEBAR_SECTIONS', () => {
     const testidByTab = new Map(allItems.filter(i => i.testid).map(i => [i.tab, i.testid]));
     // Spot-check the testids referenced by existing E2E flows.
     expect(testidByTab.get(AdminTab.Users)).toBe('admin-users-tab-btn');
-    expect(testidByTab.get(AdminTab.RegistrationInvites)).toBe('admin-invite-center-tab-btn');
     expect(testidByTab.get(AdminTab.Waitlist)).toBe('admin-waitlist-tab-btn');
     expect(testidByTab.get(AdminTab.SecOpsTriage)).toBe('admin-secops-triage-btn');
     expect(testidByTab.get(AdminTab.SecurityDashboard)).toBe('admin-security-dashboard-btn');
@@ -107,7 +106,7 @@ describe('findSectionKeyForTab', () => {
     expect(findSectionKeyForTab(AdminTab.EmailMarketing)).toBe('people');
     expect(findSectionKeyForTab(AdminTab.CreditAnalytics)).toBe('money');
     expect(findSectionKeyForTab(AdminTab.SystemSecrets)).toBe('trust');
-    expect(findSectionKeyForTab(AdminTab.LLMDashboard)).toBe('ai');
+    expect(findSectionKeyForTab(AdminTab.Models)).toBe('ai');
     expect(findSectionKeyForTab(AdminTab.SreAgent)).toBe('platform');
     expect(findSectionKeyForTab(AdminTab.AdminSettings)).toBe('settings');
   });

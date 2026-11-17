@@ -24,7 +24,7 @@ describe('OrchestrateToggle', () => {
     expect(query('chat-surface-toggle')).toBeNull();
   });
 
-  it('reads as navigation: a labelled Agents segment and an icon-only conversation one', async () => {
+  it('labels the conversation icon accessibly and shows the Agents label', async () => {
     await renderToggle(['working']);
     expect(el('chat-surface-toggle-chat').getAttribute('aria-label')).toBe('Show conversation');
     expect(el('chat-surface-toggle-chat').textContent).toBe('');
@@ -101,6 +101,15 @@ describe('OrchestrateToggle', () => {
     await renderToggle(['done'], 'orchestrate');
     expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-pressed')).toBe('true');
     expect(el('chat-surface-toggle-chat').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it.each(['chat', 'orchestrate'] as const)('highlights only the active %s view', async surface => {
+    await renderToggle(['done'], surface);
+    const active = el(`chat-surface-toggle-${surface}`);
+    const inactive = el(`chat-surface-toggle-${surface === 'chat' ? 'orchestrate' : 'chat'}`);
+    expect(getComputedStyle(active).fontWeight).toBe('600');
+    expect(getComputedStyle(inactive).fontWeight).toBe('400');
+    expect(getComputedStyle(active).backgroundColor).not.toBe(getComputedStyle(inactive).backgroundColor);
   });
 
   it('keeps the same control, with the count, on the orchestrate surface', async () => {

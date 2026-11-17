@@ -631,6 +631,18 @@ async function handleInteractiveAction(
     }
   }
 
+  if (actions?.[0]?.action_id === 'liveops_approve_issue' || actions?.[0]?.action_id === 'liveops_reject_issue') {
+    const { handleLiveopsApprovalAction } =
+      await import('@bike4mind/server-utils/integrations/slack/liveopsTriageApproval');
+    const { response, deferred } = await handleLiveopsApprovalAction(actions[0].action_id, actions[0].value, user.id, {
+      workspaceId,
+      channelId: payload.channel?.id,
+      botToken,
+    });
+    (payload as Record<string, unknown>).__sreDeferred = deferred;
+    return response;
+  }
+
   // Handle SRE approval actions (no linked account required - admin-only Slack action)
   if (actions && actions.length > 0) {
     const sreAction = actions[0];

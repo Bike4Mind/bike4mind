@@ -75,6 +75,20 @@ describe('shadowCandidates', () => {
     expect(shadowCandidates(models, allowlist).map(m => m.id)).toEqual(['cheap-a', 'cheap-b']);
   });
 
+  it('skips substitutes the billing org policy does not allow', () => {
+    const models = [
+      model('premium'),
+      model('cheap-a', { backend: 'openai' }),
+      model('cheap-b', { backend: 'anthropic' }),
+    ];
+    const orgModelPolicy = { allowedProviders: ['anthropic'], allowedModels: null, allowedTools: null } as never;
+    expect(shadowCandidates(models, allowlist, { orgModelPolicy }).map(m => m.id)).toEqual(['cheap-b']);
+    expect(resolveShadowModelInfo(shadow, models[0], models, allowlist, undefined, { orgModelPolicy })?.id).toBe(
+      'cheap-b'
+    );
+    expect(shadowCandidates(models, allowlist, { orgModelPolicy: 'invalid' })).toEqual([]);
+  });
+
   it('lists the runnable allowlisted models in allowlist order', () => {
     const models = [model('cheap-b'), model('premium'), model('cheap-a')];
     expect(shadowCandidates(models, allowlist).map(m => m.id)).toEqual(['cheap-a', 'cheap-b']);
