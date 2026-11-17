@@ -37,10 +37,11 @@ export function parseLoopMemory(rawAnswer: string, previous: ILoopMemory): Omit<
       const parsed: unknown = JSON.parse(last);
       if (parsed && typeof parsed === 'object') {
         const { notes, nextAction } = parsed as Record<string, unknown>;
-        if (typeof notes === 'string' && typeof nextAction === 'string') {
+        // A null nextAction is a run saying there is nothing left to do next.
+        if (typeof notes === 'string' && (typeof nextAction === 'string' || nextAction === null)) {
           return {
             notes: notes.slice(0, LOOP_MEMORY_TAIL_CHARS),
-            nextAction: nextAction.slice(0, LOOP_MEMORY_TAIL_CHARS),
+            nextAction: (nextAction ?? '').slice(0, LOOP_MEMORY_TAIL_CHARS),
           };
         }
       }

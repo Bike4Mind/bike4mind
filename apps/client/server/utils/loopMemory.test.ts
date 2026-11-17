@@ -10,6 +10,13 @@ describe('parseLoopMemory', () => {
     expect(parseLoopMemory(answer, previous)).toEqual({ notes: 'n1', nextAction: 'a1' });
   });
 
+  it('reads a null nextAction as nothing left to do', () => {
+    expect(parseLoopMemory(block('{"notes":"n1","nextAction":null}'), previous)).toEqual({
+      notes: 'n1',
+      nextAction: '',
+    });
+  });
+
   it('takes the last of several blocks', () => {
     const answer = `${block('{"notes":"first","nextAction":"x"}')}\nmore\n${block('{"notes":"last","nextAction":"y"}')}`;
     expect(parseLoopMemory(answer, previous)).toEqual({ notes: 'last', nextAction: 'y' });
