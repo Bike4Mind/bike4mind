@@ -135,6 +135,7 @@ can silently turn it into `none`.
 | HeldCreditReward | `status` | enum | `billing/HeldCreditRewardModel.ts#pauseOne` | repository-check | `literal` | writes "paused" |
 | HeldCreditReward | `status` | enum | `billing/HeldCreditRewardModel.ts#resumeForUser` | repository-check | `literal` | writes "held" |
 | HeldCreditReward | `status` | enum | `billing/HeldCreditRewardModel.ts#settle` | route-schema | `b4m-core/services/src/creditService/payCreditReward.ts#payCreditReward` | All callers pass literal 'paid' or 'void' |
+| ImageModerationIncident | `escalationTrigger` | enum | `content/ImageModerationIncidentModel.ts#ImageModerationIncidentRepository.escalate` | schema | `runValidators` | update call passes runValidators |
 | ImageModerationIncident | `previousReviewStatus` | enum | `content/ImageModerationIncidentModel.ts#ImageModerationIncidentRepository.recordManualReport` | repository-check | `packages/database/src/models/content/ImageModerationIncidentModel.ts#ImageModerationIncidentRepository.recordManualReport` | Loops over the INCIDENT_OVERRIDABLE_REVIEW_STATUSES constant, which is the schema enum |
 | ImageModerationIncident | `reviewStatus` | enum | `content/ImageModerationIncidentModel.ts#ImageModerationIncidentRepository.claimForNcmecSubmission` | repository-check | `literal` | writes "confirmed_csam" |
 | ImageModerationIncident | `reviewStatus` | enum | `content/ImageModerationIncidentModel.ts#ImageModerationIncidentRepository.markNoAction` | repository-check | `literal` | writes "no_action" |

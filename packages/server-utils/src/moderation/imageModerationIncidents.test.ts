@@ -4,6 +4,7 @@ import type { ImageModerationIncident } from '@bike4mind/common';
 const mocks = vi.hoisted(() => ({
   record: vi.fn(),
   markAlerted: vi.fn(),
+  markEscalationAlerted: vi.fn(),
   getSettingsMap: vi.fn(),
   sendEmail: vi.fn(),
   logger: { warn: vi.fn(), error: vi.fn() },
@@ -11,13 +12,23 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
-  imageModerationIncidentRepository: { record: mocks.record, markAlerted: mocks.markAlerted },
+  imageModerationIncidentRepository: {
+    record: mocks.record,
+    markAlerted: mocks.markAlerted,
+    markEscalationAlerted: mocks.markEscalationAlerted,
+  },
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: mocks.getSettingsMap }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { globalInstance: mocks.logger } }));
 vi.mock('../utils/mailer/index', () => ({ default: { sendEmail: mocks.sendEmail } }));
 
-import { createReviewerAlertDelivery, imageModerationIncidents, resolveAdminAppUrl } from './imageModerationIncidents';
+import {
+  createReviewerAlertDelivery,
+  getReviewerListStatus,
+  imageModerationIncidents,
+  resolveAdminAppUrl,
+  sendIncidentEscalationAlert,
+} from './imageModerationIncidents';
 
 describe('resolveAdminAppUrl', () => {
   it('prefers APP_URL', () => {
@@ -104,5 +115,90 @@ describe('imageModerationIncidents', () => {
     await createReviewerAlertDelivery({ skipSettingsCache: true }).getRecipients();
 
     expect(mocks.getSettingsMap).toHaveBeenCalledWith({ adminSettings: expect.anything() }, { skipCache: true });
+  });
+});
+
+describe('sendIncidentEscalationAlert', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.sendEmail.mockResolvedValue({ messageId: 'm-1' });
+    mocks.markEscalationAlerted.mockResolvedValue(undefined);
+  });
+
+  it('emails the escalation list read past the settings cache, privately, and stamps the delivery', async () => {
+    mocks.getSettingsMap.mockResolvedValue({
+      ImageModerationReviewerEmails: ['first@example.com'],
+      ImageModerationEscalationEmails: '["second@example.com"]',
+    });
+
+    const result = await sendIncidentEscalationAlert(INCIDENT);
+
+    expect(result).toEqual({ outcome: 'delivered', alertedAt: expect.any(Date) });
+    expect(mocks.getSettingsMap).toHaveBeenCalledWith({ adminSettings: expect.anything() }, { skipCache: true });
+    expect(mocks.sendEmail).toHaveBeenCalledExactlyOnceWith(
+      'second@example.com',
+      expect.objectContaining({ subject: 'Moderation review escalated' }),
+      PRIVATE_OPTIONS
+    );
+    expect(mocks.markEscalationAlerted).toHaveBeenCalledWith('incident-1', result.alertedAt);
+  });
+
+  it('reports no_recipients when no escalation reviewer is configured', async () => {
+    mocks.getSettingsMap.mockResolvedValue({ ImageModerationReviewerEmails: ['first@example.com'] });
+
+    await expect(sendIncidentEscalationAlert(INCIDENT)).resolves.toEqual({
+      outcome: 'no_recipients',
+      alertedAt: null,
+    });
+    expect(mocks.sendEmail).not.toHaveBeenCalled();
+    expect(mocks.markEscalationAlerted).not.toHaveBeenCalled();
+  });
+});
+
+describe('getReviewerListStatus', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('reads only the two lists, past the settings cache', async () => {
+    mocks.getSettingsMap.mockResolvedValue({});
+
+    await getReviewerListStatus();
+
+    expect(mocks.getSettingsMap).toHaveBeenCalledExactlyOnceWith(
+      { adminSettings: expect.anything() },
+      { skipCache: true, names: ['ImageModerationReviewerEmails', 'ImageModerationEscalationEmails'] }
+    );
+  });
+
+  it.each([
+    ['absent', undefined, false],
+    ['empty', '[]', false],
+    ['unparseable', 'not json', false],
+    ['invalid entries only', '["not-an-address", ""]', false],
+    ['one valid entry among invalid ones', '["not-an-address", "reviewer@example.com"]', true],
+    ['a valid array', ['reviewer@example.com'], true],
+  ])('treats a list that is %s as configured=%s', async (_label, stored, expected) => {
+    mocks.getSettingsMap.mockResolvedValue({
+      ImageModerationReviewerEmails: stored,
+      ImageModerationEscalationEmails: stored,
+    });
+
+    await expect(getReviewerListStatus()).resolves.toEqual({
+      reviewersConfigured: expected,
+      escalationReviewersConfigured: expected,
+    });
+  });
+
+  it('judges each list on its own and never returns an address', async () => {
+    mocks.getSettingsMap.mockResolvedValue({
+      ImageModerationReviewerEmails: '["reviewer@example.com"]',
+      ImageModerationEscalationEmails: '["nope"]',
+    });
+
+    const status = await getReviewerListStatus();
+
+    expect(status).toEqual({ reviewersConfigured: true, escalationReviewersConfigured: false });
+    expect(JSON.stringify(status)).not.toContain('@');
   });
 });

@@ -8,3 +8,12 @@ describe('ImageModerationEnabled setting', () => {
     expect(setting.schema.parse(undefined)).toBe(true);
   });
 });
+
+describe('ImageModerationEscalationEmails setting', () => {
+  it('sits beside the reviewer list and defaults to no recipients', () => {
+    const setting = settingsMap.ImageModerationEscalationEmails;
+    expect(setting.defaultValue).toEqual([]);
+    expect(setting.category).toBe(settingsMap.ImageModerationReviewerEmails.category);
+    expect(setting.schema.parse(['second@example.com'])).toEqual(['second@example.com']);
+  });
+});
