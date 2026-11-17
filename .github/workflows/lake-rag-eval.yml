@@ -161,7 +161,7 @@ jobs:
             exit 1
           fi
           set -o pipefail
-          pnpm --filter @bike4mind/services exec vitest run src/llm/evals/lakeRag/run.live.test.ts 2>&1 \
+          pnpm --filter @bike4mind/services-core exec vitest run src/llm/evals/lakeRag/run.live.test.ts 2>&1 \
             | tee "$RUNNER_TEMP/lakerag-output.txt"
 
       - name: Write job summary

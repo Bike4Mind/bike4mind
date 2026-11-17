@@ -1,6 +1,6 @@
 import {
   getTextModelCreditsPer1M,
-  hasDeveloperUserTag,
+  isFreeTierExempt,
   isModelAllowedByOrgPolicy,
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
   ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
@@ -105,10 +105,8 @@ export function isOrgModelNotAllowedError(error: unknown): error is ForbiddenErr
   return error.additionalInfo?.errorCode === ORG_MODEL_NOT_ALLOWED_ERROR_CODE;
 }
 
-/** Admins and developer-tagged users are never held to the free-tier allowlist. */
-export function isFreeTierExempt(user: Pick<ModelAdmissionInput['user'], 'isAdmin' | 'tags'>): boolean {
-  return Boolean(user.isAdmin) || hasDeveloperUserTag(user.tags);
-}
+/** Moved to common so the browser can apply the same exemption; kept here for existing importers. */
+export { isFreeTierExempt };
 
 /**
  * Whether a free account may call the model: listed, or a text model while text models are open. Pass the

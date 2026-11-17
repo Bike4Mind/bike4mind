@@ -30,6 +30,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { NotAuthenticatedError, SessionRevokedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type CompletionRunAttribution, type PromptCacheTtl } from '@bike4mind/common';
+import { localRunSettlement, type RunSpend } from '@shared/runSpend';
 import type {
   ChatApprovalDecidedBy,
   ChatApprovalSystemReason,
@@ -202,7 +203,7 @@ import {
   type CompletionMessage,
   type CompletionRequest,
 } from './completions';
-import type { CompletionRunMinter } from './completionRuns';
+import { readCompletionRunUsage, type CompletionRunMinter } from './completionRuns';
 import { describeAlways, outsideFoldersReason } from './approvalScope';
 import { ensureScratchDirectory, isScratchDirectory, removeScratchDirectory } from './scratchDirectory';
 import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
@@ -398,6 +399,8 @@ type TaskDecisionIndexLoad = {
 
 /** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
 type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
+type AuxiliaryPurpose = Extract<CompletionRunAttribution['purpose'], 'title' | 'compaction' | 'suggestion'>;
+type AuxiliaryRun = { session: ChatSession; run: CompletionRunAttribution };
 
 /** Rides with a message typed while the turn ran, so the model answers it without dropping the task. */
 const MID_TURN_NOTE =
@@ -2005,8 +2008,9 @@ export class ChatService {
       runId: serverRunId,
       role: session.origin ? 'worker' : 'root',
       purpose: 'turn',
-      // A worker session carries exactly one task, so its id names the task.
-      ...(session.workerTask ? { taskId: session.id } : {}),
+      // A worker session carries exactly one task, so its id names the task. Sent for a worker with
+      // no contract too, or the server folds every such worker into one id-less attempt.
+      ...(session.origin ? { taskId: session.id } : {}),
       ...(attemptId ? { attemptId } : {}),
       ...(session.origin ? { parentSessionId: session.origin.parentSessionId } : {}),
     };
@@ -2029,6 +2033,65 @@ export class ChatService {
     } catch (err) {
       this.deps.logger.warn(`CHAT: could not forget run attribution: ${err instanceof Error ? err.message : err}`);
     }
+  }
+
+  /**
+   * The settled spend of the orchestration rooted at `rootSessionId`: the server's total for its
+   * run beside what this device recorded under the same run, for the job summary. The run is the
+   * root's current one, or, once the root's policy has lapsed, the newest worker's copy of it.
+   */
+  async getRunSpend(rootSessionId: string): Promise<RunSpend> {
+    if (!isValidSessionId(rootSessionId)) return { status: 'unattributed' };
+    const summaries = await this.deps.store.list();
+    const run = this.currentRunOf(rootSessionId, summaries);
+    if (!run) return { status: 'unattributed' };
+    const sessions = await Promise.all(
+      summaries
+        .filter(summary => summary.id === rootSessionId || summary.orchestrationPolicy?.rootRunId === run.rootRunId)
+        .map(summary => this.deps.store.get(summary.id).catch(() => null))
+    );
+    const local = localRunSettlement(
+      sessions.flatMap(session => session?.messages ?? []),
+      run.serverRunId
+    );
+    const api = this.deps.getApiClient();
+    if (!api) {
+      return { status: 'unavailable', runId: run.serverRunId, local, reason: 'Sign in to read the settled total.' };
+    }
+    const read = await readCompletionRunUsage(api.getAxiosInstance(), run.serverRunId);
+    if (!read.ok) {
+      this.deps.logger.warn(`CHAT: could not read the spend of run ${run.serverRunId}: ${read.reason}`);
+      return { status: 'unavailable', runId: run.serverRunId, local, reason: read.reason };
+    }
+    return {
+      status: 'settled',
+      runId: run.serverRunId,
+      local,
+      server: read.usage,
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  private currentRunOf(
+    rootSessionId: string,
+    summaries: readonly ChatSessionSummary[]
+  ): { rootRunId: string; serverRunId: string } | undefined {
+    const withId = (policy: RootPolicy | undefined) => {
+      const serverRunId = policy && (policy.serverRunId ?? this.serverRuns.get(policy.rootRunId));
+      return policy && serverRunId ? { rootRunId: policy.rootRunId, serverRunId } : undefined;
+    };
+    const root = summaries.find(summary => summary.id === rootSessionId)?.orchestrationPolicy;
+    if (root?.rootSessionId === rootSessionId) return withId(root);
+    // The newest-CREATED worker belongs to the root's latest run; the list's own order is by last
+    // update, which a chat in an older run's worker would win.
+    const workers = summaries
+      .filter(summary => summary.id !== rootSessionId && summary.orchestrationPolicy?.rootSessionId === rootSessionId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    for (const worker of workers) {
+      const found = withId(worker.orchestrationPolicy);
+      if (found) return found;
+    }
+    return undefined;
   }
 
   /**
@@ -3536,6 +3599,7 @@ export class ChatService {
     let timer: NodeJS.Timeout | undefined;
     let answer = '';
     try {
+      const attributed = await this.auxiliaryRun(session, session.model, 'compaction');
       timer = setTimeout(
         () => controller.abort(),
         isLocalModel(session.model) ? LOCAL_COMPACT_TIMEOUT_MS : COMPACT_TIMEOUT_MS
@@ -3556,7 +3620,8 @@ export class ChatService {
             event => {
               if (event.type === 'content') answer += event.text ?? '';
             },
-            controller.signal
+            controller.signal,
+            attributed
           );
           break;
         } catch (err) {
@@ -4375,6 +4440,7 @@ export class ChatService {
             turnSettled = {
               creditsCharged: event.creditsCharged,
               ...(event.usdCost !== undefined ? { usdCost: event.usdCost } : {}),
+              ...(event.runId ? { runId: event.runId } : {}),
             };
             return;
           }
@@ -8072,12 +8138,17 @@ export class ChatService {
     return this.deps.modelSettings.get(model);
   }
 
-  /** Auxiliary generations honor the same device-local boundary as the main reply. */
+  /**
+   * Auxiliary generations honor the same device-local boundary as the main reply. A hosted one
+   * made for an orchestrated session is billed under that session's run with `purpose`, so the
+   * run's usage counts titles, summaries and suggestions beside its turns.
+   */
   private async streamAuxiliary(
     api: AuthenticatedApiClient | null,
     request: CompletionRequest,
     onEvent: (event: CompletionStreamEvent) => void,
-    signal: AbortSignal
+    signal: AbortSignal,
+    attributed?: AuxiliaryRun
   ): Promise<void> {
     if (isLocalModel(request.model)) {
       const thinking = createThinkFilter();
@@ -8098,7 +8169,33 @@ export class ChatService {
     }
     if (!api) throw new Error('Sign in to use a hosted model.');
     const { endpoint } = await this.resolveServerConfig(api);
-    await streamCompletion(api.getAxiosInstance(), endpoint, request, onEvent, signal);
+    await withRunFallback(
+      attributed?.run,
+      attribution =>
+        streamCompletion(
+          api.getAxiosInstance(),
+          endpoint,
+          attribution ? { ...request, run: attribution } : request,
+          onEvent,
+          signal
+        ),
+      () => (attributed ? this.forgetServerRun(attributed.session, attributed.run.runId) : undefined)
+    );
+  }
+
+  /**
+   * The run a hosted auxiliary call for `session` is billed under. Resolved BEFORE the caller starts
+   * its timeout: a first prompt's title can be what waits on the run being minted, and that wait
+   * must not eat the few seconds the title itself is given.
+   */
+  private async auxiliaryRun(
+    session: ChatSession,
+    model: string,
+    purpose: AuxiliaryPurpose
+  ): Promise<AuxiliaryRun | undefined> {
+    if (isLocalModel(model)) return undefined;
+    const run = await this.runAttribution(session);
+    return run ? { session, run: { ...run, purpose } } : undefined;
   }
 
   /**
@@ -8131,6 +8228,7 @@ export class ChatService {
 
       // Bounded on its own rather than tied to the turn: a title is worth a few seconds and no
       // more, and the reply it runs beside can legitimately last half an hour.
+      const attributed = await this.auxiliaryRun(session, model, 'title');
       timer = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS);
 
       let reply = '';
@@ -8140,7 +8238,8 @@ export class ChatService {
         event => {
           if (event.type === 'content' || event.type === 'tool_use') reply += event.text ?? '';
         },
-        controller.signal
+        controller.signal,
+        attributed
       );
 
       const title = sanitizeGeneratedTitle(reply);
@@ -8215,6 +8314,7 @@ export class ChatService {
         : pickSuggestionModel(available, preferredModel);
       if (!model) return null;
 
+      const attributed = await this.auxiliaryRun(session, model.id, 'suggestion');
       timer = setTimeout(
         () => controller.abort(),
         isLocalBackend(model) ? LOCAL_SUGGESTION_TIMEOUT_MS : SUGGESTION_TIMEOUT_MS
@@ -8232,7 +8332,8 @@ export class ChatService {
         event => {
           if (event.type === 'content' || event.type === 'tool_use') answer += event.text ?? '';
         },
-        controller.signal
+        controller.signal,
+        attributed
       );
 
       // An abort is a normal outcome here - streamCompletion resolves on one - so the partial

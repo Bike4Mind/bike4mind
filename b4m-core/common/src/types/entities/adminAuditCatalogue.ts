@@ -147,6 +147,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.api_key.access_updated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.member_revoked': { category: 'access', severity: 'notice', write: 'strict' },
   'org.settings.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  // A platform admin reading an org they do not belong to. strict, like the other staff read audits.
+  'org.viewed': { category: 'org', severity: 'info', write: 'strict' },
   'org.logo.updated': { category: 'org', severity: 'info', write: 'bestEffort' },
   // strict: written inside the delete transaction, so the delete never lands without its entry.
   'org.deleted': { category: 'org', severity: 'notice', write: 'strict' },

@@ -2093,6 +2093,8 @@ export interface ChatReplyRound {
 export interface ChatSettledCharge {
   creditsCharged: number;
   usdCost?: number;
+  /** The server run the charge was billed under, as the `settled` event echoed it; absent outside a run. */
+  runId?: string;
 }
 
 /** A round's assistant message as sent, plus any app text appended to its last tool result. */

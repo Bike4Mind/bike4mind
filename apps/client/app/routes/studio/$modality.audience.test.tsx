@@ -11,12 +11,20 @@ const h = vi.hoisted(() => ({
   enabledSettings: new Set<string>(),
 }));
 
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
+vi.mock('@tanstack/react-router', async () => {
+  const { createLinkStub } = await import('@client/app/components/Studio/testUtils/routerLinkMock');
+  return { useNavigate: () => vi.fn(), createLink: createLinkStub };
+});
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector: (state: { isAdmin: boolean }) => unknown) => selector({ isAdmin: h.isAdmin }),
 }));
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isAdminFeatureEnabled: (key: string) => h.enabledSettings.has(key), isLoading: false }),
+}));
+// Image and Create v2 read no audience setting or plan; stubbed so the real hook needs no query client.
+vi.mock('@client/app/hooks/data/settings', () => ({ useGetSettingsValue: () => undefined }));
+vi.mock('@client/app/hooks/data/entitlements', () => ({
+  useEntitlements: () => ({ data: undefined, isError: false }),
 }));
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
   useAdminSettingsCache: () => ({ authedSettingsLoaded: true, error: null }),
