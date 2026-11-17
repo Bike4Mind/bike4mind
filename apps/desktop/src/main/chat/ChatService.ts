@@ -2008,8 +2008,9 @@ export class ChatService {
       runId: serverRunId,
       role: session.origin ? 'worker' : 'root',
       purpose: 'turn',
-      // A worker session carries exactly one task, so its id names the task.
-      ...(session.workerTask ? { taskId: session.id } : {}),
+      // A worker session carries exactly one task, so its id names the task. Sent for a worker with
+      // no contract too, or the server folds every such worker into one id-less attempt.
+      ...(session.origin ? { taskId: session.id } : {}),
       ...(attemptId ? { attemptId } : {}),
       ...(session.origin ? { parentSessionId: session.origin.parentSessionId } : {}),
     };
@@ -2058,7 +2059,10 @@ export class ChatService {
       return { status: 'unavailable', runId: run.serverRunId, local, reason: 'Sign in to read the settled total.' };
     }
     const read = await readCompletionRunUsage(api.getAxiosInstance(), run.serverRunId);
-    if (!read.ok) return { status: 'unavailable', runId: run.serverRunId, local, reason: read.reason };
+    if (!read.ok) {
+      this.deps.logger.warn(`CHAT: could not read the spend of run ${run.serverRunId}: ${read.reason}`);
+      return { status: 'unavailable', runId: run.serverRunId, local, reason: read.reason };
+    }
     return {
       status: 'settled',
       runId: run.serverRunId,
@@ -2078,13 +2082,14 @@ export class ChatService {
     };
     const root = summaries.find(summary => summary.id === rootSessionId)?.orchestrationPolicy;
     if (root?.rootSessionId === rootSessionId) return withId(root);
-    // Newest first, so the first worker found belongs to the root's latest run.
-    for (const summary of summaries) {
-      const policy = summary.orchestrationPolicy;
-      if (policy?.rootSessionId === rootSessionId && summary.id !== rootSessionId) {
-        const found = withId(policy);
-        if (found) return found;
-      }
+    // The newest-CREATED worker belongs to the root's latest run; the list's own order is by last
+    // update, which a chat in an older run's worker would win.
+    const workers = summaries
+      .filter(summary => summary.id !== rootSessionId && summary.orchestrationPolicy?.rootSessionId === rootSessionId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    for (const worker of workers) {
+      const found = withId(worker.orchestrationPolicy);
+      if (found) return found;
     }
     return undefined;
   }

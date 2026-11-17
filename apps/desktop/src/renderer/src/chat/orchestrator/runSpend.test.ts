@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CompletionRunUsage } from '@bike4mind/common';
 import type { RunSpend } from '@shared/runSpend';
-import { describeRunSpend } from './runSpend';
+import { describeRunSpend, formatCheckedAt } from './runSpend';
 
 const spend = (creditsCharged: number, requests = 1) => ({
   creditsCharged,
@@ -53,6 +53,7 @@ describe('describeRunSpend', () => {
       'Root 10 credits · Workers 20 credits over 2 attempts',
       'Turns 27 credits · Titles 1 credit · Summaries 2 credits',
       'Turn charges match what this device recorded',
+      `Server total as of ${formatCheckedAt('2026-11-10T00:05:00.000Z')}`,
     ]);
     expect(view?.reconciled).toBe(true);
   });
@@ -60,7 +61,7 @@ describe('describeRunSpend', () => {
   it('says how far the turn charges are from what this device recorded', () => {
     const view = describeRunSpend(settled(25));
     expect(view?.reconciled).toBe(false);
-    expect(view?.lines.at(-1)).toBe('This device recorded 25 credits of the 27 credits in turn charges');
+    expect(view?.lines).toContain('This device recorded 25 credits of the 27 credits in turn charges');
   });
 
   it('marks a worker attempt count that the server cut short', () => {
@@ -76,10 +77,37 @@ describe('describeRunSpend', () => {
       reason: 'offline',
     });
     expect(view).toEqual({
-      chip: '~12 credits settled',
-      lines: ['Server total unavailable; showing what this device recorded, which can miss helper calls'],
+      chip: '~12 credits (this device)',
+      lines: ['Server total unavailable; this device can miss helper calls and dropped requests'],
       reconciled: false,
     });
+  });
+
+  it('leaves the estimate alone when the server is unavailable and this device recorded nothing', () => {
+    expect(
+      describeRunSpend({
+        status: 'unavailable',
+        runId: 'run-a',
+        local: { creditsCharged: 0, requests: 0 },
+        reason: 'x',
+      })
+    ).toBeUndefined();
+  });
+
+  it('counts each worker as its own attempt', () => {
+    const view = describeRunSpend(
+      settled(
+        27,
+        usage({
+          byAttempt: [
+            { ...spend(5), role: 'worker', taskId: 'w1' },
+            { ...spend(5), role: 'worker', taskId: 'w2' },
+            { ...spend(10), role: 'worker', taskId: 'w3' },
+          ],
+        })
+      )
+    );
+    expect(view?.lines[0]).toContain('over 3 attempts');
   });
 
   it('describes nothing for a run the server never attributed', () => {

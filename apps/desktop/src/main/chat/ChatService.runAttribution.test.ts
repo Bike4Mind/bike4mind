@@ -362,7 +362,8 @@ describe('orchestration run attribution', () => {
       return call(index)[1].run;
     };
 
-    expect(await turn('Do the work')).toMatchObject({ runId: RUN_A, role: 'worker' });
+    // A worker without a task contract is still its own attempt in the run's breakdown.
+    expect(await turn('Do the work')).toMatchObject({ runId: RUN_A, role: 'worker', taskId: worker.id });
     expect(await storedRunId(worker.id)).toBe(RUN_A);
 
     // A restart: the root's orchestrate flag expired with its policy, and the in-memory map is new.

@@ -463,6 +463,7 @@ describe('OrchestratorStage', () => {
         'Root 50 credits \u00B7 Workers 1,750 credits over 2 attempts',
         'Turns 1,750 credits \u00B7 Titles 50 credits',
         'Turn charges match what this device recorded',
+        expect.stringMatching(/^Server total as of /),
       ]);
     });
 

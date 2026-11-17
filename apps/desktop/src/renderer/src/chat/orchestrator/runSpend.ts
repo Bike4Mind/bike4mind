@@ -57,9 +57,11 @@ function purposeLine(usage: CompletionRunUsage): string {
 export function describeRunSpend(spend: RunSpend | undefined): RunSpendView | undefined {
   if (!spend || spend.status === 'unattributed') return undefined;
   if (spend.status === 'unavailable') {
+    // Nothing recorded under the run is unknown, not zero: the card keeps its own estimate.
+    if (spend.local.requests === 0) return undefined;
     return {
-      chip: `~${credits(spend.local.creditsCharged)} settled`,
-      lines: ['Server total unavailable; showing what this device recorded, which can miss helper calls'],
+      chip: `~${credits(spend.local.creditsCharged)} (this device)`,
+      lines: ['Server total unavailable; this device can miss helper calls and dropped requests'],
       reconciled: false,
     };
   }
@@ -72,28 +74,44 @@ export function describeRunSpend(spend: RunSpend | undefined): RunSpendView | un
     reconciled
       ? 'Turn charges match what this device recorded'
       : `This device recorded ${credits(local.creditsCharged)} of the ${credits(turns)} in turn charges`,
+    `Server total as of ${formatCheckedAt(spend.checkedAt)}`,
   ].filter(Boolean);
   return { chip: `${credits(server.settled.creditsCharged)} settled`, lines, reconciled };
 }
 
-/** Reads the run's spend once `active` turns true (the finale is up), and again for a new root. */
+export function formatCheckedAt(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/**
+ * When the summary reads the run again, in ms. The root's title and next-prompt suggestion can
+ * settle up to TITLE_TIMEOUT_MS (15s) after the run goes idle, after the first read; one bounded
+ * re-read picks them up.
+ */
+export const RUN_SPEND_REREAD_MS = 20_000;
+
+/** Reads the run's spend when `active` turns true (the finale is up), once more after RUN_SPEND_REREAD_MS. */
 export function useRunSpend(rootSessionId: string | undefined, active: boolean): RunSpendView | undefined {
   const [view, setView] = useState<RunSpendView | undefined>(undefined);
   useEffect(() => {
     setView(undefined);
     if (!rootSessionId || !active) return;
     let current = true;
-    window.b4m.chat
-      .getRunSpend(rootSessionId)
-      .then(spend => {
-        if (current) setView(describeRunSpend(spend));
-      })
-      .catch((err: unknown) => {
-        // The card keeps its local estimate; the summary is never worth an error of its own.
-        console.warn('Could not read the run spend', err);
-      });
+    const read = () =>
+      window.b4m.chat
+        .getRunSpend(rootSessionId)
+        .then(spend => {
+          if (current) setView(previous => describeRunSpend(spend) ?? previous);
+        })
+        .catch((err: unknown) => {
+          // The card keeps its local estimate; the summary is never worth an error of its own.
+          console.warn('Could not read the run spend', err);
+        });
+    void read();
+    const reread = setTimeout(() => void read(), RUN_SPEND_REREAD_MS);
     return () => {
       current = false;
+      clearTimeout(reread);
     };
   }, [rootSessionId, active]);
   return view;
