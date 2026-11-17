@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
+import { isAxiosError } from 'axios';
 import { Box, Button, Card, CircularProgress, Divider, Sheet, Stack, Typography, Alert } from '@mui/joy';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import { EmailCategory } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
-import { getCapturedUnsubscribeToken } from './unsubscribeToken';
+import { getServerErrorField } from '@client/app/utils/error';
+import { EMAIL_UNSUBSCRIBE_PATH, getEmailLinkToken } from '@client/app/utils/emailLinkToken';
 
 interface PreferencesData {
   email: string;
@@ -34,8 +36,12 @@ const CATEGORY_DESCRIPTIONS: Record<EmailCategory, string> = {
 /** The link's token goes to the API in a header (pages/api/email/unsubscribe.ts), never the API URL. */
 const tokenHeader = (token: string) => ({ headers: { 'x-unsubscribe-token': token } });
 
+/** The API's reason for a 4xx. A 5xx, or a response with no status, gives undefined so the caller's fallback shows. */
+const serverReason = (err: unknown) =>
+  isAxiosError(err) && (err.response?.status ?? 500) < 500 ? getServerErrorField(err) : undefined;
+
 export default function UnsubscribePage() {
-  const [token] = useState(getCapturedUnsubscribeToken);
+  const [token] = useState(() => getEmailLinkToken(EMAIL_UNSUBSCRIBE_PATH));
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -54,8 +60,8 @@ export default function UnsubscribePage() {
       try {
         const response = await api.get('/api/email/unsubscribe', tokenHeader(token));
         setData(response.data);
-      } catch (err: any) {
-        setError(err.response?.data?.message || 'Failed to load preferences. The link may be invalid or expired.');
+      } catch (err) {
+        setError(serverReason(err) || 'Failed to load preferences. The link may be invalid or expired.');
       } finally {
         setLoading(false);
       }
@@ -81,8 +87,8 @@ export default function UnsubscribePage() {
           },
         });
       }
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to update preferences');
+    } catch (err) {
+      setError(serverReason(err) || 'Failed to update preferences');
     } finally {
       setProcessing(false);
     }
@@ -105,8 +111,8 @@ export default function UnsubscribePage() {
           },
         });
       }
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to update preferences');
+    } catch (err) {
+      setError(serverReason(err) || 'Failed to update preferences');
     } finally {
       setProcessing(false);
     }

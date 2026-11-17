@@ -9,7 +9,7 @@ import {
   IUserDocument,
   canUpdateShareable,
 } from '@bike4mind/common';
-import { projectService } from '@bike4mind/services';
+import { projectService } from '@bike4mind/services-core';
 import { getSlackDeps, getSlackDb } from '../di/registry';
 
 /**

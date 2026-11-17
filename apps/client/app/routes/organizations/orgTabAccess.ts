@@ -192,9 +192,9 @@ export interface OrgTabAccess {
 /**
  * Who may open each gated tab, for the notice a caller sees when a deep link names one they cannot.
  * Tabs open to every member are absent. Billing is owner-only (canViewOrgBilling); every other gated
- * tab admits the owner and current managers.
+ * tab admits the owner and current managers; Settings also admits profile editors.
  */
-export const ORG_TAB_AUDIENCE: Readonly<Partial<Record<OrganizationTabs, 'owner' | 'managers'>>> = {
+export const ORG_TAB_AUDIENCE: Readonly<Partial<Record<OrganizationTabs, 'owner' | 'managers' | 'settings'>>> = {
   [OrganizationTabs.Groups]: 'managers',
   [OrganizationTabs.Usage]: 'managers',
   [OrganizationTabs.Analysis]: 'managers',
@@ -203,7 +203,7 @@ export const ORG_TAB_AUDIENCE: Readonly<Partial<Record<OrganizationTabs, 'owner'
   [OrganizationTabs.Domains]: 'managers',
   [OrganizationTabs.ApiKeys]: 'managers',
   [OrganizationTabs.Audit]: 'managers',
-  [OrganizationTabs.Settings]: 'managers',
+  [OrganizationTabs.Settings]: 'settings',
 };
 
 /** Owner-only tabs shown to a manager as a locked entry with a read-only summary. */

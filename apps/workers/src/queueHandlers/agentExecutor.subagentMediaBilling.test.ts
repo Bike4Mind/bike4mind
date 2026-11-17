@@ -204,14 +204,7 @@ let remainingMs = 600_000;
 const lambdaContext = { getRemainingTimeInMillis: () => remainingMs } as never;
 const imagePayload = { model: IMAGE_MODEL_ID, n: 1, paths: ['generated/bicycle.png'] };
 const EXPECTED_IMAGE_CREDITS = 55;
-const audioPayload = { kind: 'sound_effect', provider: 'elevenlabs', durationSeconds: 20 };
-
-// Imported lazily: a static import would load the mocked modules before the fixtures above exist.
-async function expectedAudioCredits() {
-  const { estimateGeneratedMediaUsd } = await import('@bike4mind/services');
-  // Same converter as the `@bike4mind/utils` mock above, over the real estimator.
-  return Math.ceil(estimateGeneratedMediaUsd('audio_generation', audioPayload, []) * 1000);
-}
+const audioPayload = { kind: 'sound_effect' };
 
 async function dagHookMock() {
   const { onDagNodeTerminal } = await import('./agentExecutorDag');
@@ -290,26 +283,10 @@ describe('processSubagentDispatch generated-media billing', () => {
     expect(settledAt).toBeLessThan((await dagHookMock()).mock.invocationCallOrder[0]);
   });
 
-  it('bills audio priced from the onToolFinish payload', async () => {
+  it('does not bill audio_generation on the dispatch rail: its generation job bills it', async () => {
     delegateBehavior = async callbacks => {
       await callbacks.onToolStart('audio_generation', audioPayload);
       await callbacks.onToolFinish('audio_generation', audioPayload);
-      return completedResult;
-    };
-    const { handler } = await import('./agentExecutor');
-
-    await handler(dagNodeDispatchEvent(), lambdaContext);
-
-    const audioCredits = await expectedAudioCredits();
-    expect(audioCredits).toBeGreaterThan(0);
-    expect(deductCreditsWithOrgSupportMock).toHaveBeenCalledTimes(1);
-    expect(deductCreditsWithOrgSupportMock.mock.calls[0][0]).toMatchObject({ credits: audioCredits });
-    expect(mockIncrementCreditsUsed).toHaveBeenCalledWith('child-1', audioCredits);
-  });
-
-  it('does not bill an image call that started but never delivered', async () => {
-    delegateBehavior = async callbacks => {
-      await callbacks.onToolStart('image_generation', { model: IMAGE_MODEL_ID, n: 1, prompt: 'a bicycle' });
       return completedResult;
     };
     const { handler } = await import('./agentExecutor');
@@ -321,9 +298,9 @@ describe('processSubagentDispatch generated-media billing', () => {
     expect(mockIncrementCreditsUsed).not.toHaveBeenCalled();
   });
 
-  it('does not bill audio from the onToolStart payload alone', async () => {
+  it('does not bill an image call that started but never delivered', async () => {
     delegateBehavior = async callbacks => {
-      await callbacks.onToolStart('audio_generation', audioPayload);
+      await callbacks.onToolStart('image_generation', { model: IMAGE_MODEL_ID, n: 1, prompt: 'a bicycle' });
       return completedResult;
     };
     const { handler } = await import('./agentExecutor');

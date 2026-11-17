@@ -48,7 +48,7 @@ export const WHOLE_REPO_TEST_PACKAGES = [
   '@bike4mind/resource',
   '@bike4mind/scripts',
   '@bike4mind/server-utils',
-  '@bike4mind/services',
+  '@bike4mind/services-core',
   '@bike4mind/workers',
 ];
 

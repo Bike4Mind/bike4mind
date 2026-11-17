@@ -121,8 +121,14 @@
     "active_subscription": "Active Subscription",
     "no_subscription": "No Subscription",
     "payment_issue": "Payment Issue",
-    "team_plan": "Team Plan",
-    "no_active_plan": "No Active Plan",
+    "plan_states": {
+      "none": "No Active Plan",
+      "payment_issue": "Payment Issue",
+      "ending": "Team Plan (ending)",
+      "trialing": "Team Plan (trial)",
+      "granted": "Team Plan (granted)",
+      "active": "Team Plan"
+    },
     "x_members_one": "{{count}} member",
     "x_members_other": "{{count}} members",
     "x_credits_one": "{{amount}} credit",
@@ -166,8 +172,8 @@
     },
     "descriptions": {
       "domains": "Manage the email domains associated with your team.",
-      "overview": "Plan, credits and seat usage for this team.",
-      "members": "{{current}} of {{max}} seats used. Invite people and manage their roles.",
+      "overview": "Plan and credits for this team.",
+      "members": "Seats, pending invitations and roles for everyone on the team.",
       "library": "Shared definitions the team owns. They stay available when their author leaves.",
       "groups": "Appoint managers and organize members into groups.",
       "usage": "Credit spend across the team.",
@@ -199,12 +205,7 @@
       "canceling": "Canceling",
       "active": "Active",
       "next_billing": "Next Billing",
-      "not_available": "N/A",
-      "seats_utilization": "Seats Utilization",
-      "seats_utilization_label": "Seats utilization: {{current}} of {{max}} seats used",
-      "x_active": "{{count}} Active",
-      "x_pending": "{{count}} Pending",
-      "x_available": "{{count}} Available"
+      "not_available": "N/A"
     },
     "api_keys": {
       "member_keys": "Member API keys"
@@ -213,6 +214,7 @@
       "owner_only": "Owner only",
       "denied_owner": "Only the team owner can open {{tab}}. Ask the owner if you need it.",
       "denied_managers": "Only the team owner and managers can open {{tab}}. Ask the owner if you need it.",
+      "denied_settings": "Your account cannot open {{tab}}. Ask the team owner if you need access.",
       "billing_locked": "Changing the plan, seats and payment details",
       "billing_locked_description": "Credits and seats for this team, read-only.",
       "billing_summary": "What you can see from here",
@@ -224,7 +226,8 @@
       "owner_only_detail": "{{what}}. Ask the team owner; the Members tab shows who that is.",
       "settings_locked": "Exporting team data, transferring ownership and deleting the team",
       "no_seats_ask_owner": "No seats available. Ask the team owner to add seats.",
-      "seat_limit_ask_owner": "You've reached your seat limit. Ask the team owner to add seats.",
+      "seat_limit_add_seats": "All seats are in use. <addSeats>Add seats</addSeats>.",
+      "seat_limit_ask_owner": "All seats are in use. Ask the team owner to add seats.",
       "add_limit_ask_owner": "You can only add up to {{available}} more members. Ask the team owner to add seats.",
       "seat_limit_upgrade": "You've reached your seat limit. Upgrade your plan to add more members.",
       "add_limit_upgrade": "You can only add up to {{available}} more members with your current plan"
@@ -779,6 +782,8 @@
     "add_files_to_notebook_other": "Add {{count}} Files to Notebook",
     "add_files_to_project_one": "Add {{count}} File to Project",
     "add_files_to_project_other": "Add {{count}} Files to Project",
+    "add_files_to_production_one": "Add {{count}} File to Production",
+    "add_files_to_production_other": "Add {{count}} Files to Production",
     "in_project": "In Project"
   },
   "file_properties": {

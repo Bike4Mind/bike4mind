@@ -7,8 +7,8 @@
  * so the cron can skip the month without persisting a false $0 snapshot.
  */
 
-/** Per-request timeout for provider API calls (ms). */
-const FETCH_TIMEOUT_MS = 30_000;
+import { DEFAULT_SPEND_DEADLINE_MS, fetchSpendJson, type ProviderSpendFetchOptions } from './spendFetchRetry';
+export type { ProviderSpendFetchOptions, ProviderSpendDiagnostic } from './spendFetchRetry';
 
 export interface ProviderSpendResult {
   providerUsd: number;
@@ -27,10 +27,16 @@ export interface ProviderSpendResult {
  *
  * Docs: https://platform.claude.com/docs/en/api/admin-api/usage-cost/get-cost-report
  */
-export async function fetchAnthropicSpend(adminApiKey: string, month: string): Promise<ProviderSpendResult | null> {
+export async function fetchAnthropicSpend(
+  adminApiKey: string,
+  month: string,
+  fetchFn: typeof fetch = fetch,
+  options: ProviderSpendFetchOptions = {}
+): Promise<ProviderSpendResult | null> {
   if (!adminApiKey || adminApiKey === 'not-configured') return null;
 
   const { startIso, endIso } = monthToIsoRange(month);
+  const requestOptions = { ...options, deadlineMs: options.deadlineMs ?? Date.now() + DEFAULT_SPEND_DEADLINE_MS };
   const breakdown: Record<string, number> = {};
   let total = 0;
   let page: string | undefined;
@@ -40,23 +46,22 @@ export async function fetchAnthropicSpend(adminApiKey: string, month: string): P
     url.searchParams.set('starting_at', startIso);
     url.searchParams.set('ending_at', endIso);
     url.searchParams.set('bucket_width', '1d');
-    url.searchParams.set('group_by', 'description');
+    url.searchParams.set('group_by[]', 'description');
     url.searchParams.set('limit', '31');
     if (page) url.searchParams.set('page', page);
 
-    const res = await fetchWithTimeout(url.toString(), {
-      headers: {
-        'x-api-key': adminApiKey,
-        'anthropic-version': '2023-06-01',
+    const data = await fetchSpendJson<AnthropicCostResponse>(
+      'Anthropic',
+      url.toString(),
+      {
+        headers: {
+          'x-api-key': adminApiKey,
+          'anthropic-version': '2023-06-01',
+        },
       },
-    });
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`Anthropic API ${res.status}: ${body.slice(0, 200)}`);
-    }
-
-    const data = (await res.json()) as AnthropicCostResponse;
+      fetchFn,
+      requestOptions
+    );
 
     for (const bucket of data.data ?? []) {
       for (const item of bucket.results ?? []) {
@@ -105,10 +110,16 @@ interface AnthropicCostResponse {
  *
  * Docs: https://developers.openai.com/cookbook/examples/completions_usage_api
  */
-export async function fetchOpenAISpend(adminApiKey: string, month: string): Promise<ProviderSpendResult | null> {
+export async function fetchOpenAISpend(
+  adminApiKey: string,
+  month: string,
+  fetchFn: typeof fetch = fetch,
+  options: ProviderSpendFetchOptions = {}
+): Promise<ProviderSpendResult | null> {
   if (!adminApiKey || adminApiKey === 'not-configured') return null;
 
   const { startTs, endTs } = monthToTimestampRange(month);
+  const requestOptions = { ...options, deadlineMs: options.deadlineMs ?? Date.now() + DEFAULT_SPEND_DEADLINE_MS };
   const breakdown: Record<string, number> = {};
   let total = 0;
   let afterTs = startTs;
@@ -127,18 +138,17 @@ export async function fetchOpenAISpend(adminApiKey: string, month: string): Prom
     url.searchParams.set('end_time', String(endTs));
     url.searchParams.set('bucket_width', '1d');
     url.searchParams.set('limit', '31');
-    url.searchParams.set('group_by', 'line_item');
+    url.searchParams.set('group_by[]', 'line_item');
 
-    const res = await fetchWithTimeout(url.toString(), {
-      headers: { Authorization: `Bearer ${adminApiKey}` },
-    });
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`OpenAI API ${res.status}: ${body.slice(0, 200)}`);
-    }
-
-    const data = (await res.json()) as OpenAICostsResponse;
+    const data = await fetchSpendJson<OpenAICostsResponse>(
+      'OpenAI',
+      url.toString(),
+      {
+        headers: { Authorization: `Bearer ${adminApiKey}` },
+      },
+      fetchFn,
+      requestOptions
+    );
     const buckets = data.data ?? [];
     if (buckets.length === 0) break;
 
@@ -199,10 +209,4 @@ function monthToTimestampRange(month: string): { startTs: number; endTs: number 
   // final daily bucket whose end_time equals midnight of the next month.
   const endTs = Math.floor(new Date(Date.UTC(year, mo, 1)).getTime() / 1000) + 1;
   return { startTs, endTs };
-}
-
-function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timeoutId));
 }

@@ -47,6 +47,13 @@ describe('forcedEnrollmentSurface', () => {
     expect(await forcedEnrollmentSurface(unenrolled, {})).toBeNull();
   });
 
+  it('records a forced account as forced on the enforcement screen while the setting is off', async () => {
+    mockReadEnforceMfa.mockResolvedValue(false);
+    const forced = { ...unenrolled, mfaEnforcement: 'force' } as IUserDocument;
+    expect(await forcedEnrollmentSurface(forced, {})).toBe('session');
+    expect(mockReadEnforceMfa).not.toHaveBeenCalled();
+  });
+
   it('is not forced for a user who already has a factor, or an impersonating admin', async () => {
     expect(await forcedEnrollmentSurface(enrolled, { mfaPending: true })).toBeNull();
     expect(await forcedEnrollmentSurface(unenrolled, { impersonatedBy: 'admin', mfaPending: true })).toBeNull();

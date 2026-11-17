@@ -362,3 +362,36 @@ describe('AdminGenerateApiKeyModal - premium scopes', () => {
     for (const scope of PREMIUM) expect(scopeRow(scope)).not.toBeNull();
   });
 });
+
+describe('platform companion scope count', () => {
+  it('counts only displayed generic scopes while retaining the companion in the minted key', async () => {
+    const offeredScopes = genericApiKeyScopesFor({
+      hasOptiAccess: true,
+      hasOverwatchAccess: true,
+      hearthEnabled: true,
+      bypass: false,
+      entitlements: new Set(),
+    });
+    expect(offeredScopes.some(scope => scope.value === ApiKeyScope.AI_CHAT)).toBe(true);
+    expect(offeredScopes.some(scope => scope.value === ApiKeyScope.AI_END_USER_ID)).toBe(false);
+    renderModal();
+    const input = (scope: string) => {
+      const element = screen.getByTestId(`admin-generate-key-scope-${scope}`).querySelector('input');
+      if (!(element instanceof HTMLInputElement)) throw new Error('Scope checkbox input missing');
+      return element;
+    };
+    const counter = () => screen.getByTestId('admin-generate-key-scopes-count').textContent;
+    fireEvent.click(input(ApiKeyScope.AI_CHAT));
+    expect(counter()).toContain(`(1/${offeredScopes.length} selected)`);
+    fireEvent.click(input(ApiKeyScope.AI_END_USER_ID));
+    expect(input(ApiKeyScope.AI_CHAT).checked).toBe(true);
+    expect(input(ApiKeyScope.AI_END_USER_ID).checked).toBe(true);
+    expect(counter()).toContain(`(1/${offeredScopes.length} selected)`);
+    fireEvent.click(input(ApiKeyScope.AI_END_USER_ID));
+    expect(counter()).toContain(`(1/${offeredScopes.length} selected)`);
+    fireEvent.click(input(ApiKeyScope.AI_END_USER_ID));
+    fireEvent.change(screen.getByPlaceholderText(/Data Lake Upload/i), { target: { value: 'platform key' } });
+    await confirmGeneration();
+    expect(h.mutate.mock.calls[0][0].data.scopes).toEqual([ApiKeyScope.AI_CHAT, ApiKeyScope.AI_END_USER_ID]);
+  });
+});

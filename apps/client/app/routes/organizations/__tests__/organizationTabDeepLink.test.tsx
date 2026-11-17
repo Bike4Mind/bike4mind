@@ -48,7 +48,10 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
 
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useGetOrganization: () => orgQuery.current,
-  useOrganizationSeats: () => seats.current,
+  useOrganizationSeats: () => ({
+    ...seats.current,
+    activeSeats: seats.current.currentSeats - seats.current.pendingSeats,
+  }),
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.current }) }));
@@ -109,6 +112,7 @@ const ORG = {
     // Holds manage permissions but is neither owner nor manager: the one caller for whom the two
     // gates disagree, so a deep link must be honoured for Settings and refused for Usage.
     { userId: 'manager2', permissions: [Permission.read, Permission.update] },
+    { userId: 'reader1', permissions: [Permission.read] },
   ],
 } as unknown as IOrganizationDocument;
 
@@ -271,6 +275,7 @@ describe('organization detail page - ?tab= deep link', () => {
 
     expect(selectedTabName()).toBe('Settings');
     expect(screen.queryByTestId('model-policy-editor')).toBeNull();
+    expect(screen.queryByTestId('organization-tab-denied-notice')).toBeNull();
   });
 
   it('shows the policy editor to a platform administrator without requiring an organization ACL row', () => {
@@ -311,6 +316,21 @@ describe('organization detail page - ?tab= deep link', () => {
     expect(screen.getByTestId('organization-tab-denied-notice').textContent).toBe(
       'Only the team owner and managers can open Usage. Ask the owner if you need it.'
     );
+  });
+
+  it('gives a read-only member a precise Settings refusal without claiming managers-only access', () => {
+    searchParams.current = { tab: 'settings' };
+    user.current = { id: 'reader1' };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Overview');
+    expect(screen.queryByRole('tab', { name: 'Settings' })).toBeNull();
+    expect(screen.getByTestId('organization-tab-denied-notice').textContent).toBe(
+      'Your account cannot open Settings. Ask the team owner if you need access.'
+    );
+    expect(searchParams.current).toEqual({ tab: 'settings' });
+    expect(navigateSpy).not.toHaveBeenCalled();
   });
 
   it('names the owner as the only one who can open Billing', () => {
@@ -619,9 +639,9 @@ describe('organization detail page - Integrations tab', () => {
     const renderAsManager = () => {
       searchParams.current = { tab };
       user.current = { id: 'mgr3' };
-      orgQuery.current = { data: undefined, isLoading: true };
+      orgQuery.current = { data: undefined, isLoading: true, isError: false, error: undefined };
       const { rerender } = render(wrapper(<OrganizationPage />));
-      orgQuery.current = { data: MANAGER_ORG, isLoading: false };
+      orgQuery.current = { data: MANAGER_ORG, isLoading: false, isError: false, error: undefined };
       rerender(wrapper(<OrganizationPage />));
       return rerender;
     };
@@ -653,7 +673,7 @@ describe('organization detail page - Integrations tab', () => {
 
   it('does not rewrite before the user and organization have loaded', () => {
     searchParams.current = { tab: 'integrations', section: 'github' };
-    orgQuery.current = { data: undefined, isLoading: true };
+    orgQuery.current = { data: undefined, isLoading: true, isError: false, error: undefined };
 
     render(wrapper(<OrganizationPage />));
 
