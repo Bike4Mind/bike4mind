@@ -7,6 +7,7 @@ import { initialUpdateState, reduceUpdate, type UpdateBusyReport, type UpdateIns
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { Home } from './Home';
+import { SESSION_PANEL_INSET, SESSION_PANEL_SPACE, SESSION_PANEL_WIDTH } from '../chat/sessionPanelState';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -64,6 +65,7 @@ let host: HTMLElement | null = null;
 let install = vi.fn<(force: boolean) => Promise<UpdateInstallResult>>();
 
 beforeEach(() => {
+  window.localStorage.clear();
   Element.prototype.scrollIntoView = () => undefined;
   vi.stubGlobal(
     'IntersectionObserver',
@@ -120,6 +122,44 @@ const byTestId = (id: string) => document.querySelector<HTMLElement>(`[data-test
 const notices = () => Array.from(document.querySelectorAll<HTMLElement>('[data-testid="update-notice"]'));
 
 describe('the update card in the signed-in window', () => {
+  it('moves left of the session panel while it is open, then returns when it closes', async () => {
+    const session = {
+      id: 'with-loop',
+      title: 'Loop session',
+      mode: 'chat' as const,
+      model: 'test-model',
+      approvalMode: 'auto' as const,
+      reasoningEffort: 'default' as const,
+      messageCount: 1,
+      createdAt: '2026-10-01T00:00:00.000Z',
+      updatedAt: '2026-10-01T00:00:00.000Z',
+    };
+    window.b4m.chat.listSessions = vi.fn(async () => [session]);
+    window.b4m.chat.getSession = vi.fn(async () => ({ ...session, messages: [] }));
+    window.b4m.chat.getLoop = vi.fn(async () => ({
+      sessionId: session.id,
+      prompt: 'Check',
+      intervalMs: 30000,
+      phase: 'scheduled' as const,
+      nextRunAt: null,
+    }));
+    await mount();
+    await act(async () => byTestId('chat-session-item')?.click());
+    expect(byTestId('chat-toggle-session-panel-btn')).not.toBeNull();
+    expect(getComputedStyle(notices()[0]).right).toBe('12px');
+
+    await act(async () => byTestId('chat-toggle-session-panel-btn')?.click());
+    expect(byTestId('session-panel')).not.toBeNull();
+    const rightInset = Number.parseFloat(getComputedStyle(notices()[0]).right);
+    expect(rightInset).toBe(SESSION_PANEL_SPACE);
+    expect(rightInset).toBeGreaterThan(SESSION_PANEL_INSET + SESSION_PANEL_WIDTH);
+    expect(getComputedStyle(notices()[0]).bottom).toBe('12px');
+
+    await act(async () => byTestId('chat-toggle-session-panel-btn')?.click());
+    expect(byTestId('session-panel')).toBeNull();
+    expect(getComputedStyle(notices()[0]).right).toBe('12px');
+  });
+
   it('anchors above the composer, outside the sidebar, whether the sidebar is open or collapsed', async () => {
     await mount();
     expect(byTestId('sidebar')).not.toBeNull();

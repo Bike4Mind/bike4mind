@@ -251,7 +251,7 @@ export function ChatShell({
 }: {
   auth?: AuthState | null;
   account?: AccountStrip;
-  updateNotice?: ReactNode;
+  updateNotice?: (panelShown: boolean) => ReactNode;
   onOpenModelServers?: () => void;
   /** Settings > Import, scrolled to one source; the sidebar's sync hints are shown only with it. */
   onOpenImportSettings?: (focus: ClaudeImportKind) => void;
@@ -1501,7 +1501,7 @@ export function ChatShell({
         )}
       />
 
-      {screen !== 'conversation' && updateNotice}
+      {screen !== 'conversation' && updateNotice?.(false)}
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
       ) : screen === 'models' ? (
@@ -1764,7 +1764,7 @@ export function ChatShell({
                 }}
               />
             )}
-            {updateNotice}
+            {updateNotice?.(panelShown)}
           </Box>
 
           {ambient.settled && (
