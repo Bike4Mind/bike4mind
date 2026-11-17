@@ -46,6 +46,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 }));
 
 import {
+  ABORT_GRACE_MS,
   BUDGET_PAUSE_REASON,
   dispatchLoopNow,
   LOOP_LEASE_MS,
@@ -250,6 +251,37 @@ describe('runLoopSchedulerTick', () => {
     await runLoopSchedulerTick(NOW, logger);
 
     expect(await reload(loop.id)).toMatchObject({ statusReason: 'Run stalled', consecutiveFailures: 1 });
+  });
+
+  it('aborts and folds a stopped run whose executor did not end it within the grace, and waits inside it', async () => {
+    const claim = vi.spyOn(agentExecutionRepository, 'claimExecution').mockResolvedValue(true);
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: new Date(NOW.getTime() + 60_000) });
+    const stopped = (ago: number) =>
+      (executions['exec-0'] = { status: 'running', updatedAt: NOW, abortedAt: new Date(NOW.getTime() - ago) });
+
+    stopped(ABORT_GRACE_MS - 60_000);
+    await runLoopSchedulerTick(NOW, logger);
+    expect((await reload(loop.id)).activeExecutionIds).toEqual(['exec-0']);
+    expect(claim).not.toHaveBeenCalled();
+
+    stopped(ABORT_GRACE_MS + 60_000);
+    await runLoopSchedulerTick(NOW, logger);
+    expect(claim).toHaveBeenCalledWith('exec-0', ['running'], 'aborted');
+    expect(await reload(loop.id)).toMatchObject({ activeExecutionIds: [], statusReason: 'Run aborted' });
+  });
+
+  it('leaves a stopped run to the next tick when it ended before the abort landed', async () => {
+    vi.spyOn(agentExecutionRepository, 'claimExecution').mockResolvedValue(false);
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: new Date(NOW.getTime() + 60_000) });
+    executions['exec-0'] = {
+      status: 'running',
+      updatedAt: new Date(0),
+      abortedAt: new Date(NOW.getTime() - ABORT_GRACE_MS - 60_000),
+    };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect((await reload(loop.id)).activeExecutionIds).toEqual(['exec-0']);
   });
 
   it('releases the lease on concurrent_limit so the next tick retries', async () => {
@@ -747,6 +779,26 @@ describe('runLoopSchedulerTick - unsure', () => {
     expect(await ticketOf(ticket.id)).toMatchObject({ status: 'blocked', statusReason: 'Run stalled' });
     expect((await eventsOf(loop.id))[0].foldedAt).toBeInstanceOf(Date);
     expect(await reload(loop.id)).toMatchObject({ consecutiveFailures: 0 });
+  });
+
+  it('folds a stopped resumed run as aborted once the grace has passed', async () => {
+    vi.spyOn(agentExecutionRepository, 'claimExecution').mockResolvedValue(true);
+    const loop = await createLoop({ nextRunAt: LATER });
+    const ticket = await createTicket(loop.id);
+    await loopEventRepository.resolveUnsure(
+      { loopId: loop.id, userId: 'user-1', executionId: 'exec-0', ...gate(new Date(1000)) },
+      { outcome: 'resumed', at: NOW }
+    );
+    executions['exec-0'] = {
+      userId: 'user-1',
+      status: 'running',
+      updatedAt: NOW,
+      abortedAt: new Date(NOW.getTime() - ABORT_GRACE_MS - 60_000),
+    };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'blocked', statusReason: 'Run aborted' });
   });
 
   it('parks a resumed run that pauses again under a new event', async () => {

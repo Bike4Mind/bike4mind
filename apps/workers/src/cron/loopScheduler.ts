@@ -448,6 +448,26 @@ async function raiseLongRun(loop: ILoop, execution: IAgentExecution, executionId
 /** Parents waiting on children legitimately idle for hours; the executor's own stale sweep skips them too. */
 const WAITING_ON_CHILDREN = ['awaiting_subagent', 'awaiting_dag_children'];
 
+/** How long (ms) a live executor gets to end a stopped run itself, past a tool call in flight (web_fetch: ~2 min). */
+export const ABORT_GRACE_MS = 3 * 60_000;
+
+/**
+ * Stop only sets `abortedAt` on a running run (`handleAbort`); its executor ends it at the next iteration. One
+ * still active past ABORT_GRACE_MS lost its executor mid-tool, so it is aborted here and folds as aborted at once,
+ * not as stalled once `updatedAt` (which the Stop write itself bumps) goes stale. 'raced' when it ended meanwhile:
+ * the next reconcile reads where it ended.
+ */
+async function endUnansweredStop(
+  execution: IAgentExecution,
+  executionId: string,
+  now: Date
+): Promise<'aborted' | 'raced' | undefined> {
+  if (!execution.abortedAt || now.getTime() - new Date(execution.abortedAt).getTime() < ABORT_GRACE_MS) return;
+  return (await agentExecutionRepository.claimExecution(executionId, [execution.status], 'aborted'))
+    ? 'aborted'
+    : 'raced';
+}
+
 /**
  * Folds a run's outcome into its ticket and, when that moved the ticket to another stage, fires the stage
  * triggers listening there. False when the ticket was no longer in progress under the run (it set its own status,
@@ -501,9 +521,12 @@ async function reconcileRun(loop: ILoop, executionId: string, now: Date): Promis
 
   if (execution && ACTIVE_AGENT_EXECUTION_STATUSES.includes(execution.status)) {
     if (WAITING_ON_CHILDREN.includes(execution.status)) return;
+    const stopped = await endUnansweredStop(execution, executionId, now);
+    if (stopped === 'raced') return;
+    if (stopped === 'aborted') execution.status = 'aborted';
     // ponytail: updatedAt heuristic, same threshold and statuses as the start-time stale sweep, which
     // aborts the doc on the owner's next start. A legitimately long-quiet run is folded as failed here.
-    if (now.getTime() - new Date(execution.updatedAt).getTime() < STALE_ACTIVE_MS) {
+    else if (now.getTime() - new Date(execution.updatedAt).getTime() < STALE_ACTIVE_MS) {
       return raiseLongRun(loop, execution, executionId, now);
     }
   }
@@ -728,7 +751,10 @@ async function foldResumedRun(event: ILoopEvent, now: Date): Promise<boolean> {
     }
     // Same stale rule as reconcileLoop, so a resumed run whose executor died does not hold its ticket forever.
     if (WAITING_ON_CHILDREN.includes(execution.status)) return false;
-    if (now.getTime() - new Date(execution.updatedAt).getTime() < STALE_ACTIVE_MS) return false;
+    const stopped = await endUnansweredStop(execution, executionId, now);
+    if (stopped === 'raced') return false;
+    if (stopped === 'aborted') execution.status = 'aborted';
+    else if (now.getTime() - new Date(execution.updatedAt).getTime() < STALE_ACTIVE_MS) return false;
   }
 
   const completed = execution?.status === 'completed';
