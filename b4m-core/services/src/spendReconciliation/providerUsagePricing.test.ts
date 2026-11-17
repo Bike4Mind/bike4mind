@@ -150,21 +150,21 @@ describe('priceProviderUsage', () => {
       rows,
     });
     const tier = (input: number, output: number) => ({ 272_000: { input: input * PER_M, output: output * PER_M } });
-    const usage = [row('gpt-6-astra-2026-10-01', { inputTokens: 1_000_000, outputTokens: 1_000_000 })];
+    const usage = [row('gpt-catalog-only-2026-10-01', { inputTokens: 1_000_000, outputTokens: 1_000_000 })];
 
     it('prices a catalog-only id, and its dated form, that is otherwise unpriced', async () => {
       const without = await priceProviderUsage('openai', usage);
       expect(without).toMatchObject({
         usd: 0,
         unpricedOutputTokens: 1_000_000,
-        unpricedModels: ['gpt-6-astra-2026-10-01'],
+        unpricedModels: ['gpt-catalog-only-2026-10-01'],
       });
 
       const result = await priceProviderUsage(
         'openai',
-        [...usage, row('gpt-6-astra', { inputTokens: 1_000_000, outputTokens: 1_000_000 })],
+        [...usage, row('gpt-catalog-only', { inputTokens: 1_000_000, outputTokens: 1_000_000 })],
         undefined,
-        snapshot({ modelId: 'gpt-6-astra', pricing: tier(3, 12) })
+        snapshot({ modelId: 'gpt-catalog-only', pricing: tier(3, 12) })
       );
       expect(result.usd).toBeCloseTo(30, 6);
       expect(result).toMatchObject({ unpricedOutputTokens: 0, unpricedModels: [] });
@@ -197,7 +197,12 @@ describe('priceProviderUsage', () => {
     it('leaves the result unchanged when the snapshot has no rows, and does not leak across calls', async () => {
       const baseline = await priceProviderUsage('openai', usage);
       expect(await priceProviderUsage('openai', usage, undefined, snapshot())).toEqual(baseline);
-      await priceProviderUsage('openai', usage, undefined, snapshot({ modelId: 'gpt-6-astra', pricing: tier(3, 12) }));
+      await priceProviderUsage(
+        'openai',
+        usage,
+        undefined,
+        snapshot({ modelId: 'gpt-catalog-only', pricing: tier(3, 12) })
+      );
       expect(await priceProviderUsage('openai', usage)).toEqual(baseline);
     });
   });
