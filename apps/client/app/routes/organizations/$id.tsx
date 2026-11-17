@@ -155,7 +155,7 @@ const OrganizationPage: FC = () => {
   const { t } = useTranslation();
   const { id } = useParams({ strict: false });
   const { data: organization, isLoading, isError, error, refetch } = useGetOrganization(id as string);
-  const { currentSeats, pendingSeats } = useOrganizationSeats(id as string);
+  const { activeSeats } = useOrganizationSeats(id as string);
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as { tab?: string; section?: string };
   const { currentUser } = useUser();
@@ -477,7 +477,7 @@ const OrganizationPage: FC = () => {
             </TabPanel>
             <TabPanel value={OrganizationTabs.Members} {...panelAccessibility(OrganizationTabs.Members)}>
               {/* Seat numbers live only in the tab's seat summary (OrgSeatSummary). */}
-              {header(OrganizationTabs.Members, { count: currentSeats - pendingSeats })}
+              {header(OrganizationTabs.Members, { count: activeSeats })}
               {currentUser && <OrganizationMembers organization={organization} />}
             </TabPanel>
             {access.canManageGroups && (
@@ -600,7 +600,7 @@ const OrganizationHeader: FC<{
   const { name, description } = organization;
   const { data: subscriptions } = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, organization.id);
   const planState = getOrgPlanState(pickDisplayedSubscription(subscriptions ?? []));
-  const { currentSeats, pendingSeats } = useOrganizationSeats(organization.id);
+  const { activeSeats } = useOrganizationSeats(organization.id);
 
   return (
     <Card variant="outlined" sx={{ mx: { xs: 2, sm: 3 }, p: { xs: 2, sm: 3 } }} data-testid="organization-header">
@@ -633,7 +633,7 @@ const OrganizationHeader: FC<{
           </Typography>
           <Stack direction="row" spacing={{ xs: 1, sm: 2 }} mt={1} flexWrap="wrap" useFlexGap>
             <Chip size="sm" variant="soft" startDecorator={<GroupOutlinedIcon sx={{ fontSize: 14 }} />}>
-              {t('organization.x_members', { count: currentSeats - pendingSeats })}
+              {t('organization.x_members', { count: activeSeats })}
             </Chip>
             <Chip
               size="sm"
@@ -659,7 +659,7 @@ const OrganizationHeader: FC<{
 
 const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> = ({ organization }) => {
   const { t, i18n } = useTranslation();
-  const { currentSeats, pendingSeats } = useOrganizationSeats(organization.id);
+  const { activeSeats } = useOrganizationSeats(organization.id);
   const { data: subscriptions } = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, organization.id);
 
   const subscription = pickDisplayedSubscription(subscriptions ?? []);
@@ -680,7 +680,7 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
             <Typography level="body-xs" color="neutral">
               {t('organization.overview.total_members')}
             </Typography>
-            <Typography level="h2">{currentSeats - pendingSeats}</Typography>
+            <Typography level="h2">{activeSeats}</Typography>
           </Stack>
         </Card>
         <Card variant="outlined" sx={{ flex: 1, minWidth: 200, p: 3 }}>

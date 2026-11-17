@@ -7,10 +7,9 @@ import { FC } from 'react';
  * which also drives the Add Member gate, so the two never disagree.
  */
 const OrgSeatSummary: FC<{ organizationId: string }> = ({ organizationId }) => {
-  const { maxSeats, currentSeats, pendingSeats, availableSeats } = useOrganizationSeats(organizationId);
+  const { maxSeats, currentSeats, pendingSeats, activeSeats, availableSeats } = useOrganizationSeats(organizationId);
   const usage = maxSeats > 0 ? Math.min(100, (currentSeats / maxSeats) * 100) : 0;
   const color = usage >= 90 ? 'danger' : usage >= 75 ? 'warning' : 'success';
-  const activeSeats = currentSeats - pendingSeats;
 
   return (
     <Card variant="outlined" data-testid="organization-members-seats-card" sx={{ gap: 1.5 }}>
@@ -27,7 +26,7 @@ const OrgSeatSummary: FC<{ organizationId: string }> = ({ organizationId }) => {
         )}
       </Stack>
       <Typography level="body-sm" data-testid="organization-members-seats-count">
-        {currentSeats} of {maxSeats || '∞'} seats used
+        {maxSeats > 0 ? `${currentSeats} of ${maxSeats} seats used` : `${currentSeats} seats used`}
       </Typography>
       {maxSeats > 0 && (
         <LinearProgress

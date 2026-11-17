@@ -4,7 +4,9 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import OrgSeatSummary from './OrgSeatSummary';
 
-const seats = vi.hoisted(() => ({ current: { maxSeats: 5, currentSeats: 4, pendingSeats: 1, availableSeats: 1 } }));
+const seats = vi.hoisted(() => ({
+  current: { maxSeats: 5, currentSeats: 4, pendingSeats: 1, activeSeats: 3, availableSeats: 1 },
+}));
 vi.mock('@client/app/hooks/data/organizations', () => ({ useOrganizationSeats: () => seats.current }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -26,9 +28,9 @@ describe('OrgSeatSummary', () => {
   });
 
   it('says when the team has no plan', () => {
-    seats.current = { maxSeats: 0, currentSeats: 1, pendingSeats: 0, availableSeats: 0 };
+    seats.current = { maxSeats: 0, currentSeats: 1, pendingSeats: 0, activeSeats: 1, availableSeats: 0 };
     renderSummary();
     expect(screen.getByTestId('organization-members-no-plan-chip')).toHaveTextContent('No Active Plan');
-    expect(screen.getByTestId('organization-members-seats-count')).toHaveTextContent('1 of ∞ seats used');
+    expect(screen.getByTestId('organization-members-seats-count')).toHaveTextContent(/^1 seats used$/);
   });
 });
