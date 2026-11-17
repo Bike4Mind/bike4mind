@@ -3174,6 +3174,16 @@
       "count": 1
     }
   },
+  "apps/workers/src/events/dlqTriage.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/events/dlqTriage.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
   "apps/workers/src/events/sessionSummarization.test.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
@@ -3255,6 +3265,11 @@
     }
   },
   "apps/workers/src/queueHandlers/agentExecutor.push.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/queueHandlers/agentExecutor.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
     }
