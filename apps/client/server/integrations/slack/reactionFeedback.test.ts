@@ -230,3 +230,47 @@ it('ignores a message whose author cannot be resolved', async () => {
   expect(mocks.update).toHaveBeenCalledWith(expect.anything(), { $set: { state: 'ignored' } });
   expect(mocks.fetch).not.toHaveBeenCalled();
 });
+
+it.each([
+  ['WREACTOR', 'C12345678'],
+  ['UREACTOR', 'G12345678'],
+  ['WREACTOR', 'G12345678'],
+])('forwards a signed report from %s in an eligible %s channel', async (user, channel) => {
+  mocks.channel.mockResolvedValue({ channelId: channel, destinationId: 'receiver' });
+  mocks.info.mockResolvedValue({ channel: { is_member: true, is_private: channel.startsWith('G') } });
+  await forwardSlackReaction('T1', 'A1', { ...event, user, item: { ...event.item, channel } });
+  expect(mocks.fetch).toHaveBeenCalledOnce();
+  const [url, init] = mocks.fetch.mock.calls[0];
+  expect(url).toBe('https://receiver.example/inbound');
+  expect(JSON.parse(init.body)).toMatchObject({ reactor: { slackId: user }, fileNames: ['report.txt'] });
+  expect(init.body).not.toContain('must-not-forward');
+  expect(init.headers['x-b4m-signature']).toBe(
+    signFeedback(init.body, init.headers['x-b4m-timestamp'], 'synthetic-test-signing-key-not-real-12345', 'forward')
+  );
+  expect(mocks.findChannel).toHaveBeenCalledWith(
+    expect.objectContaining({
+      _id: feedbackId('ws1', channel),
+      workspaceId: 'ws1',
+      organizationId: 'org1',
+      slackTeamId: 'T1',
+      enabled: true,
+    })
+  );
+  expect(mocks.create).toHaveBeenCalledWith(
+    expect.objectContaining({ _id: feedbackId('ws1', 'T1', channel, '123.456') })
+  );
+});
+
+it.each([
+  { is_mpim: true },
+  { is_shared: true },
+  { is_org_shared: true },
+  { is_ext_shared: true },
+  { is_pending_ext_shared: true },
+  { is_member: false },
+])('refuses ineligible G channels %j without sending or spending quota', async fields => {
+  mocks.info.mockResolvedValue({ channel: { is_member: true, ...fields } });
+  await forwardSlackReaction('T1', 'A1', { ...event, user: 'WREACTOR', item: { ...event.item, channel: 'G12345678' } });
+  expect(mocks.fetch).not.toHaveBeenCalled();
+  expect(mocks.limit).not.toHaveBeenCalled();
+});

@@ -63,3 +63,29 @@ describe('feedback protocol', () => {
     warn.mockRestore();
   });
 });
+
+it.each([
+  ['W12345678', 'C12345678'],
+  ['U12345678', 'G12345678'],
+  ['W12345678', 'G12345678'],
+])('accepts Slack reactor %s in channel %s', (user, channel) => {
+  expect(
+    reactionSchema.safeParse({
+      type: 'reaction_added',
+      reaction: 'bug',
+      user,
+      item: { type: 'message', channel, ts: '1.2' },
+    }).success
+  ).toBe(true);
+});
+
+it.each(['D12345678', 'g12345678', 'Gbad-id', 'G'])('rejects malformed or DM channel %s', channel => {
+  expect(
+    reactionSchema.safeParse({
+      type: 'reaction_added',
+      reaction: 'bug',
+      user: 'W12345678',
+      item: { type: 'message', channel, ts: '1.2' },
+    }).success
+  ).toBe(false);
+});

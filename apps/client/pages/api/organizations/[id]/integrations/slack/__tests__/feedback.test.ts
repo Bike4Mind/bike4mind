@@ -55,6 +55,7 @@ vi.mock('@slack/web-api', () => ({
   },
 }));
 import '../feedback';
+import { feedbackId } from '@server/integrations/slack/feedbackProtocol';
 const orgId = '650000000000000000000abc';
 const ownerId = '650000000000000000000111';
 const update = { channelId: 'C12345678', enabled: true, destinationId: 'receiver' };
@@ -149,4 +150,39 @@ it('allows opt-out without a Slack call and without upsert', async () => {
   expect(m.update).toHaveBeenCalledWith(expect.objectContaining({ organizationId: orgId }), {
     $set: { enabled: false },
   });
+});
+
+it('enables an eligible legacy private G channel with canonical ownership', async () => {
+  m.info.mockResolvedValue({ channel: { is_member: true, is_private: true } });
+  const { req, res } = request({ ...update, channelId: 'G12345678' });
+  await m.handlers.PUT(req, res);
+  expect(m.info).toHaveBeenCalledWith({ channel: 'G12345678' });
+  expect(m.update).toHaveBeenCalledWith(
+    { _id: feedbackId('ws1', 'G12345678') },
+    {
+      $set: expect.objectContaining({
+        organizationId: orgId,
+        workspaceId: 'ws1',
+        slackTeamId: 'T1',
+        channelId: 'G12345678',
+        destinationId: 'receiver',
+        enabled: true,
+      }),
+    },
+    { upsert: true, runValidators: true }
+  );
+});
+
+it.each([
+  { is_mpim: true },
+  { is_shared: true },
+  { is_org_shared: true },
+  { is_ext_shared: true },
+  { is_pending_ext_shared: true },
+  { is_member: false },
+])('refuses a G channel excluded by its actual metadata %j', async fields => {
+  m.info.mockResolvedValue({ channel: { is_member: true, ...fields } });
+  const { req, res } = request({ ...update, channelId: 'G12345678' });
+  await expect(m.handlers.PUT(req, res)).rejects.toThrow('non-shared channel');
+  expect(m.update).not.toHaveBeenCalled();
 });

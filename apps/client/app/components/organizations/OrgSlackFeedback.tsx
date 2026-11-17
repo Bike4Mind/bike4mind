@@ -3,6 +3,7 @@ import { Button, Input, Stack, Typography } from '@mui/joy';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
+import { slackFeedbackConfiguredChannelIdSchema } from '@client/app/utils/slackFeedbackIds';
 
 export default function OrgSlackFeedback({
   organizationId,
@@ -59,7 +60,7 @@ export default function OrgSlackFeedback({
         <>
           <Input
             data-testid="slack-feedback-channel"
-            placeholder="Channel ID (C...)"
+            placeholder="Channel ID (C... or G...)"
             value={channelId}
             onChange={event => setChannelId(event.target.value)}
           />
@@ -79,7 +80,7 @@ export default function OrgSlackFeedback({
             data-testid="slack-feedback-enable"
             loading={mutation.isPending}
             disabled={
-              !/^C[A-Z0-9]{8,}$/.test(channelId) ||
+              !slackFeedbackConfiguredChannelIdSchema.safeParse(channelId).success ||
               !data?.destinations.includes(destinationId) ||
               !/^[a-z0-9_+-]{1,64}$/.test(emoji)
             }

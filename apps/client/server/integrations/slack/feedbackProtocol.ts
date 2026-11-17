@@ -1,6 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
+import { slackFeedbackChannelIdSchema, slackFeedbackUserIdSchema } from '@client/app/utils/slackFeedbackIds';
 
 export function isFeedbackChannelEligible(
   channel:
@@ -72,10 +73,10 @@ export function verifyFeedback(body: string, timestamp: unknown, signature: unkn
 export const reactionSchema = z.object({
   type: z.literal('reaction_added'),
   reaction: z.string().max(64),
-  user: z.string().regex(/^U[A-Z0-9]+$/),
+  user: slackFeedbackUserIdSchema,
   item: z.object({
     type: z.literal('message'),
-    channel: z.string().regex(/^C[A-Z0-9]+$/),
+    channel: slackFeedbackChannelIdSchema,
     ts: z.string().regex(/^\d+\.\d+$/),
   }),
 });

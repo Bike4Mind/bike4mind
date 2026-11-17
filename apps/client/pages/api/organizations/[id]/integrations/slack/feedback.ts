@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { slackFeedbackConfiguredChannelIdSchema } from '@client/app/utils/slackFeedbackIds';
 import { WebClient } from '@slack/web-api';
 import { orgSlackWorkspaceRepository, SlackFeedbackChannel, slackAuditLogRepository } from '@bike4mind/database/infra';
 import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
@@ -16,7 +17,7 @@ const responseSchema = z.object({
 });
 
 const updateSchema = z.strictObject({
-  channelId: z.string().regex(/^C[A-Z0-9]{8,}$/),
+  channelId: slackFeedbackConfiguredChannelIdSchema,
   enabled: z.boolean(),
   emoji: z
     .string()
