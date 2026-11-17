@@ -8,6 +8,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.edit
 import androidx.lifecycle.lifecycleScope
@@ -29,7 +33,10 @@ class MainActivity : ComponentActivity() {
         val app = application as B4MApplication
         setContent {
             B4MTheme {
-                AppRoot(app = app, signInError = signInError, onSignedIn = ::askForNotificationsOnce)
+                // Exposes Compose test tags as resource ids, which is how the shared Maestro flows address elements.
+                Box(Modifier.semantics { testTagsAsResourceId = true }) {
+                    AppRoot(app = app, signInError = signInError, onSignedIn = ::askForNotificationsOnce)
+                }
             }
         }
         if (savedInstanceState == null) handleCallback(intent)

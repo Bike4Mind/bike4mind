@@ -1,5 +1,5 @@
 import type { DataHolderRegistry } from '../types';
-import { CATALOG_PUBLICATION } from './retention';
+import { CATALOG_PUBLICATION, ERASURE_FENCE } from './retention';
 
 export const aiHolders = {
   ActiveCodeAgent: {
@@ -9,7 +9,8 @@ export const aiHolders = {
   Agent: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
       { path: 'users.userId', matchBy: 'userId', action: 'pullFromArray' },
     ],
   },
@@ -195,7 +196,10 @@ export const aiHolders = {
   },
   LatticeModel: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+    ],
     // A list of attribute names to group by, not people.
     unrelatedPaths: ['views.views.config.grouping.groupBy'],
   },
@@ -243,9 +247,18 @@ export const aiHolders = {
   },
   MemoryPrincipalKey: {
     kind: 'holder',
+    // A live key goes; the tombstone `destroy` leaves (no `dek`) is the fence and stays.
     references: [
       { path: 'ownerUserId', matchBy: 'userId', action: 'deleteDocument' },
       { path: 'principalId', matchBy: 'userId', action: 'deleteDocument', where: { principalKind: 'user' } },
+      { path: 'ownerUserId', matchBy: 'userId', action: 'retain', ...ERASURE_FENCE, where: { dek: null } },
+      {
+        path: 'principalId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...ERASURE_FENCE,
+        where: { principalKind: 'user', dek: null },
+      },
     ],
     secretPaths: ['dek'],
   },
@@ -305,7 +318,10 @@ export const aiHolders = {
   },
   ResearchTask: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+    ],
   },
   SessionAgentConfig: {
     kind: 'holder',
@@ -318,7 +334,8 @@ export const aiHolders = {
   Skill: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
       { path: 'users.userId', matchBy: 'userId', action: 'pullFromArray' },
     ],
   },
@@ -383,6 +400,9 @@ export const aiHolders = {
   },
   WorkItem: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+    ],
   },
 } satisfies DataHolderRegistry;

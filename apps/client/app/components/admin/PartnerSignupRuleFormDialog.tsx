@@ -1,8 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   Alert,
   Autocomplete,
-  Box,
   Button,
   FormControl,
   FormHelperText,
@@ -11,28 +10,26 @@ import {
   Option,
   Select,
   Stack,
-  Switch,
   Textarea,
   Typography,
 } from '@mui/joy';
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import type { IPartnerSignupRuleDocument } from '@bike4mind/common';
 import { KNOWN_ENTITLEMENT_KEYS } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { SUBSCRIPTION_PLANS } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import type { SubscriptionPlanDetail } from '@bike4mind/server-utils/lib/userSubscriptions/types';
-import {
-  createPartnerSignupRule,
-  updatePartnerSignupRule,
-  searchOrganizations,
-  fetchOrganizationById,
-  type OrganizationOption,
-} from '@client/app/utils/partnerSignupRuleAPICalls';
+import { createPartnerSignupRule, updatePartnerSignupRule } from '@client/app/utils/partnerSignupRuleAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 import GrantPackageSelect, { useSelectedGrantPackage } from './InviteCenter/shared/GrantPackageSelect';
 import { AdminDialog } from './shared';
+import {
+  PartnerRuleDomainField,
+  PartnerRuleEnabledField,
+  PartnerRuleOrganizationField,
+  type PartnerRuleOrganizationValue,
+} from './PartnerSignupRuleFields';
 
 // Options for the entitlements picker; spread to a mutable array for Joy Autocomplete.
 const ENTITLEMENT_OPTIONS = [...KNOWN_ENTITLEMENT_KEYS];
@@ -45,7 +42,7 @@ export const planLabelForPriceId = (priceId: string): string => {
   return plan ? planLabel(plan) : priceId;
 };
 
-type FormState = {
+type FormState = PartnerRuleOrganizationValue & {
   domain: string;
   label: string;
   entitlements: string[];
@@ -56,10 +53,6 @@ type FormState = {
   grantPackageId: string | null;
   notes: string;
   enabled: boolean;
-  // `organizationId` is the value persisted; `organization` carries the name so the picker can
-  // render the current selection (seeded async when editing a rule that already has an org).
-  organizationId: string | null;
-  organization: OrganizationOption | null;
 };
 
 const emptyForm: FormState = {
@@ -145,31 +138,6 @@ export default function PartnerSignupRuleFormDialog({ editing, onClose, onSaved 
     },
   });
 
-  // Org picker: debounced name search. The Autocomplete input stays uncontrolled so it shows the
-  // selected org's label; onInputChange feeds the search.
-  const { debouncedValue: orgSearch, setValue: setOrgSearchInput } = useDebounceValue('');
-  const { data: orgOptions = [], isFetching: orgOptionsLoading } = useQuery({
-    queryKey: ['org-search', orgSearch],
-    queryFn: () => searchOrganizations(orgSearch),
-  });
-
-  // Seed the picker's selected label. The rule stores only the id, so fetch the org name;
-  // a since-deleted org (fetch returns null) leaves the picker empty.
-  useEffect(() => {
-    if (!editing?.organizationId) return;
-    let cancelled = false;
-    fetchOrganizationById(editing.organizationId)
-      .then(org => {
-        if (org && !cancelled) setForm(f => (f.organizationId === org.id ? { ...f, organization: org } : f));
-      })
-      .catch(() => {
-        /* non-fatal: the id still saves; only the display label is missing */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [editing]);
-
   return (
     <AdminDialog
       onClose={onClose}
@@ -181,22 +149,11 @@ export default function PartnerSignupRuleFormDialog({ editing, onClose, onSaved 
         {editing ? editing.domain : 'Grant entitlements and bonus credits to a partner domain.'}
       </Typography>
       <Stack spacing={1.5}>
-        <FormControl required>
-          <FormLabel>Domain</FormLabel>
-          <Input
-            placeholder="partner.com"
-            autoFocus={!editing}
-            value={form.domain}
-            disabled={!!editing}
-            onChange={e => setForm(f => ({ ...f, domain: e.target.value }))}
-            data-testid="partner-rule-domain-input"
-          />
-          <FormHelperText>
-            {editing
-              ? 'Domain is the key and cannot be changed. Delete and re-add to move it.'
-              : 'Bare domain only (no @ or path). Public mail providers are rejected.'}
-          </FormHelperText>
-        </FormControl>
+        <PartnerRuleDomainField
+          value={form.domain}
+          onChange={domain => setForm(f => ({ ...f, domain }))}
+          locked={editing !== null}
+        />
 
         <FormControl>
           <FormLabel>Label</FormLabel>
@@ -305,26 +262,11 @@ export default function PartnerSignupRuleFormDialog({ editing, onClose, onSaved 
           helperText="A package replaces the credits above and caps them; at the cap, signups still join the org and plan without credits."
         />
 
-        <FormControl>
-          <FormLabel>Organization</FormLabel>
-          <Autocomplete
-            placeholder="Search organizations by name..."
-            options={orgOptions}
-            value={form.organization}
-            loading={orgOptionsLoading}
-            getOptionLabel={option => option.name}
-            isOptionEqualToValue={(option, value) => option.id === value.id}
-            onInputChange={(_event, value) => setOrgSearchInput(value)}
-            onChange={(_event, value) =>
-              setForm(f => ({ ...f, organization: value, organizationId: value?.id ?? null }))
-            }
-            data-testid="partner-rule-org-input"
-          />
-          <FormHelperText>
-            Optional. Verified signups on this domain are auto-added to this organization as members. Existing users are
-            not touched - use the backfill action for those. Leave empty for no org.
-          </FormHelperText>
-        </FormControl>
+        <PartnerRuleOrganizationField
+          value={form.organization}
+          onChange={update => setForm(f => ({ ...f, ...update(f) }))}
+          seedOrganizationId={editing?.organizationId ?? null}
+        />
 
         <FormControl>
           <FormLabel>Notes</FormLabel>
@@ -337,18 +279,7 @@ export default function PartnerSignupRuleFormDialog({ editing, onClose, onSaved 
           />
         </FormControl>
 
-        <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
-          <Box>
-            <FormLabel>Enabled</FormLabel>
-            <FormHelperText sx={{ mt: 0 }}>Turn off to stage a rule without granting anything.</FormHelperText>
-          </Box>
-          <Switch
-            color={form.enabled ? 'success' : 'neutral'}
-            checked={form.enabled}
-            onChange={e => setForm(f => ({ ...f, enabled: e.target.checked }))}
-            data-testid="partner-rule-enabled-switch"
-          />
-        </FormControl>
+        <PartnerRuleEnabledField value={form.enabled} onChange={enabled => setForm(f => ({ ...f, enabled }))} />
 
         {formError && (
           <Alert

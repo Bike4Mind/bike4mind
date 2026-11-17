@@ -45,6 +45,8 @@ export type VideoModelCapabilities = ModelStanding & {
   // Rough wall-clock render time, only used to set the agent's expectation. Not part of the public API.
   typicalRenderSeconds: number;
   audio: 'always' | 'optional' | 'none';
+  keyframes?: { max: number };
+  draft?: { usdPerSecond: number; resolutions: readonly ResolutionTier[] };
   pricing: VideoPricing;
   // Admin setting `videoGeneration.enabledModels[id]` overrides this.
   defaultEnabled: boolean;
