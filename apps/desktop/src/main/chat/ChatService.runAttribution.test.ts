@@ -6,7 +6,7 @@ import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { CompletionRun, CompletionRunAttribution } from '@bike4mind/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskContract } from '@shared/orchestration';
-import type { ChatModelOption } from '@shared/chat';
+import type { ChatMessage, ChatModelOption } from '@shared/chat';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
 import type { CompletionRunMinter } from './completionRuns';
@@ -519,11 +519,11 @@ describe('orchestration run attribution', () => {
       byAttempt: [],
       byAttemptTruncated: false,
     });
-    const settledReply = (id: string, creditsCharged: number, runId?: string) => ({
+    const settledReply = (id: string, creditsCharged: number, runId?: string): ChatMessage => ({
       id,
-      role: 'assistant' as const,
+      role: 'assistant',
       content: 'Done',
-      timestamp: Date.now(),
+      createdAt: new Date().toISOString(),
       requestId: id,
       settled: { creditsCharged, ...(runId ? { runId } : {}) },
     });
