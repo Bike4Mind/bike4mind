@@ -74,6 +74,20 @@ describe('GET /api/admin/users', () => {
       );
     });
 
+    it('counts matches across pages, not just the page returned', async () => {
+      mockList.mockResolvedValue({ users: [], totalUsers: 1, page: 2, totalPages: 1 });
+
+      await call(handler, { search: DIGEST, page: '2' });
+
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          target: expect.objectContaining({ kind: 'system' }),
+          details: { providerEndUserId: DIGEST, source: 'users_list', matched: true, matchedCount: 1 },
+        })
+      );
+    });
+
     it('audits a 64-hex search with no match against the system target', async () => {
       await call(handler, { search: DIGEST });
 

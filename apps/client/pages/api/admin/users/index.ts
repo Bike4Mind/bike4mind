@@ -48,8 +48,11 @@ const handler = adminApi({
       });
       const [only] = list.users;
       await audit({
-        count: list.users.length,
-        sole: list.users.length === 1 ? { id: only.id, displayName: only.email ?? only.username } : undefined,
+        count: list.totalUsers,
+        sole:
+          list.totalUsers === 1 && list.users.length === 1
+            ? { id: only.id, displayName: only.email ?? only.username }
+            : undefined,
       });
       return res.json(list);
     })
