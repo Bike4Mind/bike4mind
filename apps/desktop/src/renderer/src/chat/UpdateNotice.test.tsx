@@ -205,15 +205,15 @@ describe('UpdateNotice with in-app updates', () => {
     expect(actions.download).toHaveBeenCalledTimes(1);
   });
 
-  it('floats in the upper-right corner, below the 53px header bar', async () => {
+  it('floats in the bottom-right corner with a 12px inset', async () => {
     await mount(offered('0.2.0'), { actions: actionsFor() });
     const style = getComputedStyle(byTestId('update-notice') as HTMLElement);
 
     expect(style.position).toBe('fixed');
-    expect(style.top).toBe('65px');
+    expect(style.top).toBe('auto');
     expect(style.right).toBe('12px');
     expect(style.left).toBe('auto');
-    expect(style.bottom).toBe('auto');
+    expect(style.bottom).toBe('12px');
   });
 });
 

@@ -23,9 +23,6 @@ export interface UpdateNoticeProps {
   actions?: UpdateNoticeActions;
 }
 
-// The bar across the top of the main pane (ChatShell's conversation header, CustomizePanel's): py 1.25
-// either side of a size-sm control (2rem) and a 1px divider. A project line under the title adds ~5px.
-const HEADER_BAR_HEIGHT = 10 + 32 + 10 + 1;
 const EDGE = 12;
 
 function noticeTitle(state: UpdateState, inApp: boolean): string {
@@ -35,9 +32,8 @@ function noticeTitle(state: UpdateState, inApp: boolean): string {
 }
 
 /**
- * The update card, fixed in the window's upper-right corner just below the header bar: clear of
- * the header's controls above it and of the composer at the foot of the window. Given `actions` it
- * downloads and installs; which version it shows, if any, is updateNoticeVersion's call.
+ * Given `actions` the card downloads and installs; which version it shows, if any,
+ * is updateNoticeVersion's call.
  */
 export function UpdateNotice({ state, onOpenRelease, onDismiss, actions }: UpdateNoticeProps) {
   // A failed download outranks an earlier dismissal: the user has just asked for this version.
@@ -55,7 +51,7 @@ export function UpdateNotice({ state, onOpenRelease, onDismiss, actions }: Updat
       data-testid="update-notice"
       sx={{
         position: 'fixed',
-        top: HEADER_BAR_HEIGHT + EDGE,
+        bottom: EDGE,
         right: EDGE,
         zIndex: 'snackbar',
         width: `min(280px, calc(100vw - ${2 * EDGE}px))`,
