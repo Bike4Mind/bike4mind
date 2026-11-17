@@ -75,7 +75,7 @@ function controller(overrides: Partial<StudioController> = {}): StudioController
     ...overrides,
   };
 }
-async function mount(value?: StudioController, variant: 'docked' | 'drawer' = 'docked', onClose = vi.fn()) {
+async function mount(value?: StudioController, variant: 'docked' | 'stacked' = 'docked', onClose = vi.fn()) {
   if (!host) {
     host = document.createElement('div');
     document.body.appendChild(host);
@@ -92,16 +92,18 @@ async function mount(value?: StudioController, variant: 'docked' | 'drawer' = 'd
 }
 
 describe('Studio layout', () => {
-  it('uses a drawer until a full reading column and Studio fit', () => {
-    expect(studioPaneLayout(null)).toBe('drawer');
-    expect(studioPaneLayout(0)).toBe('drawer');
-    expect(studioPaneLayout(STUDIO_DOCK_MIN_WIDTH - 1)).toBe('drawer');
+  it('stacks without an overlay when a usable chat column and Studio do not fit', () => {
+    expect(studioPaneLayout(null)).toBe('docked');
+    expect(studioPaneLayout(0)).toBe('stacked');
+    expect(studioPaneLayout(STUDIO_DOCK_MIN_WIDTH - 1)).toBe('stacked');
     expect(studioPaneLayout(STUDIO_DOCK_MIN_WIDTH)).toBe('docked');
   });
-  it('renders a labelled drawer that Escape dismisses', async () => {
-    const close = await mount(undefined, 'drawer');
-    expect(get('studio-pane').dataset.variant).toBe('drawer');
-    expect(get('studio-pane').getAttribute('role')).toBe('dialog');
+  it('renders a labelled nonmodal stacked pane that Escape dismisses', async () => {
+    const close = await mount(undefined, 'stacked');
+    expect(get('studio-pane').dataset.variant).toBe('stacked');
+    expect(get('studio-pane').tagName).toBe('ASIDE');
+    expect(get('studio-pane').getAttribute('aria-labelledby')).toBe('studio-pane-title');
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(get('studio-pane').closest('[aria-hidden="true"]')).toBeNull();
     await act(async () =>
       get('studio-close-btn').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
@@ -128,6 +130,8 @@ describe('Studio states', () => {
     await mount(value);
     await click('studio-create-image-tile');
     expect((get('studio-setting-model') as HTMLSelectElement).value).toBe('gpt-image-2');
+    expect(get('studio-creation-back-btn').textContent).toBe('');
+    expect(get('studio-creation-back-btn').getAttribute('aria-label')).toBe('Back to Studio');
     expect(get('studio-creation-form').textContent).not.toContain('Wet slate');
     expect(get('studio-creation-form').textContent).not.toContain('Kitchen counter');
     await input('studio-setting-count', '3');
@@ -136,7 +140,7 @@ describe('Studio states', () => {
     await input('studio-setting-model', 'flux-pro-1.1');
     expect((get('studio-setting-quality') as HTMLSelectElement).value).toBe('high');
     await input('studio-prompt-input', 'Three bicycles');
-    await click('studio-prepare-btn');
+    await click('studio-generate-btn');
     expect(value.prepareCreation).toHaveBeenCalledWith(
       expect.objectContaining({
         settings: expect.objectContaining({ model: 'flux-pro-1.1', count: 3, size: '1024x1024', quality: 'high' }),
@@ -172,11 +176,12 @@ describe('Studio states', () => {
     await click('studio-load-more-jobs-btn');
     expect(loadMore).toHaveBeenCalledWith('jobs');
     await click('studio-asset-saved-btn');
+    await click('studio-asset-actions-btn');
     await click('studio-asset-reuse-btn');
     expect((get('studio-prompt-input') as HTMLTextAreaElement).value).toBe('Saved prompt');
     expect(value.prepareCreation).not.toHaveBeenCalled();
     expect(value.create).not.toHaveBeenCalled();
-    await click('studio-prepare-btn');
+    await click('studio-generate-btn');
     expect(value.prepareCreation).toHaveBeenCalledWith(
       expect.objectContaining({ settings: { size: '1024x1024', model: 'saved-model' } })
     );
@@ -200,44 +205,42 @@ describe('Studio states', () => {
     await mount(controller({ state: { status: 'error', error: 'Offline' } }));
     expect(get('studio-load-error').textContent).toBe('Offline');
   });
-  it('reviews context and editable Voice script before dispatching create', async () => {
+  it('prepares the current session context and dispatches the prepared Voice script once', async () => {
     const value = controller();
     await mount(value);
     await click('studio-create-speech-tile');
     await input('studio-prompt-input', 'Read this');
-    expect((get('studio-context-select') as HTMLSelectElement).value).toBe('session-family');
-    await click('studio-prepare-btn');
+    expect((get('studio-use-session-context-checkbox') as HTMLInputElement).checked).toBe(true);
+    await click('studio-generate-btn');
     expect(value.prepareCreation).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: 'speech',
         prompt: 'Read this',
-        selection: { mode: 'session-family' },
+        selection: { mode: 'current-session' },
         sessionId: 's1',
         workspaceId: 'w1',
         revision: '1',
       })
     );
-    expect(get('studio-context-review').textContent).toContain('Excluded: Private source');
-    expect(get('studio-context-review').textContent).toContain('Truncated: Long source');
-    await input('studio-prepared-input', 'Edited script');
-    await click('studio-create-btn');
     expect(value.create).toHaveBeenCalledWith(
-      expect.objectContaining({ reviewId: 'review-1', preparedPrompt: 'Edited script' })
+      expect.objectContaining({ reviewId: 'review-1', preparedPrompt: 'Prepared script' })
     );
+    expect(value.create).toHaveBeenCalledTimes(1);
     expect(find('studio-creation-form')).toBeNull();
   });
-  it('requires explicit custom selection and invalidates review on scope edits', async () => {
-    await mount(controller());
+  it('can generate without session context and exposes no custom source picker', async () => {
+    const value = controller();
+    await mount(value);
     await click('studio-create-image-tile');
     await input('studio-prompt-input', 'A garden');
-    await click('studio-prepare-btn');
-    await input('studio-context-select', 'custom');
+    await click('studio-use-session-context-checkbox');
+    expect(find('studio-context-select')).toBeNull();
+    expect(find('studio-pick-files-btn')).toBeNull();
+    await click('studio-generate-btn');
+    expect(value.prepareCreation).toHaveBeenCalledWith(expect.objectContaining({ selection: { mode: 'none' } }));
     expect(find('studio-context-review')).toBeNull();
-    expect((get('studio-prepare-btn') as HTMLButtonElement).disabled).toBe(true);
-    await click('studio-context-s1-checkbox');
-    expect((get('studio-prepare-btn') as HTMLButtonElement).disabled).toBe(false);
   });
-  it('discards an in-flight prepare after prompt edits and revision changes', async () => {
+  it('locks edits while preparing and discards preparation after revision changes', async () => {
     let finish: (result: StudioReview) => void = () => undefined;
     const value = controller({
       prepareCreation: vi.fn(
@@ -250,20 +253,20 @@ describe('Studio states', () => {
     await mount(value);
     await click('studio-create-image-tile');
     await input('studio-prompt-input', 'Before');
-    await click('studio-prepare-btn');
-    await input('studio-prompt-input', 'After');
-    await act(async () => finish(review));
-    expect(find('studio-context-review')).toBeNull();
-    await click('studio-prepare-btn');
+    await click('studio-generate-btn');
+    expect((get('studio-generate-btn') as HTMLButtonElement).disabled).toBe(true);
+    expect((get('studio-prompt-input') as HTMLTextAreaElement).disabled).toBe(true);
     await mount({ ...value, revision: '2' });
     await act(async () => finish(review));
-    expect(find('studio-context-review')).toBeNull();
+    expect(value.create).not.toHaveBeenCalled();
+    expect((get('studio-generate-btn') as HTMLButtonElement).disabled).toBe(true);
   });
-  it('lists jobs chronologically and exposes disabled or live preview actions', async () => {
+  it('lists jobs chronologically and shows images inline with a collapsed prompt and action menu', async () => {
     const asset = {
       id: 'a1',
       kind: 'image' as const,
       title: 'Garden',
+      prompt: 'A peaceful garden with flowers',
       originatingSessionId: 's1',
       createdAt: '2026-11-01',
       updatedAt: '2026-11-01',
@@ -291,23 +294,41 @@ describe('Studio states', () => {
         },
       })
     );
-    expect(get('studio-asset-list').firstElementChild?.textContent).toContain('running');
+    expect(get('studio-asset-list').firstElementChild?.textContent).toContain('Creating...');
     await click('studio-asset-a1-btn');
     expect((get('studio-asset-export-btn') as HTMLButtonElement).disabled).toBe(true);
-    await click('studio-asset-preview-btn');
-    expect(preview).toHaveBeenCalledWith(asset);
+    expect((get('studio-asset-image') as HTMLImageElement).src).toBe(asset.url);
+    expect(find('studio-asset-preview-btn')).toBeNull();
+    expect(get('studio-asset-toggle-prompt-btn').getAttribute('aria-expanded')).toBe('false');
+    expect(document.getElementById('studio-asset-prompt')).toBeNull();
+    await click('studio-asset-toggle-prompt-btn');
+    expect(document.getElementById('studio-asset-prompt')?.textContent).toBe(asset.prompt);
+    await click('studio-asset-toggle-prompt-btn');
+    expect(document.getElementById('studio-asset-prompt')).toBeNull();
+    await click('studio-asset-actions-btn');
+    expect(get('studio-asset-delete-btn').getAttribute('role')).toBe('menuitem');
+    expect(preview).not.toHaveBeenCalled();
   });
-  it('invalidates reviews when submission becomes busy and keeps background jobs independent', async () => {
-    const value = controller();
+  it('discards preparation when submission becomes busy and keeps background refresh independent', async () => {
+    let finish: (result: StudioReview) => void = () => undefined;
+    const value = controller({
+      prepareCreation: vi.fn(
+        () =>
+          new Promise<StudioReview>(resolve => {
+            finish = resolve;
+          })
+      ),
+    });
     await mount(value);
     await click('studio-create-image-tile');
     await input('studio-prompt-input', 'Garden');
-    await click('studio-prepare-btn');
+    await click('studio-generate-btn');
     await mount({ ...value, state: { status: 'loading' } });
-    expect(get('studio-context-review')).toBeTruthy();
+    expect(get('studio-creation-form')).toBeTruthy();
     await mount({ ...value, busy: true });
-    expect(find('studio-context-review')).toBeNull();
-    expect((get('studio-prepare-btn') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => finish(review));
+    expect(value.create).not.toHaveBeenCalled();
+    expect((get('studio-generate-btn') as HTMLButtonElement).disabled).toBe(true);
   });
   it('does not duplicate delivered jobs alongside their assets', async () => {
     const job = {
@@ -355,10 +376,10 @@ describe('Studio states', () => {
     await click('studio-create-video-tile');
     await input('studio-prompt-input', 'A garden');
     await input('studio-setting-durationSeconds', '20');
-    await click('studio-prepare-btn');
+    await click('studio-generate-btn');
     expect(value.prepareCreation).not.toHaveBeenCalled();
     await input('studio-setting-durationSeconds', '5');
-    await click('studio-prepare-btn');
+    await click('studio-generate-btn');
     expect(value.prepareCreation).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'video', settings: { durationSeconds: 5 } })
     );

@@ -100,6 +100,16 @@ export function registerStudio(deps: {
           JSON.stringify(studioGenerationRequestSchema.parse(checked))
         )
           throw new Error('Model capabilities changed. Review again.');
+        const api = auth.getApiClient();
+        if (!api) throw new Error('Sign in first.');
+        for (const reference of draft.settings.references ?? []) {
+          const file = await new MediaApiClient(api).getFile(reference.fileId);
+          if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.mime_type))
+            throw new Error('Reference images must be PNG, JPEG, or WebP.');
+          if (file.moderation_status !== 'clean' || !file.download_url)
+            throw new Error('Reference image is not ready. Wait for the file scan, then review again.');
+          if (scope !== sessions.scopeKey()) throw new Error('Account changed.');
+        }
         if (scope !== sessions.scopeKey()) throw new Error('Account changed.');
         const key = JSON.stringify({ scope, sessionId, request });
         authorizations.set(key, authorize);

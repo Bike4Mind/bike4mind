@@ -518,20 +518,24 @@ function escapingAbsolutes(): HTMLElement[] {
 }
 
 describe('the shell layout', () => {
-  it.each([900, 1600])('opens and closes Studio from Panes at region width %s without remounting chat', async width => {
-    paneWidth(width);
-    await open('bound');
-    const composer = get('chat-composer-input');
-    await act(async () => get('chat-panes-menu-btn').click());
-    await act(async () => get('chat-panes-menu-studio-item').click());
-    expect(get('studio-pane').dataset.variant).toBe(width >= 1120 ? 'docked' : 'drawer');
-    expect(find('studio-unavailable')).toBeNull();
-    expect(get('studio-pane').textContent).toContain('Your creations will appear here.');
-    expect(get('chat-composer-input')).toBe(composer);
-    await act(async () => get('studio-close-btn').click());
-    expect(find('studio-pane')).toBeNull();
-    expect(document.activeElement).toBe(get('chat-panes-menu-btn'));
-  });
+  it.each([600, 900, 1600])(
+    'opens and closes Studio from Panes at region width %s without remounting chat',
+    async width => {
+      paneWidth(width);
+      await open('bound');
+      const composer = get('chat-composer-input');
+      await act(async () => get('chat-panes-menu-btn').click());
+      await act(async () => get('chat-panes-menu-studio-item').click());
+      expect(get('studio-pane').dataset.variant).toBe(width >= 760 ? 'docked' : 'stacked');
+      expect(get('studio-pane').getAttribute('aria-modal')).toBeNull();
+      expect(find('studio-unavailable')).toBeNull();
+      expect(get('studio-pane').textContent).toContain('Your creations will appear here.');
+      expect(get('chat-composer-input')).toBe(composer);
+      await act(async () => get('studio-close-btn').click());
+      expect(find('studio-pane')).toBeNull();
+      expect(document.activeElement).toBe(get('chat-panes-menu-btn'));
+    }
+  );
 
   it('pins the shell to the viewport so the window itself never scrolls', async () => {
     paneWidth(1600);

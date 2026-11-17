@@ -10,6 +10,7 @@ import {
   ttsRequestSchema,
 } from '@bike4mind/common';
 import { studioCreationSchema, studioProvenanceSchema, type StudioAsset, type StudioJob } from '@shared/studio';
+import { titleFromStudioPrompt } from '@shared/studioAssetTitle';
 import { isTerminalQuest, type MediaApiClient } from '../../media/MediaApiClient';
 import { MediaStore, parseMediaUrl } from '../../media/MediaStore';
 import { resolveImageUrls } from '../../media/imageGeneration';
@@ -489,7 +490,7 @@ export class StudioGenerationService {
     id: string,
     stored: { url: string; mimeType: string },
     connection: StudioGenerationConnection,
-    title: string = job.kind
+    title: string = titleFromStudioPrompt(job.creation?.prompt, job.kind)
   ) {
     this.assertConnection(connection);
     const now = new Date().toISOString();

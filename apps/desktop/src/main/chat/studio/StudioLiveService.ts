@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { SOUND_EFFECTS_MAX_INPUT_CHARS } from '@bike4mind/common';
 import type { StudioAsset, StudioJob, StudioProvenance } from '@shared/studio';
 import {
   studioCreateSchema,
@@ -204,6 +205,8 @@ export class StudioLiveService {
   }
 
   private async context(draft: StudioDraft): Promise<ContextRequest> {
+    if (draft.selection.mode === 'none')
+      return { sessionId: draft.sessionId, selection: { kind: 'explicit', sessionIds: [] } };
     const family = await this.family(draft.sessionId);
     const selected =
       draft.selection.mode === 'custom' ? (draft.selection.sessionIds ?? []) : family.map(session => session.id);
@@ -230,6 +233,8 @@ export class StudioLiveService {
 
   async prepare(raw: unknown): Promise<StudioReview> {
     const draft = studioDraftSchema.parse(raw);
+    if (draft.kind === 'sound-effect' && draft.prompt.length > SOUND_EFFECTS_MAX_INPUT_CHARS)
+      throw new Error(`Keep the sound description within ${SOUND_EFFECTS_MAX_INPUT_CHARS} characters.`);
     const identity = await this.validate(draft);
     const controller = new AbortController();
     this.pending.add(controller);
@@ -241,6 +246,7 @@ export class StudioLiveService {
           context: await this.context(draft),
           kind: draft.kind === 'speech' ? 'script' : 'prompt',
           instruction: draft.prompt,
+          ...(draft.kind === 'sound-effect' ? { maxCharacters: SOUND_EFFECTS_MAX_INPUT_CHARS } : {}),
         },
         controller.signal
       );

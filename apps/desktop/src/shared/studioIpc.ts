@@ -19,7 +19,7 @@ export const studioDraftSchema = z
     prompt: z.string().trim().min(1).max(16_384),
     selection: z
       .object({
-        mode: z.enum(['current-session', 'session-family', 'custom']),
+        mode: z.enum(['current-session', 'session-family', 'custom', 'none']),
         sessionIds: z.array(studioIdSchema).max(256).optional(),
         files: z.array(z.string().min(1).max(4096)).max(32).optional(),
       })

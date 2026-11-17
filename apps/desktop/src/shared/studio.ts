@@ -11,7 +11,7 @@ export const studioWorkspaceIdentitySchema = z.object({
 export type StudioWorkspaceIdentity = z.infer<typeof studioWorkspaceIdentitySchema>;
 
 export interface StudioContextSelection {
-  mode: 'current-session' | 'session-family' | 'custom';
+  mode: 'current-session' | 'session-family' | 'custom' | 'none';
   sessionIds?: string[];
   files?: string[];
 }

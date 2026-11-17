@@ -379,6 +379,14 @@ export function ChatShell({
   const [modelOpen, setModelOpen] = useState(false);
   const [studioOpen, setStudioOpen] = useState(false);
   const [studioRegion, studioWidth] = useElementWidth();
+  const studioContainer = useRef<HTMLDivElement | null>(null);
+  const setStudioRegion = useCallback(
+    (node: HTMLDivElement | null) => {
+      studioContainer.current = node;
+      studioRegion(node);
+    },
+    [studioRegion]
+  );
   const liveStudio = useStudioController(
     persistedId,
     studioOpen && !suppliedStudio,
@@ -1539,11 +1547,21 @@ export function ChatShell({
           onOpenSkillMarket={openSkillMarket}
         />
       ) : (
-        <Box ref={studioRegion} sx={{ position: 'relative', display: 'flex', flex: 1, minWidth: 0, minHeight: 0 }}>
+        <Box
+          ref={setStudioRegion}
+          sx={{
+            position: 'relative',
+            display: 'flex',
+            flexDirection: studioOpen && studioPaneLayout(studioWidth) === 'stacked' ? 'column' : 'row',
+            flex: 1,
+            minWidth: 0,
+            minHeight: 0,
+          }}
+        >
           <Stack
             ref={conversationColumn}
             data-testid="chat-conversation-column"
-            sx={{ flex: 1, minWidth: 0, ...columnStackSx, [SESSION_PANEL_SPACE_VAR]: `${panelSpace}px` }}
+            sx={{ flex: 1, minWidth: 0, minHeight: 0, ...columnStackSx, [SESSION_PANEL_SPACE_VAR]: `${panelSpace}px` }}
           >
             <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
               <Box sx={{ ...contentColumnSx, py: 1.25, display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -2161,8 +2179,8 @@ export function ChatShell({
       {browserOpen && browserAvailable && screen === 'conversation' && (
         <BrowserPane
           sessionId={activeId}
-          suspended={drop.over}
-          conversation={conversationColumn}
+          suspended={drop.over || (panelShown && !panelDocked)}
+          conversation={studioContainer}
           historyEnabled={!opening && conversation.session ? conversation.session.historyEnabled === true : null}
           onHistory={onHistory}
         />

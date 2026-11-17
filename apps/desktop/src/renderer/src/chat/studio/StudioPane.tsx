@@ -4,19 +4,22 @@ import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Checkbox from '@mui/joy/Checkbox';
 import Divider from '@mui/joy/Divider';
+import Dropdown from '@mui/joy/Dropdown';
+import Menu from '@mui/joy/Menu';
+import MenuButton from '@mui/joy/MenuButton';
+import MenuItem from '@mui/joy/MenuItem';
 import FormControl from '@mui/joy/FormControl';
 import FormLabel from '@mui/joy/FormLabel';
 import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
-import Modal from '@mui/joy/Modal';
-import ModalDialog from '@mui/joy/ModalDialog';
 import Stack from '@mui/joy/Stack';
 import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
 import type { StudioAsset, StudioMediaKind } from '@shared/studio';
-import { CloseIcon, ImageIcon, MusicIcon, SoundIcon, VideoIcon, VoiceIcon } from '../icons';
+import { studioAssetTitle } from '@shared/studioAssetTitle';
+import { ArrowLeftIcon, CloseIcon, ImageIcon, MusicIcon, SoundIcon, VideoIcon, VoiceIcon } from '../icons';
 import { thinScrollbarSx } from '../layout';
-import type { StudioController, StudioCreationDraft, StudioReview } from './controller';
+import type { StudioController, StudioCreationDraft } from './controller';
 import { STUDIO_PANE_WIDTH } from './layout';
 import { StudioSettings, defaultStudioSettings } from './StudioSettings';
 
@@ -60,17 +63,15 @@ function CreationForm({
     revision: controller.revision,
     kind,
     prompt: initial?.prompt ?? '',
-    selection: { mode: 'session-family' },
+    selection: { mode: 'current-session' },
     settings: initial?.settings ?? defaultStudioSettings(kind, controller),
   }));
-  const [review, setReview] = useState<StudioReview | null>(null);
-  const [preparedPrompt, setPreparedPrompt] = useState('');
   const [phase, setPhase] = useState<'idle' | 'preparing' | 'creating'>('idle');
   const [error, setError] = useState<string | null>(null);
   const epoch = useRef(0);
   const form = useRef<HTMLFormElement>(null);
   const capability = controller.capabilities[kind];
-  const locked = !!controller.busy || phase === 'creating' || capability?.status !== 'available';
+  const locked = !!controller.busy || phase !== 'idle' || capability?.status !== 'available';
   useEffect(
     () => () => {
       epoch.current++;
@@ -79,41 +80,25 @@ function CreationForm({
   );
   useEffect(() => {
     epoch.current++;
-    setReview(null);
     setPhase('idle');
   }, [controller.busy, capability?.status]);
 
   const edit = (next: StudioCreationDraft) => {
     epoch.current++;
     setDraft(next);
-    setReview(null);
     setError(null);
     setPhase('idle');
   };
-  const prepare = async () => {
+  const generate = async () => {
     if (locked || phase !== 'idle' || !form.current?.reportValidity()) return;
     const request = ++epoch.current;
     setPhase('preparing');
     setError(null);
-    setReview(null);
     try {
       const result = await controller.prepareCreation(draft);
       if (request !== epoch.current) return;
-      setReview(result);
-      setPreparedPrompt(result.preparedPrompt);
-    } catch (cause) {
-      if (request === epoch.current) setError(errorText(cause));
-    } finally {
-      if (request === epoch.current) setPhase('idle');
-    }
-  };
-  const create = async () => {
-    if (!review || locked || phase !== 'idle' || !preparedPrompt.trim()) return;
-    const request = ++epoch.current;
-    setPhase('creating');
-    setError(null);
-    try {
-      await controller.create({ draft, reviewId: review.id, preparedPrompt });
+      setPhase('creating');
+      await controller.create({ draft, reviewId: result.id, preparedPrompt: result.preparedPrompt });
       if (request === epoch.current) onBack();
     } catch (cause) {
       if (request === epoch.current) setError(errorText(cause));
@@ -129,20 +114,6 @@ function CreationForm({
       spacing={2}
       data-testid="studio-creation-form"
     >
-      <Button
-        size="sm"
-        variant="plain"
-        color="neutral"
-        onClick={onBack}
-        disabled={phase === 'creating'}
-        data-testid="studio-creation-back-btn"
-        sx={{ alignSelf: 'flex-start', px: 0 }}
-      >
-        Back to Studio
-      </Button>
-      <Typography level="h4" sx={{ fontSize: 20, letterSpacing: '-0.02em' }}>
-        Create {mediaLabel(kind)}
-      </Typography>
       <StudioSettings controller={controller} draft={draft} disabled={locked} edit={edit} />
       <FormControl disabled={locked}>
         <FormLabel>{kind === 'speech' ? 'Script or instructions' : 'What would you like to create?'}</FormLabel>
@@ -153,80 +124,14 @@ function CreationForm({
           slotProps={{ textarea: { 'data-testid': 'studio-prompt-input' } }}
         />
       </FormControl>
-      <FormControl disabled={locked}>
-        <FormLabel>Context scope</FormLabel>
-        <Box
-          component="select"
-          aria-label="Context scope"
-          value={draft.selection.mode}
-          disabled={locked}
-          sx={selectSx}
-          data-testid="studio-context-select"
-          onChange={event => {
-            const mode = event.target.value;
-            if (mode === 'current-session' || mode === 'session-family' || mode === 'custom')
-              edit({ ...draft, selection: { mode, ...(mode === 'custom' ? { sessionIds: [] } : {}) } });
-          }}
-        >
-          <option value="current-session">Current session</option>
-          <option value="session-family">Session family</option>
-          <option value="custom">Custom</option>
-        </Box>
-      </FormControl>
-      {draft.selection.mode === 'custom' && (
-        <Stack spacing={1} role="group" aria-label="Context sessions" data-testid="studio-context-sessions">
-          {controller.sessions.map(session => (
-            <Checkbox
-              key={session.id}
-              size="sm"
-              label={session.title}
-              disabled={locked}
-              checked={draft.selection.sessionIds?.includes(session.id) ?? false}
-              onChange={event => {
-                const selected = draft.selection.sessionIds ?? [];
-                edit({
-                  ...draft,
-                  selection: {
-                    ...draft.selection,
-                    mode: 'custom',
-                    sessionIds: event.target.checked
-                      ? [...selected, session.id]
-                      : selected.filter(id => id !== session.id),
-                  },
-                });
-              }}
-              slotProps={{ input: { 'data-testid': `studio-context-${session.id}-checkbox` } }}
-            />
-          ))}
-          {controller.sessions.length === 0 && (
-            <Typography level="body-xs">No sessions available for selection.</Typography>
-          )}
-        </Stack>
-      )}
-      {controller.pickFiles && (
-        <Stack spacing={0.5}>
-          <Button
-            size="sm"
-            variant="outlined"
-            disabled={locked}
-            data-testid="studio-pick-files-btn"
-            onClick={() =>
-              void controller.pickFiles!()
-                .then(files => {
-                  if (files.length) edit({ ...draft, selection: { ...draft.selection, files } });
-                })
-                .catch(cause => setError(errorText(cause)))
-            }
-          >
-            Select context files
-          </Button>
-          {draft.selection.files?.map(file => (
-            <Typography key={file} level="body-xs">
-              {file}
-            </Typography>
-          ))}
-        </Stack>
-      )}
+      <Checkbox
+        size="sm"
+        label="Use current session context"
+        disabled={locked}
+        checked={draft.selection.mode === 'current-session'}
+        onChange={event => edit({ ...draft, selection: { mode: event.target.checked ? 'current-session' : 'none' } })}
+        slotProps={{ input: { 'data-testid': 'studio-use-session-context-checkbox' } }}
+      />
       {!controller.catalog &&
         capability?.status === 'available' &&
         capability.fields?.map(field => {
@@ -285,75 +190,17 @@ function CreationForm({
           {capability?.reason ?? 'This media type is not supported.'}
         </Alert>
       )}
-      <Typography level="body-xs">
-        Preparation uses your session model and may use credits. Creating media is a separate paid action.
-      </Typography>
       <Button
         size="sm"
-        variant="soft"
-        disabled={
-          locked || !draft.prompt.trim() || (draft.selection.mode === 'custom' && !draft.selection.sessionIds?.length)
-        }
-        loading={phase === 'preparing'}
-        onClick={() => void prepare()}
-        data-testid="studio-prepare-btn"
+        variant="outlined"
+        sx={{ '&.Mui-disabled': { borderColor: 'neutral.outlinedBorder' } }}
+        disabled={locked || !draft.prompt.trim()}
+        loading={phase !== 'idle'}
+        onClick={() => void generate()}
+        data-testid="studio-generate-btn"
       >
-        Review context and {kind === 'speech' ? 'script' : 'prompt'}
+        Generate
       </Button>
-      {review && (
-        <Stack
-          spacing={1.25}
-          data-testid="studio-context-review"
-          sx={{ p: 1.75, borderRadius: 'md', bgcolor: 'background.level1' }}
-        >
-          <Typography level="title-sm">Review before creating</Typography>
-          <Typography level="body-sm">
-            {review.count && review.count > 1 ? `${review.count} images` : mediaLabel(kind)}
-            {' \u00b7 '}
-            {review.estimatedCredits == null
-              ? 'Cost calculated by provider'
-              : `Estimated total: ${review.estimatedCredits.toLocaleString()} credits`}
-          </Typography>
-          <Typography level="body-xs">Included sessions</Typography>
-          {review.sources.map(source => (
-            <Typography level="body-xs" key={source.sessionId}>
-              {source.title}
-            </Typography>
-          ))}
-          {review.sources.length === 0 && <Typography level="body-xs">No session context included.</Typography>}
-          {(
-            [
-              ['Excluded', review.exclusions],
-              ['Truncated', review.truncation],
-              ['Warning', review.warnings],
-            ] as const
-          ).map(([label, messages]) =>
-            messages.map((message, index) => (
-              <Alert key={`${label}-${index}`} size="sm" color="warning">
-                {label}: {message}
-              </Alert>
-            ))
-          )}
-          <FormControl disabled={locked}>
-            <FormLabel>{kind === 'speech' ? 'Prepared script' : 'Prepared prompt'}</FormLabel>
-            <Textarea
-              minRows={5}
-              value={preparedPrompt}
-              onChange={event => setPreparedPrompt(event.target.value)}
-              slotProps={{ textarea: { 'data-testid': 'studio-prepared-input' } }}
-            />
-          </FormControl>
-          <Button
-            size="sm"
-            disabled={locked || !preparedPrompt.trim()}
-            loading={phase === 'creating'}
-            onClick={() => void create()}
-            data-testid="studio-create-btn"
-          >
-            Create {mediaLabel(kind)}
-          </Button>
-        </Stack>
-      )}
       {error && (
         <Alert size="sm" color="danger" data-testid="studio-creation-error">
           {error}
@@ -372,10 +219,14 @@ function AssetPreview({
   controller: StudioController;
   onBack: () => void;
 }) {
-  const [title, setTitle] = useState(asset.title);
+  const [title, setTitle] = useState(() => studioAssetTitle(asset));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [showPrompt, setShowPrompt] = useState(false);
+  const [mediaFailed, setMediaFailed] = useState(false);
+  const locked = busy || !!controller.busy;
   const run = async (action: () => Promise<void>, close = false) => {
     setBusy(true);
     setError(null);
@@ -390,89 +241,182 @@ function AssetPreview({
   };
   return (
     <Stack spacing={1.5} data-testid="studio-asset-preview">
-      <Button
+      <IconButton
         size="sm"
         variant="plain"
         color="neutral"
         onClick={onBack}
         disabled={busy}
         data-testid="studio-preview-back-btn"
+        aria-label="Back to Studio"
+        sx={{ alignSelf: 'flex-start' }}
       >
-        Back to Studio
-      </Button>
+        <ArrowLeftIcon />
+      </IconButton>
       <Typography level="title-sm" sx={{ overflowWrap: 'anywhere' }}>
-        {asset.title}
+        {studioAssetTitle(asset)}
       </Typography>
-      <Typography level="body-xs">
-        {mediaLabel(asset.kind)} - {asset.mimeType ?? 'Media asset'}
-      </Typography>
-      {asset.prompt && (
-        <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+      {mediaFailed || !asset.url ? (
+        <Alert size="sm" color="neutral" data-testid="studio-asset-media-error">
+          Preview unavailable. You can still export this asset.
+        </Alert>
+      ) : asset.kind === 'image' ? (
+        <Box
+          component="img"
+          src={asset.url}
+          alt={studioAssetTitle(asset)}
+          onError={() => setMediaFailed(true)}
+          data-testid="studio-asset-image"
+          sx={{ display: 'block', width: '100%', maxHeight: '45vh', objectFit: 'contain', borderRadius: 'sm' }}
+        />
+      ) : asset.kind === 'video' ? (
+        <Box
+          component="video"
+          src={asset.url}
+          controls
+          onError={() => setMediaFailed(true)}
+          sx={{ width: '100%', maxHeight: '45vh', borderRadius: 'sm' }}
+        />
+      ) : (
+        <Box component="audio" src={asset.url} controls onError={() => setMediaFailed(true)} sx={{ width: '100%' }} />
+      )}
+      <Stack direction="row" spacing={1} alignItems="center" data-testid="studio-asset-actions">
+        <Box role="group" aria-label="Asset actions" sx={{ display: 'inline-flex', flexShrink: 0 }}>
+          <Button
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            sx={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
+            disabled={locked || !controller.exportAsset || !!controller.assetActionReasons?.export}
+            data-testid="studio-asset-export-btn"
+            onClick={() => void run(() => controller.exportAsset!(asset))}
+          >
+            Export
+          </Button>
+          <Dropdown>
+            <MenuButton
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              disabled={locked}
+              aria-label="More asset actions"
+              data-testid="studio-asset-actions-btn"
+              sx={{ ml: '-1px', minWidth: 28, px: 0.75, borderTopLeftRadius: 0, borderBottomLeftRadius: 0 }}
+            >
+              <Box component="svg" viewBox="0 0 16 16" aria-hidden="true" sx={{ width: 14, height: 14 }}>
+                <path
+                  d="m4 6 4 4 4-4"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </Box>
+            </MenuButton>
+            <Menu placement="bottom-end">
+              <MenuItem
+                disabled={!controller.renameAsset || !!controller.assetActionReasons?.rename}
+                data-testid="studio-asset-rename-btn"
+                onClick={() => {
+                  setRenaming(true);
+                  setConfirmDelete(false);
+                }}
+              >
+                Rename
+              </MenuItem>
+              <MenuItem
+                disabled={!asset.creation || !controller.reuseAsset || !!controller.assetActionReasons?.reuse}
+                data-testid="studio-asset-reuse-btn"
+                onClick={() => void run(() => controller.reuseAsset!(asset))}
+              >
+                Use settings again
+              </MenuItem>
+              <MenuItem
+                color="danger"
+                disabled={!controller.deleteAsset || !!controller.assetActionReasons?.delete}
+                data-testid="studio-asset-delete-btn"
+                onClick={() => {
+                  setConfirmDelete(true);
+                  setRenaming(false);
+                }}
+              >
+                Delete
+              </MenuItem>
+            </Menu>
+          </Dropdown>
+        </Box>
+        {asset.prompt && (
+          <Button
+            size="sm"
+            variant="plain"
+            color="neutral"
+            aria-expanded={showPrompt}
+            aria-controls="studio-asset-prompt"
+            data-testid="studio-asset-toggle-prompt-btn"
+            onClick={() => setShowPrompt(value => !value)}
+            sx={{ px: 0.5, minWidth: 0, whiteSpace: 'nowrap', ml: 'auto !important' }}
+          >
+            {showPrompt ? 'Hide prompt' : 'Show prompt'}
+          </Button>
+        )}
+      </Stack>
+      {renaming && (
+        <Stack
+          component="form"
+          direction="row"
+          spacing={1}
+          onSubmit={event => {
+            event.preventDefault();
+            if (title.trim() && !locked && controller.renameAsset)
+              void run(async () => {
+                await controller.renameAsset!(asset, title.trim());
+                setRenaming(false);
+              });
+          }}
+        >
+          <Input
+            value={title}
+            disabled={locked}
+            aria-label="Asset name"
+            sx={{ flex: 1, minWidth: 0 }}
+            onChange={event => setTitle(event.target.value)}
+            slotProps={{ input: { 'data-testid': 'studio-asset-title-input' } }}
+          />
+          <Button type="submit" size="sm" disabled={locked || !title.trim()}>
+            Save
+          </Button>
+          <Button size="sm" variant="plain" disabled={locked} onClick={() => setRenaming(false)}>
+            Cancel
+          </Button>
+        </Stack>
+      )}
+      {confirmDelete && (
+        <Stack direction="row" spacing={1}>
+          <Button
+            size="sm"
+            color="danger"
+            disabled={locked || !controller.deleteAsset}
+            data-testid="studio-asset-confirm-delete-btn"
+            onClick={() => void run(() => controller.deleteAsset!(asset), true)}
+          >
+            Confirm delete
+          </Button>
+          <Button
+            size="sm"
+            variant="plain"
+            disabled={locked}
+            onClick={() => setConfirmDelete(false)}
+            data-testid="studio-asset-cancel-delete-btn"
+          >
+            Keep asset
+          </Button>
+        </Stack>
+      )}
+      {asset.prompt && showPrompt && (
+        <Typography id="studio-asset-prompt" level="body-sm" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
           {asset.prompt}
         </Typography>
-      )}
-      <FormControl disabled={!controller.renameAsset || busy}>
-        <FormLabel>Asset name</FormLabel>
-        <Input
-          value={title}
-          onChange={event => setTitle(event.target.value)}
-          slotProps={{ input: { 'data-testid': 'studio-asset-title-input' } }}
-        />
-      </FormControl>
-      {(['preview', 'rename', 'export', 'reuse', 'delete'] as const).map(action => {
-        const callback = {
-          preview: controller.previewAsset,
-          rename: controller.renameAsset
-            ? (item: StudioAsset) => controller.renameAsset?.(item, title.trim()) ?? Promise.resolve()
-            : undefined,
-          export: controller.exportAsset,
-          reuse: asset.creation ? controller.reuseAsset : undefined,
-          delete: controller.deleteAsset,
-        }[action];
-        const reason =
-          controller.assetActionReasons?.[action] ??
-          (!callback ? `${action[0].toUpperCase()}${action.slice(1)} is not connected yet.` : null);
-        return (
-          <Box key={action}>
-            <Button
-              size="sm"
-              variant="soft"
-              color={action === 'delete' ? 'danger' : 'neutral'}
-              disabled={busy || !!controller.busy || !callback || !!reason || (action === 'rename' && !title.trim())}
-              data-testid={`studio-asset-${action}-btn`}
-              onClick={() => {
-                if (!callback) return;
-                if (action === 'delete' && !confirmDelete) {
-                  setConfirmDelete(true);
-                  return;
-                }
-                void run(() => callback(asset), action === 'delete');
-              }}
-            >
-              {action === 'reuse'
-                ? 'Use settings again'
-                : action === 'delete' && confirmDelete
-                  ? 'Confirm delete'
-                  : `${action[0].toUpperCase()}${action.slice(1)}`}
-            </Button>
-            {reason && (
-              <Typography level="body-xs" textColor="text.tertiary">
-                {reason}
-              </Typography>
-            )}
-          </Box>
-        );
-      })}
-      {confirmDelete && (
-        <Button
-          size="sm"
-          variant="plain"
-          disabled={busy}
-          onClick={() => setConfirmDelete(false)}
-          data-testid="studio-asset-cancel-delete-btn"
-        >
-          Keep asset
-        </Button>
       )}
       {error && (
         <Alert size="sm" color="danger" data-testid="studio-asset-error">
@@ -483,8 +427,15 @@ function AssetPreview({
   );
 }
 
-function StudioContent({ controller }: { controller?: StudioController }) {
-  const [kind, setKind] = useState<StudioMediaKind | null>(null);
+function StudioContent({
+  controller,
+  kind,
+  setKind,
+}: {
+  controller?: StudioController;
+  kind: StudioMediaKind | null;
+  setKind: (kind: StudioMediaKind | null) => void;
+}) {
   const [initial, setInitial] = useState<StudioAsset['creation']>();
   const [pagingError, setPagingError] = useState<string | null>(null);
   const [paging, setPaging] = useState(false);
@@ -594,9 +545,6 @@ function StudioContent({ controller }: { controller?: StudioController }) {
         })}
       </Box>
       <Divider />
-      <Typography level="title-sm" sx={{ pt: 0.5 }}>
-        Your creations
-      </Typography>
       {(controller?.hasMoreAssets || controller?.hasMoreJobs) && (
         <Typography level="body-xs">Partial history loaded. Load remaining pages to browse all records.</Typography>
       )}
@@ -700,23 +648,32 @@ function StudioContent({ controller }: { controller?: StudioController }) {
                           sx={{
                             width: 44,
                             height: 44,
+                            flexShrink: 0,
                             display: 'grid',
                             placeItems: 'center',
                             borderRadius: 'sm',
-                            bgcolor: 'background.level1',
-                            color: 'text.secondary',
+                            bgcolor: `${STUDIO_TILES.find(tile => tile.kind === row.item.kind)?.accent ?? 'primary'}.softBg`,
+                            color: `${STUDIO_TILES.find(tile => tile.kind === row.item.kind)?.accent ?? 'primary'}.softColor`,
                           }}
                         >
                           {STUDIO_TILES.find(tile => tile.kind === row.item.kind)?.icon}
                         </Box>
                       )}
-                      <Box sx={{ minWidth: 0 }}>
-                        <Typography level="title-sm" sx={{ overflowWrap: 'anywhere' }}>
-                          {row.item.title}
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography
+                          level="title-sm"
+                          title={studioAssetTitle(row.item)}
+                          sx={{
+                            display: '-webkit-box',
+                            WebkitBoxOrient: 'vertical',
+                            WebkitLineClamp: 2,
+                            overflow: 'hidden',
+                            overflowWrap: 'anywhere',
+                          }}
+                        >
+                          {studioAssetTitle(row.item)}
                         </Typography>
-                        <Typography level="body-xs" textColor="text.tertiary">
-                          {mediaLabel(row.item.kind)}
-                          {' \u00b7 '}
+                        <Typography level="body-xs" textColor="text.tertiary" sx={{ opacity: 0.65 }}>
                           {new Date(row.item.createdAt).toLocaleDateString()}
                         </Typography>
                       </Box>
@@ -724,46 +681,98 @@ function StudioContent({ controller }: { controller?: StudioController }) {
                   ) : (
                     <Box
                       data-testid={`studio-job-${row.item.id}`}
-                      sx={{ borderBottom: '1px solid', borderColor: 'divider', px: 1, py: 1.5 }}
+                      sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1, py: 1, borderRadius: 'md' }}
                     >
-                      <Typography level="body-sm">
-                        {mediaLabel(row.item.kind)} - {row.item.state}
-                      </Typography>
-                      {row.item.error && (
-                        <Typography level="body-xs" color="danger">
-                          {row.item.error}
+                      <Box
+                        aria-hidden="true"
+                        sx={{
+                          width: 44,
+                          height: 44,
+                          flexShrink: 0,
+                          display: 'grid',
+                          placeItems: 'center',
+                          borderRadius: 'sm',
+                          bgcolor: `${STUDIO_TILES.find(tile => tile.kind === row.item.kind)?.accent ?? 'primary'}.softBg`,
+                          color: `${STUDIO_TILES.find(tile => tile.kind === row.item.kind)?.accent ?? 'primary'}.softColor`,
+                          position: 'relative',
+                          overflow: 'hidden',
+                          ...(['submitting', 'queued', 'running'].includes(row.item.state) && {
+                            '&::after': {
+                              content: '""',
+                              position: 'absolute',
+                              inset: 0,
+                              background:
+                                'linear-gradient(110deg, transparent 20%, rgba(128,128,128,0.16) 50%, transparent 80%)',
+                              animation: 'studio-job-shimmer 1.8s ease-in-out infinite',
+                            },
+                            '@keyframes studio-job-shimmer': {
+                              from: { transform: 'translateX(-100%)' },
+                              to: { transform: 'translateX(100%)' },
+                            },
+                            '@media (prefers-reduced-motion: reduce)': { '&::after': { animation: 'none' } },
+                          }),
+                        }}
+                      >
+                        {STUDIO_TILES.find(tile => tile.kind === row.item.kind)?.icon}
+                      </Box>
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography level="title-sm" noWrap>
+                          {mediaLabel(row.item.kind)}
                         </Typography>
-                      )}
+                        <Typography
+                          level="body-xs"
+                          textColor="text.tertiary"
+                          noWrap
+                          title={row.item.error ?? undefined}
+                        >
+                          {row.item.error ??
+                            {
+                              submitting: 'Starting...',
+                              queued: 'Queued',
+                              running: 'Creating...',
+                              completed: 'Completed',
+                              failed: 'Failed',
+                              cancelled: 'Cancelled',
+                              unknown: 'Status unavailable',
+                            }[row.item.state]}
+                        </Typography>
+                      </Box>
                       {controller.jobAction && !['completed', 'failed', 'cancelled'].includes(row.item.state) && (
-                        <Stack direction="row" spacing={1}>
-                          <Button
+                        <Dropdown>
+                          <MenuButton
                             size="sm"
                             variant="plain"
-                            data-testid={`studio-job-${row.item.id}-recheck-btn`}
-                            onClick={() =>
-                              void controller.jobAction!(row.item.id, 'recheck').catch(cause =>
-                                setPagingError(errorText(cause))
-                              )
-                            }
+                            aria-label="Generation actions"
+                            sx={{ minWidth: 28, px: 0.75, flexShrink: 0 }}
                           >
-                            Recheck status
-                          </Button>
-                          {['video', 'music'].includes(row.item.kind) && row.item.providerJobId && (
-                            <Button
-                              size="sm"
-                              color="danger"
-                              variant="plain"
-                              data-testid={`studio-job-${row.item.id}-cancel-btn`}
+                            {'\u22ef'}
+                          </MenuButton>
+                          <Menu placement="bottom-end">
+                            <MenuItem
+                              data-testid={`studio-job-${row.item.id}-recheck-btn`}
                               onClick={() =>
-                                void controller.jobAction!(row.item.id, 'cancel').catch(cause =>
+                                void controller.jobAction!(row.item.id, 'recheck').catch(cause =>
                                   setPagingError(errorText(cause))
                                 )
                               }
                             >
-                              Cancel job
-                            </Button>
-                          )}
-                        </Stack>
+                              Recheck status
+                            </MenuItem>
+                            {['video', 'music'].includes(row.item.kind) && row.item.providerJobId && (
+                              <MenuItem
+                                color="danger"
+                                data-testid={`studio-job-${row.item.id}-cancel-btn`}
+                                onClick={() =>
+                                  void controller.jobAction!(row.item.id, 'cancel').catch(cause =>
+                                    setPagingError(errorText(cause))
+                                  )
+                                }
+                              >
+                                Cancel job
+                              </MenuItem>
+                            )}
+                          </Menu>
+                        </Dropdown>
                       )}
                     </Box>
                   )}
@@ -782,24 +791,45 @@ export function StudioPane({
   onClose,
 }: {
   controller?: StudioController;
-  variant: 'docked' | 'drawer';
+  variant: 'docked' | 'stacked';
   onClose: () => void;
 }) {
-  const drawerHost = useRef<HTMLDivElement>(null);
+  const [creation, setCreation] = useState<{ sessionId: string; workspaceId: string; kind: StudioMediaKind } | null>(
+    null
+  );
+  const kind =
+    creation?.sessionId === controller?.sessionId && creation?.workspaceId === controller?.workspaceId
+      ? (creation?.kind ?? null)
+      : null;
+  const setKind = (next: StudioMediaKind | null) => {
+    setCreation(
+      next && controller ? { sessionId: controller.sessionId, workspaceId: controller.workspaceId, kind: next } : null
+    );
+  };
   const content = (
     <>
       <Stack
         direction="row"
         alignItems="center"
         spacing={1}
-        sx={{ p: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}
+        sx={{ px: 1.5, py: 1.25, borderBottom: '1px solid', borderColor: 'divider' }}
       >
+        {kind && (
+          <IconButton
+            size="sm"
+            variant="plain"
+            color="neutral"
+            aria-label="Back to Studio"
+            disabled={controller?.busy}
+            onClick={() => setKind(null)}
+            data-testid="studio-creation-back-btn"
+          >
+            <ArrowLeftIcon />
+          </IconButton>
+        )}
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography id="studio-pane-title" level="title-md">
-            Studio
-          </Typography>
-          <Typography level="body-xs" noWrap>
-            {controller?.familyLabel ?? 'Shared with your session family'}
+            {kind ? `Create ${mediaLabel(kind)}` : 'Studio'}
           </Typography>
         </Box>
         <IconButton
@@ -817,59 +847,31 @@ export function StudioPane({
         <StudioContent
           key={`${controller?.sessionId ?? ''}:${controller?.workspaceId ?? ''}`}
           controller={controller}
+          kind={kind}
+          setKind={setKind}
         />
       </Box>
     </>
   );
-  if (variant === 'drawer')
-    return (
-      <Box ref={drawerHost} sx={{ position: 'absolute', inset: 0, zIndex: 'modal' }}>
-        <Modal
-          open
-          disablePortal
-          container={() => drawerHost.current!}
-          onClose={onClose}
-          sx={{ position: 'absolute' }}
-          slotProps={{ backdrop: { sx: { position: 'absolute' } } }}
-        >
-          <ModalDialog
-            aria-labelledby="studio-pane-title"
-            data-testid="studio-pane"
-            data-variant="drawer"
-            sx={{
-              position: 'absolute',
-              top: 0,
-              right: 0,
-              bottom: 0,
-              left: 'auto',
-              transform: 'none',
-              width: STUDIO_PANE_WIDTH,
-              maxWidth: '100%',
-              maxHeight: '100%',
-              p: 0,
-              gap: 0,
-              borderRadius: 0,
-            }}
-          >
-            {content}
-          </ModalDialog>
-        </Modal>
-      </Box>
-    );
   return (
     <Box
       component="aside"
       aria-labelledby="studio-pane-title"
       data-testid="studio-pane"
-      data-variant="docked"
+      data-variant={variant}
+      onKeyDown={event => {
+        if (event.key === 'Escape' && !event.defaultPrevented) onClose();
+      }}
       sx={{
-        width: STUDIO_PANE_WIDTH,
+        width: variant === 'stacked' ? '100%' : STUDIO_PANE_WIDTH,
+        height: variant === 'stacked' ? '50%' : undefined,
         flexShrink: 0,
         minWidth: 0,
         minHeight: 0,
         display: 'flex',
         flexDirection: 'column',
-        borderLeft: '1px solid',
+        borderLeft: variant === 'docked' ? '1px solid' : undefined,
+        borderTop: variant === 'stacked' ? '1px solid' : undefined,
         borderColor: 'divider',
         bgcolor: 'background.surface',
       }}
