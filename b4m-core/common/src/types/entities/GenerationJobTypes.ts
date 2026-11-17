@@ -1,12 +1,14 @@
 import type { GenerationProviderJobHandle, ProviderOutput } from '../../generation';
 import type { ImageProviderId, StoredImageRequest } from '../../image';
 import type { MusicGenerationRequest, MusicProviderId } from '../../music';
+import type { StoredSceneCompositionRequest } from '../../scene';
 import type { ProviderJobHandle, VideoGenerationRequest, VideoProviderId } from '../../video';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType, type CreditHoldRecord } from './CreditHolderTypes';
 
-export const GENERATION_JOB_KINDS = ['video', 'music', 'image'] as const;
+/** `compose` renders a Scene (a video with a music track muxed in) from files the caller already has. */
+export const GENERATION_JOB_KINDS = ['video', 'music', 'image', 'compose'] as const;
 export type GenerationJobKind = (typeof GENERATION_JOB_KINDS)[number];
 
 /** The kinds a chat message can start; every generation kind can now land on a quest. */
@@ -64,6 +66,8 @@ export const GENERATION_JOB_ERROR_CODES = [
   'enqueue_failed',
   'cancelled',
   'account_blocked',
+  /** An input file the job reads is missing, unreadable, or outside the kind's limits (a compose job's media). */
+  'unsupported_input',
 ] as const;
 export type GenerationJobErrorCode = (typeof GENERATION_JOB_ERROR_CODES)[number];
 
@@ -142,11 +146,24 @@ export type ImageJobPayload = {
   billedBlock?: boolean;
 };
 
+/** Same storage fields as VideoJobOutput: the Scene is a video file. */
+export type ComposeJobOutput = VideoJobOutput;
+
+/**
+ * A Scene is rendered by our own worker (ffmpeg), not a provider: submit downloads the inputs, muxes them and stores
+ * the result in one step, so no provider handle or bytes ever reach this payload. Nothing is billed in v1.
+ */
+export type ComposeJobPayload = {
+  request: StoredSceneCompositionRequest;
+  output?: ComposeJobOutput;
+};
+
 /** Each kind's payload; the job type is a union discriminated on `kind`. */
 export type GenerationJobPayloads = {
   video: VideoJobPayload;
   music: MusicJobPayload;
   image: ImageJobPayload;
+  compose: ComposeJobPayload;
 };
 
 export const GENERATION_JOB_DELIVERY_KINDS = ['slack'] as const;

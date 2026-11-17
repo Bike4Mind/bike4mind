@@ -40,7 +40,7 @@ vi.mock('../utils/saveGeneratedAssetToFiles', () => ({
   saveGeneratedAssetToFiles: (...a: unknown[]) => mocks.saveGeneratedAssetToFiles(...a),
 }));
 
-import { loadInputImage, saveToFiles } from './wiring';
+import { loadInputImage, loadSceneInputFile, saveToFiles } from './wiring';
 
 const FILE_ID = '64b7f1c2a1b2c3d4e5f60718';
 const image = { id: FILE_ID, filePath: 'uploads/a.png', mimeType: 'image/png', moderationStatus: 'clean' };
@@ -161,5 +161,38 @@ describe('saveToFiles', () => {
         signal: new AbortController().signal,
       })
     ).resolves.toEqual({ saved: false, reason: 'storage_limit' });
+  });
+});
+
+describe('loadSceneInputFile', () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  const audio = { ...image, filePath: 'uploads/song.mp3', mimeType: 'audio/mpeg', fileSize: 4096 };
+
+  it('returns the stored key, mime type and size of the owner file without downloading it', async () => {
+    mocks.findByIdAndUserId.mockResolvedValue(audio);
+    await expect(loadSceneInputFile('user1', FILE_ID)).resolves.toEqual({
+      s3Key: 'uploads/song.mp3',
+      mimeType: 'audio/mpeg',
+      bytes: 4096,
+    });
+    expect(mocks.findByIdAndUserId).toHaveBeenCalledWith(FILE_ID, 'user1');
+    expect(mocks.download).not.toHaveBeenCalled();
+  });
+
+  it('returns null for a malformed id without querying', async () => {
+    await expect(loadSceneInputFile('user1', 'not-an-id')).resolves.toBeNull();
+    expect(mocks.findByIdAndUserId).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['another user (not found for the owner scope)', null],
+    ['a file with no filePath', { ...audio, filePath: undefined }],
+    ['a file with no mime type', { ...audio, mimeType: undefined }],
+    ['a moderation-blocked file', { ...audio, moderationStatus: 'blocked' }],
+    ['a soft-deleted file', { ...audio, deletedAt: new Date() }],
+  ])('returns null for %s', async (_label, fabFile) => {
+    mocks.findByIdAndUserId.mockResolvedValue(fabFile);
+    await expect(loadSceneInputFile('user1', FILE_ID)).resolves.toBeNull();
   });
 });

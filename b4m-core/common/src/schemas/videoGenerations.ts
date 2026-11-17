@@ -44,6 +44,8 @@ export function toPublicVideoJobErrorCode(code: GenerationJobErrorCode): VideoJo
   switch (code) {
     case 'orphaned_submit':
     case 'enqueue_failed':
+    // Compose-only: a video job's inputs are images, refused as input_image_not_found.
+    case 'unsupported_input':
       return 'provider_error';
     case 'content_blocked':
     case 'provider_timeout':

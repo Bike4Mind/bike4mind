@@ -1,4 +1,4 @@
-import type { GenerationJobErrorCode } from '@bike4mind/common';
+import { SCENE_MAX_VIDEO_SECONDS, type GenerationJobErrorCode } from '@bike4mind/common';
 
 /**
  * Fixed text per job error code. A stored job.error.message can carry provider wording, which never leaves the
@@ -24,6 +24,7 @@ export function generationJobErrorCopy(
     enqueue_failed: `The ${noun} could not be started.`,
     cancelled: 'The generation was cancelled.',
     account_blocked: `This account cannot generate ${plural}.`,
+    unsupported_input: `An input file could not be used for this ${noun}.`,
     ...overrides,
   };
 }
@@ -38,5 +39,18 @@ export const IMAGE_JOB_ERROR_COPY = generationJobErrorCopy(
     content_blocked: 'The image was declined under the content policy.',
     // An image job can take several inputs.
     input_image_not_found: 'An input image could not be found.',
+  }
+);
+
+// A Scene is rendered by our own worker, so its copy never names a provider.
+export const SCENE_JOB_ERROR_COPY = generationJobErrorCopy(
+  { noun: 'Scene', plural: 'Scenes' },
+  {
+    provider_timeout: 'The Scene did not finish rendering in time.',
+    provider_error: 'The Scene could not be rendered.',
+    output_too_large: 'The rendered Scene exceeded the maximum size.',
+    unsupported_input:
+      'An input file is missing, unreadable, or outside the limits: the video needs a video stream and may run ' +
+      `at most ${SCENE_MAX_VIDEO_SECONDS} seconds, the audio needs an audio stream, and the cover must be an image.`,
   }
 );

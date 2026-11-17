@@ -127,6 +127,8 @@ export function infoDescription(scopes: readonly string[] = PUBLIC_DOC_API_KEY_S
       '`GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
     '- **Music generation** (`POST /api/v1/music-generations`) returns `202`. Poll ' +
       '`GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
+    '- **Scene composition** (`POST /api/v1/scene-compositions`) returns `202`. Poll ' +
+      '`GET /api/v1/scene-compositions/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
     '- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll ' +
       '`GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.',
     '- **Audio** endpoints are synchronous and return the result directly.',
@@ -371,6 +373,12 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     {
       name: 'Music',
       description: 'Song generation, queued with `202` and polled at `GET /api/v1/music-generations/{id}`.',
+    },
+    {
+      name: 'Scenes',
+      description:
+        'A video and a music track composed into one shareable clip, queued with `202` and polled at ' +
+        '`GET /api/v1/scene-compositions/{id}`.',
     },
     { name: 'Images', description: 'Image generation and editing, queued and polled as quests.' },
     {

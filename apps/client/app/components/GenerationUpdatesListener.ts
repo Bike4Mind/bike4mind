@@ -30,8 +30,8 @@ type KindCache = {
 };
 
 // Image jobs are cached in two places, not through KIND_CACHES: Studio's gallery list and the chat card's per-id
-// detail (handleImageUpdate).
-type CachedKind = Exclude<GenerationJobKind, 'image'>;
+// detail (handleImageUpdate). Scene (compose) jobs have no web cache yet; they take the unknown-kind path below.
+type CachedKind = Exclude<GenerationJobKind, 'image' | 'compose'>;
 
 const KIND_CACHES: Record<CachedKind, KindCache> = {
   video: {

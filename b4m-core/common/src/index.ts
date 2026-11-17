@@ -43,6 +43,7 @@ export * from './video';
 export * from './image';
 export * from './embeddings';
 export * from './music';
+export * from './scene';
 export * from './integrations';
 export * from './decisions';
 export * from './soundGeneration';

@@ -26,10 +26,21 @@ type PushedKind = Exclude<IGenerationJobDocument['kind'], 'image'>;
 const JOB_TITLES: Record<PushedKind, string> = {
   video: 'Video ready',
   music: 'Song ready',
+  compose: 'Scene ready',
 };
 
+const JOB_NOUNS: Record<PushedKind, string> = {
+  video: 'video',
+  music: 'music',
+  compose: 'Scene',
+};
+
+// A Scene has no prompt; its optional title stands in.
+const pushTextOf = (job: Extract<IGenerationJobDocument, { kind: PushedKind }>): string | undefined =>
+  job.kind === 'compose' ? job.payload.request.title : job.payload.request.prompt;
+
 /**
- * For a video or music job the engine just finished. Pushed regardless of websocket presence: these run
+ * For a video, music or Scene job the engine just finished. Pushed regardless of websocket presence: these run
  * for minutes, long enough that the requester has usually moved on. Failed and cancelled jobs are not
  * pushed (there is no failure category), and neither is a job with a Slack delivery, which already
  * reports back in its own thread. Image jobs are not pushed per job: a "make N" batch is pushed once,
@@ -50,7 +61,7 @@ export async function publishGenerationJobReadyPush(
       userId: job.requestedBy,
       category: 'generation_ready',
       title: JOB_TITLES[job.kind],
-      body: generationPushBody(job.payload.request.prompt, `Your ${job.kind} is ready.`),
+      body: generationPushBody(pushTextOf(job), `Your ${JOB_NOUNS[job.kind]} is ready.`),
       deepLink: sessionId ? deps.sessionDeepLink(sessionId) : deps.appRootDeepLink(),
       collapseId: `generation:${job.id}`,
       ...(job.questId && { questId: job.questId }),

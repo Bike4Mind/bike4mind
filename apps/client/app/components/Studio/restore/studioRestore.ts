@@ -91,6 +91,9 @@ const ROLE_NOUNS: Record<GeneratedAssetLineageRole, string> = {
   variation_of: 'source image',
   edit_source: 'edit source',
   mask: 'mask',
+  scene_video: 'Scene video',
+  scene_audio: 'soundtrack',
+  scene_cover: 'cover art',
 };
 
 export const roleNoun = (role: GeneratedAssetLineageRole): string => ROLE_NOUNS[role];

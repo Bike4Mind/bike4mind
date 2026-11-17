@@ -1,11 +1,13 @@
 import {
   toPublicMusicJobErrorCode,
+  toPublicSceneJobErrorCode,
   toPublicVideoJobErrorCode,
   type GenerationJobErrorCode,
   type GenerationJobSource,
   type GenerationJobState,
   type IGenerationJobDocument,
   type IGenerationJobDocumentOf,
+  type ComposeJobOutput,
   type ImageJobOutput,
   type MusicJobOutput,
   type VideoJobOutput,
@@ -21,6 +23,7 @@ import {
 import {
   IMAGE_JOB_ERROR_COPY,
   MUSIC_JOB_ERROR_COPY,
+  SCENE_JOB_ERROR_COPY,
   VIDEO_JOB_ERROR_COPY,
   type GenerationJobErrorCopy,
 } from './generationJobErrorCopy';
@@ -121,6 +124,7 @@ export async function toPublicGenerationJob<
 type VideoJob = IGenerationJobDocumentOf<'video'>;
 type MusicJob = IGenerationJobDocumentOf<'music'>;
 type ImageJob = IGenerationJobDocumentOf<'image'>;
+type SceneJob = IGenerationJobDocumentOf<'compose'>;
 
 // Must stay in sync with VideoGenerationSchema (b4m-core/common/src/schemas/videoGenerations.ts), key order included.
 export const VIDEO_GENERATION_PROJECTION = {
@@ -177,4 +181,25 @@ export const IMAGE_GENERATION_PROJECTION = {
   statusFields: () => ({}),
   outputOf: (job: ImageJob): ImageJobOutput | undefined => job.payload.output,
   outputFields: () => ({}),
+};
+
+// Must stay in sync with SceneCompositionSchema (b4m-core/common/src/schemas/sceneCompositions.ts), key order included.
+export const SCENE_COMPOSITION_PROJECTION = {
+  object: 'scene_composition' as const,
+  toPublicErrorCode: toPublicSceneJobErrorCode,
+  errorCopy: SCENE_JOB_ERROR_COPY,
+  requestFields: ({ payload: { request } }: SceneJob) => ({
+    video_file_id: request.videoFileId,
+    audio_file_id: request.audioFileId,
+    cover_file_id: request.coverFileId ?? null,
+    title: request.title ?? null,
+    audio: {
+      fit: request.audio.fit,
+      fade_in_seconds: request.audio.fadeInSeconds,
+      fade_out_seconds: request.audio.fadeOutSeconds,
+    },
+  }),
+  statusFields: () => ({}),
+  outputOf: (job: SceneJob): ComposeJobOutput | undefined => job.payload.output,
+  outputFields: (output: ComposeJobOutput) => ({ duration_seconds: output.durationSeconds }),
 };

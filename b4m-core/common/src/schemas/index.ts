@@ -87,6 +87,7 @@ export * from './imageApi';
 export * from './imageModels';
 export * from './videoGenerations';
 export * from './musicGenerations';
+export * from './sceneCompositions';
 export * from './decisions';
 export * from './voiceApi';
 export * from './generationCallback';

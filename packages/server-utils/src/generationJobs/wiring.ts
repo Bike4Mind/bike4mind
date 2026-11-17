@@ -1,4 +1,7 @@
 import { assertMediaModelAdmission } from '../billing/assertMediaModelAdmission';
+import { createWriteStream } from 'node:fs';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { Resource } from 'sst';
 import { apiKeyService } from '@bike4mind/auth';
 import {
@@ -39,6 +42,11 @@ import { StudioEvents } from '../utils/eventBus';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { createMusicJobHandler, type CreateMusicJobDeps, type MusicJobDeps } from '@bike4mind/services/musicJobs';
 import { createImageJobHandler, type CreateImageJobsDeps, type ImageJobDeps } from '@bike4mind/services/imageJobs';
+import {
+  createSceneJobHandler,
+  type CreateSceneCompositionJobDeps,
+  type SceneJobDeps,
+} from '@bike4mind/services/sceneJobs';
 import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
 import {
   callerOwnsGeneratedImage,
@@ -90,6 +98,7 @@ import { appPathDeepLink, appRootDeepLink, publishPushNotification } from '../ut
 import { createSlackJobDeliveryDeps } from './slackJobDeliveryDeps';
 import { getFilesStorage, getGeneratedImageStorage } from '../utils/storage/index';
 import { imageModerationIncidents } from '../moderation/imageModerationIncidents';
+import { createFfmpegRunner } from './ffmpegRunner';
 
 // Must outlive the worker timeout (5 min, infra/queues.ts generationJobQueue) so two workers never overlap on
 // one job, and stay under the queue visibility timeout (6 min).
@@ -345,6 +354,23 @@ export const saveToFiles: MusicJobDeps['saveToFiles'] = async params => {
   // lets the generated-copy fork guard tell the owning notebook apart. A notebook delete keeps the file.
   const sessionId = (await questRepository.findById(params.questId))?.sessionId;
   return saveGeneratedAssetToFiles({ ...params, ...(sessionId && { sessionId }) }, logger);
+};
+
+// Owner-only, like loadInputFabFile: a Scene re-publishes its inputs' bytes in a new file of the requester's.
+export const loadSceneInputFile: SceneJobDeps['loadInputFile'] = async (userId, fileId) => {
+  if (!isValidObjectId(fileId)) return null;
+  const fabFile = await fabFileRepository.findByIdAndUserId(fileId, userId);
+  if (!fabFile || fabFile.deletedAt || !fabFile.filePath || !fabFile.mimeType) return null;
+  // The upload moderation gate every FabFile read goes through: a pending or blocked file is not used.
+  if (!isImageServeable(fabFile)) return null;
+  return { s3Key: fabFile.filePath, mimeType: fabFile.mimeType, bytes: fabFile.fileSize };
+};
+
+// Streamed to disk rather than buffered: the inputs together can reach SCENE_MAX_INPUT_BYTES.
+const downloadSceneInputFile: SceneJobDeps['downloadInputFile'] = async ({ s3Key, destinationPath, signal }) => {
+  const body = await getFilesStorage().getContent(s3Key);
+  if (!(body instanceof Readable)) throw new Error(`unexpected S3 body type for ${s3Key}`);
+  await pipeline(body, createWriteStream(destinationPath), { signal });
 };
 
 const saveToGeneratedBucket: VideoJobDeps['saveToGeneratedBucket'] = async ({ key, bytes, contentType, signal }) => {
@@ -610,6 +636,35 @@ export const getCreateMusicJobDeps = (): CreateMusicJobDeps => ({
   checkStorageFor,
 });
 
+let sceneJobDeps: SceneJobDeps | undefined;
+export const getSceneJobDeps = (): SceneJobDeps => {
+  sceneJobDeps ??= {
+    repository: generationJobRepository,
+    loadInputFile: loadSceneInputFile,
+    downloadInputFile: downloadSceneInputFile,
+    ffmpeg: createFfmpegRunner(),
+    saveToFiles,
+    saveToGeneratedBucket,
+    credits: {
+      users: userRepository,
+      organizations: organizationRepository,
+      creditTransactions: creditTransactionRepository,
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+      onInsufficientCredits: recordInsufficientCredits,
+    },
+    enqueue: enqueueGenerationJob,
+    now: () => new Date(),
+    logger,
+  };
+  return sceneJobDeps;
+};
+
+export const getCreateSceneCompositionJobDeps = (): CreateSceneCompositionJobDeps => ({
+  ...getSceneJobDeps(),
+  engine: getGenerationJobEngine(),
+  checkStorageFor,
+});
+
 const countNotebookImage = async (questId: string): Promise<void> => {
   const quest = await questRepository.findById(questId);
   if (quest?.sessionId) await sessionRepository.incrementImageCount(String(quest.sessionId), 1);
@@ -657,6 +712,7 @@ export const getGenerationJobEngine = (): GenerationJobEngine => {
       createVideoJobHandler(getVideoJobDeps()),
       createMusicJobHandler(getMusicJobDeps()),
       createImageJobHandler(getImageJobDeps()),
+      createSceneJobHandler(getSceneJobDeps()),
     ],
     enqueue: enqueueGenerationJob,
     notify,

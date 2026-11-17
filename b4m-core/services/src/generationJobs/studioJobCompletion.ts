@@ -11,6 +11,8 @@ const MEDIUM_BY_KIND: Record<GenerationJobKind, StudioCompletionMedium> = {
   image: 'image',
   video: 'video',
   music: 'music',
+  // A Scene is a rendered video clip.
+  compose: 'video',
 };
 
 const UNTITLED = 'Untitled';
@@ -44,7 +46,10 @@ export const studioCompletionSubscriber = (
       readyCount,
       failedCount,
       cancelledCount,
-      title: studioCompletionTitle(anchor.payload.request.prompt),
+      // A Scene has no prompt; its optional title names it instead.
+      title: studioCompletionTitle(
+        anchor.kind === 'compose' ? anchor.payload.request.title : anchor.payload.request.prompt
+      ),
       link: studioCompletionLink(medium, groupId),
       completedAt: completedAt.toISOString(),
     });

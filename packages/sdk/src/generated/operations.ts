@@ -29,6 +29,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/music-generations/{id}/cancel',
   },
+  cancelSceneComposition: {
+    method: 'POST',
+    path: '/api/v1/scene-compositions/{id}/cancel',
+  },
   cancelVideoGeneration: {
     method: 'POST',
     path: '/api/v1/video-generations/{id}/cancel',
@@ -88,6 +92,10 @@ export const operations = {
   createProjectInvite: {
     method: 'POST',
     path: '/api/v1/projects/{id}/invites',
+  },
+  createSceneComposition: {
+    method: 'POST',
+    path: '/api/v1/scene-compositions',
   },
   createSession: {
     method: 'POST',
@@ -277,6 +285,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/quests/{id}',
   },
+  getSceneComposition: {
+    method: 'GET',
+    path: '/api/v1/scene-compositions/{id}',
+  },
   getSession: {
     method: 'GET',
     path: '/api/sessions/{id}',
@@ -384,6 +396,10 @@ export const operations = {
   listQuestFiles: {
     method: 'GET',
     path: '/api/v1/quests/{id}/files',
+  },
+  listSceneCompositions: {
+    method: 'GET',
+    path: '/api/v1/scene-compositions',
   },
   listSessionFiles: {
     method: 'GET',
