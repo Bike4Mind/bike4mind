@@ -223,4 +223,15 @@ describe('Studio workspace persistence', () => {
     });
     expect(await sessions.resolveStudioWorkspace(sibling.id)).toEqual(identity);
   });
+
+  it('paginates prefix IDs in the same order used by cursors', async () => {
+    const session = await sessions.create();
+    await workspaces.upsertAsset(session.id, asset(session.id, 'a'));
+    await workspaces.upsertAsset(session.id, asset(session.id, 'a-1'));
+    const first = await workspaces.listAssets(session.id, { limit: 1 });
+    expect(first?.items.map(item => item.id)).toEqual(['a']);
+    const second = await workspaces.listAssets(session.id, { limit: 1, cursor: first?.nextCursor });
+    expect(second?.items.map(item => item.id)).toEqual(['a-1']);
+    expect(second?.nextCursor).toBeUndefined();
+  });
 });

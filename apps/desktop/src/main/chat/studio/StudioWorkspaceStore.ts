@@ -139,13 +139,14 @@ export class StudioWorkspaceStore {
     }
     const ids = names
       .filter(name => name.endsWith('.json') && studioIdSchema.safeParse(name.slice(0, -5)).success)
+      .map(name => name.slice(0, -5))
       .sort()
-      .filter(name => !options.cursor || name.slice(0, -5) > options.cursor);
+      .filter(id => !options.cursor || id > options.cursor);
     const selected = ids.slice(0, limit);
     const records = await Promise.all(
-      selected.map(async name => {
+      selected.map(async id => {
         try {
-          return schema.parse(JSON.parse(await readFile(join(folder, name), 'utf8')));
+          return schema.parse(JSON.parse(await readFile(join(folder, `${id}.json`), 'utf8')));
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
           throw error;
@@ -154,7 +155,7 @@ export class StudioWorkspaceStore {
     );
     return {
       items: records.filter((record): record is Awaited<T> => record !== null),
-      ...(ids.length > limit ? { nextCursor: selected[selected.length - 1].slice(0, -5) } : {}),
+      ...(ids.length > limit ? { nextCursor: selected[selected.length - 1] } : {}),
     };
   }
 }
