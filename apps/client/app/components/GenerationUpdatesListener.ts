@@ -30,8 +30,9 @@ type KindCache = {
 };
 
 // Image jobs are cached in two places, not through KIND_CACHES: Studio's gallery list and the chat card's per-id
-// detail (handleImageUpdate).
-type CachedKind = Exclude<GenerationJobKind, 'image'>;
+// detail (handleImageUpdate). Speech and sound effects have no job gallery yet, so their frames only refresh the
+// credit balance.
+type CachedKind = Extract<GenerationJobKind, 'video' | 'music'>;
 
 const KIND_CACHES: Record<CachedKind, KindCache> = {
   video: {

@@ -6,6 +6,7 @@ import { getThemeConfig } from '@client/app/utils/themes';
 
 const h = vi.hoisted(() => ({
   studioFeatures: {} as Record<string, boolean>,
+  productionsAccess: undefined as 'open' | 'upgrade' | 'closed' | undefined,
 }));
 
 vi.mock('@tanstack/react-router', async () => {
@@ -17,6 +18,12 @@ vi.mock('./StudioCreditsBalance', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: vi.fn() }));
 vi.mock('../useStudioFeature', () => ({
   useStudioFeature: (feature: string) => h.studioFeatures[feature] ?? false,
+  useStudioFeatureAccess: (feature: string) =>
+    feature === 'productions' && h.productionsAccess
+      ? h.productionsAccess
+      : h.studioFeatures[feature]
+        ? 'open'
+        : 'closed',
 }));
 // The Library's own browser is covered by StudioLibrary.test.tsx; this pins only that the page mounts it.
 vi.mock('@client/app/components/Files/StudioLibrary', () => ({
@@ -37,6 +44,7 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
 beforeEach(() => {
   vi.clearAllMocks();
   h.studioFeatures = { createV2: true, productions: true };
+  h.productionsAccess = undefined;
 });
 
 describe('Studio Productions', () => {
@@ -58,6 +66,26 @@ describe('Studio Productions', () => {
 });
 
 describe('Studio frame', () => {
+  const renderFrame = () =>
+    render(
+      <StudioV2Frame area="create" testId="studio-frame">
+        <div />
+      </StudioV2Frame>,
+      { wrapper: TestWrapper }
+    );
+
+  it.each(['open', 'upgrade'] as const)('shows the Productions tab when access is %s', access => {
+    h.productionsAccess = access;
+    renderFrame();
+    expect(screen.getByTestId('studio-area-productions')).toBeInTheDocument();
+  });
+
+  it('hides the Productions tab when access is closed', () => {
+    h.productionsAccess = 'closed';
+    renderFrame();
+    expect(screen.queryByTestId('studio-area-productions')).not.toBeInTheDocument();
+  });
+
   it('keeps the Create link on the current medium while in Create', () => {
     h.studioFeatures = { createV2: true, image: true };
     render(
