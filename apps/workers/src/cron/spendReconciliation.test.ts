@@ -59,6 +59,7 @@ const mockOpenAIFetch = vi.fn();
 
 vi.mock('@bike4mind/services', () => ({
   spendReconciliationService: {
+    DEFAULT_SPEND_DEADLINE_MS: 240_000,
     fetchAnthropicSpend: (...args: unknown[]) => mockAnthropicFetch(...args),
     fetchOpenAISpend: (...args: unknown[]) => mockOpenAIFetch(...args),
   },

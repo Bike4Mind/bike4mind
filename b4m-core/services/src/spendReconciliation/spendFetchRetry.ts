@@ -65,11 +65,10 @@ function safeHeaders(headers: Headers | undefined, secrets: string[]): Record<st
 
 function isQuotaError(body: unknown): boolean {
   if (!body || typeof body !== 'object') return false;
-  const error = (body as { error?: { code?: unknown; type?: unknown; message?: unknown } }).error;
+  const error = (body as { error?: { code?: unknown; type?: unknown } }).error;
   if (!error || typeof error !== 'object') return false;
-  const fields = [error.code, error.type, error.message].filter((value): value is string => typeof value === 'string');
-  return fields.some(value =>
-    /insufficient_quota|billing|credit balance|quota.*exceed|exceed.*quota|usage limit/i.test(value)
+  return [error.code, error.type].some(
+    value => typeof value === 'string' && /quota|^billing_hard_limit_reached$/i.test(value)
   );
 }
 

@@ -64,14 +64,48 @@ describe('spend GET retry', () => {
     await expect(request(fetchFn)).rejects.toThrow(`API ${status}`);
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
-  it.each(['insufficient_quota', 'billing_hard_limit_reached', 'credit balance is too low', 'usage limit exceeded'])(
-    'does not retry quota error %s',
-    async type => {
-      const fetchFn = vi.fn().mockResolvedValue(rateLimited({}, type));
-      await expect(request(fetchFn)).rejects.toThrow('quota');
-      expect(fetchFn).toHaveBeenCalledTimes(1);
-    }
-  );
+  it.each(['insufficient_quota', 'billing_hard_limit_reached'])('does not retry quota error %s', async type => {
+    const fetchFn = vi.fn().mockResolvedValue(rateLimited({}, type));
+    await expect(request(fetchFn)).rejects.toThrow('quota');
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+  it('retries a rate limit whose message links to billing', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            error: {
+              code: 'rate_limit_exceeded',
+              type: 'requests',
+              message: 'Rate limit reached. Visit https://platform.openai.com/account/billing to add a payment method.',
+            },
+          },
+          { status: 429 }
+        )
+      )
+      .mockResolvedValueOnce(success());
+    const pending = request(fetchFn);
+    await vi.runAllTimersAsync();
+    expect(await pending).toEqual({ total: 12 });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+  it.each([
+    ['5', (delay: number | undefined) => expect(delay).toBeLessThan(60_000)],
+    ['0', (delay: number | undefined) => expect(delay).toBeGreaterThanOrEqual(60_000)],
+  ])('reset header with remaining %s', async (remaining, check) => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        rateLimited({ 'x-ratelimit-reset-requests': '1m', 'x-ratelimit-remaining-requests': remaining })
+      )
+      .mockResolvedValueOnce(success());
+    const diagnostics: ProviderSpendDiagnostic[] = [];
+    const pending = request(fetchFn, { onDiagnostic: (value: ProviderSpendDiagnostic) => diagnostics.push(value) });
+    await vi.runAllTimersAsync();
+    await pending;
+    check(diagnostics[0].delayMs);
+  });
   it('fails without shortening a provider delay beyond the remaining budget', async () => {
     const fetchFn = vi.fn().mockResolvedValue(rateLimited({ 'retry-after': '61' }));
     await expect(request(fetchFn, { deadlineMs: Date.now() + 60_000 })).rejects.toThrow('deadline');

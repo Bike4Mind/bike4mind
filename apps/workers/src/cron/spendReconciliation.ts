@@ -27,7 +27,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 import { type AdminKeyProvider, resolveProviderAdminKey } from './providerAdminKey';
 
-const PROVIDER_FETCH_BUDGET_MS = 240_000;
+const PROVIDER_FETCH_BUDGET_MS = spendReconciliationService.DEFAULT_SPEND_DEADLINE_MS;
 const METRICS_HEADROOM_MS = 30_000;
 
 const contextToLogs = (context: Context) => ({
