@@ -4,7 +4,8 @@
  *
  * Studio only: a signed-in session (no API key) behind the EnableStudioProductions flag and its audience (admins,
  * or paid plans: StudioProductionsAudience), so there is no public contract. The body is the
- * StudioCompositionCreateInputSchema shape; a request that parses but breaks a spec rule (timeline overlap, an unreadable file, a project that is not yours) answers 422 with every issue.
+ * StudioCompositionCreateInputSchema shape; a request that parses but breaks a spec rule (timeline overlap, an
+ * unreadable file, a project that is not yours) answers 422 with every issue.
  */
 import { z } from 'zod';
 import {
