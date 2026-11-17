@@ -32,7 +32,7 @@ export function SignInCard({ state }: { state: AuthState }) {
             data-testid="auth-brand-logo"
             sx={{ width: 88, height: 88 }}
           />
-          <Typography level="title-lg">
+          <Typography level="title-lg" component="h1">
             Bike4Mind{' '}
             <Typography level="body-sm" textColor="text.tertiary">
               Desktop

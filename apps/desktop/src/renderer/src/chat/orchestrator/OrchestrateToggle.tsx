@@ -76,7 +76,8 @@ function Segment({
 /**
  * Header switch between the conversation and its agents' stage, sized like the sidebar's ModeSwitcher.
  * View only: the Orchestrate behaviour is the composer's OrchestratePill, which is why this one draws
- * AgentStageIcon rather than its AgentsIcon. Absent until the session has an agent: an empty stage is
+ * AgentStageIcon rather than its AgentsIcon. The conversation segment stays icon-only: "Chat" already
+ * names the sidebar's Chat/Code mode and would misread in a Code session. Absent until the session has an agent: an empty stage is
  * nothing to navigate to.
  */
 export function OrchestrateToggle({
