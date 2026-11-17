@@ -100,8 +100,11 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     tier: 'flagship',
     releasedAt: '2026-08-04',
     preview: false,
-    modes: ['text_to_video'],
+    modes: ['text_to_video', 'image_to_video'],
     inputs: {},
+    keyframes: { max: 10 },
+    // https://bfl.ai/pricing: drafts are HD only, with audio included.
+    draft: { usdPerSecond: 0.06, resolutions: ['720p'] },
     duration: { kind: 'range', min: 5, max: 20, step: 1 },
     aspectRatios: ['16:9', '9:16', '1:1'],
     resolutions: ['720p', '1080p'],

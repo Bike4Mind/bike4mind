@@ -7281,6 +7281,9 @@ export interface components {
         | 'unexpected_input_image'
         | 'unsupported_input_role'
         | 'unsupported_audio_option'
+        | 'unsupported_keyframes'
+        | 'invalid_keyframes'
+        | 'unsupported_draft'
         | 'invalid_request'
         | 'model_disabled'
         | 'model_unavailable'
@@ -7307,6 +7310,9 @@ export interface components {
         | 'unexpected_input_image'
         | 'unsupported_input_role'
         | 'unsupported_audio_option'
+        | 'unsupported_keyframes'
+        | 'invalid_keyframes'
+        | 'unsupported_draft'
         | 'invalid_request'
         | 'model_disabled'
         | 'model_unavailable'
@@ -7326,7 +7332,7 @@ export interface components {
       model: string;
       prompt: string;
       /**
-       * @description Defaults to image_to_video when a first_frame input (or input_image_file_id) is set, else text_to_video.
+       * @description Defaults to image_to_video when keyframes, a first_frame input or input_image_file_id is set, else text_to_video.
        * @enum {string}
        */
       mode?: 'text_to_video' | 'image_to_video';
@@ -7345,6 +7351,13 @@ export interface components {
       /** @description Deprecated: send inputs with role first_frame instead. Cannot be combined with inputs. */
       input_image_file_id?: string;
       audio?: boolean;
+      /** @description Owned image files pinned to timestamps, in strictly increasing order starting at 0 and not exceeding duration_seconds. Cannot be combined with inputs or input_image_file_id. Requires model keyframes support. */
+      keyframes?: {
+        file_id: string;
+        time_seconds: number;
+      }[];
+      /** @description Generate a lower-cost preview when true; omitted or false requests full quality. Requires model draft support at the requested resolution. FLUX 3 drafts require 720p and cost $0.06 per second. */
+      draft?: boolean;
       /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
       organization_id?: string | null;
     };
@@ -7519,6 +7532,15 @@ export interface components {
         };
         /** @enum {string} */
         audio: 'always' | 'optional' | 'none';
+        /** @description Timestamped keyframe limit; null when unsupported. */
+        keyframes?: {
+          max: number;
+        } | null;
+        /** @description Draft resolutions and price; null when unsupported. */
+        draft?: {
+          resolutions: ('360p' | '480p' | '720p' | '1080p' | '4k')[];
+          credits_per_second: number;
+        } | null;
         /** @description Credits per second of output by resolution; null for per-clip priced models. */
         credits_per_second: {
           [key: string]: number;
@@ -21543,7 +21565,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The request cannot run: a body or capability violation (`errorCode` names it, e.g. `unsupported_duration`, or `unsupported_input_role` for an input role the model does not take), an unknown, unavailable or retired model (`model_unavailable`; for a retired model the message names the model to use instead), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
+      /** @description The request cannot run: a body or capability violation (`errorCode` names it, e.g. `unsupported_duration`, `unsupported_keyframes`, `invalid_keyframes`, `unsupported_draft`, or `unsupported_input_role` for an input role the model does not take). Keyframe/draft errors name the field. An unknown, unavailable or retired model (`model_unavailable`; for a retired model the message names the model to use instead), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

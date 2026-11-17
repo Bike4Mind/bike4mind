@@ -11,6 +11,9 @@ export const VIDEO_VALIDATION_ERROR_CODES = [
   'unexpected_input_image',
   'unsupported_input_role',
   'unsupported_audio_option',
+  'unsupported_keyframes',
+  'invalid_keyframes',
+  'unsupported_draft',
 ] as const;
 export type VideoValidationErrorCode = (typeof VIDEO_VALIDATION_ERROR_CODES)[number];
 
@@ -51,6 +54,39 @@ const checkInputs = (request: VideoGenerationRequest, caps: VideoModelCapabiliti
   const model = caps.displayName;
   const hasLegacyFile = Boolean(request.inputImageFileId);
   const hasLegacyGenerated = Boolean(request.inputGeneratedImageKey);
+  if (request.keyframes) {
+    if (!caps.keyframes) return fail({ model, code: 'unsupported_keyframes' }, `${model} does not support keyframes`);
+    if (request.inputs || hasLegacyFile || hasLegacyGenerated) {
+      return fail(
+        { model, code: 'invalid_keyframes' },
+        'keyframes cannot be combined with inputs or legacy image fields'
+      );
+    }
+    if (
+      request.mode !== 'image_to_video' ||
+      request.keyframes.length === 0 ||
+      request.keyframes.length > caps.keyframes.max
+    ) {
+      return fail(
+        { model, code: 'invalid_keyframes' },
+        `keyframes requires image_to_video and 1-${caps.keyframes.max} frames`
+      );
+    }
+    for (const [index, frame] of request.keyframes.entries()) {
+      if (
+        !Number.isFinite(frame.timeSeconds) ||
+        frame.timeSeconds < 0 ||
+        frame.timeSeconds > request.durationSeconds ||
+        (index === 0 ? frame.timeSeconds !== 0 : frame.timeSeconds <= request.keyframes[index - 1].timeSeconds)
+      ) {
+        return fail(
+          { model, code: 'invalid_keyframes' },
+          `keyframes.${index}.time_seconds must start at 0, increase strictly, and not exceed duration_seconds`
+        );
+      }
+    }
+    return null;
+  }
   if (hasLegacyFile && hasLegacyGenerated) {
     return fail(
       { model, code: 'unexpected_input_image', cause: 'conflicting_image_fields' },
@@ -100,6 +136,18 @@ export const validateAgainstCapabilities = (
   request: VideoGenerationRequest,
   caps: VideoModelCapabilities
 ): VideoValidationResult => {
+  if (request.keyframes && !caps.keyframes) {
+    return fail(
+      { model: caps.displayName, code: 'unsupported_keyframes' },
+      `${caps.displayName} does not support keyframes`
+    );
+  }
+  if (request.draft && (!caps.draft || !caps.draft.resolutions.includes(request.resolution))) {
+    return fail(
+      { model: caps.displayName, code: 'unsupported_draft' },
+      `${caps.displayName} draft is ${caps.draft ? `only supported at ${caps.draft.resolutions.join(', ')}` : 'not supported'}`
+    );
+  }
   if (!caps.modes.includes(request.mode)) {
     return fail(
       { model: caps.displayName, code: 'unsupported_mode', mode: request.mode },

@@ -13458,6 +13458,9 @@
               "unexpected_input_image",
               "unsupported_input_role",
               "unsupported_audio_option",
+              "unsupported_keyframes",
+              "invalid_keyframes",
+              "unsupported_draft",
               "invalid_request",
               "model_disabled",
               "model_unavailable",
@@ -13497,6 +13500,9 @@
               "unexpected_input_image",
               "unsupported_input_role",
               "unsupported_audio_option",
+              "unsupported_keyframes",
+              "invalid_keyframes",
+              "unsupported_draft",
               "invalid_request",
               "model_disabled",
               "model_unavailable",
@@ -13531,7 +13537,7 @@
               "text_to_video",
               "image_to_video"
             ],
-            "description": "Defaults to image_to_video when a first_frame input (or input_image_file_id) is set, else text_to_video."
+            "description": "Defaults to image_to_video when keyframes, a first_frame input or input_image_file_id is set, else text_to_video."
           },
           "duration_seconds": {
             "type": "number",
@@ -13596,6 +13602,34 @@
           },
           "audio": {
             "type": "boolean"
+          },
+          "keyframes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "time_seconds": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "file_id",
+                "time_seconds"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "maxItems": 10,
+            "description": "Owned image files pinned to timestamps, in strictly increasing order starting at 0 and not exceeding duration_seconds. Cannot be combined with inputs or input_image_file_id. Requires model keyframes support."
+          },
+          "draft": {
+            "type": "boolean",
+            "description": "Generate a lower-cost preview when true; omitted or false requests full quality. Requires model draft support at the requested resolution. FLUX 3 drafts require 720p and cost $0.06 per second."
           },
           "organization_id": {
             "type": [
@@ -14249,6 +14283,51 @@
                     "optional",
                     "none"
                   ]
+                },
+                "keyframes": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "max": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [
+                    "max"
+                  ],
+                  "description": "Timestamped keyframe limit; null when unsupported."
+                },
+                "draft": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "resolutions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "360p",
+                          "480p",
+                          "720p",
+                          "1080p",
+                          "4k"
+                        ]
+                      }
+                    },
+                    "credits_per_second": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "resolutions",
+                    "credits_per_second"
+                  ],
+                  "description": "Draft resolutions and price; null when unsupported."
                 },
                 "credits_per_second": {
                   "type": [
@@ -48861,7 +48940,7 @@
             }
           },
           "422": {
-            "description": "The request cannot run: a body or capability violation (`errorCode` names it, e.g. `unsupported_duration`, or `unsupported_input_role` for an input role the model does not take), an unknown, unavailable or retired model (`model_unavailable`; for a retired model the message names the model to use instead), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`).",
+            "description": "The request cannot run: a body or capability violation (`errorCode` names it, e.g. `unsupported_duration`, `unsupported_keyframes`, `invalid_keyframes`, `unsupported_draft`, or `unsupported_input_role` for an input role the model does not take). Keyframe/draft errors name the field. An unknown, unavailable or retired model (`model_unavailable`; for a retired model the message names the model to use instead), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`).",
             "content": {
               "application/json": {
                 "schema": {

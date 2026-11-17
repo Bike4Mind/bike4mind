@@ -4,6 +4,12 @@ import type { VideoModelCapabilities } from './types';
 import { validateAgainstCapabilities } from './validate';
 
 export const estimateVideoCostUsd = (caps: VideoModelCapabilities, request: VideoGenerationRequest): number => {
+  if (request.draft) {
+    if (!caps.draft || !caps.draft.resolutions.includes(request.resolution)) {
+      throw new Error(`${caps.displayName}: no draft price for ${request.resolution}`);
+    }
+    return caps.draft.usdPerSecond * request.durationSeconds;
+  }
   const { pricing } = caps;
   if (pricing.unit === 'per_second') {
     const rate = pricing.usdByResolution[request.resolution];

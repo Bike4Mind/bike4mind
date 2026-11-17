@@ -79,7 +79,7 @@ export const CreateVideoGenerationBodySchema = z.strictObject({
     .enum(VIDEO_MODES)
     .optional()
     .describe(
-      'Defaults to image_to_video when a first_frame input (or input_image_file_id) is set, else text_to_video.'
+      'Defaults to image_to_video when keyframes, a first_frame input or input_image_file_id is set, else text_to_video.'
     ),
   duration_seconds: z.number().positive().optional().describe("Defaults to the model's default duration."),
   aspect_ratio: z.enum(ASPECT_RATIOS).optional(),
@@ -98,6 +98,27 @@ export const CreateVideoGenerationBodySchema = z.strictObject({
     .optional()
     .describe('Deprecated: send inputs with role first_frame instead. Cannot be combined with inputs.'),
   audio: z.boolean().optional(),
+  keyframes: z
+    .array(
+      z.strictObject({
+        file_id: z.string().min(1),
+        time_seconds: z.number().nonnegative(),
+      })
+    )
+    .min(1)
+    .max(10)
+    .optional()
+    .describe(
+      'Owned image files pinned to timestamps, in strictly increasing order starting at 0 and not exceeding duration_seconds. ' +
+        'Cannot be combined with inputs or input_image_file_id. Requires model keyframes support.'
+    ),
+  draft: z
+    .boolean()
+    .optional()
+    .describe(
+      'Generate a lower-cost preview when true; omitted or false requests full quality. Requires model draft support ' +
+        'at the requested resolution. FLUX 3 drafts require 720p and cost $0.06 per second.'
+    ),
   organization_id: BillingOrganizationIdSchema,
 });
 export type CreateVideoGenerationBody = z.infer<typeof CreateVideoGenerationBodySchema>;
@@ -186,6 +207,16 @@ export const VideoModelSchema = z.object({
     resolution: z.enum(RESOLUTION_TIERS),
   }),
   audio: z.enum(['always', 'optional', 'none']),
+  keyframes: z
+    .object({ max: z.number().int().positive() })
+    .nullable()
+    .optional()
+    .describe('Timestamped keyframe limit; null when unsupported.'),
+  draft: z
+    .object({ resolutions: z.array(z.enum(RESOLUTION_TIERS)), credits_per_second: z.number() })
+    .nullable()
+    .optional()
+    .describe('Draft resolutions and price; null when unsupported.'),
   credits_per_second: z
     .record(z.string(), z.number())
     .nullable()
