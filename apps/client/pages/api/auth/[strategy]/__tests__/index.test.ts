@@ -9,7 +9,7 @@ const h = vi.hoisted(() => ({
   turnstile: vi.fn(),
   fixedLimitOptions: [] as unknown[],
   used: [] as unknown[],
-  getAppleConfig: vi.fn(),
+  registered: new Set<string>(),
   getHandler: null as null | ((req: Request, res: Response, next: NextFunction) => unknown),
 }));
 
@@ -49,7 +49,13 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: () => '203.0.113.7' }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ isE2EEnabled: () => false }));
-vi.mock('@server/auth/auth', () => ({ default: { authenticate: (...a: unknown[]) => h.authenticate(...a) } }));
+// The real passport registry lookup, backed by the set of providers each test registers.
+vi.mock('@server/auth/auth', () => ({
+  default: {
+    authenticate: (...a: unknown[]) => h.authenticate(...a),
+    _strategy: (name: string) => (h.registered.has(name) ? {} : undefined),
+  },
+}));
 vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', () => ({ issueStateNonce: () => 'hash' }));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => {
@@ -63,7 +69,6 @@ vi.mock('@server/utils/auth/oauthStartTurnstile', () => ({
     next();
   },
 }));
-vi.mock('@bike4mind/server-utils/auth/appleConfig', () => ({ getAppleConfig: () => h.getAppleConfig() }));
 vi.mock('@bike4mind/server-utils/utils/validators', () => ({ isLocalAppUrl: () => false }));
 
 import '@pages/api/auth/[strategy]/index';
@@ -83,6 +88,7 @@ describe('GET /api/auth/[strategy] initiation', () => {
     vi.clearAllMocks();
     h.tryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
     h.authenticate.mockReturnValue(vi.fn());
+    h.registered = new Set(['google', 'github']);
   });
 
   it('never reaches the provider for a blocked IP', async () => {
@@ -112,18 +118,20 @@ describe('GET /api/auth/[strategy] initiation', () => {
     expect(h.authenticate).toHaveBeenCalledWith('google', expect.objectContaining({ scope: ['profile', 'email'] }));
   });
 
-  it('rejects apple as an invalid request when Apple is not configured', async () => {
-    h.isBlocked.mockResolvedValue(null);
-    h.getAppleConfig.mockReturnValue(null);
-    const { req, res } = run('apple');
-    await h.getHandler!(req, res, vi.fn());
-    expect(res._getStatusCode()).toBe(400);
-    expect(h.authenticate).not.toHaveBeenCalled();
-  });
+  it.each(['apple', 'facebook'])(
+    'rejects %s as an invalid request when its provider is not registered',
+    async strategy => {
+      h.isBlocked.mockResolvedValue(null);
+      const { req, res } = run(strategy);
+      await h.getHandler!(req, res, vi.fn());
+      expect(res._getStatusCode()).toBe(400);
+      expect(h.authenticate).not.toHaveBeenCalled();
+    }
+  );
 
   it('starts the apple flow when Apple is configured', async () => {
     h.isBlocked.mockResolvedValue(null);
-    h.getAppleConfig.mockReturnValue({ clientId: 'c', teamId: 't', keyId: 'k', privateKey: 'p' });
+    h.registered.add('apple');
     const { req, res } = run('apple');
     await h.getHandler!(req, res, vi.fn());
     expect(h.authenticate).toHaveBeenCalledWith('apple', expect.objectContaining({ scope: ['name', 'email'] }));

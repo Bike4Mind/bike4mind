@@ -47,8 +47,13 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
 // passport.authenticate is invoked as passport.authenticate(strategy, opts, cb)(req, res, next);
 // the mock lets each test drive the (err, user, info) triple passport would normally supply.
 const mockAuthenticate = vi.fn();
+const registeredStrategies = vi.hoisted(() => ({ names: new Set<string>() }));
 vi.mock('passport', () => ({
-  default: { authenticate: (...args: unknown[]) => mockAuthenticate(...args) },
+  default: {
+    authenticate: (...args: unknown[]) => mockAuthenticate(...args),
+    // passport's own registry lookup, read by isPassportStrategyRegistered.
+    _strategy: (name: string) => (registeredStrategies.names.has(name) ? {} : undefined),
+  },
 }));
 
 const mockAuthFailCreate = vi.fn();
@@ -120,7 +125,7 @@ import handler from '@pages/api/auth/[strategy]/callback';
 function makeReqRes(headers: Record<string, string> = {}, query: Record<string, string> = {}) {
   const { req, res } = createMocks({
     method: 'GET',
-    query: { strategy: 'github', state: 'state-token', ...query },
+    query: { strategy: 'github', state: 'state-token', code: 'auth-code', ...query },
     headers: { host: 'localhost:3000', 'user-agent': 'vitest', ...headers },
     url: '/api/auth/github/callback',
   });
@@ -149,7 +154,49 @@ async function runCallback(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  registeredStrategies.names = new Set(['google', 'github']);
   mockResolveSecondFactor.mockResolvedValue({ kind: 'satisfied', trustedDevice: null });
+});
+
+describe('[strategy]/callback - unavailable provider and empty callback', () => {
+  it.each(['apple', 'facebook'])(
+    'answers 404 for the %s callback when that provider is not registered, without an error log',
+    async strategy => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const { req, res } = makeReqRes({}, { strategy });
+
+      await expect(handler(req, res, vi.fn())).rejects.toMatchObject({ statusCode: 404 });
+
+      expect(mockAuthenticate).not.toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
+    }
+  );
+
+  it('redirects a callback carrying neither code nor error to the login page at warn', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { req, res } = makeReqRes({}, { strategy: 'google', code: '' });
+
+    await handler(req, res, vi.fn());
+
+    expect(res._getRedirectUrl()).toBe('/login?error=missing_code');
+    expect(mockAuthenticate).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith('OAuth callback without code or error', { strategy: 'google' });
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it('still hands a provider error return (no code) to passport', async () => {
+    const res = await runCallback(null, undefined, { message: 'denied' }, undefined, {
+      code: '',
+      error: 'access_denied',
+    });
+
+    expect(mockAuthenticate).toHaveBeenCalled();
+    expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
+  });
 });
 
 describe('[strategy]/callback - !user branch sanitized reason', () => {
