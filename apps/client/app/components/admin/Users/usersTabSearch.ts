@@ -76,6 +76,7 @@ export const USERS_FILTER_PARAMS = {
   acqUnattributed: 'acqUnattributed',
   acqConverted: 'acqConverted',
   acqWindow: 'acqWindow',
+  adminRole: 'role',
 } as const satisfies Partial<Record<keyof UsersListView, string>>;
 export type UsersFilterKey = keyof typeof USERS_FILTER_PARAMS;
 export const USERS_FILTER_KEYS = Object.keys(USERS_FILTER_PARAMS) as UsersFilterKey[];
@@ -142,6 +143,7 @@ export type UsersSearch = {
   acqUnattributed?: UsersListView['acqUnattributed'];
   acqConverted?: UsersListView['acqConverted'];
   acqWindow?: UsersListView['acqWindow'];
+  role?: string;
 };
 
 const parseLimit = (value: unknown): number | undefined => {
@@ -228,6 +230,7 @@ export const USERS_SEARCH_PARSERS: {
   acqUnattributed: parseFlag,
   acqConverted: parseFlag,
   acqWindow: oneOf(USER_ACQUISITION_WINDOW_FILTERS),
+  role: parseObjectId,
 };
 
 function filtersFromSearch(search: Record<string, unknown>): Pick<UsersListView, UsersFilterKey> {
@@ -256,6 +259,7 @@ function filtersFromSearch(search: Record<string, unknown>): Pick<UsersListView,
     acqUnattributed: USERS_SEARCH_PARSERS.acqUnattributed(search.acqUnattributed),
     acqConverted: USERS_SEARCH_PARSERS.acqConverted(search.acqConverted),
     acqWindow: USERS_SEARCH_PARSERS.acqWindow(search.acqWindow),
+    adminRole: parseObjectId(search.role),
   };
 }
 
@@ -339,6 +343,7 @@ export function usersViewToSearch(params: UsersListView): Omit<UsersSearch, type
     acqUnattributed: params.acqUnattributed,
     acqConverted: params.acqConverted,
     acqWindow: params.acqWindow,
+    role: parseObjectId(params.adminRole),
   };
 }
 

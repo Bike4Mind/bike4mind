@@ -64,13 +64,13 @@ describe('/api/admin/admin-roles/[id]', () => {
   it('passes a full admin edit through to the service', async () => {
     const res = await call(handler, 'PATCH', FULL_ADMIN, {
       query,
-      body: { permissions: ['users:moderate', 'support:read'] },
+      body: { permissions: ['users:moderate', 'support:read'], reason: 'Billing hire starts Monday' },
     });
 
     expect(mockUpdate).toHaveBeenCalledWith(
       FULL_ADMIN,
       ROLE_ID,
-      { permissions: ['support:read', 'users:moderate'] },
+      { permissions: ['support:read', 'users:moderate'], reason: 'Billing hire starts Monday' },
       {}
     );
     expect(res._getJSONData()).toMatchObject({ name: 'Renamed' });

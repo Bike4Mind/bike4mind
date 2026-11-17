@@ -42,6 +42,21 @@ import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 import { recordGeneratedImages } from '../../../recordGeneratedImages';
 import { saveGeneratedAssetFromTool } from '../../helpers/persistGeneratedFile';
+import {
+  buildEditJobRequest,
+  createImageJobsForTool,
+  imageSelectionOf,
+  isImageJobToolConfig,
+  reportImageJobs,
+} from '../imageGeneration/imageJobTool';
+import type { CreateImageJobsErrorCode } from '../../../../imageJobs/types';
+
+// A refused input the in-process edit can still take: a file the caller can open but does not own, or a format
+// the job path refuses.
+const IN_PROCESS_EDIT_FALLBACK_CODES: ReadonlySet<string> = new Set<CreateImageJobsErrorCode>([
+  'input_image_not_found',
+  'unsupported_input_image',
+]);
 
 async function imageUrlToBase64(imageUrl: string, trustConfiguredStorageOrigin = false): Promise<string> {
   try {
@@ -309,7 +324,7 @@ export const imageEditTool: ToolDefinition = {
   implementation: (context, config: unknown) => ({
     toolFn: async val => {
       // Get imageConfig from config (shared with image_generation tool)
-      const imageConfig = config as GenerateImageToolCall | undefined;
+      const imageConfig: GenerateImageToolCall | undefined = imageSelectionOf(config);
 
       const {
         image: toolImage,
@@ -339,6 +354,23 @@ export const imageEditTool: ToolDefinition = {
 
       if (!prompt) {
         return 'Error: Prompt is required for editing';
+      }
+
+      // A job reads its inputs as the caller's own files, so only file ids take this path. A URL or a generated
+      // image key (older turns) still edits in-process, and so does an input IN_PROCESS_EDIT_FALLBACK_CODES covers.
+      if (isImageJobToolConfig(config) && isObjectIdShaped(toolImage) && (!toolMask || isObjectIdShaped(toolMask))) {
+        const request = buildEditJobRequest(
+          imageConfig,
+          prompt,
+          { image: toolImage, ...(toolMask && { mask: toolMask }) },
+          { size: toolSize, background: toolBackground, outputFormat: toolOutputFormat }
+        );
+        // Billing is the job's own credit hold, so this path never calls context.onStart/onFinish.
+        const result = await createImageJobsForTool(context, config, 'edit_image', request, 1);
+        if (typeof result === 'string') return result;
+        if (result.ok || !IN_PROCESS_EDIT_FALLBACK_CODES.has(result.code)) {
+          return reportImageJobs(context, config, 'Image edit', result);
+        }
       }
 
       // Use imageConfig settings as defaults, allow tool call to override

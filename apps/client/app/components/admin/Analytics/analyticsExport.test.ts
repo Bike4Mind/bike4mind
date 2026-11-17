@@ -1,6 +1,7 @@
 import JSZip from 'jszip';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AnalyticsOverview, AnalyticsTopAccounts } from '@client/app/utils/analyticsOverview';
+import type { AcquisitionConversion } from '@client/app/utils/acquisitionConversion';
 
 const download = vi.hoisted(() => ({ downloadData: vi.fn() }));
 vi.mock('@client/app/utils/download', () => download);
@@ -193,7 +194,7 @@ describe('buildAnalyticsCsvFiles', () => {
       totals: metrics,
       rows: [{ ...metrics, kind: 'touch', key: 'ads|cpc|=cmd()', source: 'ads', medium: 'cpc', campaign: '=cmd()' }],
       truncated: false,
-    } as const;
+    } satisfies AcquisitionConversion;
     const rows = fileNamed(buildAnalyticsCsvFiles(overview, topAccounts, acquisition), 'acquisition-conversion.csv');
     expect(rows[0]).toContain('Converted within (days)');
     expect(rows[1]).toBe(

@@ -372,6 +372,7 @@ export const SettingKeySchema = z.enum([
   'BedrockGuardrailVersion',
   'ImageModerationEnabled',
   'ImageModerationReviewerEmails',
+  'ImageModerationEscalationEmails',
   'tagLineMain',
   'tagLineSub',
   'defaultTags',
@@ -434,6 +435,7 @@ export const SettingKeySchema = z.enum([
   'EnableStudioCreateV2',
   'EnableStudioImage',
   'EnableStudioProductions',
+  'StudioProductionsAudience',
   'VectorThreshold',
   'bflApiKey',
   'EnableMCPServer',
@@ -557,6 +559,10 @@ export const SettingKeySchema = z.enum([
   'spendMonitorTrustedAccountIds',
   'spendMonitorTrustedAccountSpikeFloorCredits',
   'spendMonitorTrustedAccountCeilingCredits',
+  'spendMonitorMarginEnabled',
+  'spendMonitorMarginMinRatio',
+  'spendMonitorMarginWindowHours',
+  'spendMonitorMarginCostFloorUsd',
   'youngAccountSpendPageUsdPerHour',
   'youngAccountSpendWarnUsdPerHour',
   'freeTierDailySystemCostCapUsd',
@@ -737,7 +743,6 @@ export const SettingKeySchema = z.enum([
 
   // B4M PI SETTINGS
   'EnableBmPi',
-  'EnableBmPiDefault',
   'EnableBmPiJira',
 
   // OPTIHASHI SETTINGS
@@ -823,6 +828,12 @@ export const SettingKeySchema = z.enum([
   'musicGeneration',
   'agentMusicTracksPerRun',
 
+  // IMAGE GENERATION
+  'agentImagesPerRun',
+  // AUDIO GENERATION (agent-mode caps)
+  'agentSpeechClipsPerRun',
+  'agentSoundEffectsPerRun',
+
   // MODEL DISCOVERY (live model registry)
   'enableModelDiscovery',
   'modelDiscoveryMode',
@@ -892,13 +903,15 @@ export const OrchestrationDefaultsSchema = z.object({
     // instant without re-polluting the cached system prefix with a volatile
     // minute-precision date block.
     'current_datetime',
-    // Storage-backed artifact generation, opted into for agent mode: the agent
-    // writes these to generated-content storage, not user data, so they are safe
-    // to expose.
+    // Storage-backed artifact generation, opted into for agent mode. These only add
+    // new output (generated-content storage, or the user's Files for image jobs) and
+    // never modify existing user data, so they are safe to expose.
+    // Start capped image jobs when the run gets an image job config (agentImagesPerRun).
     'image_generation',
     'edit_image',
     // Only offered when the run gets a music config, which enforces agentMusicTracksPerRun.
     'music_generation',
+    // Speech and sound effects are capped per run by agentSpeechClipsPerRun / agentSoundEffectsPerRun.
     'audio_generation',
     'excel_generation',
     // Only offered when the run gets a video config, which enforces agentVideoClipsPerRun.
@@ -1243,6 +1256,10 @@ export function isCalendarDate(value: string): boolean {
   const date = new Date(`${value}T00:00:00.000Z`);
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
+
+/** Who Studio Productions opens to once enabled: admins only (the preview), or admins, developers and paid plans. */
+export const STUDIO_PRODUCTIONS_AUDIENCES = ['admins', 'paid'] as const;
+export type StudioProductionsAudience = (typeof STUDIO_PRODUCTIONS_AUDIENCES)[number];
 
 function makeStringSetting(
   config: {
@@ -1801,6 +1818,14 @@ export const AdminAiConfigSchema = z.object({
     })
     .prefault({})
     .meta({ title: 'Features' }),
+  dlqQueueModes: z
+    .record(z.string(), z.enum(['off', 'recommend', 'act']))
+    .prefault({})
+    .meta({
+      title: 'DLQ queue modes',
+      description:
+        'Queue label to autoTriage mode. Unlisted queues default to recommend. DLQ triage is recommend-only even when act is selected; replay has no real Undo. The master Enabled switch stops triage.',
+    }),
 });
 export type AdminAiConfig = z.infer<typeof AdminAiConfigSchema>;
 
@@ -2720,7 +2745,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableImageTemplates', order: 27 },
       { key: 'EnablePromptBuilder', order: 28 },
       { key: 'EnableBmPi', order: 30 },
-      { key: 'EnableBmPiDefault', order: 31 },
       { key: 'EnableBmPiJira', order: 32 },
       { key: 'EnableDeepResearch', order: 40 },
       { key: 'EnableDeepResearchDefault', order: 41 },
@@ -2775,6 +2799,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableStudioCreateV2', order: 300 },
       { key: 'EnableStudioImage', order: 301 },
       { key: 'EnableStudioProductions', order: 302 },
+      { key: 'StudioProductionsAudience', order: 303 },
     ],
   },
   NOTEBOOK: {
@@ -2834,6 +2859,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'spendMonitorTrustedAccountIds', order: 19.492 },
       { key: 'spendMonitorTrustedAccountSpikeFloorCredits', order: 19.493 },
       { key: 'spendMonitorTrustedAccountCeilingCredits', order: 19.494 },
+      { key: 'spendMonitorMarginEnabled', order: 19.4941 },
+      { key: 'spendMonitorMarginMinRatio', order: 19.4942 },
+      { key: 'spendMonitorMarginWindowHours', order: 19.4943 },
+      { key: 'spendMonitorMarginCostFloorUsd', order: 19.4944 },
       { key: 'youngAccountSpendPageUsdPerHour', order: 19.495 },
       { key: 'youngAccountSpendWarnUsdPerHour', order: 19.496 },
       { key: 'freeTierDailySystemCostCapUsd', order: 19.5 },
@@ -3941,6 +3970,16 @@ export const settingsMap = {
     // Plain strings, not z.email(): one malformed stored entry must not fail the whole list and
     // silence every reviewer. The update route refuses invalid entries; readers filter with
     // partitionEmailList.
+    schema: z.array(z.string()),
+  }),
+  ImageModerationEscalationEmails: makeObjectSetting<string[]>({
+    key: 'ImageModerationEscalationEmails',
+    name: 'Image Moderation Escalation Emails',
+    defaultValue: [],
+    description:
+      'Email addresses for the second review step, one per line: alerted when an image moderation incident is escalated, by a reviewer or automatically when it waits too long for a verdict. The email carries incident metadata and an admin link only, never the image or user content. Empty sends no escalation email.',
+    category: 'AI Moderation',
+    // Same shape and read rules as ImageModerationReviewerEmails.
     schema: z.array(z.string()),
   }),
   SkillMarketHighRiskTools: makeStringSetting({
@@ -6060,6 +6099,49 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),
+  spendMonitorMarginEnabled: makeBooleanSetting({
+    key: 'spendMonitorMarginEnabled',
+    name: 'Spend Monitor: Model Margin Check',
+    defaultValue: true,
+    description:
+      'Once a day, shortly after 00:00 UTC and only while Spend Monitor is enabled, flag any model whose credits charged, converted to USD at the lowest per-credit price, fall below its provider cost over the margin window. Posts follow "Post Alerts to Slack".',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorMarginMinRatio: makeNumberSetting({
+    key: 'spendMonitorMarginMinRatio',
+    name: 'Spend Monitor: Model Margin Min Ratio',
+    defaultValue: 1,
+    int: false,
+    min: 0.01,
+    max: 10,
+    description:
+      'Ratio of charged USD to provider cost. A model below it is flagged by the margin check. 1 (default) flags only models charged less than they cost; raise it to flag thin margins too.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorMarginWindowHours: makeNumberSetting({
+    key: 'spendMonitorMarginWindowHours',
+    name: 'Spend Monitor: Model Margin Window',
+    defaultValue: 24,
+    int: true,
+    min: 1,
+    max: 168,
+    description: 'Hours of spend the daily margin check sums per model. 1 to 168.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorMarginCostFloorUsd: makeNumberSetting({
+    key: 'spendMonitorMarginCostFloorUsd',
+    name: 'Spend Monitor: Model Margin Cost Floor',
+    defaultValue: 5,
+    int: true,
+    min: 1,
+    description:
+      'USD of provider cost a model needs in the margin window before the margin check can flag it, so low-volume models do not alert. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
   youngAccountSpendPageUsdPerHour: makeNumberSetting({
     key: 'youngAccountSpendPageUsdPerHour',
     name: 'Young-Account Spend Alarm: Page Ceiling (USD)',
@@ -6820,7 +6902,7 @@ export const settingsMap = {
     name: 'Enable Studio Create v2',
     defaultValue: false,
     description:
-      'Admin-only preview of the restructured Studio Create area. Non-admins never see it, whatever this is set to.',
+      'The restructured Studio Create area, for every user. Off, everyone gets the legacy Studio tabs; this is the kill switch.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 300,
@@ -6829,7 +6911,8 @@ export const settingsMap = {
     key: 'EnableStudioImage',
     name: 'Enable Image in Studio',
     defaultValue: false,
-    description: 'Admin-only preview of the Image tab in Studio. Non-admins never see it, whatever this is set to.',
+    description:
+      'The Image medium in Studio Create, for every user. Needs Enable Studio Create v2; off, the Image medium is hidden.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 301,
@@ -6840,11 +6923,23 @@ export const settingsMap = {
     name: 'Enable Studio Productions',
     defaultValue: false,
     description:
-      'Admin-only preview of Studio Productions (assembling many assets into one piece). Non-admins never see it, whatever this is set to.',
+      'Studio Productions (assembling many assets into one piece). Off, nobody sees it. On, who it opens to is set by Studio Productions Audience.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 302,
     dependsOn: 'EnableStudioCreateV2',
+  }),
+  StudioProductionsAudience: makeStringSetting({
+    key: 'StudioProductionsAudience',
+    name: 'Studio Productions Audience',
+    defaultValue: 'admins',
+    description:
+      "Who Studio Productions opens to once enabled. 'admins' is the preview. 'paid' opens it to admins, developer-tagged users and users on a paid plan; free users see an upgrade prompt.",
+    options: [...STUDIO_PRODUCTIONS_AUDIENCES],
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 303,
+    dependsOn: 'EnableStudioProductions',
   }),
   EnablePotionQuest: makeBooleanSetting({
     key: 'EnablePotionQuest',
@@ -8154,16 +8249,6 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 30,
   }),
-  EnableBmPiDefault: makeBooleanSetting({
-    key: 'EnableBmPiDefault',
-    name: 'B4M Pi: On by default for users',
-    defaultValue: false,
-    description: 'When enabled, B4M Pi is active for users who have never explicitly toggled it.',
-    category: 'Experimental',
-    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 31,
-    dependsOn: 'EnableBmPi',
-  }),
   EnableBmPiJira: makeBooleanSetting({
     key: 'EnableBmPiJira',
     name: 'Enable B4M Pi — Jira Integration',
@@ -8437,7 +8522,7 @@ export const settingsMap = {
     name: 'SecOps Triage Config',
     defaultValue: SecopsTriageConfigSchema.parse({}),
     description:
-      'Configuration for SecOps Triage — auto-creates GitHub issues for critical/high OWASP ZAP scan findings via the b4m-prod GitHub App. Disabled by default.',
+      'Configuration for SecOps triage: files a GitHub issue for each critical or high finding reported by a security scan through the system GitHub connection, and closes it when the finding is gone. Disabled by default.',
     category: 'SecOps',
     order: 131,
     schema: SecopsTriageConfigSchema,
@@ -8513,6 +8598,45 @@ export const settingsMap = {
     category: 'AI',
     order: 148,
     // Consumed by apps/workers/src/queueHandlers/agentExecutor.musicToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  agentImagesPerRun: makeNumberSetting({
+    key: 'agentImagesPerRun',
+    name: 'Agent Images Per Run',
+    defaultValue: 12,
+    min: 1,
+    int: true,
+    description:
+      'Most images image_generation and edit_image may start as jobs in one agent-mode run, counted across the run and all of its subagents. Each image still holds and settles its own credits.',
+    category: 'AI',
+    order: 149,
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.imageToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  agentSpeechClipsPerRun: makeNumberSetting({
+    key: 'agentSpeechClipsPerRun',
+    name: 'Agent Speech Clips Per Run',
+    defaultValue: 10,
+    min: 0,
+    int: true,
+    description:
+      'Most audio_generation speech clips one agent-mode run may start, counted across the run and all of its subagents. 0 refuses speech in agent mode. Each clip still holds and settles its own credits.',
+    category: 'AI',
+    order: 150,
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.audioToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  agentSoundEffectsPerRun: makeNumberSetting({
+    key: 'agentSoundEffectsPerRun',
+    name: 'Agent Sound Effects Per Run',
+    defaultValue: 10,
+    min: 0,
+    int: true,
+    description:
+      'Most audio_generation sound effects one agent-mode run may start, counted across the run and all of its subagents. 0 refuses sound effects in agent mode. Each effect still holds and settles its own credits.',
+    category: 'AI',
+    order: 151,
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.audioToolConfig.ts.
     scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   enableModelDiscovery: makeBooleanSetting({

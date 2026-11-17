@@ -13,6 +13,7 @@ import {
   convertPipelineForDocumentDB,
   executeFacetCompatible,
   mongoose,
+  platformEndUserRepository,
   type IUserObject,
 } from '@bike4mind/database';
 import { ADMIN_USER_PROJECTION, type AdminUserListItem } from '../../app/utils/adminUserProjection';
@@ -29,7 +30,13 @@ import { ACQUISITION_BUDGET_MS, acquisitionCohortUserIds } from '../../analytics
 import { ACQUISITION_UNATTRIBUTED_KEY, acquisitionKeyOf } from '../../app/utils/acquisitionTouch';
 import { signupVerdictUserIds } from '../../analytics/realSignup';
 import { listAiAbuseAdvisories } from '../aiAdvisory/aiAbuseAdvisories';
-import { LIVE_API_KEY_STATUS, adminUsersSort, buildAdminUsersMatch, organizationNamesOf } from './adminUsersQuery';
+import {
+  LIVE_API_KEY_STATUS,
+  PROVIDER_END_USER_ID,
+  adminUsersSort,
+  buildAdminUsersMatch,
+  organizationNamesOf,
+} from './adminUsersQuery';
 
 // ms. A list read that runs past this is a filter the indexes cannot serve; fail it rather than queue.
 // Shared with the Analytics funnel so its counts and this drill-down fail on the same terms.
@@ -100,7 +107,7 @@ export async function adminUsersPipeline(
     : filter.acqSource
       ? acquisitionKeyOf({ source: filter.acqSource, medium: filter.acqMedium, campaign: filter.acqCampaign })
       : undefined;
-  const [verdictUserIds, activeIds, funnelIds, aiAbuseUserIds, acquisitionIds] = await Promise.all([
+  const [verdictUserIds, activeIds, funnelIds, aiAbuseUserIds, acquisitionIds, platformEndUser] = await Promise.all([
     filter.verdict
       ? signupVerdictUserIds({ ...cohortWindow(filter, 'verdict'), verdict: filter.verdict }, cohortOptions)
       : undefined,
@@ -127,6 +134,9 @@ export async function adminUsersPipeline(
           { now, expiresAt: Math.min(Date.now() + ACQUISITION_BUDGET_MS, options.expiresAt ?? Infinity) }
         )
       : undefined,
+    filter.search && PROVIDER_END_USER_ID.test(filter.search)
+      ? platformEndUserRepository.findByProviderEndUserId(filter.search.toLowerCase())
+      : null,
   ]);
   const match = buildAdminUsersMatch(filter, {
     now,
@@ -138,6 +148,7 @@ export async function adminUsersPipeline(
     funnelStepUserIds: funnelIds,
     aiAbuseUserIds,
     acquisitionUserIds: acquisitionIds,
+    platformEndUserOwnerIds: platformEndUser ? [platformEndUser.keyOwnerId] : undefined,
   });
   // adminUsersQuery builds plain objects so it stays mongoose-free and unit-testable.
   return [{ $match: match }] as unknown as mongoose.PipelineStage[];

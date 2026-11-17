@@ -83,6 +83,8 @@ beforeEach(() => {
   vi.stubEnv('LLM_SPEND_ALARM_USD_PER_5MIN', undefined);
   vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR', undefined);
   vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC', undefined);
+  vi.stubEnv('LLM_SPEND_WARN_USD_PER_HOUR', undefined);
+  vi.stubEnv('LLM_SPEND_WARN_USD_PER_HOUR_ANTHROPIC', undefined);
   vi.stubEnv('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR', undefined);
   vi.stubEnv('YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR', undefined);
   vi.stubEnv('LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN', undefined);
@@ -255,11 +257,34 @@ describe('LLM spend alarms', () => {
   it.each([
     ['anthropic', 75],
     ['openai', 20],
+  ])('warns on hourly %s spend at %i USD', async (provider, threshold) => {
+    await load();
+    expect(resources.alarm).toHaveBeenCalledWith(`llmSpendHourlyWarn-${provider}`, {
+      name: `test-app-production-llm-spend-hourly-warn-${provider}`,
+      alarmDescription: `Estimated ${provider} LLM spend in one hour at or above the configured USD warn line`,
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'EstimatedUsd',
+      namespace: 'test-app/production/LLMSpend',
+      dimensions: { Provider: provider },
+      period: 3600,
+      statistic: 'Sum',
+      threshold,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+  });
+
+  it.each([
+    ['anthropic', 150],
+    ['openai', 40],
   ])('pages on hourly %s spend at a ceiling of %i USD', async (provider, threshold) => {
     await load();
     expect(resources.alarm).toHaveBeenCalledWith(`llmSpendHourly-${provider}`, {
       name: `test-app-production-llm-spend-hourly-${provider}`,
-      alarmDescription: `Estimated ${provider} LLM spend in one hour at or above the configured USD ceiling`,
+      alarmDescription: `Estimated ${provider} LLM spend in one hour at or above the configured USD page line`,
       comparisonOperator: 'GreaterThanOrEqualToThreshold',
       evaluationPeriods: 1,
       metricName: 'EstimatedUsd',
@@ -368,6 +393,8 @@ describe('LLM spend alarms', () => {
     vi.stubEnv('YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR', '4');
     vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR', '30');
     vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC', '90');
+    vi.stubEnv('LLM_SPEND_WARN_USD_PER_HOUR', '12');
+    vi.stubEnv('LLM_SPEND_WARN_USD_PER_HOUR_ANTHROPIC', '45');
     vi.stubEnv('LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN', '7');
     await load();
     const fixed: Record<string, number> = {
@@ -376,14 +403,35 @@ describe('LLM spend alarms', () => {
       llmSpendYoungAccounts: 7,
       completionCreditOverdraft: 1,
       'llmSpendHourly-anthropic': 90,
+      'llmSpendHourlyWarn-anthropic': 45,
     };
-    const expected = (name: string) => fixed[name] ?? (name.startsWith('llmSpendHourly-') ? 30 : 60);
+    const expected = (name: string) =>
+      fixed[name] ?? (name.startsWith('llmSpendHourlyWarn-') ? 12 : name.startsWith('llmSpendHourly-') ? 30 : 60);
     for (const [name, args] of resources.alarm.mock.calls) expect(args.threshold).toBe(expected(name));
+  });
+
+  it('caps an unset warn line at a lowered page line', async () => {
+    vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR', '15');
+    vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC', '60');
+    await load();
+    const threshold = (name: string) => resources.alarm.mock.calls.find(([n]) => n === name)?.[1].threshold;
+    expect(threshold('llmSpendHourlyWarn-openai')).toBe(15);
+    expect(threshold('llmSpendHourlyWarn-anthropic')).toBe(60);
+  });
+
+  it.each([
+    ['LLM_SPEND_WARN_USD_PER_HOUR', '41'],
+    ['LLM_SPEND_WARN_USD_PER_HOUR_ANTHROPIC', '151'],
+  ])('rejects a warn line above its page line %s=%s', async (name, raw) => {
+    vi.stubEnv(name, raw);
+    await expect(load()).rejects.toThrow(new RegExp(`${name} \\(${raw}\\) must not exceed`));
   });
 
   it.each([
     ['LLM_SPEND_ALARM_USD_PER_HOUR', '0'],
     ['LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC', '1.5'],
+    ['LLM_SPEND_WARN_USD_PER_HOUR', '0'],
+    ['LLM_SPEND_WARN_USD_PER_HOUR_ANTHROPIC', '2.5'],
   ])('rejects a malformed hourly ceiling %s=%s', async (name, raw) => {
     vi.stubEnv(name, raw);
     await expect(load()).rejects.toThrow(new RegExp(name));
@@ -458,7 +506,11 @@ describe('LLM spend dashboard', () => {
     const byTitle = (title: string) => widgets.find(w => w.properties.title === title)!.properties;
 
     expect(byTitle('LLM Spend - Alarm Status').alarms).toEqual(
-      PROVIDERS.flatMap(p => [`alarm-arn-llmSpendRate-${p}`, `alarm-arn-llmSpendHourly-${p}`])
+      PROVIDERS.flatMap(p => [
+        `alarm-arn-llmSpendRate-${p}`,
+        `alarm-arn-llmSpendHourly-${p}`,
+        `alarm-arn-llmSpendHourlyWarn-${p}`,
+      ])
     );
     expect(byTitle('Estimated USD per 5 min by provider')).toMatchObject({ stacked: true, period: 300 });
     expect(byTitle('Estimated USD per hour by provider')).toMatchObject({
@@ -466,8 +518,10 @@ describe('LLM spend dashboard', () => {
       period: 3600,
       annotations: {
         horizontal: [
-          { label: 'Hourly alarm (anthropic)', value: 75 },
-          { label: 'Hourly alarm (other providers)', value: 20 },
+          { label: 'Hourly page (anthropic)', value: 150 },
+          { label: 'Hourly warn (anthropic)', value: 75 },
+          { label: 'Hourly page (other providers)', value: 40 },
+          { label: 'Hourly warn (other providers)', value: 20 },
         ],
       },
     });
@@ -496,7 +550,7 @@ describe('LLM spend dashboard', () => {
 describe('LLM spend stage gating', () => {
   it.each(['dev', 'production'])('creates resources on %s', async stage => {
     await load(stage);
-    expect(resources.alarm).toHaveBeenCalledTimes(PROVIDERS.length * 2 + 4);
+    expect(resources.alarm).toHaveBeenCalledTimes(PROVIDERS.length * 3 + 4);
     expect(resources.dashboard).toHaveBeenCalledTimes(1);
   });
   it('creates nothing on an unmonitored stage', async () => {
@@ -516,6 +570,8 @@ describe('LLM spend stage gating', () => {
     expect(contract.deployEnv).toContain('LLM_SPEND_ALARM_USD_PER_5MIN');
     expect(contract.deployEnv).toContain('LLM_SPEND_ALARM_USD_PER_HOUR');
     expect(contract.deployEnv).toContain('LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC');
+    expect(contract.deployEnv).toContain('LLM_SPEND_WARN_USD_PER_HOUR');
+    expect(contract.deployEnv).toContain('LLM_SPEND_WARN_USD_PER_HOUR_ANTHROPIC');
     expect(contract.deployEnv).toContain('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR');
     expect(contract.deployEnv).toContain('YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR');
     expect(contract.deployEnv).toContain('LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN');

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Organization, User } from '@bike4mind/database';
+import { Organization, User, platformEndUserRepository } from '@bike4mind/database';
 import type { AdminUsersFilter } from '../../app/utils/adminUsersFilter';
 
 const { cohort } = vi.hoisted(() => ({ cohort: vi.fn<(...args: unknown[]) => Promise<string[]>>() }));
@@ -105,6 +105,42 @@ describe('the Users export request budget', () => {
     pending.resolve([]);
     await vi.advanceTimersByTimeAsync(0);
     expect(User.aggregate).not.toHaveBeenCalled();
+  });
+
+  it('starts no terminal work when a provider owner lookup settles after the response deadline', async () => {
+    const pending =
+      Promise.withResolvers<Awaited<ReturnType<typeof platformEndUserRepository.findByProviderEndUserId>>>();
+    const lookup = vi.spyOn(platformEndUserRepository, 'findByProviderEndUserId').mockReturnValueOnce(pending.promise);
+    const digest = 'ab'.repeat(32);
+    const failure = expect(exportAdminUsers({ ...filter, search: digest.toUpperCase() }, NOW)).rejects.toMatchObject({
+      statusCode: 504,
+    });
+    await vi.advanceTimersByTimeAsync(50_000);
+    await failure;
+    expect(lookup).toHaveBeenCalledExactlyOnceWith(digest);
+    pending.resolve({
+      providerEndUserId: digest,
+      keyOwnerId: 'a'.repeat(24),
+      endUserId: 'fixture-customer',
+      firstSeenAt: NOW,
+      lastSeenAt: NOW,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(User.aggregate).not.toHaveBeenCalled();
+    expect(Organization.find).not.toHaveBeenCalled();
+  });
+
+  it('caps the terminal read by time remaining after both cohort and provider resolution', async () => {
+    const lookup = vi.spyOn(platformEndUserRepository, 'findByProviderEndUserId').mockImplementationOnce(async () => {
+      vi.setSystemTime(NOW.getTime() + 35_000);
+      return null;
+    });
+    await exportAdminUsers({ ...filter, search: 'ab'.repeat(32) }, NOW);
+    expect(lookup).toHaveBeenCalledOnce();
+    expect(cohort).toHaveBeenCalledOnce();
+    expect(option).toHaveBeenCalledOnce();
+    expect(option.mock.calls[0][0].maxTimeMS).toBeGreaterThan(0);
+    expect(option.mock.calls[0][0].maxTimeMS).toBeLessThanOrEqual(15_000);
   });
 
   it('starts no organization lookup when a held user read resolves after the response deadline', async () => {

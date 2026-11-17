@@ -31,7 +31,7 @@ describe.each(VIDEO_MODEL_IDS)('catalog entry %s', id => {
   });
 
   // Otherwise the model would offer a mode no valid request can reach (or a first frame it can never use).
-  it('accepts a first_frame input exactly when it offers image_to_video', () => {
+  it('accepts a first_frame exactly when it offers image_to_video', () => {
     expect(Boolean(caps.inputs.first_frame)).toBe(caps.modes.includes('image_to_video'));
   });
 

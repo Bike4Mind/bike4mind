@@ -18,6 +18,7 @@ const doc = buildOpenApiDocument('9.9.9') as any;
 const completions = doc.paths['/api/ai/v1/completions'].post;
 const tools = doc.paths['/api/ai/v1/tools'].post;
 const chat = doc.paths['/api/chat'].post;
+const me = doc.paths['/api/v1/me'].get;
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 
 describe('buildOpenApiDocument', () => {
@@ -124,16 +125,28 @@ describe('buildOpenApiDocument', () => {
   });
 
   it('auto-injects 401 (and 403 for scoped ops) on authenticated endpoints, streaming included', () => {
-    // Guards the central auth-response injection in registerContract. chatContract
+    // Guards the central auth-response injection in registerContract. GET /api/v1/me
     // declares neither 401 nor 403 itself, so both come purely from the injection;
-    // dropping it silently narrows /api/chat's published spec and generated SDKs
+    // dropping it silently narrows the published spec and generated SDKs
     // stop modelling the missing-credential / under-scoped-key paths.
-    expect(chat.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
+    expect(me.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
     // The scope 403 extends the envelope with the route's required scopes (apiKeyAuth.ts).
-    expect(chat.responses['403'].content['application/json'].schema).toEqual(ref('ScopeForbiddenResponse'));
-    // Completions authenticates before it opens its stream, so it gets the same pair.
+    expect(me.responses['403'].content['application/json'].schema).toEqual(ref('ScopeForbiddenResponse'));
+    expect(chat.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
+    // Completions authenticates before it opens its stream, so it gets the injected 401 too.
     expect(completions.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
-    expect(completions.responses['403'].content['application/json'].schema).toEqual(ref('ScopeForbiddenResponse'));
+  });
+
+  it('publishes the organization policy refusals on the chat and completions 403s', () => {
+    const errorCodes = (op: string) => doc.components.schemas[op].properties.errorCode.enum;
+    expect(chat.responses['403'].content['application/json'].schema).toEqual(ref('sendChatMessageResponse403'));
+    expect(errorCodes('sendChatMessageResponse403')).toEqual(
+      expect.arrayContaining(['account_suspended', 'org_model_not_allowed', 'org_tool_not_allowed'])
+    );
+    expect(completions.responses['403'].content['application/json'].schema).toEqual(ref('createCompletionResponse403'));
+    expect(errorCodes('createCompletionResponse403')).toEqual(
+      expect.arrayContaining(['account_suspended', 'org_model_not_allowed'])
+    );
   });
 
   it('documents every pre-stream completions failure as a JSON error with a real status', () => {
@@ -149,6 +162,8 @@ describe('buildOpenApiDocument', () => {
       'unknown_tool_reference',
       'tool_changes_unsupported',
       'invalid_tool_change',
+      'end_user_id_not_allowed',
+      'invalid_end_user_id',
     ]);
     expect(json('413')).toEqual(ref('ErrorResponse'));
     expect(json('422')).toEqual(ref('createCompletionResponse422'));
@@ -331,8 +346,11 @@ describe('buildOpenApiDocument', () => {
       .filter(([, item]) => Object.values(item).some(op => op.responses && '202' in op.responses))
       .map(([path]) => path);
     expect(queued.length).toBeGreaterThan(0);
+    // Sync audio routes whose 202 (a clip that outlasted the request, opt-in via `Prefer: respond-async`) has no poll
+    // route yet; named instead, until the GET routes land in a later step.
+    const unpollable = new Set(['/api/ai/tts', '/api/ai/sound-effects']);
     for (const path of queued) {
-      expect(asyncJobs).toContain(`GET ${path}/{id}`);
+      expect(asyncJobs).toContain(unpollable.has(path) ? `POST ${path}` : `GET ${path}/{id}`);
     }
   });
 
@@ -431,11 +449,11 @@ describe('buildOpenApiDocument', () => {
   });
 
   it('excludes rate-limit headers from the INJECTED 401/403 but keeps them on a contract-declared 401', () => {
-    // chat declares neither status: both come from registerContract's auth injection
+    // GET /api/v1/me declares neither status: both come from registerContract's auth injection
     // and mean "apiKeyAuth rejected the credential", which happens before
     // apiKeyRateLimit runs - so those responses genuinely carry no rate-limit headers.
-    expect(chat.responses['401'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
-    expect(chat.responses['403'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
+    expect(me.responses['401'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
+    expect(me.responses['403'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
     // tts declares its OWN 401 (provider_not_configured), thrown from the handler
     // long after the middleware set all six. A status-keyed exclusion would have
     // published it as header-less, which is the same spec-vs-runtime drift as the

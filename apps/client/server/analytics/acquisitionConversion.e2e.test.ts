@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { GatewayTimeoutError } from '@bike4mind/common';
-import { AnalyticsUserDay, CreditTransaction, User } from '@bike4mind/database';
+import { AnalyticsUserDay, CreditTransaction, PlatformEndUser, User } from '@bike4mind/database';
 import { acquisitionCohortUserIds } from '@bike4mind/server-utils/analytics/acquisitionConversion';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
@@ -291,6 +291,65 @@ describe('getAcquisitionConversion', () => {
         }
       }
     }
+  });
+
+  it('intersects acquisition and role filters with actual platform-provider owner lookup', async () => {
+    await User.createIndexes();
+    const role = new mongoose.Types.ObjectId();
+    const anotherRole = new mongoose.Types.ObjectId();
+    const digest = 'ab'.repeat(32);
+    const owner = await seedSignup({ firstTouch: { source: 'ads' } }, { adminRoleIds: [role] });
+    const wrongRole = await seedSignup(
+      { firstTouch: { source: 'ads' } },
+      {
+        adminRoleIds: [anotherRole],
+        providerEndUserId: digest,
+      }
+    );
+    const wrongCohort = await seedSignup(
+      { firstTouch: { source: 'news' } },
+      {
+        adminRoleIds: [role],
+        email: `${digest}@outside.customer.example.org`,
+      }
+    );
+    await PlatformEndUser.create([
+      {
+        providerEndUserId: digest,
+        keyOwnerId: String(owner._id),
+        endUserId: 'fixture-customer',
+        firstSeenAt: NOW,
+        lastSeenAt: NOW,
+      },
+      {
+        providerEndUserId: 'cd'.repeat(32),
+        keyOwnerId: String(wrongRole._id),
+        endUserId: 'different-customer',
+        firstSeenAt: NOW,
+        lastSeenAt: NOW,
+      },
+    ]);
+    const filter = {
+      createdFrom: '2026-06-01T00:00:00.000Z',
+      createdTo: '2026-06-15T00:00:00.000Z',
+      acqSource: ' ADS ',
+      acqTouch: 'first',
+      search: digest.toUpperCase(),
+      adminRole: String(role).toUpperCase(),
+    };
+    const idsFor = async (changes: Record<string, unknown> = {}) => {
+      const parsed = AdminUsersFilterSchema.parse({ ...filter, ...changes });
+      const rows = await User.aggregate<{ _id: mongoose.Types.ObjectId }>([
+        ...(await adminUsersPipeline(parsed, NOW)),
+        { $project: { _id: 1 } },
+      ]);
+      return rows.map(row => String(row._id)).sort();
+    };
+    expect(await idsFor()).toEqual([String(owner._id)]);
+    expect(await idsFor({ adminRole: String(anotherRole) })).toEqual([String(wrongRole._id)]);
+    expect(await idsFor({ acqSource: 'news' })).toEqual([String(wrongCohort._id)]);
+    await PlatformEndUser.deleteOne({ providerEndUserId: digest });
+    expect(await idsFor()).toEqual([]);
   });
 
   it('fails a drill-down that outlives its budget with a 504', async () => {

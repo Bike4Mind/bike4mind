@@ -1,4 +1,4 @@
-import { getTextModelCost, resolveAppliedRates, type ModelInfo } from '@bike4mind/common';
+import { getTextModelCost, ModelBackend, resolveAppliedRates, type ModelInfo } from '@bike4mind/common';
 import { AnthropicBackend, OpenAIBackend } from '@bike4mind/llm-adapters';
 import type { ProviderHourlyUsage } from './providerUsageFetchers';
 
@@ -25,18 +25,49 @@ export function resolveUsageModel(modelId: string, models: readonly ModelInfo[])
   return models.find(model => model.id === base) ?? models.find(model => withoutSnapshot(String(model.id)) === base);
 }
 
+const PER_MTOK = 1 / 1_000_000;
+
+/**
+ * Published list prices (base tier, USD per token) for models the organization is billed for that
+ * the adapter tables do not ship. A catalog-only model is priced at settlement from its ModelPrice
+ * row, which this path cannot read: the poller runs without Mongo. An id the adapter table starts
+ * shipping must leave this map.
+ */
+export const USAGE_ONLY_PRICING: Record<UsageReportProvider, Record<string, ModelInfo['pricing']>> = {
+  anthropic: {},
+  openai: {
+    'gpt-6-astra': { 272_000: { input: 10 * PER_MTOK, output: 50 * PER_MTOK, cache_read: 1 * PER_MTOK } },
+    'gpt-6.1-sol': { 272_000: { input: 2 * PER_MTOK, output: 10 * PER_MTOK, cache_read: 0.1 * PER_MTOK } },
+  },
+};
+
 const tables = new Map<UsageReportProvider, Promise<ModelInfo[]>>();
 
 /**
- * The provider's static adapter price table (no network, placeholder key). These are the literals
- * the ledger falls back to; a ModelPrice catalog row overriding one is not seen here.
+ * The provider's static adapter price table (no network, placeholder key), then USAGE_ONLY_PRICING.
+ * These are the literals the ledger falls back to; a ModelPrice catalog row overriding one is not
+ * seen here.
+ *
+ * Image models are kept: the usage report counts their tokens and the OpenAI image literals are
+ * per-token rates. A row sums text and image tokens, so both take the image rates.
  */
 function providerModels(provider: UsageReportProvider): Promise<ModelInfo[]> {
   let table = tables.get(provider);
   if (!table) {
     const backend =
       provider === 'anthropic' ? new AnthropicBackend('static-price-table') : new OpenAIBackend('static-price-table');
-    table = backend.getModelInfo().then(models => models.filter(model => model.type === 'text'));
+    const usageOnly = Object.entries(USAGE_ONLY_PRICING[provider]).map(
+      ([id, pricing]) =>
+        ({
+          id,
+          type: 'text',
+          backend: provider === 'anthropic' ? ModelBackend.Anthropic : ModelBackend.OpenAI,
+          pricing,
+        }) as ModelInfo
+    );
+    table = backend
+      .getModelInfo()
+      .then(models => [...models.filter(model => model.type === 'text' || model.type === 'image'), ...usageOnly]);
     tables.set(provider, table);
   }
   return table;

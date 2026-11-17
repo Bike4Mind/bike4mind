@@ -257,6 +257,9 @@ export class AnthropicBackend implements ICompletionBackend {
   // Anthropic can attribute abuse to an individual user and scope enforcement
   // to them rather than the whole shared platform key. See `toProviderEndUserId`.
   private readonly _endUserId?: string;
+  // Fairness bucket for the shared Anthropic semaphore: the account behind the request. Differs from
+  // _endUserId only for a platform key's end user, whose requests still queue as the key owner's.
+  private readonly _tenantKey?: string;
   /** Catalog view of the model being completed; see DispatchModel. */
   private readonly _dispatch = new DispatchModel();
 
@@ -264,7 +267,12 @@ export class AnthropicBackend implements ICompletionBackend {
     this._dispatch.set(info);
   }
 
-  constructor(apiKey: string | typeof ANTHROPIC_FEDERATED_KEY, logger?: Logger, endUserId?: string) {
+  constructor(
+    apiKey: string | typeof ANTHROPIC_FEDERATED_KEY,
+    logger?: Logger,
+    endUserId?: string,
+    tenantKey?: string
+  ) {
     // Increase maxRetries from default (2) to 5 for better rate limit handling.
     // The SDK has built-in exponential backoff (500ms initial, 8s max, 25% jitter)
     // and respects Retry-After headers from 429 responses.
@@ -300,6 +308,7 @@ export class AnthropicBackend implements ICompletionBackend {
     });
     this.logger = logger ?? new Logger();
     this._endUserId = endUserId;
+    this._tenantKey = tenantKey ?? endUserId;
   }
 
   /**
@@ -1723,7 +1732,7 @@ export class AnthropicBackend implements ICompletionBackend {
             let release: SlotRelease | undefined;
             try {
               const slotRequestedAt = Date.now();
-              release = await acquireSlot({ tenantKey: this._endUserId, signal: combinedSignal });
+              release = await acquireSlot({ tenantKey: this._tenantKey, signal: combinedSignal });
               options._internal?.turnTelemetry?.onSemaphoreWait(Date.now() - slotRequestedAt);
               // Diagnostic logging: Capture payload size to help debug hanging issues
               const payloadForSize = { ...apiParams, stream: true };
@@ -2824,7 +2833,7 @@ export class AnthropicBackend implements ICompletionBackend {
         let release: SlotRelease | undefined;
         try {
           const slotRequestedAt = Date.now();
-          release = await acquireSlot({ tenantKey: this._endUserId, signal: options.abortSignal });
+          release = await acquireSlot({ tenantKey: this._tenantKey, signal: options.abortSignal });
           roundStart = Date.now();
           options._internal?.turnTelemetry?.onSemaphoreWait(roundStart - slotRequestedAt);
           // Wrap with retry for transient network errors (TLS abort, fetch terminated)

@@ -478,11 +478,25 @@ describe('acceptLakeOwnershipOffer', () => {
     expect(upsertGrant).not.toHaveBeenCalled();
   });
 
+  it('refuses an org-admin offer when the offerer is in adminUserIds but has no users[] row', async () => {
+    const { adapters, upsertGrant, resolve } = makeAdapters({
+      offer: offerRow({ offeredByUserId: 'orgAdmin', offeredVia: 'org-admin' }),
+      org: { userId: 'billing', adminUserIds: ['orgAdmin'], users: [{ userId: 'recipient' }] },
+    });
+    await expect(acceptLakeOwnershipOffer('recipient', 'offer1', adapters)).rejects.toThrow(/no longer an admin/i);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(upsertGrant).not.toHaveBeenCalled();
+  });
+
   it('still accepts an org-admin offer while the offerer keeps admin rights', async () => {
     // The control for the refusal above: same roster, but `adminUserIds` still names the offerer.
     const { adapters, upsertGrant } = makeAdapters({
       offer: offerRow({ offeredByUserId: 'orgAdmin', offeredVia: 'org-admin' }),
-      org: { userId: 'billing', adminUserIds: ['orgAdmin'], users: [{ userId: 'recipient' }] },
+      org: {
+        userId: 'billing',
+        adminUserIds: ['orgAdmin'],
+        users: [{ userId: 'orgAdmin' }, { userId: 'recipient' }],
+      },
       grants: [grant({ principalId: 'creator', role: 'owner' })],
     });
     await acceptLakeOwnershipOffer('recipient', 'offer1', adapters);

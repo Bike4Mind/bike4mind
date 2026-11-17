@@ -44,14 +44,15 @@ describe('analytics acquisition route', () => {
   });
 
   it('rejects a bad query without computing anything', async () => {
-    for (const query of [
+    const invalidQueries: Record<string, string>[] = [
       { touch: 'middle' },
       { window: '120' },
       { window: '14' },
       { followUp: '365' },
       { range: '1y' },
       { range: 'custom', from: '2026-01-01' },
-    ]) {
+    ];
+    for (const query of invalidQueries) {
       expect((await run(query))._getStatusCode(), JSON.stringify(query)).toBe(400);
     }
     expect(mocks.summary).not.toHaveBeenCalled();

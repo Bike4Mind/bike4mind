@@ -89,7 +89,7 @@ LAKE_RAG_EVAL_BASE_URL=https://<your-stage-host> \
 LAKE_RAG_EVAL_MODEL=<model id> \
 LAKE_RAG_EVAL_API_KEY=b4m_live_... \
 LAKE_RAG_EVAL_REPORT_PATH=/tmp/lakerag-report.json \
-  pnpm --filter @bike4mind/services test lakeRag/run.live
+  pnpm --filter @bike4mind/services-core test lakeRag/run.live
 ```
 
 | Variable                      | Purpose                                                                                                                                                                                                                                                                                       |

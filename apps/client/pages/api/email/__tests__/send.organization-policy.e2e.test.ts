@@ -18,6 +18,7 @@ vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
   outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@server/utils/emailSendLimits', () => ({ reserveEmailSendBudget: async () => null }));
+vi.mock('@server/utils/recipientSendLimits', () => ({ reserveRecipientSendBudget: async () => undefined }));
 vi.mock('@bike4mind/services', () => ({ notebookCurationService: {} }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ download: transport.download }),

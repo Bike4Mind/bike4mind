@@ -19,6 +19,7 @@ import defineAbilitiesFor from '../../auth/ability';
 import { isAvailable } from '../../services/integrationCircuitBreaker';
 import { recordRateLimitEvent } from '../../utils/cloudwatch';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '../../utils/chatCompletionDefaults';
+import { buildAudioToolJobs } from '../../generationJobs/audioJobWiring';
 import { slackEventPublisher } from './slackEventPublisher';
 import { buildMcpEnvVariables } from '../../utils/mcpEnv';
 
@@ -85,7 +86,9 @@ export function initializeSlackPackage(): void {
       recordRateLimitEvent,
     },
     chatCompletionDefaults: {
-      defaultChatCompletionOptions: getDefaultChatCompletionOptions(),
+      // Not on the shared defaults (an agent-mode host passes its own per-run capped jobs); Slack turns run
+      // audio_generation themselves, as slackQuestProcessor does.
+      defaultChatCompletionOptions: { ...getDefaultChatCompletionOptions(), audioToolJobs: buildAudioToolJobs() },
       getSharedTokenizer,
     },
     eventBus: slackEventPublisher as unknown as ISlackServerDependencies['eventBus'],

@@ -55,6 +55,7 @@ import {
   type ICacheRepository,
   type CompletionRunAttribution,
   isOrgServiceAccountOf,
+  readOrgModelPolicy,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -224,6 +225,11 @@ export interface CompletionParams {
    * Requires `db.organizations`.
    */
   billingOrganizationId?: string;
+  /**
+   * Model policy of an organization that governs the turn without paying for it (an org-owned embed agent
+   * serving an identified end user, who is billed personally). Ignored when `billingOrganizationId` is set.
+   */
+  governingOrgModelPolicy?: unknown;
   /** Correlation id for the usage-event dual write. Synthesized when absent. */
   requestId?: string;
   /**
@@ -237,6 +243,11 @@ export interface CompletionParams {
    * billing owner. Recorded on the ledger row (`metadata.run`) and the usage event; never charged.
    */
   run?: CompletionRunAttribution;
+  /**
+   * Opaque identifier the provider receives instead of the hash of `userId`: set for a platform key's
+   * end user (toPlatformEndUserProviderId). `userId` still owns billing and every other check.
+   */
+  providerEndUserId?: string;
   /**
    * Where this completion request originated. Recorded on the credit
    * transaction (and analytics event) so reports can break down usage by
@@ -713,6 +724,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Fail closed: an admission over no user would skip the account-state gate it exists to apply.
   if (!storedActor) throw new UnauthorizedError('User not found');
   const actor = params.scopeActor ? params.scopeActor(storedActor) : storedActor;
+  const orgModelPolicy = readOrgModelPolicy(organization ? organization.modelPolicy : params.governingOrgModelPolicy);
   await createModelAdmission({
     user: actor,
     configs: modelConfigs,
@@ -720,6 +732,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     models,
     enforceCredits: Boolean(enforceCredits),
     freeTierAllowedModels,
+    orgModelPolicy,
   }).assert(model);
 
   if (requestedModelInfo && !supportsAssistantPrefill(requestedModelInfo) && hasAssistantPrefill(messages)) {
@@ -736,6 +749,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     requested: requestedModelInfo,
     models,
     adminSettings: db.adminSettings,
+    orgModelPolicy,
     logger,
   });
   // External completion routes skip the per-user rpm middleware, so the restricted-tier rpm is enforced here.
@@ -763,6 +777,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     modelInfo,
     logger: logger ?? new Logger(),
     endUserId: userId,
+    providerEndUserId: params.providerEndUserId,
   });
 
   if (!llm) {

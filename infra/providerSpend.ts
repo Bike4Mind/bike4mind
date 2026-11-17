@@ -2,20 +2,24 @@
  * Provider-reported LLM spend: hourly alarms per provider on ProviderReportedUsd, which the
  * providerUsagePoll cron (infra/cron.ts) reads from each provider's own usage report, plus alarms
  * on the poller failing or skipping a provider, and a small dashboard. The ledger-derived twin is
- * infra/llmSpend.ts.
+ * infra/llmSpend.ts. Also alarms on the nightly spend reconciliation (spendReconciliationCron) drifting
+ * from the provider's billing or reconciling nothing.
  *
- * Also holds the access policy and the access alarms for the provider admin key store
- * (infra/providerAdminKeys.ts) the two spend crons read.
+ * Also holds the access policy, the access alarms and the key age alarms for the provider admin key
+ * store (infra/providerAdminKeys.ts) the two spend crons read.
  */
 
 import { providerUsagePollCron, spendReconciliationCron } from './cron';
 import { dlqAlarmTopic, oobAlarmTopic } from './dlqAlarms';
 import {
+  PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS,
   PROVIDER_ADMIN_KEY_PROVIDERS,
+  providerAdminKeyAgeAlarmDescription,
   providerAdminKeyChangeEventPattern,
   providerAdminKeyKmsEventPattern,
   providerAdminKeyLogsPolicy,
   providerAdminKeyReadEventPattern,
+  providerAdminKeySecretName,
   providerAdminKeySecretPolicy,
   providerAdminKeyStore,
   type ProviderAdminKeyStore,
@@ -149,6 +153,63 @@ if (isMonitoredStage) {
     });
   }
 
+  if (spendReconciliationCron) {
+    // SpendReconciliationDrift counts closed-month rows whose deltaPct exceeds
+    // SPEND_RECONCILIATION_DRIFT_ALERT_PCT (@bike4mind/common), the banner's error band.
+    new aws.cloudwatch.MetricAlarm('spendReconciliationDrift', {
+      name: `${prefix}-spend-reconciliation-drift`,
+      alarmDescription:
+        "Nightly spend reconciliation: a provider's billed spend for the closed month differs from our internal COGS by more than the error band",
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'SpendReconciliationDrift',
+      namespace: LLM_SPEND_NAMESPACE,
+      period: 86400,
+      statistic: 'Maximum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      // No okActions: the next day's empty bucket reads as OK before the 06:00 run, so a drift
+      // that persists would post a recovery every night and page again each morning.
+      alarmActions: actions,
+      tags: { Application: 'LLMSpend', Severity: 'Critical' },
+    });
+
+    // Separate from drift: every provider-month was skipped or failed, so the run checked nothing.
+    new aws.cloudwatch.MetricAlarm('spendReconciliationNothingReconciled', {
+      name: `${prefix}-spend-reconciliation-nothing-reconciled`,
+      alarmDescription:
+        'Nightly spend reconciliation reconciled no provider-month: every provider was skipped or failed',
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'SpendReconciliationNothingReconciled',
+      namespace: LLM_SPEND_NAMESPACE,
+      period: 86400,
+      statistic: 'Maximum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+
+    // A crash, timeout or failed publish never reaches the metrics above, so both would stay silent.
+    new aws.cloudwatch.MetricAlarm('spendReconciliationErrors', {
+      name: `${prefix}-spend-reconciliation-errors`,
+      alarmDescription:
+        'The nightly spend reconciliation Lambda failed, so the drift and nothing-reconciled alarms are blind',
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 86400,
+      statistic: 'Sum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: spendReconciliationCron.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+  }
+
   if (adminKeyStore) {
     // Matched events land here so the CloudTrail record of each access is kept.
     const accessLogGroup = new aws.cloudwatch.LogGroup('ProviderAdminKeyAccessLogs', {
@@ -239,6 +300,34 @@ if (isMonitoredStage) {
         treatMissingData: 'notBreaching',
         alarmActions: actions,
         tags: { Application: 'LLMSpend', Severity: 'Critical' },
+      });
+    }
+
+    // Fires on the ProviderAdminKeyAgeDays datum the poller publishes each hour for a key it read
+    // from the store. Writing a new secret version resets the age. One breaching hour in the last
+    // three keeps the state, so a run or two that publishes no age does not clear and re-fire it.
+    for (const provider of PROVIDER_ADMIN_KEY_PROVIDERS) {
+      const days = PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS[provider];
+      new aws.cloudwatch.MetricAlarm(`ProviderAdminKeyAgeAlarm-${provider}`, {
+        name: `${prefix}-provider-admin-key-age-${provider}`,
+        alarmDescription: providerAdminKeyAgeAlarmDescription({
+          provider,
+          days,
+          secretName: providerAdminKeySecretName($app.name, $app.stage, provider),
+          namespace: LLM_SPEND_NAMESPACE,
+        }),
+        comparisonOperator: 'GreaterThanOrEqualToThreshold',
+        evaluationPeriods: 3,
+        datapointsToAlarm: 1,
+        metricName: 'ProviderAdminKeyAgeDays',
+        namespace: LLM_SPEND_NAMESPACE,
+        dimensions: { Provider: provider },
+        period: 3600,
+        statistic: 'Maximum',
+        threshold: days,
+        treatMissingData: 'notBreaching',
+        alarmActions: actions,
+        tags: { Application: 'LLMSpend', Severity: 'Medium' },
       });
     }
   }

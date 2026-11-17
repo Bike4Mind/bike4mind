@@ -1,3 +1,5 @@
+import { TooManyRequestsError } from '@bike4mind/common';
+import { httpErrorToResponse } from '@server/middlewares/errorHandler';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const tryAddWithinLimitFixedWindow = vi.hoisted(() => vi.fn());
@@ -6,6 +8,8 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: { tryAddWithinLimitFixedWindow, decrementCounter },
   User: {},
 }));
+const reserveRecipientSendBudget = vi.hoisted(() => vi.fn());
+vi.mock('./recipientSendLimits', () => ({ reserveRecipientSendBudget }));
 vi.mock('@server/utils/mailer/inviteNotificationEmail', () => ({ sendInviteNotificationEmails: vi.fn() }));
 
 import { reserveInviteSendBudget } from './inviteSendLimits';
@@ -21,6 +25,7 @@ const inWindow = () => ({ success: true, count: 1, expiresAt: new Date(Date.now(
 describe('reserveInviteSendBudget', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    reserveRecipientSendBudget.mockResolvedValue(undefined);
     tryAddWithinLimitFixedWindow.mockResolvedValue(inWindow());
   });
 
@@ -113,5 +118,30 @@ describe('reserveInviteSendBudget', () => {
     await reservation.release();
 
     expect(decrementCounter).not.toHaveBeenCalled();
+  });
+
+  it('applies the per-recipient limit to typed addresses only, and gives the charges back when refused', async () => {
+    reserveRecipientSendBudget.mockResolvedValueOnce({ retryAfter: 60 });
+
+    await expect(reserveInviteSendBudget('u1', MIXED_RECIPIENTS, { chargeTypedAddresses: true })).rejects.toThrow(
+      /Too many email invitations/
+    );
+    expect(reserveRecipientSendBudget).toHaveBeenCalledWith(['a@example.com', 'b@example.com']);
+    expect(decrementCounter).toHaveBeenCalledTimes(3 + 2);
+  });
+
+  it('keeps the recipient retry delay in the actual HTTP error response', async () => {
+    reserveRecipientSendBudget.mockResolvedValueOnce({ retryAfter: 73 });
+    const error: unknown = await reserveInviteSendBudget('u1', MIXED_RECIPIENTS, { chargeTypedAddresses: true }).catch(
+      error => error
+    );
+    expect(error).toBeInstanceOf(TooManyRequestsError);
+    if (!(error instanceof TooManyRequestsError)) throw new Error('Expected a quota refusal');
+    expect(httpErrorToResponse(error, undefined).headers['Retry-After']).toBe('73');
+  });
+
+  it('does not apply the per-recipient limit to types that mail no typed address', async () => {
+    await reserveInviteSendBudget('u1', MIXED_RECIPIENTS, { chargeTypedAddresses: false });
+    expect(reserveRecipientSendBudget).not.toHaveBeenCalled();
   });
 });
