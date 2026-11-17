@@ -1235,6 +1235,9 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
     ],
     // Image jobs run our post-generation scan before the image is stored.
     permissions: [{ actions: ['rekognition:DetectModerationLabels'], resources: ['*'] }],
+    // Rekognition rejects WebP, so the scan decodes a WebP render to JPEG with this codec, which the bundle
+    // cannot carry (b4m-core/utils/src/imageModeration/webpDecode.ts reads it from the task root).
+    copyFiles: [{ from: 'b4m-core/utils/node_modules/@jsquash/webp/codec/dec/webp_dec.wasm', to: 'webp_dec.wasm' }],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       ...TEST_GENERATION_PROVIDER_ENVIRONMENT,

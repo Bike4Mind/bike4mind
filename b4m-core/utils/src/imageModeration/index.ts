@@ -9,6 +9,7 @@ import { imageSize } from 'image-size';
 import { Logger } from '@bike4mind/observability';
 import { imagePixelCount, MAX_IMAGE_PIXELS } from '../imageResize';
 import { extractAnimationFrames } from './animatedFrames';
+import { decodeWebp } from './webpDecode';
 
 /**
  * Rekognition top-level ("L1") categories we block on. Broadening is a policy change.
@@ -27,6 +28,22 @@ import { extractAnimationFrames } from './animatedFrames';
  * mild content the product allows (see safety_tolerance cap).
  */
 export const BLOCKED_CATEGORIES = ['Explicit', 'Explicit Nudity'] as const;
+
+const isWebp = (bytes: Buffer) =>
+  bytes.subarray(0, 4).toString('latin1') === 'RIFF' && bytes.subarray(8, 12).toString('latin1') === 'WEBP';
+
+/** Decodes bytes for a re-encode. jimp ships no WebP decoder, so a still WebP goes through webpDecode. */
+async function readImage(bytes: Buffer) {
+  // Dynamic import mirrors ensureImageWithinDimensionLimit in llm/utils.ts: a static jimp
+  // import makes bundlers (CLI's tsdown) treat it as external even where it's never called.
+  const { Jimp } = await import('jimp');
+  if (!isWebp(bytes)) return Jimp.read(bytes);
+  const { data, width, height } = await decodeWebp(bytes);
+  // Unpooled copy: jimp's fromBitmap re-reads the backing ArrayBuffer from offset 0 (see animatedFrames).
+  const pixels = Buffer.alloc(data.length);
+  pixels.set(data);
+  return Jimp.fromBitmap({ data: pixels, width, height });
+}
 
 /** Confidence floor (0-100) for a block. Rekognition returns per-label confidence. */
 export const EXPLICIT_NUDITY_CONFIDENCE = 90;
@@ -239,12 +256,9 @@ export class RekognitionImageModerationService implements ImageModerationService
         `Image declares ${pixels} pixels, over the ${MAX_IMAGE_PIXELS}-pixel decode limit`
       );
     }
-    // Dynamic import mirrors ensureImageWithinDimensionLimit in llm/utils.ts: a static jimp
-    // import makes bundlers (CLI's tsdown) treat it as external even where it's never called.
-    const { Jimp } = await import('jimp');
-    let image: Awaited<ReturnType<typeof Jimp.read>>;
+    let image: Awaited<ReturnType<typeof readImage>>;
     try {
-      image = await Jimp.read(bytes);
+      image = await readImage(bytes);
     } catch (err) {
       this.logger.warn(
         `[ImageModeration] oversized image (${bytes.length}B) could not be decoded for downscaling, unsupported format: ${(err as Error).message}`
@@ -273,12 +287,12 @@ export class RekognitionImageModerationService implements ImageModerationService
   }
 
   /**
-   * Re-encode arbitrary jimp-decodable bytes as JPEG. Used reactively when
-   * Rekognition rejects the original format - jimp decodes jpeg/png/webp/gif/bmp/tiff, a
-   * broader set than Rekognition itself accepts (jpeg/png, webp in some regions), so this
-   * recovers formats Rekognition can't parse but jimp can. If jimp ALSO can't decode the
-   * bytes (e.g. HEIC, SVG), it throws and the caller treats that as a confirmed unsupported
-   * format rather than a transient failure.
+   * Re-encode arbitrary readImage-decodable bytes as JPEG. Used reactively when
+   * Rekognition rejects the original format - jimp decodes jpeg/png/gif/bmp/tiff and
+   * webpDecode covers still WebP, a broader set than Rekognition itself accepts (jpeg/png), so
+   * this recovers formats Rekognition can't parse. If neither can decode the bytes (e.g. HEIC,
+   * SVG), it throws and the caller treats that as a confirmed unsupported format rather than a
+   * transient failure.
    */
   private async transcodeToJpeg(bytes: Buffer): Promise<Buffer> {
     const pixels = imagePixelCount(bytes);
@@ -287,9 +301,7 @@ export class RekognitionImageModerationService implements ImageModerationService
         `Image declares ${pixels} pixels, over the ${MAX_IMAGE_PIXELS}-pixel decode limit`
       );
     }
-    // Dynamic import for the same bundler reason as fitForInlineDetection.
-    const { Jimp } = await import('jimp');
-    const image = await Jimp.read(bytes);
+    const image = await readImage(bytes);
     return Buffer.from(await image.getBuffer('image/jpeg'));
   }
 
