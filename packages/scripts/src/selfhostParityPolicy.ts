@@ -1278,8 +1278,8 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:DlqAlarmTopic',
-    'f27b400cd1e2f5fddc61613dde994f0a4e04898c9aa66282bde4c2c6d96fab1c',
-    ['cloudwatch:DescribeAlarms', 'ssm:GetParameter']
+    'c95d18991e51f31c89d306fc1e5aeaca70b18d2ccf7c297383113a2dbd12c063',
+    ['cloudwatch:DescribeAlarms', 'cloudwatch:GetInsightRuleReport', 'ssm:GetParameter']
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:OobAlarmTopicEmailSub',

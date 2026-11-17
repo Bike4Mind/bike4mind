@@ -31,8 +31,11 @@ export type AlarmCategory = 'cost' | 'abuse' | 'jobs' | 'infra' | 'security';
 
 export const ALARM_CATEGORIES: readonly AlarmCategory[] = ['cost', 'abuse', 'jobs', 'infra', 'security'];
 
-/** Extra data the relay loads before posting; see youngAccountSpendDetail.ts and providerSpendDetail.ts. */
-export type AlarmDetailKind = 'young-account-spend' | 'provider-spend';
+/**
+ * Extra data the relay loads before posting; see youngAccountSpendDetail.ts, providerSpendDetail.ts
+ * and refusedRequestBurstDetail.ts.
+ */
+export type AlarmDetailKind = 'young-account-spend' | 'provider-spend' | 'refused-request-burst';
 
 export type AlarmLinkKey =
   | 'ai-advisory'
@@ -578,6 +581,18 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       'Many Google or other OAuth sign-ups were refused in five minutes because registration is closed to them. The refusing IPs are blocked automatically.',
     action: 'Check the WAF block list. Nothing else is needed unless real users report being refused.',
     links: ['waf-block-list'],
+  },
+  'refused-request-burst': {
+    title: 'One IP is collecting refused API requests',
+    level: 'warn',
+    category: 'security',
+    unit: 'refused requests from the top IP',
+    meaning:
+      'A single client IP sent many signed-out API requests in 15 minutes that were refused (401 to 405). Normal clients send a handful; a steady stream usually means a scripted client walking the API. Nothing is blocked automatically.',
+    action:
+      'Look at the top IP, its paths and any accounts listed above. A signed-out client polling one or two session paths is a stale tab: acknowledge and move on. Many distinct paths, admin or internal routes, or a burst that repeats across windows is probing: hand the IP to the WAF owner and suspend any listed account that is clearly abusive.',
+    links: ['waf-block-list'],
+    detail: 'refused-request-burst',
   },
   'stream-idle-timeouts': {
     title: 'AI replies are being cut off by our idle watchdog',

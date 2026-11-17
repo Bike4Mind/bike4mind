@@ -40,6 +40,7 @@ export * from './youngAccountSpendAlert';
 export * from './providerAdminKeys';
 export * from './providerSpend';
 export * from './authAbuseAlarms';
+export * from './refusedRequestAlarms';
 export * from './apiProbeDetector';
 // serviceHealthAlarms must come after subscriberFanout + chatCompletion (it alarms on both)
 export * from './serviceHealthAlarms';

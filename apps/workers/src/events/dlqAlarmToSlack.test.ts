@@ -28,6 +28,11 @@ const providerDetail = vi.hoisted(() => ({
 }));
 vi.mock('./providerSpendDetail', () => providerDetail);
 
+const refusedDetail = vi.hoisted(() => ({
+  refusedRequestBurstSection: vi.fn(async () => '*Top refused signed-out callers*\n- `203.0.113.9`: 180 refused'),
+}));
+vi.mock('./refusedRequestBurstDetail', () => refusedDetail);
+
 import { handler } from './dlqAlarmToSlack';
 
 const makeEvent = (message: string): SNSEvent => ({
@@ -82,6 +87,7 @@ describe('dlqAlarmToSlack handler', () => {
     resource.App.stage = 'production';
     detail.youngAccountSpendSection.mockClear();
     providerDetail.providerSpendSection.mockClear();
+    refusedDetail.refusedRequestBurstSection.mockClear();
     fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, statusText: 'OK' });
     vi.stubGlobal('fetch', fetchMock);
   });
@@ -113,6 +119,15 @@ describe('dlqAlarmToSlack handler', () => {
     expect(JSON.stringify(body.attachments)).toContain('*Where the spend went*');
   });
 
+  it('names the top callers on a refused-request burst alarm', async () => {
+    await handler(makeEvent(alarmPayload('ALARM', 'bike4mind-production-refused-request-burst')));
+    expect(refusedDetail.refusedRequestBurstSection).toHaveBeenCalledOnce();
+    expect(detail.youngAccountSpendSection).not.toHaveBeenCalled();
+    expect(providerDetail.providerSpendSection).not.toHaveBeenCalled();
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(JSON.stringify(body.attachments)).toContain('*Top refused signed-out callers*');
+  });
+
   it('does not look accounts up for other alarms, resolutions, or alarms this stage drops', async () => {
     await handler(makeEvent(alarmPayload('ALARM')));
     await handler(makeEvent(alarmPayload('OK', YOUNG_ACCOUNT_ALARM)));
@@ -120,6 +135,7 @@ describe('dlqAlarmToSlack handler', () => {
     await handler(makeEvent(alarmPayload('ALARM', 'bike4mind-dev-test-alarm')));
     expect(detail.youngAccountSpendSection).not.toHaveBeenCalled();
     expect(providerDetail.providerSpendSection).not.toHaveBeenCalled();
+    expect(refusedDetail.refusedRequestBurstSection).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
