@@ -26,18 +26,21 @@ const finished = (kind: 'speech' | 'sound_effect', output: { fileId?: string; du
   payload: { output },
 });
 
-const makeJobs = (overrides: Partial<ProductionAudioSettings['jobs']> = {}): ProductionAudioSettings['jobs'] => ({
-  createSpeechJob: vi.fn(async () => created('speech-job', 'queued')),
-  createSoundEffectJob: vi.fn(async () => created('sfx-job', 'queued')),
-  runInline: vi.fn(async () => null),
-  readOutput: vi.fn(),
-  cancel: vi.fn(),
-  ...overrides,
-}) as unknown as ProductionAudioSettings['jobs'];
+const makeJobs = (overrides: Partial<ProductionAudioSettings['jobs']> = {}): ProductionAudioSettings['jobs'] =>
+  ({
+    createSpeechJob: vi.fn(async () => created('speech-job', 'queued')),
+    createSoundEffectJob: vi.fn(async () => created('sfx-job', 'queued')),
+    runInline: vi.fn(async () => null),
+    readOutput: vi.fn(),
+    cancel: vi.fn(),
+    ...overrides,
+  }) as unknown as ProductionAudioSettings['jobs'];
 
 describe('createProductionAudio', () => {
   it('starts a speech job with a decodable container, posts its card and returns the saved clip', async () => {
-    const jobs = makeJobs({ runInline: vi.fn(async () => finished('speech', { fileId: FILE_ID, durationSeconds: 2.5 })) });
+    const jobs = makeJobs({
+      runInline: vi.fn(async () => finished('speech', { fileId: FILE_ID, durationSeconds: 2.5 })),
+    });
     const context = makeContext();
     const audio = createProductionAudio(context, { voice: 'nova', jobs });
 
@@ -47,9 +50,10 @@ describe('createProductionAudio', () => {
     const [input] = vi.mocked(jobs.createSpeechJob).mock.calls[0]!;
     expect(input.request).toMatchObject({ text: 'Meet the bottle that keeps up.', voice: 'nova', format: 'mp3' });
     expect(input).toMatchObject({ source: 'agent', saveToFiles: true, questId: 'quest1' });
-    expect((context as { statusUpdate: ReturnType<typeof vi.fn> }).statusUpdate).toHaveBeenCalledWith({
-      generationJobs: [{ id: 'speech-job', kind: 'speech' }],
-    });
+    expect((context as { statusUpdate: ReturnType<typeof vi.fn> }).statusUpdate).toHaveBeenCalledWith(
+      {},
+      'Generating voiceover...'
+    );
   });
 
   it('starts a sound effect job for the asked length and falls back to it when the output has none', async () => {
