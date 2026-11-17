@@ -44,8 +44,8 @@ describe('StatusSummary', () => {
     expect(a).toHaveTextContent(/^Product-a/);
     expect(b).toHaveTextContent(/^Product-b/);
     const [e2eA, e2eB] = screen.getAllByTestId('qa-summary-e2e');
-    expect(e2eA).toHaveTextContent('E2E tests passed98.8%7 of 13 runs with no failures');
-    expect(e2eB).toHaveTextContent('E2E tests passed100.0%1 of 1 run with no failures');
+    expect(e2eA).toHaveTextContent('E2E tests passed98.8%7 of 13 runs passed');
+    expect(e2eB).toHaveTextContent('E2E tests passed100.0%1 of 1 run passed');
     expect(screen.getAllByTestId('qa-summary-latency')).toHaveLength(1);
     expect(screen.queryAllByRole('heading')).toEqual([]);
     expect(screen.getByTestId('qa-summary-latency')).toHaveTextContent(

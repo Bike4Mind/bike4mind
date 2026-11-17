@@ -7,7 +7,7 @@ import type { QaCounts, QaMetric, QaRunStatus } from '@bike4mind/common';
  *
  * Definitions:
  * - E2E pass rate = passed / (passed + failed + skipped + notStarted), summed over runs.
- * - A run "with no failures" has failed 0, notStarted 0 and is not an infra-error.
+ * - An E2E run passed (cleanRuns) when it has failed 0, notStarted 0 and is not an infra-error.
  * - Latency check rate = checks within their threshold / checks with a threshold. A latency run that
  *   reported no latency result at all (it crashed before measuring) counts each of its tests, at
  *   least one, as a check over the limit, so a crash lowers the rate instead of vanishing from it.

@@ -26,10 +26,10 @@ function rangeLine(range: DayRange): string {
   return `${plural(spanDays(range), 'day')} (${days})`;
 }
 
-/** "<b>7</b> of <b>13</b> runs with no failures" */
-const runsLine = (count: number, runs: number, tail: string): ReactNode => (
+/** "<b>7</b> of <b>13</b> runs passed"; what "passed" means per figure is in the footer. */
+const runsLine = (count: number, runs: number): ReactNode => (
   <>
-    <b>{count}</b> of <b>{runs}</b> {runs === 1 ? 'run' : 'runs'} {tail}
+    <b>{count}</b> of <b>{runs}</b> {runs === 1 ? 'run' : 'runs'} passed
   </>
 );
 
@@ -123,7 +123,7 @@ const StatusSummary: FC<{
                     testId="qa-summary-e2e"
                     label="E2E tests passed"
                     value={formatPercent(p.e2e.passRate)}
-                    detail={runsLine(p.e2e.cleanRuns, p.e2e.runs, 'with no failures')}
+                    detail={runsLine(p.e2e.cleanRuns, p.e2e.runs)}
                   />
                 )}
                 {p.latency && (
@@ -131,7 +131,7 @@ const StatusSummary: FC<{
                     testId="qa-summary-latency"
                     label="Latency checks within limit"
                     value={formatPercent(p.latency.checkRate)}
-                    detail={runsLine(p.latency.passedRuns, p.latency.runs, 'passed')}
+                    detail={runsLine(p.latency.passedRuns, p.latency.runs)}
                   />
                 )}
               </Box>
@@ -140,9 +140,9 @@ const StatusSummary: FC<{
         </Box>
       )}
       <Typography level="body-xs">
-        E2E: passed tests out of all tests, not-started included. A run with no failures has no failed or not-started
-        tests. Latency: model checks within their time limit; a run that crashed before measuring counts each of its
-        tests as over the limit. A latency run passed when every check was within its limit.
+        E2E: passed tests out of all tests, not-started included; an E2E run passed when it had no failed or not-started
+        tests. Latency: model checks within their time limit, where a run that crashed before measuring counts each of
+        its tests as over the limit; a latency run passed when every check was within its limit.
       </Typography>
     </Stack>
   );
