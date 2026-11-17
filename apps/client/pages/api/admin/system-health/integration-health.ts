@@ -134,7 +134,7 @@ const handler = adminApi({
     });
 
     // Clear the DB-backed circuit breaker cache so the override takes effect immediately
-    clearCache(integration as IntegrationName);
+    await clearCache(integration as IntegrationName);
 
     // When resetting to auto, also clear the in-memory circuit breaker state
     if (mode === 'auto') {

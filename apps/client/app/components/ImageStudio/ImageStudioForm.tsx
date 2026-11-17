@@ -1,12 +1,17 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Typography } from '@mui/joy';
 import type { ImageModels } from '@bike4mind/common';
 import ImageBrowserModal from '@client/app/components/Agent/ImageBrowserModal';
 import CapabilityForm from '@client/app/components/Studio/CapabilityForm';
+import type { ReferenceCutout } from '@client/app/components/Studio/capabilityFields';
+import { useConsumeStudioRestore, type StudioRestore } from '@client/app/components/Studio/restore/studioRestore';
 import type { NonEmptyList } from '@client/app/components/Studio/useCapabilityFormState';
 import { useImageBrowser } from '@client/app/hooks/agent/useImageBrowser';
 import type { CreateStudioImageJobsBody } from '@client/app/hooks/data/studioImageJobs';
 import { imageCapabilityFields, type ImageFormState } from './imageFields';
+import { referenceFileIdToSend } from './referenceCutouts';
+import { useReferenceCutouts } from './useReferenceCutouts';
+import { restoreImageForm } from './imageRestore';
 import {
   EMPTY_IMAGE_INTENT,
   imageCreditsPerImage,
@@ -26,7 +31,12 @@ type ImageStudioFormProps = {
 
 const INITIAL_FORM: ImageFormState = { prompt: '', count: 1, intent: EMPTY_IMAGE_INTENT };
 
-const toCreateBody = (model: ImageModels, { prompt, count, intent }: ImageFormState): CreateStudioImageJobsBody => ({
+// A reference whose background was removed is sent as its cutout.
+const toCreateBody = (
+  model: ImageModels,
+  { prompt, count, intent }: ImageFormState,
+  cutoutOf: (fileId: string) => ReferenceCutout | undefined
+): CreateStudioImageJobsBody => ({
   count,
   request: {
     model,
@@ -36,7 +46,10 @@ const toCreateBody = (model: ImageModels, { prompt, count, intent }: ImageFormSt
     ...(intent.aspectRatio && { aspectRatio: intent.aspectRatio }),
     ...(intent.quality && { quality: intent.quality }),
     ...(intent.references.length > 0 && {
-      inputs: intent.references.map(file => ({ role: 'reference' as const, fileId: file.fileId })),
+      inputs: intent.references.map(file => ({
+        role: 'reference' as const,
+        fileId: referenceFileIdToSend({ ...file, cutout: cutoutOf(file.fileId) }),
+      })),
     }),
   },
 });
@@ -50,7 +63,20 @@ const toCreateBody = (model: ImageModels, { prompt, count, intent }: ImageFormSt
 const ImageStudioForm = ({ models, isSubmitting, onSubmit }: ImageStudioFormProps) => {
   const [form, setForm] = useState<ImageFormState>(INITIAL_FORM);
   const [pickedModel, setPickedModel] = useState<ImageModels | undefined>();
+  // Why a restored take's values did not all come back; cleared by the next model pick, like a switch's notices.
+  const [restoreNotices, setRestoreNotices] = useState<string[]>([]);
+  const applyRestore = useCallback(
+    (restore: StudioRestore) => {
+      const restored = restoreImageForm(restore, models);
+      setForm(restored.value.form);
+      setPickedModel(restored.value.modelId);
+      setRestoreNotices(restored.notices);
+    },
+    [models]
+  );
+  useConsumeStudioRestore('image', applyRestore);
   const imageBrowser = useImageBrowser();
+  const cutouts = useReferenceCutouts();
   const cards = useMemo(() => imageModelCards(models, form.intent), [models, form.intent]);
   // The user's pick stands while its card can be picked; until then, and if a models refetch drops it, the default.
   const model = cards.some(card => card.id === pickedModel && card.unavailableReason === null)
@@ -70,15 +96,20 @@ const ImageStudioForm = ({ models, isSubmitting, onSubmit }: ImageStudioFormProp
     setForm(current => ({ ...current, intent: { ...current.intent, ...patch } }));
   const selectModel = (modelId: string) => {
     const card = cards.find(candidate => candidate.id === modelId);
-    if (isCatalogImageModel(modelId) && card?.unavailableReason === null) setPickedModel(modelId);
+    if (isCatalogImageModel(modelId) && card?.unavailableReason === null) {
+      setPickedModel(modelId);
+      setRestoreNotices([]);
+    }
   };
 
   const modelName = cards.find(card => card.id === model)?.name ?? model;
   // Matches the notice the shared form state gives video and music when a models refetch drops the pick.
-  const changes =
-    pickedModel !== undefined && pickedModel !== model
+  const changes = [
+    ...restoreNotices,
+    ...(pickedModel !== undefined && pickedModel !== model
       ? [`The selected model is no longer available; switched to ${modelName}.`]
-      : [];
+      : []),
+  ];
   const perImage = imageCreditsPerImage(model, form.intent);
   const canSubmit = form.prompt.trim().length > 0 && imageModelWhyNot(model, form.intent) === null;
 
@@ -93,12 +124,14 @@ const ImageStudioForm = ({ models, isSubmitting, onSubmit }: ImageStudioFormProp
         update,
         updateIntent,
         pickReference: () => imageBrowser.openImageBrowser(),
+        cutoutOf: cutouts.cutoutOf,
+        toggleCutout: cutouts.toggleCutout,
       })}
       estimateCredits={perImage === null ? null : perImage * form.count}
       submitLabel={form.count === 1 ? 'Generate image' : `Generate ${form.count} images`}
       canSubmit={canSubmit}
       isSubmitting={isSubmitting}
-      onSubmit={() => onSubmit(toCreateBody(model, form))}
+      onSubmit={() => onSubmit(toCreateBody(model, form, cutouts.cutoutOf))}
     >
       <ImageBrowserModal
         isOpen={imageBrowser.isImageBrowserOpen}

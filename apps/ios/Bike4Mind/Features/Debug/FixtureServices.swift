@@ -5,7 +5,12 @@
   /// Launch with the environment variable `B4M_UI_FIXTURES=1` to run the signed-in UI against canned data:
   /// no sign-in, no network. For screenshots and UI work while a stage with the endpoints is unavailable.
   enum FixtureServices {
-    static var isEnabled: Bool { ProcessInfo.processInfo.environment["B4M_UI_FIXTURES"] == "1" }
+    /// Also accepts the launch argument `-B4M_UI_FIXTURES 1` (Maestro's `launchApp.arguments`), which lands in the
+    /// UserDefaults argument domain, because the Maestro suite cannot set environment variables.
+    static var isEnabled: Bool {
+      ProcessInfo.processInfo.environment["B4M_UI_FIXTURES"] == "1"
+        || UserDefaults.standard.string(forKey: "B4M_UI_FIXTURES") == "1"
+    }
 
     static let api: any B4MAPI = FixtureAPI()
     static let media: any MediaAPI = FixtureMediaAPI()
@@ -344,6 +349,34 @@
       func media(id: String) async throws -> MediaItem {
         guard let item = Self.all.first(where: { $0.id == id }) else { throw APIError.notFound }
         return await Self.withContent(item)
+      }
+
+      /// Video 3 was animated from image 0: its trail has a parent and image 0's has a child.
+      func lineage(of id: String) async throws -> FileLineage {
+        func node(_ item: MediaItem, generator: String, request: JSONObject? = nil) -> LineageNode {
+          LineageNode(
+            id: item.id, kind: item.kind, fileName: item.fileName, mimeType: item.mimeType, generator: generator,
+            modelID: nil, prompt: "A fox in the snow", createdAt: item.createdAt, request: request)
+        }
+        let image = Self.all[0]
+        let video = Self.all[3]
+        let edge = LineageEdge(parentID: image.id, childID: video.id, role: .firstFrame)
+        switch id {
+        case video.id:
+          return FileLineage(
+            fileID: id,
+            ancestors: [
+              node(video, generator: "video", request: ["durationSeconds": .number(6)]),
+              node(image, generator: "image"),
+            ],
+            children: [], edges: [edge])
+        case image.id:
+          return FileLineage(
+            fileID: id, ancestors: [node(image, generator: "image")], children: [node(video, generator: "video")],
+            edges: [edge])
+        default:
+          return FileLineage(fileID: id, ancestors: [], children: [], edges: [])
+        }
       }
 
       private static func withContent(_ item: MediaItem) async -> MediaItem {

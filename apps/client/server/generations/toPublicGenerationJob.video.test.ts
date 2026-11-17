@@ -67,6 +67,13 @@ const succeeded = (location: 'files' | 'generated') =>
   });
 
 describe('toPublicGenerationJob (video)', () => {
+  it.each([true, false])('echoes an explicit draft=%s on job read-back', async draft => {
+    const stored = job({ payload: { ...job().payload, request: { ...job().payload.request, draft } } });
+    const view = await toPublicVideoGeneration(stored, { sign: vi.fn(), now: () => new Date() });
+    expect(view).toMatchObject({ draft });
+    expect(VideoGenerationSchema.parse(view)).toEqual(view);
+  });
+
   it('never echoes the generated-image key of an agent job', async () => {
     const key = '86cdc650-43d2-416e-aca6-23ff4fe23081.png';
     const agentJob = job({

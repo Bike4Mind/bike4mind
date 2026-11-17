@@ -23,6 +23,7 @@ import {
 } from '@mui/joy';
 import { useMemo, useRef, useState } from 'react';
 import { useSettingsDraft } from './SettingsDraftProvider';
+import { useDlqQueues } from '@client/app/hooks/data/dlqManagement';
 import { AdminDialog } from './shared/AdminDialog';
 import { SettingFieldRow } from './shared/SettingFieldRow';
 import { useAdminSaveShortcut } from './shared/adminKeyboard';
@@ -57,6 +58,52 @@ function readStored(stored: unknown): ConfigObject {
 }
 
 const sameValue = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+
+function DlqQueueModes({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: unknown;
+  disabled: boolean;
+  onChange(next: ConfigObject): void;
+}) {
+  const queues = useDlqQueues();
+  const modes = toConfigObject(value);
+  const labels = [...new Set([...(queues.data?.map(queue => queue.label) ?? []), ...Object.keys(modes)])].sort();
+  return (
+    <Stack gap={1}>
+      <Typography level="title-sm">DLQ queue modes</Typography>
+      <Typography level="body-sm">
+        Unlisted queues recommend by default. Act remains recommend-only; no autonomous actions run.
+      </Typography>
+      {queues.isError && (
+        <Typography level="body-sm">
+          Queue discovery failed. Saved overrides remain editable; refresh to load other queues.
+        </Typography>
+      )}
+      {labels.map(label => (
+        <FormControl key={label}>
+          <FormLabel>{label}</FormLabel>
+          <Select
+            value={typeof modes[label] === 'string' ? modes[label] : 'recommend'}
+            disabled={disabled}
+            slotProps={{ button: { 'data-testid': `admin-setting-dlq-mode-${label}` } }}
+            onChange={(_, mode) => {
+              if (mode) onChange({ ...modes, [label]: mode });
+            }}
+          >
+            {['off', 'recommend', 'act'].map(mode => (
+              <Option key={mode} value={mode}>
+                {mode}
+              </Option>
+            ))}
+          </Select>
+        </FormControl>
+      ))}
+    </Stack>
+  );
+}
 
 const parseNumber = (text: string) => (text.trim() === '' ? NaN : Number(text));
 const formatNumber = (value: unknown) => (typeof value === 'number' && !Number.isNaN(value) ? String(value) : '');
@@ -173,6 +220,8 @@ function FieldControl({
           sx={{ alignSelf: 'flex-start', mt: 0.5 }}
         />
       );
+    case 'dlqQueueModes':
+      return <DlqQueueModes value={value} disabled={disabled} onChange={onChange} />;
     case 'unsupported':
       return (
         <Typography level="body-sm" data-testid={testId}>

@@ -4,6 +4,7 @@ import { computeHelpCorpusHash } from '@bike4mind/infra';
 import { DEFAULT_LAMBDA_ENVIRONMENT, runsScheduledJobs } from './constants';
 import { emailJobQueue } from './emailMarketing';
 import { allSecrets } from './secrets';
+import { providerAdminKeyCronAccess, providerAdminKeyStore } from './providerAdminKeys';
 import { eventBus } from './bus';
 import {
   researchEngineQueue,
@@ -40,6 +41,33 @@ import './businessMetricAlerts';
 import './imageModerationReviewSweep';
 import './adminMorningBrief';
 import './organizationRetention';
+import { secrets } from './secrets';
+import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
+import { dlqTriagePermissions } from './dlqTriagePermissions';
+
+if (runsScheduledJobs && dlqTriageSweepDeadLetter) {
+  const deadLetter = dlqTriageSweepDeadLetter;
+  const sweep = new sst.aws.Cron('dlqTriageSweep', {
+    schedule: 'cron(0 8 * * ? *)',
+    function: {
+      vpc: lambdaVpc,
+      handler: 'apps/workers/src/cron/dlqTriage.handler',
+      runtime: 'nodejs24.x',
+      timeout: '5 minutes',
+      retries: 0,
+      link: [secrets.MONGODB_URI, secrets.SLACK_ALARMS_WEBHOOK_URL, secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
+      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      permissions: [
+        deadLetter.sendPermission,
+        { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
+        dlqTriagePermissions(),
+      ],
+      transform: deadLetter.functionTarget,
+    },
+    transform: { target: { ...deadLetter.ruleTarget.target, input: undefined } },
+  });
+  deadLetter.allowRules([$util.output(sweep)]);
+}
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',
@@ -1199,6 +1227,10 @@ const agentExecutionAbandonedSweepCron = runsScheduledJobs
     })
   : undefined;
 
+// Provider admin keys come from the secret store in infra/providerAdminKeys.ts where it exists; the
+// linked Config secrets remain the source for stages and self-host deploys without it.
+const providerAdminKeyAccess = providerAdminKeyCronAccess(providerAdminKeyStore);
+
 // Spend Reconciliation -- fetches authoritative billing from Anthropic/OpenAI
 // admin APIs and compares against internal COGS estimates.
 const spendReconciliationCron = runsScheduledJobs
@@ -1212,7 +1244,16 @@ const spendReconciliationCron = runsScheduledJobs
         link: [...allSecrets],
         environment: {
           ...DEFAULT_LAMBDA_ENVIRONMENT,
+          ...providerAdminKeyAccess.environment,
         },
+        // PutMetricData publishes the drift and nothing-reconciled metrics alarmed in infra/providerSpend.ts.
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+          ...providerAdminKeyAccess.permissions,
+        ],
       },
     })
   : undefined;
@@ -1233,12 +1274,14 @@ const providerUsagePollCron = runsScheduledJobs
         link: [...allSecrets],
         environment: {
           ...DEFAULT_LAMBDA_ENVIRONMENT,
+          ...providerAdminKeyAccess.environment,
         },
         permissions: [
           {
             actions: ['cloudwatch:PutMetricData'],
             resources: ['*'],
           },
+          ...providerAdminKeyAccess.permissions,
         ],
       },
     })

@@ -128,6 +128,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.domain.policy_updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.domain.removed': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.custom_mcp_policy.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.model_policy.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.slack_channel_api_posting.updated': { category: 'org', severity: 'notice', write: 'strict' },
   // Target the member, not the org, so the entry reaches the user's Admin log; organizationId names the org.
   'org.member.added': { category: 'org', severity: 'notice', write: 'strict' },
@@ -312,6 +313,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'ops.sre.tracking_retried': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.dlq.replayed': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.dlq.discarded': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.dlq.triage.dismissed': { category: 'support', severity: 'notice', write: 'strict' },
+  'ops.dlq.triage.accepted': { category: 'support', severity: 'notice', write: 'strict' },
   'ops.agent_executions.cleaned_up': { category: 'support', severity: 'notice', write: 'bestEffort' },
   // Handler coverage: billing and model config
   'settings.model_price.repriced': { category: 'settings', severity: 'notice', write: 'strict' },

@@ -720,7 +720,7 @@
           }
         ]
       },
-      "ScopeForbiddenResponse": {
+      "sendChatMessageResponse403": {
         "type": "object",
         "properties": {
           "error": {
@@ -737,7 +737,10 @@
           "errorCode": {
             "type": "string",
             "enum": [
-              "account_suspended"
+              "account_suspended",
+              "model_requires_subscription",
+              "org_model_not_allowed",
+              "org_tool_not_allowed"
             ]
           },
           "suspension": {
@@ -1101,7 +1104,9 @@
             "type": "string",
             "enum": [
               "account_suspended",
-              "billing_organization_mismatch"
+              "billing_organization_mismatch",
+              "org_model_not_allowed",
+              "org_tool_not_allowed"
             ]
           },
           "suspension": {
@@ -1342,6 +1347,72 @@
           "total_iterations",
           "created_at",
           "updated_at"
+        ]
+      },
+      "ScopeForbiddenResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "account_suspended"
+            ]
+          },
+          "suspension": {
+            "type": "object",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "multiple_accounts",
+                  "automated_misuse",
+                  "payment_fraud",
+                  "prohibited_content",
+                  "terms_violation"
+                ],
+                "description": "Which Terms of Service rule the account was suspended under. New categories may be added."
+              },
+              "terms_url": {
+                "type": "string",
+                "description": "The policy page for this category. Absent on self-hosted deployments."
+              },
+              "appeal_url": {
+                "type": "string",
+                "description": "Where to appeal the suspension. Absent on self-hosted deployments."
+              }
+            },
+            "required": [
+              "reason_category"
+            ]
+          },
+          "required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route accepts. Holding any one of them satisfies it."
+          },
+          "also_required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
+          }
+        },
+        "required": [
+          "error"
         ]
       },
       "getSessionResponse200": {
@@ -2337,6 +2408,74 @@
           "error"
         ]
       },
+      "createCompletionResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "account_suspended",
+              "model_requires_subscription",
+              "org_model_not_allowed"
+            ]
+          },
+          "suspension": {
+            "type": "object",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "multiple_accounts",
+                  "automated_misuse",
+                  "payment_fraud",
+                  "prohibited_content",
+                  "terms_violation"
+                ],
+                "description": "Which Terms of Service rule the account was suspended under. New categories may be added."
+              },
+              "terms_url": {
+                "type": "string",
+                "description": "The policy page for this category. Absent on self-hosted deployments."
+              },
+              "appeal_url": {
+                "type": "string",
+                "description": "Where to appeal the suspension. Absent on self-hosted deployments."
+              }
+            },
+            "required": [
+              "reason_category"
+            ]
+          },
+          "required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route accepts. Holding any one of them satisfies it."
+          },
+          "also_required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "createCompletionResponse404": {
         "type": "object",
         "properties": {
@@ -3004,7 +3143,7 @@
               "runId",
               "role"
             ],
-            "description": "Groups this request's spend under a run you created with `POST /api/v1/completion-runs`. A run you did not create is refused with `404` (`errorCode: \"run_not_found\"`)."
+            "description": "Groups this request's spend under a run you created with `POST /api/v1/completion-runs`. A run you did not create is refused with `404` (`errorCode: \"run_not_found\"`), as is a read of its spend."
           },
           "options": {
             "type": "object",
@@ -3296,6 +3435,370 @@
           "rootSessionId": "session-42"
         }
       },
+      "getCompletionRunUsageResponse200": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "A run id issued by `POST /api/v1/completion-runs`."
+          },
+          "rootSessionId": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "settled": {
+            "type": "object",
+            "properties": {
+              "creditsCharged": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Credits the ledger recorded for these requests: the same amount each `settled` stream event reported."
+              },
+              "requests": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Settled requests counted."
+              },
+              "inputTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "outputTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cacheReadTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cacheWriteTokens": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "creditsCharged",
+              "requests",
+              "inputTokens",
+              "outputTokens",
+              "cacheReadTokens",
+              "cacheWriteTokens"
+            ],
+            "description": "Every settled request attributed to the run, each counted once."
+          },
+          "byRole": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "creditsCharged": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Credits the ledger recorded for these requests: the same amount each `settled` stream event reported."
+                },
+                "requests": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Settled requests counted."
+                },
+                "inputTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "outputTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cacheReadTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cacheWriteTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "root",
+                    "worker"
+                  ]
+                }
+              },
+              "required": [
+                "creditsCharged",
+                "requests",
+                "inputTokens",
+                "outputTokens",
+                "cacheReadTokens",
+                "cacheWriteTokens",
+                "role"
+              ]
+            }
+          },
+          "byPurpose": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "creditsCharged": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Credits the ledger recorded for these requests: the same amount each `settled` stream event reported."
+                },
+                "requests": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Settled requests counted."
+                },
+                "inputTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "outputTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cacheReadTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cacheWriteTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "purpose": {
+                  "type": "string",
+                  "enum": [
+                    "turn",
+                    "title",
+                    "compaction",
+                    "suggestion",
+                    "explore",
+                    "review"
+                  ],
+                  "description": "`turn` when sent without one."
+                }
+              },
+              "required": [
+                "creditsCharged",
+                "requests",
+                "inputTokens",
+                "outputTokens",
+                "cacheReadTokens",
+                "cacheWriteTokens",
+                "purpose"
+              ]
+            }
+          },
+          "byModel": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "creditsCharged": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Credits the ledger recorded for these requests: the same amount each `settled` stream event reported."
+                },
+                "requests": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Settled requests counted."
+                },
+                "inputTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "outputTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cacheReadTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cacheWriteTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "model": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "creditsCharged",
+                "requests",
+                "inputTokens",
+                "outputTokens",
+                "cacheReadTokens",
+                "cacheWriteTokens",
+                "model"
+              ]
+            },
+            "description": "Grouped by the model each request asked for, which is not always the model that ran."
+          },
+          "byAttempt": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "creditsCharged": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Credits the ledger recorded for these requests: the same amount each `settled` stream event reported."
+                },
+                "requests": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Settled requests counted."
+                },
+                "inputTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "outputTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cacheReadTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cacheWriteTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "root",
+                    "worker"
+                  ]
+                },
+                "taskId": {
+                  "type": "string"
+                },
+                "attemptId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "creditsCharged",
+                "requests",
+                "inputTokens",
+                "outputTokens",
+                "cacheReadTokens",
+                "cacheWriteTokens",
+                "role"
+              ]
+            },
+            "description": "One entry per distinct role, `taskId` and `attemptId` sent; absent ids are their own entry. At most 500, largest spend first."
+          },
+          "byAttemptTruncated": {
+            "type": "boolean",
+            "description": "True when the run has more attempts than `byAttempt` lists; `settled` still counts all of them."
+          }
+        },
+        "required": [
+          "runId",
+          "createdAt",
+          "settled",
+          "byRole",
+          "byPurpose",
+          "byModel",
+          "byAttempt",
+          "byAttemptTruncated"
+        ],
+        "example": {
+          "runId": "0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80",
+          "rootSessionId": "session-42",
+          "createdAt": "2026-11-10T12:00:00.000Z",
+          "settled": {
+            "creditsCharged": 412,
+            "requests": 9,
+            "inputTokens": 18200,
+            "outputTokens": 4100,
+            "cacheReadTokens": 52000,
+            "cacheWriteTokens": 6400
+          },
+          "byRole": [
+            {
+              "role": "root",
+              "creditsCharged": 412,
+              "requests": 9,
+              "inputTokens": 18200,
+              "outputTokens": 4100,
+              "cacheReadTokens": 52000,
+              "cacheWriteTokens": 6400
+            }
+          ],
+          "byPurpose": [
+            {
+              "purpose": "turn",
+              "creditsCharged": 412,
+              "requests": 9,
+              "inputTokens": 18200,
+              "outputTokens": 4100,
+              "cacheReadTokens": 52000,
+              "cacheWriteTokens": 6400
+            }
+          ],
+          "byModel": [
+            {
+              "model": "claude-sonnet-5-5",
+              "creditsCharged": 412,
+              "requests": 9,
+              "inputTokens": 18200,
+              "outputTokens": 4100,
+              "cacheReadTokens": 52000,
+              "cacheWriteTokens": 6400
+            }
+          ],
+          "byAttempt": [
+            {
+              "role": "root",
+              "creditsCharged": 412,
+              "requests": 9,
+              "inputTokens": 18200,
+              "outputTokens": 4100,
+              "cacheReadTokens": 52000,
+              "cacheWriteTokens": 6400
+            }
+          ],
+          "byAttemptTruncated": false
+        }
+      },
+      "getCompletionRunUsageResponse404": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "run_not_found"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "errorCode"
+        ]
+      },
       "synthesizeSpeechResponse200": {
         "anyOf": [
           {
@@ -3534,7 +4037,9 @@
             "type": "string",
             "enum": [
               "account_suspended",
-              "billing_organization_mismatch"
+              "billing_organization_mismatch",
+              "org_model_not_allowed",
+              "org_tool_not_allowed"
             ]
           },
           "suspension": {
@@ -4137,7 +4642,9 @@
             "type": "string",
             "enum": [
               "account_suspended",
-              "billing_organization_mismatch"
+              "billing_organization_mismatch",
+              "org_model_not_allowed",
+              "org_tool_not_allowed"
             ]
           },
           "suspension": {
@@ -5469,7 +5976,8 @@
                         "reason": {
                           "type": "string",
                           "enum": [
-                            "requires_paid_plan"
+                            "requires_paid_plan",
+                            "org_policy"
                           ]
                         }
                       },
@@ -5973,7 +6481,8 @@
                         "reason": {
                           "type": "string",
                           "enum": [
-                            "requires_paid_plan"
+                            "requires_paid_plan",
+                            "org_policy"
                           ]
                         }
                       },
@@ -7075,7 +7584,9 @@
             "type": "string",
             "enum": [
               "account_suspended",
-              "billing_organization_mismatch"
+              "billing_organization_mismatch",
+              "org_model_not_allowed",
+              "org_tool_not_allowed"
             ]
           },
           "suspension": {
@@ -7507,7 +8018,9 @@
             "type": "string",
             "enum": [
               "account_suspended",
-              "billing_organization_mismatch"
+              "billing_organization_mismatch",
+              "org_model_not_allowed",
+              "org_tool_not_allowed"
             ]
           },
           "suspension": {
@@ -11224,6 +11737,7 @@
           "generationJobs": {},
           "agentVideoClipsClaimed": {},
           "agentMusicTracksClaimed": {},
+          "agentImagesClaimed": {},
           "oob": {},
           "promptMeta": {},
           "status": {},
@@ -11289,6 +11803,7 @@
               "generationJobs": {},
               "agentVideoClipsClaimed": {},
               "agentMusicTracksClaimed": {},
+              "agentImagesClaimed": {},
               "oob": {},
               "promptMeta": {},
               "status": {},
@@ -12460,6 +12975,10 @@
               "4k"
             ]
           },
+          "draft": {
+            "type": "boolean",
+            "description": "Whether this job requested draft quality; absent for requests that omitted draft."
+          },
           "source": {
             "type": "string",
             "enum": [
@@ -12686,6 +13205,10 @@
               "4k"
             ]
           },
+          "draft": {
+            "type": "boolean",
+            "description": "Whether this job requested draft quality; absent for requests that omitted draft."
+          },
           "source": {
             "type": "string",
             "enum": [
@@ -12867,7 +13390,9 @@
             "type": "string",
             "enum": [
               "account_suspended",
-              "billing_organization_mismatch"
+              "billing_organization_mismatch",
+              "org_model_not_allowed",
+              "org_tool_not_allowed"
             ]
           },
           "suspension": {
@@ -12941,6 +13466,9 @@
               "unexpected_input_image",
               "unsupported_input_role",
               "unsupported_audio_option",
+              "unsupported_keyframes",
+              "invalid_keyframes",
+              "unsupported_draft",
               "invalid_request",
               "model_disabled",
               "model_unavailable",
@@ -12980,6 +13508,9 @@
               "unexpected_input_image",
               "unsupported_input_role",
               "unsupported_audio_option",
+              "unsupported_keyframes",
+              "invalid_keyframes",
+              "unsupported_draft",
               "invalid_request",
               "model_disabled",
               "model_unavailable",
@@ -13014,7 +13545,7 @@
               "text_to_video",
               "image_to_video"
             ],
-            "description": "Defaults to image_to_video when a first_frame input (or input_image_file_id) is set, else text_to_video."
+            "description": "Defaults to image_to_video when keyframes, a first_frame input or input_image_file_id is set, else text_to_video."
           },
           "duration_seconds": {
             "type": "number",
@@ -13079,6 +13610,34 @@
           },
           "audio": {
             "type": "boolean"
+          },
+          "keyframes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "time_seconds": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "file_id",
+                "time_seconds"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "maxItems": 100,
+            "description": "Owned image files pinned to timestamps, in strictly increasing order starting at 0 and not exceeding duration_seconds. Cannot be combined with inputs or input_image_file_id. Requires model keyframes support; its max limits the count (FLUX 3: 10). Keyframe image mode is admitted separately from modes."
+          },
+          "draft": {
+            "type": "boolean",
+            "description": "Generate a lower-cost preview when true; omitted or false requests full quality. Requires model draft support at the requested resolution. FLUX 3 drafts require 720p and cost $0.06 per second."
           },
           "organization_id": {
             "type": [
@@ -13161,6 +13720,10 @@
               "1080p",
               "4k"
             ]
+          },
+          "draft": {
+            "type": "boolean",
+            "description": "Whether this job requested draft quality; absent for requests that omitted draft."
           },
           "source": {
             "type": "string",
@@ -13392,6 +13955,10 @@
                     "1080p",
                     "4k"
                   ]
+                },
+                "draft": {
+                  "type": "boolean",
+                  "description": "Whether this job requested draft quality; absent for requests that omitted draft."
                 },
                 "source": {
                   "type": "string",
@@ -13732,6 +14299,51 @@
                     "optional",
                     "none"
                   ]
+                },
+                "keyframes": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "max": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [
+                    "max"
+                  ],
+                  "description": "Timestamped keyframe limit; null when unsupported."
+                },
+                "draft": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "resolutions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "360p",
+                          "480p",
+                          "720p",
+                          "1080p",
+                          "4k"
+                        ]
+                      }
+                    },
+                    "credits_per_second": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "resolutions",
+                    "credits_per_second"
+                  ],
+                  "description": "Draft resolutions and price; null when unsupported."
                 },
                 "credits_per_second": {
                   "type": [
@@ -14282,7 +14894,9 @@
             "type": "string",
             "enum": [
               "account_suspended",
-              "billing_organization_mismatch"
+              "billing_organization_mismatch",
+              "org_model_not_allowed",
+              "org_tool_not_allowed"
             ]
           },
           "suspension": {
@@ -22569,7 +23183,7 @@
       "post": {
         "operationId": "sendChatMessage",
         "summary": "Send a chat message",
-        "description": "Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`; one whose reasoning model spends its whole output budget thinking is answered with a 422 or 502 (see those responses). Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: \"error\"`, since the ACK was already sent. A terminal `status: \"stopped\"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: \"error\"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure is a classified billing reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has two members, but only `insufficient_credits` is raised as a quest errorCode by any current throw site on this endpoint - `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A caller must treat `type: \"error\"` OR a terminal `status: \"stopped\"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.",
+        "description": "Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`; one whose reasoning model spends its whole output budget thinking is answered with a 422 or 502 (see those responses). Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: \"error\"`, since the ACK was already sent. A terminal `status: \"stopped\"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: \"error\"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure is a classified billing reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has two members, but only `insufficient_credits` is raised as a quest errorCode by any current throw site on this endpoint - `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A caller must treat `type: \"error\"` OR a terminal `status: \"stopped\"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Organization-policy preflight refusals use 403 with `errorCode: \"org_model_not_allowed\"` or `\"org_tool_not_allowed\"`. An explicit-model JWT request can instead be accepted and refused during quest execution: that refusal appears on the 200 `wait: true` body or polled quest as `type: \"error\"`, without a policy `errorCode`. Check the quest outcome as described above. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.",
         "tags": [
           "AI"
         ],
@@ -22724,11 +23338,11 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
+            "description": "The API key does not hold any of the required scopes, the account is suspended (`errorCode: \"account_suspended\"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: \"model_requires_subscription\"`), organization-policy preflight refuses the model (`errorCode: \"org_model_not_allowed\"`), or an API-key caller named a built-in tool the organization does not allow (`errorCode: \"org_tool_not_allowed\"`).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/sendChatMessageResponse403"
                 }
               }
             },
@@ -22737,6 +23351,42 @@
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
                 "schema": {
                   "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
@@ -23267,7 +23917,7 @@
             }
           },
           "403": {
-            "description": "The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`), or a non-admin caller sent `confidence_overrides`.",
+            "description": "The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`), or a non-admin caller sent `confidence_overrides`, or an API-key caller named built-in `tools` the billed organization does not allow (`errorCode: org_tool_not_allowed`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -27394,7 +28044,7 @@
       "post": {
         "operationId": "createCompletion",
         "summary": "Create a chat completion",
-        "description": "OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, then one `settled` event once credits are committed (the charge can be 0), terminated by `data: [DONE]`. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. A final non-blank assistant message is an assistant prefill, except a server-tool continuation ending in `server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. Check the model's `supports_assistant_prefill` field from `GET /api/v1/models` before sending one. Authenticate with an API key (`b4m_live_`) or a JWT.\n\nRUNS AND SETTLEMENT. To group the spend of a multi-agent run (a root session and the workers it spawns), mint a run id with `POST /api/v1/completion-runs` and send it as `run` on each request. Spend is recorded against the run, never charged twice. The `settled` event (`{ type, requestId, creditsCharged, usdCost, runId }`) arrives after the last content event and before `[DONE]`, once the charge is committed: `creditsCharged` is what the ledger recorded, which can be below the terminal event's `credits.used` when the balance capped it, and `requestId` is the `X-Request-ID` you sent (or a generated one). Use it to count a settled charge once when your client sees the same event twice (replay or reconnect). Send a fresh `X-Request-ID` per request: reusing one does not deduplicate charges, since the server charges every request.\n\nTOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `\"anthropic\"` or `\"bedrock\"`), a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ \"serverTool\": { \"type\": \"tool_search_tool_regex_20251119\", \"name\": \"tool_search_tool_regex\" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: \"anthropic\", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: \"pause_turn\"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ \"type\": \"tool_reference\", \"tool_name\": \"...\" }` blocks inside a `tool_result`'s content. On every other model `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.\n\nERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: \"unknown_model\"` for an unknown model), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: \"model_requires_subscription\"` (upgrade the plan or pick a free-tier model), a body over 25 MB `413`, any other body that fails schema validation `422`, insufficient credits `422` with `errorCode: \"insufficient_credits\"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: \"run_not_found\"`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: \"provider_not_configured\"` (retryable). A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with `errorCode: \"invalid_request\"` (do not retry it unchanged). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), `output_budget_exhausted` when a reasoning model spent your whole `max_tokens` thinking and wrote no answer (raise `max_tokens` or omit it; do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.",
+        "description": "OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, then one `settled` event once credits are committed (the charge can be 0), terminated by `data: [DONE]`. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. A final non-blank assistant message is an assistant prefill, except a server-tool continuation ending in `server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. Check the model's `supports_assistant_prefill` field from `GET /api/v1/models` before sending one. Authenticate with an API key (`b4m_live_`) or a JWT.\n\nRUNS AND SETTLEMENT. To group the spend of a multi-agent run (a root session and the workers it spawns), mint a run id with `POST /api/v1/completion-runs` and send it as `run` on each request. Spend is recorded against the run, never charged twice. The `settled` event (`{ type, requestId, creditsCharged, usdCost, runId }`) arrives after the last content event and before `[DONE]`, once the charge is committed: `creditsCharged` is what the ledger recorded, which can be below the terminal event's `credits.used` when the balance capped it, and `requestId` is the `X-Request-ID` you sent (or a generated one). Use it to count a settled charge once when your client sees the same event twice (replay or reconnect). Send a fresh `X-Request-ID` per request: reusing one does not deduplicate charges, since the server charges every request.\n\nTOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `\"anthropic\"` or `\"bedrock\"`), a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ \"serverTool\": { \"type\": \"tool_search_tool_regex_20251119\", \"name\": \"tool_search_tool_regex\" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: \"anthropic\", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: \"pause_turn\"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ \"type\": \"tool_reference\", \"tool_name\": \"...\" }` blocks inside a `tool_result`'s content. On every other model `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.\n\nERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: \"unknown_model\"` for an unknown model), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: \"model_requires_subscription\"` (upgrade the plan or pick a free-tier model), a model the caller's organization policy does not allow `403` with `errorCode: \"org_model_not_allowed\"`, a body over 25 MB `413`, any other body that fails schema validation `422`, insufficient credits `422` with `errorCode: \"insufficient_credits\"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: \"run_not_found\"`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: \"provider_not_configured\"` (retryable). A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with `errorCode: \"invalid_request\"` (do not retry it unchanged). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), `output_budget_exhausted` when a reasoning model spent your whole `max_tokens` thinking and wrote no answer (raise `max_tokens` or omit it; do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.",
         "tags": [
           "AI"
         ],
@@ -27472,11 +28122,11 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
+            "description": "The API key does not hold any of the required scopes, the account is suspended (`errorCode: \"account_suspended\"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: \"model_requires_subscription\"`), or the caller's organization policy does not allow the model (`errorCode: \"org_model_not_allowed\"`).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/createCompletionResponse403"
                 }
               }
             },
@@ -27992,6 +28642,390 @@
             "lang": "Python",
             "label": "requests",
             "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/completion-runs\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"rootSessionId\": \"session-42\"\n    },\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/completion-runs/{runId}/usage": {
+      "get": {
+        "operationId": "getCompletionRunUsage",
+        "summary": "Get a completion run's spend",
+        "description": "Returns what a run has cost so far: every `POST /api/ai/v1/completions` request sent with this `run.runId` whose credits have settled, summed once per request from the credit ledger, with breakdowns by role, purpose, model and task attempt. `creditsCharged` is the sum of the amounts each request's `settled` stream event reports, so a client can reconcile its own totals against it. Only settled charges count: a request still running, one whose credits never settled, and one sent without `run` are not included. Readable only with a credential of the same user and billing owner that minted the run; any other run id, including one that does not exist, gets `404` (`errorCode: \"run_not_found\"`).",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "A run id issued by `POST /api/v1/completion-runs`."
+            },
+            "required": true,
+            "description": "A run id issued by `POST /api/v1/completion-runs`.",
+            "name": "runId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run and its settled spend.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/getCompletionRunUsageResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The run does not exist, or another user or billing owner minted it (`errorCode: \"run_not_found\"`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/getCompletionRunUsageResponse404"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:chat",
+          "ai:generate"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X GET \"https://your-deployment.example.com/api/v1/completion-runs/<runId>/usage\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/completion-runs/<runId>/usage\", {\n  method: \"GET\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/completion-runs/<runId>/usage\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
           }
         ]
       }
@@ -47922,7 +48956,7 @@
             }
           },
           "422": {
-            "description": "The request cannot run: a body or capability violation (`errorCode` names it, e.g. `unsupported_duration`, or `unsupported_input_role` for an input role the model does not take), an unknown, unavailable or retired model (`model_unavailable`; for a retired model the message names the model to use instead), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`).",
+            "description": "The request cannot run: a body or capability violation (`errorCode` names it, e.g. `unsupported_duration`, `unsupported_keyframes`, `invalid_keyframes`, `unsupported_draft`, or `unsupported_input_role` for an input role the model does not take). Keyframe/draft errors name the field. An unknown, unavailable or retired model (`model_unavailable`; for a retired model the message names the model to use instead), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`).",
             "content": {
               "application/json": {
                 "schema": {

@@ -1,6 +1,7 @@
 'use client';
 
 import { lazy, ReactNode, Suspense, useEffect, useState } from 'react';
+import { OrgModelCatalogSync } from '@client/app/hooks/data/OrgModelCatalogSync';
 import { PersistQueryClientProvider, PersistedClient, Persister } from '@tanstack/react-query-persist-client';
 import { QueryClient } from '@tanstack/react-query';
 import { get, set, del } from 'idb-keyval';
@@ -215,6 +216,7 @@ export function ClientProviders({ children }: { children: ReactNode }) {
               <StripePaymentReturnHandler />
             </Suspense>
             <UserProvider>
+              <OrgModelCatalogSync />
               <ServerStatusProvider>
                 <QuestPreparationOverlay />
                 <Box sx={{ display: 'flex', flexDirection: 'column', height: '100dvh' }}>

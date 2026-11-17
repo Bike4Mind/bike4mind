@@ -5,13 +5,17 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { api } from '@client/app/contexts/ApiContext';
-import { ISpendReconciliation } from '@bike4mind/common';
+import {
+  ISpendReconciliation,
+  SPEND_RECONCILIATION_DRIFT_ALERT_PCT,
+  SPEND_RECONCILIATION_DRIFT_WARN_PCT,
+} from '@bike4mind/common';
 
 const signedUsd = (value: number) => `${value < 0 ? '-' : '+'}$${Math.abs(value).toFixed(2)}`;
 
 const statusFromDelta = (deltaPct: number): { color: 'success' | 'warning' | 'danger'; Icon: React.ElementType } => {
-  if (deltaPct < 2) return { color: 'success', Icon: CheckCircleOutlineIcon };
-  if (deltaPct <= 10) return { color: 'warning', Icon: WarningAmberIcon };
+  if (deltaPct < SPEND_RECONCILIATION_DRIFT_WARN_PCT) return { color: 'success', Icon: CheckCircleOutlineIcon };
+  if (deltaPct <= SPEND_RECONCILIATION_DRIFT_ALERT_PCT) return { color: 'warning', Icon: WarningAmberIcon };
   return { color: 'danger', Icon: ErrorOutlineIcon };
 };
 
