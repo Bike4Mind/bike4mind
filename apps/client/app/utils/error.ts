@@ -27,8 +27,10 @@ const MARKUP_BODY = /^<[!?a-z]/i;
  */
 function isMarkupBody(body: string, headers: AxiosResponse['headers']): boolean {
   // axios types a response's headers wider than AxiosHeaders.from accepts; at runtime it is either shape.
+  const trimmed = body.trim();
+  if (!trimmed) return false;
   const contentType = String(AxiosHeaders.from(headers as RawAxiosHeaders | AxiosHeaders).get('content-type') ?? '');
-  return /\btext\/html\b/i.test(contentType) || MARKUP_BODY.test(body.trim());
+  return /\btext\/html\b/i.test(contentType) || MARKUP_BODY.test(trimmed);
 }
 
 const httpStatusMessage = (status: number) => `Error: ${status}`;

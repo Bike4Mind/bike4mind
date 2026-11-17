@@ -82,6 +82,12 @@ describe('getErrorMessage', () => {
     it('returns an empty body as is', () => {
       expect(getErrorMessage(apiError(502, ''))).toBe('');
     });
+
+    it('keeps an empty or blank text/html body as is', () => {
+      const headers = { 'content-type': 'text/html' };
+      expect(getErrorMessage(apiError(502, '', headers))).toBe('');
+      expect(getErrorMessage(apiError(502, '  \n', headers))).toBe('  \n');
+    });
   });
 
   describe('JSON object bodies', () => {
