@@ -61,7 +61,7 @@ import { recallLakeMemoryForSession } from '../memory/lakeMemoryRecall';
 import { loadSystemPromptById } from './sessionSystemPromptResolver';
 import { summarizeSession, contextSummarizeSession } from '../managers/sessionManager';
 import { getUserEntitlements } from '../entitlements/index';
-import { admitQuestStart } from '../entitlements/questStartAllowance';
+import { admitQuestStart, releaseQuestStart } from '../entitlements/questStartAllowance';
 import { resolveThinkingVisibility } from './thinkingVisibility';
 import { Config } from './config';
 import { getFilesStorage, getGeneratedImageStorage } from './storage/index';
@@ -219,6 +219,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
     // (not just the libonc Tutor). Pure fn ref; per-request resolution is memoized in core.
     getEntitlements: getUserEntitlements,
     admitQuestStart,
+    releaseQuestStart,
     getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
     invokeCreateMemento: async (questId, sessionId, userId, prompt, model, flags): Promise<void> => {

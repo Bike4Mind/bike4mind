@@ -48,6 +48,15 @@ describe('durable free quest admission', () => {
     expect(await userRepository.claimFreeQuestStart(user.id, 'third')).toBe(false);
   });
 
+  it('releases only the start it was given', async () => {
+    const user = await seed();
+    expect(await userRepository.claimFreeQuestStart(user.id, 'first')).toBe(true);
+    await userRepository.releaseFreeQuestStart(user.id, 'stale');
+    expect(await userRepository.claimFreeQuestStart(user.id, 'second')).toBe(false);
+    await userRepository.releaseFreeQuestStart(user.id, 'first');
+    expect(await userRepository.claimFreeQuestStart(user.id, 'second')).toBe(true);
+  });
+
   it('does not admit a missing account', async () => {
     expect(await userRepository.claimFreeQuestStart(new mongoose.Types.ObjectId().toString(), 'first')).toBe(false);
   });

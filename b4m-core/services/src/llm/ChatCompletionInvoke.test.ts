@@ -135,7 +135,7 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     );
   });
 
-  it('admits the first plan and refuses the second before dispatch or credit work', async () => {
+  it('admits the first plan and refuses the second before the quest, dispatch or credit work', async () => {
     mockedGetAvailableModels.mockResolvedValue([
       { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
     ] as never);
@@ -165,11 +165,46 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     expect(invoke.questAdmittedAs).toBe('free');
     await expect(start()).rejects.toBe(refusal);
     expect(dispatch).toHaveBeenCalledOnce();
+    expect(mockDb.quests.create).toHaveBeenCalledOnce();
     expect(admitQuestStart.mock.calls[0][1]).not.toBe(admitQuestStart.mock.calls[1][1]);
     expect(holdCredits).not.toHaveBeenCalled();
-    expect(mockDb.quests.update).toHaveBeenCalledWith(
-      expect.objectContaining({ errorCode: 'free_quest_limit_reached' })
+  });
+
+  it.each([
+    { admittedAs: 'free', released: true },
+    { admittedAs: 'subscriber', released: false },
+  ] as const)('releases only a free start when dispatch fails ($admittedAs)', async ({ admittedAs, released }) => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as never);
+    mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+    mockDb.adminSettings.getSettingsValue.mockImplementation(async (name: string) =>
+      name === 'EnableQuestMaster' ? true : 'text-embedding-ada-002'
     );
+    const admitQuestStart = vi.fn().mockResolvedValue(admittedAs);
+    const releaseQuestStart = vi.fn().mockResolvedValue(undefined);
+    const invoke = new ChatCompletionInvoke({
+      db: mockDb,
+      logger: { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      user: { id: OWNER_ID, tags: [] },
+      admitQuestStart,
+      releaseQuestStart,
+      invokeLambda: vi.fn().mockRejectedValue(new Error('queue unavailable')),
+    } as unknown as ConstructorParameters<typeof ChatCompletionInvoke>[0]);
+    const quest = await invoke.invoke({
+      body: { ...body, enableQuestMaster: true },
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+    expect(quest?.type).toBe('error');
+    if (released) {
+      expect(releaseQuestStart).toHaveBeenCalledWith(
+        expect.objectContaining({ id: OWNER_ID }),
+        admitQuestStart.mock.calls[0][1]
+      );
+    } else {
+      expect(releaseQuestStart).not.toHaveBeenCalled();
+    }
   });
   it.each([
     { name: 'disabled QuestMaster', enabled: false, model: 'gpt-4' },
@@ -231,12 +266,14 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
       name === 'EnableQuestMaster' ? true : 'text-embedding-ada-002'
     );
     const invoke = makeInvoke({ id: OWNER_ID, tags: [] });
-    const quest = await invoke.invoke({
-      body: { ...body, enableQuestMaster: true },
-      userId: OWNER_ID,
-      authOrigin: 'session',
-    });
-    expect(quest?.type).toBe('error');
+    await expect(
+      invoke.invoke({
+        body: { ...body, enableQuestMaster: true },
+        userId: OWNER_ID,
+        authOrigin: 'session',
+      })
+    ).rejects.toThrow();
+    expect(mockDb.quests.create).not.toHaveBeenCalled();
     expect(invoke.questMasterStartId).toBeUndefined();
   });
 

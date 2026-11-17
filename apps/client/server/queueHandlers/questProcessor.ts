@@ -59,7 +59,7 @@ import { createChatLiveActivity, publishChatCompletedPush } from './questProcess
 import { recordFirstChatValue } from '@server/analytics/funnel';
 import { summarizeSession, contextSummarizeSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
-import { admitQuestStart } from '@bike4mind/server-utils/entitlements/questStartAllowance';
+import { admitQuestStart, releaseQuestStart } from '@bike4mind/server-utils/entitlements/questStartAllowance';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { operationalBillingAdapters } from '@bike4mind/server-utils/billing/operationalBilling';
 import { accessibleBy } from '@casl/mongoose';
@@ -194,6 +194,7 @@ export const getStaticOptions = () => {
     // per-request, per-user resolution happens inside ChatCompletionProcess.resolveEntitlementKeys.
     getEntitlements: getUserEntitlements,
     admitQuestStart,
+    releaseQuestStart,
     getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
     invokeCreateMemento: async (

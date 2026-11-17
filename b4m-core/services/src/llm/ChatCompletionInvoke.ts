@@ -13,7 +13,6 @@ import {
   LLMModelConfig,
   ModelInfo,
   ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
-  FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
   getQuestErrorCode,
   PromptMeta,
   PromptMetaZodSchema,
@@ -59,6 +58,7 @@ export class ChatCompletionInvoke {
   private invokeLambda?: (params: z.infer<typeof QuestStartBodySchema>) => Promise<void>;
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private admitQuestStart: IChatCompletionServiceOptions['admitQuestStart'];
+  private releaseQuestStart: IChatCompletionServiceOptions['releaseQuestStart'];
   private autoNameSession: IChatCompletionServiceOptions['autoNameSession'];
   /** Session fetched during invoke; exposed for the wait=true path to avoid a re-fetch in process. */
   public prefetchedSession: ISessionDocument | null = null;
@@ -84,6 +84,7 @@ export class ChatCompletionInvoke {
     this.invokeLambda = options.invokeLambda;
     this.getEntitlements = options.getEntitlements;
     this.admitQuestStart = options.admitQuestStart;
+    this.releaseQuestStart = options.releaseQuestStart;
     this.autoNameSession = options.autoNameSession;
   }
 
@@ -405,6 +406,21 @@ export class ChatCompletionInvoke {
       }
     }
 
+    // Admitted before the quest exists, so a refusal reaches the caller as a 403 with no quest to clean up.
+    const startsPlan =
+      enableQuestMaster &&
+      !questMaster &&
+      isQuestMasterCompatible(model.id) &&
+      (await this.db.adminSettings.getSettingsValue('EnableQuestMaster')) === true;
+    const questMasterStartId = startsPlan ? randomUUID() : undefined;
+    const questAdmittedAs = questMasterStartId ? await this.admitQuestStart(this.user, questMasterStartId) : undefined;
+    const releaseFreeStart = async () => {
+      if (questAdmittedAs !== 'free' || !questMasterStartId || !this.releaseQuestStart) return;
+      await this.releaseQuestStart(this.user, questMasterStartId).catch(err =>
+        this.logger.warn(`Failed to release free QuestMaster start ${questMasterStartId}`, err)
+      );
+    };
+
     // Parallelize independent operations: quest ops + admin settings + session update
     const [
       quest,
@@ -499,13 +515,19 @@ export class ChatCompletionInvoke {
 
       // Session update (fire-and-forget but ensure completion)
       sessionUpdatePromise,
-    ]);
+    ]).catch(async err => {
+      await releaseFreeStart();
+      throw err;
+    });
 
     if (!this.modelConfigurationsCache && modelConfigurations) {
       this.modelConfigurationsCache = modelConfigurations;
     }
 
-    if (!quest) return;
+    if (!quest) {
+      await releaseFreeStart();
+      return;
+    }
 
     try {
       if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
@@ -543,15 +565,6 @@ export class ChatCompletionInvoke {
       }
 
       let currentEmbeddingModel = embeddingModel;
-      const startsPlan =
-        enableQuestMaster &&
-        !questMaster &&
-        isQuestMasterCompatible(model.id) &&
-        (await this.db.adminSettings.getSettingsValue('EnableQuestMaster')) === true;
-      const questMasterStartId = startsPlan ? randomUUID() : undefined;
-      const questAdmittedAs = questMasterStartId
-        ? await this.admitQuestStart(this.user, questMasterStartId)
-        : undefined;
       if (!currentEmbeddingModel) {
         currentEmbeddingModel = defaultEmbeddingModel;
       }
@@ -642,6 +655,8 @@ export class ChatCompletionInvoke {
         throw new InternalServerError('No invokeLambda function provided');
       }
     } catch (error) {
+      // Nothing was dispatched, so a failed turn must not spend the account's one free start.
+      await releaseFreeStart();
       let errorMessage = `Something went wrong. Please try again.`;
       if (isZodError(error)) {
         errorMessage = fromZodError(error).message;
@@ -665,7 +680,6 @@ export class ChatCompletionInvoke {
         reply: quest.reply,
         errorCode: getQuestErrorCode(error),
       });
-      if (getQuestErrorCode(error) === FREE_QUEST_LIMIT_REACHED_ERROR_CODE) throw error;
     }
     return quest;
   }

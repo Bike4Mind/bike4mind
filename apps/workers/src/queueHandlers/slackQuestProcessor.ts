@@ -50,7 +50,7 @@ import { Logger } from '@bike4mind/observability';
 registerLambdaErrorHandlers();
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
-import { admitQuestStart } from '@bike4mind/server-utils/entitlements/questStartAllowance';
+import { admitQuestStart, releaseQuestStart } from '@bike4mind/server-utils/entitlements/questStartAllowance';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { operationalBillingAdapters } from '@bike4mind/server-utils/billing/operationalBilling';
 import { z } from 'zod';
@@ -194,6 +194,7 @@ export const getStaticOptions = () => {
     // Entitlement-aware lake retrieval parity with questProcessor (see note there).
     getEntitlements: getUserEntitlements,
     admitQuestStart,
+    releaseQuestStart,
     getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
     invokeCreateMemento: async (

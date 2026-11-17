@@ -19,3 +19,7 @@ export async function admitQuestStart(user: IUserDocument, startId: string): Pro
     }
   );
 }
+
+export async function releaseQuestStart(user: IUserDocument, startId: string): Promise<void> {
+  await userRepository.releaseFreeQuestStart(user.id, startId);
+}
