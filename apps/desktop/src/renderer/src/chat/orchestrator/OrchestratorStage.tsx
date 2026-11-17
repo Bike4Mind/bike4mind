@@ -9,6 +9,7 @@ import { ExampleQuestButtons } from './exampleQuests';
 import { questAgents, useFinale, type ParentReport } from './finale';
 import { FinaleBanner } from './FinaleBanner';
 import { FocusPanel } from './FocusPanel';
+import { useRunSpend } from './runSpend';
 import { NeedsYouCard } from './NeedsYouCard';
 import type { OrchestratorViewId } from './orchestratorPrefs';
 import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
@@ -184,6 +185,7 @@ export function OrchestratorStage({
 
   const quest = useMemo(() => questAgents(agents, report), [agents, report]);
   const finale = useFinale(rootId, quest, parent, report);
+  const spend = useRunSpend(rootId, finale.shown);
   useEffect(() => {
     if (finale.shown) playChime();
   }, [finale.shown]);
@@ -193,6 +195,7 @@ export function OrchestratorStage({
   const banner = finale.shown && report && (
     <FinaleBanner
       agents={quest}
+      spend={spend}
       placement={bannerInScene ? 'scene' : 'inline'}
       onRead={() => {
         finale.dismiss();

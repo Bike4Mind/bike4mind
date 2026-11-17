@@ -43,6 +43,7 @@ describe('orchestration run attribution', () => {
   let streams: PassThrough[];
   let post: ReturnType<typeof vi.fn>;
   let mint: ReturnType<typeof vi.fn<CompletionRunMinter>>;
+  let usageGet: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     project = await realpath(await mkdtemp(join(tmpdir(), 'b4m-run-project-')));
@@ -59,6 +60,7 @@ describe('orchestration run attribution', () => {
       return Promise.resolve({ data: stream, status: 200 });
     });
     mint = vi.fn<CompletionRunMinter>().mockResolvedValue(run(RUN_A));
+    usageGet = vi.fn().mockRejectedValue(new Error('no usage stubbed'));
     deps = {
       store,
       summaryChanged: vi.fn(),
@@ -68,7 +70,7 @@ describe('orchestration run attribution', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
-          getAxiosInstance: () => ({ post }),
+          getAxiosInstance: () => ({ post, get: usageGet }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: () => undefined,
@@ -495,6 +497,113 @@ describe('orchestration run attribution', () => {
       expect(call(1)[1].run?.purpose).toBe('suggestion');
       expect(call(2)[1]).not.toHaveProperty('run');
       expect(await storedRunId(parent.id)).toBeUndefined();
+    });
+  });
+
+  describe('run spend', () => {
+    const spend = (creditsCharged: number, requests: number) => ({
+      creditsCharged,
+      requests,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+    const usage = (creditsCharged: number, requests: number) => ({
+      runId: RUN_A,
+      createdAt: '2026-11-10T00:00:00.000Z',
+      settled: spend(creditsCharged, requests),
+      byRole: [],
+      byPurpose: [],
+      byModel: [],
+      byAttempt: [],
+      byAttemptTruncated: false,
+    });
+    const settledReply = (id: string, creditsCharged: number, runId?: string) => ({
+      id,
+      role: 'assistant' as const,
+      content: 'Done',
+      timestamp: Date.now(),
+      requestId: id,
+      settled: { creditsCharged, ...(runId ? { runId } : {}) },
+    });
+
+    async function orchestratedRoot() {
+      const parent = await created();
+      await service.setSessionOrchestrate(parent.id, true);
+      await service.send(parent.id, 'Plan the work');
+      await waitStream(0);
+      streams[0].write(frame({ type: 'meta', requestId: 'req-root' }));
+      streams[0].write(frame({ type: 'content', text: 'Planned' }));
+      streams[0].write(frame({ type: 'settled', requestId: 'req-root', creditsCharged: 3, runId: RUN_A }));
+      streams[0].write(frame('[DONE]'));
+      await idle(parent.id);
+      return parent;
+    }
+    async function workerOf(parentId: string) {
+      const policy = (await store.get(parentId))?.orchestrationPolicy;
+      if (!policy) throw new Error('No root policy');
+      return store.create('worker', {
+        title: 'Fixed worker title',
+        orchestrationPolicy: policy,
+        origin: { parentSessionId: parentId, depth: 1, seedPrompt: 'Do the work' },
+      });
+    }
+
+    it('stores the run id the server settled a charge under', async () => {
+      const parent = await orchestratedRoot();
+      const reply = (await store.get(parent.id))?.messages.find(message => message.role === 'assistant');
+      expect(reply?.settled).toEqual({ creditsCharged: 3, runId: RUN_A });
+    });
+
+    it("totals the root's and workers' charges under the run beside the server's settled total", async () => {
+      const parent = await orchestratedRoot();
+      const worker = await workerOf(parent.id);
+      await store.appendMessage(worker.id, settledReply('req-w1', 4, RUN_A));
+      await store.appendMessage(worker.id, settledReply('req-w2', 5, RUN_A));
+      // Spent before the run, or billed outside it: neither belongs to this job.
+      await store.appendMessage(parent.id, settledReply('req-old', 40));
+      usageGet.mockResolvedValueOnce({ status: 200, data: usage(12, 3) });
+
+      const result = await service.getRunSpend(parent.id);
+
+      expect(usageGet).toHaveBeenCalledWith(`/api/v1/completion-runs/${RUN_A}/usage`, expect.anything());
+      expect(result).toMatchObject({
+        status: 'settled',
+        runId: RUN_A,
+        local: { creditsCharged: 12, requests: 3 },
+        server: { settled: { creditsCharged: 12, requests: 3 } },
+      });
+    });
+
+    it("still finds the run through a worker once the root's policy has lapsed", async () => {
+      const parent = await orchestratedRoot();
+      const worker = await workerOf(parent.id);
+      await store.appendMessage(worker.id, settledReply('req-w1', 4, RUN_A));
+      await store.setOrchestrationPolicy(parent.id, undefined);
+      usageGet.mockResolvedValueOnce({ status: 200, data: usage(7, 2) });
+
+      expect(await service.getRunSpend(parent.id)).toMatchObject({
+        status: 'settled',
+        local: { creditsCharged: 7, requests: 2 },
+      });
+    });
+
+    it("falls back to this device's charges when the server total cannot be read", async () => {
+      const parent = await orchestratedRoot();
+      usageGet.mockRejectedValueOnce(new Error('offline'));
+      expect(await service.getRunSpend(parent.id)).toEqual({
+        status: 'unavailable',
+        runId: RUN_A,
+        local: { creditsCharged: 3, requests: 1 },
+        reason: 'offline',
+      });
+    });
+
+    it('reports nothing to read for a session that never ran under a server run', async () => {
+      const parent = await created();
+      expect(await service.getRunSpend(parent.id)).toEqual({ status: 'unattributed' });
+      expect(usageGet).not.toHaveBeenCalled();
     });
   });
 });

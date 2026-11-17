@@ -30,6 +30,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { NotAuthenticatedError, SessionRevokedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type CompletionRunAttribution, type PromptCacheTtl } from '@bike4mind/common';
+import { localRunSettlement, type RunSpend } from '@shared/runSpend';
 import type {
   ChatApprovalDecidedBy,
   ChatApprovalSystemReason,
@@ -202,7 +203,7 @@ import {
   type CompletionMessage,
   type CompletionRequest,
 } from './completions';
-import type { CompletionRunMinter } from './completionRuns';
+import { readCompletionRunUsage, type CompletionRunMinter } from './completionRuns';
 import { describeAlways, outsideFoldersReason } from './approvalScope';
 import { ensureScratchDirectory, isScratchDirectory, removeScratchDirectory } from './scratchDirectory';
 import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
@@ -2030,6 +2031,61 @@ export class ChatService {
     } catch (err) {
       this.deps.logger.warn(`CHAT: could not forget run attribution: ${err instanceof Error ? err.message : err}`);
     }
+  }
+
+  /**
+   * The settled spend of the orchestration rooted at `rootSessionId`: the server's total for its
+   * run beside what this device recorded under the same run, for the job summary. The run is the
+   * root's current one, or, once the root's policy has lapsed, the newest worker's copy of it.
+   */
+  async getRunSpend(rootSessionId: string): Promise<RunSpend> {
+    if (!isValidSessionId(rootSessionId)) return { status: 'unattributed' };
+    const summaries = await this.deps.store.list();
+    const run = this.currentRunOf(rootSessionId, summaries);
+    if (!run) return { status: 'unattributed' };
+    const sessions = await Promise.all(
+      summaries
+        .filter(summary => summary.id === rootSessionId || summary.orchestrationPolicy?.rootRunId === run.rootRunId)
+        .map(summary => this.deps.store.get(summary.id).catch(() => null))
+    );
+    const local = localRunSettlement(
+      sessions.flatMap(session => session?.messages ?? []),
+      run.serverRunId
+    );
+    const api = this.deps.getApiClient();
+    if (!api) {
+      return { status: 'unavailable', runId: run.serverRunId, local, reason: 'Sign in to read the settled total.' };
+    }
+    const read = await readCompletionRunUsage(api.getAxiosInstance(), run.serverRunId);
+    if (!read.ok) return { status: 'unavailable', runId: run.serverRunId, local, reason: read.reason };
+    return {
+      status: 'settled',
+      runId: run.serverRunId,
+      local,
+      server: read.usage,
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  private currentRunOf(
+    rootSessionId: string,
+    summaries: readonly ChatSessionSummary[]
+  ): { rootRunId: string; serverRunId: string } | undefined {
+    const withId = (policy: RootPolicy | undefined) => {
+      const serverRunId = policy && (policy.serverRunId ?? this.serverRuns.get(policy.rootRunId));
+      return policy && serverRunId ? { rootRunId: policy.rootRunId, serverRunId } : undefined;
+    };
+    const root = summaries.find(summary => summary.id === rootSessionId)?.orchestrationPolicy;
+    if (root?.rootSessionId === rootSessionId) return withId(root);
+    // Newest first, so the first worker found belongs to the root's latest run.
+    for (const summary of summaries) {
+      const policy = summary.orchestrationPolicy;
+      if (policy?.rootSessionId === rootSessionId && summary.id !== rootSessionId) {
+        const found = withId(policy);
+        if (found) return found;
+      }
+    }
+    return undefined;
   }
 
   /**
@@ -4377,6 +4433,7 @@ export class ChatService {
             turnSettled = {
               creditsCharged: event.creditsCharged,
               ...(event.usdCost !== undefined ? { usdCost: event.usdCost } : {}),
+              ...(event.runId ? { runId: event.runId } : {}),
             };
             return;
           }

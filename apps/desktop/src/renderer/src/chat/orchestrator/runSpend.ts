@@ -1,0 +1,100 @@
+import { useEffect, useState } from 'react';
+import type { CompletionRunUsage } from '@bike4mind/common';
+import type { RunSpend } from '@shared/runSpend';
+import { formatAgentCost } from './roster';
+
+/** The job summary's spend: a chip for the finale card and the lines that explain it. */
+export interface RunSpendView {
+  chip: string;
+  lines: string[];
+  /** The server's turn charges equal what this device recorded under the run. */
+  reconciled: boolean;
+}
+
+type Purpose = CompletionRunUsage['byPurpose'][number]['purpose'];
+
+const PURPOSE_LABELS: Record<Purpose, string> = {
+  turn: 'Turns',
+  explore: 'Exploration',
+  title: 'Titles',
+  compaction: 'Summaries',
+  suggestion: 'Suggestions',
+  review: 'Reviews',
+};
+
+const credits = (value: number) => formatAgentCost(undefined, value);
+const SEPARATOR = ' · ';
+// Credits are fractional; a difference this small is float noise, not a missing charge.
+const EPSILON = 1e-6;
+
+function roleLine(usage: CompletionRunUsage): string {
+  const root = usage.byRole.find(entry => entry.role === 'root');
+  const workers = usage.byRole.find(entry => entry.role === 'worker');
+  const attempts = usage.byAttempt.filter(entry => entry.role === 'worker').length;
+  const parts = [
+    root && `Root ${credits(root.creditsCharged)}`,
+    workers &&
+      `Workers ${credits(workers.creditsCharged)} over ${attempts}${usage.byAttemptTruncated ? '+' : ''} ${
+        attempts === 1 && !usage.byAttemptTruncated ? 'attempt' : 'attempts'
+      }`,
+  ];
+  return parts.filter(Boolean).join(SEPARATOR);
+}
+
+function purposeLine(usage: CompletionRunUsage): string {
+  return usage.byPurpose
+    .filter(entry => entry.creditsCharged > 0)
+    .map(entry => `${PURPOSE_LABELS[entry.purpose]} ${credits(entry.creditsCharged)}`)
+    .join(SEPARATOR);
+}
+
+/**
+ * What the finale says about a run's spend; undefined when the server has nothing for it, which
+ * leaves the card on its local estimate. The server's total is authoritative. This device's own
+ * record is compared against the TURN charges only, because helper calls settle without a reply
+ * to store their charge on.
+ */
+export function describeRunSpend(spend: RunSpend | undefined): RunSpendView | undefined {
+  if (!spend || spend.status === 'unattributed') return undefined;
+  if (spend.status === 'unavailable') {
+    return {
+      chip: `~${credits(spend.local.creditsCharged)} settled`,
+      lines: ['Server total unavailable; showing what this device recorded, which can miss helper calls'],
+      reconciled: false,
+    };
+  }
+  const { server, local } = spend;
+  const turns = server.byPurpose.find(entry => entry.purpose === 'turn')?.creditsCharged ?? 0;
+  const reconciled = Math.abs(turns - local.creditsCharged) < EPSILON;
+  const lines = [
+    roleLine(server),
+    purposeLine(server),
+    reconciled
+      ? 'Turn charges match what this device recorded'
+      : `This device recorded ${credits(local.creditsCharged)} of the ${credits(turns)} in turn charges`,
+  ].filter(Boolean);
+  return { chip: `${credits(server.settled.creditsCharged)} settled`, lines, reconciled };
+}
+
+/** Reads the run's spend once `active` turns true (the finale is up), and again for a new root. */
+export function useRunSpend(rootSessionId: string | undefined, active: boolean): RunSpendView | undefined {
+  const [view, setView] = useState<RunSpendView | undefined>(undefined);
+  useEffect(() => {
+    setView(undefined);
+    if (!rootSessionId || !active) return;
+    let current = true;
+    window.b4m.chat
+      .getRunSpend(rootSessionId)
+      .then(spend => {
+        if (current) setView(describeRunSpend(spend));
+      })
+      .catch((err: unknown) => {
+        // The card keeps its local estimate; the summary is never worth an error of its own.
+        console.warn('Could not read the run spend', err);
+      });
+    return () => {
+      current = false;
+    };
+  }, [rootSessionId, active]);
+  return view;
+}
