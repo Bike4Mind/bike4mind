@@ -5821,11 +5821,16 @@ export class ChatService {
           const message = err instanceof Error ? err.message : String(err);
           this.deps.logger.debug(`CHAT: tool ${request.name} failed: ${message}`);
           if (err instanceof RunBudgetExhaustedError && scope.budgetStop) scope.budgetStop.error ??= err;
+          // The model reads this after a raise resumes the turn; without it, it takes the refusal as final.
+          const stored =
+            err instanceof RunBudgetExhaustedError
+              ? `${message} The run paused for its credit budget before this call ran; once it resumes, call this tool again.`
+              : message;
           settled = decorate({
             ...call,
             // A refusal is its own state: the UI says "denied", not "something broke".
             status: err instanceof Error && err.name === 'PathAccessDenied' ? 'denied' : 'error',
-            error: message,
+            error: stored,
           });
         }
 

@@ -20,6 +20,10 @@ function spentAndReserved(state: CompletionRunBudgetState): string {
  */
 export function runBudgetPausedMessage(budgetCredits?: number, state?: CompletionRunBudgetState): string {
   const budget = state?.budgetCredits ?? budgetCredits;
+  if (state && state.committedCredits < state.budgetCredits) {
+    const left = credits(state.budgetCredits - state.committedCredits);
+    return `Paused: this orchestration run has ${left} of its ${credits(state.budgetCredits)}-credit budget left, too few for its next request (${spentAndReserved(state)}). Raise the budget to resume; the work so far is kept.`;
+  }
   const what = budget !== undefined ? `its ${credits(budget)}-credit budget` : 'its credit budget';
   const detail = state ? ` (${spentAndReserved(state)})` : '';
   return `Paused: this orchestration run has used ${what}${detail}. Raise the budget to resume; the work so far is kept.`;

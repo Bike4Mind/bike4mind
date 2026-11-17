@@ -20,7 +20,13 @@ import {
   type CompletionRunAttribution,
 } from '@bike4mind/common';
 import type { ChatToolNotice } from '@shared/chat';
-import { RunBudgetExhaustedError, RunNotFoundError, withRunFallback } from '../completions';
+import {
+  isRunBudgetExhausted,
+  isRunNotFound,
+  RunBudgetExhaustedError,
+  RunNotFoundError,
+  withRunFallback,
+} from '../completions';
 import { parseMusicModels } from './musicModels';
 
 /**
@@ -490,14 +496,6 @@ interface ApiErrorBody {
 }
 
 /**
- * Turn a transport failure into something a user and a model can both act on.
- *
- * `insufficient_credits` gets a notice rather than a bare message: it is the one failure the
- * user can fix, and burying "you are out of credits" in a red monospace tool error is how an
- * app ends up looking broken when it is only unpaid. `provider_not_configured` is its mirror
- * image - nothing the user can buy will help, so it must not read like a billing problem.
- */
-/**
  * A refusal of the request's `run`, as the error the turn acts on: a used-up budget pauses the
  * whole run (ChatService.pauseRunForBudget), and an unknown run is handled by withRunFallback.
  */
@@ -505,10 +503,8 @@ function toRunRefusal(error: unknown): RunBudgetExhaustedError | RunNotFoundErro
   if (!isAxiosError(error)) return undefined;
   const body = (error.response?.data ?? {}) as ApiErrorBody;
   const detail = body.error || body.message;
-  if (error.response?.status === 422 && body.errorCode === 'run_budget_exhausted') {
-    return new RunBudgetExhaustedError(detail);
-  }
-  if (error.response?.status === 404 && body.errorCode === 'run_not_found') return new RunNotFoundError(detail);
+  if (isRunBudgetExhausted(error, body)) return new RunBudgetExhaustedError(detail);
+  if (isRunNotFound(error, body)) return new RunNotFoundError(detail);
   return undefined;
 }
 
@@ -518,6 +514,14 @@ function toPaidCallError(error: unknown, action: string): Error {
   return toMediaError(error, action);
 }
 
+/**
+ * Turn a transport failure into something a user and a model can both act on.
+ *
+ * `insufficient_credits` gets a notice rather than a bare message: it is the one failure the
+ * user can fix, and burying "you are out of credits" in a red monospace tool error is how an
+ * app ends up looking broken when it is only unpaid. `provider_not_configured` is its mirror
+ * image - nothing the user can buy will help, so it must not read like a billing problem.
+ */
 export function toMediaError(error: unknown, action: string): MediaToolError {
   if (error instanceof MediaToolError) return error;
 

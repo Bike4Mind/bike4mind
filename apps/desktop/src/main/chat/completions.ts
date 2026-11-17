@@ -436,7 +436,7 @@ export class RunNotFoundError extends Error {
   }
 }
 
-function isRunNotFound(error: unknown, body: ErrorBody | undefined): boolean {
+export function isRunNotFound(error: unknown, body: ErrorBody | undefined): boolean {
   return isAxiosError(error) && error.response?.status === 404 && body?.errorCode === 'run_not_found';
 }
 
@@ -452,7 +452,7 @@ export class RunBudgetExhaustedError extends Error {
   }
 }
 
-function isRunBudgetExhausted(error: unknown, body: ErrorBody | undefined): boolean {
+export function isRunBudgetExhausted(error: unknown, body: ErrorBody | undefined): boolean {
   return isAxiosError(error) && error.response?.status === 422 && body?.errorCode === RUN_BUDGET_EXHAUSTED_ERROR_CODE;
 }
 
