@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { handlers, packages, invites } = vi.hoisted(() => ({
+const { handlers, packages, invites, rules } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => unknown>,
   packages: { findById: vi.fn() },
   invites: { listByGrantPackage: vi.fn() },
+  rules: { listByGrantPackage: vi.fn() },
 }));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
@@ -32,6 +33,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/database', () => ({
   grantPackageRepository: packages,
   registrationInviteRepository: invites,
+  partnerSignupRuleRepository: rules,
 }));
 
 import '@pages/api/admin/grant-packages/[id]/links';
@@ -54,6 +56,7 @@ describe('GET /api/admin/grant-packages/[id]/links', () => {
     vi.clearAllMocks();
     packages.findById.mockResolvedValue({ id: PKG, name: 'Launch' });
     invites.listByGrantPackage.mockResolvedValue({ data: [], truncated: false });
+    rules.listByGrantPackage.mockResolvedValue({ data: [], truncated: false });
   });
 
   it.each([
@@ -75,6 +78,7 @@ describe('GET /api/admin/grant-packages/[id]/links', () => {
     const delegate = { isAdmin: false, id: 'd1', adminPermissions: ['support:read', 'settings:manage'] };
     expect((await get({ id: PKG }, delegate)).statusCode).toBe(403);
     expect(invites.listByGrantPackage).not.toHaveBeenCalled();
+    expect(rules.listByGrantPackage).not.toHaveBeenCalled();
   });
 
   it('returns 404 for an unknown package', async () => {
@@ -97,5 +101,13 @@ describe('GET /api/admin/grant-packages/[id]/links', () => {
     const res = await get({ id: PKG });
     expect(invites.listByGrantPackage).toHaveBeenCalledWith(PKG, 50);
     expect(res._getJSONData().invites).toEqual({ data: [{ id: 'i1', code: 'ABC' }], truncated: true });
+  });
+
+  it('lists the linked partner rules capped at 50 and passes the truncated flag through', async () => {
+    const rule = { id: 'r1', domain: 'partner.com', enabled: true, organizationId: null };
+    rules.listByGrantPackage.mockResolvedValue({ data: [rule], truncated: true });
+    const res = await get({ id: PKG });
+    expect(rules.listByGrantPackage).toHaveBeenCalledWith(PKG, 50);
+    expect(res._getJSONData().partnerRules).toEqual({ data: [rule], truncated: true });
   });
 });

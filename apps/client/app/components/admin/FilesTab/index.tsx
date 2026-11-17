@@ -231,7 +231,7 @@ const AdminFilesTab = () => {
 
                   let errorMessage: string = 'Error uploading file';
                   if (axios.isAxiosError(err)) {
-                    errorMessage = err.response?.data?.message;
+                    errorMessage = err.response?.data?.error ?? errorMessage;
                   } else if (err instanceof Error) {
                     errorMessage = err.message;
                   }

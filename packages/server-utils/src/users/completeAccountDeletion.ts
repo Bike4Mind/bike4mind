@@ -6,6 +6,7 @@ import {
   accountDeletionNoticeRepository,
   adminAuditLogRepository,
   realtimeConnectionRepository,
+  type mongoose,
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { adminAuditService, authSessionService } from '@bike4mind/services';
@@ -23,6 +24,8 @@ export type AccountDeletionSkipReason = 'not_due' | 'not_found' | 'busy';
 export type AccountDeletionCompletion = { deleted: true } | { deleted: false; reason: AccountDeletionSkipReason };
 
 export type ErasureSubject = { userId: string; email: string | null };
+/** `beforeDelete` holds back the references `hardDeleteUser` still reads (an organization's owner); `afterDelete` writes only those. */
+export type ErasureStage = 'beforeDelete' | 'afterDelete';
 
 /**
  * The data holder registry's view of one person, for an admin data subject erasure. The registry
@@ -32,6 +35,13 @@ export type ErasureSubject = { userId: string; email: string | null };
 export type ErasureRegistry = {
   /** What an erasure of the subject covers, per collection. Throws when a registered model is unclassified. */
   scope(subject: ErasureSubject, assertLease: () => Promise<void>): Promise<AdminErasureCollection[]>;
+  /** Deletes, anonymizes or detaches every row the registry finds naming the subject, or one stage of them. Idempotent. */
+  erase(
+    subject: ErasureSubject,
+    assertLease: () => Promise<void>,
+    stage?: ErasureStage,
+    session?: mongoose.ClientSession
+  ): Promise<void>;
   /** After the purge: what still names the subject outside the stated retentions, and the models not checked. */
   audit(subject: ErasureSubject): Promise<{ remaining: AdminErasureCollection[]; unclassified: string[] }>;
 };
@@ -128,6 +138,7 @@ export async function completeAccountDeletion(
   const erasure = user.deletion?.source === 'admin' ? { requestedBy: user.deletion.requestedBy ?? null } : null;
   const subject = { userId, email: user.email ?? null };
 
+  let deleteCommitted = false;
   try {
     // Snapshot once: a retry after a partial purge would count less, and the record must describe it all.
     let scope = user.deletion?.erasureScope;
@@ -144,6 +155,8 @@ export async function completeAccountDeletion(
       { userId },
       { db: { realtimeConnections: realtimeConnectionRepository } }
     );
+    await assertNoOwnedOrganizations(userId);
+    await erasureRegistry.erase(subject, assertLease, 'beforeDelete');
     await hardDeleteUser(
       userId,
       {
@@ -188,10 +201,17 @@ export async function completeAccountDeletion(
             { db: { adminAuditLog: adminAuditLogRepository }, logger }
           );
         },
+        afterDeleteInTransaction: session => erasureRegistry.erase(subject, async () => {}, 'afterDelete', session),
+        onDeleteCommitted: () => {
+          deleteCommitted = true;
+        },
       },
       users => users.delete(userId)
     );
   } catch (error) {
+    if (deleteCommitted) {
+      throw error;
+    }
     try {
       await User.updateOne(
         { _id: userId, 'deletion.purgeLeaseId': leaseId },

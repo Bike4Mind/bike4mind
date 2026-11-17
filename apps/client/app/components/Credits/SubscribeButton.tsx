@@ -103,6 +103,7 @@ const SubscribeButton = ({
   return (
     <Button
       className="subscription-action-button"
+      data-testid={`subscription-${type}-btn`}
       aria-label={ariaLabel}
       loading={isLoading}
       onClick={handleClick}

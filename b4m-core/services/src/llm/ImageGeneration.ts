@@ -96,6 +96,7 @@ import { CostInput } from './imageCostCalculator/types';
 import type { ImageCreditHolds } from './imageCreditHolds';
 import { shouldSummarizeSession } from './ChatCompletionFeatures';
 import { moderateImageOrThrow } from './imageModerationGate';
+import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
 
 /** BFL models with no output_format field (flux-3-image): BFL picks the format, so none is persisted. */
@@ -161,7 +162,13 @@ interface IImageGenerationServiceOptions {
   startImageGenerationProcess: (body: ImageGenerationBody) => Promise<void>;
   /** Reserves the estimate before the provider call. Required so the app factory cannot drop the hold. */
   creditHolds: ImageCreditHolds;
-  assertModelAdmission: (user: string | IUserDocument, modelId: string, adminRoleWithheld?: boolean) => Promise<void>;
+  /** organizationId is the org this request bills, so its model policy applies. */
+  assertModelAdmission: (
+    user: string | IUserDocument,
+    modelId: string,
+    adminRoleWithheld?: boolean,
+    organizationId?: string | null
+  ) => Promise<void>;
   wsHttpsUrl: string;
   abilityGetter: (user: IUserDocument | undefined) => MongoAbility;
   logEvent: (
@@ -322,7 +329,7 @@ export class ImageGenerationService {
       rest.background === 'transparent' && rejectsTransparentBackground(requestedModel)
         ? ImageModels.GPT_IMAGE_1_5
         : requestedModel;
-    await this.assertModelAdmission(userId, model, adminRoleWithheld);
+    await this.assertModelAdmission(userId, model, adminRoleWithheld, organizationId);
     const session = await this.db.sessions.findById(sessionId);
     if (!session) throw new NotFoundError('Session not found');
 
@@ -899,7 +906,7 @@ export class ImageGenerationService {
         organizationId ? this.db.organizations.findById(organizationId) : Promise.resolve(null),
       ]);
       if (!user) throw new NotFoundError('User not found');
-      await this.assertModelAdmission(user, model, adminRoleWithheld);
+      await this.assertModelAdmission(user, model, adminRoleWithheld, organizationId);
 
       // Owner-wide lake access for scoping the input-image lookup: a lake-only image the workbench
       // admitted must still resolve here. Absent resolver (or a resolution outage) degrades to
@@ -956,8 +963,12 @@ export class ImageGenerationService {
         });
         // Only moderate if using OpenAI (BFL models have their own safety_tolerance)
         const isBFLModelForModeration = Object.values(BFL_IMAGE_MODELS).includes(model as any);
-        if (!isBFLModelForModeration && apiKeyTable.openai) {
-          await new OpenaiModerationsService(apiKeyTable.openai, logger).checkPrompt(prompt);
+        const moderationOpenaiKey = resolveModerationOpenaiKey(
+          apiKeyTable.openai,
+          getSettingsValue('openaiDemoKey', settings)
+        );
+        if (!isBFLModelForModeration && moderationOpenaiKey) {
+          await new OpenaiModerationsService(moderationOpenaiKey, logger).checkPrompt(prompt);
         }
       }
 

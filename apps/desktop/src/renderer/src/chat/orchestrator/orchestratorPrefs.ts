@@ -1,5 +1,6 @@
-export type OrchestratorViewId = 'tavern' | 'board' | 'table';
-export const ORCHESTRATOR_VIEWS: readonly OrchestratorViewId[] = ['tavern', 'board', 'table'];
+export type OrchestratorViewId = 'tavern' | 'aquarium' | 'board' | 'table' | 'tile-wall';
+/** Menu and Mod+Shift+[ / ] order: the scenes, then the layouts (ViewSwitcher groups them the same way). */
+export const ORCHESTRATOR_VIEWS: readonly OrchestratorViewId[] = ['tavern', 'aquarium', 'board', 'table', 'tile-wall'];
 
 export type SessionSurface = 'chat' | 'orchestrate';
 
@@ -11,6 +12,7 @@ const INTRO_SEEN_KEY = 'b4m.orchestrator.introSeen';
 const FINALE_SEEN_KEY = 'b4m.orchestrator.finaleSeen.';
 const AMBIENT_KEY = 'b4m.orchestrator.ambient';
 const AMBIENT_HINT_SEEN_KEY = 'b4m.orchestrator.ambientHintSeen';
+const FOCUS_KEY = 'b4m.orchestrator.focus';
 
 /** Storage can be blocked or full; every preference then just falls back to its default. */
 function readItem(key: string): string | null {
@@ -134,4 +136,13 @@ export function readAmbientHintSeen(): boolean {
 
 export function writeAmbientHintSeen(): void {
   writeItem(AMBIENT_HINT_SEEN_KEY, '1');
+}
+
+/** Focus mode: every view cut down to what needs the user (FocusPanel). Off unless turned on. */
+export function readFocus(): boolean {
+  return readItem(FOCUS_KEY) === '1';
+}
+
+export function writeFocus(on: boolean): void {
+  writeItem(FOCUS_KEY, on ? '1' : '0');
 }

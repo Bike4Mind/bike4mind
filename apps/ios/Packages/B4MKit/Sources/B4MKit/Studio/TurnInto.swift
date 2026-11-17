@@ -50,12 +50,18 @@ public struct StudioSeed: Equatable, Sendable {
   public let prompt: String
   public let inputs: [StudioInput]
   public let params: GenerationParams
+  /// The model to select when it is still offered (Branch); nil keeps the bar's choice.
+  public let modelID: String?
 
-  public init(kind: GenerationKind, prompt: String, inputs: [StudioInput], params: GenerationParams = .init()) {
+  public init(
+    kind: GenerationKind, prompt: String, inputs: [StudioInput], params: GenerationParams = .init(),
+    modelID: String? = nil
+  ) {
     self.kind = kind
     self.prompt = prompt
     self.inputs = inputs
     self.params = params
+    self.modelID = modelID
   }
 }
 
@@ -130,5 +136,20 @@ public enum TurnInto {
     case .grabFrame:
       return nil
     }
+  }
+}
+
+extension StudioSeed {
+  /// "Remix": re-opens a finished item as a new request with its prompt pre-filled and nothing attached, ready to
+  /// iterate. Nil when the server recorded no prompt, since there is nothing to iterate on.
+  public static func remix(of item: MediaItem) -> StudioSeed? {
+    guard let prompt = item.prompt?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty else { return nil }
+    let kind: GenerationKind =
+      switch item.kind {
+      case .image: .image
+      case .video: .video
+      case .audio: .music
+      }
+    return StudioSeed(kind: kind, prompt: prompt, inputs: [])
   }
 }

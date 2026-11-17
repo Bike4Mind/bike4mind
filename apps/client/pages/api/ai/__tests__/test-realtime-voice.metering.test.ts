@@ -118,7 +118,7 @@ describe('POST /api/ai/test-realtime-voice metering', () => {
     expect(createModelAdmission).toHaveBeenCalledWith(
       expect.objectContaining({ user: expect.objectContaining({ id: 'u1' }) })
     );
-    expect(assertAdmission).toHaveBeenCalledWith('tts-1-hd');
+    expect(assertAdmission).toHaveBeenCalledWith('tts-1-hd', { orgModelBackend: 'openai' });
     expect(holdPreflightCredits).not.toHaveBeenCalled();
     expect(m.create).not.toHaveBeenCalled();
   });

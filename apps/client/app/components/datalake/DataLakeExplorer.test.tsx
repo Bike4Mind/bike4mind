@@ -985,7 +985,7 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
   it('offers the lake picker in the tree, opening on the all-lakes scope', () => {
     renderExplorer();
 
-    expect(screen.getByTestId('datalake-lake-picker-btn')).toHaveTextContent('All data lakes');
+    expect(screen.getByTestId('datalake-lake-picker-btn')).toHaveTextContent(/^\d+ lakes?/);
     // Unscoped, so every lake's branches are in the tree.
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', 'lakea,lakeb');
   });
@@ -1128,7 +1128,7 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
     );
     fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
 
-    expect(screen.getByTestId('datalake-lake-picker-btn')).toHaveTextContent('All data lakes');
+    expect(screen.getByTestId('datalake-lake-picker-btn')).toHaveTextContent(/^\d+ lakes?/);
     expect(screen.queryByTestId('datalake-selected-lake-header')).not.toBeInTheDocument();
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', 'lakea,lakeb');
   });

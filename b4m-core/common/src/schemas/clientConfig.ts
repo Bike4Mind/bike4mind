@@ -94,7 +94,7 @@ export const ClientConfigPickerModelSchema = PublicModelSchema.extend({
   is_slow_model: z.boolean().optional(),
   disabled: z.boolean().optional(),
   disabled_reason: z.string().optional(),
-  access: z.object({ locked: z.literal(true), reason: z.literal('requires_paid_plan') }).optional(),
+  access: z.object({ locked: z.literal(true), reason: z.enum(['requires_paid_plan', 'org_policy']) }).optional(),
 });
 
 export const ClientConfigCatalogSchema = z.object({
