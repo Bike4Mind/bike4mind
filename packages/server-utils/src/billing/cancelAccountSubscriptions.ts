@@ -86,7 +86,7 @@ export async function readAccountSubscriptionCustomerIds(userId: string): Promis
 
 // Per Stripe request (ms). Bulk callers run this inside a time budget checked only between chunks,
 // so one hung call must not hold a chunk for Stripe's 80 s default.
-export const STRIPE_REQUEST_TIMEOUT_MS = 10_000;
+const STRIPE_REQUEST_TIMEOUT_MS = 10_000;
 
 // ms. The deadline window for a single-user admin action, well inside the web Lambda's 60 s timeout.
 export const SINGLE_USER_CANCEL_BUDGET_MS = 30_000;

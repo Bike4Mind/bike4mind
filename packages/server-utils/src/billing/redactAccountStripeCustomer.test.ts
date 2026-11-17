@@ -48,7 +48,6 @@ vi.mock('../integrations/stripe/stripe', () => ({
   },
 }));
 vi.mock('./cancelAccountSubscriptions', () => ({
-  STRIPE_REQUEST_TIMEOUT_MS: 10_000,
   cancelAccountSubscriptions: mocks.cancel,
 }));
 

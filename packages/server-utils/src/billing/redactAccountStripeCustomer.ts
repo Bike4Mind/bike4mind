@@ -2,7 +2,7 @@ import { Organization, User } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import type Stripe from 'stripe';
 import { isStripeConfigured, stripe } from '../integrations/stripe/stripe';
-import { cancelAccountSubscriptions, STRIPE_REQUEST_TIMEOUT_MS } from './cancelAccountSubscriptions';
+import { cancelAccountSubscriptions } from './cancelAccountSubscriptions';
 
 export type StripeCustomerRedaction =
   | { outcome: 'redacted'; customerId: string }
@@ -12,7 +12,8 @@ export type StripeCustomerRedaction =
 const KEPT_METADATA_KEYS = new Set(['type', 'stage']);
 const ORGANIZATION_CUSTOMER_TYPE = 'Organization';
 
-const options = { timeout: STRIPE_REQUEST_TIMEOUT_MS };
+// ms per Stripe request; mirrors STRIPE_REQUEST_TIMEOUT_MS in cancelAccountSubscriptions.ts.
+const options = { timeout: 10_000 };
 
 const isMissing = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === 'resource_missing';
