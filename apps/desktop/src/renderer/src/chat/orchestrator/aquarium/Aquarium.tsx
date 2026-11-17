@@ -193,6 +193,8 @@ function Lamp({ action, onAction }: { action?: ViewAction; onAction(action: View
         border: 0,
         bgcolor: 'transparent',
         cursor: lit ? 'pointer' : 'default',
+        // Unlit it is only decoration, so a swimmer passing under its box stays clickable.
+        pointerEvents: lit ? 'auto' : 'none',
         zIndex: 4,
         '&:focus-visible': { outline: '2px solid', outlineColor: 'focusVisible' },
       }}
