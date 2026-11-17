@@ -45,6 +45,7 @@ import { classifyQueryComplexity } from './queryComplexityClassifier';
 import { orgDisallowedTools } from './orgToolPolicy';
 import { filterBuiltInTools } from './tools/toolManager';
 import { randomUUID } from 'node:crypto';
+import { isQuestMasterCompatible } from './questMasterEligibility';
 
 export class ChatCompletionInvoke {
   public db: IChatCompletionServiceOptions['db'];
@@ -70,6 +71,10 @@ export class ChatCompletionInvoke {
 
   public get questMasterStartId(): string | undefined {
     return this.questStartParams?.questMasterStartId;
+  }
+
+  public get questAdmittedAs(): 'subscriber' | 'free' | undefined {
+    return this.questStartParams?.questAdmittedAs;
   }
 
   constructor(options: IChatCompletionServiceOptions) {
@@ -538,8 +543,15 @@ export class ChatCompletionInvoke {
       }
 
       let currentEmbeddingModel = embeddingModel;
-      const questMasterStartId = enableQuestMaster && !questMaster ? randomUUID() : undefined;
-      if (questMasterStartId) await this.admitQuestStart?.(this.user, questMasterStartId);
+      const startsPlan =
+        enableQuestMaster &&
+        !questMaster &&
+        isQuestMasterCompatible(model.id) &&
+        (await this.db.adminSettings.getSettingsValue('EnableQuestMaster')) === true;
+      const questMasterStartId = startsPlan ? randomUUID() : undefined;
+      const questAdmittedAs = questMasterStartId
+        ? await this.admitQuestStart(this.user, questMasterStartId)
+        : undefined;
       if (!currentEmbeddingModel) {
         currentEmbeddingModel = defaultEmbeddingModel;
       }
@@ -575,6 +587,7 @@ export class ChatCompletionInvoke {
         dashboardParams,
         enableQuestMaster,
         questMasterStartId,
+        questAdmittedAs,
         enableMementos,
         enableArtifacts,
         enableAgents,

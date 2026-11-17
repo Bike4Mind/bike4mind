@@ -1,3 +1,5 @@
+import { isQuestMasterCompatible } from './questMasterEligibility';
+import { resolveSuccessorChain } from '@bike4mind/llm-adapters';
 import {
   type EmbeddingCredential,
   type EmbeddingRuntime,
@@ -2246,8 +2248,18 @@ export class ChatCompletionProcess {
       return;
     }
 
-    if (body.enableQuestMaster && !body.questMaster) {
-      await this.admitQuestStart?.(this.user, body.questMasterStartId ?? body.questId);
+    if (
+      body.enableQuestMaster &&
+      !body.questMaster &&
+      isQuestMasterCompatible(resolveSuccessorChain(body.params.model)) &&
+      (await this.db.adminSettings.getSettingsValue('EnableQuestMaster')) === true
+    ) {
+      if (!body.questMasterStartId || !body.questAdmittedAs) {
+        throw new BadRequestError('QuestMaster start admission is required');
+      }
+      if (body.questAdmittedAs === 'free') {
+        await this.admitQuestStart(this.user, body.questMasterStartId);
+      }
     }
 
     // Started now so its reads overlap context assembly instead of delaying the first token.

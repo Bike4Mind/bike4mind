@@ -195,6 +195,7 @@ vi.mock('@bike4mind/services/llm', async orig => {
     prefetchedSession = undefined;
     prefetchedOrganization = undefined;
     questMasterStartId = 'server-admitted-start';
+    questAdmittedAs = 'subscriber';
     invoke = (...a: unknown[]) => mockInvoke(...a);
   }
   // The wait=true path constructs this directly; the async-path tests never reach it.
@@ -1429,7 +1430,7 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     expect(res._getStatusCode()).toBe(200);
     expect(mockProcess).toHaveBeenCalledWith(
       expect.objectContaining({
-        body: expect.objectContaining({ questMasterStartId: 'server-admitted-start' }),
+        body: expect.objectContaining({ questMasterStartId: 'server-admitted-start', questAdmittedAs: 'subscriber' }),
       })
     );
   });

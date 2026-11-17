@@ -18,7 +18,7 @@ beforeEach(() => {
 
 describe('admitQuestStart', () => {
   it('claims the first free start', async () => {
-    await expect(admitQuestStart(user, 'start')).resolves.toBeUndefined();
+    await expect(admitQuestStart(user, 'start')).resolves.toBe('free');
     expect(mocks.claim).toHaveBeenCalledWith('user', 'start');
     expect(mocks.personal).toHaveBeenCalledWith('user', { strict: true });
   });
@@ -31,8 +31,8 @@ describe('admitQuestStart', () => {
   });
   it('exempts personal and organization-seat subscribers without consuming the allowance', async () => {
     mocks.personal.mockResolvedValue([{ id: 'subscription' }]);
-    await admitQuestStart(user, 'first');
-    await admitQuestStart(user, 'second');
+    await expect(admitQuestStart(user, 'first')).resolves.toBe('subscriber');
+    await expect(admitQuestStart(user, 'second')).resolves.toBe('subscriber');
     expect(mocks.claim).not.toHaveBeenCalled();
   });
   it('uses the owning organization for service accounts', async () => {

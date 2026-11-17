@@ -95,6 +95,7 @@ describe('resolveFieldLimits', () => {
     const limits = resolveFieldLimits('users', opts());
     expect(limits).toEqual({
       password: false,
+      freeQuestStartId: false,
       'signupGrant.blocked': false,
       stripeCustomerId: false,
       resetPasswordToken: false,
