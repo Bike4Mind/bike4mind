@@ -16,6 +16,11 @@ import type { ProductionAudioAdapter, ProductionAudioResult, ProductionAudioSett
 import { attemptKey, createWithRetry, DEAD_REPLAY_MESSAGE } from './jobs';
 
 type Context = Omit<ToolContext, 'config'>;
+type CreatedAudioJob = Awaited<
+  ReturnType<
+    ProductionAudioSettings['jobs']['createSpeechJob'] | ProductionAudioSettings['jobs']['createSoundEffectJob']
+  >
+>;
 
 const SFX_PROVIDER = 'elevenlabs';
 const SPEECH_WORDS_PER_MINUTE = 150;
@@ -66,10 +71,9 @@ export function createProductionAudio(context: Context, audio: ProductionAudioSe
       questId: context.questId,
       idempotencyKey: attemptKey(context, { kind, ...request }, attempt),
     });
-    let created:
-      Awaited<ReturnType<typeof jobs.createSpeechJob> | ReturnType<typeof jobs.createSoundEffectJob>> | undefined;
+    let created: CreatedAudioJob | undefined;
     try {
-      created = await createWithRetry(attempt =>
+      created = await createWithRetry<CreatedAudioJob>(attempt =>
         kind === 'speech'
           ? jobs.createSpeechJob({ ...input(attempt), preferredVoice: context.user.preferredVoice })
           : jobs.createSoundEffectJob(input(attempt))
@@ -87,7 +91,8 @@ export function createProductionAudio(context: Context, audio: ProductionAudioSe
       if (created.code === 'insufficient_credits') throw insufficientCreditsError(created.message);
       return { ok: false, code: created.code, message: created.message };
     }
-    await context.statusUpdate({ generationJobs: [{ id: created.job.id, kind }] });
+    // Audio jobs run inline and have no Quest job card (QUEST_GENERATION_JOB_KINDS), as in audio_generation.
+    await context.statusUpdate({}, kind === 'speech' ? 'Generating voiceover...' : 'Generating sound effect...');
     const job = await jobs.runInline(created.job.id, {
       timeoutMs: AUDIO_JOB_INLINE_TIMEOUT_MS,
       minStepMs: inlineMinStepMs(kind),
