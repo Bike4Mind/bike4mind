@@ -344,7 +344,7 @@ describe('provider admin key access alarms', () => {
     expect(callsOf(resources.alarm).filter(([logicalName]) => logicalName.startsWith('ProviderAdminKey'))).toHaveLength(
       3
     );
-    expect(resources.alarm).toHaveBeenCalledTimes(11);
+    expect(resources.alarm).toHaveBeenCalledTimes(13);
   });
 
   it('creates nothing alarm-related on a stage that does not monitor', async () => {

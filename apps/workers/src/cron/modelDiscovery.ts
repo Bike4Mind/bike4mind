@@ -19,6 +19,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitDiscoveryMetrics, emitDiscoveryRunFailure } from '@workers/modelDiscovery/metrics';
 import { runScheduledDiscovery } from '@bike4mind/server-utils/modelDiscovery/scheduledRun';
 import { Resource } from 'sst';
+import { publishModelPriceSnapshot } from './modelPriceSnapshotWriter';
 
 const logger = new Logger({ metadata: { service: 'modelDiscovery' } });
 
@@ -49,8 +50,10 @@ function budgetFrom(context?: Context): number {
 
 export async function handler(event: ModelDiscoveryEvent = {}, context?: Context) {
   const stage = Resource.App.stage;
+  let connected = false;
   try {
     await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage), logger);
+    connected = true;
 
     const result = await runScheduledDiscovery(logger, HOST, {
       trigger: event.trigger === 'manual' ? 'manual' : 'cron',
@@ -82,5 +85,8 @@ export async function handler(event: ModelDiscoveryEvent = {}, context?: Context
       error: error instanceof Error ? error.message : String(error),
     });
     throw error;
+  } finally {
+    // Early returns and failed runs still leave the rows in force worth publishing.
+    if (connected) await publishModelPriceSnapshot(logger);
   }
 }

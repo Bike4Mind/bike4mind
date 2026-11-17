@@ -3,6 +3,7 @@ import type { Context } from 'aws-lambda';
 
 const mocks = vi.hoisted(() => ({
   send: vi.fn(async (_command: unknown) => undefined),
+  s3Send: vi.fn(async (_command: unknown): Promise<{ Body?: { transformToString: () => Promise<string> } }> => ({})),
   secretSend: vi.fn(async (_command: unknown): Promise<{ SecretString?: string }> => ({})),
   fetchAnthropicHourlyUsage: vi.fn(),
   fetchOpenAIHourlyUsage: vi.fn(),
@@ -21,6 +22,14 @@ vi.mock('@aws-sdk/client-cloudwatch', () => ({
     send = mocks.send;
   },
   PutMetricDataCommand: class {
+    constructor(public readonly input: unknown) {}
+  },
+}));
+vi.mock('@aws-sdk/client-s3', () => ({
+  S3Client: class {
+    send = mocks.s3Send;
+  },
+  GetObjectCommand: class {
     constructor(public readonly input: unknown) {}
   },
 }));
@@ -75,7 +84,21 @@ const published = (): PutInput => {
   return command.input;
 };
 
+const snapshotBody = (overrides: Record<string, unknown> = {}) => ({
+  Body: {
+    transformToString: async () =>
+      JSON.stringify({
+        version: 1,
+        generatedAt: '2026-10-31T09:00:00.000Z',
+        rows: [{ modelId: 'gpt-6-astra', pricing: { '272000': { input: 1e-6, output: 4e-6 } } }],
+        ...overrides,
+      }),
+  },
+});
+
 beforeEach(() => {
+  vi.stubEnv('MODEL_PRICE_SNAPSHOT_BUCKET', 'snapshot-bucket');
+  mocks.s3Send.mockResolvedValue(snapshotBody());
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   mocks.config.ANTHROPIC_ADMIN_API_KEY = 'anthropic-admin-key';
@@ -118,8 +141,18 @@ describe('providerUsagePoll handler', () => {
       START.getTime() / 1000,
       END.getTime() / 1000
     );
-    expect(mocks.priceProviderUsage).toHaveBeenCalledWith('anthropic', expect.any(Array));
-    expect(mocks.priceProviderUsage).toHaveBeenCalledWith('openai', [usageRow('gpt-5.5')]);
+    expect(mocks.priceProviderUsage).toHaveBeenCalledWith(
+      'anthropic',
+      expect.any(Array),
+      undefined,
+      expect.objectContaining({ version: 1 })
+    );
+    expect(mocks.priceProviderUsage).toHaveBeenCalledWith(
+      'openai',
+      [usageRow('gpt-5.5')],
+      undefined,
+      expect.objectContaining({ version: 1 })
+    );
   });
 
   it('publishes USD, output tokens and unpriced tokens per provider, stamped at run time', async () => {
@@ -149,8 +182,8 @@ describe('providerUsagePoll handler', () => {
 
   it('logs one info line per provider and one warn line for unpriced models', async () => {
     await handler({}, context);
-    expect(mocks.info).toHaveBeenCalledTimes(2);
-    expect(mocks.info.mock.calls[0][0]).toBe(
+    expect(mocks.info).toHaveBeenCalledTimes(3);
+    expect(mocks.info.mock.calls[1][0]).toBe(
       '[ProviderUsagePoll] anthropic 2026-10-31T13:00:00.000Z..2026-10-31T14:00:00.000Z: usd=$42.50 outputTokens=40 models=2'
     );
     expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
@@ -263,5 +296,59 @@ describe('providerUsagePoll handler', () => {
       expect(metrics).toHaveLength(3);
       expect(metrics.every(d => (d.Dimensions as Array<{ Value: string }>)[0].Value === 'openai')).toBe(true);
     });
+  });
+});
+
+describe('providerUsagePoll model price snapshot', () => {
+  const snapshotArg = () => mocks.priceProviderUsage.mock.calls[0][3];
+  const staticPricing = () => {
+    expect(mocks.priceProviderUsage).toHaveBeenCalledTimes(2);
+    for (const call of mocks.priceProviderUsage.mock.calls) expect(call[3]).toBeUndefined();
+  };
+
+  it('loads the snapshot once before the provider loop and logs its age and size', async () => {
+    await handler({}, context);
+    expect(mocks.s3Send).toHaveBeenCalledOnce();
+    expect((mocks.s3Send.mock.calls[0][0] as { input: unknown }).input).toEqual({
+      Bucket: 'snapshot-bucket',
+      Key: 'model-prices/per-token.json',
+    });
+    expect(snapshotArg()).toMatchObject({ rows: [{ modelId: 'gpt-6-astra' }] });
+    expect(mocks.info).toHaveBeenCalledWith(expect.stringContaining('generatedAt=2026-10-31T09:00:00.000Z rows=1'));
+    expect(mocks.warn).not.toHaveBeenCalledWith(expect.stringContaining('snapshot'), expect.anything());
+    expect(mocks.warn).not.toHaveBeenCalledWith(expect.stringContaining('snapshot'));
+  });
+
+  it('warns when the snapshot is older than 24h but still uses it', async () => {
+    mocks.s3Send.mockResolvedValue(snapshotBody({ generatedAt: '2026-10-30T13:00:00.000Z' }));
+    await handler({}, context);
+    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining('older than 24h'));
+    expect(snapshotArg()).toBeDefined();
+  });
+
+  it('prices from the static tables with one warning when the bucket is not configured', async () => {
+    vi.stubEnv('MODEL_PRICE_SNAPSHOT_BUCKET', '');
+    await handler({}, context);
+    expect(mocks.s3Send).not.toHaveBeenCalled();
+    staticPricing();
+    expect(mocks.warn).toHaveBeenCalledTimes(2);
+    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining('snapshot bucket not configured'));
+  });
+
+  it('prices from the static tables when the object is missing', async () => {
+    mocks.s3Send.mockRejectedValue(Object.assign(new Error('no such key'), { name: 'NoSuchKey' }));
+    await expect(handler({}, context)).resolves.toEqual({ published: 2, skipped: 0 });
+    staticPricing();
+    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining('snapshot unavailable'), expect.any(Error));
+  });
+
+  it.each([
+    ['not JSON', async () => 'nope'],
+    ['the wrong shape', async () => JSON.stringify({ version: 2, rows: [] })],
+  ])('prices from the static tables when the snapshot is %s', async (_label, transformToString) => {
+    mocks.s3Send.mockResolvedValue({ Body: { transformToString } });
+    await expect(handler({}, context)).resolves.toEqual({ published: 2, skipped: 0 });
+    staticPricing();
+    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining('snapshot unavailable'), expect.anything());
   });
 });

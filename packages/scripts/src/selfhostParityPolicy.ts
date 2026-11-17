@@ -261,19 +261,19 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'eventRule:infra/providerSpend.ts:ProviderAdminKeyChangeRule',
-    'e328076166277ffd3a5b0f613c21a58d4b0702f4c234dbc8d4e7084195eb07ff',
+    'd808ffebf735772b86f2a79b3c1e02fb06176ae4ba90c2707c8b78077796c220',
     'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
     ['cloudwatch:PutMetricData']
   ),
   hostedOnly(
     'eventRule:infra/providerSpend.ts:ProviderAdminKeyKmsChangeRule',
-    '05121631419d2d44923ae27f0802b510498356aed77bd5d4e460434b6cbe5a36',
+    '95f1a9d8bd93df1a27f3caeb8278e7f9e944d9561aaeb85ec326f2eeef41e5cd',
     'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
     ['cloudwatch:PutMetricData']
   ),
   hostedOnly(
     'eventRule:infra/providerSpend.ts:ProviderAdminKeyReadRule',
-    '196fb966bed4c123fe7b1412bd0ac904b73d0d475c71f7b3da99be9b65d654dd',
+    '090e9a2b604adf317aa9c0487f6bc1ad1c0b616c5c8606370c7df956b240e539',
     'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
     ['cloudwatch:PutMetricData']
   ),
@@ -1052,7 +1052,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'schedule:infra/cron.ts:modelDiscoveryCron',
-    '7f2b05bafc0342ba49618e79c8141efeb1def7b2ef88a4c2a76fbcc1f7b16fb8',
+    '6c33a39dd7f6a9ba57d195bc8bc6906665d2573e0fc7f492ed486d84a8b536b0',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'schedule:modelDiscovery',
@@ -1081,7 +1081,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/cron.ts:providerUsagePoll',
-    '5f00804579eaf0eb3b4ed3b5dca53ece8b19f8457fd8604091d1432f4066eac0',
+    '0efe87f7fb65efd31bd4b6954832cff26f9da8db51ec29556071702237c3a1bf',
     'Publishes provider-reported spend to hosted CloudWatch alarms on monitored stages; no local metric or alarm destination is configured.',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),

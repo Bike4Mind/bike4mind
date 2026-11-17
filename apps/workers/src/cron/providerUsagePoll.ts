@@ -6,6 +6,10 @@
  * alarmed in infra/providerSpend.ts, as is UnpricedOutputTokens). Unlike the ledger-derived EstimatedUsd (infra/llmSpend.ts),
  * this counts every call billed to the organization, whichever service made it.
  *
+ * Prices come from the static adapter tables plus the ModelPrice snapshot that model discovery
+ * writes to S3 (modelPriceSnapshotWriter.ts); without the snapshot the static tables alone price
+ * the hour.
+ *
  * A provider whose admin key is not configured is skipped and publishes ProviderUsagePollSkipped
  * instead. A provider whose report cannot be read fails the run after the others are published, so
  * the poller-errors alarm sees it.
@@ -15,17 +19,21 @@
  */
 
 import { CloudWatchClient, PutMetricDataCommand, type MetricDatum } from '@aws-sdk/client-cloudwatch';
+import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { Context } from 'aws-lambda';
 import { Logger } from '@bike4mind/observability';
+import { MODEL_PRICE_SNAPSHOT_KEY, ModelPriceSnapshot, type IModelPriceSnapshot } from '@bike4mind/common';
 import { randomUUID } from 'crypto';
 import { spendReconciliationService } from '@bike4mind/services';
 import { Resource } from 'sst';
 import { resolveProviderAdminKey } from './providerAdminKey';
+import { MODEL_PRICE_SNAPSHOT_BUCKET_ENV } from './modelPriceSnapshotWriter';
 
 type ProviderHourlyUsage = spendReconciliationService.ProviderHourlyUsage;
 type UsageReportProvider = spendReconciliationService.UsageReportProvider;
 
 const HOUR_MS = 3_600_000;
+const SNAPSHOT_STALE_MS = 24 * HOUR_MS;
 
 const contextToLogs = (context: Context) => ({
   requestId: context.awsRequestId ?? randomUUID(),
@@ -58,6 +66,29 @@ export function previousHourWindow(now: Date): { start: Date; end: Date } {
   return { start: new Date(end.getTime() - HOUR_MS), end };
 }
 
+/** Null on any failure: the hour is then priced from the static tables alone, as before the snapshot existed. */
+async function loadModelPriceSnapshot(logger: Logger, now: Date): Promise<IModelPriceSnapshot | null> {
+  const bucket = process.env[MODEL_PRICE_SNAPSHOT_BUCKET_ENV];
+  if (!bucket) {
+    logger.warn('[ProviderUsagePoll] model price snapshot bucket not configured, using static prices');
+    return null;
+  }
+  try {
+    const object = await new S3Client({}).send(new GetObjectCommand({ Bucket: bucket, Key: MODEL_PRICE_SNAPSHOT_KEY }));
+    const snapshot = ModelPriceSnapshot.parse(JSON.parse((await object.Body?.transformToString()) ?? ''));
+    logger.info(
+      `[ProviderUsagePoll] model price snapshot generatedAt=${snapshot.generatedAt} rows=${snapshot.rows.length}`
+    );
+    if (now.getTime() - Date.parse(snapshot.generatedAt) > SNAPSHOT_STALE_MS) {
+      logger.warn(`[ProviderUsagePoll] model price snapshot is older than 24h (generatedAt=${snapshot.generatedAt})`);
+    }
+    return snapshot;
+  } catch (err) {
+    logger.warn('[ProviderUsagePoll] model price snapshot unavailable, using static prices', err);
+    return null;
+  }
+}
+
 export async function handler(_event: unknown, context: Context) {
   const logger = new Logger().withMetadata(contextToLogs(context));
   const now = new Date();
@@ -68,6 +99,7 @@ export async function handler(_event: unknown, context: Context) {
   const failed: string[] = [];
   let published = 0;
   let skipped = 0;
+  const snapshot = (await loadModelPriceSnapshot(logger, now)) ?? undefined;
 
   for (const { provider, fetch } of PROVIDERS) {
     let key: string | undefined;
@@ -94,7 +126,7 @@ export async function handler(_event: unknown, context: Context) {
 
     try {
       const rows = await fetch(key, start, end);
-      const price = await spendReconciliationService.priceProviderUsage(provider, rows);
+      const price = await spendReconciliationService.priceProviderUsage(provider, rows, undefined, snapshot);
       if (price.unpricedModels.length > 0) {
         logger.warn(
           `[ProviderUsagePoll] ${provider}: no price for ${price.unpricedModels.join(', ')} ` +
