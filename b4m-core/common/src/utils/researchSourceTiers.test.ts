@@ -221,11 +221,49 @@ describe('cleanResearchItemRuleCondition', () => {
   });
 
   it('removes C0, DEL and C1 control characters', () => {
-    expect(cleanResearchItemRuleCondition('a\u0000b\u001Fc\u007Fd\u0085e\u009Ff')).toBe('abcdef');
+    expect(cleanResearchItemRuleCondition('a\u0000b\u001Fc\u007Fd\u0080e\u009Ff')).toBe('abcdef');
   });
 
   it('turns tab, newline and carriage return into a space', () => {
-    expect(cleanResearchItemRuleCondition('a\tb\nc\r\nd')).toBe('a b c  d');
+    expect(cleanResearchItemRuleCondition('a\tb\nc\r\nd')).toBe('a b c d');
+  });
+
+  it.each([
+    ['soft hyphen', '\u00AD'],
+    ['invisible operators', '\u2061\u2062'],
+    ['variation selector', '\uFE0F'],
+    ['tag character', '\u{E0041}'],
+    ['hangul filler', '\u3164'],
+    ['braille blank', '\u2800'],
+  ])('reduces a lone %s to empty', (_name, char) => {
+    expect(cleanResearchItemRuleCondition(char)).toBe('');
+  });
+
+  it.each([
+    ['vertical tab', '\v'],
+    ['form feed', '\f'],
+    ['NEL', '\u0085'],
+    ['line separator', '\u2028'],
+    ['paragraph separator', '\u2029'],
+  ])('turns %s between words into one space', (_name, char) => {
+    expect(cleanResearchItemRuleCondition('press' + char + 'release')).toBe('press release');
+  });
+
+  it('collapses whitespace left around a stripped character', () => {
+    expect(cleanResearchItemRuleCondition('a \u200B b')).toBe('a b');
+  });
+
+  it('keys conditions that differ only in line breaks or spacing identically', () => {
+    const keys = ['a b', 'a\nb', 'a\r\nb', 'a  b'].map(condition =>
+      researchItemRuleKey({ condition, action: 'block' })
+    );
+    expect(new Set(keys).size).toBe(1);
+  });
+
+  it('leaves accents, CJK and emoji unchanged', () => {
+    expect(cleanResearchItemRuleCondition('caf\u00E9 \u65E5\u672C\u8A9E \u{1F600}')).toBe(
+      'caf\u00E9 \u65E5\u672C\u8A9E \u{1F600}'
+    );
   });
 
   it('removes bidi controls', () => {
