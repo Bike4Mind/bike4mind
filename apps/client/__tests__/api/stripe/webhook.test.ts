@@ -212,6 +212,9 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
 }));
 
+vi.mock('@bike4mind/server-utils/subscriptions/releasePlanStorageLimit', () => ({
+  releasePlanStorageLimit: vi.fn(),
+}));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     MONGODB_URI: 'mongodb://localhost/test',

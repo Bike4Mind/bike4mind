@@ -13,6 +13,11 @@ vi.mock('@bike4mind/database', () => ({
 }));
 const { mockEmitMetric } = vi.hoisted(() => ({ mockEmitMetric: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: mockEmitMetric }));
+const { mockRelease } = vi.hoisted(() => ({ mockRelease: vi.fn() }));
+vi.mock('@bike4mind/server-utils/subscriptions/releasePlanStorageLimit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/subscriptions/releasePlanStorageLimit')>()),
+  releasePlanStorageLimit: mockRelease,
+}));
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
@@ -115,6 +120,28 @@ describe('applyPlanStorageLimit', () => {
       await apply({ storageLimitMb: '5000' }, status);
 
       expect(mockSetPlanStorageLimit).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['canceled', 'incomplete_expired'] as const)(
+    'releases the plan allowance once the subscription is %s, whatever the price carries',
+    async status => {
+      await apply({ storageLimitMb: '5000' }, status);
+      await apply({}, status);
+      await apply({ storageLimitMb: 'lots' }, status);
+
+      expect(mockRelease).toHaveBeenCalledTimes(3);
+      expect(mockRelease).toHaveBeenCalledWith('user-1', 'sub_1', logger);
+      expect(logger.warn).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['active', 'trialing', 'incomplete', 'past_due', 'unpaid', 'paused'] as const)(
+    'keeps the plan allowance on a %s subscription',
+    async status => {
+      await apply({ storageLimitMb: '5000' }, status);
+
+      expect(mockRelease).not.toHaveBeenCalled();
     }
   );
 

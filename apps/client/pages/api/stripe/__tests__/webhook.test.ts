@@ -43,6 +43,7 @@ const mocks = vi.hoisted(() => ({
   recordBillingEvent: vi.fn(),
   publishSubscriptionUpdated: vi.fn(),
   publishInvoicePayment: vi.fn(),
+  releasePlanStorageLimit: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -95,6 +96,9 @@ vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
     updateByStripeSubscriptionIdReturningBefore: mocks.updateByStripeSubscriptionId,
     markPastDue: mocks.markPastDue,
   },
+}));
+vi.mock('@bike4mind/server-utils/subscriptions/releasePlanStorageLimit', () => ({
+  releasePlanStorageLimit: mocks.releasePlanStorageLimit,
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { STRIPE_WEBHOOK_SECRET: 'whsec_test' },
@@ -466,6 +470,29 @@ describe('customer.subscription.deleted', () => {
     await vi.waitFor(() => expect(mocks.voidOpenSubscriptionInvoices).toHaveBeenCalled());
 
     expect(mocks.postSubscriptionLifecycleToSlack).toHaveBeenCalledOnce();
+  });
+
+  it("releases the user's plan storage allowance, owner taken from the row", async () => {
+    mocks.updateByStripeSubscriptionId.mockResolvedValue({ ...userRow, status: 'active' });
+
+    await deliver(deleted('cancellation_requested'));
+
+    expect(mocks.releasePlanStorageLimit).toHaveBeenCalledOnce();
+    expect(mocks.releasePlanStorageLimit).toHaveBeenCalledWith('user_1', 'sub_1', logger);
+  });
+
+  it('leaves storage alone for an org-owned subscription and in a stage with no row', async () => {
+    mocks.updateByStripeSubscriptionId.mockResolvedValueOnce({
+      ...userRow,
+      ownerType: SubscriptionOwnerType.Organization,
+      ownerId: 'org_1',
+    });
+    await deliver(deleted('cancellation_requested'));
+
+    mocks.updateByStripeSubscriptionId.mockResolvedValueOnce(null);
+    await deliver(deleted('cancellation_requested'));
+
+    expect(mocks.releasePlanStorageLimit).not.toHaveBeenCalled();
   });
 
   it('posts the end once across a redelivery', async () => {

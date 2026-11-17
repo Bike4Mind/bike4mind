@@ -59,6 +59,7 @@ import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billin
 import { recordBillingEvent, type BillingEventHints } from '@server/billing/billingEventStore';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { stripeMirrorFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
+import { releasePlanStorageLimit } from '@bike4mind/server-utils/subscriptions/releasePlanStorageLimit';
 import { emitBillingEvent, emitPurchaseEvents } from '@bike4mind/server-utils/analytics/signupEvents';
 import { reverseSubscriptionRewardForRefund } from '@bike4mind/server-utils/referrals/subscriptionReward';
 import {
@@ -425,6 +426,14 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       // swallows its own failures, so it cannot fail a delivery that already landed.
       if (cleanupFailed) {
         await emitMetric('Lumina5/Entitlements', 'DunningCleanupFailed', 1, { reason: 'void_failed' });
+      }
+
+      // The ended plan's storage allowance goes (#7379): the user falls back to their manual override,
+      // or the default limit. Nothing stored is deleted; uploads over the new limit are refused.
+      // Owner from the row, not metadata, as in customerSubscriptionUpdated.ts. Org-owned
+      // subscriptions have no plan storage mapping yet. Never throws.
+      if (updated.ownerType === SubscriptionOwnerType.User) {
+        await releasePlanStorageLimit(updated.ownerId, subscription.id, req.logger);
       }
 
       // Only when Stripe's retry schedule ended in cancel. A Dashboard setting of "mark unpaid"
