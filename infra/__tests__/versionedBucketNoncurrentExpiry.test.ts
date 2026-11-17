@@ -35,6 +35,17 @@ const prop = (obj: ts.ObjectLiteralExpression, name: string): ts.Expression | un
 
 const calleeIs = (node: ts.NewExpression, text: string) => node.expression.getText() === text;
 
+// The variable declaration that owns a `new` expression: its direct parent, or reached through parentheses
+// and the branches of a stage-gating ternary (`cond ? new sst.aws.Bucket(...) : undefined`). A `new` in the
+// ternary's condition, or under any other parent, has no owner.
+const ownerOf = (node: ts.Expression): ts.VariableDeclaration | null => {
+  const parent = node.parent;
+  if (ts.isVariableDeclaration(parent)) return ts.isIdentifier(parent.name) ? parent : null;
+  if (ts.isParenthesizedExpression(parent)) return ownerOf(parent);
+  if (ts.isConditionalExpression(parent) && parent.condition !== node) return ownerOf(parent);
+  return null;
+};
+
 type BucketInfo = { name: string; versioned: boolean; undeterminable: boolean };
 
 const analyze = (src: string) => {
@@ -49,7 +60,7 @@ const analyze = (src: string) => {
       consts.set(node.name.text, unwrap(node.initializer));
     }
     if (ts.isNewExpression(node) && calleeIs(node, 'sst.aws.Bucket')) {
-      const owner = ts.isVariableDeclaration(node.parent) && ts.isIdentifier(node.parent.name) ? node.parent : null;
+      const owner = ownerOf(node);
       if (!owner) {
         unattributed++;
       } else {
@@ -176,6 +187,37 @@ describe('guard parsing', () => {
     const a = analyze(src);
     expect(a.buckets).toEqual([{ name: 'fooBucket', versioned: true, undeterminable: false }]);
     expect(a.unattributed).toBe(0);
+  });
+
+  it.each([
+    [
+      'in the true branch',
+      `const fooBucket = isHosted ? new sst.aws.Bucket('fooBucket', { versioning: true }) : undefined;`,
+    ],
+    [
+      'in the false branch',
+      `const fooBucket = isLocal ? undefined : new sst.aws.Bucket('fooBucket', { versioning: true });`,
+    ],
+    [
+      'in a parenthesized branch',
+      `export const fooBucket = isHosted\n  ? (new sst.aws.Bucket('fooBucket', { versioning: true }))\n  : undefined;`,
+    ],
+  ])('attributes a bucket %s of a stage-gating ternary, and still requires its lifecycle', (_label, src) => {
+    const a = analyze(src);
+    expect(a.buckets).toEqual([{ name: 'fooBucket', versioned: true, undeterminable: false }]);
+    expect(a.unattributed).toBe(0);
+    expect(problemsIn(src)).toEqual(['fooBucket has no BucketLifecycleConfigurationV2']);
+    expect(problemsIn(src + '\n' + lifecycle(rule()))).toEqual([]);
+  });
+
+  it('accepts an unversioned bucket behind a ternary with no lifecycle', () => {
+    const src = `const b = isHosted ? new sst.aws.Bucket('b', { versioning: false }) : undefined;`;
+    expect(analyze(src).buckets).toEqual([{ name: 'b', versioned: false, undeterminable: false }]);
+    expect(problemsIn(src)).toEqual([]);
+  });
+
+  it('does not attribute a bucket built in a ternary condition', () => {
+    expect(analyze(`const x = new sst.aws.Bucket('x', {}) ? 1 : 2;`).unattributed).toBe(1);
   });
 
   it('fails a versioned bucket declared after a `/*` string when it has no lifecycle', () => {

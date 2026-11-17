@@ -56,6 +56,7 @@ const mockDlqUrls = vi.hoisted(() => ({
       'revenue-snapshot',
       'subscription-reconciliation',
       'account-deletion-sweep',
+      'dlq-triage-sweep',
       'organization-retention',
       'fab-file-moderation',
       'telemetry-alert-rule',

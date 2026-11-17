@@ -10,9 +10,11 @@ import {
   ADMIN_ANALYTICS_TAB_SLUG,
   ADMIN_EVENTS_TAB_SLUG,
   ADMIN_INTEGRATION_DEMAND_TAB_SLUG,
+  ADMIN_INTEGRATION_HEALTH_TAB_SLUG,
   ADMIN_MODEL_LOGS_TAB_SLUG,
   ADMIN_MODEL_METRICS_TAB_SLUG,
   ADMIN_ORGANIZATIONS_TAB_SLUG,
+  ADMIN_RATE_LIMITS_TAB_SLUG,
   ADMIN_REVENUE_TAB_SLUG,
   ADMIN_SECURITY_DASHBOARD_TAB_SLUG,
   ADMIN_SETTINGS_TAB_SLUG,
@@ -74,9 +76,9 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.GitHubConnection]: 'github-connection',
   [AdminTab.HelpAnalytics]: 'help-analytics',
   [AdminTab.ContextInspector]: 'context-inspector',
-  [AdminTab.RateLimits]: 'rate-limits',
+  [AdminTab.RateLimits]: ADMIN_RATE_LIMITS_TAB_SLUG,
   [AdminTab.DlqReplay]: ADMIN_DLQ_REPLAY_TAB_SLUG,
-  [AdminTab.IntegrationHealth]: 'integration-health',
+  [AdminTab.IntegrationHealth]: ADMIN_INTEGRATION_HEALTH_TAB_SLUG,
   [AdminTab.SreAgent]: 'sre-agent',
   [AdminTab.ManageGears]: 'manage-gears',
   [AdminTab.ApiReference]: 'api-reference',
@@ -109,6 +111,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.Approvals]: 'approvals',
   [AdminTab.Tutorials]: 'tutorials',
   [AdminTab.AiOperations]: 'ai-operations',
+  [AdminTab.Roles]: 'roles',
 };
 
 /**
