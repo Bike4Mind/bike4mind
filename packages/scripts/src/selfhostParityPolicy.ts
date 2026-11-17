@@ -119,6 +119,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap('event:infra/eventBus.ts:email-send', 'b19f0525b465da453fa0fa04023bdcac4b3b57e706ed181099baea524d661f80'),
   gap(
+    'event:infra/eventBus.ts:moderation-escalation-alert',
+    '6db5f1d6798bc7d470c7f75f12252468da84d878a780d70014dc960bb6922882',
+    ['ssm:GetParameter']
+  ),
+  gap(
     'event:infra/eventBus.ts:notebook-curation-complete-analytics',
     'cb7bc46a17716134f82299540bcff81030e1d4ef64e17f7a924d154f5d28c44a'
   ),
@@ -383,6 +388,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   broker('queue:infra/eventBus.ts:emailEventsDLQ', '89640933adf55a7c4b2f652b0af642da349c22f08b15a76086b9526925b2b277'),
   broker('queue:infra/eventBus.ts:pushEventsDLQ', '9675205f30ba0e4475576666a8df72743d21b4a07d58fc35474bdded3ac4ecbe'),
+  broker(
+    'queue:infra/eventBus.ts:moderationAlertsDLQ',
+    '122aa6633fc75c70c1e6ade17d4ccf2eb13159ee43723a49ad48c4e805a29a46'
+  ),
   broker(
     'queue:infra/eventBus.ts:notebookEventsDLQ',
     '6d141bd0d7ffdd58bd3868b5b89ce62a6aa5d3b2102ff88ae5a09215d74ec9ce'
