@@ -7,7 +7,13 @@ import {
   type ToolBuilderCallbacks,
 } from '@bike4mind/services/llm';
 import { applyOrgToolPolicy } from '@bike4mind/services/llm/orgToolPolicy';
-import { assertOwnerHasCredits, creditService, estimateGeneratedMediaUsd } from '@bike4mind/services';
+import {
+  assertOwnerHasCredits,
+  creditService,
+  estimateGeneratedMediaUsd,
+  spendFreezeService,
+} from '@bike4mind/services';
+import { spendFreezeSubjectForRequest } from '../billing/spendFreezeSubject';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { usdToCredits } from '@bike4mind/utils';
 import {
@@ -25,6 +31,7 @@ import {
   questRepository,
   scopedSettingsRepository,
   sessionRepository,
+  spendFreezeRepository,
   userRepository,
 } from '@bike4mind/database';
 import {
@@ -79,15 +86,22 @@ async function assertMediaOwnerStanding(ownerUserId: string): Promise<void> {
 }
 
 /**
- * Media tools call onToolStart before their provider call, so with credits enforced this refuses there (422)
- * when the owner's balance, or their org member cap, cannot cover the estimate.
+ * Media tools call onToolStart before their provider call, so this refuses there: a spend freeze on the owner
+ * or the billed org (403) always, and with credits enforced (422) when the owner's balance, or their org member
+ * cap, cannot cover the estimate.
  */
 async function gateMediaToolStart(toolName: string, data: unknown, ctx: MediaBillingContext): Promise<void> {
+  const owner = (await userRepository.findById(ctx.ownerUserId)) as IUserDocument | null;
+  if (!owner) throw new ForbiddenError(`deep agent tools: owner user ${ctx.ownerUserId} not found`);
+  await spendFreezeService.assertSpendNotFrozen(
+    spendFreezeSubjectForRequest({ user: owner }, ctx.billingOrgId ?? null),
+    {
+      db: { spendFreezes: spendFreezeRepository },
+    }
+  );
   if (!(await isCreditsEnforced())) return;
   const usd = estimateMediaUsd(toolName, data, ctx);
   if (usd <= 0) return;
-  const owner = (await userRepository.findById(ctx.ownerUserId)) as IUserDocument | null;
-  if (!owner) throw new ForbiddenError(`deep agent tools: owner user ${ctx.ownerUserId} not found`);
   const requiredCredits = usdToCredits(usd);
   const org = ctx.billingOrgId ? await organizationRepository.findById(ctx.billingOrgId) : null;
   if (org && creditService.isMemberCreditCapExceeded(org, owner.id, requiredCredits)) {

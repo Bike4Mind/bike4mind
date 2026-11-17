@@ -154,7 +154,7 @@ const SITES: Record<string, Array<[call: string, why: string]>> = {
   ],
   'packages/server-utils/src/decisions/runDecision.ts': [['reserveRequestCredits(', VIA_RESERVE]],
   'packages/server-utils/src/deepAgent/toolMaterializer.ts': [
-    ['assertOwnerHasCredits(', 'gated-by the wake meter (reserveRequestCredits) on the LLM call that issued the tool'],
+    ['assertOwnerHasCredits(', 'gated-by assertSpendNotFrozen at the top of the media tool start'],
   ],
   'packages/server-utils/src/deepAgent/wakeMetering.ts': [
     ['assertOwnerHasCredits(', 'gated-by assertOwnerCanAfford at the top of the preflight'],
