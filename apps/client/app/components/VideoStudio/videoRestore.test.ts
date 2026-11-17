@@ -13,6 +13,20 @@ const restoreOf = (
 ): StudioRestoreRequest => ({ medium: 'video', request, lineageInputs: [], fileNames });
 
 describe('restoreVideoForm', () => {
+  it('warns when a take contains keyframes that Create cannot restore', () => {
+    const { value, notices } = restoreVideoForm(
+      restoreOf({
+        model: rangeModel.id,
+        prompt: 'p',
+        mode: 'image_to_video',
+        keyframes: [{ fileId: 'f1', timeSeconds: 0 }],
+      }),
+      MODELS
+    );
+    expect(value.inputImage).toBeNull();
+    expect(notices).toContain("Create does not take keyframes yet, so the take's keyframes were left out.");
+  });
+
   it('fills every control of a stored video request, with its first frame as the starting image', () => {
     const { value, notices } = restoreVideoForm(
       restoreOf(

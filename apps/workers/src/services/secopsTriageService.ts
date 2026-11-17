@@ -8,6 +8,7 @@
  * - Filters findings by configured severity threshold (critical / high)
  * - Deduplicates via SHA-1 fingerprint (alertId + stage) embedded in issue body
  * - Existing open issue -> adds a rescan comment
+ * - Closed issue -> reopens it with a comment, unless it was closed as not planned or duplicate (then left closed)
  * - New finding -> creates a GitHub issue with full Affected URLs table
  * - Clean findings (not in current scan) -> auto-closes open issues of the same stage
  * - Caps issue creation at maxIssuesPerScan (sorted highest severity first)
@@ -24,7 +25,7 @@ import { apiKeyService } from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { SlackClient } from '@bike4mind/slack';
 import type { KnownBlock, Block } from '@slack/web-api';
-import type { GitHubService } from '@bike4mind/server-utils/services/githubService';
+import type { GitHubIssue, GitHubService } from '@bike4mind/server-utils/services/githubService';
 import type { SecopsTriageConfig, SecopsTriageScanSource } from '@bike4mind/common';
 import { escapeSlackLine, escapeSlackText } from '@bike4mind/common';
 
@@ -64,19 +65,28 @@ export interface SecopsTriageIssueLink {
 export interface SecopsTriageResult {
   issuesCreated: number;
   issuesUpdated: number;
+  issuesReopened: number;
   issuesClosed: number;
   issuesDeduplicated: number;
+  /** Findings whose issue was closed as not planned or duplicate; left closed with no GitHub writes. */
+  issuesSuppressed: number;
   skippedBelowThreshold: number;
   skippedRateLimit: number;
   dryRun: boolean;
   createdIssueLinks: SecopsTriageIssueLink[];
   updatedIssueLinks: SecopsTriageIssueLink[];
+  reopenedIssueLinks: SecopsTriageIssueLink[];
   closedIssueLinks: SecopsTriageIssueLink[];
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const FINGERPRINT_COMMENT_PREFIX = '<!-- secops-fingerprint:';
+const FINGERPRINT_PATTERN = /<!-- secops-fingerprint: ([a-f0-9]+) -->/;
+const ISSUE_PAGE_SIZE = 100;
+const MAX_ISSUE_PAGES = 10;
+// Close reasons that mean a person chose to keep the issue closed.
+const LEFT_CLOSED_REASONS = new Set(['not_planned', 'duplicate']);
 const SEVERITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
 const SCAN_SOURCE_META: Record<
@@ -454,7 +464,9 @@ async function generateHealthAssessment(
   result: {
     issuesCreated: number;
     issuesUpdated: number;
+    issuesReopened: number;
     issuesClosed: number;
+    issuesSuppressed: number;
     skippedBelowThreshold: number;
   },
   stage: string,
@@ -509,7 +521,9 @@ Scan findings (all severity levels):
 Triage actions taken (for findings meeting severity threshold):
 - Issues created: ${result.issuesCreated}
 - Issues still open (rescan comment added): ${result.issuesUpdated}
+- Issues reopened (closed earlier, detected again): ${result.issuesReopened}
 - Issues auto-closed (resolved): ${result.issuesClosed}
+- Findings left closed (issue was closed as not planned or duplicate): ${result.issuesSuppressed}
 - Findings below threshold (not triaged): ${result.skippedBelowThreshold}
 
 Top triaged findings:
@@ -695,6 +709,12 @@ function buildRescanComment(finding: SecopsTriageFinding, scanSource?: string): 
   return `**Still detected** — rescanned on ${scanDate}. ${count} ${meta.rescanNoun}${count !== 1 ? 's' : ''} still affected.`;
 }
 
+function buildReopenComment(scanSource?: string): string {
+  const scanDate = new Date().toUTCString();
+  const meta = getScanSourceMeta(scanSource);
+  return `**Detected again** in ${meta.autoCloseSource} on ${scanDate}. Reopened.`;
+}
+
 function buildAutoCloseComment(scanSource?: string): string {
   const scanDate = new Date().toUTCString();
   const meta = getScanSourceMeta(scanSource);
@@ -743,8 +763,13 @@ function buildSlackSummaryBlocks(
     result.createdIssueLinks.length > 0 ? issueLines(result.createdIssueLinks) : null,
     `• 🔁 ${result.issuesUpdated} issue${result.issuesUpdated !== 1 ? 's' : ''} updated`,
     result.updatedIssueLinks.length > 0 ? issueLines(result.updatedIssueLinks) : null,
+    `\u2022 \u{1F513} ${result.issuesReopened} issue${result.issuesReopened !== 1 ? 's' : ''} reopened`,
+    result.reopenedIssueLinks.length > 0 ? issueLines(result.reopenedIssueLinks) : null,
     `• ✅ ${result.issuesClosed} issue${result.issuesClosed !== 1 ? 's' : ''} closed`,
     result.closedIssueLinks.length > 0 ? issueLines(result.closedIssueLinks) : null,
+    result.issuesSuppressed > 0
+      ? `\u2022 \u{1F6AB} ${result.issuesSuppressed} finding${result.issuesSuppressed !== 1 ? 's' : ''} left closed (issue closed as not planned or duplicate)`
+      : null,
     `• ⏩ ${result.skippedBelowThreshold} finding${result.skippedBelowThreshold !== 1 ? 's' : ''} skipped (below threshold)`,
   ].filter((l): l is string => l !== null);
 
@@ -809,13 +834,16 @@ export function createSecopsTriageService(logger: Logger) {
       const result: SecopsTriageResult = {
         issuesCreated: 0,
         issuesUpdated: 0,
+        issuesReopened: 0,
         issuesClosed: 0,
         issuesDeduplicated: 0,
+        issuesSuppressed: 0,
         skippedBelowThreshold: 0,
         skippedRateLimit: 0,
         dryRun,
         createdIssueLinks: [],
         updatedIssueLinks: [],
+        reopenedIssueLinks: [],
         closedIssueLinks: [],
       };
 
@@ -841,29 +869,26 @@ export function createSecopsTriageService(logger: Logger) {
       // 2. Sort: critical first, then high
       eligible.sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 99) - (SEVERITY_ORDER[b.severity] ?? 99));
 
-      // 3. Cap at maxIssuesPerScan
-      const toProcess = eligible.slice(0, maxIssues);
-      result.skippedRateLimit = Math.max(0, eligible.length - maxIssues);
-
-      if (result.skippedRateLimit > 0) {
-        logger.warn('[SECOPS-TRIAGE] Rate limit cap applied', {
-          eligible: eligible.length,
-          processing: toProcess.length,
-          skipped: result.skippedRateLimit,
+      // 3. Fetch this source's triage issues, open and closed, for dedup, reopen and auto-close
+      const issues: GitHubIssue[] = [];
+      for (let page = 1; page <= MAX_ISSUE_PAGES; page++) {
+        const batch = await githubService.listIssues(repo, {
+          state: 'all',
+          labels: `${sourceMeta.issueLabel},auto-triage`,
+          per_page: ISSUE_PAGE_SIZE,
+          sort: 'created',
+          direction: 'desc',
+          page,
         });
-      }
-
-      // 4. Fetch all currently open secops-zap issues for dedup + auto-close
-      const openIssues = await githubService.searchIssues(
-        repo,
-        `label:${sourceMeta.issueLabel} label:auto-triage is:issue is:open`
-      );
-
-      if (openIssues.length === 100) {
-        logger.warn(
-          '[SECOPS-TRIAGE] searchIssues returned exactly 100 results — results may be truncated. Auto-close may miss issues beyond page 1.',
-          { repo }
-        );
+        // listIssues drops pull requests from each page, so only an empty page marks the end.
+        if (batch.length === 0) break;
+        issues.push(...batch);
+        if (page === MAX_ISSUE_PAGES) {
+          logger.warn('[SECOPS-TRIAGE] Issue listing stopped at the page cap; older issues were not read', {
+            repo,
+            pages: MAX_ISSUE_PAGES,
+          });
+        }
       }
 
       // Collect fingerprints from ALL findings in the scan (not just toProcess) so that findings
@@ -876,13 +901,59 @@ export function createSecopsTriageService(logger: Logger) {
         fingerprintsSeen.add(fingerprint(id, stage, sourceMeta.issueLabel));
       }
 
-      // Build a map of fingerprint -> issue number for O(1) lookup
+      // Build maps of fingerprint -> issue for O(1) lookup; a closed fingerprint keeps its newest issue
       const openByFingerprint = new Map<string, { number: number; title: string; stage: string | null }>();
-      for (const issue of openIssues) {
-        const match = issue.body?.match(/<!-- secops-fingerprint: ([a-f0-9]+) -->/);
-        if (match) {
+      const closedByFingerprint = new Map<string, { number: number; title: string; stateReason: string | null }>();
+      for (const issue of issues) {
+        const match = issue.body?.match(FINGERPRINT_PATTERN);
+        if (!match) continue;
+        if (issue.state === 'open') {
           openByFingerprint.set(match[1], { number: issue.number, title: issue.title, stage: issueStage(issue.body) });
+        } else if (issue.state === 'closed') {
+          const known = closedByFingerprint.get(match[1]);
+          if (!known || issue.number > known.number) {
+            closedByFingerprint.set(match[1], {
+              number: issue.number,
+              title: issue.title,
+              stateReason: issue.state_reason ?? null,
+            });
+          }
         }
+      }
+
+      // 4. Cap at maxIssuesPerScan. A finding whose issue was closed as not planned or duplicate is left alone
+      // and does not count toward the cap.
+      const actionable: SecopsTriageFinding[] = [];
+      for (const finding of eligible) {
+        const fp = fingerprint(finding.id, stage, sourceMeta.issueLabel);
+        const closed = closedByFingerprint.get(fp);
+        if (openByFingerprint.has(fp) || !closed || !LEFT_CLOSED_REASONS.has(closed.stateReason ?? '')) {
+          actionable.push(finding);
+          continue;
+        }
+        result.issuesSuppressed++;
+        if (dryRun) {
+          logger.info(
+            `[SECOPS-TRIAGE] DRY RUN - would leave issue #${closed.number} closed (${closed.stateReason}): ${closed.title}`
+          );
+        } else {
+          logger.info('[SECOPS-TRIAGE] Leaving issue closed', {
+            issueNumber: closed.number,
+            stateReason: closed.stateReason,
+            findingId: finding.id,
+          });
+        }
+      }
+
+      const toProcess = actionable.slice(0, maxIssues);
+      result.skippedRateLimit = Math.max(0, actionable.length - maxIssues);
+
+      if (result.skippedRateLimit > 0) {
+        logger.warn('[SECOPS-TRIAGE] Rate limit cap applied', {
+          eligible: eligible.length,
+          processing: toProcess.length,
+          skipped: result.skippedRateLimit,
+        });
       }
 
       // 5. Process each eligible finding
@@ -893,6 +964,7 @@ export function createSecopsTriageService(logger: Logger) {
         const title = `[${sourceMeta.titlePrefix}][${priority}] ${finding.title}`;
 
         const existing = openByFingerprint.get(fp);
+        const closed = closedByFingerprint.get(fp);
 
         if (existing) {
           // Existing open issue - add rescan comment
@@ -909,6 +981,23 @@ export function createSecopsTriageService(logger: Logger) {
               issueNumber: existing.number,
               fingerprint: fp,
             });
+          }
+        } else if (closed) {
+          // Not closed by choice (those were left out above): reopen, no enrichment
+          if (dryRun) {
+            logger.info(`[SECOPS-TRIAGE] DRY RUN - would reopen issue #${closed.number}: ${closed.title}`);
+          } else {
+            const reopened = await githubService.reopenIssue(repo, closed.number);
+            if (reopened) {
+              await githubService.addIssueComment(repo, closed.number, buildReopenComment(scanSource));
+              result.issuesReopened++;
+              result.reopenedIssueLinks.push({ title: closed.title, url: `${issueBaseUrl}/${closed.number}` });
+              logger.info('[SECOPS-TRIAGE] Reopened closed issue for a finding detected again', {
+                issueNumber: closed.number,
+                fingerprint: fp,
+                stateReason: closed.stateReason,
+              });
+            }
           }
         } else {
           // New finding - optionally enrich with LLM, then create issue

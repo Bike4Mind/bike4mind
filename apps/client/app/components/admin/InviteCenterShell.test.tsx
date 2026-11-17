@@ -3,9 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { AdminTab } from './adminSidebarConfig';
 import { InviteCenterShell } from './InviteCenterShell';
-import { useAdminModal } from './useAdminModal';
 
 const routerMock = vi.hoisted(() => ({
   search: {} as Record<string, unknown>,
@@ -16,6 +14,14 @@ vi.mock('./InviteCenter/Packages/GrantPackagesTab', () => ({
   default: ({ embedded }: { embedded?: boolean }) => (
     <div data-testid="grant-packages-tab-stub" data-embedded={String(embedded)} />
   ),
+}));
+
+vi.mock('./PartnerSignupRulesTab', () => ({
+  default: () => <div data-testid="partner-signup-rules-tab-stub" />,
+}));
+
+vi.mock('./InviteCenter', () => ({
+  default: () => <div data-testid="invite-center-body-stub" />,
 }));
 
 vi.mock('./InviteCenter/Pending/PendingSection', () => ({
@@ -45,7 +51,6 @@ describe('InviteCenterShell', () => {
   beforeEach(() => {
     routerMock.search = {};
     routerMock.navigate.mockClear();
-    useAdminModal.setState(useAdminModal.getInitialState());
   });
 
   it('shows the header and the waitlist by default', () => {
@@ -124,19 +129,27 @@ describe('InviteCenterShell', () => {
     expect(screen.queryByTestId('admin-empty-state')).not.toBeInTheDocument();
   });
 
-  it.each([['packages', 'invite-center-open-partner-signups-btn', AdminTab.PartnerSignupRules]])(
-    'on %s, %s opens its admin tab',
-    (id, testId, tab) => {
-      routerMock.search = { inviteSection: id };
-      renderShell();
-      fireEvent.click(screen.getByTestId(testId));
-      expect(useAdminModal.getState().activeTab).toBe(tab);
-    }
-  );
+  it('hosts the bulk invite and codes body in the invites section', () => {
+    routerMock.search = { inviteSection: 'invites' };
+    renderShell();
+    expect(screen.getByTestId('invite-center-section-invites')).toContainElement(
+      screen.getByTestId('invite-center-body-stub')
+    );
+  });
 
-  it('on packages, has no link out to Invites since codes are added in the package form', () => {
+  // Rules with no package (entitlements, plans, org joins, backfill, delete) are managed only here.
+  it('hosts the full partner signup rules list in the partners section', () => {
+    routerMock.search = { inviteSection: 'partners' };
+    renderShell();
+    expect(screen.getByTestId('invite-center-section-partners')).toContainElement(
+      screen.getByTestId('partner-signup-rules-tab-stub')
+    );
+  });
+
+  it('on packages, links out to neither Invites nor Partner signups since both are edited in the package form', () => {
     routerMock.search = { inviteSection: 'packages' };
     renderShell();
     expect(screen.queryByTestId('invite-center-open-invites-btn')).toBeNull();
+    expect(screen.queryByTestId('invite-center-open-partner-signups-btn')).toBeNull();
   });
 });

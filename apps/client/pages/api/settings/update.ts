@@ -112,7 +112,7 @@ const handler = adminApi({ adminPermissions: { PUT: 'settings:manage' } }).put(
 
     // The schema accepts any strings so a bad stored entry cannot blank the list on read; the write is
     // where an admin can still fix a typo, so refuse it here.
-    if (key === 'ImageModerationReviewerEmails') {
+    if (key === 'ImageModerationReviewerEmails' || key === 'ImageModerationEscalationEmails') {
       const { valid, invalid } = partitionEmailList(value);
       if (invalid.length > 0) {
         throw new BadRequestError(`Not a valid email address: ${invalid.map(e => JSON.stringify(e)).join(', ')}`);
