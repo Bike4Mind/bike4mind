@@ -138,4 +138,23 @@ describe('DLQ triage decisions', () => {
     expect(screen.getByTestId('dlq-triage-draft-m1')).toHaveTextContent('Fix relationship unavailable');
     expect(screen.queryByTestId('dlq-triage-approve-m1')).not.toBeInTheDocument();
   });
+  it.each([
+    ['success', 'Replay send acknowledged. Consumer outcome unknown.'],
+    ['discarded', 'Discard deletion acknowledged.'],
+    ['pending', 'Operation started; execution outcome unconfirmed.'],
+    ['failed', 'Operation request failed'],
+    ['skipped', 'Operation skipped; no replay was sent.'],
+  ])('shows durable %s separately from authorization', async (status, text) => {
+    h.get.mockResolvedValue({
+      data: {
+        suggestion: { id: 'a'.repeat(24), verdict: 'replay', status: 'accepted', reasons: [] },
+        execution: { status, operation: 'replay', hasWarning: true, recordedAt: '2026-11-17T00:00:00Z' },
+      },
+    });
+    setup();
+    const execution = await screen.findByTestId('dlq-triage-execution-m1');
+    expect(execution).toHaveTextContent(text);
+    expect(execution).toHaveTextContent('Operation warning recorded');
+    expect(screen.getByTestId('dlq-triage-m1')).toHaveTextContent('Authorized');
+  });
 });

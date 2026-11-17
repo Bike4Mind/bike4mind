@@ -122,6 +122,13 @@ export const dlqTriageEvidenceSchema = z.object({
 });
 export type DlqTriageEvidence = z.infer<typeof dlqTriageEvidenceSchema>;
 
+export type DlqTriageExecution = {
+  status: 'success' | 'failed' | 'skipped' | 'discarded' | 'pending';
+  operation: 'replay' | 'discard';
+  hasWarning: boolean;
+  recordedAt: string;
+};
+
 /**
  * The admin queues that offer an abuse assessment as a suggestion. Each records its own suggestion
  * rows (feature + entityType), so agreement is measured per queue. Server side:

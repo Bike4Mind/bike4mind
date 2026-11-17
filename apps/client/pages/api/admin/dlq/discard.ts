@@ -126,6 +126,7 @@ const handler = adminApi({
         messageBody: message.body,
         sourceQueue: entry.displayName,
         operation: 'discard',
+        ...(aiSuggestionId ? { aiSuggestionId } : {}),
         status: 'pending',
         reason,
         replayedBy: adminUserId,

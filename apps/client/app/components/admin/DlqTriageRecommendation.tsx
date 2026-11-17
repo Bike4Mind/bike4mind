@@ -1,6 +1,6 @@
 import { Button, Stack, Typography } from '@mui/joy';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { dlqTriageEvidenceSchema, type AdminAiSuggestionItem } from '@bike4mind/common';
+import { dlqTriageEvidenceSchema, type AdminAiSuggestionItem, type DlqTriageExecution } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { AdminPermissionAction } from './shared/MissingPermission';
 import { useState } from 'react';
@@ -15,22 +15,26 @@ export function DlqTriageRecommendation({ queueLabel, messageId }: { queueLabel:
     queryKey: key,
     queryFn: async () =>
       (
-        await api.get<{ suggestion: AdminAiSuggestionItem | null }>('/api/admin/dlq/triage', {
-          params: { queue: queueLabel, message: messageId },
-        })
-      ).data.suggestion,
+        await api.get<{ suggestion: AdminAiSuggestionItem | null; execution: DlqTriageExecution | null }>(
+          '/api/admin/dlq/triage',
+          {
+            params: { queue: queueLabel, message: messageId },
+          }
+        )
+      ).data,
   });
   const dismiss = useMutation({
     mutationFn: async () =>
       api.post('/api/admin/dlq/triage', {
         queue: queueLabel,
         message: messageId,
-        suggestionId: query.data?.id,
+        suggestionId: query.data?.suggestion?.id,
         decision: 'dismiss',
       }),
     onSettled: () => client.invalidateQueries({ queryKey: key }),
   });
-  const suggestion = query.data;
+  const suggestion = query.data?.suggestion;
+  const execution = query.data?.execution;
   const proposedAction = suggestion?.proposedAction;
   const evidenceResult = dlqTriageEvidenceSchema.safeParse(
     proposedAction && typeof proposedAction === 'object' && 'facts' in proposedAction ? proposedAction.facts : null
@@ -76,8 +80,19 @@ export function DlqTriageRecommendation({ queueLabel, messageId }: { queueLabel:
       </Typography>
       {suggestion.status === 'accepted' && (
         <Typography level="body-xs" data-testid={`dlq-triage-execution-${messageId}`}>
-          Execution outcome unconfirmed. Authorization does not prove replay, discard or consumer success. Inspect DLQ
-          history before acting again.
+          {execution
+            ? execution.status === 'success'
+              ? 'Replay send acknowledged. Consumer outcome unknown.'
+              : execution.status === 'discarded'
+                ? 'Discard deletion acknowledged.'
+                : execution.status === 'failed'
+                  ? 'Operation request failed; inspect history before retrying.'
+                  : execution.status === 'skipped'
+                    ? 'Operation skipped; no replay was sent.'
+                    : 'Operation started; execution outcome unconfirmed.'
+            : 'Execution outcome unconfirmed. Authorization does not prove replay, discard or consumer success.'}
+          {execution?.hasWarning ? ' Operation warning recorded; inspect history before acting again.' : ''}
+          {execution ? ` Recorded ${execution.recordedAt}.` : ' Inspect DLQ history before acting again.'}
         </Typography>
       )}
       {evidence && (
