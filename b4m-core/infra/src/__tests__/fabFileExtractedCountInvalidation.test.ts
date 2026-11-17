@@ -41,8 +41,6 @@ const UPLOAD_PATTERN = new RegExp(`${UPLOAD_CALL.source}|PutObjectCommand|putObj
 const NOT_A_REWRITE = new Set([
   // First write of a new object; the key is hashed from user, tag, name and slot.
   'packages/server-utils/src/tutorials/sheet.ts',
-  // Presigns Turborepo cache artifacts in a separate bucket; no FabFile row exists.
-  'apps/workers/src/turboCache/handler.ts',
   // Overwrites the model price snapshot in its own bucket; no FabFile row exists.
   'apps/workers/src/cron/modelPriceSnapshotWriter.ts',
   'b4m-core/services/src/fabFileService/create.ts',

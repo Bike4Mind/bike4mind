@@ -3,6 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   isAdmin: false,
+  tags: [] as string[],
+  audience: undefined as string | undefined,
+  entitlements: undefined as string[] | undefined,
+  entitlementsError: false,
+  entitlementsEnabled: [] as boolean[],
   enabledSettings: new Set<string>(),
   featuresLoading: false,
   authedSettingsLoaded: true,
@@ -11,7 +16,14 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: (selector: (state: { isAdmin: boolean }) => unknown) => selector({ isAdmin: h.isAdmin }),
+  useUser: (selector: (state: { isAdmin: boolean; currentUser: { tags: string[] } }) => unknown) =>
+    selector({ isAdmin: h.isAdmin, currentUser: { tags: h.tags } }),
+}));
+vi.mock('@client/app/hooks/data/entitlements', () => ({
+  useEntitlements: ({ enabled }: { enabled: boolean }) => {
+    h.entitlementsEnabled.push(enabled);
+    return { data: enabled ? h.entitlements : undefined, isError: enabled && h.entitlementsError };
+  },
 }));
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({
@@ -20,17 +32,27 @@ vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   }),
 }));
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
-  useAdminSettingsCache: () => ({ authedSettingsLoaded: h.authedSettingsLoaded, error: h.settingsError }),
+  useAdminSettingsCache: () => ({
+    authedSettingsLoaded: h.authedSettingsLoaded,
+    error: h.settingsError,
+    getSetting: (key: string, fallback = '') =>
+      key === 'StudioProductionsAudience' ? (h.audience ?? 'admins') : fallback,
+  }),
 }));
 vi.mock('@client/app/hooks/useAccessToken', () => ({
   useAccessToken: (selector: (state: { accessToken: string | null }) => unknown) =>
     selector({ accessToken: h.signedIn ? 'token' : null }),
 }));
 
-import { useStudioFeature, useStudioFeaturesLoading } from './useStudioFeature';
+import { useStudioFeature, useStudioFeatureAccess, useStudioFeaturesLoading } from './useStudioFeature';
 
 beforeEach(() => {
   h.isAdmin = false;
+  h.tags = [];
+  h.audience = undefined;
+  h.entitlements = undefined;
+  h.entitlementsError = false;
+  h.entitlementsEnabled = [];
   h.enabledSettings = new Set();
   h.featuresLoading = false;
   h.authedSettingsLoaded = true;
@@ -83,6 +105,56 @@ describe('useStudioFeature', () => {
   });
 });
 
+describe('useStudioFeatureAccess for Productions', () => {
+  const access = () => renderHook(() => useStudioFeatureAccess('productions')).result.current;
+
+  beforeEach(() => {
+    h.enabledSettings = new Set(['EnableStudioCreateV2', 'EnableStudioProductions']);
+    h.audience = 'paid';
+  });
+
+  it('opens for a paid user and asks for upgrade for a free one', () => {
+    h.entitlements = ['plan:paid'];
+    expect(access()).toBe('open');
+    h.entitlements = [];
+    expect(access()).toBe('upgrade');
+  });
+
+  it('opens for an admin and a developer without loading entitlements', () => {
+    h.isAdmin = true;
+    expect(access()).toBe('open');
+    h.isAdmin = false;
+    h.tags = ['Developer'];
+    expect(access()).toBe('open');
+    expect(h.entitlementsEnabled.every(enabled => !enabled)).toBe(true);
+  });
+
+  it('does not treat a lookalike tag as developer', () => {
+    h.tags = ['developer-ish'];
+    h.entitlements = [];
+    expect(access()).toBe('upgrade');
+  });
+
+  it('is closed with the flag off, whatever the plan', () => {
+    h.enabledSettings = new Set(['EnableStudioCreateV2']);
+    h.entitlements = ['plan:paid'];
+    expect(access()).toBe('closed');
+  });
+
+  it('keeps the admins audience closed to a paid non-admin and loads no entitlements', () => {
+    h.audience = 'admins';
+    h.entitlements = ['plan:paid'];
+    expect(access()).toBe('closed');
+    expect(h.entitlementsEnabled.every(enabled => !enabled)).toBe(true);
+  });
+
+  it('falls back to admins for an unknown audience value', () => {
+    h.audience = 'everyone';
+    h.entitlements = ['plan:paid'];
+    expect(access()).toBe('closed');
+  });
+});
+
 describe('useStudioFeaturesLoading', () => {
   const loading = () => renderHook(() => useStudioFeaturesLoading()).result.current;
 
@@ -110,5 +182,36 @@ describe('useStudioFeaturesLoading', () => {
     h.authedSettingsLoaded = false;
     h.signedIn = false;
     expect(loading()).toBe(false);
+  });
+
+  describe('with a paid feature', () => {
+    const loadingFor = () => renderHook(() => useStudioFeaturesLoading('productions')).result.current;
+
+    beforeEach(() => {
+      h.audience = 'paid';
+    });
+
+    it('waits for the entitlements of a free-tier viewer, so upgrade never flashes before a paying user is known', () => {
+      expect(loadingFor()).toBe(true);
+      h.entitlements = [];
+      expect(loadingFor()).toBe(false);
+    });
+
+    it('settles when the entitlement read fails', () => {
+      h.entitlementsError = true;
+      expect(loadingFor()).toBe(false);
+    });
+
+    it('does not wait for an exempt viewer or a non-paid audience', () => {
+      h.isAdmin = true;
+      expect(loadingFor()).toBe(false);
+      h.isAdmin = false;
+      h.audience = 'admins';
+      expect(loadingFor()).toBe(false);
+    });
+
+    it('does not wait on entitlements when no feature is asked about', () => {
+      expect(loading()).toBe(false);
+    });
   });
 });

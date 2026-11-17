@@ -21,6 +21,12 @@
 
 import { CloudWatchClient, PutMetricDataCommand, type MetricDatum } from '@aws-sdk/client-cloudwatch';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { Readable } from 'node:stream';
+import {
+  modelPriceSnapshotDeadline,
+  ModelPriceSnapshotBudgetError,
+  withModelPriceSnapshotBudget,
+} from './modelPriceSnapshotBudget';
 import { Context } from 'aws-lambda';
 import { Logger } from '@bike4mind/observability';
 import {
@@ -40,6 +46,8 @@ type UsageReportProvider = spendReconciliationService.UsageReportProvider;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 const SNAPSHOT_STALE_MS = DAY_MS;
+// Reserve time for the primary provider reports and metric publication; their own budgets are separate.
+const SNAPSHOT_HEADROOM_MS = 30_000;
 
 const contextToLogs = (context: Context) => ({
   requestId: context.awsRequestId ?? randomUUID(),
@@ -73,15 +81,41 @@ export function previousHourWindow(now: Date): { start: Date; end: Date } {
 }
 
 /** Undefined on any failure: the hour is then priced from the static tables alone, as before the snapshot existed. */
-async function loadModelPriceSnapshot(logger: Logger, now: Date): Promise<IModelPriceSnapshot | undefined> {
+async function loadModelPriceSnapshot(
+  logger: Logger,
+  now: Date,
+  deadlineMs: number
+): Promise<IModelPriceSnapshot | undefined> {
   const bucket = process.env[MODEL_PRICE_SNAPSHOT_BUCKET_ENV];
   if (!bucket) {
     logger.warn('[ProviderUsagePoll] model price snapshot bucket not configured, using static prices');
     return undefined;
   }
   try {
-    const object = await new S3Client({}).send(new GetObjectCommand({ Bucket: bucket, Key: MODEL_PRICE_SNAPSHOT_KEY }));
-    const snapshot = ModelPriceSnapshot.parse(JSON.parse((await object.Body?.transformToString()) ?? ''));
+    const snapshot = await withModelPriceSnapshotBudget(deadlineMs, async (signal, assertActive) => {
+      const object = await new S3Client({}).send(
+        new GetObjectCommand({ Bucket: bucket, Key: MODEL_PRICE_SNAPSHOT_KEY }),
+        { abortSignal: signal }
+      );
+      const body = object.Body;
+      let disposed = false;
+      const disposeBody = () => {
+        if (disposed) return;
+        disposed = true;
+        // Workers use the Node SDK stream. Also dispose a response delivered after its abort.
+        if (body instanceof Readable) body.destroy();
+      };
+      signal.addEventListener('abort', disposeBody, { once: true });
+      try {
+        assertActive();
+        const text = await body?.transformToString();
+        assertActive();
+        return ModelPriceSnapshot.parse(JSON.parse(text ?? ''));
+      } finally {
+        signal.removeEventListener('abort', disposeBody);
+        if (signal.aborted) disposeBody();
+      }
+    });
     logger.info(
       `[ProviderUsagePoll] model price snapshot generatedAt=${snapshot.generatedAt} rows=${snapshot.rows.length}`
     );
@@ -93,7 +127,10 @@ async function loadModelPriceSnapshot(logger: Logger, now: Date): Promise<IModel
     }
     return snapshot;
   } catch (err) {
-    logger.warn('[ProviderUsagePoll] model price snapshot unavailable, using static prices', err);
+    logger.warn(
+      '[ProviderUsagePoll] model price snapshot unavailable, using static prices',
+      err instanceof ModelPriceSnapshotBudgetError ? err : new Error('Optional model price snapshot read failed')
+    );
     return undefined;
   }
 }
@@ -108,7 +145,11 @@ export async function handler(_event: unknown, context: Context) {
   const failed: string[] = [];
   let published = 0;
   let skipped = 0;
-  const snapshot = await loadModelPriceSnapshot(logger, now);
+  const snapshot = await loadModelPriceSnapshot(
+    logger,
+    now,
+    modelPriceSnapshotDeadline(context.getRemainingTimeInMillis?.(), SNAPSHOT_HEADROOM_MS)
+  );
 
   for (const { provider, fetch } of PROVIDERS) {
     let key: string | undefined;

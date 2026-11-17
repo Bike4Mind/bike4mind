@@ -95,7 +95,6 @@ describe('S3 buckets state encryption and public-access blocking', () => {
         'publishedArtifactsBucket',
         'qaArtifactsBucket',
         'slackExportBucket',
-        'turboCacheBucket',
       ].sort()
     );
   });

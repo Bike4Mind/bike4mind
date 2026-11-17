@@ -1,9 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Context } from 'aws-lambda';
+import { Readable } from 'node:stream';
 
 const mocks = vi.hoisted(() => ({
   send: vi.fn(async (_command: unknown) => undefined),
-  s3Send: vi.fn(async (_command: unknown): Promise<{ Body?: { transformToString: () => Promise<string> } }> => ({})),
+  s3Send: vi.fn(
+    async (
+      _command: unknown,
+      _options?: { abortSignal?: AbortSignal }
+    ): Promise<{ Body?: { transformToString: () => Promise<string> } }> => ({})
+  ),
   secretSend: vi.fn(async (_command: unknown): Promise<{ SecretString?: string; CreatedDate?: Date }> => ({})),
   fetchAnthropicHourlyUsage: vi.fn(),
   fetchOpenAIHourlyUsage: vi.fn(),
@@ -434,5 +440,107 @@ describe('providerUsagePoll model price snapshot', () => {
     await expect(handler({}, context)).resolves.toEqual({ published: 2, skipped: 0 });
     staticPricing();
     expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining('snapshot unavailable'), expect.anything());
+  });
+});
+
+function deferredSnapshot<T>() {
+  let resolve: (value: T) => void = () => {
+    throw new Error('Deferred snapshot was not initialized');
+  };
+  let reject: (reason: unknown) => void = () => {
+    throw new Error('Deferred snapshot was not initialized');
+  };
+  const promise = new Promise<T>((accept, fail) => {
+    resolve = accept;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
+function observePoll(promise: ReturnType<typeof handler>) {
+  const state: { settled: boolean; value: unknown; error: unknown } = {
+    settled: false,
+    value: undefined,
+    error: undefined,
+  };
+  const completed = (async () => {
+    try {
+      state.value = await promise;
+    } catch (error) {
+      state.error = error;
+    } finally {
+      state.settled = true;
+    }
+  })();
+  return { state, completed };
+}
+
+describe('optional model price snapshot budget', () => {
+  const assertFallback = () => {
+    expect(mocks.priceProviderUsage).toHaveBeenCalledTimes(2);
+    for (const call of mocks.priceProviderUsage.mock.calls) expect(call[3]).toBeUndefined();
+    expect(
+      mocks.warn.mock.calls.filter(call => typeof call[0] === 'string' && call[0].includes('snapshot unavailable'))
+    ).toHaveLength(1);
+  };
+
+  it('bounds pending headers, aborts the SDK and disposes a response arriving after fallback', async () => {
+    const headers = deferredSnapshot<{ Body?: { transformToString: () => Promise<string> } }>();
+    mocks.s3Send.mockReturnValueOnce(headers.promise);
+    const transform = vi.fn(async () => '{}');
+    const body = Object.assign(new Readable({ read() {} }), { transformToString: transform });
+    const observed = observePoll(handler({}, context));
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const signal = mocks.s3Send.mock.calls[0][1]?.abortSignal;
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(observed.state.settled).toBe(true);
+      expect(observed.state.value).toEqual({ published: 2, skipped: 0 });
+      expect(signal?.aborted).toBe(true);
+      assertFallback();
+    } finally {
+      headers.resolve({ Body: body });
+      await observed.completed;
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(transform).not.toHaveBeenCalled();
+    expect(body.destroyed).toBe(true);
+  });
+
+  it('uses one budget for headers and a pending body, destroying the body on expiry', async () => {
+    const headers = deferredSnapshot<{ Body?: { transformToString: () => Promise<string> } }>();
+    const text = deferredSnapshot<string>();
+    const transform = vi.fn(() => text.promise);
+    const body = Object.assign(new Readable({ read() {} }), { transformToString: transform });
+    mocks.s3Send.mockReturnValueOnce(headers.promise);
+    const observed = observePoll(handler({}, context));
+    try {
+      await vi.advanceTimersByTimeAsync(4_000);
+      headers.resolve({ Body: body });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(transform).toHaveBeenCalledOnce();
+      expect(mocks.priceProviderUsage).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(observed.state.settled).toBe(true);
+      expect(body.destroyed).toBe(true);
+      assertFallback();
+      text.reject(new Error('late body failure'));
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      headers.resolve({ Body: body });
+      text.resolve('{}');
+      await observed.completed;
+      await vi.advanceTimersByTimeAsync(0);
+    }
+  });
+
+  it('leaves primary work headroom without admitting an optional read', async () => {
+    await expect(handler({}, { ...context, getRemainingTimeInMillis: () => 30_000 })).resolves.toEqual({
+      published: 2,
+      skipped: 0,
+    });
+    expect(mocks.s3Send).not.toHaveBeenCalled();
+    assertFallback();
   });
 });

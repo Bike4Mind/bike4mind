@@ -377,6 +377,7 @@ export async function runLakeResearch(
     )) as ApiKeyTable;
     const models = await getAvailableModels(apiKeyTable);
     const judgeService = new dataLakeResearchService.RelevanceJudgeService(logger);
+    const itemRuleService = new dataLakeResearchService.ItemRuleService(logger);
     // Resolved once, against the live catalog: a config naming a model this deployment has since
     // retired or disabled falls back rather than failing the whole run. Disabled counts because the
     // picker drops disabled models, but a config saved before the model was disabled still names it.
@@ -397,7 +398,7 @@ export async function runLakeResearch(
 
     // Re-resolved on every admit: ownership can transfer mid-run, and the rule must act as whoever
     // owns the lake now. The live config's off switch and site lists can only narrow admits mid-run;
-    // enabling it or adding sites applies from the next run. Never throws: a failure leaves it pending.
+    // enabling it, adding sites or adding item rules applies from the next run. Never throws: a failure leaves it pending.
     const autoAdmit: dataLakeResearchService.ResearchRunPorts['autoAdmit'] = async (proposal, rule) => {
       try {
         const grants = await dataLakeService.loadActiveLakeGrants(lake, {
@@ -518,6 +519,25 @@ export async function runLakeResearch(
         judgeUsage.cacheWriteTokens += judgment.cacheCreationInputTokens ?? 0;
         return judgment;
       },
+      ...((claimed.levers.itemRules?.length ?? 0) > 0
+        ? {
+            evaluateItemRules: async (rules, item) => {
+              const result = await itemRuleService.evaluate({
+                apiKeyTable,
+                models,
+                model,
+                rules,
+                item,
+                endUserId: lake.createdByUserId,
+              });
+              judgeUsage.inputTokens += result.inputTokens;
+              judgeUsage.outputTokens += result.outputTokens;
+              judgeUsage.cachedInputTokens += result.cacheReadInputTokens;
+              judgeUsage.cacheWriteTokens += result.cacheCreationInputTokens;
+              return result;
+            },
+          }
+        : {}),
       fetchSource: url => fetchSourceForProposal(url, logger),
       propose: candidate =>
         dataLakeService.proposeDataLakeContent(lake, candidate, {

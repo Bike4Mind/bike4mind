@@ -20,6 +20,7 @@ import { emitDiscoveryMetrics, emitDiscoveryRunFailure } from '@workers/modelDis
 import { runScheduledDiscovery } from '@bike4mind/server-utils/modelDiscovery/scheduledRun';
 import { Resource } from 'sst';
 import { publishModelPriceSnapshot } from './modelPriceSnapshotWriter';
+import { modelPriceSnapshotDeadline } from './modelPriceSnapshotBudget';
 
 const logger = new Logger({ metadata: { service: 'modelDiscovery' } });
 
@@ -87,6 +88,7 @@ export async function handler(event: ModelDiscoveryEvent = {}, context?: Context
     throw error;
   } finally {
     // Early returns and failed runs still leave the rows in force worth publishing.
-    if (connected) await publishModelPriceSnapshot(logger);
+    const deadlineMs = modelPriceSnapshotDeadline(context?.getRemainingTimeInMillis?.(), BUDGET_HEADROOM_MS);
+    if (connected && deadlineMs > Date.now()) await publishModelPriceSnapshot(logger, new Date(), { deadlineMs });
   }
 }
