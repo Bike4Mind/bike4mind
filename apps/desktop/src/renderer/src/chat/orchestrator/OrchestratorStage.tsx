@@ -26,6 +26,8 @@ export interface AgentActions {
 
 export interface OrchestratorViewProps {
   agents: readonly AgentView[];
+  /** The orchestrating session, for a view built on the snapshot (snapshotView.tsx). */
+  rootId?: string;
   onSelect(id: string): void;
   selectedId: string | null;
   introPlaying: boolean;
@@ -204,6 +206,7 @@ export function OrchestratorStage({
 
   const viewProps: OrchestratorViewProps = {
     agents,
+    rootId,
     onSelect: setSelectedId,
     selectedId,
     introPlaying,
