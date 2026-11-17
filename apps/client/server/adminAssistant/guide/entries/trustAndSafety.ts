@@ -128,6 +128,8 @@ export const TRUST_AND_SAFETY_GUIDE: readonly AdminGuideEntry[] = [
     settings: ['ImageModerationEnabled', 'ImageModerationReviewerEmails', 'ImageModerationEscalationEmails'],
     howTo: [
       'Switch between Needs review and Closed. Click an incident to open it; reviewers are alerted by email when one needs a verdict.',
+      'The totals above the queue show what waits, the oldest wait, escalations and how closed incidents ended. A banner appears while incidents wait and their list (Image Moderation Reviewer Emails, or Escalation Emails for escalated ones) has no address: no reviewer is emailed until it does.',
+      'Timeline on an incident lists, oldest first in UTC, when it was flagged, when reviewers were alerted and last reminded, when and how it was escalated, and how it was closed.',
       'Close as correctly blocked records that the block was right and nothing needs reporting. It leaves the queue and its reminders stop.',
       'Mark false positive records that the classifier was wrong. It closes the incident without a report and keeps it on file.',
       'Record report stores the id of a report you filed on the external reporting form first; it cannot be undone. Full admin access is required.',

@@ -6,10 +6,18 @@ import type {
   ModerationLabelHit,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 const ENDPOINT = '/api/admin/moderation-incidents';
 export const MODERATION_INCIDENT_QUEUE_QUERY_KEY = ['admin-moderation-incident-queue'];
+export const MODERATION_INCIDENT_SUMMARY_QUERY_KEY = ['admin-moderation-incident-summary'];
+
+// A verdict or an escalation changes both the queue and its counts.
+const invalidateReviewPage = (queryClient: QueryClient) =>
+  Promise.all([
+    queryClient.invalidateQueries({ queryKey: MODERATION_INCIDENT_QUEUE_QUERY_KEY }),
+    queryClient.invalidateQueries({ queryKey: MODERATION_INCIDENT_SUMMARY_QUERY_KEY }),
+  ]);
 
 const QUEUE_LIST_LIMIT = 100;
 
@@ -96,6 +104,28 @@ export function useModerationIncidentQueue(
   });
 }
 
+/** Counts for the review page; no incident, user or address. */
+export type ModerationIncidentSummary = {
+  /** Unreviewed incidents. */
+  needsReview: number;
+  /** Of needsReview, the ones held by the second review step. */
+  escalated: number;
+  /** Report submissions left in an unknown state. */
+  stuck: number;
+  closed: { noAction: number; falsePositive: number; reported: number };
+  oldestPendingCreatedAt: string | null;
+  /** Whether each reviewer list has at least one valid address. */
+  reviewersConfigured: boolean;
+  escalationReviewersConfigured: boolean;
+};
+
+export function useModerationIncidentSummary() {
+  return useQuery({
+    queryKey: MODERATION_INCIDENT_SUMMARY_QUERY_KEY,
+    queryFn: async () => (await api.get<ModerationIncidentSummary>(`${ENDPOINT}/summary`)).data,
+  });
+}
+
 export type ModerationIncidentView = {
   id: string;
   createdAt: string;
@@ -123,6 +153,7 @@ export type ModerationIncidentView = {
   escalationAlertedAt: string | null;
   reportedAt: string | null;
   falsePositiveAt: string | null;
+  noActionAt: string | null;
   image:
     | { availability: 'ready'; url: string; expiresAt: string }
     | { availability: 'unavailable'; reason: 'no_stored_image' | 'not_displayable' };
@@ -170,7 +201,7 @@ export function useModerationIncidentVerdict() {
           reason,
         })
       ).data,
-    onSettled: () => queryClient.invalidateQueries({ queryKey: MODERATION_INCIDENT_QUEUE_QUERY_KEY }),
+    onSettled: () => invalidateReviewPage(queryClient),
   });
 }
 
@@ -190,6 +221,6 @@ export function useModerationIncidentEscalation() {
   return useMutation({
     mutationFn: async ({ id, reason }: { id: string; reason: string }) =>
       (await api.post<ModerationEscalationResult>(`${ENDPOINT}/${encodeURIComponent(id)}/escalate`, { reason })).data,
-    onSettled: () => queryClient.invalidateQueries({ queryKey: MODERATION_INCIDENT_QUEUE_QUERY_KEY }),
+    onSettled: () => invalidateReviewPage(queryClient),
   });
 }

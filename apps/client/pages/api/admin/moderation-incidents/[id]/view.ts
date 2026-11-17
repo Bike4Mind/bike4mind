@@ -60,6 +60,7 @@ const handler = adminApi({
     escalationAlertedAt: incident.escalationAlertedAt ?? null,
     reportedAt: incident.reportedAt ?? null,
     falsePositiveAt: incident.falsePositiveAt ?? null,
+    noActionAt: incident.noActionAt ?? null,
     image,
   });
 });

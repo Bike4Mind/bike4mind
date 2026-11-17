@@ -4,8 +4,11 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import {
+  MODERATION_INCIDENT_QUEUE_QUERY_KEY,
+  MODERATION_INCIDENT_SUMMARY_QUERY_KEY,
   useModerationIncidentEscalation,
   useModerationIncidentQueue,
+  useModerationIncidentSummary,
   useModerationIncidentVerdict,
 } from './moderationIncidents';
 
@@ -120,7 +123,64 @@ describe('useModerationIncidentQueue (closed)', () => {
   });
 });
 
+describe('useModerationIncidentSummary', () => {
+  it('reads the counts and reviewer list flags from the summary route', async () => {
+    const summary = {
+      needsReview: 3,
+      escalated: 1,
+      stuck: 0,
+      closed: { noAction: 4, falsePositive: 2, reported: 1 },
+      oldestPendingCreatedAt: '2026-10-30T10:00:00.000Z',
+      reviewersConfigured: true,
+      escalationReviewersConfigured: false,
+    };
+    mocks.get.mockResolvedValue({ data: summary });
+    const { result } = renderHook(() => useModerationIncidentSummary(), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(mocks.get).toHaveBeenCalledExactlyOnceWith('/api/admin/moderation-incidents/summary');
+    expect(result.current.data).toEqual(summary);
+  });
+});
+
 describe('moderation incident writes', () => {
+  const trackedWrapper = () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const Wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    return { invalidatedKeys: () => invalidate.mock.calls.map(([filters]) => filters?.queryKey), wrapper: Wrapper };
+  };
+
+  const REVIEW_PAGE_KEYS = [MODERATION_INCIDENT_QUEUE_QUERY_KEY, MODERATION_INCIDENT_SUMMARY_QUERY_KEY];
+
+  it('refreshes the queue and its summary after a verdict, even a refused one', async () => {
+    mocks.post.mockRejectedValue(new Error('refused'));
+    const { invalidatedKeys, wrapper: tracked } = trackedWrapper();
+    const { result } = renderHook(() => useModerationIncidentVerdict(), { wrapper: tracked });
+
+    await act(async () => {
+      await result.current
+        .mutateAsync({ id: 'inc-1', verdict: { kind: 'no_action' }, reason: 'Checked it' })
+        .catch(() => undefined);
+    });
+
+    expect(invalidatedKeys()).toEqual(expect.arrayContaining(REVIEW_PAGE_KEYS));
+  });
+
+  it('refreshes the queue and its summary after an escalation, even a refused one', async () => {
+    mocks.post.mockRejectedValue(new Error('refused'));
+    const { invalidatedKeys, wrapper: tracked } = trackedWrapper();
+    const { result } = renderHook(() => useModerationIncidentEscalation(), { wrapper: tracked });
+
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'inc-1', reason: 'Needs a second opinion' }).catch(() => undefined);
+    });
+
+    expect(invalidatedKeys()).toEqual(expect.arrayContaining(REVIEW_PAGE_KEYS));
+  });
+
   // Both go through the shared api client, whose step-up interceptor prompts and replays them.
   it('sends the reviewer reason with a verdict', async () => {
     mocks.post.mockResolvedValue({ data: { ok: true } });

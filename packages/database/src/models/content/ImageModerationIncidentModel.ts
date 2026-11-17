@@ -95,6 +95,20 @@ const UNREVIEWED_REVIEW_STATUSES: (IncidentReviewStatus | null)[] = ['pending_re
 // flight, not a verdict, so it is neither here nor in the unreviewed set.
 export const CLOSED_REVIEW_STATUSES: IncidentReviewStatus[] = ['false_positive', 'no_action', 'reported'];
 
+/** Counts for the review page summary; never ids, users or labels. */
+export interface ImageModerationIncidentSummary {
+  /** reviewStatus absent or 'pending_review'. */
+  needsReview: number;
+  /** Of needsReview, the ones moved to the second review step. */
+  escalated: number;
+  /** In 'confirmed_csam': a report submission claimed and not yet resolved. */
+  stuck: number;
+  closed: { noAction: number; falsePositive: number; reported: number };
+  oldestPendingCreatedAt: Date | null;
+}
+
+const SUMMARY_MAX_TIME_MS = 2000;
+
 export class ImageModerationIncidentRepository extends BaseRepository<IImageModerationIncidentDocument> {
   constructor(model: Model<IImageModerationIncidentDocument>) {
     super(model);
@@ -144,6 +158,27 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
       .maxTimeMS(2000)
       .lean();
     return row?.createdAt ?? null;
+  }
+
+  /**
+   * One count per status, each led by reviewStatus so it runs on the {reviewStatus, createdAt}
+   * index; only the escalated count reads documents, and only the unreviewed ones.
+   */
+  async summarize(): Promise<ImageModerationIncidentSummary> {
+    const count = (filter: Record<string, unknown>) =>
+      this.model.countDocuments(filter).maxTimeMS(SUMMARY_MAX_TIME_MS).exec();
+    const unreviewed = { reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } };
+    const [needsReview, escalated, stuck, noAction, falsePositive, reported, oldestPendingCreatedAt] =
+      await Promise.all([
+        count(unreviewed),
+        count({ ...unreviewed, escalatedAt: { $ne: null } }),
+        count({ reviewStatus: 'confirmed_csam' }),
+        count({ reviewStatus: 'no_action' }),
+        count({ reviewStatus: 'false_positive' }),
+        count({ reviewStatus: 'reported' }),
+        this.oldestPendingReviewAt(),
+      ]);
+    return { needsReview, escalated, stuck, closed: { noAction, falsePositive, reported }, oldestPendingCreatedAt };
   }
 
   /**

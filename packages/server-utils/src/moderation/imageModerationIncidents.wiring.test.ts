@@ -6,13 +6,14 @@ const REPO_ROOT = join(__dirname, '../../../..');
 const ROOTS = ['apps', 'b4m-core', 'packages', 'selfhost'];
 const SKIPPED_DIRS = new Set(['node_modules', 'dist', '.next', '.sst', '.turbo', 'build', 'coverage']);
 
-// The repository's own module, the alerting wrapper, read-only admin routes (they list and
+// The repository's own module, the alerting wrapper, read-only admin routes (they list, count and
 // update incidents, never record one), the admin action counts (they count pending reviews,
 // never record one), and the review sweep (it re-alerts, never records).
 const ALLOWED = new Set([
   'packages/database/src/models/content/ImageModerationIncidentModel.ts',
   'packages/server-utils/src/moderation/imageModerationIncidents.ts',
   'apps/client/pages/api/admin/moderation-incidents/index.ts',
+  'apps/client/pages/api/admin/moderation-incidents/summary.ts',
   'apps/client/pages/api/admin/moderation-incidents/[id]/escalate.ts',
   'apps/client/pages/api/admin/moderation-incidents/[id]/verdict.ts',
   'apps/client/pages/api/admin/moderation-incidents/[id]/view.ts',

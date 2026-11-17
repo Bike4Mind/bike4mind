@@ -74,6 +74,7 @@ const view = (over: Partial<ModerationIncidentView> = {}): ModerationIncidentVie
   escalationAlertedAt: null,
   reportedAt: null,
   falsePositiveAt: null,
+  noActionAt: null,
   image: { availability: 'ready', url: 'https://signed.example/img', expiresAt: '2026-10-30T10:05:00.000Z' },
   ...over,
 });
@@ -471,6 +472,111 @@ describe('ModerationIncidentDetail', () => {
       renderDetail();
       fireEvent.click(screen.getByTestId('moderation-incident-escalate-btn'));
       expect(screen.getByTestId('moderation-incident-escalate-error').textContent).toContain('already escalated');
+    });
+  });
+  describe('timeline', () => {
+    const timelineIds = () =>
+      Array.from(screen.getByTestId('moderation-incident-timeline').querySelectorAll('li')).map(row =>
+        row.getAttribute('data-testid')?.replace('moderation-incident-timeline-', '')
+      );
+    const timelineRow = (event: string) => screen.getByTestId(`moderation-incident-timeline-${event}`).textContent;
+
+    it('lists only the flag on an incident nothing else has happened to', () => {
+      m.view.mockReturnValue(loaded(view(NO_IMAGE)));
+      renderDetail();
+      expect(timelineIds()).toEqual(['flagged']);
+      expect(timelineRow('flagged')).toBe('Flagged30 Oct 2026, 10:00 UTC');
+    });
+
+    it('lists what happened oldest first, with a manual escalation and a recorded report', () => {
+      m.view.mockReturnValue(
+        loaded(
+          view({
+            ...NO_IMAGE,
+            reviewStatus: 'reported',
+            previousReviewStatus: 'false_positive',
+            alertedAt: '2026-10-30T10:01:00.000Z',
+            // The latest reminder went out after the escalation, so time decides the order.
+            lastReminderAt: '2026-10-31T09:00:00.000Z',
+            escalatedAt: '2026-10-30T12:00:00.000Z',
+            escalationTrigger: 'manual',
+            escalationAlertedAt: '2026-10-30T12:00:02.000Z',
+            falsePositiveAt: '2026-10-31T10:00:00.000Z',
+            reportedAt: '2026-11-01T08:30:00.000Z',
+          })
+        )
+      );
+      renderDetail();
+
+      expect(timelineIds()).toEqual([
+        'flagged',
+        'alerted',
+        'escalated',
+        'escalation-alerted',
+        'reminded',
+        'false-positive',
+        'reported',
+      ]);
+      expect(timelineRow('alerted')).toBe('Reviewer alerted30 Oct 2026, 10:01 UTC');
+      expect(timelineRow('escalated')).toBe('Escalated manually30 Oct 2026, 12:00 UTC');
+      expect(timelineRow('escalation-alerted')).toContain('Second reviewers alerted');
+      expect(timelineRow('reminded')).toBe('Latest reminder sent31 Oct 2026, 09:00 UTC');
+      expect(timelineRow('false-positive')).toContain('Marked false positive');
+      expect(timelineRow('reported')).toBe('Report recorded1 Nov 2026, 08:30 UTC');
+      expect(screen.queryByTestId('moderation-incident-timeline-no-action')).toBeNull();
+    });
+
+    it('names an automatic escalation and leaves out an escalation email not yet delivered', () => {
+      m.view.mockReturnValue(
+        loaded(
+          view({
+            ...NO_IMAGE,
+            escalatedAt: '2026-10-31T10:00:00.000Z',
+            escalationTrigger: 'timeout',
+            escalationAlertedAt: null,
+          })
+        )
+      );
+      renderDetail();
+      expect(timelineIds()).toEqual(['flagged', 'escalated']);
+      expect(timelineRow('escalated')).toBe('Escalated automatically31 Oct 2026, 10:00 UTC');
+    });
+
+    it('ends with the close when the incident was closed as correctly blocked', () => {
+      m.view.mockReturnValue(
+        loaded(
+          view({
+            ...NO_IMAGE,
+            reviewStatus: 'no_action',
+            alertedAt: '2026-10-30T10:01:00.000Z',
+            noActionAt: '2026-10-30T11:15:00.000Z',
+          })
+        )
+      );
+      renderDetail();
+      expect(timelineIds()).toEqual(['flagged', 'alerted', 'no-action']);
+      expect(timelineRow('no-action')).toBe('Closed as correctly blocked30 Oct 2026, 11:15 UTC');
+    });
+
+    it('adds an escalation made from this page without reloading the view', async () => {
+      m.view.mockReturnValue(loaded(view(NO_IMAGE)));
+      m.escalate.mockResolvedValue({
+        incident: {
+          id: 'inc-1',
+          reviewStatus: 'pending_review',
+          escalatedAt: '2026-10-30T12:00:00.000Z',
+          escalationTrigger: 'manual',
+          escalationAlertedAt: '2026-10-30T12:00:01.000Z',
+        },
+        alert: 'delivered',
+      });
+      renderDetail();
+      fireEvent.click(screen.getByTestId('moderation-incident-escalate-btn'));
+      pickPreset('moderation-incident-escalate-dialog');
+      fireEvent.click(screen.getByTestId('moderation-incident-escalate-dialog-confirm-btn'));
+
+      await waitFor(() => expect(timelineIds()).toEqual(['flagged', 'escalated', 'escalation-alerted']));
+      expect(timelineRow('escalated')).toContain('Escalated manually');
     });
   });
 });
