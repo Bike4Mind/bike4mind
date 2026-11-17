@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { emptyResearchRunTotals, researchFeedFingerprint, RESEARCH_FEED_MAX_BYTES } from '@bike4mind/common';
+import {
+  emptyResearchRunTotals,
+  researchFeedFingerprint,
+  RESEARCH_FEED_MAX_BYTES,
+  spendFrozenError,
+} from '@bike4mind/common';
 import type { ResearchFeedCursor } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
@@ -49,8 +54,11 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('@bike4mind/services', async importOriginal => {
-  const real = (await importOriginal<typeof import('@bike4mind/services')>()).dataLakeResearchService;
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  const real = actual.dataLakeResearchService;
   return {
+    // Real: the run must refuse with the shared spend_frozen error and subject.
+    spendFreezeService: actual.spendFreezeService,
     apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
     dataLakeService: {
       proposeDataLakeContent: h.proposeDataLakeContent,
@@ -192,13 +200,14 @@ describe('runLakeResearch', () => {
     );
   });
 
-  it('fails a run whose lake owner has spending paused before any search, judgment or charge', async () => {
+  it('fails a run whose billed org has spending paused before any search, judgment or charge', async () => {
     h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: 'org-7' });
+    h.findOrgById.mockResolvedValue({ id: 'org-7' });
     h.findActiveFreeze.mockResolvedValue({ scopeType: 'Organization', frozenAt: new Date() });
 
     expect(await runLakeResearch('run-1', logger)).toEqual({ claimed: true });
 
-    expect(h.findActiveFreeze).toHaveBeenCalledWith({ userId: 'owner-1', organizationId: 'org-7' });
+    expect(h.findActiveFreeze).toHaveBeenCalledWith({ userId: 'owner-1', organizationId: 'org-7', apiKeyId: null });
     expect(h.executeResearchRun).not.toHaveBeenCalled();
     expect(h.recordOperationalUsage).not.toHaveBeenCalled();
     expect(h.settleRun).toHaveBeenCalledWith(
@@ -206,8 +215,32 @@ describe('runLakeResearch', () => {
       expect.objectContaining({
         status: 'failed',
         spentMicroUsd: 0,
-        error: expect.stringMatching(/Spending is paused/),
+        error: spendFrozenError({ scopeType: 'Organization', frozenAt: new Date() }).message,
       })
+    );
+  });
+
+  it('checks the owner personally when their home org does not resolve, as the charge does', async () => {
+    h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: 'org-gone' });
+    h.findOrgById.mockResolvedValue(null);
+
+    await runLakeResearch('run-1', logger);
+
+    expect(h.findActiveFreeze).toHaveBeenCalledWith({ userId: 'owner-1', organizationId: null, apiKeyId: null });
+    expect(h.executeResearchRun).toHaveBeenCalled();
+  });
+
+  it('settles and rethrows when the billed org read fails, without searching', async () => {
+    h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: 'org-7' });
+    h.findOrgById.mockRejectedValue(new Error('org read down'));
+
+    await expect(runLakeResearch('run-1', logger)).rejects.toThrow('org read down');
+
+    expect(h.findActiveFreeze).not.toHaveBeenCalled();
+    expect(h.executeResearchRun).not.toHaveBeenCalled();
+    expect(h.settleRun).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({ status: 'failed', error: 'org read down' })
     );
   });
 

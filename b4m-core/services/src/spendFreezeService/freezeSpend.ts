@@ -28,7 +28,10 @@ export const freezeSpend = async (
     );
   } catch (error) {
     if (!isDuplicateKeyError(error)) throw error;
-    // A concurrent freeze won the race; the winner audits it.
+    // A concurrent freeze won the race and audits it. Outside a transaction this re-read returns
+    // the winner. Inside one (the admin routes' `withTransaction`) the server has aborted the
+    // transaction, so this read rejects with a transient error and `withTransaction` retries the
+    // callback, whose first `findActive` returns the committed winner.
     const winner = await spendFreezes.findActive(scope);
     if (!winner) throw error;
     return { freeze: winner, created: false };
