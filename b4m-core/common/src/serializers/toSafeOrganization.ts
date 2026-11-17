@@ -46,7 +46,7 @@ type OrganizationField = keyof IOrganizationDocument;
 /**
  * What a plain member receives. The client computes owner, manager and membership checks from
  * `userId`, `adminUserIds` and `users`, so those stay; the rest backs the Overview, Members tab,
- * account switcher and the member's own budget notice.
+ * account switcher, the member's own budget notice and the model-catalog refresh in OrgModelCatalogSync.
  */
 export const ORGANIZATION_MEMBER_VISIBLE_FIELDS = [
   'id',
@@ -66,6 +66,7 @@ export const ORGANIZATION_MEMBER_VISIBLE_FIELDS = [
   'maxCreditsPerMember',
   'mfaPolicy',
   'retentionPolicy',
+  'modelPolicy',
 ] as const satisfies readonly OrganizationField[];
 
 /** Withheld from plain members; the websocket projection excludes these by name. */

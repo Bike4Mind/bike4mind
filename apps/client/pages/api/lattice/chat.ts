@@ -1,3 +1,4 @@
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { shadowIdentityOptions } from '@bike4mind/services/llm/shadowTier';
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 /**
@@ -344,7 +345,9 @@ const handler = baseApi({ auth: true }).post(
       if (candidates.length === 0) {
         throw new BadRequestError('No LLM models with tool support available.');
       }
-      const admission = await createModelAdmission(user, availableModels);
+      const admission = await createModelAdmission(user, availableModels, false, {
+        organizationId: resolveRequestBillingOrgId(req),
+      });
       let modelInfo: ModelInfo | undefined;
       for (const candidate of candidates) {
         if (await admission.admits(candidate.id)) {
