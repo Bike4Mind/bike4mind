@@ -75,6 +75,24 @@ vi.mock('../utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({}),
 }));
 
+const billing = vi.hoisted(() => ({
+  enforced: false,
+  usd: 0.04,
+  isCreditsEnforced: vi.fn(),
+  reserve: vi.fn(),
+  settle: vi.fn(),
+  estimate: vi.fn(),
+}));
+vi.mock('../billing/meterPlatformCompletion', () => ({
+  isCreditsEnforced: billing.isCreditsEnforced,
+  reserveCompletionCredits: billing.reserve,
+  settleCompletion: billing.settle,
+}));
+vi.mock('@bike4mind/services', async importOriginal => ({
+  ...((await importOriginal()) as Record<string, unknown>),
+  estimateGeneratedMediaUsd: billing.estimate,
+}));
+
 const { createDeepAgentToolMaterializer } = await import('./toolMaterializer');
 const { organizationRepository, questRepository, sessionRepository, userRepository } =
   await import('@bike4mind/database');
@@ -193,5 +211,98 @@ describe('createDeepAgentToolMaterializer', () => {
     const reply = await save?.toolFn({ content: 'hello', fileName: 'note.md', dataLakeId: 'lake-1' });
     expect(reply).not.toMatch(/not available on this surface/);
     expect(reply).toMatch(/Data lakes are not enabled/);
+  });
+});
+
+describe('deep agent media tool callbacks', () => {
+  type Callbacks = {
+    onToolStart: (n: string, d: unknown) => Promise<void>;
+    onToolFinish: (n: string, d: unknown) => Promise<void>;
+  };
+  const callbacksFor = async () => {
+    buildSharedToolsSpy.mockClear();
+    await materialize()(['image_generation'], 'owner-1');
+    return buildSharedToolsSpy.mock.calls[0][1] as Callbacks;
+  };
+  const IMAGE = { model: 'image-model', n: 1 };
+
+  beforeEach(() => {
+    resolveToolAvailabilityMock.mockResolvedValue({});
+    billing.isCreditsEnforced.mockReset().mockImplementation(async () => billing.enforced);
+    billing.estimate.mockReset().mockImplementation(() => billing.usd);
+    billing.reserve.mockReset().mockResolvedValue({ settle: vi.fn() });
+    billing.settle.mockReset().mockResolvedValue(1);
+    billing.enforced = false;
+    billing.usd = 0.04;
+  });
+
+  it('refuses a restricted owner before the provider call', async () => {
+    const callbacks = await callbacksFor();
+    vi.mocked(userRepository.findById).mockResolvedValueOnce({ id: 'owner-1', isModerated: true } as never);
+
+    await expect(callbacks.onToolStart('image_generation', IMAGE)).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('refuses an owner who cannot cover the media estimate when credits are enforced', async () => {
+    billing.enforced = true;
+    const callbacks = await callbacksFor();
+    vi.mocked(userRepository.findById).mockResolvedValueOnce({ id: 'owner-1', currentCredits: 0 } as never);
+
+    await expect(callbacks.onToolStart('image_generation', IMAGE)).rejects.toMatchObject({ statusCode: 422 });
+  });
+
+  it('lets an affordable owner through when credits are enforced', async () => {
+    billing.enforced = true;
+    const callbacks = await callbacksFor();
+    vi.mocked(userRepository.findById).mockResolvedValueOnce({ id: 'owner-1', currentCredits: 1_000_000 } as never);
+
+    await expect(callbacks.onToolStart('image_generation', IMAGE)).resolves.toBeUndefined();
+  });
+
+  it('skips the credit check when credits are not enforced', async () => {
+    const callbacks = await callbacksFor();
+    vi.mocked(userRepository.findById).mockResolvedValueOnce({ id: 'owner-1', currentCredits: 0 } as never);
+
+    await expect(callbacks.onToolStart('image_generation', IMAGE)).resolves.toBeUndefined();
+    expect(billing.estimate).not.toHaveBeenCalled();
+  });
+
+  it('charges a delivered image once, at the estimated cost, to the owner', async () => {
+    const callbacks = await callbacksFor();
+
+    await callbacks.onToolFinish('image_generation', IMAGE);
+
+    expect(billing.reserve).toHaveBeenCalledTimes(1);
+    expect(billing.reserve.mock.calls[0][1]).toBe(0.04);
+    expect(billing.settle).toHaveBeenCalledTimes(1);
+    expect(billing.settle.mock.calls[0][2]).toMatchObject({ model: 'image-model', usd: 0.04, inputTokens: 0 });
+  });
+
+  it('logs rather than throws when the charge for delivered media is refused', async () => {
+    billing.reserve.mockRejectedValueOnce(new Error('insufficient credits'));
+    const callbacks = await callbacksFor();
+
+    await expect(callbacks.onToolFinish('image_generation', IMAGE)).resolves.toBeUndefined();
+    expect(billing.settle).not.toHaveBeenCalled();
+  });
+
+  it('leaves non-media tools alone', async () => {
+    const callbacks = await callbacksFor();
+    vi.mocked(userRepository.findById).mockClear();
+
+    await callbacks.onToolStart('weather_info', {});
+    await callbacks.onToolFinish('weather_info', {});
+
+    expect(userRepository.findById).not.toHaveBeenCalled();
+    expect(billing.reserve).not.toHaveBeenCalled();
+  });
+
+  it('does not charge a media call that never finished', async () => {
+    const callbacks = await callbacksFor();
+
+    await callbacks.onToolStart('image_generation', IMAGE);
+
+    expect(billing.reserve).not.toHaveBeenCalled();
+    expect(billing.settle).not.toHaveBeenCalled();
   });
 });
