@@ -40,7 +40,7 @@ If you call the API from your own product on behalf of many end users, one key n
 - `end_user_id` is your own opaque identifier for the end user: 1 to 64 characters, letters, digits, `_`, `:` and `-` only. Never send an email address or other personal data; a value containing `@` is rejected.
 - The provider receives an identifier derived from your account and this value, not the value itself, so your end users never collide with each other or with another account's.
 - Billing, rate limits and every other check still apply to your key and account, not to the end user.
-- A value that breaks the format rules fails schema validation with `422`. Sending `end_user_id` with a key that lacks `ai:end-user-id`, or with a signed-in session instead of a key, returns `400` with `errorCode: "end_user_id_not_allowed"`; the field is never silently ignored.
+- A value that breaks the format rules returns `400` with `errorCode: "invalid_end_user_id"`, whatever the credential. Sending `end_user_id` with a key that lacks `ai:end-user-id`, or with a signed-in session instead of a key, returns `400` with `errorCode: "end_user_id_not_allowed"`; the field is never silently ignored.
 - `POST /api/ai/tts` accepts the same field under the same rules.
 
 To get the scope on a key, ask your Bike4Mind administrator. You cannot add it yourself when you create a key.
@@ -84,7 +84,7 @@ Each API key has a per-minute and a per-day request limit; the in-app reference 
 
 Anything checked before the model provider is called fails with a JSON body and a real HTTP status, and no stream opens:
 
-- 400: with `errorCode: "end_user_id_not_allowed"`, the request sent `end_user_id` on a credential that may not send it (see [End users of your product](#end-users-of-your-product)).
+- 400: with `errorCode: "invalid_end_user_id"`, `end_user_id` broke the format rules; with `errorCode: "end_user_id_not_allowed"`, the request sent `end_user_id` on a credential that may not send it (see [End users of your product](#end-users-of-your-product)).
 - 401: missing or invalid credentials.
 - 403: with `required_scopes` in the body, the API key lacks a scope. Without it, the account may be suspended or under a dispute (contact support), or a JWT caller may need to enroll in MFA in the web app.
 - 422: the body failed schema validation, or insufficient credits (see above).

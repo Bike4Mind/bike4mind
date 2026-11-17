@@ -1551,10 +1551,20 @@ describe('end_user_id', () => {
     ['over 64 characters', 'a'.repeat(65)],
     ['outside the charset', 'customer 42'],
     ['an email', 'jane@example.com'],
-  ])('rejects an end_user_id that is %s as a schema failure', async (_name, endUserId) => {
+  ])('rejects an end_user_id that is %s with a 400 invalid_end_user_id', async (_name, endUserId) => {
     mockResolveContractAuth.mockResolvedValue({ method: 'apiKey', userId: 'user-1', apiKeyInfo: platformKey });
 
-    await expectJsonError(await post({ ...COMPLETION, end_user_id: endUserId }), 422);
+    const body = await expectJsonError(await post({ ...COMPLETION, end_user_id: endUserId }), 400);
+    expect(body.errorCode).toBe('invalid_end_user_id');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockRecordPlatformEndUser).not.toHaveBeenCalled();
+  });
+
+  it('checks the format before the credential, so a malformed value on a session is invalid_end_user_id', async () => {
+    mockResolveContractAuth.mockResolvedValue({ method: 'jwt', userId: 'user-1' });
+
+    const body = await expectJsonError(await post({ ...COMPLETION, end_user_id: 'jane@example.com' }), 400);
+    expect(body.errorCode).toBe('invalid_end_user_id');
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 });

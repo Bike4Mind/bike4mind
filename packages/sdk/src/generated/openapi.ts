@@ -3097,7 +3097,8 @@ export interface components {
         | 'unknown_tool_reference'
         | 'tool_changes_unsupported'
         | 'invalid_tool_change'
-        | 'end_user_id_not_allowed';
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id';
     };
     createCompletionResponse403: {
       error: string;
@@ -3375,7 +3376,7 @@ export interface components {
         /** @description The `sessionId` of the session that spawned this one, for nested workers. */
         parentSessionId?: string;
       };
-      /** @description Your own opaque identifier for the end user this request is for (1-64 characters: letters, digits, `_`, `:`, `-`; never an email). Accepted only on an API key holding `ai:end-user-id`, which an administrator grants to keys that serve many end users; any other credential sending it is refused with a 400 (`errorCode: "end_user_id_not_allowed"`). The model provider then receives an identifier derived from your account and this value instead of one for your whole account. */
+      /** @description Your own opaque identifier for the end user this request is for (1-64 characters: letters, digits, `_`, `:`, `-`; never an email). A malformed value is refused with a 400 (`errorCode: "invalid_end_user_id"`). Accepted only on an API key holding `ai:end-user-id`, which an administrator grants to keys that serve many end users; any other credential sending it is refused with a 400 (`errorCode: "end_user_id_not_allowed"`). The model provider then receives an identifier derived from your account and this value instead of one for your whole account. */
       end_user_id?: string;
       options?: {
         temperature?: number;
@@ -3690,7 +3691,12 @@ export interface components {
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'end_user_id_not_allowed';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id';
     };
     synthesizeSpeechResponse401: {
       error: string;
@@ -3703,7 +3709,12 @@ export interface components {
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'end_user_id_not_allowed';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id';
     };
     synthesizeSpeechResponse403: {
       error: string;
@@ -3746,7 +3757,12 @@ export interface components {
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'end_user_id_not_allowed';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id';
     };
     synthesizeSpeechResponse413: {
       error: string;
@@ -3768,7 +3784,12 @@ export interface components {
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'end_user_id_not_allowed';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id';
     };
     synthesizeSpeechResponse429: {
       error: string;
@@ -3781,7 +3802,12 @@ export interface components {
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'end_user_id_not_allowed';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id';
     };
     synthesizeSpeechResponse502: {
       error: string;
@@ -3794,7 +3820,12 @@ export interface components {
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected' | 'end_user_id_not_allowed';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id';
     };
     /**
      * @example {
@@ -3817,7 +3848,7 @@ export interface components {
       languageCode?: string;
       /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your personal credits, as this endpoint always has. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
       organization_id?: string | null;
-      /** @description Your own opaque identifier for the end user this request is for (1-64 characters: letters, digits, `_`, `:`, `-`; never an email). Accepted only on an API key holding `ai:end-user-id`, which an administrator grants to keys that serve many end users; any other credential sending it is refused with a 400 (`errorCode: "end_user_id_not_allowed"`). The model provider then receives an identifier derived from your account and this value instead of one for your whole account. */
+      /** @description Your own opaque identifier for the end user this request is for (1-64 characters: letters, digits, `_`, `:`, `-`; never an email). A malformed value is refused with a 400 (`errorCode: "invalid_end_user_id"`). Accepted only on an API key holding `ai:end-user-id`, which an administrator grants to keys that serve many end users; any other credential sending it is refused with a 400 (`errorCode: "end_user_id_not_allowed"`). The model provider then receives an identifier derived from your account and this value instead of one for your whole account. */
       end_user_id?: string;
       /** @enum {string} */
       encoding?: 'binary' | 'base64';
@@ -12537,7 +12568,7 @@ export interface operations {
           'text/event-stream': components['schemas']['createCompletionResponse200'];
         };
       };
-      /** @description Malformed or otherwise invalid request (no `errorCode`), a model that rejects a final assistant message (`errorCode: "assistant_prefill_unsupported"`), provider-rejected caller input (`errorCode: "invalid_request"`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), `deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` naming a tool not in `tools`, or carrying no string `tool_name`). Mid-conversation tool changes are refused with: `tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and `unknown_tool_reference` (a changed tool not in `tools`). `end_user_id` sent on a credential other than an API key holding `ai:end-user-id` is refused with `end_user_id_not_allowed`. */
+      /** @description Malformed or otherwise invalid request (no `errorCode`), a model that rejects a final assistant message (`errorCode: "assistant_prefill_unsupported"`), provider-rejected caller input (`errorCode: "invalid_request"`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), `deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` naming a tool not in `tools`, or carrying no string `tool_name`). Mid-conversation tool changes are refused with: `tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and `unknown_tool_reference` (a changed tool not in `tools`). `end_user_id` sent on a credential other than an API key holding `ai:end-user-id` is refused with `end_user_id_not_allowed`; a malformed `end_user_id` is refused with `invalid_end_user_id`. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -13059,7 +13090,7 @@ export interface operations {
         };
         content?: never;
       };
-      /** @description The billing organization could not be resolved. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. Also `end_user_id` sent on a credential other than an API key holding `ai:end-user-id` (`errorCode: "end_user_id_not_allowed"`). */
+      /** @description The billing organization could not be resolved. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. Also `end_user_id` sent on a credential other than an API key holding `ai:end-user-id` (`errorCode: "end_user_id_not_allowed"`), or a malformed `end_user_id` (`errorCode: "invalid_end_user_id"`). */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

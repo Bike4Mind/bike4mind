@@ -51,6 +51,26 @@ describe('resolvePlatformEndUser', () => {
   });
 });
 
+describe('resolvePlatformEndUser format check', () => {
+  it.each([
+    ['empty', ''],
+    ['over 64 characters', 'a'.repeat(65)],
+    ['outside the charset', 'customer 42'],
+    ['an email', 'jane@example.com'],
+  ])('refuses an end_user_id that is %s with a 400 invalid_end_user_id', (_label, value) => {
+    for (const caller of [asPlatform, { userId: OWNER, apiKeyInfo: undefined }]) {
+      let thrown: unknown;
+      try {
+        resolvePlatformEndUser(value, caller);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(BadRequestError);
+      expect((thrown as BadRequestError).additionalInfo).toEqual({ errorCode: 'invalid_end_user_id' });
+    }
+  });
+});
+
 describe('recordPlatformEndUserSeen', () => {
   beforeEach(() => {
     recordSeen.mockReset();

@@ -139,6 +139,7 @@ export const TTS_ERROR_CODES = [
   'provider_not_configured',
   'provider_rejected',
   'end_user_id_not_allowed',
+  'invalid_end_user_id',
 ] as const satisfies readonly ApiErrorCode[];
 
 /**

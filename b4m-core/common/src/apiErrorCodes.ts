@@ -19,6 +19,7 @@ export const MCP_ACTION_REPLACED_ERROR_CODE = 'action_replaced';
 export const PENDING_ACTION_EXPIRED_ERROR_CODE = 'action_expired';
 export const PENDING_ACTION_ALREADY_RESOLVED_ERROR_CODE = 'action_already_resolved';
 export const END_USER_ID_NOT_ALLOWED_ERROR_CODE = 'end_user_id_not_allowed';
+export const INVALID_END_USER_ID_ERROR_CODE = 'invalid_end_user_id';
 
 /**
  * The one enumerated vocabulary for the `errorCode` field on a public error body
@@ -149,6 +150,8 @@ export const API_ERROR_CODES = [
   // AI routes that take `end_user_id` (completions, TTS).
   /** `end_user_id` was sent on a credential other than an API key holding `ai:end-user-id`. */
   END_USER_ID_NOT_ALLOWED_ERROR_CODE,
+  /** `end_user_id` was not 1-64 characters of letters, digits, `_`, `:` and `-`. */
+  INVALID_END_USER_ID_ERROR_CODE,
   // Skill Market import conflicts (POST /api/v1/skills/market/listings/{id}/import); see
   // SKILL_MARKET_IMPORT_ERROR_CODES in schemas/skillMarketPublic.ts.
   /** A newer version was approved since the one the caller reviewed. */

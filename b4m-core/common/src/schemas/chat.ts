@@ -12,6 +12,7 @@ import {
   UNKNOWN_MODEL_ERROR_CODE,
   RUN_NOT_FOUND_ERROR_CODE,
   END_USER_ID_NOT_ALLOWED_ERROR_CODE,
+  INVALID_END_USER_ID_ERROR_CODE,
   type ApiErrorCode,
 } from '../apiErrorCodes';
 import { StorageLimitErrorInfoSchema } from '../errors';
@@ -428,6 +429,7 @@ export const CompletionsBadRequestErrorSchema = ApiErrorSchema.extend({
       ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,
       ...COMPLETION_TOOL_ERROR_CODES,
       END_USER_ID_NOT_ALLOWED_ERROR_CODE,
+      INVALID_END_USER_ID_ERROR_CODE,
     ])
     .optional(),
 });

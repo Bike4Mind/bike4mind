@@ -243,6 +243,21 @@ describe('POST /api/ai/tts', () => {
     expect(mocks.synthesizeTts).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['empty', ''],
+    ['over 64 characters', 'a'.repeat(65)],
+    ['outside the charset', 'customer 42'],
+    ['an email', 'jane@example.com'],
+  ])('refuses an end_user_id that is %s with a 400 invalid_end_user_id, whatever the credential', async (_n, value) => {
+    const { promise } = run({ text: 'hi', end_user_id: value }, { id: 'u1' }, undefined);
+    await expect(promise).rejects.toMatchObject({
+      statusCode: 400,
+      additionalInfo: { errorCode: 'invalid_end_user_id' },
+    });
+    expect(mocks.holdPreflightCredits).not.toHaveBeenCalled();
+    expect(mocks.synthesizeTts).not.toHaveBeenCalled();
+  });
+
   it('accepts end_user_id from a platform key', async () => {
     const platformKey = { keyId: 'k1', userId: 'u1', scopes: ['ai:generate', 'ai:end-user-id'] };
     const { res, promise } = run({ text: 'hi', end_user_id: 'customer_42' }, { id: 'u1' }, platformKey);

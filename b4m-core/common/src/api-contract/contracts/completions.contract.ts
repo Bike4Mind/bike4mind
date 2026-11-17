@@ -115,7 +115,8 @@ export const createCompletionContract = defineEndpoint({
         '`tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it ' +
         'here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and ' +
         '`unknown_tool_reference` (a changed tool not in `tools`). `end_user_id` sent on a credential other than an ' +
-        'API key holding `ai:end-user-id` is refused with `end_user_id_not_allowed`.',
+        'API key holding `ai:end-user-id` is refused with `end_user_id_not_allowed`; a malformed `end_user_id` is ' +
+        'refused with `invalid_end_user_id`.',
       schema: CompletionsBadRequestErrorSchema,
     },
     403: {
