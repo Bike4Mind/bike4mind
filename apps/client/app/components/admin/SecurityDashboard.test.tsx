@@ -45,6 +45,12 @@ vi.mock('./SecurityDashboard/ScanSummaryTable', () => ({
     </div>
   ),
 }));
+vi.mock('./SecurityDashboard/IssueFilingCard', () => ({
+  IssueFilingCard: () => <div data-testid="issue-filing-card-stub" />,
+}));
+vi.mock('./SecurityDashboard/RecentFilingRunsCard', () => ({
+  RecentFilingRunsCard: () => <div data-testid="recent-filing-runs-stub" />,
+}));
 
 import { fakeAdminRouter } from './__tests__/fakeAdminRouter';
 import SecurityDashboard from './SecurityDashboard';
@@ -83,6 +89,34 @@ describe('SecurityDashboard views', () => {
     fireEvent.click(screen.getByTestId('security-dashboard-views-incident-btn'));
     expect(fakeAdminRouter.search).not.toHaveProperty('securityView');
     expect(screen.queryByTestId('waf-overview-stub')).not.toBeInTheDocument();
+  });
+
+  it('orders the Scans view: issue filing, scans table, recent filing runs, then the panel selector and panel', () => {
+    fakeAdminRouter.reset({ tab: 'security-dashboard', securityView: 'scans' });
+    renderPage();
+
+    const children = Array.from(screen.getByTestId('security-scans-view').children);
+    const order = [
+      'issue-filing-card-stub',
+      'scan-summary-stub',
+      'recent-filing-runs-stub',
+      'security-scans-panel-tabs',
+      'security-scans-web-panel',
+    ].map(testId => children.indexOf(screen.getByTestId(testId)));
+    expect(order).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it('opens Admin settings on the Security section from the header', () => {
+    fakeAdminRouter.reset({ tab: 'security-dashboard', securityView: 'scans', securityScan: 'prowler' });
+    renderPage();
+
+    const button = screen.getByTestId('security-dashboard-settings-btn');
+    expect(button).toHaveTextContent('Security settings');
+    fireEvent.click(button);
+
+    expect(fakeAdminRouter.navigate).toHaveBeenCalledWith(expect.objectContaining({ to: '/admin' }));
+    expect(fakeAdminRouter.navigate.mock.lastCall?.[0]).not.toHaveProperty('replace');
+    expect(fakeAdminRouter.search).toEqual({ tab: 'admin-settings', section: 'security' });
   });
 
   it('opens the scan panel a link names', () => {

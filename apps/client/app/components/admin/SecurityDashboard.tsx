@@ -1,5 +1,7 @@
 import { Box, Button, Chip, Sheet, Stack, Switch, Typography, useTheme } from '@mui/joy';
 import { useState } from 'react';
+import { useNavigate } from '@tanstack/react-router';
+import { SETTING_TABS } from '@bike4mind/common';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useSecurityScanCooldown } from '@client/app/hooks/useSecurityScanCooldown';
 import {
@@ -18,6 +20,8 @@ import { WafTrafficOverview } from './SecurityDashboard/WafTrafficOverview';
 import ActiveDefenseTab from './SecurityDashboard/ActiveDefenseTab';
 import { IncidentView } from './SecurityDashboard/IncidentView';
 import { ScanSummaryTable } from './SecurityDashboard/ScanSummaryTable';
+import { IssueFilingCard } from './SecurityDashboard/IssueFilingCard';
+import { RecentFilingRunsCard } from './SecurityDashboard/RecentFilingRunsCard';
 import { useSecurityDashboardSearch } from './SecurityDashboard/useSecurityDashboardSearch';
 import { SECURITY_VIEWS, type SecurityScan, type SecurityView } from './securityDashboardSearch';
 import {
@@ -32,6 +36,12 @@ import {
 } from './shared';
 import { SecurityFindingsTable } from './SecurityDashboard/SecurityFindingsTable';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import {
+  ADMIN_SETTINGS_SECTION_PARAM,
+  ADMIN_SETTINGS_TAB_SLUG,
+  adminSearchForTab,
+  type AdminSearch,
+} from './adminTabParams';
 
 const statusColorMap: Record<SecurityCheckStatus, 'success' | 'warning' | 'danger' | 'neutral'> = {
   pass: 'success',
@@ -952,7 +962,9 @@ const ScanPanel = ({ scan }: { scan: SecurityScan }) => {
 
 export const ScansView = ({ scan, onSelectScan }: { scan: SecurityScan; onSelectScan(scan: SecurityScan): void }) => (
   <Stack spacing={2.5} data-testid="security-scans-view">
+    <IssueFilingCard />
     <ScanSummaryTable activeScan={scan} onSelect={onSelectScan} />
+    <RecentFilingRunsCard />
     <SegmentedControl
       options={SCAN_TABS}
       value={scan}
@@ -976,13 +988,35 @@ const isSecurityView = (id: string): id is SecurityView => SECURITY_VIEWS.some(v
 
 const SecurityDashboard: React.FC = () => {
   const { view, scan, setView, setScan } = useSecurityDashboardSearch();
+  const navigate = useNavigate();
+  // Navigate with the slug rather than setting the tab store: the store-to-URL mirror would drop the section.
+  const openSecuritySettings = () =>
+    navigate({
+      to: '/admin',
+      search: (previous: AdminSearch) => ({
+        ...adminSearchForTab(previous, ADMIN_SETTINGS_TAB_SLUG),
+        [ADMIN_SETTINGS_SECTION_PARAM]: SETTING_TABS.SECURITY.id,
+      }),
+    });
 
   return (
     <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="security-dashboard-root">
       <AdminPageHeader
         title="Security"
         description="Live incident signals, firewall traffic and scan results."
-        actions={<ContextHelpButton helpId="admin/security-dashboard" tooltipText="Security dashboard help" />}
+        actions={
+          <>
+            <Button
+              variant="outlined"
+              color="neutral"
+              onClick={() => void openSecuritySettings()}
+              data-testid="security-dashboard-settings-btn"
+            >
+              Security settings
+            </Button>
+            <ContextHelpButton helpId="admin/security-dashboard" tooltipText="Security dashboard help" />
+          </>
+        }
       />
       <ViewTabs
         views={VIEW_TABS}
