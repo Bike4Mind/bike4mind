@@ -214,6 +214,22 @@ describe('useOrchestratorRoster', () => {
 });
 
 describe('useOrchestratorPrefs', () => {
+  it("starts a new session on its project's last view, and records picks for the project", () => {
+    writeView('a', 'aquarium', '/p');
+    writeView('x', 'table', '/other');
+    let latest: ReturnType<typeof useOrchestratorPrefs> | undefined;
+    const Probe = ({ id, project }: { id: string; project?: string }) => {
+      latest = useOrchestratorPrefs(id, project);
+      return null;
+    };
+    act(() => root.render(<Probe id="b" project="/p" />));
+    expect(latest?.view).toBe('aquarium');
+    act(() => latest?.setView('board'));
+    expect(window.localStorage.getItem('b4m.orchestrator.projectView./p')).toBe('board');
+    act(() => root.render(<Probe id="b" project="/q" />));
+    expect(latest?.view).toBe('board');
+  });
+
   it('re-reads when the session changes and setters write through immediately', () => {
     writeView('a', 'board');
     let latest: ReturnType<typeof useOrchestratorPrefs> | undefined;
@@ -226,7 +242,7 @@ describe('useOrchestratorPrefs', () => {
     expect(latest?.surface).toBe('chat');
 
     act(() => root.render(<Probe id="b" />));
-    expect(latest?.view).toBe('tavern');
+    expect(latest?.view).toBe('board');
 
     act(() => latest?.setView('table'));
     expect(latest?.view).toBe('table');

@@ -6,6 +6,8 @@ export type SessionSurface = 'chat' | 'orchestrate';
 
 const SURFACE_KEY = 'b4m.orchestrator.surface.';
 const VIEW_KEY = 'b4m.orchestrator.view.';
+const PROJECT_VIEW_KEY = 'b4m.orchestrator.projectView.';
+const LAST_VIEW_KEY = 'b4m.orchestrator.lastView';
 const DOCK_OPEN_KEY = 'b4m.orchestrator.dockOpen';
 const DOCK_WIDTH_KEY = 'b4m.orchestrator.dockWidth';
 const INTRO_SEEN_KEY = 'b4m.orchestrator.introSeen';
@@ -48,17 +50,33 @@ export function writeSurface(sessionId: string, surface: SessionSurface): void {
   }
 }
 
-export function readView(sessionId: string): OrchestratorViewId {
-  const stored = readItem(VIEW_KEY + sessionId);
-  return ORCHESTRATOR_VIEWS.find(view => view === stored) ?? 'tavern';
-}
-
-export function writeView(sessionId: string, view: OrchestratorViewId): void {
-  writeItem(VIEW_KEY + sessionId, view);
+function parseView(stored: string | null): OrchestratorViewId | undefined {
+  return ORCHESTRATOR_VIEWS.find(view => view === stored);
 }
 
 /**
- * Forgets a deleted session's surface and view. Called from the delete path only: the session list is
+ * The view a session opens on: its own choice, else the last one picked in its project (the folder
+ * the session is bound to; omit for a session without one), else the last one picked anywhere, else
+ * the Tavern. A stored id that is no longer a view falls through to the next level.
+ */
+export function readView(sessionId: string, projectDirectory?: string): OrchestratorViewId {
+  return (
+    parseView(readItem(VIEW_KEY + sessionId)) ??
+    (projectDirectory ? parseView(readItem(PROJECT_VIEW_KEY + projectDirectory)) : undefined) ??
+    parseView(readItem(LAST_VIEW_KEY)) ??
+    'tavern'
+  );
+}
+
+/** Records the choice for the session, for its project when it has one, and as the global last choice. */
+export function writeView(sessionId: string, view: OrchestratorViewId, projectDirectory?: string): void {
+  writeItem(VIEW_KEY + sessionId, view);
+  if (projectDirectory) writeItem(PROJECT_VIEW_KEY + projectDirectory, view);
+  writeItem(LAST_VIEW_KEY, view);
+}
+
+/**
+ * Forgets a deleted session's surface and view. The project and global last choices are not the session's, so they stay. Called from the delete path only: the session list is
  * scoped to the signed-in account while storage is install-wide, so "not listed" never means "gone".
  */
 export function forgetSessionPrefs(sessionId: string): void {

@@ -721,13 +721,13 @@ export function ChatShell({
   const spawned = useMemo(() => spawnedSessions(sessions, statuses, activeId), [sessions, statuses, activeId]);
   // States only: the activity stream is subscribed inside OrchestratorSurface, while orchestrating.
   const spawnedStates = useMemo(() => agentStates(sessions, statuses, activeId), [sessions, statuses, activeId]);
-  const orchestratorPrefs = useOrchestratorPrefs(activeId);
+  const orchestrationSession =
+    sessionDraft.session && sessionDraft.session.id === conversation.session?.id ? conversation.session : activeSummary;
+  const orchestratorPrefs = useOrchestratorPrefs(activeId, orchestrationSession?.project?.directory);
   const { setDockOpen, setView: setOrchestratorView, setSurface: setOrchestratorSurface } = orchestratorPrefs;
   // A Code session can orchestrate before it has any agents; a Chat session only shows its agents.
   // One at the depth cap, or on a model sent no tools, could start none: main ignores its flag
   // there (orchestratesAgents, toolsSupported) and so does this.
-  const orchestrationSession =
-    sessionDraft.session && sessionDraft.session.id === conversation.session?.id ? conversation.session : activeSummary;
   const orchestrateCapable =
     !!orchestrationSession?.project &&
     canSpawnDeeper(orchestrationSession) &&
