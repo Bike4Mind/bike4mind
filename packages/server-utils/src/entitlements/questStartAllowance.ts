@@ -13,7 +13,7 @@ export async function admitQuestStart(user: IUserDocument, startId: string): Pro
   // The same admission may cross invoke -> queue -> process more than once.
   if (await userRepository.claimFreeQuestStart(user.id, startId)) return 'free';
   throw new ForbiddenError(
-    'Your free QuestMaster quest has already been started. A subscription is required for another.',
+    'Your free QuestMaster quest has already been started. Turn QuestMaster off (enableQuestMaster=false) to continue chatting, or subscribe to start another QuestMaster quest.',
     {
       errorCode: FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
     }

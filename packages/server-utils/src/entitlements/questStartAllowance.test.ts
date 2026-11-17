@@ -26,6 +26,7 @@ describe('admitQuestStart', () => {
     mocks.claim.mockResolvedValue(false);
     await expect(admitQuestStart(user, 'second')).rejects.toMatchObject({
       statusCode: 403,
+      message: expect.stringContaining('Turn QuestMaster off (enableQuestMaster=false) to continue chatting'),
       additionalInfo: { errorCode: 'free_quest_limit_reached' },
     });
   });
