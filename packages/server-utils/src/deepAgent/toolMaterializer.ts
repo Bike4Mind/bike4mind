@@ -7,7 +7,7 @@ import {
   type ToolBuilderCallbacks,
 } from '@bike4mind/services/llm';
 import { applyOrgToolPolicy } from '@bike4mind/services/llm/orgToolPolicy';
-import { assertOwnerHasCredits, estimateGeneratedMediaUsd } from '@bike4mind/services';
+import { assertOwnerHasCredits, creditService, estimateGeneratedMediaUsd } from '@bike4mind/services';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { usdToCredits } from '@bike4mind/utils';
 import {
@@ -27,9 +27,20 @@ import {
   sessionRepository,
   userRepository,
 } from '@bike4mind/database';
-import { getAvailableModels, type ApiKeyTable, type ICompletionBackend } from '@bike4mind/llm-adapters';
+import {
+  getAvailableModels,
+  type ApiKeyTable,
+  type ICompletionBackend,
+  type ICompletionOptionTools,
+} from '@bike4mind/llm-adapters';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
-import { ForbiddenError, readOrgModelPolicy, type IUserDocument, type ModelInfo } from '@bike4mind/common';
+import {
+  ForbiddenError,
+  insufficientCreditsError,
+  readOrgModelPolicy,
+  type IUserDocument,
+  type ModelInfo,
+} from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { lakeWriteToolDb } from '../dataLakes/lakeWriteToolDb';
 import { getFilesStorage, getGeneratedImageStorage } from '../utils/storage/index';
@@ -59,21 +70,54 @@ function estimateMediaUsd(toolName: string, data: unknown, ctx: MediaBillingCont
   }
 }
 
-/**
- * Media tools call onToolStart before their provider call, so this refuses there: a restricted owner gets
- * the AI-access 403 and, with credits enforced, an owner who cannot cover the estimate gets the 422.
- * The owner is reloaded because standing can change while a mission runs.
- */
-async function gateMediaToolStart(toolName: string, data: unknown, ctx: MediaBillingContext): Promise<void> {
-  const owner = (await userRepository.findById(ctx.ownerUserId)) as IUserDocument | null;
-  if (!owner) throw new ForbiddenError(`deep agent tools: owner user ${ctx.ownerUserId} not found`);
+/** Refuses a restricted owner with the AI-access 403; reloaded per call since standing can change mid-mission. */
+async function assertMediaOwnerStanding(ownerUserId: string): Promise<void> {
+  const owner = (await userRepository.findById(ownerUserId)) as IUserDocument | null;
+  if (!owner) throw new ForbiddenError(`deep agent tools: owner user ${ownerUserId} not found`);
   const denial = aiAccessDeniedMessage(owner);
   if (denial) throw new ForbiddenError(denial);
+}
+
+/**
+ * Media tools call onToolStart before their provider call, so with credits enforced this refuses there (422)
+ * when the owner's balance, or their org member cap, cannot cover the estimate.
+ */
+async function gateMediaToolStart(toolName: string, data: unknown, ctx: MediaBillingContext): Promise<void> {
   if (!(await isCreditsEnforced())) return;
   const usd = estimateMediaUsd(toolName, data, ctx);
   if (usd <= 0) return;
+  const owner = (await userRepository.findById(ctx.ownerUserId)) as IUserDocument | null;
+  if (!owner) throw new ForbiddenError(`deep agent tools: owner user ${ctx.ownerUserId} not found`);
+  const requiredCredits = usdToCredits(usd);
   const org = ctx.billingOrgId ? await organizationRepository.findById(ctx.billingOrgId) : null;
-  assertOwnerHasCredits(org ?? owner, { requiredCredits: usdToCredits(usd) });
+  if (org && creditService.isMemberCreditCapExceeded(org, owner.id, requiredCredits)) {
+    throw insufficientCreditsError(creditService.MEMBER_CREDIT_CAP_MESSAGE);
+  }
+  assertOwnerHasCredits(org ?? owner, { requiredCredits });
+}
+
+/**
+ * Runs the media tools one call at a time behind the owner-standing check. The check sits on the tool itself
+ * because image_generation without a preset model returns its picker prompt before onToolStart; one at a time
+ * so each credit gate reads the balance after the previous call has settled.
+ */
+function gateMediaTools(tools: ICompletionOptionTools[], ownerUserId: string): ICompletionOptionTools[] {
+  let tail: Promise<unknown> = Promise.resolve();
+  return tools.map(tool => {
+    if (!MEDIA_TOOLS.has(tool.toolSchema.name)) return tool;
+    const run = async (parameters?: unknown, apiKey?: string) => {
+      await assertMediaOwnerStanding(ownerUserId);
+      return tool.toolFn(parameters, apiKey);
+    };
+    return {
+      ...tool,
+      toolFn: (parameters?: unknown, apiKey?: string) => {
+        const result = tail.then(() => run(parameters, apiKey));
+        tail = result.catch(() => undefined);
+        return result;
+      },
+    };
+  });
 }
 
 /**
@@ -229,6 +273,6 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         toolAvailability,
         orgToolPolicy,
       }) ?? [];
-    return applyOrgToolPolicy(tools, orgToolPolicy).tools;
+    return gateMediaTools(applyOrgToolPolicy(tools, orgToolPolicy).tools, ownerUserId);
   };
 }

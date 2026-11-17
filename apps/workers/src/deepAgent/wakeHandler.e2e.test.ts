@@ -39,7 +39,11 @@ const NEUTRAL: DriveVector = { curiosity: 0.5, progress: 0.5, social: 0.5, novel
 const INTERVAL_MS = 6 * 60 * 60 * 1000;
 const AGENT_ID = 'mission-1';
 
-async function seedMission(userFields: Record<string, unknown>, openBlockers: string[] = []) {
+async function seedMission(
+  userFields: Record<string, unknown>,
+  openBlockers: string[] = [],
+  opts: { withHandoff?: boolean; lastWakeAt?: string } = {}
+) {
   const owner = await User.create({
     username: 'owner',
     email: 'owner@example.com',
@@ -69,10 +73,11 @@ async function seedMission(userFields: Record<string, unknown>, openBlockers: st
     updatedAt: now,
   };
   await store.saveCharter(charter);
+  if (opts.withHandoff === false) return store;
   await store.saveHandoff({
     agentId: AGENT_ID,
     wakeCount: 2,
-    lastWakeAt: now,
+    lastWakeAt: opts.lastWakeAt ?? now,
     lastActionSummary: 'read the paper',
     nextIntendedAction: 'reproduce table 1',
     nextWakeIntervalMs: INTERVAL_MS,
@@ -160,5 +165,51 @@ describe('processWake account-standing gate (real user documents)', () => {
     const handoff = await store.loadHandoff(AGENT_ID);
     expect(handoff?.openBlockers).not.toContain(MISSION_OWNER_RESTRICTED_BLOCKER);
     expect(handoff?.wakeCount).toBe(3);
+  });
+
+  it('keeps the cron claim lease while clearing a stale blocker on a due wake', async () => {
+    const store = await seedMission({}, [MISSION_OWNER_RESTRICTED_BLOCKER], {
+      lastWakeAt: new Date(Date.now() - 2 * INTERVAL_MS).toISOString(),
+    });
+    const leaseMs = 15 * 60 * 1000;
+    const claimedAt = Date.now();
+    expect(await deepAgentHandoffRepository.claimDueAgentIds(new Date(claimedAt), leaseMs)).toEqual([AGENT_ID]);
+    const { deps } = wakeDeps(store);
+    const orient = deps.steps.orient.bind(deps.steps);
+    let nextWakeAtDuringWake: Date | undefined;
+    deps.steps.orient = async ctx => {
+      nextWakeAtDuringWake = (await deepAgentHandoffRepository.findByAgentId(AGENT_ID))?.nextWakeAt;
+      return orient(ctx);
+    };
+
+    await processWake({ agentId: AGENT_ID }, new Logger(), { deps });
+
+    expect(nextWakeAtDuringWake?.getTime()).toBe(claimedAt + leaseMs);
+    expect(await deepAgentHandoffRepository.claimDueAgentIds(new Date(), leaseMs)).toEqual([]);
+  });
+
+  it('holds and reschedules a mission restricted before its first wake, then wakes it once lifted', async () => {
+    const store = await seedMission({ isModerated: true }, [], { withHandoff: false });
+    const { deps, providerCalls } = wakeDeps(store);
+    const before = Date.now();
+
+    await processWake({ agentId: AGENT_ID }, new Logger(), { deps });
+
+    expect(providerCalls).not.toHaveBeenCalled();
+    const held = await store.loadHandoff(AGENT_ID);
+    expect(held).toMatchObject({ wakeCount: 0, openBlockers: [MISSION_OWNER_RESTRICTED_BLOCKER] });
+    const nextWakeAt = (await deepAgentHandoffRepository.findByAgentId(AGENT_ID))!.nextWakeAt!.getTime();
+    expect(nextWakeAt).toBeGreaterThanOrEqual(before + 60 * 60 * 1000);
+
+    await processWake({ agentId: AGENT_ID }, new Logger(), { deps });
+    expect(providerCalls).not.toHaveBeenCalled();
+
+    await User.updateOne({}, { $set: { isModerated: false } });
+    await processWake({ agentId: AGENT_ID }, new Logger(), { deps });
+
+    expect(providerCalls).toHaveBeenCalled();
+    const woken = await store.loadHandoff(AGENT_ID);
+    expect(woken?.wakeCount).toBe(1);
+    expect(woken?.openBlockers).not.toContain(MISSION_OWNER_RESTRICTED_BLOCKER);
   });
 });

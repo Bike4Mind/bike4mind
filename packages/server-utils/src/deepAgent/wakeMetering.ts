@@ -150,7 +150,8 @@ export async function assertMissionOwnerCanUseAi(store: DeepAgentStore, agentId:
 
 /**
  * Hold a scheduled mission while its owner's account is restricted: show the blocker, keep the interval, and
- * push the next wake out by ACCOUNT_HOLD_RECHECK_MS. A paused mission (no interval) stays paused.
+ * push the next wake out by ACCOUNT_HOLD_RECHECK_MS. A paused mission (no interval) stays paused; one held
+ * before its first wake gets a handoff seeded so the cron rechecks it.
  */
 export async function deferWakeForAccountStanding(
   store: DeepAgentStore,
@@ -158,15 +159,25 @@ export async function deferWakeForAccountStanding(
   logger: Logger
 ): Promise<void> {
   const handoff = await store.loadHandoff(agentId);
-  if (!handoff) return;
-  if (!handoff.openBlockers.includes(MISSION_OWNER_RESTRICTED_BLOCKER)) {
+  const nowIso = new Date().toISOString();
+  if (!handoff) {
+    await store.saveHandoff({
+      agentId,
+      wakeCount: 0,
+      lastWakeAt: nowIso,
+      lastActionSummary: '',
+      nextIntendedAction: '',
+      openBlockers: [MISSION_OWNER_RESTRICTED_BLOCKER],
+      updatedAt: nowIso,
+    });
+  } else if (!handoff.openBlockers.includes(MISSION_OWNER_RESTRICTED_BLOCKER)) {
     await store.saveHandoff({
       ...handoff,
       openBlockers: [...handoff.openBlockers, MISSION_OWNER_RESTRICTED_BLOCKER],
-      updatedAt: new Date().toISOString(),
+      updatedAt: nowIso,
     });
   }
-  if (handoff.nextWakeIntervalMs == null) return;
+  if (handoff && handoff.wakeCount > 0 && handoff.nextWakeIntervalMs == null) return;
   // After the save: saving re-derives nextWakeAt from lastWakeAt + interval (DeepAgentHandoffModel.upsertForAgent).
   const resumeAt = new Date(Date.now() + ACCOUNT_HOLD_RECHECK_MS);
   await deepAgentHandoffRepository.releaseWakeClaim(agentId, resumeAt);
@@ -177,9 +188,12 @@ export async function deferWakeForAccountStanding(
 export async function clearAccountStandingBlocker(store: DeepAgentStore, agentId: string): Promise<void> {
   const handoff = await store.loadHandoff(agentId);
   if (!handoff?.openBlockers.includes(MISSION_OWNER_RESTRICTED_BLOCKER)) return;
+  // Saving re-derives nextWakeAt, which would drop the cron's claim lease (claimDueAgentIds) mid-wake.
+  const lease = (await deepAgentHandoffRepository.findByAgentId(agentId))?.nextWakeAt;
   await store.saveHandoff({
     ...handoff,
     openBlockers: handoff.openBlockers.filter(b => b !== MISSION_OWNER_RESTRICTED_BLOCKER),
     updatedAt: new Date().toISOString(),
   });
+  if (lease) await deepAgentHandoffRepository.releaseWakeClaim(agentId, lease);
 }

@@ -366,11 +366,15 @@ describe('processWake', () => {
 
     it('clears a stale account blocker and wakes once the owner is healthy again', async () => {
       const store = seedStore([MISSION_OWNER_RESTRICTED_BLOCKER, 'other blocker']);
+      const lease = new Date(Date.now() + 15 * 60 * 1000);
+      vi.spyOn(deepAgentHandoffRepository, 'findByAgentId').mockResolvedValue({ nextWakeAt: lease } as never);
+      const release = vi.spyOn(deepAgentHandoffRepository, 'releaseWakeClaim').mockResolvedValue(undefined as never);
 
       await processWake({ agentId: 'agent-1' }, new Logger(), { deps: fakeDeps(store) });
 
       expect(store.episodes).toHaveLength(1);
       expect(store.handoffs.get('agent-1')!.openBlockers).not.toContain(MISSION_OWNER_RESTRICTED_BLOCKER);
+      expect(release).toHaveBeenCalledWith('agent-1', lease);
     });
   });
 });

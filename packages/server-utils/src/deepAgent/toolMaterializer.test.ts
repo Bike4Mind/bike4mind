@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Logger } from '@bike4mind/observability';
+import { usdToCredits } from '@bike4mind/utils';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 
 // Collaborators of the materializer, stubbed so the REAL buildSharedTools still runs: a mocked
@@ -82,16 +83,21 @@ const billing = vi.hoisted(() => ({
   reserve: vi.fn(),
   settle: vi.fn(),
   estimate: vi.fn(),
+  capExceeded: vi.fn(),
 }));
 vi.mock('../billing/meterPlatformCompletion', () => ({
   isCreditsEnforced: billing.isCreditsEnforced,
   reserveCompletionCredits: billing.reserve,
   settleCompletion: billing.settle,
 }));
-vi.mock('@bike4mind/services', async importOriginal => ({
-  ...((await importOriginal()) as Record<string, unknown>),
-  estimateGeneratedMediaUsd: billing.estimate,
-}));
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = (await importOriginal()) as Record<string, unknown> & { creditService: Record<string, unknown> };
+  return {
+    ...actual,
+    estimateGeneratedMediaUsd: billing.estimate,
+    creditService: { ...actual.creditService, isMemberCreditCapExceeded: billing.capExceeded },
+  };
+});
 
 const { createDeepAgentToolMaterializer } = await import('./toolMaterializer');
 const { organizationRepository, questRepository, sessionRepository, userRepository } =
@@ -214,33 +220,68 @@ describe('createDeepAgentToolMaterializer', () => {
   });
 });
 
-describe('deep agent media tool callbacks', () => {
+describe('deep agent media tools', () => {
   type Callbacks = {
     onToolStart: (n: string, d: unknown) => Promise<void>;
     onToolFinish: (n: string, d: unknown) => Promise<void>;
   };
   const callbacksFor = async () => {
     buildSharedToolsSpy.mockClear();
-    await materialize()(['image_generation'], 'owner-1');
+    await materialize()(['edit_image'], 'owner-1');
     return buildSharedToolsSpy.mock.calls[0][1] as Callbacks;
   };
-  const IMAGE = { model: 'image-model', n: 1 };
+  const toolNamed = async (name: string) => {
+    const tool = (await materialize()([name], 'owner-1')).find(t => t.toolSchema.name === name);
+    if (!tool) throw new Error(`${name} did not materialize`);
+    return tool;
+  };
+  const EDIT = { model: 'image-model', n: 1 };
 
   beforeEach(() => {
     resolveToolAvailabilityMock.mockResolvedValue({});
     billing.isCreditsEnforced.mockReset().mockImplementation(async () => billing.enforced);
     billing.estimate.mockReset().mockImplementation(() => billing.usd);
+    billing.capExceeded.mockReset().mockReturnValue(false);
     billing.reserve.mockReset().mockResolvedValue({ settle: vi.fn() });
     billing.settle.mockReset().mockResolvedValue(1);
     billing.enforced = false;
     billing.usd = 0.04;
   });
 
-  it('refuses a restricted owner before the provider call', async () => {
-    const callbacks = await callbacksFor();
-    vi.mocked(userRepository.findById).mockResolvedValueOnce({ id: 'owner-1', isModerated: true } as never);
+  // image_generation with no preset model answers with its model picker before onToolStart, so the
+  // standing check has to sit on the tool call itself; these drive the materialized tool, not the callbacks.
+  describe('the materialized image_generation call', () => {
+    it('refuses a restricted owner', async () => {
+      const tool = await toolNamed('image_generation');
+      vi.mocked(userRepository.findById).mockResolvedValueOnce({ id: 'owner-1', isModerated: true } as never);
 
-    await expect(callbacks.onToolStart('image_generation', IMAGE)).rejects.toMatchObject({ statusCode: 403 });
+      await expect(tool.toolFn({ prompt: 'a lighthouse' })).rejects.toMatchObject({ statusCode: 403 });
+      expect(billing.reserve).not.toHaveBeenCalled();
+    });
+
+    it('runs for an owner in good standing', async () => {
+      const tool = await toolNamed('image_generation');
+      vi.mocked(userRepository.findById).mockResolvedValueOnce({ id: 'owner-1' } as never);
+
+      await expect(tool.toolFn({ prompt: 'a lighthouse' })).resolves.toMatch(/model selection required/i);
+    });
+
+    it('runs concurrent media calls one at a time', async () => {
+      const tool = await toolNamed('image_generation');
+      let release!: (owner: unknown) => void;
+      vi.mocked(userRepository.findById)
+        .mockClear()
+        .mockImplementationOnce(() => new Promise(resolve => (release = resolve)) as never);
+
+      const first = tool.toolFn({ prompt: 'one' });
+      const second = tool.toolFn({ prompt: 'two' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(userRepository.findById).toHaveBeenCalledTimes(1);
+
+      release({ id: 'owner-1' });
+      await Promise.all([first, second]);
+      expect(vi.mocked(userRepository.findById).mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
   });
 
   it('refuses an owner who cannot cover the media estimate when credits are enforced', async () => {
@@ -248,7 +289,28 @@ describe('deep agent media tool callbacks', () => {
     const callbacks = await callbacksFor();
     vi.mocked(userRepository.findById).mockResolvedValueOnce({ id: 'owner-1', currentCredits: 0 } as never);
 
-    await expect(callbacks.onToolStart('image_generation', IMAGE)).rejects.toMatchObject({ statusCode: 422 });
+    await expect(callbacks.onToolStart('edit_image', EDIT)).rejects.toMatchObject({ statusCode: 422 });
+  });
+
+  it('refuses an org member whose credit cap the estimate would pass', async () => {
+    billing.enforced = true;
+    billing.capExceeded.mockReturnValue(true);
+    const member = { id: 'owner-1', organizationId: 'org-1' };
+    vi.mocked(userRepository.findById).mockResolvedValue(member as never);
+    vi.mocked(organizationRepository.findById).mockResolvedValue({ id: 'org-1', currentCredits: 1_000_000 } as never);
+    try {
+      const callbacks = await callbacksFor();
+
+      await expect(callbacks.onToolStart('edit_image', EDIT)).rejects.toMatchObject({ statusCode: 422 });
+      expect(billing.capExceeded).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'org-1' }),
+        'owner-1',
+        usdToCredits(0.04)
+      );
+    } finally {
+      vi.mocked(userRepository.findById).mockResolvedValue({ _id: 'owner-1', id: 'owner-1' } as never);
+      vi.mocked(organizationRepository.findById).mockResolvedValue(null);
+    }
   });
 
   it('lets an affordable owner through when credits are enforced', async () => {
@@ -256,21 +318,20 @@ describe('deep agent media tool callbacks', () => {
     const callbacks = await callbacksFor();
     vi.mocked(userRepository.findById).mockResolvedValueOnce({ id: 'owner-1', currentCredits: 1_000_000 } as never);
 
-    await expect(callbacks.onToolStart('image_generation', IMAGE)).resolves.toBeUndefined();
+    await expect(callbacks.onToolStart('edit_image', EDIT)).resolves.toBeUndefined();
   });
 
   it('skips the credit check when credits are not enforced', async () => {
     const callbacks = await callbacksFor();
-    vi.mocked(userRepository.findById).mockResolvedValueOnce({ id: 'owner-1', currentCredits: 0 } as never);
 
-    await expect(callbacks.onToolStart('image_generation', IMAGE)).resolves.toBeUndefined();
+    await expect(callbacks.onToolStart('edit_image', EDIT)).resolves.toBeUndefined();
     expect(billing.estimate).not.toHaveBeenCalled();
   });
 
-  it('charges a delivered image once, at the estimated cost, to the owner', async () => {
+  it('charges a delivered edit once, at the estimated cost, to the owner', async () => {
     const callbacks = await callbacksFor();
 
-    await callbacks.onToolFinish('image_generation', IMAGE);
+    await callbacks.onToolFinish('edit_image', EDIT);
 
     expect(billing.reserve).toHaveBeenCalledTimes(1);
     expect(billing.reserve.mock.calls[0][1]).toBe(0.04);
@@ -282,7 +343,7 @@ describe('deep agent media tool callbacks', () => {
     billing.reserve.mockRejectedValueOnce(new Error('insufficient credits'));
     const callbacks = await callbacksFor();
 
-    await expect(callbacks.onToolFinish('image_generation', IMAGE)).resolves.toBeUndefined();
+    await expect(callbacks.onToolFinish('edit_image', EDIT)).resolves.toBeUndefined();
     expect(billing.settle).not.toHaveBeenCalled();
   });
 
@@ -300,7 +361,7 @@ describe('deep agent media tool callbacks', () => {
   it('does not charge a media call that never finished', async () => {
     const callbacks = await callbacksFor();
 
-    await callbacks.onToolStart('image_generation', IMAGE);
+    await callbacks.onToolStart('edit_image', EDIT);
 
     expect(billing.reserve).not.toHaveBeenCalled();
     expect(billing.settle).not.toHaveBeenCalled();
