@@ -339,6 +339,18 @@ describe('deep agent media tools', () => {
     expect(billing.settle.mock.calls[0][2]).toMatchObject({ model: 'image-model', usd: 0.04, inputTokens: 0 });
   });
 
+  it('labels a delivered sound effect by its kind, since it reports no model', async () => {
+    const callbacks = await callbacksFor();
+
+    await callbacks.onToolFinish('audio_generation', {
+      kind: 'sound_effect',
+      provider: 'sfx-vendor',
+      durationSeconds: 3,
+    });
+
+    expect(billing.settle.mock.calls[0][2]).toMatchObject({ model: 'sound_effect', provider: 'sfx-vendor', usd: 0.04 });
+  });
+
   it('logs rather than throws when the charge for delivered media is refused', async () => {
     billing.reserve.mockRejectedValueOnce(new Error('insufficient credits'));
     const callbacks = await callbacksFor();

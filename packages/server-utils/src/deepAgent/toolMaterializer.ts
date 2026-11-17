@@ -135,9 +135,10 @@ async function settleMediaToolFinish(toolName: string, data: unknown, ctx: Media
     const reservation = await reserveCompletionCredits(req, usd, 'mission media', {
       organizationId: ctx.billingOrgId,
     });
-    const { model, provider } = (data ?? {}) as { model?: string; provider?: string };
+    const { model, provider, kind } = (data ?? {}) as { model?: string; provider?: string; kind?: string };
     await settleCompletion(reservation, req, {
-      model: model ?? toolName,
+      // Sound effects report no model, so label them by kind to keep them apart from speech in rollups.
+      model: model ?? (kind === 'sound_effect' ? kind : toolName),
       provider: provider ?? ctx.models.find(m => m.id === model)?.backend ?? 'unknown',
       usd,
       inputTokens: 0,
