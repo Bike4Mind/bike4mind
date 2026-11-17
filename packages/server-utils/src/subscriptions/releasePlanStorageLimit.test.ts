@@ -11,22 +11,9 @@ vi.mock('../models/Subscription', () => ({
 }));
 vi.mock('../utils/cloudwatch', () => ({ emitMetric: mocks.emitMetric }));
 
-import { endsPlanStorageAllowance, releasePlanStorageLimit } from './releasePlanStorageLimit';
+import { releasePlanStorageLimit } from './releasePlanStorageLimit';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-describe('endsPlanStorageAllowance', () => {
-  it.each(['canceled', 'incomplete_expired'] as const)('ends the allowance on %s', status => {
-    expect(endsPlanStorageAllowance(status)).toBe(true);
-  });
-
-  it.each(['active', 'trialing', 'incomplete', 'past_due', 'unpaid', 'paused'] as const)(
-    'keeps the allowance on %s, which Stripe can still bring back',
-    status => {
-      expect(endsPlanStorageAllowance(status)).toBe(false);
-    }
-  );
-});
 
 describe('releasePlanStorageLimit', () => {
   beforeEach(() => {

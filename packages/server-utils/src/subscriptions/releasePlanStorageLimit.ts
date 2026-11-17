@@ -1,16 +1,11 @@
 import { userRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { subscriptionRepository } from '../models/Subscription';
-import { TERMINAL_SUBSCRIPTION_STATUSES } from '../lib/subscriptions/types';
 import { emitMetric } from '../utils/cloudwatch';
-import type Stripe from 'stripe';
-
-/** True for the statuses after which a subscription grants nothing and never resumes (canceled, incomplete_expired). */
-export const endsPlanStorageAllowance = (status: Stripe.Subscription.Status): boolean =>
-  TERMINAL_SUBSCRIPTION_STATUSES.has(status);
 
 /**
- * Takes the plan storage allowance away from a user whose subscription has ended (#7379): clears
+ * Takes the plan storage allowance away from a user whose subscription has ended (#7379; a status in
+ * TERMINAL_SUBSCRIPTION_STATUSES, or customer.subscription.deleted): clears
  * `planStorageLimit`, so the enforced limit falls back to the manual override, or to
  * DEFAULT_STORAGE_LIMIT_MB without one. Nothing stored is deleted; a user left over the new limit
  * keeps read and delete access and the upload checks refuse new bytes.
