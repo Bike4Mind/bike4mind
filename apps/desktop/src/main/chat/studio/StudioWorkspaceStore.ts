@@ -73,6 +73,30 @@ export class StudioWorkspaceStore {
     return this.put(sessionId, 'jobs', studioJobSchema.parse(job), expectedScope);
   }
 
+  getJob(sessionId: string, id: string): Promise<StudioJob | null> {
+    return this.record(sessionId, 'jobs', id, studioJobSchema);
+  }
+
+  getAsset(sessionId: string, id: string): Promise<StudioAsset | null> {
+    return this.record(sessionId, 'assets', id, studioAssetSchema);
+  }
+
+  private async record<T>(sessionId: string, collection: string, id: string, schema: z.ZodType<T>): Promise<T | null> {
+    studioIdSchema.parse(id);
+    const scope = this.sessions.scopeKey();
+    const workspace = await this.locate(sessionId, scope);
+    if (!workspace) return null;
+    try {
+      const record = schema.parse(
+        JSON.parse(await readFile(join(workspace.directory, collection, `${id}.json`), 'utf8'))
+      );
+      return this.sessions.scopeKey() === scope ? record : null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+
   async removeAsset(sessionId: string, assetId: string, expectedScope = this.sessions.scopeKey()): Promise<boolean> {
     studioIdSchema.parse(assetId);
     return (
@@ -104,7 +128,23 @@ export class StudioWorkspaceStore {
         const workspace = await this.locate(sessionId, scope);
         if (!workspace) return false;
         const owner = await this.sessions.resolveStudioWorkspace(record.originatingSessionId, scope);
-        if (owner?.workspaceId !== workspace.identity.workspaceId) return false;
+        if (owner?.workspaceId !== workspace.identity.workspaceId) {
+          const schema = collection === 'assets' ? studioAssetSchema : studioJobSchema;
+          const existing = await readFile(join(workspace.directory, collection, `${record.id}.json`), 'utf8')
+            .then(text => schema.parse(JSON.parse(text)))
+            .catch(() => null);
+          const jobId = 'jobId' in record ? record.jobId : undefined;
+          const job = jobId
+            ? await readFile(join(workspace.directory, 'jobs', `${studioIdSchema.parse(jobId)}.json`), 'utf8')
+                .then(text => studioJobSchema.parse(JSON.parse(text)))
+                .catch(() => null)
+            : null;
+          if (
+            existing?.originatingSessionId !== record.originatingSessionId &&
+            job?.originatingSessionId !== record.originatingSessionId
+          )
+            return false;
+        }
         const directory = join(workspace.directory, collection);
         await mkdir(directory, { recursive: true });
         const temporary = join(directory, `${record.id}.${randomUUID()}.tmp`);
