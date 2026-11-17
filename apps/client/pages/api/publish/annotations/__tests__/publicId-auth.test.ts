@@ -17,6 +17,7 @@ const { mockAuthenticate, mockCreate, mockLoadFindOne } = vi.hoisted(() => ({
 }));
 
 // Run the .use() middlewares in order before the method handler, so the real optionalAuth executes.
+vi.mock('@bike4mind/server-utils/auth/sideAppRefusal', () => ({ recordSideAppRefusal: vi.fn() }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const mws: ((req: unknown, res: unknown, next: () => void) => unknown)[] = [];
