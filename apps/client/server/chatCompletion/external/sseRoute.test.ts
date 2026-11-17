@@ -887,14 +887,14 @@ describe('POST /api/ai/v1/completions - pre-stream failures are JSON with a real
     );
   });
 
-  it('leaves the key creator out of the subject for an org-billed key', async () => {
+  it('keeps the acting user in the subject of an org-billed key', async () => {
     mockResolveContractAuth.mockResolvedValue({
       method: 'apiKey',
       userId: 'user-1',
       apiKeyInfo: { keyId: 'key-1', userId: 'user-1', billingOwnerType: 'Organization', organizationId: 'org-1' },
     });
     await (await post()).text();
-    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: null, organizationId: 'org-1', apiKeyId: 'key-1' });
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'user-1', organizationId: 'org-1', apiKeyId: 'key-1' });
   });
 
   it('answers a catalogued model without a backend with 503 provider_not_configured', async () => {

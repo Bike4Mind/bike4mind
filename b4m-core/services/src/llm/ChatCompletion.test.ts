@@ -6331,7 +6331,7 @@ describe('ChatCompletionProcess', () => {
         }
       );
 
-      it('drops the creating user from the subject of an org-billed key turn', async () => {
+      it('keeps the acting user in the subject of an org-billed key turn', async () => {
         reservationOrgSetup();
         fundedOrg();
         mockQuest.sessionId = 'session1';
@@ -6348,7 +6348,7 @@ describe('ChatCompletionProcess', () => {
         });
 
         expect(mockDb.spendFreezes.findActiveForSubject).toHaveBeenCalledWith({
-          userId: null,
+          userId: 'user1',
           organizationId: 'org1',
           apiKeyId: 'key-1',
         });

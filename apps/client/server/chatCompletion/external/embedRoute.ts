@@ -531,12 +531,12 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       const actorUserId = ctx.endUserId ?? ctx.userId;
 
       // Spend freeze first, on the same subject executeCompletion would check, and before any stream bytes
-      // so it can 403. An anonymous visitor spends the owner org's money, so the key owner is not the subject.
+      // so it can 403. An anonymous visitor spends the owner org's money under the key's own user.
       const embedBillingOwnerType = ctx.endUserId ? undefined : CreditHolderType.Organization;
       try {
         await assertSpendNotFrozen(
           spendFreezeSubjectForRequest(
-            { user: { id: actorUserId }, apiKeyInfo: { keyId: ctx.keyId, billingOwnerType: embedBillingOwnerType } },
+            { user: { id: actorUserId }, apiKeyInfo: { keyId: ctx.keyId } },
             ctx.endUserId ? null : ctx.organizationId
           ),
           { db: { spendFreezes: spendFreezeRepository } }

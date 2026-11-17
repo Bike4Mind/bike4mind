@@ -31,7 +31,6 @@ import {
   creditTransactionRepository,
   apiKeyRepository,
   spendFreezeRepository,
-  userApiKeyRepository,
   fabFileRepository,
   FabFile,
   fabFileChunkRepository,
@@ -838,7 +837,6 @@ async function readUserAccessDenial(userId: string): Promise<string | null> {
 
 const spendFreezeReadDeps: SpendFreezeDenialDeps = {
   spendFreezes: spendFreezeRepository,
-  readKeyBillingOwnerType: async apiKeyId => (await userApiKeyRepository.findById(apiKeyId))?.billingOwnerType,
 };
 
 /**

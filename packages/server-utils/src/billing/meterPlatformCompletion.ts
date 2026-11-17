@@ -346,8 +346,8 @@ type CompletionMeterOptions = {
    */
   apiKeyId?: string;
   /**
-   * That key's billing owner type. Only `Organization` drops the user from the freeze subject; unset keeps
-   * the user, so a caller that cannot tell over-checks rather than skips.
+   * That key's billing owner type. No longer read by the spend freeze check, which keeps the acting user for
+   * every key.
    */
   apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
 };
@@ -386,9 +386,7 @@ export function createRequestCompletionMeter(
     const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens, false, tools);
     const reservation = await reserveCompletionCredits(req, ceilingUsd * turns, featureLabel, {
       organizationId: opts.organizationId,
-      spendFreezeApiKey: opts.apiKeyId
-        ? { keyId: opts.apiKeyId, billingOwnerType: opts.apiKeyBillingOwnerType }
-        : undefined,
+      spendFreezeApiKey: opts.apiKeyId ? { keyId: opts.apiKeyId } : undefined,
     });
     return {
       refund: () => reservation.refund(),

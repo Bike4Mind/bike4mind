@@ -120,7 +120,10 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   adminRoleWithheld: z.boolean().optional(),
   /** The UserApiKey that authenticated the request; recorded on the settled ledger row. */
   apiKeyId: z.string().optional(),
-  /** Whether that key bills its owner or an organization; only an org-billed key drops the user from the spend freeze check. */
+  /**
+   * Whether that key bills its owner or an organization. No longer read by the spend freeze check, which keeps
+   * the acting user for every key.
+   */
   apiKeyBillingOwnerType: z.enum([CreditHolderType.User, CreditHolderType.Organization]).optional(),
   // `n` is inherited from OpenAIImageGenerationInput (1-10, the range generation honors) and
   // deliberately left alone: editing renders IMAGES_PER_EDIT_REQUEST whatever it says, so it is
@@ -688,7 +691,6 @@ export class ImageEditService {
             userId,
             organizationId: organization ? organization.id : null,
             apiKeyId,
-            apiKeyBillingOwnerType,
           }),
           { db: { spendFreezes: this.db.spendFreezes } }
         );

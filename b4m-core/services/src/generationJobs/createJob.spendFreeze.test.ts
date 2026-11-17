@@ -69,7 +69,7 @@ describe('holdJobCredits spend freeze', () => {
     });
   });
 
-  it('leaves the creator out for an org-billed key', async () => {
+  it('keeps the acting user on an org-billed key', async () => {
     const { deps } = makeDeps(null);
     await holdJobCredits(
       {
@@ -81,7 +81,7 @@ describe('holdJobCredits spend freeze', () => {
       deps
     );
     expect(deps.credits.spendFreezes.findActiveForSubject).toHaveBeenCalledWith({
-      userId: null,
+      userId: 'u1',
       organizationId: 'o1',
       apiKeyId: 'k1',
     });

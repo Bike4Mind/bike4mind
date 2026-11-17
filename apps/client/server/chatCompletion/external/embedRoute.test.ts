@@ -1214,11 +1214,11 @@ describe('POST /api/embed/chat - identified mode', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
-  it('checks the org and key, not the key owner, for an anonymous visitor', async () => {
+  it('checks the org, the key and the key user for an anonymous visitor', async () => {
     const res = await post(CHAT);
     await res.text();
     expect(mockFindActiveFreeze).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: null, apiKeyId: expect.any(String) })
+      expect.objectContaining({ userId: 'user-1', apiKeyId: expect.any(String) })
     );
     expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ spendFreezeChecked: true }));
   });

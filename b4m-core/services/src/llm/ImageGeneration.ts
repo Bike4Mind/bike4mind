@@ -135,7 +135,10 @@ export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
   adminRoleWithheld: z.boolean().optional(),
   /** The UserApiKey that authenticated the request; recorded on the settled ledger row. */
   apiKeyId: z.string().optional(),
-  /** Whether that key bills its owner or an organization; only an org-billed key drops the user from the spend freeze check. */
+  /**
+   * Whether that key bills its owner or an organization. No longer read by the spend freeze check, which keeps
+   * the acting user for every key.
+   */
   apiKeyBillingOwnerType: z.enum([CreditHolderType.User, CreditHolderType.Organization]).optional(),
 });
 export type ImageGenerationBody = z.infer<typeof ImageGenerationBodySchema>;
@@ -1059,7 +1062,6 @@ export class ImageGenerationService {
             userId,
             organizationId: organization ? organization.id : null,
             apiKeyId,
-            apiKeyBillingOwnerType,
           }),
           { db: { spendFreezes: this.db.spendFreezes } }
         );

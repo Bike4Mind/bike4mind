@@ -204,7 +204,7 @@ export async function reserveVoiceHold(args: {
   unaffordable: () => Error;
   /** Organization the caller spends under, for the spend freeze check. */
   organizationId: string | null;
-  /** Server-derived from the API key (never the client): an org-billed key is checked without its creator. */
+  /** Server-derived from the API key. No longer read by the spend freeze check, which keeps the acting user. */
   apiKeyBillingOwnerType?: CreditHolderType;
   spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
   /** The apps pass theirs, which alert LiveOps on a refusal; this package cannot import them. */
@@ -214,7 +214,7 @@ export async function reserveVoiceHold(args: {
     spendFreezeSubjectForRequest(
       {
         user: { id: args.userId },
-        apiKeyInfo: args.apiKeyId ? { keyId: args.apiKeyId, billingOwnerType: args.apiKeyBillingOwnerType } : undefined,
+        apiKeyInfo: args.apiKeyId ? { keyId: args.apiKeyId } : undefined,
       },
       args.organizationId
     ),

@@ -272,7 +272,7 @@ describe('reserveVoiceHold', () => {
     expect(incrementCredits).not.toHaveBeenCalled();
   });
 
-  it('checks the key and organization but not the creator for an org-billed key', async () => {
+  it('checks the key, the organization and the acting user for an org-billed key', async () => {
     await reserveVoiceHold({
       ...RESERVE,
       apiKeyId: 'key-1',
@@ -280,7 +280,7 @@ describe('reserveVoiceHold', () => {
       organizationId: 'org-1',
     });
 
-    expect(findActiveForSubject).toHaveBeenCalledWith({ userId: null, organizationId: 'org-1', apiKeyId: 'key-1' });
+    expect(findActiveForSubject).toHaveBeenCalledWith({ userId: 'u1', organizationId: 'org-1', apiKeyId: 'key-1' });
   });
 
   it('lets a read error propagate with nothing moved', async () => {

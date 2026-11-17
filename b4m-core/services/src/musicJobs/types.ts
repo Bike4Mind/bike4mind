@@ -84,7 +84,10 @@ export type CreateMusicJobInput = {
   source: GenerationJobSource;
   /** The UserApiKey that authenticated the request, kept on the job for its settlement row. */
   apiKeyId?: string;
-  /** Whether that key bills its owner or an organization; only an org-billed key drops the user from the spend freeze check. */
+  /**
+   * Whether that key bills its owner or an organization. No longer read by the spend freeze check, which keeps
+   * the acting user for every key.
+   */
   apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
   idempotencyKey?: string;
   /** The notebook and message the song belongs to, for in-chat producers. */

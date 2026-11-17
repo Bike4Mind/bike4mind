@@ -236,7 +236,10 @@ export interface CompletionParams {
    * serving an identified end user, who is billed personally). Ignored when `billingOrganizationId` is set.
    */
   governingOrgModelPolicy?: unknown;
-  /** Whether the authenticating key bills its owner or an organization; only an org-billed key drops the user from the spend freeze check. */
+  /**
+   * Whether the authenticating key bills its owner or an organization. No longer read by the spend freeze check,
+   * which keeps the acting user for every key.
+   */
   apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
   /** The caller already ran assertSpendNotFrozen for this request (ahead of its own cap checks); skips the second lookup. */
   spendFreezeChecked?: boolean;
@@ -747,7 +750,6 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         userId,
         organizationId: params.billingOrganizationId ?? null,
         apiKeyId: apiKeyInfo?.keyId,
-        apiKeyBillingOwnerType: params.apiKeyBillingOwnerType,
       }),
       { db: { spendFreezes: db.spendFreezes } }
     );

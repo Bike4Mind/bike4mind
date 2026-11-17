@@ -354,9 +354,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
         spendFreezeSubjectForRequest(
           {
             user: { id: params.userId },
-            apiKeyInfo: params.apiKeyId
-              ? { keyId: params.apiKeyId, billingOwnerType: params.apiKeyBillingOwnerType }
-              : undefined,
+            apiKeyInfo: params.apiKeyId ? { keyId: params.apiKeyId } : undefined,
           },
           params.organizationId ?? null
         ),

@@ -190,9 +190,9 @@ describe('POST /api/v1/voice/sessions - spend freeze', () => {
     expect(h.signToken).not.toHaveBeenCalled();
   });
 
-  it('checks the key but not its creator for an org-billed key, and mints the billing owner type', async () => {
+  it('checks the key and its user for an org-billed key, and mints the billing owner type', async () => {
     await run({ ...key, billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org' });
-    expect(h.findFreeze).toHaveBeenCalledWith({ userId: null, organizationId: 'key-org', apiKeyId: 'key-1' });
+    expect(h.findFreeze).toHaveBeenCalledWith({ userId: 'owner-1', organizationId: 'key-org', apiKeyId: 'key-1' });
     expect(h.signToken.mock.calls[0][0]).toMatchObject({ apiKeyBillingOwnerType: CreditHolderType.Organization });
     expect(h.reserve).toHaveBeenCalledWith(
       expect.objectContaining({ apiKeyBillingOwnerType: CreditHolderType.Organization, apiKeyId: 'key-1' })
@@ -225,7 +225,7 @@ describe('POST /api/v1/voice/sessions - spend freeze', () => {
       organizationId: 'key-org',
     }).catch((e: unknown) => e);
     expect(refusal).toMatchObject({ statusCode: 403, additionalInfo: { errorCode: 'spend_frozen' } });
-    expect(h.findFreeze).toHaveBeenCalledWith({ userId: null, organizationId: 'key-org', apiKeyId: 'key-1' });
+    expect(h.findFreeze).toHaveBeenCalledWith({ userId: 'owner-1', organizationId: 'key-org', apiKeyId: 'key-1' });
     expect(h.signToken).not.toHaveBeenCalled();
   });
 

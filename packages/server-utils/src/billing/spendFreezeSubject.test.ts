@@ -30,21 +30,12 @@ describe('spendFreezeSubjectForRequest', () => {
     });
   });
 
-  it('leaves the creator out for an org-billed key', () => {
+  it('keeps the minting user on an org-billed key, so a frozen user cannot spend through it', () => {
     const apiKeyInfo = { keyId: 'k1', billingOwnerType: CreditHolderType.Organization };
-    expect(spendFreezeSubjectForRequest({ user, apiKeyInfo }, 'org1')).toEqual({
-      userId: null,
-      organizationId: 'org1',
-      apiKeyId: 'k1',
-    });
-  });
-
-  it('keeps the user for an org-billed caller with no key id', () => {
-    const apiKeyInfo = { billingOwnerType: CreditHolderType.Organization };
     expect(spendFreezeSubjectForRequest({ user, apiKeyInfo }, 'org1')).toEqual({
       userId: 'u1',
       organizationId: 'org1',
-      apiKeyId: null,
+      apiKeyId: 'k1',
     });
   });
 });

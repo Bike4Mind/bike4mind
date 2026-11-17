@@ -104,7 +104,7 @@ describe('executeCompletion spend freeze', () => {
     });
   });
 
-  it('leaves the creating user out of an org-billed key turn', async () => {
+  it('keeps the acting user on an org-billed key turn', async () => {
     const db = buildDb();
     await run(db, {
       apiKeyInfo: { keyId: 'key-1', keyName: 'k' },
@@ -112,7 +112,7 @@ describe('executeCompletion spend freeze', () => {
       billingOrganizationId: 'org1',
     });
     expect(db.spendFreezes.findActiveForSubject).toHaveBeenCalledWith({
-      userId: null,
+      userId: 'user1',
       organizationId: 'org1',
       apiKeyId: 'key-1',
     });

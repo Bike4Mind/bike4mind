@@ -27,8 +27,8 @@ export const VoiceSessionContextSchema = z
     authOrigin: AuthOriginSchema.optional(),
     // The `b4m_live_` key that minted the token, when one did, forwarded as ToolContext.apiKeyId.
     apiKeyId: z.string().min(1).optional(),
-    // Who that key bills, from the minting request's verified key info. The proxy's spend freeze checks drop
-    // the creator for an org-billed key. Optional: a token minted before the claim checks the user too.
+    // Who that key bills, from the minting request's verified key info. No longer read by the spend freeze
+    // check, which keeps the acting user for every key.
     apiKeyBillingOwnerType: z.enum([CreditHolderType.User, CreditHolderType.Organization]).optional(),
     // That key lacks the admin scope, so the proxy withholds the owner's admin role on its reload.
     adminRoleWithheld: z.boolean().optional(),

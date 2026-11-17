@@ -252,7 +252,7 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
     );
   });
 
-  it("forwards the token's key billing owner type to invoke() and the process() body, so an org-billed key skips its creator's freeze", async () => {
+  it("forwards the token's key billing owner type to invoke() and the process() body", async () => {
     mockVerifyVoiceSessionToken.mockReturnValue({
       userId: 'user-1',
       sessionId: 'session-1',

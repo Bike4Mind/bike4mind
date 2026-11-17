@@ -1,12 +1,12 @@
 import { CreditHolderType, type SpendFreezeSubject } from '@bike4mind/common';
 
 /**
- * Who a request spends as, for the spend freeze check. An org-billed API key spends the organization's
- * money, so it carries the key and org but not its creator: a frozen creator must not stop the org's
- * integration. Every other caller carries the user.
+ * Who a request spends as, for the spend freeze check: the acting user, the billing org and the key, for every
+ * key. An org-owned key authenticates as the organization's service account, so its user is that account;
+ * keeping the user on an org-billed key a person minted means a frozen user cannot spend through it.
  */
 // Structural slice of Express.ApiKeyInfo, whose augmentation lives in apps/client/global.d.ts.
-export type SpendFreezeApiKey = { billingOwnerType?: CreditHolderType; keyId?: string };
+export type SpendFreezeApiKey = { keyId?: string };
 
 export function spendFreezeSubjectForRequest(
   req: {
@@ -15,12 +15,10 @@ export function spendFreezeSubjectForRequest(
   },
   billingOrganizationId: string | null
 ): SpendFreezeSubject {
-  const keyId = req.apiKeyInfo?.keyId ?? null;
-  const orgBilledKey = !!keyId && req.apiKeyInfo?.billingOwnerType === CreditHolderType.Organization;
   return {
-    userId: orgBilledKey ? null : (req.user?.id ?? null),
+    userId: req.user?.id ?? null,
     organizationId: billingOrganizationId,
-    apiKeyId: keyId,
+    apiKeyId: req.apiKeyInfo?.keyId ?? null,
   };
 }
 

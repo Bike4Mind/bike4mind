@@ -136,7 +136,6 @@ const childDoc = {
 
 // The account stays active throughout; only the spend freeze varies.
 const mockFindActiveFreeze = vi.fn();
-const mockKeyRecordRead = vi.fn();
 const mockMarkFailed = vi.fn().mockResolvedValue(undefined);
 const mockMarkComplete = vi.fn().mockResolvedValue(undefined);
 const mockMarkAborted = vi.fn().mockResolvedValue(undefined);
@@ -158,7 +157,6 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(actual.spendFreezeRepository, 'findActiveForSubject').mockImplementation((...args) =>
     mockFindActiveFreeze(...args)
   );
-  vi.spyOn(actual.userApiKeyRepository, 'findById').mockImplementation((...args) => mockKeyRecordRead(...args));
   vi.spyOn(actual.User, 'findById').mockResolvedValue({ id: 'user-1', currentCredits: 100 } as never);
   // disableUserIntegrations short-circuits loadMcpToolsForSession to an empty pool - no MCP wiring.
   vi.spyOn(actual.sessionRepository, 'findById').mockResolvedValue({
@@ -209,7 +207,6 @@ describe('processSubagentDispatch spend freeze', () => {
     orchestrator.throwsAfterRun = false;
     mockCheckAbortFlag.mockResolvedValue(false);
     mockFindActiveFreeze.mockResolvedValue(null);
-    mockKeyRecordRead.mockResolvedValue({ id: 'key-1', billingOwnerType: 'Organization' });
   });
 
   it('refuses a subagent whose API key was frozen before dispatch, with no provider call', async () => {
@@ -251,24 +248,14 @@ describe('processSubagentDispatch spend freeze', () => {
     expect(mockMarkAborted).not.toHaveBeenCalled();
   });
 
-  it('checks an org-billed key without its creator, so a frozen creator does not stop it', async () => {
-    const { handler } = await import('./agentExecutor');
-
-    await handler(dagNodeDispatchEvent(), ctx);
-
-    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: null, organizationId: 'org-1', apiKeyId: 'key-1' });
-    expect(providerCalls.count).toBe(ITERATIONS);
-    expect(mockMarkComplete).toHaveBeenCalledTimes(1);
-    expect(mockMarkFailed).not.toHaveBeenCalled();
-  });
-
-  it('keeps the creator in the subject of a personal-billed key', async () => {
-    mockKeyRecordRead.mockResolvedValue({ id: 'key-1', billingOwnerType: 'User' });
+  it('checks the run user, the billed organization and the key', async () => {
     const { handler } = await import('./agentExecutor');
 
     await handler(dagNodeDispatchEvent(), ctx);
 
     expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'user-1', organizationId: 'org-1', apiKeyId: 'key-1' });
+    expect(providerCalls.count).toBe(ITERATIONS);
     expect(mockMarkComplete).toHaveBeenCalledTimes(1);
+    expect(mockMarkFailed).not.toHaveBeenCalled();
   });
 });

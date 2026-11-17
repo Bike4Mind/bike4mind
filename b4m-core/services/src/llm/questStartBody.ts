@@ -68,8 +68,8 @@ export const QuestStartBodySchema = z
      */
     apiKeyId: z.string().optional(),
     /**
-     * Whether that key bills its owner or an organization. Server-set like `apiKeyId`; only an org-billed key
-     * drops the acting user from the spend freeze check, and an absent type checks the user.
+     * Whether that key bills its owner or an organization. Server-set like `apiKeyId`. No longer read by the spend
+     * freeze check, which keeps the acting user for every key.
      */
     apiKeyBillingOwnerType: z.enum([CreditHolderType.User, CreditHolderType.Organization]).optional(),
     /**

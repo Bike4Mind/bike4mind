@@ -1,4 +1,4 @@
-import { isSpendFrozenError, type ApiKeyBillingOwnerType, type ISpendFreezeRepository } from '@bike4mind/common';
+import { isSpendFrozenError, type ISpendFreezeRepository } from '@bike4mind/common';
 import { creditService } from '@bike4mind/services';
 import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 
@@ -11,32 +11,22 @@ export type SpendFreezeRun = {
 
 export type SpendFreezeDenialDeps = {
   spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
-  /** Billing owner of the API key record; undefined when the key or its type is missing. */
-  readKeyBillingOwnerType: (apiKeyId: string) => Promise<ApiKeyBillingOwnerType | undefined>;
 };
 
 /**
  * Reads whether any scope the run spends under is frozen: the refusal message, or null when spend is allowed.
- * Always a live read (a freeze lands mid-run). The key's billing owner type is resolved once per reader, since
- * an org-billed key spends the organization's money and must not be stopped by a frozen creator. A failed read
- * propagates so the caller decides: the run fails closed (the outer catch marks it failed and acks), like the account gate; subagent checks fail closed too.
+ * Always a live read (a freeze lands mid-run). A failed read propagates so the caller decides: the run fails closed
+ * (the outer catch marks it failed and acks), like the account gate; subagent checks fail closed too.
  */
 export function createSpendFreezeDenialReader(
   run: SpendFreezeRun,
   deps: SpendFreezeDenialDeps
 ): () => Promise<string | null> {
-  let billingOwnerType: Promise<ApiKeyBillingOwnerType | undefined> | undefined;
-  const resolveBillingOwnerType = () => {
-    if (!run.apiKeyId) return Promise.resolve(undefined);
-    billingOwnerType ??= deps.readKeyBillingOwnerType(run.apiKeyId);
-    return billingOwnerType;
-  };
-
   return async () => {
     const subject = spendFreezeSubjectForRequest(
       {
         user: { id: run.userId },
-        apiKeyInfo: { billingOwnerType: await resolveBillingOwnerType(), keyId: run.apiKeyId ?? undefined },
+        apiKeyInfo: { keyId: run.apiKeyId ?? undefined },
       },
       run.organizationId ?? null
     );

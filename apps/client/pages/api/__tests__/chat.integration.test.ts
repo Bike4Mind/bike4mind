@@ -970,7 +970,7 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
         );
       });
 
-      it('checks the freeze against the key org and key, never the holder', async () => {
+      it('checks the freeze against the key org, the key and its user', async () => {
         mockFindActiveFreeze.mockResolvedValueOnce({
           scopeType: 'Organization',
           frozenAt: new Date('2026-11-01T00:00:00Z'),
@@ -979,7 +979,7 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
         await handler(req, res);
         expect(res._getStatusCode()).toBe(403);
         expect(res._getJSONData()).toMatchObject({ errorCode: 'spend_frozen', frozenScope: 'organization' });
-        expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: null, organizationId: orgId, apiKeyId: 'k1' });
+        expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'user-1', organizationId: orgId, apiKeyId: 'k1' });
         expect(mockInvoke).not.toHaveBeenCalled();
       });
 

@@ -243,7 +243,7 @@ describe('runLakeSemanticSearch billing owner and source', () => {
       input()
     );
 
-    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: null, organizationId: 'key-org', apiKeyId: 'key-1' });
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: 'key-org', apiKeyId: 'key-1' });
   });
 
   it("still checks an org-billed key's org when the holder read fails", async () => {
@@ -254,7 +254,7 @@ describe('runLakeSemanticSearch billing owner and source', () => {
       input()
     );
 
-    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: null, organizationId: 'key-org', apiKeyId: 'key-1' });
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: 'key-org', apiKeyId: 'key-1' });
   });
 
   // The toggle alone is off; billing applies only once the helper sees this holder (free tier).

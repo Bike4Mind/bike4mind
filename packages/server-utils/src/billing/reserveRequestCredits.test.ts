@@ -210,13 +210,13 @@ describe('reserveRequestCredits', () => {
       expect(findActiveFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: null, apiKeyId: 'key1' });
     });
 
-    it('checks an org-billed key without its creator, so a frozen creator does not stop the org', async () => {
+    it('checks an org-billed key with its acting user, so a frozen user cannot spend through it', async () => {
       orgFindById.mockResolvedValue({ id: 'org1', currentCredits: 100, userDetails: [], users: [{ userId: 'u1' }] });
       orgIncrement.mockResolvedValue({ currentCredits: 95 });
       const req = userReq({ keyId: 'key1', billingOwnerType: CreditHolderType.Organization, organizationId: 'org1' });
       await reserve(req, true);
       expect(findActiveFreeze).toHaveBeenCalledTimes(1);
-      expect(findActiveFreeze).toHaveBeenCalledWith({ userId: null, organizationId: 'org1', apiKeyId: 'key1' });
+      expect(findActiveFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: 'org1', apiKeyId: 'key1' });
     });
 
     it('checks the owner of a user-billed key as the user', async () => {

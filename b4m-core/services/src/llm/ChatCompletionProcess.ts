@@ -3124,7 +3124,6 @@ export class ChatCompletionProcess {
           userId: this.user.id,
           organizationId: organization?.id ?? null,
           apiKeyId: this.turnApiKeyId,
-          apiKeyBillingOwnerType: parsedBody.apiKeyBillingOwnerType,
         }),
         { db: { spendFreezes: this.db.spendFreezes } }
       );

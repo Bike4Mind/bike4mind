@@ -411,7 +411,11 @@ describe('processQuest', () => {
     it('leaves the creating user out of an org-billed key turn and carries the billing org', async () => {
       mockFindActiveFreeze.mockClear();
       await run({ apiKeyId: 'key-1', apiKeyBillingOwnerType: 'Organization', organizationId: 'org-1' });
-      expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: null, organizationId: 'org-1', apiKeyId: 'key-1' });
+      expect(mockFindActiveFreeze).toHaveBeenCalledWith({
+        userId: 'user-1',
+        organizationId: 'org-1',
+        apiKeyId: 'key-1',
+      });
     }, 120_000);
 
     it('checks the user on a session turn', async () => {

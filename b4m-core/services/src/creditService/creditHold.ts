@@ -88,7 +88,10 @@ export async function holdCredits(
     logger: ILogger;
     /** The UserApiKey that authenticated the request, when there is one; its freeze is checked too. */
     apiKeyId?: string | null;
-    /** Whether that key bills its owner or an organization; only an org-billed key drops the user from the spend freeze check. */
+    /**
+     * Whether that key bills its owner or an organization. No longer read by the spend freeze check, which keeps
+     * the acting user for every key.
+     */
     apiKeyBillingOwnerType?: ApiKeyBillingOwnerType | null;
     /** The caller already ran assertSpendNotFrozen for this reservation; skips the second lookup. */
     spendFreezeChecked?: boolean;
@@ -122,7 +125,6 @@ export async function holdCredits(
         userId,
         organizationId,
         apiKeyId: params.apiKeyId,
-        apiKeyBillingOwnerType: params.apiKeyBillingOwnerType,
       }),
       {
         db: { spendFreezes: adapters.spendFreezes },

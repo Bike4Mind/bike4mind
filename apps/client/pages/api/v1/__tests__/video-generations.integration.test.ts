@@ -362,7 +362,7 @@ describe('POST /api/v1/video-generations', () => {
       h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
     });
 
-    it('carries the key billing owner type to the job so only an org-billed key drops its creator from the freeze check', async () => {
+    it('carries the key billing owner type to the job', async () => {
       orgKey();
       const first = post(base);
       await handler(first.req, first.res);

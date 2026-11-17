@@ -400,12 +400,14 @@ describe('meterPlatformCompletion credits', () => {
     // clearAllMocks keeps implementations, so the freeze stub would leak into later describes.
     afterEach(() => m.findFreeze.mockImplementation(async () => null));
 
-    it("does not refuse an org-billed key's turn when only its creator is frozen", async () => {
+    it("refuses an org-billed key's turn when its acting user is frozen", async () => {
       frozenWhen(subject => subject.userId === 'u1');
 
-      await expect(meterFor(CreditHolderType.Organization)).resolves.toBeDefined();
+      await expect(meterFor(CreditHolderType.Organization)).rejects.toMatchObject({
+        additionalInfo: { errorCode: 'spend_frozen' },
+      });
       expect(m.findFreeze).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: null, organizationId: 'o1', apiKeyId: 'k-org' })
+        expect.objectContaining({ userId: 'u1', organizationId: 'o1', apiKeyId: 'k-org' })
       );
     });
 
@@ -797,14 +799,14 @@ describe('assertRequestCanAfford', () => {
     expect(m.orgFindById).toHaveBeenCalledWith('seat');
   });
 
-  it('checks an org-billed key against its org and key, not the holder', async () => {
+  it('checks an org-billed key against its org, the key and its user', async () => {
     m.findFreeze.mockResolvedValueOnce({ scopeType: 'apiKey', frozenAt: new Date('2026-11-01T00:00:00Z') });
     await expect(
       assertRequestCanAfford(
         keyReq({ billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org', keyId: 'k1' })
       )
     ).rejects.toMatchObject({ statusCode: 403, additionalInfo: { errorCode: 'spend_frozen', frozenScope: 'api_key' } });
-    expect(m.findFreeze).toHaveBeenCalledWith({ userId: null, organizationId: 'key-org', apiKeyId: 'k1' });
+    expect(m.findFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: 'key-org', apiKeyId: 'k1' });
     expect(m.orgFindById).not.toHaveBeenCalled();
   });
 

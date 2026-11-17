@@ -318,14 +318,14 @@ describe('POST /api/sessions/semantic-search metering', () => {
     expect(m.embed).not.toHaveBeenCalled();
   });
 
-  it('checks an org-billed key against its org and key, not the holder', async () => {
+  it('checks an org-billed key against its org, the key and its user', async () => {
     m.findOrg.mockResolvedValue({ id: 'o2', currentCredits: 50 });
     m.findFreeze.mockResolvedValue({ scopeType: 'Organization', frozenAt: new Date('2026-11-01T00:00:00Z') });
 
     await expect(
       call(0, undefined, { billingOwnerType: 'Organization', organizationId: 'o2', keyId: 'k1' })
     ).rejects.toMatchObject({ statusCode: 403, additionalInfo: { errorCode: 'spend_frozen' } });
-    expect(m.findFreeze).toHaveBeenCalledWith({ userId: null, organizationId: 'o2', apiKeyId: 'k1' });
+    expect(m.findFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: 'o2', apiKeyId: 'k1' });
     expect(m.complete).not.toHaveBeenCalled();
   });
 

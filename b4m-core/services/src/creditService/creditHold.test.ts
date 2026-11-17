@@ -277,7 +277,7 @@ describe('holdCredits spend freeze', () => {
     expect(state.org).toBe(100);
   });
 
-  it('refuses a frozen API key when one is given, and checks it without the creator for an org-billed key', async () => {
+  it('refuses a frozen API key when one is given, and checks it with the acting user for an org-billed key', async () => {
     const { adapters, state } = makeAdapters({ user: 100, org: 100 });
     vi.mocked(adapters.spendFreezes.findActiveForSubject).mockResolvedValueOnce(frozen('apiKey') as ISpendFreeze);
     const error = await hold(adapters, {
@@ -288,7 +288,7 @@ describe('holdCredits spend freeze', () => {
     expect(isSpendFrozenError(error)).toBe(true);
     expect(state.org).toBe(100);
     expect(adapters.spendFreezes.findActiveForSubject).toHaveBeenCalledWith({
-      userId: null,
+      userId: 'u1',
       organizationId: 'o1',
       apiKeyId: 'k1',
     });
@@ -308,14 +308,18 @@ describe('holdCredits spend freeze', () => {
     expect(state.org).toBe(100);
   });
 
-  it('lets an org-billed key through when only its creator is frozen', async () => {
-    const { adapters } = makeAdapters({ user: 100, org: 100 });
+  it('refuses a frozen user spending through an org-billed key', async () => {
+    const { adapters, state } = makeAdapters({ user: 100, org: 100 });
     vi.mocked(adapters.spendFreezes.findActiveForSubject).mockImplementation(async subject =>
       subject.userId === 'u1' ? (frozen('User') as ISpendFreeze) : null
     );
-    await expect(
-      hold(adapters, { organizationId: 'o1', apiKeyId: 'k1', apiKeyBillingOwnerType: CreditHolderType.Organization })
-    ).resolves.toMatchObject({ ownerType: CreditHolderType.Organization });
+    const error = await hold(adapters, {
+      organizationId: 'o1',
+      apiKeyId: 'k1',
+      apiKeyBillingOwnerType: CreditHolderType.Organization,
+    }).catch((err: unknown) => err);
+    expect(isSpendFrozenError(error)).toBe(true);
+    expect(state.org).toBe(100);
   });
 
   it('checks the user alongside a user-billed key', async () => {
