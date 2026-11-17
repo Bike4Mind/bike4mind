@@ -1,0 +1,172 @@
+import { forwardRef, useImperativeHandle, useState, type ReactNode } from 'react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { defaultStudioTimeline, type IFabFileDocument, type StudioCompositionResponse } from '@bike4mind/common';
+import { getThemeConfig } from '@client/app/utils/themes';
+
+const VIDEO_FILE_ID = 'f'.repeat(24);
+
+const h = vi.hoisted(() => ({
+  updateMutate: vi.fn(),
+  pickedFiles: [] as unknown[],
+}));
+
+vi.mock('@client/app/hooks/data/studioCompositions', () => ({
+  compositionErrorMessage: () => 'failed',
+  compositionErrorIssues: () => [],
+  useUpdateStudioComposition: () => ({ mutate: h.updateMutate, isPending: false, isError: false, error: null }),
+}));
+vi.mock('@client/app/utils/filesAPICalls', () => ({
+  getFabFileByIdFromServer: async (id: string) => ({
+    id,
+    fileName: 'hero.mp4',
+    mimeType: 'video/mp4',
+    fileUrl: 'https://files.test/hero.mp4',
+  }),
+}));
+vi.mock('./probeMediaDuration', () => ({ probeMediaDurationMs: async () => 6_000 }));
+// The Library browser has its own tests; here it only has to open and hand back the picked files.
+vi.mock('@client/app/components/Files/EmbeddedFileBrowser', () => ({
+  default: forwardRef(function PickerStub(
+    { onAdd, lockedFilters }: { onAdd: (files: unknown[]) => void; lockedFilters: { type: string } },
+    ref
+  ) {
+    const [open, setOpen] = useState(false);
+    useImperativeHandle(ref, () => ({ handleOpen: () => setOpen(true) }));
+    if (!open) return null;
+    return (
+      <button
+        type="button"
+        data-testid="picker-stub-add"
+        data-filter={lockedFilters.type}
+        onClick={() => {
+          setOpen(false);
+          onAdd(h.pickedFiles);
+        }}
+      >
+        Add
+      </button>
+    );
+  }),
+}));
+
+import ProductionEditor from './ProductionEditor';
+
+const appTheme = extendTheme({ ...getThemeConfig() });
+
+const renderEditor = (composition: StudioCompositionResponse) => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const Wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>
+      <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+    </QueryClientProvider>
+  );
+  return render(<ProductionEditor composition={composition} />, { wrapper: Wrapper });
+};
+
+const composition = (): StudioCompositionResponse => ({
+  id: 'c'.repeat(24),
+  title: 'Spring ad',
+  template: 'ad_campaign',
+  brief: {},
+  brandKit: { colors: [], productFileIds: [] },
+  shots: [],
+  timeline: defaultStudioTimeline('ad_campaign'),
+  createdAt: new Date(),
+  updatedAt: new Date(),
+});
+
+const clipsIn = (lane: string) => within(screen.getByTestId(`production-lane-${lane}`)).queryAllByRole('button');
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  h.pickedFiles = [];
+});
+
+describe('ProductionEditor', () => {
+  it('draws an empty lane per track kind and previews the first output', () => {
+    renderEditor(composition());
+    for (const kind of ['video', 'voice', 'sfx', 'music', 'captions']) {
+      expect(screen.getByTestId(`production-lane-${kind}`)).toBeInTheDocument();
+    }
+    expect(screen.getByTestId('production-preview-stage')).toHaveAttribute('data-aspect-ratio', '16:9');
+    expect(screen.getByTestId('production-save-status')).toHaveAttribute('data-status', 'saved');
+  });
+
+  it('switches the preview between the 16:9, 9:16 and 1:1 outputs', () => {
+    renderEditor(composition());
+    for (const [testId, ratio] of [
+      ['9x16', '9:16'],
+      ['1x1', '1:1'],
+      ['16x9', '16:9'],
+    ]) {
+      fireEvent.click(screen.getByTestId(`production-preview-size-${testId}`));
+      expect(screen.getByTestId('production-preview-stage')).toHaveAttribute('data-aspect-ratio', ratio);
+    }
+  });
+
+  it('adds a caption, edits its text in the inspector and shows it in the preview', () => {
+    renderEditor(composition());
+    fireEvent.click(screen.getByTestId('production-add-captions-btn'));
+    expect(clipsIn('captions')).toHaveLength(1);
+
+    fireEvent.change(screen.getByTestId('production-inspector-text-input'), { target: { value: 'Buy now' } });
+    expect(screen.getByTestId('production-preview')).toHaveTextContent('Buy now');
+  });
+
+  it('adds a Library video to the video track at its own length', async () => {
+    h.pickedFiles = [
+      { id: VIDEO_FILE_ID, fileName: 'hero.mp4', mimeType: 'video/mp4', fileUrl: 'https://files.test/hero.mp4' },
+    ] as Partial<IFabFileDocument>[];
+    renderEditor(composition());
+
+    fireEvent.click(screen.getByTestId('production-add-video-btn'));
+    expect(screen.getByTestId('picker-stub-add')).toHaveAttribute('data-filter', 'video');
+    fireEvent.click(screen.getByTestId('picker-stub-add'));
+
+    await waitFor(() => expect(clipsIn('video')).toHaveLength(1));
+    expect(await screen.findByText('hero.mp4', { selector: 'span' })).toBeInTheDocument();
+    expect(screen.getByTestId('production-inspector-duration-input')).toHaveValue(6);
+  });
+
+  it('filters the picker to audio for the audio tracks', () => {
+    renderEditor(composition());
+    fireEvent.click(screen.getByTestId('production-add-music-btn'));
+    expect(screen.getByTestId('picker-stub-add')).toHaveAttribute('data-filter', 'audio');
+  });
+
+  it('saves a valid edit after a pause', async () => {
+    renderEditor(composition());
+    fireEvent.click(screen.getByTestId('production-add-captions-btn'));
+    expect(screen.getByTestId('production-save-status')).toHaveAttribute('data-status', 'pending');
+
+    await waitFor(() => expect(h.updateMutate).toHaveBeenCalledTimes(1), { timeout: 2_000 });
+    const [body] = h.updateMutate.mock.calls[0];
+    expect(body.timeline.tracks[0]).toMatchObject({ kind: 'captions', clips: [{ text: 'New caption' }] });
+  });
+
+  it('holds the save and lists the issue while two clips overlap', async () => {
+    renderEditor(composition());
+    fireEvent.click(screen.getByTestId('production-add-captions-btn'));
+    fireEvent.click(screen.getByTestId('production-add-captions-btn'));
+    // Pull the second caption back over the first.
+    fireEvent.change(screen.getByTestId('production-inspector-start-input'), { target: { value: '1' } });
+
+    expect(screen.getByTestId('production-save-status')).toHaveAttribute('data-status', 'invalid');
+    expect(screen.getByTestId('production-issues')).toBeInTheDocument();
+    // The validator flags the later clip of an overlapping pair.
+    expect(clipsIn('captions').filter(clip => clip.dataset.invalid === 'true')).toHaveLength(1);
+    await act(() => new Promise(resolve => setTimeout(resolve, 1_000)));
+    expect(h.updateMutate).not.toHaveBeenCalled();
+  });
+
+  it('removes the selected clip from the inspector', () => {
+    renderEditor(composition());
+    fireEvent.click(screen.getByTestId('production-add-captions-btn'));
+    fireEvent.click(screen.getByTestId('production-inspector-remove-btn'));
+    expect(clipsIn('captions')).toHaveLength(0);
+    expect(screen.getByTestId('production-inspector-empty')).toBeInTheDocument();
+  });
+});
