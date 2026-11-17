@@ -204,6 +204,24 @@ export function FilePane({
   const [pane, setPane] = useState<HTMLDivElement | null>(null);
   const body = useRef<HTMLDivElement>(null);
   const clamp = useCallback((next: number) => clampFilePaneWidth(next, limit), [limit]);
+  // A reload belongs to this selection, not merely to the mounted conversation pane.
+  const selection = useRef({ sessionId, requested, initial, request: 0 });
+  if (
+    selection.current.sessionId !== sessionId ||
+    selection.current.requested !== requested ||
+    selection.current.initial !== initial
+  ) {
+    selection.current = { sessionId, requested, initial, request: 0 };
+  }
+  const owner = selection.current;
+  const live = useRef(true);
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+      selection.current.request += 1;
+    };
+  }, []);
 
   // A new link click hands a new view; it replaces whatever a reload last read.
   useEffect(() => {
@@ -212,15 +230,23 @@ export function FilePane({
   }, [initial]);
 
   const reload = useCallback(() => {
-    void window.b4m.chat.readFilePath(sessionId, requested).then(next => {
-      if (next.kind === 'text') {
-        setView(current => ({ ...next, ...(current.line ? { line: current.line } : {}) }));
-        setProblem(null);
-      } else {
-        setProblem(next.kind === 'error' ? next.error : 'That path is no longer a text file.');
+    const request = ++owner.request;
+    const isCurrent = () => live.current && selection.current === owner && owner.request === request;
+    void window.b4m.chat.readFilePath(sessionId, requested).then(
+      next => {
+        if (!isCurrent()) return;
+        if (next.kind === 'text') {
+          setView(current => ({ ...next, ...(current.line ? { line: current.line } : {}) }));
+          setProblem(null);
+        } else {
+          setProblem(next.kind === 'error' ? next.error : 'That path is no longer a text file.');
+        }
+      },
+      (error: unknown) => {
+        if (isCurrent()) setProblem(error instanceof Error ? error.message : String(error));
       }
-    });
-  }, [sessionId, requested]);
+    );
+  }, [sessionId, requested, owner]);
 
   const firstRefresh = useRef(refreshKey);
   useEffect(() => {
@@ -313,12 +339,17 @@ export function FilePane({
             variant="plain"
             color="neutral"
             aria-label="Open in default app"
-            onClick={() =>
+            onClick={() => {
+              const isCurrent = () => live.current && selection.current === owner;
               void onOpenExternally(requested).then(
-                result => setProblem(result.ok ? null : result.error),
-                (error: unknown) => setProblem(error instanceof Error ? error.message : String(error))
-              )
-            }
+                result => {
+                  if (isCurrent()) setProblem(result.ok ? null : result.error);
+                },
+                (error: unknown) => {
+                  if (isCurrent()) setProblem(error instanceof Error ? error.message : String(error));
+                }
+              );
+            }}
             data-testid="file-pane-open-external-btn"
           >
             <ExternalLinkIcon />

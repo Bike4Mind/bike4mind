@@ -45,6 +45,7 @@ const RUNNABLE_EXTENSIONS: ReadonlySet<string> = new Set([
   '.exe',
   '.fileloc',
   '.fish',
+  '.hta',
   '.inetloc',
   '.jar',
   '.js',

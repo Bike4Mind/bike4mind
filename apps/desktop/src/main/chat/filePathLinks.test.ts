@@ -153,6 +153,22 @@ describe('opening a path a reply names', () => {
     expect(deps.openPath).not.toHaveBeenCalled();
   });
 
+  it.each(['document.hta', 'document.HTA'])('reveals Windows HTML applications without launching %s', async name => {
+    await writeFile(join(project, name), '<html>inert fixture</html>');
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    registerFilePathLinkIpc(
+      {
+        handle: (channel: string, listener: (...args: never[]) => unknown) =>
+          void handlers.set(channel, listener as never),
+      },
+      { ...deps, platform: 'win32' }
+    );
+    const result = await handlers.get(IPC_CHANNELS.chatOpenFilePath)!({}, SESSION, name);
+    expect(result).toEqual({ ok: true, opened: 'revealed' });
+    expect(deps.reveal).toHaveBeenCalledWith(join(project, name));
+    expect(deps.openPath).not.toHaveBeenCalled();
+  });
+
   it('touches nothing for a path it would not have linked', async () => {
     for (const path of [join(outside, 'secret.txt'), 'escape.txt', 'vault/token.json', 'missing.md', 42, '']) {
       const result = await open(SESSION, path);

@@ -42,13 +42,13 @@ const conversation = createRef<HTMLElement>();
 
 const byTestId = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
 
-async function render(view: TextFileView, refreshKey: unknown = 0) {
+async function render(view: TextFileView, refreshKey: unknown = 0, requested = 'src/app.ts:2') {
   await act(async () =>
     root.render(
       <CssVarsProvider theme={desktopTheme}>
         <FilePane
           sessionId="s1"
-          requested="src/app.ts:2"
+          requested={requested}
           view={view}
           refreshKey={refreshKey}
           conversation={conversation}
@@ -138,6 +138,91 @@ describe('FilePane', () => {
 
     await act(async () => byTestId('file-pane-reload-btn')!.click());
     expect(readFilePath).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['text', 'error', 'rejection'] as const)(
+    'ignores an older file reload %s after selecting another file',
+    async outcome => {
+      let resolve!: (view: ChatFileView) => void;
+      let reject!: (error: Error) => void;
+      readFilePath.mockImplementationOnce(
+        () =>
+          new Promise((done, fail) => {
+            resolve = done;
+            reject = fail;
+          })
+      );
+      await render({ ...VIEW, line: 2 });
+      await act(async () => byTestId('file-pane-reload-btn')!.click());
+      const next = { ...VIEW, path: '/work/project/next.md', name: 'next.md', text: '# next selection' };
+      await render(next, 0, 'next.md');
+      await act(async () => {
+        if (outcome === 'rejection') reject(new Error('old read rejected'));
+        else
+          resolve(outcome === 'text' ? { ...VIEW, text: 'stale contents' } : { kind: 'error', error: 'stale failure' });
+      });
+      expect(byTestId('file-pane')?.dataset.path).toBe(next.path);
+      expect(byTestId('file-pane-body')?.textContent).toContain('# next selection');
+      expect(byTestId('file-pane-error')).toBeNull();
+      await act(async () => byTestId('file-pane-open-external-btn')!.click());
+      expect(onOpenExternally).toHaveBeenLastCalledWith('next.md');
+      expect(byTestId('file-pane-body')?.querySelector('[data-line="2"]')).toBeNull();
+    }
+  );
+
+  it('does not revive an old reload after switching away and back to the same path', async () => {
+    let resolve!: (view: ChatFileView) => void;
+    readFilePath.mockImplementationOnce(
+      () =>
+        new Promise(done => {
+          resolve = done;
+        })
+    );
+    await render(VIEW);
+    await act(async () => byTestId('file-pane-reload-btn')!.click());
+    await render({ ...VIEW, path: '/work/project/next.md', name: 'next.md' }, 0, 'next.md');
+    await render({ ...VIEW, text: 'fresh selection' });
+    await act(async () => resolve({ ...VIEW, text: 'stale reload' }));
+    expect(byTestId('file-pane-body')?.textContent).toContain('fresh selection');
+  });
+
+  it('ignores an external-open failure belonging to the previous selection', async () => {
+    let resolve!: (result: ChatFilePathOpenResult) => void;
+    onOpenExternally.mockImplementationOnce(
+      () =>
+        new Promise(done => {
+          resolve = done;
+        })
+    );
+    await render(VIEW);
+    await act(async () => byTestId('file-pane-open-external-btn')!.click());
+    await render({ ...VIEW, path: '/work/project/next.md', name: 'next.md' }, 0, 'next.md');
+    await act(async () => resolve({ ok: false, error: 'old application failure' }));
+    expect(byTestId('file-pane-error')).toBeNull();
+  });
+
+  it('keeps the newest of two same-file reloads', async () => {
+    let resolve!: (view: ChatFileView) => void;
+    readFilePath.mockImplementationOnce(
+      () =>
+        new Promise(done => {
+          resolve = done;
+        })
+    );
+    await render(VIEW);
+    await act(async () => byTestId('file-pane-reload-btn')!.click());
+    readFilePath.mockResolvedValueOnce({ ...VIEW, text: 'newest contents' });
+    await act(async () => byTestId('file-pane-reload-btn')!.click());
+    await act(async () => resolve({ ...VIEW, text: 'older contents' }));
+    expect(byTestId('file-pane-body')?.textContent).toContain('newest contents');
+  });
+
+  it('reports a rejected current reload while retaining the file', async () => {
+    await render(VIEW);
+    readFilePath.mockRejectedValueOnce(new Error('current read failed'));
+    await act(async () => byTestId('file-pane-reload-btn')!.click());
+    expect(byTestId('file-pane-error')?.textContent).toContain('current read failed');
+    expect(byTestId('file-pane-body')?.textContent).toContain('const a = 1;');
   });
 
   it('keeps the last good copy and says why when a reload fails', async () => {

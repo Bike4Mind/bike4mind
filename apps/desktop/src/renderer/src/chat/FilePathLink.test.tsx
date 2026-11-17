@@ -324,6 +324,94 @@ describe('where a file path link opens', () => {
     expect(openFilePath).not.toHaveBeenCalled();
   });
 
+  it.each(['text', 'error', 'binary', 'rejection'] as const)(
+    'ignores an older initial read %s after a later link click',
+    async outcome => {
+      let resolve!: (view: ChatFileView) => void;
+      let reject!: (error: Error) => void;
+      readFilePath.mockImplementationOnce(
+        () =>
+          new Promise((done, fail) => {
+            resolve = done;
+            reject = fail;
+          })
+      );
+      await renderWithPane();
+      await act(async () => link('reports/run.webm').click());
+      await act(async () => link('package.json').click());
+      expect(showFile).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        if (outcome === 'rejection') reject(new Error('old read rejected'));
+        else
+          resolve(
+            outcome === 'text'
+              ? VIEWS['package.json']
+              : outcome === 'binary'
+                ? VIEWS['reports/run.webm']
+                : { kind: 'error', error: 'old failure' }
+          );
+      });
+      expect(showFile).toHaveBeenCalledTimes(1);
+      expect(showFile).toHaveBeenLastCalledWith('package.json', VIEWS['package.json']);
+      expect(openFilePath).not.toHaveBeenCalled();
+      expect(document.querySelector('[data-testid="file-link-error-notice"]')).toBeNull();
+    }
+  );
+
+  it('invalidates the pending read synchronously when the pane closes', async () => {
+    let resolve!: (view: ChatFileView) => void;
+    const selectionEpoch = { current: 0 };
+    readFilePath.mockImplementationOnce(
+      () =>
+        new Promise(done => {
+          resolve = done;
+        })
+    );
+    await render(
+      <FilePathLinkProvider sessionId="s1" selectionEpoch={selectionEpoch} showFile={showFile}>
+        <ReplyMarkdown text="See `package.json`" />
+      </FilePathLinkProvider>
+    );
+    await act(async () => link('package.json').click());
+    await act(async () => {
+      selectionEpoch.current += 1;
+      resolve(VIEWS['package.json']);
+    });
+    expect(showFile).not.toHaveBeenCalled();
+  });
+
+  it.each(['close', 'session', 'unmount'] as const)('invalidates an initial read on %s', async change => {
+    let resolve!: (view: ChatFileView) => void;
+    readFilePath.mockImplementationOnce(
+      () =>
+        new Promise(done => {
+          resolve = done;
+        })
+    );
+    const selectionEpoch = { current: 0 };
+    await render(
+      <FilePathLinkProvider sessionId="s1" selectionEpoch={selectionEpoch} showFile={showFile}>
+        <ReplyMarkdown text="See `package.json` and reports/run.webm" />
+      </FilePathLinkProvider>
+    );
+    await act(async () => link('package.json').click());
+    if (change === 'close') selectionEpoch.current += 1;
+    if (change === 'unmount') await render(null);
+    else
+      await render(
+        <FilePathLinkProvider
+          sessionId={change === 'session' ? 's2' : 's1'}
+          selectionEpoch={selectionEpoch}
+          showFile={showFile}
+        >
+          <ReplyMarkdown text="See `package.json` and reports/run.webm" />
+        </FilePathLinkProvider>
+      );
+    await act(async () => resolve(VIEWS['package.json']));
+    expect(showFile).not.toHaveBeenCalled();
+    expect(openFilePath).not.toHaveBeenCalled();
+  });
+
   it('hands a file the pane cannot show to the OS', async () => {
     await renderWithPane();
     await act(async () => link('reports/run.webm').click());

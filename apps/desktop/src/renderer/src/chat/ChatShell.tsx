@@ -460,13 +460,17 @@ export function ChatShell({
   // The file a link opened, held for the conversation it was opened in so it never follows the
   // user into another one. `requested` is the path as the reply wrote it, which main re-resolves.
   const [openFile, setOpenFile] = useState<{ sessionId: string; requested: string; view: TextFileView } | null>(null);
+  const fileSelectionEpoch = useRef(0);
   const showFile = useCallback<ShowFile>(
     (requested, view) => {
       if (activeId) setOpenFile({ sessionId: activeId, requested, view });
     },
     [activeId]
   );
-  const closeFile = useCallback(() => setOpenFile(null), []);
+  const closeFile = useCallback(() => {
+    fileSelectionEpoch.current += 1;
+    setOpenFile(null);
+  }, []);
   const openFileExternally = useCallback(
     (requested: string) =>
       activeId
@@ -1347,6 +1351,7 @@ export function ChatShell({
                 sessionId={activeId}
                 recheck={conversation.settledTurns}
                 showFile={showFile}
+                selectionEpoch={fileSelectionEpoch}
                 onAttach={activeId ? draft.attachFilePath : undefined}
               >
                 <MessageThread

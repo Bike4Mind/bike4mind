@@ -9,6 +9,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
+  type RefObject,
 } from 'react';
 import Box from '@mui/joy/Box';
 import Dropdown from '@mui/joy/Dropdown';
@@ -68,6 +69,7 @@ const newLinkStore = (): LinkStore => ({ cache: new Map(), settled: new Map(), q
 function useFilePathLinks(
   sessionId: string,
   recheck: unknown,
+  selectionEpoch: RefObject<number> | undefined,
   report: (message: string) => void,
   showFile: ShowFile | undefined,
   menu: FilePathLinks['menu']
@@ -78,6 +80,16 @@ function useFilePathLinks(
   const store = useRef<{ sessionId: string; links: LinkStore }>({ sessionId, links: newLinkStore() });
   if (store.current.sessionId !== sessionId) store.current = { sessionId, links: newLinkStore() };
   const links = store.current.links;
+  const selection = useRef({ links, request: 0 });
+  if (selection.current.links !== links) selection.current = { links, request: 0 };
+  const live = useRef(true);
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+      selection.current.request += 1;
+    };
+  }, []);
 
   const [generation, setGeneration] = useState(0);
   const firstRecheck = useRef(recheck);
@@ -115,10 +127,15 @@ function useFilePathLinks(
   );
 
   const openExternally = useCallback(
-    (path: string) => {
-      window.b4m.chat.openFilePath(sessionId, path).then(result => {
-        if (!result.ok) report(result.error);
-      }, failed);
+    (path: string, isCurrent: () => boolean) => {
+      void window.b4m.chat.openFilePath(sessionId, path).then(
+        result => {
+          if (isCurrent() && !result.ok) report(result.error);
+        },
+        (error: unknown) => {
+          if (isCurrent()) failed(error);
+        }
+      );
     },
     [sessionId, report, failed]
   );
@@ -126,17 +143,28 @@ function useFilePathLinks(
   // A folder or a binary file has nothing the pane can show, so it goes to the OS as before.
   const open = useCallback(
     (path: string, externally = false) => {
+      const owner = selection.current;
+      const request = ++owner.request;
+      const epoch = selectionEpoch?.current;
+      const isCurrent = () =>
+        live.current && selection.current === owner && owner.request === request && selectionEpoch?.current === epoch;
       if (externally || !showFile) {
-        openExternally(path);
+        openExternally(path, isCurrent);
         return;
       }
-      window.b4m.chat.readFilePath(sessionId, path).then(view => {
-        if (view.kind === 'text') showFile(path, view);
-        else if (view.kind === 'error') report(view.error);
-        else openExternally(path);
-      }, failed);
+      void window.b4m.chat.readFilePath(sessionId, path).then(
+        view => {
+          if (!isCurrent()) return;
+          if (view.kind === 'text') showFile(path, view);
+          else if (view.kind === 'error') report(view.error);
+          else openExternally(path, isCurrent);
+        },
+        (error: unknown) => {
+          if (isCurrent()) failed(error);
+        }
+      );
     },
-    [sessionId, showFile, openExternally, report, failed]
+    [sessionId, showFile, openExternally, report, failed, selectionEpoch]
   );
 
   // A new object per generation, so every link re-reads its answer after a recheck.
@@ -254,12 +282,15 @@ function FileLinkMenuItems({ canAttach, onPick }: { canAttach: boolean; onPick: 
 export function FilePathLinkProvider({
   sessionId,
   recheck,
+  selectionEpoch,
   showFile,
   onAttach,
   children,
 }: {
   sessionId: string | null;
   recheck?: unknown;
+  /** Closing the pane invalidates earlier link reads, including ones still awaiting main. */
+  selectionEpoch?: RefObject<number>;
   /** Where a text file opens in the app. Without it every link opens in another app. */
   showFile?: ShowFile;
   /** Adds the file to the composer's draft. Without it the menu has no Attach item. */
@@ -276,7 +307,7 @@ export function FilePathLinkProvider({
   const returnFocus = useCallback(() => {
     if (trigger.current?.isConnected) trigger.current.focus();
   }, []);
-  const links = useFilePathLinks(sessionId ?? '', recheck, setNotice, showFile, openMenu);
+  const links = useFilePathLinks(sessionId ?? '', recheck, selectionEpoch, setNotice, showFile, openMenu);
 
   const failed = useCallback((error: unknown) => setNotice(error instanceof Error ? error.message : String(error)), []);
   const pick = useCallback(

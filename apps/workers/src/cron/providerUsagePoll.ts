@@ -8,7 +8,8 @@
  *
  * A provider whose admin key is not configured is skipped and publishes ProviderUsagePollSkipped
  * instead. A provider whose report cannot be read fails the run after the others are published, so
- * the poller-errors alarm sees it.
+ * the poller-errors alarm sees it. A key read from the secret store also publishes
+ * ProviderAdminKeyAgeDays, the age of its current version.
  *
  * Schedule: hourly at minute 7 UTC
  * Enabled: production + dev
@@ -20,12 +21,13 @@ import { Logger } from '@bike4mind/observability';
 import { randomUUID } from 'crypto';
 import { spendReconciliationService } from '@bike4mind/services';
 import { Resource } from 'sst';
-import { resolveProviderAdminKey } from './providerAdminKey';
+import { lookupProviderAdminKey } from './providerAdminKey';
 
 type ProviderHourlyUsage = spendReconciliationService.ProviderHourlyUsage;
 type UsageReportProvider = spendReconciliationService.UsageReportProvider;
 
 const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
 
 const contextToLogs = (context: Context) => ({
   requestId: context.awsRequestId ?? randomUUID(),
@@ -71,8 +73,9 @@ export async function handler(_event: unknown, context: Context) {
 
   for (const { provider, fetch } of PROVIDERS) {
     let key: string | undefined;
+    let keyCreatedAt: Date | undefined;
     try {
-      key = await resolveProviderAdminKey(provider);
+      ({ key, createdAt: keyCreatedAt } = await lookupProviderAdminKey(provider));
     } catch (err) {
       failed.push(provider);
       logger.error(`[ProviderUsagePoll] ${provider} ${window} admin key lookup failed`, err);
@@ -90,6 +93,18 @@ export async function handler(_event: unknown, context: Context) {
       });
       skipped++;
       continue;
+    }
+
+    if (keyCreatedAt) {
+      // Read by the per-provider key age alarm in infra/providerSpend.ts. Published before the report
+      // is fetched, so a run whose report fails still reports the age.
+      metricData.push({
+        MetricName: 'ProviderAdminKeyAgeDays',
+        Value: Math.max(0, (now.getTime() - keyCreatedAt.getTime()) / DAY_MS),
+        Unit: 'None',
+        Dimensions: [{ Name: 'Provider', Value: provider }],
+        Timestamp: now,
+      });
     }
 
     try {
