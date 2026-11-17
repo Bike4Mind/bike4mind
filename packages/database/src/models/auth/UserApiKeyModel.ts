@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { softDeletePlugin } from '../../utils/mongo';
 import {
   ApiKeyCapPool,
+  type ApiKeyScopeValue,
   ApiKeyStoredSecret,
   ApiKeyStatus,
   isWellFormedApiKeyScope,
@@ -159,6 +160,11 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
         },
       }
     );
+  }
+
+  /** Add or remove one scope in place. Admin flows only: it bypasses the mint-time scope rules. */
+  async setScopeHeld(id: string, scope: ApiKeyScopeValue, held: boolean) {
+    await this.model.updateOne({ _id: id }, held ? { $addToSet: { scopes: scope } } : { $pull: { scopes: scope } });
   }
 
   async resetSpend(id: string) {
