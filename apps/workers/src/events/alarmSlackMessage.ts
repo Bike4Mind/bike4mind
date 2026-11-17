@@ -489,6 +489,16 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       'Owner: the abuse/LiveOps owner triages this in the thread. Devops: no infrastructure action unless the provider console shows an unknown key spending, which is a key rotation.',
     links: ['agent-executions', 'signup-activity', 'waf-block-list'],
   },
+  'provider-unpriced-tokens-hourly': {
+    title: 'AI spend at {provider} is partly unpriced',
+    level: 'warn',
+    category: 'cost',
+    unit: 'unpriced hours',
+    meaning:
+      "The last hour's {provider} usage report includes output tokens from models our poller has no price for, above both the volume floor and the share floor, so the provider-reported spend alarm reads low.",
+    action:
+      'Open the usage poller Lambda log, find the WARN line "no price for <ids>", and add a price for each id (in the adapter table, or USAGE_ONLY_PRICING in b4m-core/services/src/spendReconciliation/providerUsagePricing.ts). Until then, check the {provider} console usage for that hour by hand.',
+  },
   'provider-usage-poll-errors': {
     title: 'The provider usage poller is failing',
     level: 'warn',

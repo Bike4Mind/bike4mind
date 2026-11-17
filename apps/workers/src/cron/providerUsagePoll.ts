@@ -3,7 +3,7 @@
  *
  * Reads the previous complete UTC hour from the Anthropic and OpenAI admin usage reports, prices it
  * with our model rates and publishes it to the LLMSpend namespace (ProviderReportedUsd and friends,
- * alarmed in infra/providerSpend.ts). Unlike the ledger-derived EstimatedUsd (infra/llmSpend.ts),
+ * alarmed in infra/providerSpend.ts, as is UnpricedOutputTokens). Unlike the ledger-derived EstimatedUsd (infra/llmSpend.ts),
  * this counts every call billed to the organization, whichever service made it.
  *
  * A provider whose admin key is not configured is skipped and publishes ProviderUsagePollSkipped

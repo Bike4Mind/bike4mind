@@ -491,13 +491,14 @@ describe('ALARM_CATALOG', () => {
     expect(dlqCatalogEntry('dlq-email-send-age')?.category).toBe('jobs');
   });
 
-  it('files only provider-reported spend, reconciliation drift and ungranted purchases under cost', () => {
+  it('files only provider-reported spend, unpriced tokens, reconciliation drift and ungranted purchases under cost', () => {
     const cost = Object.entries(ALARM_CATALOG)
       .filter(([, entry]) => entry.category === 'cost')
       .map(([key]) => key)
       .sort();
     expect(cost).toEqual([
       'provider-reported-spend-hourly',
+      'provider-unpriced-tokens-hourly',
       'spend-reconciliation-drift',
       'ungranted-credit-purchases',
     ]);
@@ -550,6 +551,14 @@ describe('ALARM_CATALOG', () => {
     expect(ALARM_CATALOG['provider-usage-poll-errors'].level).toBe('warn');
     expect(ALARM_CATALOG['llm-spend-young-accounts'].level).toBe('page');
     expect(ALARM_CATALOG['completion-credit-overdraft'].level).toBe('warn');
+  });
+
+  it('warns, as a cost alarm, on unpriced tokens and names the provider', () => {
+    const alarm = { ...sample, AlarmName: 'test-app-production-provider-unpriced-tokens-hourly-openai' };
+    expect(alarmCatalogEntry(alarm, 'production')).toMatchObject({ level: 'warn', category: 'cost' });
+    const text = JSON.stringify(formatAlarmSlackMessage(alarm, 'production'));
+    expect(text).toContain('AI spend at OpenAI is partly unpriced');
+    expect(text).not.toContain('{provider}');
   });
 
   it('pages on reconciliation drift and warns, as a job, on a run that reconciled nothing', () => {
