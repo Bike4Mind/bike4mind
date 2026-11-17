@@ -324,6 +324,26 @@ describe('organization detail page - ?tab= deep link', () => {
     );
   });
 
+  it.each(['groups', 'domains'])('does not tell the owner of a personal team to ask the owner for %s', tab => {
+    searchParams.current = { tab };
+    orgQuery.current = { data: { ...ORG, personal: true }, isLoading: false, isError: false, error: undefined };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(selectedTabName()).toBe('Overview');
+    expect(screen.queryByTestId('organization-tab-denied-notice')).toBeNull();
+  });
+
+  it('does not tell a platform admin to ask the owner for Audit', () => {
+    searchParams.current = { tab: 'audit' };
+    user.current = { id: 'staff1', isAdmin: true };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Overview');
+    expect(screen.queryByTestId('organization-tab-denied-notice')).toBeNull();
+  });
+
   it('shows no notice when the requested tab opens', () => {
     searchParams.current = { tab: 'usage' };
 

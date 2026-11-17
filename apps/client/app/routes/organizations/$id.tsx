@@ -247,9 +247,12 @@ const OrganizationPage: FC = () => {
   // would break the link for this caller the day they are granted access, and make one shared URL
   // mean different things to different people.
   // A refused tab is named in a notice on Overview, so the link does not silently land elsewhere.
+  // Not for a caller who already manages the team: they were refused for another reason (a personal
+  // team has no Groups or Domains; Audit excludes platform admins), so "ask the owner" would mislead.
   const tabView = resolveOrgTabView(requestedTab, access);
   const selectedTab = tabView.tab;
-  const deniedAudience = tabView.denied && currentUser ? ORG_TAB_AUDIENCE[tabView.denied] : undefined;
+  const audience = tabView.denied && currentUser ? ORG_TAB_AUDIENCE[tabView.denied] : undefined;
+  const deniedAudience = audience === 'managers' && access.seesLockedTabs ? undefined : audience;
   const selectedSection = resolveIntegrationSection(requestedSection, access);
   const integrationSections = visibleIntegrationSections(access);
   // Share current grouped tab order and access rules across the rail and phone selector.
