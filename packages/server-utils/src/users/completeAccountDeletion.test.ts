@@ -325,7 +325,17 @@ describe('completeAccountDeletion', () => {
       email: 'leaving@example.com',
       now: expect.any(Date),
     });
-    expect(h.order).toEqual(['orgs', 'files', 'content', 'realtime', 'notice', 'audit', 'committed', 'email']);
+    expect(h.order).toEqual([
+      'orgs',
+      'files',
+      'content',
+      'realtime',
+      'erase:beforeDelete',
+      'notice',
+      'audit',
+      'committed',
+      'email',
+    ]);
     expect(h.noticeRemove).toHaveBeenCalledWith(`hash-${USER_ID}`);
   });
 
