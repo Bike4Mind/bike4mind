@@ -17,16 +17,29 @@ import {
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
 vi.mock('sst', () => ({
-  Resource: new Proxy({} as Record<string, unknown>, { get: (_, key) => ({ value: `test-${String(key)}` }) }),
+  Resource: new Proxy({} as Record<string, unknown>, {
+    get: (_, key) => ({ value: `test-${String(key)}`, name: `test-${String(key)}` }),
+  }),
 }));
 
 const effects = vi.hoisted(() => ({
+  deleteImportPrefix: vi.fn(),
   deleteGenerated: vi.fn(),
   deletePrefix: vi.fn(),
   deleteFile: vi.fn(),
   sendCompleteEmail: vi.fn(),
   cdnAdd: vi.fn(),
   cdnFlush: vi.fn(),
+}));
+vi.mock('@bike4mind/fab-pipeline', async importActual => ({
+  ...(await importActual<typeof import('@bike4mind/fab-pipeline')>()),
+  S3Storage: class {
+    constructor(private readonly bucketName: string) {}
+    deletePermanently = effects.deleteFile;
+    deletePrefixPermanently(prefix: string) {
+      return effects.deleteImportPrefix(this.bucketName, prefix);
+    }
+  },
 }));
 vi.mock('../utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ delete: effects.deleteGenerated, deletePermanently: effects.deleteGenerated }),
@@ -85,6 +98,7 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   vi.clearAllMocks();
+  effects.deleteImportPrefix.mockReset().mockResolvedValue(undefined);
   effects.deleteGenerated.mockResolvedValue(undefined);
   effects.deletePrefix.mockResolvedValue(undefined);
   effects.deleteFile.mockResolvedValue(undefined);
@@ -117,7 +131,11 @@ describe('permanent personal-content purge', () => {
   it('retains the real account and purge marker after object failure, then removes content and User before emailing completion', async () => {
     const notebookId = new mongoose.Types.ObjectId();
     const fileId = new mongoose.Types.ObjectId();
-    const storedObjects = new Set(['private-upload', 'private-generated']);
+    const notebookImport = `notebooks/${ownerId}/archive.json`;
+    const storedObjects = new Set(['private-upload', 'private-generated', notebookImport]);
+    effects.deleteImportPrefix.mockImplementation(async (_bucket: string, prefix: string) => {
+      for (const key of storedObjects) if (key.startsWith(prefix)) storedObjects.delete(key);
+    });
     await collection('OrgAdminNotificationPref').insertOne({ userId: ownerId, organizationId: 'team', kinds: {} });
     await collection('OrgAlertNotification').insertOne({ subjectUserId: ownerId, organizationId: 'team' });
     await collection('Inbox').insertOne({ receiverId: ownerId, organizationAlert: true });
@@ -172,9 +190,33 @@ describe('permanent personal-content purge', () => {
       deleted: false,
       reason: 'not_found',
     });
+    expect(effects.deleteImportPrefix).toHaveBeenCalledWith('test-historyImportBucket', `notebooks/${ownerId}/`);
     expect(effects.sendCompleteEmail).toHaveBeenCalledExactlyOnceWith('purge@example.test');
     expect(completionSnapshots).toEqual([{ remainingRows: [0, 0, 0, 0, 0, 0, 0, 0], remainingObjects: 0 }]);
   });
+  it('keeps the account retryable when notebook-import deletion fails, then completes after retry', async () => {
+    await collection('User').insertOne({
+      _id: new mongoose.Types.ObjectId(ownerId),
+      username: 'import-owner',
+      email: 'imports@example.test',
+      deletion: { requestedAt: new Date(0), scheduledFor: new Date(0), source: 'self' },
+    });
+    effects.deleteImportPrefix.mockRejectedValueOnce(new Error('notebook imports unavailable'));
+
+    await expect(completeAccountDeletion(ownerId, { logger, erasureRegistry })).rejects.toThrow(
+      'notebook imports unavailable'
+    );
+    expect(await collection('User').findOne({ _id: new mongoose.Types.ObjectId(ownerId) })).toMatchObject({
+      deletion: { purgeStartedAt: expect.any(Date) },
+    });
+    expect(effects.sendCompleteEmail).not.toHaveBeenCalled();
+
+    await expect(completeAccountDeletion(ownerId, { logger, erasureRegistry })).resolves.toEqual({ deleted: true });
+    expect(effects.deleteImportPrefix).toHaveBeenCalledTimes(2);
+    expect(effects.deleteImportPrefix).toHaveBeenLastCalledWith('test-historyImportBucket', `notebooks/${ownerId}/`);
+    expect(effects.sendCompleteEmail).toHaveBeenCalledExactlyOnceWith('imports@example.test');
+  });
+
   it('hard-deletes notebooks, messages and personal content including tombstones, preserving other owners and org content', async () => {
     const notebookId = new mongoose.Types.ObjectId();
     const otherNotebookId = new mongoose.Types.ObjectId();
