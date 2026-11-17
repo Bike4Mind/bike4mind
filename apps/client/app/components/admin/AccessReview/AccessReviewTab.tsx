@@ -66,12 +66,14 @@ function DecisionCell({ row }: { row: ReviewRow }) {
   );
 }
 
+// Column widths plus the 3.5rem actions column sum to the DataTable minWidth below; keep them in step.
 const columns: DataColumn<ReviewRow>[] = [
-  { id: 'admin', label: 'Admin', width: '16rem', wrap: true, render: row => label(row) },
-  { id: 'permissions', label: 'Permissions', wrap: true, render: row => <PermissionsCell row={row} /> },
+  { id: 'admin', label: 'Admin', width: '10.5rem', wrap: true, render: row => label(row) },
+  { id: 'permissions', label: 'Permissions', width: '7rem', wrap: true, render: row => <PermissionsCell row={row} /> },
   {
     id: 'granted',
     label: 'Granted by',
+    width: '6.5rem',
     wrap: true,
     render: ({ live }) => {
       if (!live) return '-';
@@ -87,7 +89,7 @@ const columns: DataColumn<ReviewRow>[] = [
   {
     id: 'lastAction',
     label: 'Last admin action',
-    width: '9rem',
+    width: '8.5rem',
     render: ({ live }) => {
       if (!live) return '\u2014';
       return live.lastAdminActionAt ? <RelativeTime at={live.lastAdminActionAt} /> : 'None';
@@ -105,6 +107,7 @@ const columns: DataColumn<ReviewRow>[] = [
   {
     id: 'flags',
     label: 'Flags',
+    width: '5.5rem',
     wrap: true,
     render: ({ live }) =>
       live ? (
@@ -127,7 +130,7 @@ const columns: DataColumn<ReviewRow>[] = [
         </Stack>
       ) : null,
   },
-  { id: 'decision', label: 'Decision', width: '11rem', wrap: true, render: row => <DecisionCell row={row} /> },
+  { id: 'decision', label: 'Decision', width: '9rem', wrap: true, render: row => <DecisionCell row={row} /> },
 ];
 
 /** The quarterly admin access review: every admin's access, its provenance and activity, and a decision per admin. */
@@ -275,7 +278,7 @@ export default function AccessReviewTab() {
         error={isError && !data ? 'The access review could not be loaded.' : undefined}
         onRetry={() => void refetch()}
         pagination={false}
-        minWidth="64rem"
+        minWidth="59.5rem"
         maxHeight="none"
         empty={
           <EmptyState
