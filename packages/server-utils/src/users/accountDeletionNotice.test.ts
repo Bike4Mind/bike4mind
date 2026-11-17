@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   store: new Map<string, { idHash: string; email: string; attempts: number; nextAttemptAt: Date }>(),
   send: vi.fn(),
+  // Repository faults, keyed by operation: set a key to make that call reject.
+  fault: {} as { markFailed?: boolean; remove?: boolean },
 }));
 vi.mock('@bike4mind/database', () => ({
   ACCOUNT_DELETION_NOTICE_RETRY_DELAY_MS: 60 * 60 * 1000,
@@ -11,6 +13,7 @@ vi.mock('@bike4mind/database', () => ({
     listDue: async (now: Date, limit: number) =>
       [...h.store.values()].filter(n => n.nextAttemptAt <= now).slice(0, limit),
     markFailed: async (idHash: string, nextAttemptAt: Date) => {
+      if (h.fault.markFailed) throw new Error('db down');
       const notice = h.store.get(idHash);
       if (!notice) return null;
       notice.attempts++;
@@ -18,6 +21,7 @@ vi.mock('@bike4mind/database', () => ({
       return notice.attempts;
     },
     remove: async (idHash: string) => {
+      if (h.fault.remove) throw new Error('db down');
       h.store.delete(idHash);
     },
   },
@@ -42,6 +46,7 @@ const loggedText = () =>
 beforeEach(() => {
   vi.clearAllMocks();
   h.store.clear();
+  h.fault = {};
   h.send.mockResolvedValue(undefined);
   seed();
 });
@@ -69,6 +74,7 @@ describe('sendPendingDeletionNotice', () => {
     await expect(sendPendingDeletionNotice(HASH, EMAIL, { logger, now: NOW })).resolves.toBe('failed');
 
     expect(h.store.get(HASH)).toMatchObject({ email: EMAIL, attempts: 1 });
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('EntryRejected'));
   });
 
   it('does not log a retry when the notice is already gone', async () => {
@@ -78,6 +84,34 @@ describe('sendPendingDeletionNotice', () => {
     await expect(sendPendingDeletionNotice(HASH, EMAIL, { logger, now: NOW })).resolves.toBe('failed');
 
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('logs a PII-free warn and returns failed when recording the failure throws', async () => {
+    h.send.mockRejectedValueOnce(new Error(`bus down for ${EMAIL}`));
+    h.fault.markFailed = true;
+
+    await expect(sendPendingDeletionNotice(HASH, EMAIL, { logger, now: NOW })).resolves.toBe('failed');
+
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(loggedText()).not.toContain(EMAIL);
+    expect(loggedText()).not.toContain(HASH);
+    expect(h.store.get(HASH)).toMatchObject({ email: EMAIL, attempts: 0 });
+  });
+
+  it('returns failed with a remove error when the give-up delete throws', async () => {
+    h.send.mockRejectedValueOnce(new Error('bus down'));
+    h.fault.remove = true;
+
+    await expect(sendPendingDeletionNotice(HASH, EMAIL, { logger, now: NOW, maxAttempts: 1 })).resolves.toBe('failed');
+
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Could not remove'));
+    expect(h.store.has(HASH)).toBe(true);
+  });
+
+  it('still reports sent, without throwing, when clearing the notice fails after a send', async () => {
+    h.fault.remove = true;
+
+    await expect(sendPendingDeletionNotice(HASH, EMAIL, { logger, now: NOW })).resolves.toBe('sent');
   });
 });
 

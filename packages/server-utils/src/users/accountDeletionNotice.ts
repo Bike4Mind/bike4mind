@@ -27,7 +27,7 @@ export async function sendPendingDeletionNotice(
   try {
     // PutEvents reports a rejected entry as a normal response, not a throw.
     const sent = await sendAccountDeletionCompleteEmail(email);
-    if (sent && sent.FailedEntryCount) throw new Error('EntryRejected');
+    if (sent && sent.FailedEntryCount) throw Object.assign(new Error('EntryRejected'), { name: 'EntryRejected' });
   } catch (error) {
     const reason = error instanceof Error ? error.name : 'unknown';
     let attempts: number | null = null;
@@ -37,9 +37,10 @@ export async function sendPendingDeletionNotice(
         new Date(now.getTime() + ACCOUNT_DELETION_NOTICE_RETRY_DELAY_MS)
       );
     } catch {
-      // The notice stays as it was; the next run retries.
+      logger.warn(`Could not record a failed deletion-complete send; it will be retried (${reason})`);
+      return 'failed';
     }
-    // Gone already: a concurrent send succeeded, so there is nothing left to retry.
+    // Null: gone already, a concurrent send succeeded, so there is nothing left to retry.
     if (attempts === null) return 'failed';
     if (attempts >= maxAttempts) {
       try {

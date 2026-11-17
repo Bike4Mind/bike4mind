@@ -39,8 +39,8 @@ shorten that. Judge the fix by the sweep's own count reaching 0, not by the alar
      sweep correctly reports it not due. Bring `scheduledFor` forward, or cancel the deletion and erase
      the account by hand (step 4)
 4. Fix the cause and re-run the sweep, or complete the request by hand through the admin erasure path
-   before day 30. The admin erasure path refuses an account with a self-service deletion still pending,
-   so cancel that deletion first. Once the row is gone the next run emits 0, and the alarm clears within
+   before day 30. The admin erasure path refuses an account with any pending deletion not started by an
+   admin (self-service or support-logged), so cancel that deletion first. Once the row is gone the next run emits 0, and the alarm clears within
    about two days (see above).
 
 ## Confirmation email retries
