@@ -126,10 +126,10 @@ final class VoiceConversationModelTests: XCTestCase {
   func testSilenceEndsTheUtterance() async throws {
     let model = await startedModel(silenceTimeout: .milliseconds(30))
     await listener.emit("Name two colors")
-    XCTAssertEqual(model.liveTranscript, "")
     await until { await api.sentMessages.count == 1 }
     let sent = await api.sentMessages
     XCTAssertEqual(sent.first?.message, "Name two colors")
+    XCTAssertEqual(model.liveTranscript, "")
     await model.stop()
   }
 
