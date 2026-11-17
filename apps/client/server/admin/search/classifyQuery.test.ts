@@ -12,6 +12,10 @@ describe('admin query classification', () => {
     ['192.0.2.4', 'ip'],
     ['2001:db8::1', 'ip'],
     ['cus_abc123', 'stripe'],
+    ['a'.repeat(64), 'providerEndUserId'],
+    ['ABCDEF0123456789'.repeat(4), 'providerEndUserId'],
+    ['a'.repeat(63), 'name'],
+    ['a'.repeat(65), 'name'],
     ['Example organization', 'name'],
     ['192.0.2.999', 'name'],
   ])('classifies %s as %s', (query, expected) => {

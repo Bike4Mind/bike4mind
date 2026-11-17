@@ -33,6 +33,11 @@ export type IncidentReportChannel = (typeof INCIDENT_REPORT_CHANNELS)[number];
 export const INCIDENT_SURFACES = ['generation', 'edit', 'upload'] as const;
 export type IncidentSurface = (typeof INCIDENT_SURFACES)[number];
 
+// How an incident reached the second review step: a reviewer escalated it, or the review sweep did
+// once it had waited too long for a verdict.
+export const INCIDENT_ESCALATION_TRIGGERS = ['manual', 'timeout'] as const;
+export type IncidentEscalationTrigger = (typeof INCIDENT_ESCALATION_TRIGGERS)[number];
+
 export const ModerationLabelHitSchema = z.object({
   name: z.string(),
   parentName: z.string(),
@@ -81,6 +86,17 @@ export const ImageModerationIncidentSchema = z.object({
   alertedAt: z.union([z.string(), z.date()]).optional(),
   // When a scheduled sweep reminder digest last covered this incident while it awaited a verdict.
   lastReminderAt: z.union([z.string(), z.date()]).optional(),
+  // Second review step. Escalation is stamped on an incident that is still pending and never changes
+  // reviewStatus, so every pending query keeps matching it.
+  escalatedAt: z.union([z.string(), z.date()]).optional(),
+  // Admin user id that escalated it; absent when the sweep escalated it.
+  escalatedBy: z.string().optional(),
+  escalationTrigger: z.enum(INCIDENT_ESCALATION_TRIGGERS).optional(),
+  // When the escalation email was delivered. Absent means a later sweep still owes it.
+  escalationAlertedAt: z.union([z.string(), z.date()]).optional(),
+  // When a sweep reminder digest to the second reviewers last covered this incident. Separate from
+  // lastReminderAt so the two lists are reminded independently of each other.
+  escalationLastReminderAt: z.union([z.string(), z.date()]).optional(),
   createdAt: z.union([z.string(), z.date()]).optional(),
   updatedAt: z.union([z.string(), z.date()]).optional(),
 });

@@ -79,7 +79,7 @@ describe('admin search route', () => {
     expect(res._getJSONData()).toEqual({ results: [] });
     expect(audit).not.toHaveBeenCalled();
   });
-  it.each(['192.0.2.1', 'b4m_live_abcd'])('audits %s without recording the identifier', async q => {
+  it.each(['192.0.2.1', 'b4m_live_abcd', 'f'.repeat(64)])('audits %s without recording the identifier', async q => {
     await call(q);
     expect(audit).toHaveBeenCalledOnce();
     expect(JSON.stringify(audit.mock.calls[0][1])).not.toContain(q);
