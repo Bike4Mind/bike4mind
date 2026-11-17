@@ -13,7 +13,7 @@ const ONE_MINUTE_MS = 60 * 1000;
 /**
  * GET /api/organizations/:id/storage-usage - the org's storage pool: the counter quota checks enforce,
  * the effective limit in bytes, and the charged rows by uploader (OrganizationStorageUsage). Read tier
- * (verifyOrgAdminRead): owner, manager, appointed admin or platform admin; anyone else gets 404.
+ * (verifyOrgAdminRead): owner, manager (with a users[] row) or platform admin; anyone else gets 404.
  * First-party only (`jwtOnly`), like users/me/storage-breakdown, so it needs no public API contract.
  */
 const handler = baseApi({ auth: 'jwtOnly' })

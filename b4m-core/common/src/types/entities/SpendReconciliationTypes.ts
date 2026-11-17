@@ -3,6 +3,13 @@ import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 
 /**
+ * deltaPct bands shared by the admin reconciliation banner and the nightly drift alarm
+ * (apps/workers/src/cron/spendReconciliation.ts): below WARN is in line, above ALERT pages.
+ */
+export const SPEND_RECONCILIATION_DRIFT_WARN_PCT = 2;
+export const SPEND_RECONCILIATION_DRIFT_ALERT_PCT = 10;
+
+/**
  * One reconciliation snapshot per (month, provider). The nightly cron fetches
  * each provider's authoritative billing total and compares it against our
  * internal COGS estimate (sum of UsageEvent.costUsd). Append-only: a new row

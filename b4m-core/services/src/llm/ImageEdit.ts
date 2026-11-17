@@ -72,6 +72,7 @@ import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
 import type { ImageCreditHolds } from './imageCreditHolds';
 import { moderateImageOrThrow } from './imageModerationGate';
+import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
 import { estimateImageCredits } from '../imageCost';
 import { getQuestErrorCode } from '@bike4mind/common';
@@ -156,7 +157,13 @@ interface IImageEditServiceOptions {
   startImageEditProcess: (body: ImageEditBody) => Promise<void>;
   /** Reserves the estimate before the provider call. Required so the app factory cannot drop the hold. */
   creditHolds: ImageCreditHolds;
-  assertModelAdmission: (user: string | IUserDocument, modelId: string, adminRoleWithheld?: boolean) => Promise<void>;
+  /** organizationId is the org this request bills, so its model policy applies. */
+  assertModelAdmission: (
+    user: string | IUserDocument,
+    modelId: string,
+    adminRoleWithheld?: boolean,
+    organizationId?: string | null
+  ) => Promise<void>;
   deleteFabFile: (userId: string, fileId: string) => Promise<void>;
   wsHttpsUrl: string;
   abilityGetter: (user: IUserDocument | undefined) => MongoAbility;
@@ -265,7 +272,7 @@ export class ImageEditService {
         ? ImageModels.GPT_IMAGE_1_5
         : requestedModel;
 
-    await this.assertModelAdmission(userId, model, adminRoleWithheld);
+    await this.assertModelAdmission(userId, model, adminRoleWithheld, organizationId);
     const session = await this.db.sessions.findById(sessionId);
     if (!session) throw new NotFoundError('Session not found');
 
@@ -557,7 +564,7 @@ export class ImageEditService {
         organizationId ? this.db.organizations.findById(organizationId) : Promise.resolve(null),
       ]);
       if (!user) throw new NotFoundError('User not found');
-      await this.assertModelAdmission(user, model, adminRoleWithheld);
+      await this.assertModelAdmission(user, model, adminRoleWithheld, organizationId);
 
       // skipCache: enforceCredits gates money (and ModerationEnabled below gates content safety),
       // and this host may outlive the admin's write to either.
@@ -680,8 +687,12 @@ export class ImageEditService {
           statusMessage: 'Checking prompt...',
         });
         // Only moderate if using OpenAI (BFL models have their own safety_tolerance)
-        if (provider !== 'bfl' && apiKeyTable.openai) {
-          await new OpenaiModerationsService(apiKeyTable.openai, logger).checkPrompt(prompt);
+        const moderationOpenaiKey = resolveModerationOpenaiKey(
+          apiKeyTable.openai,
+          getSettingsValue('openaiDemoKey', settings)
+        );
+        if (provider !== 'bfl' && moderationOpenaiKey) {
+          await new OpenaiModerationsService(moderationOpenaiKey, logger).checkPrompt(prompt);
         }
       }
 

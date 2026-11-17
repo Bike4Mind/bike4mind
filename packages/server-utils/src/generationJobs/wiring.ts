@@ -610,6 +610,11 @@ export const getCreateMusicJobDeps = (): CreateMusicJobDeps => ({
   checkStorageFor,
 });
 
+const countNotebookImage = async (questId: string): Promise<void> => {
+  const quest = await questRepository.findById(questId);
+  if (quest?.sessionId) await sessionRepository.incrementImageCount(String(quest.sessionId), 1);
+};
+
 let imageJobDeps: ImageJobDeps | undefined;
 export const getImageJobDeps = (): ImageJobDeps => {
   imageJobDeps ??= {
@@ -630,6 +635,7 @@ export const getImageJobDeps = (): ImageJobDeps => {
     },
     enqueue: enqueueGenerationJob,
     recordUsage: recordImageUsage,
+    countNotebookImage,
     now: () => new Date(),
     logger,
   };

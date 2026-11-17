@@ -70,6 +70,23 @@ If you do not see **Connectors**, ask the Team owner to check your management ac
 
 If the deployment has custom connectors turned off, the page shows a notice; saving a Team policy cannot turn them on. If the saved policy is invalid, save a valid replacement or use **Use platform default**. If a policy or member-connections request fails, use **Retry** instead of treating the missing data as an empty list. A member who belongs to several Teams is subject to every Team's connector policy, so another Team's restrictions can also block a connection.
 
+## Models and tools
+
+The Team owner, current Team managers and platform admins can open **View Details > Settings > Models and tools** to restrict the AI providers, models and listed built-in tools used in the Team's context. These restrictions do not grant access to a model that is unavailable under the deployment's settings or your plan. Custom connector tools have their own policy under **Connectors**. Requests outside an organization context and platform-selected system models are exempt from the Team's model policy.
+
+- Turn on **Restrict providers** or **Restrict models** and select at least one entry. When both restrictions are on, a model must satisfy both. A provider restriction also blocks media providers that are not represented in the provider list.
+- A selected retired model ID also allows its configured successor, provided the successor meets the provider restriction. Selected IDs that are no longer in the catalog remain visible. Models outside the selected providers remain visible when selected so you can remove them.
+- Turn on **Restrict built-in tools** to choose from the listed tools. Leaving every tool unchecked blocks those tools; turning the restriction off leaves them unrestricted.
+- Click **Save** to apply the policy, or **Reset to unrestricted** to remove the Team's restrictions. Unrestricted does not override platform or plan limits.
+
+The model picker refreshes when you return to the tab and every few minutes, so it can briefly show a model the policy no longer allows. Server checks enforce the policy regardless, when work starts and when governed tools choose a provider; an already running provider request is not cancelled by a policy edit.
+
+### Troubleshooting model policy
+
+If **Models and tools** is missing, ask the owner to check your Team management access. Being able to edit other Team settings does not necessarily grant policy management access.
+
+Unrecognized saved provider or tool entries are shown so an administrator can remove them before saving. They do not authorize a different provider or tool. If the stored policy is malformed, requests fail closed until an administrator saves a valid replacement or resets it. If no model satisfies the policy and the usual platform and plan checks, widen the policy or choose another permitted model; the system does not bypass the restriction to find a fallback.
+
 ## Data retention
 
 Open **Teams > View Details > Overview > Data retention** to see the active periods for **Chat history**, **Uploaded files** and **Generated media**. Each starts at **Keep forever**.

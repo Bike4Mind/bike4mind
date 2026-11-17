@@ -89,7 +89,7 @@ export function App({
   const messages = useCliStore(useShallow(state => state.session?.messages || []));
   const pendingMessages = useCliStore(state => state.pendingMessages);
   const messageQueue = useCliStore(state => state.messageQueue);
-  const currentModel = useCliStore(state => state.session?.model || ChatModels.CLAUDE_4_5_SONNET);
+  const currentModel = useCliStore(state => state.session?.model || ChatModels.CLAUDE_5_5_SONNET);
   const totalTokens = useCliStore(state => state.session?.metadata.totalTokens || 0);
   const totalCredits = useCliStore(state => state.session?.metadata.totalCredits);
   // Spawned-agent usage: completed runs (session metadata rollup) + currently-running ones (live map)

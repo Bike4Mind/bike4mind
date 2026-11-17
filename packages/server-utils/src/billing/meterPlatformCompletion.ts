@@ -11,10 +11,12 @@ import {
   getTurnsCost,
   insufficientCreditsError,
   isShadowTier,
+  readOrgModelPolicy,
   type IMessage,
   type IUserDocument,
   type ModelInfo,
   type ApiKeyCompletionSource,
+  type ReadOrgModelPolicy,
 } from '@bike4mind/common';
 import {
   adminSettingsRepository,
@@ -36,6 +38,7 @@ import {
   loadFreeTierAllowedModels,
   loadModelConfigurations,
   type ModelAdmission,
+  type ModelAdmissionInput,
 } from '@bike4mind/services/llm/modelAdmission';
 import {
   executedModelFields,
@@ -71,16 +74,26 @@ export type MeteredRequest = Parameters<typeof reserveRequestCredits>[0]['req'] 
  * executeCompletion and the agent executor). Pass the resolved catalog so a disabled model, or an
  * unpriced text model while credits are enforced, is refused too. `systemModel` skips the per-user
  * picker access rules and the free-tier gate for a model the platform chose (the operations model, a fixed default).
+ * `organizationId` applies that org's model policy; a system model skips it, since the org did not pick it.
  */
 export async function createModelAdmission(
   user: IUserDocument,
   models?: ModelInfo[],
-  systemModel = false
+  systemModel = false,
+  opts: {
+    organizationId?: string | null;
+    getOrgModelBackend?: ModelAdmissionInput['getOrgModelBackend'];
+    /** Trusted parsed snapshot already loaded for this execution; explicit null is unrestricted. */
+    orgModelPolicy?: ReadOrgModelPolicy;
+  } = {}
 ): Promise<ModelAdmission> {
-  const [configs, enforceCredits, freeTierAllowedModels] = await Promise.all([
+  const [configs, enforceCredits, freeTierAllowedModels, org] = await Promise.all([
     systemModel ? [] : loadModelConfigurations(adminSettingsRepository),
     isCreditsEnforced(),
     systemModel ? undefined : loadFreeTierAllowedModels(adminSettingsRepository),
+    systemModel || opts.orgModelPolicy !== undefined || !opts.organizationId
+      ? null
+      : organizationRepository.findById(opts.organizationId),
   ]);
   const admission = createSharedModelAdmission({
     user,
@@ -89,12 +102,18 @@ export async function createModelAdmission(
     models,
     enforceCredits,
     freeTierAllowedModels,
+    orgModelPolicy: systemModel
+      ? null
+      : opts.orgModelPolicy === undefined
+        ? readOrgModelPolicy(org?.modelPolicy)
+        : opts.orgModelPolicy,
+    getOrgModelBackend: opts.getOrgModelBackend,
   });
   return {
-    admits: modelId => admission.admits(modelId),
-    async assert(modelId) {
+    admits: (modelId, options) => admission.admits(modelId, options),
+    async assert(modelId, options) {
       try {
-        await admission.assert(modelId);
+        await admission.assert(modelId, options);
       } catch (error) {
         await recordPaidPlanRefusal(user.id, modelId, error);
         throw error;
@@ -187,7 +206,8 @@ export async function reserveCompletionCredits(
 
 /**
  * The allowlisted model a restricted caller runs in place of `requested`, or undefined when the request
- * runs as asked. Callers keep admission, the hold and the response on the requested model.
+ * runs as asked. Only models the billing org allows qualify. Callers keep admission, the hold and the
+ * response on the requested model.
  */
 export async function resolveShadowSubstitute(
   req: MeteredRequest,
@@ -197,8 +217,13 @@ export async function resolveShadowSubstitute(
 ): Promise<ModelInfo | undefined> {
   const user = throttleUser(req);
   if (!user || !isShadowTier(user)) return undefined;
-  const { allowlist } = await loadShadowTierSettings(adminSettingsRepository);
-  return resolveShadowModelInfo(user, requested, models, allowlist, req.logger, { requireTools });
+  const organizationId = resolveRequestBillingOrgId(req);
+  const [{ allowlist }, org] = await Promise.all([
+    loadShadowTierSettings(adminSettingsRepository),
+    organizationId ? organizationRepository.findById(organizationId) : null,
+  ]);
+  const orgModelPolicy = readOrgModelPolicy(org?.modelPolicy);
+  return resolveShadowModelInfo(user, requested, models, allowlist, req.logger, { requireTools, orgModelPolicy });
 }
 
 export { hasReportedUsage, latchUsage, type CompletionUsage };
@@ -325,7 +350,10 @@ export function createRequestCompletionMeter(
   opts: CompletionMeterOptions = {}
 ): CompletionMeter {
   return async (modelInfo, messages, maxTokens, models, turns = 1, tools = []) => {
-    await (await createModelAdmission(req.user!, models ?? [modelInfo], opts.systemModel)).assert(modelInfo.id);
+    const organizationId = opts.systemModel ? null : resolveRequestBillingOrgId(req, opts.organizationId);
+    await (
+      await createModelAdmission(req.user!, models ?? [modelInfo], opts.systemModel, { organizationId })
+    ).assert(modelInfo.id);
     const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens, false, tools);
     const reservation = await reserveCompletionCredits(req, ceilingUsd * turns, featureLabel, {
       organizationId: opts.organizationId,
