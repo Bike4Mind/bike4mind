@@ -23,6 +23,11 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
+const mockAudit = vi.fn();
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...args: unknown[]) => mockAudit(...args),
+}));
+
 import handler from '../by-provider-id';
 
 const ADMIN = { id: 'a'.repeat(24), isAdmin: true };
@@ -40,6 +45,7 @@ describe('GET /api/admin/users/by-provider-id', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFindOne.mockResolvedValue(null);
+    mockAudit.mockResolvedValue({});
   });
 
   it('gates through adminApi with JWT auth, admin scope and support:read for GET', () => {
@@ -56,6 +62,7 @@ describe('GET /api/admin/users/by-provider-id', () => {
       const res = await call(query as Record<string, string>);
       expect(res._getStatusCode()).toBe(400);
       expect(mockFindOne).not.toHaveBeenCalled();
+      expect(mockAudit).not.toHaveBeenCalled();
     }
   );
 
@@ -70,7 +77,37 @@ describe('GET /api/admin/users/by-provider-id', () => {
     expect(res._getJSONData()).toEqual({ id: 'u1', name: 'Ada', username: 'ada', email: 'ada@example.com' });
   });
 
+  it('audits a match against the matched account', async () => {
+    mockFindOne.mockResolvedValue({ _id: 'u1', name: 'Ada', username: 'ada', email: 'ada@example.com' });
+
+    await call({ id: DIGEST });
+
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.provider_id.resolved',
+        target: { kind: 'user', id: 'u1', displayName: 'ada@example.com' },
+        details: { providerEndUserId: DIGEST, matched: true, source: 'by_provider_id' },
+      })
+    );
+  });
+
+  it('fails the request without returning the account when the audit write fails', async () => {
+    mockFindOne.mockResolvedValue({ _id: 'u1', name: 'Ada', username: 'ada', email: 'ada@example.com' });
+    mockAudit.mockRejectedValue(new Error('audit down'));
+
+    await expect(call({ id: DIGEST })).rejects.toThrow('audit down');
+  });
+
   it('answers 404 when no account carries the identifier', async () => {
     await expect(call({ id: DIGEST })).rejects.toThrow('No account has this provider end-user identifier');
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.provider_id.resolved',
+        target: expect.objectContaining({ kind: 'system' }),
+        details: { providerEndUserId: DIGEST, matched: false, source: 'by_provider_id' },
+      })
+    );
   });
 });

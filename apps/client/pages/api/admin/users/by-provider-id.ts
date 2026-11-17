@@ -4,6 +4,7 @@ import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
 
 const QuerySchema = z.object({
@@ -37,6 +38,16 @@ const handler = adminApi({
       }
       res.setHeader('Cache-Control', 'private, no-store');
       const user = await User.findOne({ providerEndUserId: parsed.data.id }).select('_id name username email').lean();
+      await recordAdminActionFromRequest(req, {
+        action: 'user.provider_id.resolved',
+        target: user
+          ? { kind: 'user', id: String(user._id), displayName: user.email ?? user.username }
+          : { kind: 'system', id: 'provider-end-user-id', displayName: 'Provider end-user identifier' },
+        summary: user
+          ? 'Resolved a provider end-user identifier to an account'
+          : 'Looked up an unknown provider end-user identifier',
+        details: { providerEndUserId: parsed.data.id, matched: Boolean(user), source: 'by_provider_id' },
+      });
       if (!user) throw new NotFoundError('No account has this provider end-user identifier');
       return res.json({ id: String(user._id), name: user.name, username: user.username, email: user.email ?? null });
     })
