@@ -95,6 +95,22 @@ describe('trackQuests', () => {
     expect(ledger.open.size).toBe(0);
   });
 
+  it('checks off a run the user accepts while it waits on them, even with its record unchanged', () => {
+    const ledger = track([
+      [agent('a', 'working', { outcome: 'finished' })],
+      [ended('a', 'needs-you', 'finished')],
+      [ended('a', 'done', 'finished')],
+    ]);
+    expect(ledger.finished).toEqual(new Map([['a', 200]]));
+    expect(ledger.open.size).toBe(0);
+  });
+
+  it('ends a run the user stops while it waits on them, even with its record unchanged', () => {
+    const ledger = track([[ended('a', 'needs-you', 'aborted')], [ended('a', 'stopped', 'aborted')]]);
+    expect(ledger.open.size).toBe(0);
+    expect(ledger.finished.size).toBe(0);
+  });
+
   it('ends a re-run that fails again with the same outcome once the record updates', () => {
     const ledger = track([[agent('a', 'working', { outcome: 'failed' })], [ended('a', 'failed', 'failed')]]);
     expect(ledger.open.size).toBe(0);

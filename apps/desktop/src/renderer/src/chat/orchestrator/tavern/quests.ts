@@ -28,8 +28,12 @@ export type QuestLedger = {
   finished: ReadonlyMap<string, number>;
 };
 
-/** The session record as last seen on an open quest: until it changes, any stored outcome is a previous run's. */
-type OpenSnapshot = { outcome: ChildOutcome | undefined; updatedAt: string };
+/**
+ * The session record as last seen on an open quest: until it changes, any stored outcome is a previous
+ * run's. Only a run last seen `working` can be in that gap: one waiting on the user (`needs-you`) may
+ * already hold its own outcome, so whatever it turns into next is real (accepted, stopped).
+ */
+type OpenSnapshot = { outcome: ChildOutcome | undefined; updatedAt: string; working: boolean };
 
 export const EMPTY_LEDGER: QuestLedger = { open: new Map(), finished: new Map() };
 
@@ -39,13 +43,18 @@ export const EMPTY_LEDGER: QuestLedger = { open: new Map(), finished: new Map() 
  * failed or stopped on a re-run). The stored outcome lands with a record update, which ends the bridge.
  */
 function isAwaitingOutcome(agent: AgentView, snapshot: OpenSnapshot): boolean {
-  if (agent.outcome !== snapshot.outcome) return false;
+  if (!snapshot.working || agent.outcome !== snapshot.outcome) return false;
   return agent.updatedAt === snapshot.updatedAt || (agent.state === 'idle' && agent.outcome === undefined);
 }
 
 /** A re-run reading `done` from the previous run's stored outcome, before the new outcome lands. */
 function isStaleDone(agent: AgentView, snapshot: OpenSnapshot): boolean {
-  return agent.outcome !== undefined && agent.outcome === snapshot.outcome && agent.updatedAt === snapshot.updatedAt;
+  return (
+    snapshot.working &&
+    agent.outcome !== undefined &&
+    agent.outcome === snapshot.outcome &&
+    agent.updatedAt === snapshot.updatedAt
+  );
 }
 
 /**
@@ -59,7 +68,7 @@ export function trackQuests(ledger: QuestLedger, agents: readonly AgentView[], n
   const finished = new Map<string, number>();
   for (const agent of agents) {
     if (OPEN.has(agent.state)) {
-      open.set(agent.id, { outcome: agent.outcome, updatedAt: agent.updatedAt });
+      open.set(agent.id, { outcome: agent.outcome, updatedAt: agent.updatedAt, working: agent.state === 'working' });
       continue;
     }
     if (agent.state === 'done') {
