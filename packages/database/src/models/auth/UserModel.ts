@@ -7,6 +7,8 @@ import {
   VERIFIED_SLACK_IDENTITY_FILTER,
   canonicalizeEmail,
   DEFAULT_STORAGE_LIMIT_MB,
+  USER_ACCOUNT_SEGMENTS,
+  type UserAccountSegment,
 } from '@bike4mind/common';
 import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import {
@@ -407,6 +409,14 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   async removeGroupsFromAllUsers(groupIds: string[]): Promise<void> {
     if (groupIds.length === 0) return;
     await this.model.updateMany({ groups: { $in: groupIds } }, { $pull: { groups: { $in: groupIds } } });
+  }
+
+  /** Sets the partner mark, or unsets the field for `null` (absent reads as customer). */
+  async setAccountSegment(userId: string, accountSegment: UserAccountSegment | null): Promise<void> {
+    await this.model.updateOne(
+      { _id: userId },
+      accountSegment ? { $set: { accountSegment } } : { $unset: { accountSegment: 1 } }
+    );
   }
 
   /** Null the active-org pointer of every user on the org (org delete). */
@@ -2130,6 +2140,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     isSynthetic: { type: Boolean, required: false },
     // See IUser.isInternal. No default, like isSynthetic: absent reads as "not marked".
     isInternal: { type: Boolean, required: false },
+    // See IUser.accountSegment. No default: absent reads as customer.
+    accountSegment: { type: String, required: false, enum: [...USER_ACCOUNT_SEGMENTS] },
     // See IUser.isPersona. Written only by the persona mint route.
     isPersona: { type: Boolean, required: false },
     personaExpiresAt: { type: Date, required: false },

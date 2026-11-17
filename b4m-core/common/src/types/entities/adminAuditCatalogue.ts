@@ -118,6 +118,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.conversion.initiated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.revoked': { category: 'org', severity: 'notice', write: 'strict' },
   'org.group_types.updated': { category: 'org', severity: 'info', write: 'strict' },
+  'organization.segment.changed': { category: 'org', severity: 'notice', write: 'strict' },
   'org.admins.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.owner.transferred': { category: 'org', severity: 'notice', write: 'strict' },
   'org.group_member.assigned': { category: 'org', severity: 'info', write: 'bestEffort' },
@@ -190,6 +191,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // counts as a customer, so both directions keep a record.
   'user.internal.marked': { category: 'account', severity: 'notice', write: 'strict' },
   'user.internal.unmarked': { category: 'account', severity: 'notice', write: 'strict' },
+  'user.segment.changed': { category: 'account', severity: 'notice', write: 'strict' },
   'user.email.unverified': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.verification_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },

@@ -13,6 +13,7 @@ import {
   ChartColumn,
   ChartLine,
   ChartSpline,
+  ChartColumnStacked,
   Clock,
   Code,
   Coins,
@@ -151,6 +152,7 @@ export enum AdminTab {
   LegacyApiKeys = 79,
   Roles = 80,
   AccessReview = 81,
+  SpendExplorer = 82,
 }
 
 /**
@@ -258,6 +260,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     items: [
       { Icon: ChartSpline, tab: AdminTab.Revenue, label: 'Revenue & payments', testid: 'admin-revenue-btn' },
       { Icon: Coins, tab: AdminTab.CreditAnalytics, label: 'Credits' },
+      {
+        Icon: ChartColumnStacked,
+        tab: AdminTab.SpendExplorer,
+        label: 'Spend explorer',
+        testid: 'admin-spend-explorer-btn',
+      },
       { Icon: CreditCard, tab: AdminTab.Subscriptions, label: 'Subscriptions', badge: 'newSubscriptions' },
       { Icon: Tag, tab: AdminTab.GrowthPricing, label: 'Pricing', testid: 'admin-growth-pricing-btn' },
     ],

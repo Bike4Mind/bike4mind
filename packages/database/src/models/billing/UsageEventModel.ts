@@ -42,7 +42,12 @@ import {
   USAGE_PRICE_SOURCES,
   attributeChargeToFundingSources,
   type IUsageFundingBreakdown,
+  type SpendBreakdown,
+  type SpendBreakdownParams,
+  type SpendTimelineParams,
+  type SpendTimelineRow,
 } from '@bike4mind/common';
+import { spendBreakdownPipeline, spendTimelinePipeline } from './spendExplorerPipelines';
 import { loadCreditHolderFundingSnapshot, type LoadCreditHolderFundingSnapshot } from './creditHolderFundingSnapshot';
 
 export type IUsageEventDocument = IUsageEvent & IMongoDocument;
@@ -692,6 +697,25 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       byModel: result?.byModel ?? [],
       byAccount: result?.byAccount ?? [],
       dailyCost: result?.dailyCost ?? [],
+    };
+  }
+
+  async spendTimeline(params: SpendTimelineParams): Promise<SpendTimelineRow[]> {
+    return this.model.aggregate<SpendTimelineRow>(spendTimelinePipeline(params));
+  }
+
+  async spendBreakdown(params: SpendBreakdownParams): Promise<SpendBreakdown> {
+    const [result] = await this.model.aggregate<{
+      totals: Array<{ costUsd: number }>;
+      byProvider: SpendBreakdown['byProvider'];
+      bySegment: SpendBreakdown['bySegment'];
+      topActors: SpendBreakdown['topActors'];
+    }>(spendBreakdownPipeline(params));
+    return {
+      totalCostUsd: result?.totals?.[0]?.costUsd ?? 0,
+      byProvider: result?.byProvider ?? [],
+      bySegment: result?.bySegment ?? [],
+      topActors: result?.topActors ?? [],
     };
   }
 
