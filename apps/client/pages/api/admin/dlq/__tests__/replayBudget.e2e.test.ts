@@ -47,7 +47,16 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   deleteFromQueue: h.delete,
 }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn() }));
-vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } }));
+vi.mock('@server/admin/dlq/triage', () => ({ visibleDlqSuggestion: vi.fn() }));
+vi.mock('@bike4mind/observability', async importOriginal => {
+  const original = await importOriginal<typeof import('@bike4mind/observability')>();
+  class Logger extends original.Logger {
+    static info = vi.fn();
+    static error = vi.fn();
+    static warn = vi.fn();
+  }
+  return { ...original, Logger };
+});
 
 import '../replay';
 

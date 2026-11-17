@@ -899,16 +899,6 @@
       "count": 3
     }
   },
-  "apps/client/app/routes/verify-change.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/client/app/routes/verify-email.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/app/services/adminTools/AdminToolService.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1

@@ -111,6 +111,7 @@ can silently turn it into `none`.
 | DataLakeSpendNotification | `scope` | enum | `ai/DataLakeSpendNotificationModel.ts#DataLakeSpendNotificationRepository.claimNotification` | route-schema | `b4m-core/services/src/dataLakeService/renderSpendNotificationEmail.ts#renderSpendNotificationEmail` | Sole caller renders first; the renderer throws on an unhandled kind/scope pair |
 | DeviceAuthorization | `status` | enum | `auth/DeviceAuthorizationModel.ts#DeviceAuthorizationRepository.claimApproved` | repository-check | `literal` | writes "consumed" |
 | DlqReplayLog | `status` | enum | `infra/webhooks/DlqReplayLogModel.ts#DlqReplayLogRepository.finalizeDiscard` | route-schema | `apps/client/pages/api/admin/dlq/discard.ts#handler` | Caller uses a ternary between the literals 'discarded' and 'failed' |
+| DlqTriageDelivery | `state` | enum | `infra/webhooks/DlqTriageDeliveryModel.ts#delivered` | repository-check | `literal` | writes "delivered" |
 | DungeonInstance | `status` | enum | `content/DungeonInstanceModel.ts#markExpired` | repository-check | `literal` | writes "expired" |
 | DungeonInstance | `status` | enum | `content/DungeonInstanceModel.ts#markExpiring` | repository-check | `literal` | writes "expiring" |
 | EmailJob | `overallStatus` | enum | `infra/email/EmailJobModel.ts#EmailJobRepository.claimForSending` | route-schema | `apps/client/pages/api/admin/email/jobs/[id]/send.ts#claimForSending` | Writer sets SENDING constant; sole caller's updates spread has no status |
