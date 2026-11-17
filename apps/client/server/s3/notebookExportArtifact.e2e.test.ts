@@ -30,7 +30,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
  *     one object literal the second would silently replace the first and the access check would be
  *     gone. A stub asserting on `query.$or` cannot tell those two shapes apart.
  *
- * Run `pnpm --filter @bike4mind/services build` first: the service comes from the built dist, so a
+ * Run `pnpm --filter @bike4mind/services-core build` first: the service comes from the built dist, so a
  * stale build reports green against whatever was last compiled.
  */
 

@@ -32,7 +32,7 @@
     "@bike4mind/resource": "workspace:*",
     "@bike4mind/scripts": "workspace:*",
     "@bike4mind/server-utils": "workspace:*",
-    "@bike4mind/services": "workspace:*",
+    "@bike4mind/services": "workspace:@bike4mind/services-core@*",
     "@bike4mind/slack": "workspace:*",
     "@bike4mind/utils": "workspace:*",
     "@casl/mongoose": "^8.0.5",

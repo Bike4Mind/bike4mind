@@ -274,7 +274,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/server-utils
       '@bike4mind/services':
-        specifier: workspace:*
+        specifier: workspace:@bike4mind/services-core@*
         version: link:../../b4m-core/services
       '@bike4mind/slack':
         specifier: workspace:*
@@ -1119,7 +1119,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/server-utils
       '@bike4mind/services':
-        specifier: workspace:*
+        specifier: workspace:@bike4mind/services-core@*
         version: link:../../b4m-core/services
       '@bike4mind/slack':
         specifier: workspace:*
@@ -1882,7 +1882,7 @@ importers:
       '@bike4mind/observability':
         specifier: workspace:*
         version: link:../observability
-      '@bike4mind/services':
+      '@bike4mind/services-core':
         specifier: workspace:*
         version: link:../services
       '@bike4mind/utils':
@@ -2355,7 +2355,7 @@ importers:
         specifier: workspace:*
         version: link:../sdk
       '@bike4mind/services':
-        specifier: workspace:*
+        specifier: workspace:@bike4mind/services-core@*
         version: link:../../b4m-core/services
       '@bike4mind/utils':
         specifier: workspace:*
@@ -2580,7 +2580,7 @@ importers:
         specifier: workspace:*
         version: link:../server-utils
       '@bike4mind/services':
-        specifier: workspace:*
+        specifier: workspace:@bike4mind/services-core@*
         version: link:../../b4m-core/services
       '@bike4mind/utils':
         specifier: workspace:*
@@ -2777,7 +2777,7 @@ importers:
         specifier: workspace:*
         version: link:../../b4m-core/resource
       '@bike4mind/services':
-        specifier: workspace:*
+        specifier: workspace:@bike4mind/services-core@*
         version: link:../../b4m-core/services
       '@bike4mind/slack':
         specifier: workspace:*

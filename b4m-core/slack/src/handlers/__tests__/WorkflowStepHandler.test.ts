@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
-import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvoke';
+import { ChatCompletionInvoke } from '@bike4mind/services-core/llm/ChatCompletionInvoke';
 import { getControlledManifestFields } from '@bike4mind/common';
 import {
   WorkflowStepHandler,
@@ -44,7 +44,7 @@ vi.mock('../../di/registry', () => ({
   }),
 }));
 
-vi.mock('@bike4mind/services/llm/ChatCompletionInvoke', () => ({
+vi.mock('@bike4mind/services-core/llm/ChatCompletionInvoke', () => ({
   ChatCompletionInvoke: vi.fn().mockImplementation(function () {
     return { invoke: vi.fn().mockResolvedValue({}) };
   }),
