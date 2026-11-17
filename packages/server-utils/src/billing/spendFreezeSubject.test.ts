@@ -38,6 +38,15 @@ describe('spendFreezeSubjectForRequest', () => {
       apiKeyId: 'k1',
     });
   });
+
+  it('keeps the user for an org-billed caller with no key id', () => {
+    const apiKeyInfo = { billingOwnerType: CreditHolderType.Organization };
+    expect(spendFreezeSubjectForRequest({ user, apiKeyInfo }, 'org1')).toEqual({
+      userId: 'u1',
+      organizationId: 'org1',
+      apiKeyId: null,
+    });
+  });
 });
 
 describe('billedOrganizationIdForFreeze', () => {

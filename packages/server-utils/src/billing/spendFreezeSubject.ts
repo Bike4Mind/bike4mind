@@ -15,11 +15,12 @@ export function spendFreezeSubjectForRequest(
   },
   billingOrganizationId: string | null
 ): SpendFreezeSubject {
-  const orgBilledKey = req.apiKeyInfo?.billingOwnerType === CreditHolderType.Organization;
+  const keyId = req.apiKeyInfo?.keyId ?? null;
+  const orgBilledKey = !!keyId && req.apiKeyInfo?.billingOwnerType === CreditHolderType.Organization;
   return {
     userId: orgBilledKey ? null : (req.user?.id ?? null),
     organizationId: billingOrganizationId,
-    apiKeyId: req.apiKeyInfo?.keyId ?? null,
+    apiKeyId: keyId,
   };
 }
 
