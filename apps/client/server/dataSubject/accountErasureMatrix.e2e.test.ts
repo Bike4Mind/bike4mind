@@ -286,7 +286,13 @@ async function seedFromRegistry(subject: { userId: string; email: string }): Pro
       });
     }
     for (const reference of holder.attribution ?? []) {
-      await insert(model, documentFor(model, reference, subject), `${reference.path} (attribution)`, reference, 'anonymized');
+      await insert(
+        model,
+        documentFor(model, reference, subject),
+        `${reference.path} (attribution)`,
+        reference,
+        'anonymized'
+      );
     }
   }
   return seeded;
@@ -390,8 +396,7 @@ async function expectSeededOutcomes(subject: { userId: string; email: string }, 
       const emptied = row.ref?.action === 'pullFromArray'; // seeded with only the subject, so nothing is left
       const purgedWithParent = row.under && DELETED_INSTEAD_OF_ANONYMIZED.has(row.under.parent);
       const stronger = DELETED_INSTEAD_OF_ANONYMIZED.has(row.model) || purgedWithParent;
-      if (!emptied && !stronger)
-        violations.push(`${label} should remain (${outcome})`);
+      if (!emptied && !stronger) violations.push(`${label} should remain (${outcome})`);
     } else if (row.ref) {
       const wanted = row.ref.matchBy === 'email' ? subject.email : subject.userId;
       const names = valuesAt(found, row.ref.path).some(value => String(value) === wanted);
