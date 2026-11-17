@@ -11,6 +11,7 @@ import {
 import { STUDIO_MICRO_LABEL, studioColor, studioRadius } from '../design/studioTokens';
 import { moveClip, removeClip, trimClipEnd, trimClipStart } from './timelineEdits';
 import { formatTimecode } from './timelinePlayback';
+import { usePlaybackTime, type PlaybackClock } from './usePlaybackClock';
 import type { TimelineFile } from './useTimelineFiles';
 
 export type AddClipRequest = { kind: 'video' | 'image' | 'voice' | 'sfx' | 'music' | 'captions' };
@@ -142,7 +143,7 @@ type DragMode = 'move' | 'trim-start' | 'trim-end';
 type TimelineTracksProps = {
   timeline: StudioTimeline;
   files: ReadonlyMap<string, TimelineFile>;
-  timeMs: number;
+  clock: PlaybackClock;
   selectedClipId: string | null;
   invalidClipIds: ReadonlySet<string>;
   onSelect: (clipId: string | null) => void;
@@ -170,6 +171,12 @@ const rulerStepMs = (durationMs: number) =>
 
 const percent = (ms: number, durationMs: number) => `${(ms / durationMs) * 100}%`;
 
+// The only part of the timeline that re-renders on every clock tick.
+const ClockPlayhead = ({ clock, durationMs }: { clock: PlaybackClock; durationMs: number }) => {
+  const timeMs = usePlaybackTime(clock);
+  return <Playhead style={{ left: percent(timeMs, durationMs) }} />;
+};
+
 const clipLabel = (clip: StudioTimelineClip, files: ReadonlyMap<string, TimelineFile>) =>
   'text' in clip ? clip.text : (files.get(clip.fileId)?.fileName ?? 'Loading...');
 
@@ -182,7 +189,7 @@ const clipLabel = (clip: StudioTimelineClip, files: ReadonlyMap<string, Timeline
 const TimelineTracks = ({
   timeline,
   files,
-  timeMs,
+  clock,
   selectedClipId,
   invalidClipIds,
   onSelect,
@@ -305,7 +312,7 @@ const TimelineTracks = ({
             {formatTimecode(mark)}
           </RulerMark>
         ))}
-        <Playhead style={{ left: percent(timeMs, durationMs) }} />
+        <ClockPlayhead clock={clock} durationMs={durationMs} />
       </Ruler>
       {laneRows(timeline).map(({ kind, track, isFirstOfKind }) => (
         <LaneRow key={track?.id ?? `empty-${kind}`}>
@@ -329,7 +336,7 @@ const TimelineTracks = ({
           </LaneHead>
           <Lane data-lane={kind} data-testid={`production-lane-${kind}`} onPointerDown={() => onSelect(null)}>
             {track && clipsOf(track).map(clip => renderClip(track, clip))}
-            <Playhead style={{ left: percent(timeMs, durationMs) }} />
+            <ClockPlayhead clock={clock} durationMs={durationMs} />
           </Lane>
         </LaneRow>
       ))}

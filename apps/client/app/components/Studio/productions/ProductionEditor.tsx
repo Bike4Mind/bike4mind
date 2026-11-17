@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { styled } from '@mui/system';
-import { Button, Chip, Input, Slider, Stack, Typography } from '@mui/joy';
+import { useBlocker } from '@tanstack/react-router';
+import { Button, Chip, Input, Modal, ModalDialog, Slider, Stack, Typography } from '@mui/joy';
 import { toast } from 'sonner';
 import {
   STUDIO_COMPOSITION_LIMITS,
@@ -30,7 +31,7 @@ import {
 } from './timelineEdits';
 import TimelinePreview from './TimelinePreview';
 import TimelineTracks, { type AddClipRequest } from './TimelineTracks';
-import { usePlaybackClock } from './usePlaybackClock';
+import { usePlaybackClock, usePlaybackTime, type PlaybackClock } from './usePlaybackClock';
 import { useTimelineAutosave, type TimelineEditorIssue, type TimelineSaveStatus } from './useTimelineAutosave';
 import { useTimelineFiles } from './useTimelineFiles';
 
@@ -102,6 +103,32 @@ const invalidClipIdsOf = (timeline: StudioTimeline, issues: TimelineEditorIssue[
  * The timeline editor for one production: its title, length and output shapes; the live preview with transport
  * and output switch; the tracks; and the selected clip's inspector. Edits stay in a local draft that autosaves.
  */
+// Play/pause, timecode and seek: the editor's only controls that re-render on every clock tick.
+const PlaybackTransport = ({ clock, durationMs }: { clock: PlaybackClock; durationMs: number }) => {
+  const timeMs = usePlaybackTime(clock);
+  return (
+    <>
+      <Button size="sm" data-testid="production-play-btn" onClick={clock.isPlaying ? clock.pause : clock.play}>
+        {clock.isPlaying ? 'Pause' : 'Play'}
+      </Button>
+      <Typography level="body-sm" data-testid="production-timecode" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+        {formatTimecode(timeMs)} / {formatTimecode(durationMs)}
+      </Typography>
+      <Slider
+        size="sm"
+        aria-label="Seek"
+        min={0}
+        max={durationMs}
+        step={10}
+        value={timeMs}
+        onChange={(_, value) => typeof value === 'number' && clock.seek(value)}
+        sx={{ flex: 1, minWidth: '160px' }}
+        slotProps={{ input: { 'aria-label': 'Playhead', 'data-testid': 'production-seek-slider' } }}
+      />
+    </>
+  );
+};
+
 const ProductionEditor = ({ composition }: { composition: StudioCompositionResponse }) => {
   const [timeline, setTimeline] = useState(composition.timeline);
   const timelineRef = useRef(timeline);
@@ -109,7 +136,12 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
     timelineRef.current = timeline;
   }, [timeline]);
   const { files, context, reportDuration } = useTimelineFiles(timeline);
-  const { status } = useTimelineAutosave(composition.id, timeline, composition.timeline, context);
+  const { status, isDirty, blocksNavigation } = useTimelineAutosave(
+    composition.id,
+    timeline,
+    composition.timeline,
+    context
+  );
   const clock = usePlaybackClock(timeline.durationMs);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [outputId, setOutputId] = useState(timeline.outputs[0].id);
@@ -204,28 +236,11 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
             timeline={timeline}
             output={output}
             files={files}
-            timeMs={clock.timeMs}
-            isPlaying={clock.isPlaying}
+            clock={clock}
             onSourceDuration={reportDuration}
           />
           <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
-            <Button size="sm" data-testid="production-play-btn" onClick={clock.isPlaying ? clock.pause : clock.play}>
-              {clock.isPlaying ? 'Pause' : 'Play'}
-            </Button>
-            <Typography level="body-sm" data-testid="production-timecode" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-              {formatTimecode(clock.timeMs)} / {formatTimecode(timeline.durationMs)}
-            </Typography>
-            <Slider
-              size="sm"
-              aria-label="Seek"
-              min={0}
-              max={timeline.durationMs}
-              step={10}
-              value={clock.timeMs}
-              onChange={(_, value) => typeof value === 'number' && clock.seek(value)}
-              sx={{ flex: 1, minWidth: '160px' }}
-              slotProps={{ input: { 'aria-label': 'Playhead', 'data-testid': 'production-seek-slider' } }}
-            />
+            <PlaybackTransport clock={clock} durationMs={timeline.durationMs} />
             <StudioSegmentedControl
               aria-label="Preview size"
               value={output.id}
@@ -252,7 +267,7 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
         <TimelineTracks
           timeline={timeline}
           files={files}
-          timeMs={clock.timeMs}
+          clock={clock}
           selectedClipId={selectedClipId}
           invalidClipIds={invalidClipIds}
           onSelect={setSelectedClipId}
@@ -276,7 +291,36 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
         addButtonLabelKey="file_browser.add_files_to_production"
         onAdd={picked => void onFilesPicked(picked)}
       />
+      <LeaveGuard isDirty={isDirty} blocksNavigation={blocksNavigation} />
     </Stack>
+  );
+};
+
+/**
+ * Closing the tab with unsaved edits asks first. In-app navigation asks only when the edits cannot be sent on the
+ * way out (an invalid or rejected draft); otherwise the autosave hook sends them as the editor unmounts.
+ */
+const LeaveGuard = ({ isDirty, blocksNavigation }: { isDirty: boolean; blocksNavigation: boolean }) => {
+  const blocker = useBlocker({
+    shouldBlockFn: () => blocksNavigation,
+    enableBeforeUnload: isDirty,
+    withResolver: true,
+  });
+  return (
+    <Modal open={blocker.status === 'blocked'} onClose={() => blocker.reset?.()}>
+      <ModalDialog data-testid="production-leave-dialog">
+        <Typography level="title-md">Leave without saving?</Typography>
+        <Typography>Your latest edits cannot be saved until the issues listed in the editor are fixed.</Typography>
+        <Stack direction="row" gap={1} justifyContent="flex-end">
+          <Button variant="plain" onClick={() => blocker.reset?.()} data-testid="production-leave-cancel-btn">
+            Keep editing
+          </Button>
+          <Button color="danger" onClick={() => blocker.proceed?.()} data-testid="production-leave-discard-btn">
+            Discard edits
+          </Button>
+        </Stack>
+      </ModalDialog>
+    </Modal>
   );
 };
 

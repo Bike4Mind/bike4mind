@@ -17,6 +17,7 @@ import {
   previewVolume,
 } from './timelinePlayback';
 import type { TimelineFile } from './useTimelineFiles';
+import { usePlaybackTime, type PlaybackClock } from './usePlaybackClock';
 
 // An element further than this from the clock is re-seeked; closer, it plays on so playback stays smooth.
 const DRIFT_TOLERANCE_S = 0.25;
@@ -48,8 +49,7 @@ type PreviewProps = {
   timeline: StudioTimeline;
   output: StudioTimelineOutput;
   files: ReadonlyMap<string, TimelineFile>;
-  timeMs: number;
-  isPlaying: boolean;
+  clock: PlaybackClock;
   onSourceDuration: (fileId: string, durationMs: number) => void;
 };
 
@@ -58,7 +58,9 @@ type PreviewProps = {
  * background, audio tracks mix through their own elements, captions draw on top. Every media element is mounted
  * up front (so it is loaded before its clip starts) and synced to the shared clock each tick.
  */
-const TimelinePreview = ({ timeline, output, files, timeMs, isPlaying, onSourceDuration }: PreviewProps) => {
+const TimelinePreview = ({ timeline, output, files, clock, onSourceDuration }: PreviewProps) => {
+  const timeMs = usePlaybackTime(clock);
+  const { isPlaying } = clock;
   const viewportRef = useRef<HTMLDivElement>(null);
   const size = useFittedSize(viewportRef, output.width / output.height);
   const tracks = enabledTracks(timeline);

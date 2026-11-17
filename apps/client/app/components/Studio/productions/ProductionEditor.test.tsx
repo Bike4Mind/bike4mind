@@ -11,6 +11,20 @@ const VIDEO_FILE_ID = 'f'.repeat(24);
 const h = vi.hoisted(() => ({
   updateMutate: vi.fn(),
   pickedFiles: [] as unknown[],
+  blocker: {
+    options: null as null | { shouldBlockFn: () => boolean; enableBeforeUnload: boolean },
+    status: 'idle' as 'idle' | 'blocked',
+    proceed: vi.fn(),
+    reset: vi.fn(),
+  },
+}));
+
+vi.mock('@tanstack/react-router', async importOriginal => ({
+  ...(await importOriginal<typeof import('@tanstack/react-router')>()),
+  useBlocker: (options: { shouldBlockFn: () => boolean; enableBeforeUnload: boolean }) => {
+    h.blocker.options = options;
+    return { status: h.blocker.status, proceed: h.blocker.proceed, reset: h.blocker.reset };
+  },
 }));
 
 vi.mock('@client/app/hooks/data/studioCompositions', () => ({
@@ -89,6 +103,8 @@ const clipsIn = (lane: string) => within(screen.getByTestId(`production-lane-${l
 beforeEach(() => {
   vi.clearAllMocks();
   h.pickedFiles = [];
+  h.blocker.status = 'idle';
+  h.blocker.options = null;
 });
 
 describe('ProductionEditor', () => {
@@ -166,6 +182,29 @@ describe('ProductionEditor', () => {
     expect(clipsIn('captions').filter(clip => clip.dataset.invalid === 'true')).toHaveLength(1);
     await act(() => new Promise(resolve => setTimeout(resolve, 1_000)));
     expect(h.updateMutate).not.toHaveBeenCalled();
+  });
+
+  it('guards navigation only while the unsaved edits cannot be sent on the way out', () => {
+    renderEditor(composition());
+    expect(h.blocker.options).toMatchObject({ enableBeforeUnload: false });
+    expect(h.blocker.options?.shouldBlockFn()).toBe(false);
+
+    fireEvent.click(screen.getByTestId('production-add-captions-btn'));
+    expect(h.blocker.options).toMatchObject({ enableBeforeUnload: true });
+    expect(h.blocker.options?.shouldBlockFn()).toBe(false);
+
+    fireEvent.click(screen.getByTestId('production-add-captions-btn'));
+    fireEvent.change(screen.getByTestId('production-inspector-start-input'), { target: { value: '1' } });
+    expect(h.blocker.options?.shouldBlockFn()).toBe(true);
+  });
+
+  it('asks before discarding edits when navigation is blocked', () => {
+    h.blocker.status = 'blocked';
+    renderEditor(composition());
+    fireEvent.click(screen.getByTestId('production-leave-discard-btn'));
+    expect(h.blocker.proceed).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId('production-leave-cancel-btn'));
+    expect(h.blocker.reset).toHaveBeenCalledTimes(1);
   });
 
   it('removes the selected clip from the inspector', () => {

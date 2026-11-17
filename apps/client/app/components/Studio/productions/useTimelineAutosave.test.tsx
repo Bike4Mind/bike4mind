@@ -42,6 +42,9 @@ const savedResponse = (timeline: StudioTimeline) => ({
   },
 });
 
+const unavailable = () =>
+  new AxiosError('Unavailable', undefined, undefined, undefined, { status: 503, data: {} } as AxiosResponse);
+
 const unprocessable = () =>
   new AxiosError('Unprocessable', undefined, undefined, undefined, {
     status: 422,
@@ -138,6 +141,33 @@ describe('useTimelineAutosave', () => {
     expect(h.patch).toHaveBeenCalledTimes(1);
   });
 
+  it('retries a save that failed for a transient reason once on unmount', async () => {
+    h.patch.mockRejectedValueOnce(unavailable());
+    h.patch.mockImplementation(async (_url: string, body: { timeline: StudioTimeline }) =>
+      savedResponse(body.timeline)
+    );
+    const { result, rerender, unmount } = renderAutosave();
+    rerender({ draft: withCaption('Flaky') });
+    await waitFor(() => expect(result.current.status.kind).toBe('error'));
+    expect(result.current.blocksNavigation).toBe(false);
+
+    unmount();
+    await waitFor(() => expect(h.patch).toHaveBeenCalledTimes(2));
+    expect(sentTexts()).toEqual(['Flaky', 'Flaky']);
+  });
+
+  it('blocks navigation, and does not resend on unmount, after the server rejects a draft', async () => {
+    h.patch.mockRejectedValue(unprocessable());
+    const { result, rerender, unmount } = renderAutosave();
+    rerender({ draft: withCaption('Rejected') });
+    await waitFor(() => expect(result.current.status.kind).toBe('error'));
+    expect(result.current.blocksNavigation).toBe(true);
+
+    unmount();
+    await act(() => new Promise(resolve => setTimeout(resolve, 200)));
+    expect(h.patch).toHaveBeenCalledTimes(1);
+  });
+
   it('does not save a draft the validator rejects, even on unmount', async () => {
     const overlapping = addCaptionClip(withCaption('One'), 'Two').timeline;
     const track = overlapping.tracks[0];
@@ -147,6 +177,7 @@ describe('useTimelineAutosave', () => {
 
     rerender({ draft: overlapping });
     expect(result.current.status.kind).toBe('invalid');
+    expect(result.current.blocksNavigation).toBe(true);
     unmount();
     await act(() => new Promise(resolve => setTimeout(resolve, 1_000)));
     expect(h.patch).not.toHaveBeenCalled();
