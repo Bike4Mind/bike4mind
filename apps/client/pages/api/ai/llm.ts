@@ -15,6 +15,7 @@ import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminSc
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
 import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
 import { dataLakeToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
@@ -97,6 +98,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // API key always bills its own org, as on the v1 media routes; naming another is a 403.
     const effectiveOrgId = await resolveRequestBillingOrgId(req, invokeParams.organizationId);
 
+    assertAiAccessAllowed(req.user);
     // Refuse a frozen or capped turn here, rather than letting the quest worker settle it. The freeze
     // goes first so a frozen caller is not told to wait for the daily reset.
     await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, effectiveOrgId ?? null), {

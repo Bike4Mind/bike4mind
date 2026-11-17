@@ -376,6 +376,16 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     mockIsChatModelUsable.mockReturnValue(true);
   });
 
+  it('gives a user without AI access their access error, not spend_frozen', async () => {
+    mockFindActiveFreeze.mockResolvedValue({ scopeType: 'User', frozenAt: new Date('2026-11-01T00:00:00Z') });
+    const { req, res } = fire({ apiKey: null });
+    req.user = { ...JWT_USER, isModerated: true };
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().errorCode).not.toBe('spend_frozen');
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['API key', VALID_KEY, { message: 'hello' }],
     ['new conversation', null, { message: 'hello', newConversation: true }],

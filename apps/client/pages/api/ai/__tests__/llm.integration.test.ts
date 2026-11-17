@@ -266,6 +266,16 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     expect(mockInvoke).not.toHaveBeenCalled();
   });
 
+  it('gives a user without AI access their access error, not spend_frozen', async () => {
+    mockFindActiveFreeze.mockResolvedValue({ scopeType: 'User', frozenAt: new Date('2026-11-01T00:00:00Z') });
+    const { req, res } = fire({ apiKey: null });
+    req.user = { ...JWT_USER, isModerated: true };
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().errorCode).not.toBe('spend_frozen');
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
   it('refuses a frozen caller with 403 spend_frozen ahead of the daily cap and before a session', async () => {
     validateWithScopes([ApiKeyScope.AI_CHAT]);
     mockFindActiveFreeze.mockResolvedValueOnce({ scopeType: 'apiKey', frozenAt: new Date('2026-11-01T00:00:00Z') });

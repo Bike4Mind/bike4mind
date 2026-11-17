@@ -66,6 +66,7 @@ import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlat
 import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
 import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@server/utils/untrustedCompletionQuota';
 import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
 import { runWithDeadline, WAIT_TURN_BUDGET_MS, WAIT_TURN_WIND_DOWN_MS } from '@server/utils/waitTurnDeadline';
@@ -203,6 +204,7 @@ async function handleChat(
     );
   }
 
+  assertAiAccessAllowed(req.user);
   // Refuse frozen and capped turns before creating a notebook or quest. The freeze goes first so a
   // frozen caller is not told to wait for the daily reset; process() re-checks it for queued turns.
   await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, organizationId ?? null), {
