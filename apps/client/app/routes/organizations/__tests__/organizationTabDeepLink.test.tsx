@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -53,6 +53,8 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.current }) }));
 
+const mobile = vi.hoisted(() => ({ current: false }));
+vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => mobile.current }));
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: () => undefined }));
 vi.mock('@client/app/components/organizations/OrganizationAvatar', () => ({ default: () => null }));
 
@@ -401,6 +403,14 @@ describe('organization detail page - what a manager cannot do', () => {
     );
   });
 
+  it('locks Billing for a platform admin who is not the owner or a manager', () => {
+    user.current = { id: 'staff1', isAdmin: true };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(screen.getByTestId('organization-tab-locked-billing')).toBeTruthy();
+  });
+
   it('does not show the owner a locked Billing entry or the Integrations note', () => {
     user.current = { id: 'owner1' };
     searchParams.current = { tab: 'integrations' };
@@ -409,6 +419,45 @@ describe('organization detail page - what a manager cannot do', () => {
 
     expect(screen.queryByTestId('organization-tab-locked-billing')).toBeNull();
     expect(screen.queryByTestId('organization-integrations-owner-only')).toBeNull();
+  });
+});
+
+describe('organization detail page - phone section picker', () => {
+  const managedOrg = {
+    ...ORG,
+    adminUserIds: ['mgr1'],
+    users: [...ORG.users, { userId: 'mgr1', permissions: [Permission.read] }],
+  } as unknown as IOrganizationDocument;
+
+  beforeEach(() => {
+    mobile.current = true;
+    searchParams.current = {};
+    navigateSpy.mockClear();
+    orgQuery.current = { data: managedOrg, isLoading: false, isError: false, error: undefined };
+  });
+
+  afterEach(() => {
+    mobile.current = false;
+  });
+
+  it('marks Billing as locked for a manager', () => {
+    user.current = { id: 'mgr1' };
+    render(wrapper(<OrganizationPage />));
+
+    fireEvent.click(screen.getByTestId('organization-tabs-select'));
+
+    expect(screen.getByTestId('organization-tabs-option-locked-billing')).toBeTruthy();
+    expect(screen.queryByTestId('organization-tabs-option-billing')).toBeNull();
+  });
+
+  it('leaves Billing plain for the owner', () => {
+    user.current = { id: 'owner1' };
+    render(wrapper(<OrganizationPage />));
+
+    fireEvent.click(screen.getByTestId('organization-tabs-select'));
+
+    expect(screen.getByTestId('organization-tabs-option-billing')).toBeTruthy();
+    expect(screen.queryByTestId('organization-tabs-option-locked-billing')).toBeNull();
   });
 });
 

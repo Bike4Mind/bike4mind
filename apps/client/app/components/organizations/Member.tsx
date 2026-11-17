@@ -67,7 +67,7 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
   const canBuySeats = canViewOrgBilling(currentUser, organization);
   const noSeatsMessage = canBuySeats
     ? t('organizations.errors.no_seats', 'No seats available. Please upgrade your plan.')
-    : t('organizations.errors.no_seats_ask_owner', 'No seats available. Ask the team owner to add seats.');
+    : t('organization.access_notice.no_seats_ask_owner');
   const seatUsagePercentage = maxSeats > 0 ? (currentSeats / maxSeats) * 100 : 100;
 
   // For the add members modal
@@ -395,7 +395,7 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
               >
                 {canBuySeats
                   ? "You've reached your seat limit. Upgrade your plan to add more members."
-                  : "You've reached your seat limit. Ask the team owner to add seats."}
+                  : t('organization.access_notice.seat_limit_ask_owner')}
               </Typography>
             )}
           </Stack>
@@ -432,7 +432,7 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
                     toast.error(
                       canBuySeats
                         ? `You can only add up to ${availableSeats} more members with your current plan`
-                        : `You can only add up to ${availableSeats} more members. Ask the team owner to add seats.`
+                        : t('organization.access_notice.add_limit_ask_owner', { available: availableSeats })
                     );
                     return;
                   }

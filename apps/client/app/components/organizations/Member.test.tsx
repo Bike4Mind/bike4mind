@@ -676,10 +676,21 @@ describe('OrganizationMembers invite plumbing', () => {
       })
     );
     expect(screen.getByTestId('organization-members-seats-limit')).toHaveTextContent(
-      "You've reached your seat limit. Ask the team owner to add seats."
+      'organization.access_notice.seat_limit_ask_owner'
     );
     fireEvent.click(screen.getByTestId('organization-members-add-no-seats-btn'));
-    expect(mocks.toast.error).toHaveBeenCalledWith('organizations.errors.no_seats_ask_owner');
+    expect(mocks.toast.error).toHaveBeenCalledWith('organization.access_notice.no_seats_ask_owner');
+  });
+
+  it('points a platform admin who is not the owner at the owner, since only the owner can buy seats', () => {
+    mocks.viewer = { id: 'staff1', isAdmin: true };
+    mocks.seats = { maxSeats: 1, currentSeats: 1, availableSeats: 0 };
+    renderMembers(buildOrg({}));
+    expect(screen.getByTestId('organization-members-seats-limit')).toHaveTextContent(
+      'organization.access_notice.seat_limit_ask_owner'
+    );
+    fireEvent.click(screen.getByTestId('organization-members-add-no-seats-btn'));
+    expect(mocks.toast.error).toHaveBeenCalledWith('organization.access_notice.no_seats_ask_owner');
   });
 
   it('says when pending invitations fail to load', () => {
