@@ -12,6 +12,8 @@ const h = vi.hoisted(() => ({
   changeMessageVisibility: vi.fn(),
   audit: vi.fn(),
   acquire: vi.fn(),
+  suggestion: vi.fn(),
+  transition: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/adminApi', () => ({
@@ -41,7 +43,10 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
 vi.mock('@bike4mind/server-utils/utils/dlqMessages', () => ({ acquireDlqMessagesById: h.acquire }));
 vi.mock('@bike4mind/database', () => ({
   dlqReplayLogRepository: { logReplay: h.logReplay, finalizeDiscard: h.finalizeDiscard },
+  adminAiSuggestionRepository: { transition: h.transition },
+  withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
+vi.mock('@server/admin/dlq/triage', () => ({ visibleDlqSuggestion: h.suggestion }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   parseAdminActionReason: (value: unknown) => {
     if (typeof value !== 'string' || value.trim().length < 5) throw new BadRequestError('Reason required');
@@ -68,6 +73,66 @@ beforeEach(() => {
 });
 
 describe('POST /api/admin/dlq/discard', () => {
+  it('claims and audits a matching suggestion before acquiring or deleting the message', async () => {
+    const id = 'a'.repeat(24);
+    h.suggestion.mockResolvedValue({
+      id,
+      proposedAction: {
+        queueLabel: 'quest',
+        messageId: 'm1',
+        action: 'discard',
+        risk: 'terminal-refusal',
+        reason: 'Recorded refusal',
+      },
+    });
+    h.transition.mockResolvedValueOnce({ id }).mockResolvedValue(null);
+    h.acquire.mockResolvedValue({ found: [{ MessageId: 'm1', ReceiptHandle: 'fresh', Body: '{}' }], notFound: [] });
+    const invoke = () => {
+      const { req, res } = request({
+        queueLabel: 'quest',
+        messageIds: ['m1'],
+        reason: 'Job obsolete',
+        aiSuggestionId: id,
+      });
+      return h.post!(req, res);
+    };
+    await invoke();
+    expect(h.transition).toHaveBeenCalledWith(id, ['pending'], 'accepted', {
+      decidedBy: { userId: 'admin-1', name: undefined },
+    });
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'ops.dlq.triage.accepted',
+      details: { aiSuggestionId: id },
+    });
+    expect(h.audit.mock.invocationCallOrder[0]).toBeLessThan(h.acquire.mock.invocationCallOrder[0]);
+    expect(h.audit.mock.calls[1][1].details).toMatchObject({ aiSuggestionId: id });
+    await expect(invoke()).rejects.toThrow('already been decided');
+    expect(h.deleteFromQueue).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a mismatched recommendation without acquiring or deleting', async () => {
+    const id = 'a'.repeat(24);
+    h.suggestion.mockResolvedValue({
+      id,
+      proposedAction: {
+        queueLabel: 'quest',
+        messageId: 'other',
+        action: 'discard',
+        risk: 'terminal-refusal',
+        reason: 'Recorded refusal',
+      },
+    });
+    const { req, res } = request({
+      queueLabel: 'quest',
+      messageIds: ['m1'],
+      reason: 'Job obsolete',
+      aiSuggestionId: id,
+    });
+    await expect(h.post!(req, res)).rejects.toThrow('does not match');
+    expect(h.acquire).not.toHaveBeenCalled();
+    expect(h.deleteFromQueue).not.toHaveBeenCalled();
+  });
+
   it('requires a JWT and replay-equivalent permission', () => {
     expect(h.routeOptions).toMatchObject({ auth: 'jwtOnly', adminPermissions: { POST: 'settings:manage' } });
   });

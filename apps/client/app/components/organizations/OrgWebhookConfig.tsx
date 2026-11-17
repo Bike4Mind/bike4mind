@@ -337,7 +337,12 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
               </Typography>
             )}
           </Box>
-          <Switch checked={config.enabled} onChange={handleToggleEnabled} disabled={updateConfig.isPending} />
+          <Switch
+            checked={config.enabled}
+            onChange={handleToggleEnabled}
+            disabled={updateConfig.isPending}
+            slotProps={{ input: { 'aria-label': 'Webhook integration enabled' } }}
+          />
         </Box>
 
         <Divider />
@@ -352,6 +357,7 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
               <IconButton
                 variant="plain"
                 onClick={() => handleCopy(config.webhookUrl || '', 'Webhook URL')}
+                aria-label="Copy webhook URL"
                 data-testid="copy-webhook-url"
               >
                 <ContentCopyIcon />
@@ -370,13 +376,19 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
             value={secretToShow || ''}
             endDecorator={
               <Box sx={{ display: 'flex', gap: 0.5 }}>
-                <IconButton variant="plain" onClick={handleToggleSecret} data-testid="toggle-secret-visibility">
+                <IconButton
+                  variant="plain"
+                  onClick={handleToggleSecret}
+                  aria-label={showSecret ? 'Hide webhook secret' : 'Show webhook secret'}
+                  data-testid="toggle-secret-visibility"
+                >
                   {showSecret ? <VisibilityOffIcon /> : <VisibilityIcon />}
                 </IconButton>
                 {showSecret && (
                   <IconButton
                     variant="plain"
                     onClick={() => handleCopy(secretToShow || '', 'Secret')}
+                    aria-label="Copy webhook secret"
                     data-testid="copy-secret"
                   >
                     <ContentCopyIcon />
@@ -386,6 +398,7 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
                   variant="plain"
                   onClick={handleRotateSecret}
                   disabled={rotateSecret.isPending}
+                  aria-label="Rotate webhook secret"
                   data-testid="rotate-secret"
                 >
                   <RefreshIcon />

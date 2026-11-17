@@ -11,7 +11,7 @@ vi.mock('@server/admin/ai/feedbackVisibility', () => ({ feedbackAiVisible: vi.fn
 
 vi.mock('@server/middlewares/baseApi', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const chain: any = { get: () => chain, post: () => chain };
+  const chain: any = { use: () => chain, get: () => chain, post: () => chain };
   return { baseApi: () => chain };
 });
 vi.mock('@bike4mind/database', () => ({ FeedbackModel: {}, User: {}, adminSettingsRepository: {} }));
