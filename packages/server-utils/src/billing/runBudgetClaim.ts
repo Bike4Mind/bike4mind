@@ -30,6 +30,22 @@ export async function claimRunBudget(claim: {
 }
 
 /**
+ * A non-claiming check that `credits` still fit what a run has left, for a route that queues work whose
+ * real claim is taken later with its hold (image generation). Throws the same 422 a claim would; a no-op
+ * for an unbudgeted run. Advisory only: concurrent work can still use the room up, so the claim decides.
+ */
+export async function assertRunBudgetHeadroom(runId: string, credits: number): Promise<void> {
+  const run = await completionRunRepository.findById(runId);
+  if (run?.budgetCredits === undefined) return;
+  const committedCredits = run.committedCredits ?? 0;
+  if (credits > run.budgetCredits - committedCredits) {
+    throw new UnprocessableEntityError(runBudgetExhaustedMessage(run.budgetCredits, committedCredits), {
+      errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+    });
+  }
+}
+
+/**
  * The all-or-nothing claim of a paid tool call: unlike a completion, a render or a clip cannot be cut
  * short to fit what is left, so the whole hold must fit in the run or the call is refused.
  */

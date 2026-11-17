@@ -1,4 +1,5 @@
 import type {
+  CompletionRunAttribution,
   GeneratedAssetLineageEntry,
   GeneratedAssetMetadata,
   GenerationJobDelivery,
@@ -15,6 +16,7 @@ import type { Logger } from '@bike4mind/observability';
 import type { VideoProviderRegistry } from '@bike4mind/utils/videoProviders';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
 import type { GenerationJobEngine } from '../generationJobs/engine';
+import type { RunBudgetAdapters } from '../generationJobs/types';
 import type { SaveGeneratedAssetResult } from '../generatedAssets';
 
 export { isUsableApiKey } from '../generationJobs/apiKey';
@@ -60,6 +62,8 @@ export type VideoJobDeps = {
     /** `refusal` for a block the provider billed: spend with no video delivered. */
     status: Extract<UsageEventStatus, 'ok' | 'refusal'>;
   }): Promise<void>;
+  /** Claims and releases a job's share of a completion run's budget; required to create a job with a `run`. */
+  runBudget?: RunBudgetAdapters;
   now(): Date;
   logger: Logger;
 };
@@ -85,6 +89,8 @@ export type CreateVideoJobInput = {
   idempotencyKey?: string;
   questId?: string;
   delivery?: GenerationJobDelivery;
+  /** The completion run the job is made for: its hold is claimed against the run's budget (resolvePaidCallRun). */
+  run?: CompletionRunAttribution;
 };
 
 export type CreateVideoJobErrorCode =

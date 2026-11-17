@@ -11,7 +11,6 @@ import {
   OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   UNKNOWN_MODEL_ERROR_CODE,
   RUN_NOT_FOUND_ERROR_CODE,
-  RUN_BUDGET_EXHAUSTED_ERROR_CODE,
   RUN_BUDGET_NOT_RAISED_ERROR_CODE,
   END_USER_ID_NOT_ALLOWED_ERROR_CODE,
   INVALID_END_USER_ID_ERROR_CODE,
@@ -443,10 +442,10 @@ export const RunNotFoundErrorSchema = ApiErrorSchema.extend({
 
 /**
  * The completions route's 422: a body that failed validation (no `errorCode`), a balance or member cap
- * the caller cannot afford (QUEST_ERROR_CODES), or a `run` whose budget is used up.
+ * the caller cannot afford, or a `run` whose budget is used up (both QUEST_ERROR_CODES).
  */
 export const CompletionsUnprocessableErrorSchema = ApiErrorSchema.extend({
-  errorCode: z.enum([...QUEST_ERROR_CODES, RUN_BUDGET_EXHAUSTED_ERROR_CODE]).optional(),
+  errorCode: z.enum(QUEST_ERROR_CODES).optional(),
 });
 
 /** 409 when a run budget change would not raise it. */

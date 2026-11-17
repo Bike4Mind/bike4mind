@@ -104,11 +104,13 @@ export type SessionProps = {
  * quest fails for billing reasons, never for the provider-configuration reasons
  * the HTTP surface reports. The `satisfies` is what keeps it a narrowing rather
  * than a second vocabulary - a code added here that is not in `API_ERROR_CODES`
- * fails the build.
+ * fails the build. `run_budget_exhausted` lands on an image generation quest whose `run` budget
+ * could not cover the render's credit hold (ImageGeneration.process).
  */
 export const QUEST_ERROR_CODES = [
   'insufficient_credits',
   'spend_cap_exceeded',
+  'run_budget_exhausted',
 ] as const satisfies readonly ApiErrorCode[];
 export type QuestErrorCode = (typeof QUEST_ERROR_CODES)[number];
 

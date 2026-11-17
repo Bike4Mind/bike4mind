@@ -110,6 +110,7 @@ export async function createMusicJob(
       user: input.user,
       requiredCredits: estimateMusicCostCredits(caps, request),
       featureLabel: 'music generation',
+      ...(input.run && { run: input.run }),
     },
     deps
   );
@@ -137,6 +138,8 @@ export async function createMusicJob(
       deadlineAt: new Date(now.getTime() + MUSIC_JOB_MAX_WALL_CLOCK_MS),
       idempotencyKey: input.idempotencyKey,
       creditHold: held.hold,
+      ...(input.run && { run: input.run }),
+      ...(held.runClaim && { runClaim: held.runClaim }),
       questId: input.questId,
     },
     deps

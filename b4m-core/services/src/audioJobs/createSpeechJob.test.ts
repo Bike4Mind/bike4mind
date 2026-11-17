@@ -9,6 +9,7 @@ import {
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { testSpeechProvider } from '@bike4mind/utils/audioProviders';
+import { createFakeRunBudget } from '../generationJobs/__test__/fakeRunBudget';
 import { createInMemoryGenerationJobRepository } from '../generationJobs/__test__/inMemoryGenerationJobRepository';
 import { GenerationJobEngine } from '../generationJobs/engine';
 import type { CreditHold, CreditHoldAdapters } from '../creditService/creditHold';
@@ -538,5 +539,42 @@ describe('createSpeechJob', () => {
       expect(deps.assertModelAdmission).not.toHaveBeenCalled();
       expect(deps.resolveApiKey).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('createSpeechJob with a completion run', () => {
+  const run = { runId: 'run-1', role: 'root' as const, purpose: 'tool' as const };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(holdCredits).mockImplementation(async params => fakeHold(params));
+  });
+
+  it('claims the whole hold against the run and persists the claim and the run on the job', async () => {
+    const budget = createFakeRunBudget();
+    const { deps } = makeDeps({ runBudget: budget.adapters });
+    const result = await createSpeechJob({ user, request: validRequest, source: 'api', run }, deps);
+    if (!result.ok) throw new Error('expected the job to be created');
+    const reserved = result.job.creditHold?.reservedCredits;
+    expect(result.job).toMatchObject({ run, runClaim: { runId: 'run-1', credits: reserved } });
+    expect(budget.state.committedCredits).toBe(reserved);
+  });
+
+  it('refuses with run_budget_exhausted and leaves no hold and no job when the clip does not fit', async () => {
+    const budget = createFakeRunBudget({ budgetCredits: 0 });
+    const { deps, repository } = makeDeps({ runBudget: budget.adapters });
+    await expect(createSpeechJob({ user, request: validRequest, source: 'api', run }, deps)).rejects.toMatchObject({
+      additionalInfo: { errorCode: 'run_budget_exhausted' },
+    });
+    expect(holdCredits).not.toHaveBeenCalled();
+    expect(repository.jobs.size).toBe(0);
+  });
+
+  it('touches no run budget without a run', async () => {
+    const budget = createFakeRunBudget();
+    const { deps } = makeDeps({ runBudget: budget.adapters });
+    const result = await createSpeechJob({ user, request: validRequest, source: 'api' }, deps);
+    expect(result.ok && result.job).not.toHaveProperty('runClaim');
+    expect(budget.adapters.transact).not.toHaveBeenCalled();
   });
 });

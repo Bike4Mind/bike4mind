@@ -44,6 +44,11 @@ describe('resolvePaidCallRun', () => {
     expect(resolved?.billingOrganizationId).toBe('org-1');
   });
 
+  it('refuses a run on a request with no signed-in user, without a lookup', async () => {
+    await expect(resolvePaidCallRun({}, { runId: RUN_ID, role: 'root' })).rejects.toMatchObject({ statusCode: 401 });
+    expect(findById).not.toHaveBeenCalled();
+  });
+
   it("refuses another caller's run with the same 404 as a missing one", async () => {
     findById.mockResolvedValue({ ...userRun, userId: 'someone-else' });
 

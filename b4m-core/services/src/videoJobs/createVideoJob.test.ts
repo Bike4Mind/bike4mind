@@ -3,6 +3,7 @@ import { CreditHolderType, insufficientCreditsError, usdToCredits, type VideoInp
 import { BflVideoProvider, createVideoProviderRegistry, TestVideoProvider } from '@bike4mind/utils/videoProviders';
 import { Logger } from '@bike4mind/observability';
 import { createInMemoryGenerationJobRepository } from '../generationJobs/__test__/inMemoryGenerationJobRepository';
+import { createFakeRunBudget } from '../generationJobs/__test__/fakeRunBudget';
 import { GenerationJobEngine } from '../generationJobs/engine';
 import type { CreditHold, CreditHoldAdapters } from '../creditService/creditHold';
 import { EXPIRED_KEY_SENTINEL } from '../modelDiscoveryService/credentials';
@@ -630,5 +631,92 @@ describe('createVideoJob', () => {
     const result = await createVideoJob({ user, request: validRequest, source: 'api' }, deps);
     expect(result).toMatchObject({ ok: true, created: true, job: { state: 'pending' } });
     expect(releaseCreditHold).not.toHaveBeenCalled();
+  });
+});
+
+describe('createVideoJob with a completion run', () => {
+  const run = { runId: 'run-1', role: 'worker' as const, purpose: 'tool' as const };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(holdCredits).mockImplementation(async params => fakeHold(params));
+  });
+
+  it('claims the whole hold against the run and persists the claim and the run on the job', async () => {
+    const budget = createFakeRunBudget();
+    const { deps } = makeDeps({ runBudget: budget.adapters });
+    const result = await createVideoJob({ user, request: validRequest, source: 'api', run }, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const reserved = result.job.creditHold?.reservedCredits;
+    expect(reserved).toBeGreaterThan(0);
+    expect(result.job).toMatchObject({ run, runClaim: { runId: 'run-1', credits: reserved } });
+    expect(budget.state.committedCredits).toBe(reserved);
+  });
+
+  it('refuses with run_budget_exhausted and leaves no hold and no job when the job does not fit', async () => {
+    const budget = createFakeRunBudget({ budgetCredits: 1 });
+    const { deps, repository } = makeDeps({ runBudget: budget.adapters });
+    await expect(createVideoJob({ user, request: validRequest, source: 'api', run }, deps)).rejects.toMatchObject({
+      additionalInfo: { errorCode: 'run_budget_exhausted' },
+    });
+    expect(holdCredits).not.toHaveBeenCalled();
+    expect(repository.jobs.size).toBe(0);
+    expect(deps.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('returns the claim when the hold is refused', async () => {
+    const budget = createFakeRunBudget();
+    vi.mocked(holdCredits).mockRejectedValueOnce(insufficientCreditsError('You do not have enough credits'));
+    const { deps } = makeDeps({ runBudget: budget.adapters });
+    const result = await createVideoJob({ user, request: validRequest, source: 'api', run }, deps);
+    expect(result).toMatchObject({ ok: false, code: 'insufficient_credits' });
+    expect(budget.state.committedCredits).toBe(0);
+  });
+
+  it('returns the claim with the hold when the job cannot be queued', async () => {
+    const budget = createFakeRunBudget();
+    const { deps } = makeDeps({
+      runBudget: budget.adapters,
+      enqueue: vi.fn(async () => Promise.reject(new Error('sqs'))),
+    });
+    await expect(createVideoJob({ user, request: validRequest, source: 'api', run }, deps)).rejects.toThrow('sqs');
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+    expect(budget.state.committedCredits).toBe(0);
+  });
+
+  it('does not claim again for an idempotent replay', async () => {
+    const budget = createFakeRunBudget();
+    const { deps } = makeDeps({ runBudget: budget.adapters });
+    const first = await createVideoJob({ user, request: validRequest, source: 'api', idempotencyKey: 'k1', run }, deps);
+    const second = await createVideoJob(
+      { user, request: validRequest, source: 'api', idempotencyKey: 'k1', run },
+      deps
+    );
+    expect(second).toMatchObject({ ok: true, created: false, job: { id: first.ok && first.job.id } });
+    expect(budget.adapters.claim).toHaveBeenCalledTimes(1);
+    expect(holdCredits).toHaveBeenCalledTimes(1);
+  });
+
+  it('claims nothing when credits are not enforced', async () => {
+    const budget = createFakeRunBudget();
+    const { deps } = makeDeps({
+      runBudget: budget.adapters,
+      getSettings: async () => ({ enforceCredits: false, videoGeneration: undefined }),
+    });
+    const result = await createVideoJob({ user, request: validRequest, source: 'api', run }, deps);
+    expect(result).toMatchObject({ ok: true, job: { creditHold: null, run } });
+    expect(result.ok && result.job.runClaim).toBeUndefined();
+    expect(budget.adapters.claim).not.toHaveBeenCalled();
+  });
+
+  it('touches no run budget without a run', async () => {
+    const budget = createFakeRunBudget();
+    const { deps } = makeDeps({ runBudget: budget.adapters });
+    const result = await createVideoJob({ user, request: validRequest, source: 'api' }, deps);
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.job).not.toHaveProperty('run');
+    expect(result.ok && result.job).not.toHaveProperty('runClaim');
+    expect(budget.adapters.transact).not.toHaveBeenCalled();
   });
 });

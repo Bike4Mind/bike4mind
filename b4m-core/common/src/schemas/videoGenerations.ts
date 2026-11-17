@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ModelIdSchema } from './modelId';
 import { BillingOrganizationIdSchema } from './billingOrganization';
+import { CompletionRunAttributionSchema } from './cliCompletions';
 import type { ApiErrorCode } from '../apiErrorCodes';
 import { GENERATION_OUTPUT_AVAILABILITIES, type GenerationOutputAvailability } from '../generation/types';
 import { ASPECT_RATIOS, RESOLUTION_TIERS, VIDEO_INPUT_ROLES, VIDEO_MODES } from '../video/types';
@@ -26,6 +27,8 @@ export const VIDEO_GENERATION_API_ERROR_CODES = [
   'input_image_not_found',
   'idempotency_key_reused',
   'invalid_idempotency_key',
+  'run_not_found',
+  'run_budget_exhausted',
 ] as const satisfies readonly ApiErrorCode[];
 
 // The classifiers a polled job can carry. Internal-only codes are folded into these by toPublicVideoJobErrorCode.
@@ -121,6 +124,11 @@ export const CreateVideoGenerationBodySchema = z.strictObject({
         'at the requested resolution. FLUX 3 drafts require 720p and cost $0.06 per second.'
     ),
   organization_id: BillingOrganizationIdSchema,
+  run: CompletionRunAttributionSchema.optional().describe(
+    "The completion run this job is made for. Its whole estimated cost is claimed against that run's budget " +
+      'before the job is queued, and the request is refused with 422 `run_budget_exhausted` when it does not fit. ' +
+      "The job bills the run's account."
+  ),
 });
 export type CreateVideoGenerationBody = z.infer<typeof CreateVideoGenerationBodySchema>;
 

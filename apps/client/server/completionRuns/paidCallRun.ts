@@ -1,6 +1,7 @@
 import {
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   CreditHolderType,
+  UnauthorizedError,
   type CompletionRunAttribution,
 } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -18,7 +19,7 @@ export type PaidCallRun = {
   billingOrganizationId: string | null;
 };
 
-type PaidCallRequest = { user: { id: string }; apiKeyInfo?: { organizationId?: string | null } };
+type PaidCallRequest = { user?: { id: string }; apiKeyInfo?: { organizationId?: string | null } };
 
 /**
  * Resolve the `run` a paid route (image, video, music, speech, sound) was sent with. Same ownership
@@ -32,6 +33,7 @@ export async function resolvePaidCallRun(
   requestedOrganizationId?: string | null
 ): Promise<PaidCallRun | undefined> {
   if (!run) return undefined;
+  if (!req.user) throw new UnauthorizedError('Sign in to charge a call to a completion run');
   const stored = await findCallerCompletionRun(run.runId, {
     userId: req.user.id,
     billingOrganizationId: req.apiKeyInfo?.organizationId ?? undefined,

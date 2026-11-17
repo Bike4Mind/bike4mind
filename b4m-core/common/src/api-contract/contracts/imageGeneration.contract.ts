@@ -68,7 +68,9 @@ export const generateImageContract = defineEndpoint({
     '"the jacket from ref_image_2". Which `size` values a model accepts, and whether it honours ' +
     '`background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block ' +
     'of `GET /api/v1/models`. Credits are checked when the render runs, so ' +
-    'insufficient credits arrive on the polled quest rather than as a 422. ' +
+    'insufficient credits arrive on the polled quest rather than as a 422. A `run` budget is checked ' +
+    'before queueing as well, so a run with too little left is usually a synchronous 422 ' +
+    '(`errorCode: "run_budget_exhausted"`). ' +
     '`organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case ' +
     'video and music bodies; `null` bills the personal account. `POST /api/ai/generate-image` ' +
     'is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
@@ -93,14 +95,17 @@ export const generateImageContract = defineEndpoint({
       schema: ApiErrorSchema,
     },
     403: {
-      description: `The API key lacks the \`ai:generate\` scope, or ${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION}`,
+      description:
+        `The API key lacks the \`ai:generate\` scope, or ${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION} ` +
+        'Naming a billing organization other than the account the `run` bills is also a `403` with that errorCode.',
       schema: BillingOrganizationForbiddenErrorSchema,
     },
     404: {
       description:
         'The session, or the quest being retried, does not exist or is not accessible to the caller. A ' +
         'nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an ' +
-        'invalid or inaccessible `organizationId` is `403` instead.',
+        'invalid or inaccessible `organizationId` is `403` instead. A `run` that does not exist or that ' +
+        'another user or billing owner minted is `404` (`errorCode: "run_not_found"`).',
       schema: ApiErrorSchema,
     },
     422: {
@@ -109,7 +114,8 @@ export const generateImageContract = defineEndpoint({
         '`organization_id` sent with different values is a `422`; so is an empty or blank value for either ' +
         '(a blank is never treated as an omission, which would bill a different payer), and so is any other ' +
         'billing-org-shaped key such as `billing_org_id` or `payerOrgId`, which would otherwise be stripped ' +
-        "and silently bill the caller's home organization.",
+        "and silently bill the caller's home organization. A `run` whose budget cannot cover the " +
+        'render is `422` with `errorCode: "run_budget_exhausted"`.',
       schema: ApiErrorSchema,
     },
   },
