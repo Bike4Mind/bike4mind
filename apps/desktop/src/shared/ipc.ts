@@ -44,6 +44,7 @@ import type {
   ChatArtifactPublishRequest,
   ChatAttachmentInput,
   ChatFilePathOpenResult,
+  ChatFileView,
   ChatImageAction,
   ChatImageActionResult,
   ChatImageRef,
@@ -274,6 +275,7 @@ export const IPC_CHANNELS = {
   chatAttachImage: 'chat:attach-image',
   chatCheckFilePaths: 'chat:check-file-paths',
   chatOpenFilePath: 'chat:open-file-path',
+  chatReadFilePath: 'chat:read-file-path',
   chatListArtifacts: 'chat:list-artifacts',
   chatReadArtifact: 'chat:read-artifact',
   chatPublishArtifact: 'chat:publish-artifact',
@@ -1050,6 +1052,8 @@ export interface DesktopApi {
     checkFilePaths(sessionId: string, paths: string[]): Promise<(string | null)[]>;
     /** Open a path a reply names in its default app, or reveal it when it would run. Never rejects. */
     openFilePath(sessionId: string, path: string): Promise<ChatFilePathOpenResult>;
+    /** Read a path a reply names for the Files pane, under the same checks as opening it. Never rejects. */
+    readFilePath(sessionId: string, path: string): Promise<ChatFileView>;
     /**
      * Answer a tool call sitting at 'awaiting-approval'. Unknown or already-answered ids are
      * ignored, so a double click cannot approve a second, different command.

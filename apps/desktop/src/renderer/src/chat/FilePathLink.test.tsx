@@ -3,7 +3,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatFilePathOpenResult } from '@shared/chat';
+import type { ChatFilePathOpenResult, ChatFileView } from '@shared/chat';
 import { FilePathLinkProvider } from './FilePathLink';
 import { ReplyMarkdown } from './markdown/ReplyMarkdown';
 
@@ -31,6 +31,22 @@ const openFilePath = vi.fn(async (_sessionId: string, _path: string): Promise<Ch
   opened: 'opened',
 }));
 
+const VIEWS: Record<string, ChatFileView> = {
+  'reports/run.webm': { kind: 'binary', path: '/work/project/reports/run.webm', name: 'run.webm', size: 5 },
+  'package.json': {
+    kind: 'text',
+    path: '/work/project/package.json',
+    name: 'package.json',
+    size: 2,
+    text: '{}',
+    truncated: false,
+  },
+};
+const readFilePath = vi.fn(
+  async (_sessionId: string, path: string): Promise<ChatFileView> =>
+    VIEWS[path] ?? { kind: 'error', error: 'That file no longer exists.' }
+);
+
 let root: Root;
 let container: HTMLDivElement;
 
@@ -47,7 +63,8 @@ const links = () => Array.from(document.querySelectorAll<HTMLElement>('[data-tes
 beforeEach(() => {
   checkFilePaths.mockClear();
   openFilePath.mockClear();
-  vi.stubGlobal('b4m', { chat: { checkFilePaths, openFilePath }, shell: { openExternal: vi.fn() } });
+  readFilePath.mockClear();
+  vi.stubGlobal('b4m', { chat: { checkFilePaths, openFilePath, readFilePath }, shell: { openExternal: vi.fn() } });
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
@@ -140,5 +157,49 @@ describe('file path links in a reply', () => {
     expect(checkFilePaths).not.toHaveBeenCalled();
     expect(links()).toHaveLength(0);
     expect(container.textContent).toContain('See reports/run.webm');
+  });
+});
+
+describe('where a file path link opens', () => {
+  const showFile = vi.fn();
+  beforeEach(() => showFile.mockClear());
+
+  const renderWithPane = () =>
+    render(
+      <FilePathLinkProvider sessionId="s1" showFile={showFile}>
+        <ReplyMarkdown text="See `package.json` and reports/run.webm" />
+      </FilePathLinkProvider>
+    );
+  const link = (text: string) => links().find(element => element.textContent === text)!;
+
+  it('shows a text file in the app', async () => {
+    await renderWithPane();
+    await act(async () => link('package.json').click());
+
+    expect(readFilePath).toHaveBeenCalledWith('s1', 'package.json');
+    expect(showFile).toHaveBeenCalledWith('package.json', VIEWS['package.json']);
+    expect(openFilePath).not.toHaveBeenCalled();
+  });
+
+  it('hands a file the pane cannot show to the OS', async () => {
+    await renderWithPane();
+    await act(async () => link('reports/run.webm').click());
+
+    expect(showFile).not.toHaveBeenCalled();
+    expect(openFilePath).toHaveBeenCalledWith('s1', 'reports/run.webm');
+  });
+
+  it('opens in another app on a modifier click, without reading the file', async () => {
+    await renderWithPane();
+    await act(async () => {
+      // Both modifiers, so the test holds on any platform the suite runs on.
+      link('package.json').dispatchEvent(
+        new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true, ctrlKey: true })
+      );
+    });
+
+    expect(readFilePath).not.toHaveBeenCalled();
+    expect(showFile).not.toHaveBeenCalled();
+    expect(openFilePath).toHaveBeenCalledWith('s1', 'package.json');
   });
 });

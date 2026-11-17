@@ -1,7 +1,8 @@
 import type { Stats } from 'node:fs';
-import { extname, join, resolve } from 'node:path';
+import { open } from 'node:fs/promises';
+import { basename, extname, join, resolve } from 'node:path';
 import type { IpcMain } from 'electron';
-import type { ChatFilePathOpenResult } from '@shared/chat';
+import type { ChatFilePathOpenResult, ChatFileView } from '@shared/chat';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { isValidSessionId } from './SessionStore';
 import { realpathNearest, resolveWithinRoots, withinGuarded } from './tools/paths';
@@ -9,6 +10,10 @@ import { realpathNearest, resolveWithinRoots, withinGuarded } from './tools/path
 /** Bounds on what one check may ask for: a reply that names thousands of paths is not one to link. */
 export const MAX_PATHS_PER_CHECK = 200;
 const MAX_PATH_LENGTH = 1024;
+/** How much of a file the Files pane is sent; a longer one is shown up to here and says so. */
+export const MAX_VIEW_BYTES = 1024 * 1024;
+/** A NUL in this much of the start is taken to mean the file is not text. */
+const BINARY_SNIFF_BYTES = 8000;
 
 const GONE = 'That file is not in a folder shared with this conversation, or no longer exists.';
 
@@ -96,10 +101,11 @@ async function resolveOne(
   requested: string,
   scope: FilePathScope,
   deps: FilePathLinkDeps
-): Promise<{ path: string; stats: Stats } | null> {
+): Promise<{ path: string; stats: Stats; line?: number } | null> {
   const expanded = /^~[\\/]/.test(requested) ? join(deps.home, requested.slice(2)) : requested;
-  const spellings = LINE_SUFFIX.test(expanded) ? [expanded, expanded.replace(LINE_SUFFIX, '')] : [expanded];
-  for (const spelling of spellings) {
+  const suffix = LINE_SUFFIX.exec(expanded);
+  const spellings = suffix ? [expanded, expanded.slice(0, suffix.index)] : [expanded];
+  for (const [index, spelling] of spellings.entries()) {
     let path: string;
     try {
       path = await resolveWithinRoots(spelling, scope.roots, scope.workingDirectory);
@@ -109,7 +115,10 @@ async function resolveOne(
     const real = await realpathNearest(path);
     if (withinGuarded(deps.protectedPaths(), [path, real], deps.platform)) return null;
     try {
-      return { path, stats: await deps.stat(path) };
+      const stats = await deps.stat(path);
+      // The second spelling is the one with the cited line dropped: `:12:5` names line 12.
+      const line = index === 1 && suffix ? Number(suffix[0].slice(1).split(':')[0]) : undefined;
+      return line ? { path, stats, line } : { path, stats };
     } catch {
       // Not there under this spelling; the next drops the line suffix.
     }
@@ -133,6 +142,39 @@ function parsePaths(value: unknown): string[] | null {
 }
 
 const isPathText = (path: string) => path.length > 0 && path.length <= MAX_PATH_LENGTH && !path.includes('\0');
+
+/** The first `bytes` of a file: the Files pane never needs more, and a log can be gigabytes. */
+async function readHead(path: string, bytes: number): Promise<Buffer> {
+  const handle = await open(path, 'r');
+  try {
+    const buffer = Buffer.alloc(bytes);
+    const { bytesRead } = await handle.read(buffer, 0, bytes, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * What the Files pane shows for a resolved path. Only regular files that read as text come back
+ * with their text; a folder or a binary file is named so the renderer can hand it to the OS.
+ */
+async function viewOf(found: { path: string; stats: Stats; line?: number }): Promise<ChatFileView> {
+  const base = { path: resolve(found.path), name: basename(found.path), size: found.stats.size };
+  if (found.stats.isDirectory()) return { kind: 'directory', ...base };
+  if (!found.stats.isFile()) return { kind: 'binary', ...base };
+  const head = await readHead(found.path, MAX_VIEW_BYTES);
+  if (head.subarray(0, BINARY_SNIFF_BYTES).includes(0)) return { kind: 'binary', ...base };
+  // A cut can land inside a multi-byte character; the decoder turns that tail into one U+FFFD.
+  const text = head.toString('utf8');
+  return {
+    kind: 'text',
+    ...base,
+    text,
+    truncated: found.stats.size > head.length,
+    ...(found.line ? { line: found.line } : {}),
+  };
+}
 
 /**
  * The channels behind a file path a reply names: which ones exist for this session, and opening
@@ -172,6 +214,20 @@ export function registerFilePathLinkIpc(ipc: Pick<IpcMain, 'handle'>, deps: File
         return error ? { ok: false, error } : { ok: true, opened: 'opened' };
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
+  );
+
+  ipc.handle(
+    IPC_CHANNELS.chatReadFilePath,
+    async (_event, sessionId: unknown, value: unknown): Promise<ChatFileView> => {
+      if (typeof value !== 'string' || !isPathText(value)) return { kind: 'error', error: GONE };
+      try {
+        const scope = await scopeOf(sessionId);
+        const found = scope && (await resolveOne(value, scope, deps));
+        return found ? await viewOf(found) : { kind: 'error', error: GONE };
+      } catch (error) {
+        return { kind: 'error', error: error instanceof Error ? error.message : String(error) };
       }
     }
   );

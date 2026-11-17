@@ -108,7 +108,8 @@ import { roundsOf } from './replyRounds';
 import { describeActivity, latestReply, writingProse, type ComposerUsage } from './statusLine';
 import { useAccountCredits } from './useAccountCredits';
 import { ImageMenuProvider } from './ImageContextMenu';
-import { FilePathLinkProvider } from './FilePathLink';
+import { FilePathLinkProvider, type ShowFile } from './FilePathLink';
+import { FilePane, type TextFileView } from './FilePane';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
 import { useVideoJobs, VideoJobsContext } from './useVideoJobs';
@@ -456,6 +457,22 @@ export function ChatShell({
     } else if (modelPath) setModelOpen(true);
   }, [activeId, modelPath]);
   const toggleModel = useCallback(() => setModelOpen(current => !current), []);
+  // The file a link opened, held for the conversation it was opened in so it never follows the
+  // user into another one. `requested` is the path as the reply wrote it, which main re-resolves.
+  const [openFile, setOpenFile] = useState<{ sessionId: string; requested: string; view: TextFileView } | null>(null);
+  const showFile = useCallback<ShowFile>(
+    (requested, view) => {
+      if (activeId) setOpenFile({ sessionId: activeId, requested, view });
+    },
+    [activeId]
+  );
+  const closeFile = useCallback(() => setOpenFile(null), []);
+  const openFileExternally = useCallback(
+    (requested: string) => {
+      if (activeId) void window.b4m.chat.openFilePath(activeId, requested);
+    },
+    [activeId]
+  );
   const toggleBrowser = useCallback(() => {
     setBrowserOpen(current => {
       writeBrowserPaneOpen(!current);
@@ -1323,7 +1340,7 @@ export function ChatShell({
             should a switch ever skip the `opening` gate that unmounts this today. */}
             <ImageMenuProvider key={activeId ?? 'none'} onAttach={activeId ? draft.attachImage : undefined}>
               {/* A path not found yet is asked again once a turn settles: replies name files before writing them. */}
-              <FilePathLinkProvider sessionId={activeId} recheck={conversation.settledTurns}>
+              <FilePathLinkProvider sessionId={activeId} recheck={conversation.settledTurns} showFile={showFile}>
                 <MessageThread
                   // Remounted per conversation, so its window and scroll start over and nothing it
                   // set going outlives the conversation it was for. Prefixed, as the session panel
@@ -2119,6 +2136,20 @@ export function ChatShell({
       {/* macOS only: `available` is false elsewhere, so the pane and its button never draw. */}
       {simulatorOpen && simulatorView.available && screen === 'conversation' && (
         <SimulatorPane state={simulatorView} onClose={toggleSimulator} />
+      )}
+
+      {openFile && openFile.sessionId === activeId && screen === 'conversation' && (
+        <FilePane
+          key={openFile.sessionId}
+          sessionId={openFile.sessionId}
+          requested={openFile.requested}
+          view={openFile.view}
+          // A settled turn may have rewritten the file it is showing.
+          refreshKey={conversation.settledTurns}
+          conversation={conversationColumn}
+          onOpenExternally={openFileExternally}
+          onClose={closeFile}
+        />
       )}
 
       {modelOpen && modelAvailable && (

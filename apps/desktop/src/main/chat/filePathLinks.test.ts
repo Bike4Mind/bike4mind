@@ -2,9 +2,9 @@ import { chmod, mkdir, mkdtemp, realpath, stat, symlink, writeFile } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatFilePathOpenResult } from '@shared/chat';
+import type { ChatFilePathOpenResult, ChatFileView } from '@shared/chat';
 import { IPC_CHANNELS } from '@shared/ipc';
-import { MAX_PATHS_PER_CHECK, registerFilePathLinkIpc, type FilePathScope } from './filePathLinks';
+import { MAX_PATHS_PER_CHECK, MAX_VIEW_BYTES, registerFilePathLinkIpc, type FilePathScope } from './filePathLinks';
 
 const SESSION = 'session-1';
 
@@ -22,6 +22,7 @@ let deps: {
 };
 let check: (sessionId: unknown, paths: unknown) => Promise<(string | null)[]>;
 let open: (sessionId: unknown, path: unknown) => Promise<ChatFilePathOpenResult>;
+let read: (sessionId: unknown, path: unknown) => Promise<ChatFileView>;
 
 beforeEach(async () => {
   // Real paths, so macOS's /var -> /private/var link does not make the roots look different.
@@ -63,6 +64,8 @@ beforeEach(async () => {
     handlers.get(IPC_CHANNELS.chatCheckFilePaths)!({}, sessionId, paths) as Promise<(string | null)[]>;
   open = (sessionId, path) =>
     handlers.get(IPC_CHANNELS.chatOpenFilePath)!({}, sessionId, path) as Promise<ChatFilePathOpenResult>;
+  read = (sessionId, path) =>
+    handlers.get(IPC_CHANNELS.chatReadFilePath)!({}, sessionId, path) as Promise<ChatFileView>;
 });
 
 describe('checking the paths a reply names', () => {
@@ -144,5 +147,49 @@ describe('opening a path a reply names', () => {
       ok: false,
       error: 'No application knows how to open this file.',
     });
+  });
+});
+
+describe('reading a path a reply names for the Files pane', () => {
+  it('returns a text file with its absolute path, name and size', async () => {
+    expect(await read(SESSION, 'notes.md')).toEqual({
+      kind: 'text',
+      path: join(project, 'notes.md'),
+      name: 'notes.md',
+      size: 7,
+      text: '# notes',
+      truncated: false,
+    });
+  });
+
+  it('carries the line a cited path names', async () => {
+    const view = await read(SESSION, 'notes.md:12:3');
+    expect(view).toMatchObject({ kind: 'text', path: join(project, 'notes.md'), line: 12 });
+  });
+
+  it('names a folder or a binary file without sending its contents', async () => {
+    await writeFile(join(project, 'image.bin'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]));
+    expect(await read(SESSION, 'reports')).toMatchObject({ kind: 'directory', path: join(project, 'reports') });
+    const binary = await read(SESSION, 'image.bin');
+    expect(binary).toMatchObject({ kind: 'binary', name: 'image.bin', size: 6 });
+    expect(binary).not.toHaveProperty('text');
+  });
+
+  it('sends only the start of a long file, and says so', async () => {
+    await writeFile(join(project, 'big.log'), 'x'.repeat(MAX_VIEW_BYTES + 10));
+    const view = await read(SESSION, 'big.log');
+    expect(view.kind).toBe('text');
+    if (view.kind !== 'text') return;
+    expect(view.text).toHaveLength(MAX_VIEW_BYTES);
+    expect(view.truncated).toBe(true);
+    expect(view.size).toBe(MAX_VIEW_BYTES + 10);
+  });
+
+  it('reads nothing it would not have linked', async () => {
+    for (const path of [join(outside, 'secret.txt'), 'escape.txt', 'vault/token.json', 'missing.md', 42, '']) {
+      expect(await read(SESSION, path)).toMatchObject({ kind: 'error' });
+    }
+    expect(await read('other', 'notes.md')).toMatchObject({ kind: 'error' });
+    expect(await read('../../etc', 'notes.md')).toMatchObject({ kind: 'error' });
   });
 });

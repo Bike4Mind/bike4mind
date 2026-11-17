@@ -7,10 +7,18 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type MouseEvent,
   type ReactNode,
 } from 'react';
 import Box from '@mui/joy/Box';
 import Snackbar from '@mui/joy/Snackbar';
+import type { ChatFileView } from '@shared/chat';
+import { isMac } from './platform';
+
+type TextFileView = Extract<ChatFileView, { kind: 'text' }>;
+
+/** Shows a text file in the app's Files pane; the path is as the reply wrote it. */
+export type ShowFile = (requested: string, view: TextFileView) => void;
 
 /** Must stay at or below MAX_PATHS_PER_CHECK in main/chat/filePathLinks.ts, which refuses a longer list. */
 const BATCH = 200;
@@ -19,7 +27,8 @@ interface FilePathLinks {
   /** The settled answer for `path`: its absolute path, null when it is not a file here, undefined when not asked yet. */
   known(path: string): string | null | undefined;
   check(path: string): Promise<string | null>;
-  open(path: string): void;
+  /** In the Files pane when there is one and the path is a text file; in another app otherwise. */
+  open(path: string, externally?: boolean): void;
 }
 
 const FilePathContext = createContext<FilePathLinks | null>(null);
@@ -30,7 +39,12 @@ const FilePathContext = createContext<FilePathLinks | null>(null);
  * Paths that did not resolve are asked again whenever `recheck` changes, since a reply often names
  * a file before a later tool call writes it. Paths that resolved are kept.
  */
-function useFilePathLinks(sessionId: string, recheck: unknown, report: (message: string) => void): FilePathLinks {
+function useFilePathLinks(
+  sessionId: string,
+  recheck: unknown,
+  report: (message: string) => void,
+  showFile: ShowFile | undefined
+): FilePathLinks {
   const cache = useRef(new Map<string, Promise<string | null>>());
   const settled = useRef(new Map<string, string | null>());
   const queue = useRef<{ path: string; resolve: (found: string | null) => void }[]>([]);
@@ -65,16 +79,34 @@ function useFilePathLinks(sessionId: string, recheck: unknown, report: (message:
     }
   }, [sessionId]);
 
-  const open = useCallback(
+  const failed = useCallback(
+    (error: unknown) => report(error instanceof Error ? error.message : String(error)),
+    [report]
+  );
+
+  const openExternally = useCallback(
     (path: string) => {
-      window.b4m.chat.openFilePath(sessionId, path).then(
-        result => {
-          if (!result.ok) report(result.error);
-        },
-        error => report(error instanceof Error ? error.message : String(error))
-      );
+      window.b4m.chat.openFilePath(sessionId, path).then(result => {
+        if (!result.ok) report(result.error);
+      }, failed);
     },
-    [sessionId, report]
+    [sessionId, report, failed]
+  );
+
+  // A folder or a binary file has nothing the pane can show, so it goes to the OS as before.
+  const open = useCallback(
+    (path: string, externally = false) => {
+      if (externally || !showFile) {
+        openExternally(path);
+        return;
+      }
+      window.b4m.chat.readFilePath(sessionId, path).then(view => {
+        if (view.kind === 'text') showFile(path, view);
+        else if (view.kind === 'error') report(view.error);
+        else openExternally(path);
+      }, failed);
+    },
+    [sessionId, showFile, openExternally, report, failed]
   );
 
   // A new object per generation, so every link re-reads its answer after a recheck.
@@ -112,14 +144,17 @@ function useFilePathLinks(sessionId: string, recheck: unknown, report: (message:
 export function FilePathLinkProvider({
   sessionId,
   recheck,
+  showFile,
   children,
 }: {
   sessionId: string | null;
   recheck?: unknown;
+  /** Where a text file opens in the app. Without it every link opens in another app. */
+  showFile?: ShowFile;
   children: ReactNode;
 }) {
   const [notice, setNotice] = useState<string | null>(null);
-  const links = useFilePathLinks(sessionId ?? '', recheck, setNotice);
+  const links = useFilePathLinks(sessionId ?? '', recheck, setNotice, showFile);
   return (
     <FilePathContext.Provider value={sessionId ? links : null}>
       {children}
@@ -142,6 +177,7 @@ export function FilePathLinkProvider({
 /**
  * A path a reply names: a link that opens the file once main has confirmed it exists in this
  * conversation's folders, and its text exactly as written until then, or if it never does.
+ * Cmd-click (Ctrl-click off macOS) skips the Files pane and opens it in another app.
  */
 export function FilePathLink({ path, children }: { path: string; children: ReactNode }) {
   const links = useContext(FilePathContext);
@@ -163,11 +199,12 @@ export function FilePathLink({ path, children }: { path: string; children: React
 
   if (!links || !found) return <>{children}</>;
 
-  const open = () => links.open(path);
+  const external = (event: MouseEvent | KeyboardEvent) => (isMac ? event.metaKey : event.ctrlKey);
+  const onClick = (event: MouseEvent<HTMLElement>) => links.open(path, external(event));
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key !== 'Enter') return;
     event.preventDefault();
-    open();
+    links.open(path, external(event));
   };
 
   return (
@@ -176,7 +213,7 @@ export function FilePathLink({ path, children }: { path: string; children: React
       role="link"
       tabIndex={0}
       title={found}
-      onClick={open}
+      onClick={onClick}
       onKeyDown={onKeyDown}
       data-testid="chat-markdown-file-link"
       data-file-path={found}

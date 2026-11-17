@@ -503,6 +503,16 @@ export type ChatImageActionResult = { ok: true; done: boolean } | { ok: false; e
 export type ChatFilePathOpenResult = { ok: true; opened: 'opened' | 'revealed' } | { ok: false; error: string };
 
 /**
+ * A path a reply names, as the Files pane shows it. `path` is absolute. `text` holds at most the
+ * first MAX_VIEW_BYTES (main/chat/filePathLinks.ts), with `truncated` set when the file is longer;
+ * `line` is the line a cited `file.ts:12` names. A folder or binary file carries no content.
+ */
+export type ChatFileView =
+  | { kind: 'text'; path: string; name: string; size: number; text: string; truncated: boolean; line?: number }
+  | { kind: 'directory' | 'binary'; path: string; name: string; size: number }
+  | { kind: 'error'; error: string };
+
+/**
  * Everything the artifact card needs to draw one, whether it came out of a reply or back off
  * the server.
  *
