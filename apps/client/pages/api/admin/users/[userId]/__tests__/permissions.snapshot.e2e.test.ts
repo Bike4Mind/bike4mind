@@ -126,7 +126,12 @@ describe('permission-removal snapshot transaction', () => {
     try {
       await paused.promise;
       const { req } = request(`/api/admin/admin-roles/${role.id}`);
-      await updateAdminRole(actor, role.id, { permissions: ['users:moderate'] }, adminRolesDeps(req));
+      await updateAdminRole(
+        actor,
+        role.id,
+        { permissions: ['users:moderate'], reason: 'Narrow the role to moderation' },
+        adminRolesDeps(req)
+      );
       editedSnapshot = await AdminRoleModel.findById(role.id).lean<{ __v: number; updatedAt: Date }>();
     } finally {
       resume.resolve();
