@@ -320,17 +320,17 @@ export class ClaudeImportService {
   }
 
   /**
-   * What the sidebar hints offer: Claude Code sessions counted by file name alone (never read),
-   * and one count request to the web. Only for a sync that is off; the Claude Code count runs once
-   * per launch, the web count once per account (retried, throttled, until it succeeds).
+   * Feeds the empty-sidebar import card's options: Claude Code sessions counted by file name alone
+   * (never read), and one count request to the web. Skipped once that card is dismissed or a sync
+   * is on; the Claude Code count runs once per launch, the web count once per account (throttled).
    */
   private async detectHints(): Promise<void> {
     const scopeKey = this.deps.scopeKey();
     if (!scopeKey) return;
     const settings = await this.states.readSettings();
     const dismissed = (await this.states.scope(scopeKey)).dismissedHints;
-    const wanted = (hint: 'claude-code' | 'web') => !dismissed.includes(hint) || !dismissed.includes('sidebar-empty');
-    if (!this.codeChecked && !settings.code.enabled && !settings.code.sourceFolder && wanted('claude-code')) {
+    const wanted = !dismissed.includes('sidebar-empty');
+    if (!this.codeChecked && !settings.code.enabled && !settings.code.sourceFolder && wanted) {
       this.codeChecked = true;
       const transcripts = await listTranscripts(this.defaultSourceFolder(), false);
       this.codeSessions = transcripts.filter(transcript => ranInClaudeWorktree(transcript.path)).length;
@@ -342,7 +342,7 @@ export class ClaudeImportService {
       !this.webNotebooks.has(scopeKey) &&
       Date.now() - triedAt >= WEB_FOCUS_INTERVAL_MS &&
       !settings.web.enabled &&
-      wanted('web')
+      wanted
     ) {
       this.webCountTriedAt.set(scopeKey, Date.now());
       try {

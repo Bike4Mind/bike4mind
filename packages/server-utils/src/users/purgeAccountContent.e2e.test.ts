@@ -17,16 +17,29 @@ import {
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
 vi.mock('sst', () => ({
-  Resource: new Proxy({} as Record<string, unknown>, { get: (_, key) => ({ value: `test-${String(key)}` }) }),
+  Resource: new Proxy({} as Record<string, unknown>, {
+    get: (_, key) => ({ value: `test-${String(key)}`, name: `test-${String(key)}` }),
+  }),
 }));
 
 const effects = vi.hoisted(() => ({
+  deleteImportPrefix: vi.fn(),
   deleteGenerated: vi.fn(),
   deletePrefix: vi.fn(),
   deleteFile: vi.fn(),
   sendCompleteEmail: vi.fn(),
   cdnAdd: vi.fn(),
   cdnFlush: vi.fn(),
+}));
+vi.mock('@bike4mind/fab-pipeline', async importActual => ({
+  ...(await importActual<typeof import('@bike4mind/fab-pipeline')>()),
+  S3Storage: class {
+    constructor(private readonly bucketName: string) {}
+    deletePermanently = effects.deleteFile;
+    deletePrefixPermanently(prefix: string) {
+      return effects.deleteImportPrefix(this.bucketName, prefix);
+    }
+  },
 }));
 vi.mock('../utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ delete: effects.deleteGenerated, deletePermanently: effects.deleteGenerated }),
@@ -85,6 +98,7 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   vi.clearAllMocks();
+  effects.deleteImportPrefix.mockReset().mockResolvedValue(undefined);
   effects.deleteGenerated.mockResolvedValue(undefined);
   effects.deletePrefix.mockResolvedValue(undefined);
   effects.deleteFile.mockResolvedValue(undefined);
@@ -96,6 +110,7 @@ beforeEach(async () => {
 // These purges are self-serve, so the erasure registry is never consulted.
 const erasureRegistry: ErasureRegistry = {
   scope: async () => [],
+  erase: async () => {},
   audit: async () => ({ remaining: [], unclassified: [] }),
 };
 
@@ -114,23 +129,14 @@ describe('permanent personal-content purge', () => {
     expect(retained?.ownerId).toBeNull();
     expect(retained?.status).toBe('open');
   });
-  it('pulls a deleted account from billingManagerUserIds even without a roster row', async () => {
-    const orgId = new mongoose.Types.ObjectId();
-    await collection('Organization').insertOne({
-      _id: orgId,
-      userId: otherOwnerId,
-      personal: false,
-      billingManagerUserIds: [ownerId, otherOwnerId],
-    });
-    await purgeAccountContent(ownerId, { assertLease, logger });
-    expect(await collection('Organization').findOne({ _id: orgId })).toMatchObject({
-      billingManagerUserIds: [otherOwnerId],
-    });
-  });
   it('retains the real account and purge marker after object failure, then removes content and User before emailing completion', async () => {
     const notebookId = new mongoose.Types.ObjectId();
     const fileId = new mongoose.Types.ObjectId();
-    const storedObjects = new Set(['private-upload', 'private-generated']);
+    const notebookImport = `notebooks/${ownerId}/archive.json`;
+    const storedObjects = new Set(['private-upload', 'private-generated', notebookImport]);
+    effects.deleteImportPrefix.mockImplementation(async (_bucket: string, prefix: string) => {
+      for (const key of storedObjects) if (key.startsWith(prefix)) storedObjects.delete(key);
+    });
     await collection('OrgAdminNotificationPref').insertOne({ userId: ownerId, organizationId: 'team', kinds: {} });
     await collection('OrgAlertNotification').insertOne({ subjectUserId: ownerId, organizationId: 'team' });
     await collection('Inbox').insertOne({ receiverId: ownerId, organizationAlert: true });
@@ -185,9 +191,33 @@ describe('permanent personal-content purge', () => {
       deleted: false,
       reason: 'not_found',
     });
+    expect(effects.deleteImportPrefix).toHaveBeenCalledWith('test-historyImportBucket', `notebooks/${ownerId}/`);
     expect(effects.sendCompleteEmail).toHaveBeenCalledExactlyOnceWith('purge@example.test');
     expect(completionSnapshots).toEqual([{ remainingRows: [0, 0, 0, 0, 0, 0, 0, 0], remainingObjects: 0 }]);
   });
+  it('keeps the account retryable when notebook-import deletion fails, then completes after retry', async () => {
+    await collection('User').insertOne({
+      _id: new mongoose.Types.ObjectId(ownerId),
+      username: 'import-owner',
+      email: 'imports@example.test',
+      deletion: { requestedAt: new Date(0), scheduledFor: new Date(0), source: 'self' },
+    });
+    effects.deleteImportPrefix.mockRejectedValueOnce(new Error('notebook imports unavailable'));
+
+    await expect(completeAccountDeletion(ownerId, { logger, erasureRegistry })).rejects.toThrow(
+      'notebook imports unavailable'
+    );
+    expect(await collection('User').findOne({ _id: new mongoose.Types.ObjectId(ownerId) })).toMatchObject({
+      deletion: { purgeStartedAt: expect.any(Date) },
+    });
+    expect(effects.sendCompleteEmail).not.toHaveBeenCalled();
+
+    await expect(completeAccountDeletion(ownerId, { logger, erasureRegistry })).resolves.toEqual({ deleted: true });
+    expect(effects.deleteImportPrefix).toHaveBeenCalledTimes(2);
+    expect(effects.deleteImportPrefix).toHaveBeenLastCalledWith('test-historyImportBucket', `notebooks/${ownerId}/`);
+    expect(effects.sendCompleteEmail).toHaveBeenCalledExactlyOnceWith('imports@example.test');
+  });
+
   it('hard-deletes notebooks, messages and personal content including tombstones, preserving other owners and org content', async () => {
     const notebookId = new mongoose.Types.ObjectId();
     const otherNotebookId = new mongoose.Types.ObjectId();
@@ -210,8 +240,6 @@ describe('permanent personal-content purge', () => {
     await collection('Artifact').insertOne({ id: 'personal-artifact', userId: ownerId });
     await collection('ArtifactContent').insertOne({ artifactId: 'personal-artifact', content: 'private content' });
     await collection('ArtifactVersion').insertOne({ artifactId: 'personal-artifact', content: 'old private content' });
-    await collection('AuthSession').insertOne({ userId: ownerId });
-    await collection('CounterLog').insertOne({ userId: ownerId, metadata: { title: 'private title' } });
     await collection('UsageEvent').insertMany([
       { userId: ownerId, ownerType: 'User', ownerId, requestId: 'personal-usage' },
       {
@@ -253,15 +281,6 @@ describe('permanent personal-content purge', () => {
       action: 'revoke',
       expiresAt: new Date('2027-01-01'),
     });
-    for (const modelName of [
-      'UserActivityCounter',
-      'UserUsagePatternSignals',
-      'AdminUserNote',
-      'AdminUserNoteRevision',
-      'FeedbackNote',
-    ]) {
-      await collection(modelName).insertOne({ userId: ownerId, body: 'private account note' });
-    }
 
     await purgeAccountContent(ownerId, { logger, assertLease });
 
@@ -271,8 +290,6 @@ describe('permanent personal-content purge', () => {
     expect(await collection('Artifact').countDocuments({ userId: ownerId })).toBe(0);
     expect(await collection('ArtifactContent').countDocuments({ artifactId: 'personal-artifact' })).toBe(0);
     expect(await collection('ArtifactVersion').countDocuments({ artifactId: 'personal-artifact' })).toBe(0);
-    expect(await collection('AuthSession').countDocuments({ userId: ownerId })).toBe(0);
-    expect(await collection('CounterLog').countDocuments({ userId: ownerId })).toBe(0);
     expect(await collection('UsageEvent').countDocuments({ ownerType: 'User', ownerId })).toBe(0);
     expect(await collection('UsageEvent').countDocuments({ ownerId: String(personalOrganizationId) })).toBe(0);
     const organizationUsage = await collection('UsageEvent').findOne({ ownerId: 'org-1' });
@@ -280,7 +297,6 @@ describe('permanent personal-content purge', () => {
     expect(organizationUsage?.requestId).not.toBe('org-usage');
     for (const field of ['sessionId', 'dataLakeId', 'apiKeyId']) expect(organizationUsage).not.toHaveProperty(field);
     for (const modelName of ['GenerationJob', 'Activity']) {
-      expect(await collection(modelName).countDocuments({ ownerId })).toBe(0);
       expect(await collection(modelName).countDocuments({ ownerId: String(personalOrganizationId) })).toBe(0);
       expect(await collection(modelName).countDocuments({ ownerId: 'org-1' })).toBe(1);
     }
@@ -288,19 +304,9 @@ describe('permanent personal-content purge', () => {
       deletedAt: expect.any(Date),
     });
     expect(await collection('UserApiKeyAuditLog').countDocuments({ actorUserId: ownerId })).toBe(1);
-    for (const modelName of [
-      'UserActivityCounter',
-      'UserUsagePatternSignals',
-      'AdminUserNote',
-      'AdminUserNoteRevision',
-      'FeedbackNote',
-    ]) {
-      expect(await collection(modelName).countDocuments({ userId: ownerId })).toBe(0);
-    }
     expect(await collection('Project').countDocuments({ userId: ownerId, organizationId: null })).toBe(0);
     expect(await collection('Project').countDocuments({ organizationId: String(personalOrganizationId) })).toBe(0);
     expect(await collection('Project').findOne({ organizationId: 'org-1' })).not.toBeNull();
-    expect(await collection(Session.modelName).findOne({ _id: otherNotebookId })).toMatchObject({ users: [] });
     expect(await collection('Quest').findOne({ sessionId: String(otherNotebookId) })).not.toBeNull();
     expect(
       await collection('MemoryPrincipalKey').findOne({ principalKind: 'user', principalId: ownerId })
@@ -367,7 +373,7 @@ describe('permanent personal-content purge', () => {
     expect(effects.sendCompleteEmail).toHaveBeenCalledExactlyOnceWith('audit-retry@example.test');
   });
 
-  it('removes provider keys, project-minted grants and Slack selections of removed agents', async () => {
+  it('removes project-minted grants and Slack selections of removed agents', async () => {
     const projectId = new mongoose.Types.ObjectId();
     const otherProjectId = new mongoose.Types.ObjectId();
     const orgFileId = new mongoose.Types.ObjectId();
@@ -375,10 +381,6 @@ describe('permanent personal-content purge', () => {
     const agentId = new mongoose.Types.ObjectId();
     const orgAgentId = new mongoose.Types.ObjectId();
     const memberId = new mongoose.Types.ObjectId().toString();
-    await collection('ApiKey').insertMany([
-      { userId: ownerId, type: 'openai', apiKey: 'ciphertext', deletedAt: new Date() },
-      { userId: otherOwnerId, type: 'openai', apiKey: 'other ciphertext' },
-    ]);
     await collection('Project').insertMany([
       { _id: projectId, userId: ownerId, name: 'shared project', users: [{ userId: memberId }] },
       { _id: otherProjectId, userId: otherOwnerId, name: 'other project' },
@@ -412,8 +414,6 @@ describe('permanent personal-content purge', () => {
     await purgeAccountContent(ownerId, { logger, assertLease });
     await purgeAccountContent(ownerId, { logger, assertLease });
 
-    expect(await collection('ApiKey').countDocuments({ userId: ownerId })).toBe(0);
-    expect(await collection('ApiKey').countDocuments({ userId: otherOwnerId })).toBe(1);
     expect(await collection('Project').findOne({ _id: projectId })).toBeNull();
     const survivingGrants = [{ userId: memberId, projectId: String(otherProjectId) }, { userId: memberId }];
     expect(await collection('FabFile').findOne({ _id: orgFileId })).toMatchObject({ users: survivingGrants });

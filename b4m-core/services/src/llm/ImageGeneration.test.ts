@@ -19,7 +19,13 @@ import { OMITTED_QUALITY_TIER, OpenAIImageCostCalculator } from './imageCostCalc
 import { estimateImageCredits } from '../imageCost';
 import type { Logger } from '@bike4mind/observability';
 import { silentLogger, statusLog } from '../__tests__/utils/testUtils';
-import { getSettingsValue, ImageModerationBlockedError, ImageProviderUnavailableError } from '@bike4mind/utils';
+import {
+  getSettingsValue,
+  ImageModerationBlockedError,
+  ImageProviderUnavailableError,
+  OpenaiModerationsService,
+} from '@bike4mind/utils';
+import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { startQuestHeartbeat } from './questHeartbeat';
 
@@ -1006,6 +1012,31 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
     expect(quest.status).toBe('done');
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0 }));
     expect(quest.creditHolds.release).not.toHaveBeenCalled();
+  });
+
+  it('moderates the prompt with the shared admin key, not an expired user OpenAI key', async () => {
+    vi.mocked(getEffectiveLLMApiKeys).mockResolvedValueOnce({ gemini: 'gemini-key', openai: 'expired' } as never);
+    vi.mocked(getSettingsValue).mockImplementation(((name: string) => {
+      if (name === 'enforceCredits' || name === 'ModerationEnabled') return true;
+      if (name === 'openaiDemoKey') return 'shared-key';
+      return undefined;
+    }) as never);
+    const usedKeys: string[] = [];
+    const checkPrompt = vi
+      .spyOn(OpenaiModerationsService.prototype, 'checkPrompt')
+      .mockImplementation(async function (this: { openai: { apiKey: string } }) {
+        usedKeys.push(this.openai.apiKey);
+      });
+
+    try {
+      const quest = await runCharged(vi.fn(async () => undefined));
+
+      expect(quest.status).toBe('done');
+      expect(checkPrompt).toHaveBeenCalledWith('a red bicycle');
+      expect(usedKeys).toEqual(['shared-key']);
+    } finally {
+      checkPrompt.mockRestore();
+    }
   });
 
   it('deducts the selected primary image input cost on a GPT generation', async () => {

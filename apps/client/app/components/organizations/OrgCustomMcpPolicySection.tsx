@@ -260,6 +260,7 @@ const OrgCustomMcpPolicySection: FC<{ organization: IOrganizationDocument }> = (
             checked={form.requireApprovalForAll}
             onChange={event => update({ requireApprovalForAll: event.target.checked })}
             endDecorator="Require approval before every tool call"
+            slotProps={{ input: { 'aria-label': 'Require approval before every tool call' } }}
             data-testid="org-custom-mcp-require-approval-switch"
           />
           <Switch
@@ -267,6 +268,7 @@ const OrgCustomMcpPolicySection: FC<{ organization: IOrganizationDocument }> = (
             checked={form.allowWriteTools}
             onChange={event => update({ allowWriteTools: event.target.checked })}
             endDecorator="Allow tools that are not marked read-only"
+            slotProps={{ input: { 'aria-label': 'Allow tools that are not marked read-only' } }}
             data-testid="org-custom-mcp-write-tools-switch"
           />
           <Switch
@@ -274,6 +276,7 @@ const OrgCustomMcpPolicySection: FC<{ organization: IOrganizationDocument }> = (
             checked={form.allowUnauthenticated}
             onChange={event => update({ allowUnauthenticated: event.target.checked })}
             endDecorator="Allow servers that need no sign-in"
+            slotProps={{ input: { 'aria-label': 'Allow servers that need no sign-in' } }}
             data-testid="org-custom-mcp-unauthenticated-switch"
           />
           <FormControl disabled={!form.enabled} sx={{ maxWidth: 240 }}>

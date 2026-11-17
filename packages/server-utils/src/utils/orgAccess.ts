@@ -9,7 +9,7 @@
  * reads have their own tiers. State which one you mean at every call site; picking the wrong one
  * either leaks across a tenant boundary or breaks a members' screen:
  * - `verifyOrgPermission`      - the caller's role grants the named permission (writes and admin reads)
- * - `verifyOrgAdminRead`       - manager-tier status reads, matching `adminUserIds` without the roster row
+ * - `verifyOrgAdminRead`       - `verifyOrgPermission(..., 'manageContent')` for status reads, `{ org, canManage }` shape
  * - `verifyOrgMemberOrManager` - any member, or a manager whose row lacks a membership permission (reads only)
  * - `verifyOrgMembership`      - any member (shareable ACL)
  *
@@ -53,34 +53,13 @@ export async function verifyOrgPermission(
 }
 
 /**
- * Read-tier sibling of `verifyOrgPermission(..., 'manageContent')` for status surfaces: admits the owner, any `adminUserIds`
- * manager and a platform admin. That is the same set `findIdsWithAdminRights` and
- * `canManageLake` resolve from the user's side, read here off the org document because the org is
- * already in hand: a manager is matched on `adminUserIds` alone, unlike `canAdministerOrganization`
- * (`b4m-core/common/src/constants/organization.ts`), which also requires a current `users[]` row - so
- * a manager whose row has lapsed may still see status but not operate. Never use it to guard a write
- * - `canManage` is the `verifyOrgPermission(..., 'manageContent')` answer, so a caller can render the write controls only for
- * who may use them.
- *
- * Non-oracular like its siblings: a missing org and an unrelated caller both answer NotFoundError.
+ * `verifyOrgPermission(..., 'manageContent')` in the `{ org, canManage }` shape status surfaces
+ * expect; `canManage` is always true on success. It admits the same set `canAdministerOrganization`
+ * does: a manager counts only with a current `users[]` row, matching `findIdsAdministeredBy`. Guard
+ * writes with `verifyOrgPermission` itself.
  */
 export async function verifyOrgAdminRead(user: { id: string; isAdmin: boolean }, orgId: string) {
-  if (!orgId || !isValidObjectId(orgId)) {
-    throw new BadRequestError('Invalid organization ID');
-  }
-
-  const org = await organizationRepository.findById(orgId);
-  if (!org) {
-    throw new NotFoundError('Organization not found');
-  }
-
-  const canManage = hasOrgPermission(user, org, 'manageContent');
-  const isAppointedAdmin = (org.adminUserIds ?? []).some(adminId => String(adminId) === user.id);
-  if (!canManage && !isAppointedAdmin) {
-    throw new NotFoundError('Organization not found');
-  }
-
-  return { org, canManage };
+  return { org: await verifyOrgPermission(user, orgId, 'manageContent'), canManage: true };
 }
 
 /**
