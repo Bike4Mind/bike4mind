@@ -10,7 +10,7 @@ import {
 import { dlqTriageDeliveryRepository } from '@bike4mind/database';
 import { connectDB } from '@bike4mind/db-core';
 import { Logger } from '@bike4mind/observability';
-import { getDlqByLabel } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { describeDlqMessage, getDlqByLabel } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { triageDlqMessage, loadDlqTriageConfig } from '@server/admin/dlq/triage';
 import { Resource } from 'sst';
 import { buildDlqTriageSection } from './dlqTriageMessage';
@@ -58,6 +58,7 @@ async function collect(alarmName: string, appUrl: string | undefined, deadline: 
   const sources = await sqs.send(new ListDeadLetterSourceQueuesCommand({ QueueUrl }), request());
   const sourceQueueName =
     sources.queueUrls?.length === 1 ? (new URL(sources.queueUrls[0]).pathname.split('/').pop() ?? null) : null;
+  const sourceQueueUrl = sources.queueUrls?.length === 1 ? sources.queueUrls[0] : null;
   const { Attributes: attributes } = await sqs.send(
     new GetQueueAttributesCommand({
       QueueUrl,
@@ -90,6 +91,8 @@ async function collect(alarmName: string, appUrl: string | undefined, deadline: 
         sentTimestamp: message.Attributes?.SentTimestamp,
         retentionSeconds: Number(attributes?.MessageRetentionPeriod) || undefined,
         sourceQueueName,
+        sourceQueueUrl,
+        entityPresent: describeDlqMessage(entry, message.Body) !== null,
       });
       if (suggestion?.status === 'pending') suggestions.set(message.MessageId, suggestion);
     }
@@ -114,7 +117,7 @@ async function collect(alarmName: string, appUrl: string | undefined, deadline: 
       key,
       queueLabel: label,
       suggestionIds: ids,
-      section: `${coverage}\n${buildDlqTriageSection(label, claimed, appUrl)}`,
+      section: `${coverage} Showing ${claimed.length} of ${suggestions.size} pending sampled recommendations.\n${buildDlqTriageSection(label, claimed, appUrl)}`,
     };
   } finally {
     if (!ready) await releaseDlqTriageDelivery({ suggestionIds: claimed.map(suggestion => suggestion.id) });

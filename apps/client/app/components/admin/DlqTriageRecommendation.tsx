@@ -1,6 +1,6 @@
 import { Button, Stack, Typography } from '@mui/joy';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AdminAiSuggestionItem } from '@bike4mind/common';
+import { dlqTriageEvidenceSchema, type AdminAiSuggestionItem } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { AdminPermissionAction } from './shared/MissingPermission';
 import { useState } from 'react';
@@ -31,6 +31,11 @@ export function DlqTriageRecommendation({ queueLabel, messageId }: { queueLabel:
     onSettled: () => client.invalidateQueries({ queryKey: key }),
   });
   const suggestion = query.data;
+  const proposedAction = suggestion?.proposedAction;
+  const evidenceResult = dlqTriageEvidenceSchema.safeParse(
+    proposedAction && typeof proposedAction === 'object' && 'facts' in proposedAction ? proposedAction.facts : null
+  );
+  const evidence = evidenceResult.success ? evidenceResult.data : null;
   const approve = useMutation({
     mutationFn: async (reason: string) => {
       const discard = suggestion?.verdict === 'discard';
@@ -67,8 +72,45 @@ export function DlqTriageRecommendation({ queueLabel, messageId }: { queueLabel:
         {suggestion.verdict}: {suggestion.reasons[0]?.text}
       </Typography>
       <Typography level="body-xs">
-        {suggestion.actionClass} - {suggestion.status}
+        {suggestion.actionClass} - {suggestion.status === 'accepted' ? 'Authorized' : suggestion.status}
       </Typography>
+      {suggestion.status === 'accepted' && (
+        <Typography level="body-xs" data-testid={`dlq-triage-execution-${messageId}`}>
+          Execution outcome unconfirmed. Authorization does not prove replay, discard or consumer success. Inspect
+          DLQ history before acting again.
+        </Typography>
+      )}
+      {evidence && (
+        <details data-testid={`dlq-triage-evidence-${messageId}`}>
+          <summary>Review partial evidence</summary>
+          <Typography level="body-xs">
+            Partial SQS sample; not an inventory. Failure: {evidence.failureSource}. Consumer version:{' '}
+            {evidence.consumerVersion}. Fix verification: unavailable.
+          </Typography>
+          <Typography level="body-xs">
+            Entity context: {evidence.entityContext}. Consumer logs: {evidence.logFallback.status} (
+            {evidence.logFallback.sampledEvents} sampled events; not proof of a failure or fix).
+          </Typography>
+          <Typography level="body-xs">
+            Expiry: {evidence.expiry.status}
+            {evidence.expiry.estimatedExpiresAt ? ` (${evidence.expiry.estimatedExpiresAt})` : ''}.{' '}
+            {evidence.expiry.explanation}
+          </Typography>
+          <Typography level="body-xs">
+            Registered owner: {evidence.owner ?? 'unavailable'}.
+            {evidence.expiry.status === 'within-24-hours'
+              ? ' Request owner review before estimated expiry; no fix has been verified.'
+              : ''}
+          </Typography>
+          {evidence.issueDraft && (
+            <details data-testid={`dlq-triage-draft-${messageId}`}>
+              <summary>Review sanitized issue draft</summary>
+              <Typography level="body-xs">{evidence.issueDraft.title}</Typography>
+              <Typography level="body-xs">{evidence.issueDraft.body}</Typography>
+            </details>
+          )}
+        </details>
+      )}
       {suggestion.status === 'pending' && (
         <AdminPermissionAction requirement="settings:manage">
           {disabled => (

@@ -87,4 +87,30 @@ describe('DLQ triage decisions', () => {
       })
     );
   });
+  it('never presents authorization as a completed queue action', async () => {
+    h.get.mockResolvedValue({ data: { suggestion: { id: 'a'.repeat(24), verdict: 'replay', actionClass: 'safe-transient', status: 'accepted', reasons: [] } } });
+    setup();
+    expect(await screen.findByTestId('dlq-triage-execution-m1')).toHaveTextContent('Execution outcome unconfirmed');
+    expect(screen.getByTestId('dlq-triage-m1')).toHaveTextContent('Authorized');
+    expect(screen.queryByTestId('dlq-triage-approve-m1')).not.toBeInTheDocument();
+  });
+  it('shows partial evidence, the registered owner and a sanitized draft without offering replay for a bug', async () => {
+    h.get.mockResolvedValue({ data: { suggestion: {
+      id: 'a'.repeat(24), verdict: 'investigate', actionClass: 'review-required', status: 'pending', reasons: [],
+      proposedAction: { facts: {
+        coverage: 'partial-sqs-sample', failureSource: 'recorded', failureCategory: 'bug', consumerVersion: 'unknown',
+        fixVerification: 'unavailable', entityContext: 'present-id-withheld', owner: 'Accounts',
+        expiry: { status: 'within-24-hours', estimatedExpiresAt: null, explanation: 'Estimate only.' },
+        logFallback: { status: 'not-needed', sampledEvents: 0 },
+        issueDraft: { title: 'Investigate consumer failure', body: 'Fix relationship unavailable.' },
+      } },
+    } } });
+    setup();
+    const evidence = await screen.findByTestId('dlq-triage-evidence-m1');
+    expect(evidence).toHaveTextContent('Partial SQS sample; not an inventory');
+    expect(evidence).toHaveTextContent('Registered owner: Accounts');
+    expect(evidence).toHaveTextContent('no fix has been verified');
+    expect(screen.getByTestId('dlq-triage-draft-m1')).toHaveTextContent('Fix relationship unavailable');
+    expect(screen.queryByTestId('dlq-triage-approve-m1')).not.toBeInTheDocument();
+  });
 });

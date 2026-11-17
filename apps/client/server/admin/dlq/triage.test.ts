@@ -21,6 +21,10 @@ vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
 }));
 vi.mock('@server/admin/ai/readiness', () => ({ getAdminAiClassReadiness: h.readiness }));
 vi.mock('@server/admin/ai/telemetry', () => ({ recordAdminAiAttempt: h.attempt }));
+vi.mock('./triageEvidence', async importOriginal => ({
+  ...(await importOriginal<typeof import('./triageEvidence')>()),
+  sampleDlqConsumerLogs: vi.fn().mockResolvedValue({ status: 'unavailable', sampledEvents: 0 }),
+}));
 
 import { triageDlqMessage, visibleDlqSuggestion } from './triage';
 
@@ -68,5 +72,14 @@ describe('DLQ triage orchestration', () => {
     await triageDlqMessage('fixture', 'm1');
     h.readiness.mockResolvedValue({ canRecommend: false, canAct: false });
     expect(await visibleDlqSuggestion('fixture', 'm1')).toBeNull();
+  });
+  it('stores unavailable failure evidence rather than failing triage when the lookup fails', async () => {
+    h.failures.mockRejectedValue(new Error('private database detail'));
+    const suggestion = await triageDlqMessage('fixture', 'm1');
+    expect(suggestion?.verdict).toBe('investigate');
+    expect(suggestion?.proposedAction).toMatchObject({
+      facts: { failureSource: 'unavailable', fixVerification: 'unavailable' },
+    });
+    expect(JSON.stringify(suggestion)).not.toContain('private database detail');
   });
 });

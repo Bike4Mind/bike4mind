@@ -6,6 +6,7 @@ import { getDlqByLabel, getSourceQueueUrl } from '@bike4mind/server-utils/utils/
 import { getAdminAiClassReadiness } from '@server/admin/ai/readiness';
 import { recordAdminAiAttempt } from '@server/admin/ai/telemetry';
 import { DLQ_TRIAGE_POLICY_VERSION, recommendDlqAction } from './triagePolicy';
+import { buildDlqTriageEvidence, sampleDlqConsumerLogs } from './triageEvidence';
 
 export const dlqTriageEntityId = (queueLabel: string, messageId: string) => `${queueLabel}:${messageId}`;
 
@@ -48,6 +49,8 @@ export async function triageDlqMessage(
     retentionSeconds?: number;
     logsUrl?: string | null;
     sourceQueueName?: string | null;
+    sourceQueueUrl?: string | null;
+    entityPresent?: boolean;
   } = {}
 ): Promise<AdminAiSuggestionItem | null> {
   const startedAt = new Date();
@@ -75,7 +78,10 @@ export async function triageDlqMessage(
       : entry.sourceQueue
         ? new URL(getSourceQueueUrl(entry.sourceQueue)).pathname.split('/').pop()
         : undefined;
-  const [failure] = sourceName ? await dlqFailureRepository.findForMessages(sourceName, [messageId]) : [];
+  const failures = sourceName
+    ? await dlqFailureRepository.findForMessages(sourceName, [messageId]).catch(() => [])
+    : [];
+  const failure = failures[0];
   const action = recommendDlqAction({
     ...entry,
     replay: 'replay' in entry ? entry.replay : undefined,
@@ -83,19 +89,19 @@ export async function triageDlqMessage(
     queueLabel,
     failure,
   });
-  const evidence = {
-    failureCategory: failure?.category ?? 'unknown',
-    consumerVersion: failure?.consumerVersion ?? 'unknown',
-    failedAt: failure?.failedAt.toISOString() ?? null,
-    sentTimestamp: facts.sentTimestamp ?? null,
-    retentionSeconds: facts.retentionSeconds ?? null,
-    action,
-  };
+  const evidence = buildDlqTriageEvidence({
+    ...facts,
+    failure,
+    owner: entry.owner,
+    logFallback: failure
+      ? { status: 'not-needed', sampledEvents: 0 }
+      : await sampleDlqConsumerLogs(facts.sourceQueueUrl, messageId, facts.sentTimestamp),
+  });
   const key = {
     feature: 'dlqTriage' as const,
     entityId: dlqTriageEntityId(queueLabel, messageId),
     policyVersion: DLQ_TRIAGE_POLICY_VERSION,
-    inputHash: createHash('sha256').update(JSON.stringify(evidence)).digest('hex'),
+    inputHash: createHash('sha256').update(JSON.stringify({ evidence, action })).digest('hex'),
   };
   const existing = await adminAiSuggestionRepository.findByKey(key);
   const suggestion =

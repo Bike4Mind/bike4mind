@@ -96,7 +96,7 @@ import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
 import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
-import { dlqTriagePermissions } from './dlqTriagePermissions';
+import { dlqTriageEvidencePermissions, dlqTriagePermissions } from './dlqTriagePermissions';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -172,6 +172,7 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
         ...mentionArgs.permissions,
         { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
         dlqTriagePermissions(),
+        ...dlqTriageEvidencePermissions(),
         { actions: ['logs:StartQuery'], resources: spendLogGroupArns },
         { actions: ['logs:GetQueryResults', 'logs:StopQuery'], resources: ['*'] },
       ],

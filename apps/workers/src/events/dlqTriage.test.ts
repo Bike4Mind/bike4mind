@@ -29,7 +29,10 @@ vi.mock('@bike4mind/db-core', () => ({ connectDB: h.connect }));
 vi.mock('@bike4mind/database', () => ({
   dlqTriageDeliveryRepository: { claim: h.claim, delivered: h.delivered, release: h.release },
 }));
-vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getDlqByLabel: () => ({ label: 'fixture' }) }));
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
+  getDlqByLabel: () => ({ label: 'fixture' }),
+  describeDlqMessage: () => null,
+}));
 vi.mock('@server/admin/dlq/triage', () => ({ triageDlqMessage: h.triage, loadDlqTriageConfig: h.config }));
 vi.mock('sst', () => ({ Resource: { App: { name: 'app', stage: 'test' }, MONGODB_URI: { value: 'fixture' } } }));
 

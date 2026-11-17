@@ -26,7 +26,12 @@ export function recommendDlqAction(input: {
       reason:
         'A recorded account, credit or spend-gate refusal prevents this job from running. Discard the dead letter; new work requires the gate to be cleared.',
     };
-  if (input.failure?.transientFailure === true && input.replay === 'safe' && input.sourceQueue)
+  if (
+    input.failure?.category !== 'bug' &&
+    input.failure?.transientFailure === true &&
+    input.replay === 'safe' &&
+    input.sourceQueue
+  )
     return {
       ...identity,
       action: 'replay',
@@ -46,4 +51,4 @@ export function recommendDlqAction(input: {
   };
 }
 
-export const DLQ_TRIAGE_POLICY_VERSION = 'recommend-v1';
+export const DLQ_TRIAGE_POLICY_VERSION = 'recommend-v2';

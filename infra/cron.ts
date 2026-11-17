@@ -43,7 +43,7 @@ import './adminMorningBrief';
 import './organizationRetention';
 import { secrets } from './secrets';
 import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
-import { dlqTriagePermissions } from './dlqTriagePermissions';
+import { dlqTriageEvidencePermissions, dlqTriagePermissions } from './dlqTriagePermissions';
 
 if (runsScheduledJobs && dlqTriageSweepDeadLetter) {
   const deadLetter = dlqTriageSweepDeadLetter;
@@ -61,6 +61,7 @@ if (runsScheduledJobs && dlqTriageSweepDeadLetter) {
         deadLetter.sendPermission,
         { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
         dlqTriagePermissions(),
+        ...dlqTriageEvidencePermissions(),
       ],
       transform: deadLetter.functionTarget,
     },
