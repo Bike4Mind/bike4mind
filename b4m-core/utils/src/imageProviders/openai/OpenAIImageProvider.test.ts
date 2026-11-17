@@ -7,13 +7,15 @@ import type { ProviderContext } from '../../generationProviders/types';
 import type { ImageInputs } from '../types';
 import { OpenAIImageProvider } from './OpenAIImageProvider';
 
-// Mask redrawing is editMask's (tested there on real images); here it passes inputs through and records the convention.
-const maskConventions = vi.hoisted(() => [] as string[]);
+// Mask redrawing is editMask's (tested there on real images). Here the mask comes back as a sentinel naming the
+// convention, so a test proves the provider sends the redrawn mask, in the right convention, and not the original.
 vi.mock('../editMask', () => ({
-  withProviderMask: async (inputs: unknown, convention: string) => {
-    maskConventions.push(convention);
-    return inputs;
-  },
+  withProviderMask: async (inputs: ImageInputs, convention: string): Promise<ImageInputs> => ({
+    ...inputs,
+    images: inputs.images?.map(input =>
+      input.role === 'mask' ? { ...input, bytes: Buffer.from(`normalized-${convention}`) } : input
+    ),
+  }),
 }));
 
 const { generate, edit, constructed } = vi.hoisted(() => ({
@@ -141,12 +143,11 @@ describe('OpenAIImageProvider', () => {
       expect(edit).toHaveBeenCalledWith(dataUrlOf('src'), 'a red bicycle', {
         model: ImageModels.GPT_IMAGE_1,
         size: '1024x1024',
-        mask: dataUrlOf('mask'),
+        mask: dataUrlOf('normalized-transparent'),
         referenceImages: [dataUrlOf('ref')],
       });
       expect(generate).not.toHaveBeenCalled();
       expect(result).toMatchObject({ status: 'succeeded', output: { kind: 'inline', base64: PNG_BASE64 } });
-      expect(maskConventions.at(-1)).toBe('transparent');
     });
 
     it('omits the mask and references when there are none', async () => {

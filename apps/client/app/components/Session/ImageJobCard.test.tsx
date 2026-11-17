@@ -157,6 +157,11 @@ describe('ImageJobCard', () => {
       expect(screen.queryByTestId('image-job-card-edit-btn')).toBeNull();
     });
 
+    it.each(['pending_scan', 'unavailable'] as const)('is not offered while the image is %s', availability => {
+      show(job({ state: 'succeeded', output: output({ availability, url: null }) }));
+      expect(screen.queryByTestId('image-job-card-edit-btn')).toBeNull();
+    });
+
     it('is not offered while Studio image is closed', () => {
       h.studioImageEnabled = false;
       show(job({ state: 'succeeded', output: output() }));

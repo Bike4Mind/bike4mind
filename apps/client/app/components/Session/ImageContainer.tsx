@@ -257,8 +257,14 @@ const ImageContainer: FC<ImageContainerProps> = ({
       const fileName = `image_${Date.now()}.png`;
       const file = await copyGeneratedImageToFabFile(s3Key, fileName);
       // The copy starts 'pending' until its upload scan; an edit job refuses a pending input, so scan it now.
-      if ((await moderateFabFileNow(file.id)) === 'blocked') {
+      const scan = await moderateFabFileNow(file.id);
+      if (scan === 'blocked') {
+        await deleteFileUtility(file.id);
         toast.error('This image cannot be edited.');
+        return;
+      }
+      if (scan === 'pending') {
+        toast.info('The image is still being checked. Try Edit again in a moment.');
         return;
       }
       openStudioImageEdit({ fileId: file.id, fileName: file.fileName || fileName });
@@ -449,7 +455,11 @@ const ImageContainer: FC<ImageContainerProps> = ({
         </IconButton>
       </Tooltip>
       {!readOnly && (
-        <Tooltip title={studioImageEnabled && isGeneratedImage(src) ? 'Edit in Studio' : 'Edit Image'}>
+        <Tooltip
+          title={
+            studioImageEnabled && isGeneratedImage(src) && extractS3KeyFromUrl(src) ? 'Edit in Studio' : 'Edit Image'
+          }
+        >
           <Box component="span" sx={{ display: 'inline-block' }}>
             <IconButton
               onClick={() => void handleEditClick()}

@@ -13,9 +13,3 @@ export function strokesToMaskPixels(strokes: Uint8ClampedArray): Uint8ClampedArr
   }
   return mask;
 }
-
-/** Whether any pixel of the stroke layer was painted. */
-export const hasPaintedPixels = (strokes: Uint8ClampedArray): boolean => {
-  for (let index = 3; index < strokes.length; index += 4) if (strokes[index] > 0) return true;
-  return false;
-};

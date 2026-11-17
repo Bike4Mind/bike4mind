@@ -13,7 +13,7 @@ import { withProviderMask } from '../editMask';
 import type { ImageInputs, SyncImageProvider } from '../types';
 
 export type OpenAIImageProviderOptions = {
-  /** The ImageProcessor Lambda, which a masked edit needs (the mask is converted to PNG there). Read per call. */
+  /** The ImageProcessor Lambda, which coerces a source OpenAI cannot take as-is. Read per call. */
   imageProcessorLambdaName?: () => string | undefined;
 };
 

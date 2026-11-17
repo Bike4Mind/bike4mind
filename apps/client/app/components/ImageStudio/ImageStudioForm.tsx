@@ -109,16 +109,32 @@ const ImageStudioForm = ({ models, isSubmitting, onSubmit }: ImageStudioFormProp
       return (
         <Stack gap={1} alignItems="flex-start" data-testid="image-studio-no-edit-model">
           <Typography level="body-sm">None of your image models can edit images yet.</Typography>
-          <Button size="sm" variant="outlined" onClick={() => updateIntent({ mode: 'generate' })}>
+          <Button
+            size="sm"
+            variant="outlined"
+            onClick={() => updateIntent({ mode: 'generate' })}
+            data-testid="image-studio-back-to-create-btn"
+          >
             Back to Create
           </Button>
         </Stack>
       );
     }
+    const canEdit = pickDefaultImageModel(imageModelCards(models, { ...form.intent, mode: 'edit' })) !== undefined;
     return (
-      <Typography level="body-sm" data-testid="image-studio-no-generate-model">
-        None of your image models can generate from a prompt yet.
-      </Typography>
+      <Stack gap={1} alignItems="flex-start" data-testid="image-studio-no-generate-model">
+        <Typography level="body-sm">None of your image models can generate from a prompt yet.</Typography>
+        {canEdit && (
+          <Button
+            size="sm"
+            variant="outlined"
+            onClick={() => updateIntent({ mode: 'edit' })}
+            data-testid="image-studio-switch-to-edit-btn"
+          >
+            Edit an image instead
+          </Button>
+        )}
+      </Stack>
     );
   }
 
@@ -145,13 +161,14 @@ const ImageStudioForm = ({ models, isSubmitting, onSubmit }: ImageStudioFormProp
   };
 
   const modelName = cards.find(card => card.id === model)?.name ?? model;
-  // Matches the notice the shared form state gives video and music when a models refetch drops the pick.
-  const changes = [
-    ...restoreNotices,
-    ...(pickedModel !== undefined && pickedModel !== model
-      ? [`The selected model is no longer available; switched to ${modelName}.`]
-      : []),
-  ];
+  const pickedCard = cards.find(card => card.id === pickedModel);
+  // Matches the notice the shared form state gives video and music when a models refetch drops the pick; a pick that
+  // is still listed was set aside by the mode switch instead.
+  const switchedNotice =
+    pickedCard === undefined
+      ? `The selected model is no longer available; switched to ${modelName}.`
+      : `${pickedCard.name} cannot ${form.intent.mode === 'edit' ? 'edit images' : 'generate from a prompt'}; using ${modelName}.`;
+  const changes = [...restoreNotices, ...(pickedModel !== undefined && pickedModel !== model ? [switchedNotice] : [])];
   const perImage = imageCreditsPerImage(model, form.intent);
   const hasSource = form.intent.mode !== 'edit' || form.intent.editSource !== undefined;
   const canSubmit = form.prompt.trim().length > 0 && hasSource && imageModelWhyNot(model, form.intent) === null;

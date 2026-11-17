@@ -17,13 +17,15 @@ import {
 import type { ImageInputs } from '../types';
 import { BflImageProvider } from './BflImageProvider';
 
-// Mask redrawing is editMask's (tested there on real images); here it passes inputs through and records the convention.
-const maskConventions = vi.hoisted(() => [] as string[]);
+// Mask redrawing is editMask's (tested there on real images). Here the mask comes back as a sentinel naming the
+// convention, so a test proves the provider sends the redrawn mask, in the right convention, and not the original.
 vi.mock('../editMask', () => ({
-  withProviderMask: async (inputs: unknown, convention: string) => {
-    maskConventions.push(convention);
-    return inputs;
-  },
+  withProviderMask: async (inputs: ImageInputs, convention: string): Promise<ImageInputs> => ({
+    ...inputs,
+    images: inputs.images?.map(input =>
+      input.role === 'mask' ? { ...input, bytes: Buffer.from(`normalized-${convention}`) } : input
+    ),
+  }),
 }));
 
 const BASE = 'https://api.bfl.ai/v1';
@@ -132,8 +134,7 @@ describe('BflImageProvider.submit: request mapping', () => {
     const inputs: ImageInputs = { images: [image('edit_source', 'src'), image('mask', 'msk')] };
     await provider.submit(request({ model: ImageModels.FLUX_PRO_FILL, mode: 'edit' }), inputs, context());
     expect(submittedUrl()).toBe(`${BASE}/${ImageModels.FLUX_PRO_FILL}`);
-    expect(submittedBody()).toMatchObject({ image: b64('src'), mask: b64('msk') });
-    expect(maskConventions.at(-1)).toBe('white');
+    expect(submittedBody()).toMatchObject({ image: b64('src'), mask: b64('normalized-white') });
   });
 
   it('sends no mask field when a Fill edit carries no mask', async () => {

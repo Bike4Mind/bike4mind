@@ -22,13 +22,16 @@ import {
   deleteFileUtility,
   moderateFabFileNow,
 } from '@client/app/utils/filesAPICalls';
-import { hasPaintedPixels, strokesToMaskPixels } from './maskImage';
+import { strokesToMaskPixels } from './maskImage';
 
 // Brush diameter as a percentage of the image's width, so it feels the same on any resolution.
 const BRUSH_MIN = 1;
 const BRUSH_MAX = 20;
 const BRUSH_DEFAULT = 6;
 const STROKE_COLOR = 'rgb(236, 72, 153)';
+// The longest side the stroke layer is drawn at. The job path rescales the mask to the source, so a working
+// resolution keeps a large photo's canvas within browser limits (iOS Safari draws nothing past ~16.7M pixels).
+const MAX_MASK_SIDE = 2048;
 
 type ImageMaskPainterProps = {
   open: boolean;
@@ -65,32 +68,43 @@ async function uploadMask(strokeLayer: HTMLCanvasElement, sourceName: string): P
     new File([blob], fileName, { type: 'image/png' })
   );
   // A job refuses an input still waiting on its upload scan, so scan the mask now instead of racing the S3 event.
-  if ((await moderateFabFileNow(saved.id)) === 'blocked') {
+  const scan = await moderateFabFileNow(saved.id);
+  if (scan !== 'clean') {
     await deleteFileUtility(saved.id);
-    throw new Error('The mask was blocked by moderation. Try drawing it again.');
+    throw new Error(
+      scan === 'blocked'
+        ? 'The mask was blocked by moderation. Try drawing it again.'
+        : 'The mask could not be checked just now. Try saving it again in a moment.'
+    );
   }
   return { fileId: saved.id, fileName };
 }
 
 /**
- * Paints a mask over the image being edited. The stroke layer is the image's natural size, so the saved mask lines up
- * with it pixel for pixel; the job path still rescales a mask whose upload was downsized.
+ * Paints a mask over the image being edited. The stroke layer has the image's aspect at up to MAX_MASK_SIDE; the job
+ * path rescales the mask to the source (b4m-core/utils/src/imageProviders/editMask.ts).
  */
 const ImageMaskPainter = ({ open, source, onClose, onSaved }: ImageMaskPainterProps) => {
   const sourceFile = useGetFabFile(open ? source.fileId : null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const lastPoint = useRef<Point | null>(null);
+  // The canvas already sized to the source; the modal remounts its content (and so a fresh canvas) on every open.
+  const sizedCanvas = useRef<HTMLCanvasElement | null>(null);
   const [brushPercent, setBrushPercent] = useState(BRUSH_DEFAULT);
   const [painted, setPainted] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const url = sourceFile.data?.fileUrl;
+  const sourceUnavailable = sourceFile.isError || (sourceFile.isSuccess && !url);
 
+  // Once per canvas: a refetch re-signs the URL and reloads the image, and resizing the canvas would wipe the strokes.
   const sizeCanvasToImage = (image: HTMLImageElement) => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-    canvas.width = image.naturalWidth;
-    canvas.height = image.naturalHeight;
+    if (!canvas || sizedCanvas.current === canvas) return;
+    const scale = Math.min(1, MAX_MASK_SIDE / Math.max(image.naturalWidth, image.naturalHeight));
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    sizedCanvas.current = canvas;
     setPainted(false);
   };
 
@@ -111,9 +125,11 @@ const ImageMaskPainter = ({ open, source, onClose, onSaved }: ImageMaskPainterPr
 
   const startStroke = (event: PointerEvent<HTMLCanvasElement>) => {
     const canvas = event.currentTarget;
+    if (sizedCanvas.current !== canvas) return;
     canvas.setPointerCapture(event.pointerId);
     lastPoint.current = null;
     paintTo(canvas, canvasPoint(canvas, event));
+    setPainted(true);
   };
 
   const continueStroke = (event: PointerEvent<HTMLCanvasElement>) => {
@@ -125,8 +141,6 @@ const ImageMaskPainter = ({ open, source, onClose, onSaved }: ImageMaskPainterPr
     const canvas = event.currentTarget;
     if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
     lastPoint.current = null;
-    const strokes = canvas.getContext('2d')?.getImageData(0, 0, canvas.width, canvas.height);
-    setPainted(!!strokes && hasPaintedPixels(strokes.data));
   };
 
   const clear = () => {
@@ -149,8 +163,13 @@ const ImageMaskPainter = ({ open, source, onClose, onSaved }: ImageMaskPainterPr
     }
   };
 
+  const close = () => {
+    setError(null);
+    onClose();
+  };
+
   return (
-    <Modal open={open} onClose={saving ? undefined : onClose}>
+    <Modal open={open} onClose={saving ? undefined : close}>
       <ModalDialog sx={{ width: 'min(960px, 95vw)', maxHeight: '95vh' }} data-testid="image-mask-painter">
         <ModalClose disabled={saving} />
         <DialogTitle>Draw the area to change</DialogTitle>
@@ -187,6 +206,10 @@ const ImageMaskPainter = ({ open, source, onClose, onSaved }: ImageMaskPainterPr
                   data-testid="image-mask-painter-canvas"
                 />
               </>
+            ) : sourceUnavailable ? (
+              <Typography level="body-sm" color="danger" data-testid="image-mask-painter-source-error">
+                The image could not be loaded. It may still be being checked; try again in a moment.
+              </Typography>
             ) : (
               <CircularProgress size="sm" />
             )}
@@ -230,7 +253,7 @@ const ImageMaskPainter = ({ open, source, onClose, onSaved }: ImageMaskPainterPr
           <Button
             variant="plain"
             color="neutral"
-            onClick={onClose}
+            onClick={close}
             disabled={saving}
             data-testid="image-mask-painter-cancel-btn"
           >

@@ -277,6 +277,8 @@ describe('ImageStudioForm', () => {
     renderForm({ models: [{ id: ImageModels.FLUX_KONTEXT_PRO, name: 'FLUX Kontext Pro' }] });
     expect(screen.getByTestId('image-studio-no-generate-model')).toBeInTheDocument();
     expect(screen.queryByTestId('image-form')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('image-studio-switch-to-edit-btn'));
+    expect(screen.getByTestId('image-form')).toBeInTheDocument();
   });
   describe('Look chips', () => {
     const [slate, kitchen] = SCENE_PRESETS;
@@ -413,6 +415,14 @@ describe('ImageStudioForm', () => {
       typePrompt('make it a tabby');
       expect(submitButton()).toBeDisabled();
       expect(screen.getByTestId('image-form-mask-pick-btn')).toBeDisabled();
+    });
+
+    it('says the picked model cannot edit, rather than that it went away', () => {
+      renderForm();
+      pickCard(ImageModels.FLUX_PRO_ULTRA);
+      enterEdit();
+      expect(screen.getByTestId('image-form-changes')).toHaveTextContent(/cannot edit images; using/);
+      expect(screen.getByTestId('image-form-changes')).not.toHaveTextContent('no longer available');
     });
 
     it('submits an edit with the source and a drawn mask as role-tagged inputs', () => {

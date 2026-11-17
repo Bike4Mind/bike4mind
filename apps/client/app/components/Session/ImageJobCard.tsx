@@ -148,20 +148,24 @@ const ImageJobCard = ({ jobId }: { jobId: string }) => {
           <Chip size="sm" variant="outlined">
             {job.model}
           </Chip>
-          {studioImageEnabled && !readOnly && job.state === 'succeeded' && job.output?.file_id && (
-            <Button
-              size="sm"
-              variant="outlined"
-              color="neutral"
-              onClick={() => {
-                const fileId = job.output?.file_id;
-                if (fileId) openStudioImageEdit({ fileId, fileName: 'Image from chat' }, job.model);
-              }}
-              data-testid="image-job-card-edit-btn"
-            >
-              Edit
-            </Button>
-          )}
+          {studioImageEnabled &&
+            !readOnly &&
+            job.state === 'succeeded' &&
+            job.output?.availability === 'ready' &&
+            job.output.file_id && (
+              <Button
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                onClick={() => {
+                  const fileId = job.output?.file_id;
+                  if (fileId) openStudioImageEdit({ fileId, fileName: 'Image from chat' }, job.model);
+                }}
+                data-testid="image-job-card-edit-btn"
+              >
+                Edit
+              </Button>
+            )}
         </Stack>
       </Stack>
     </Card>
