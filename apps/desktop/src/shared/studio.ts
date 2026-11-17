@@ -58,4 +58,6 @@ export type StudioJob = z.infer<typeof studioJobSchema>;
 export interface StudioWorkspace extends StudioWorkspaceIdentity {
   assets: StudioAsset[];
   jobs: StudioJob[];
+  nextAssetCursor?: string;
+  nextJobCursor?: string;
 }

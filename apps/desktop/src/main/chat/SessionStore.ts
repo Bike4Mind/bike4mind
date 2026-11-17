@@ -36,6 +36,8 @@ import { storedReasoningEffortSetting } from './reasoningEffort';
 import { isPromptCacheTtl, type PromptCacheTtl } from '@bike4mind/common';
 import type { SessionWritesStore, StoredSessionWrites } from './tools/sessionScripts';
 import { assertScopeKey, migrateLegacySessions, sessionScopeKey, type SessionScope } from './sessionScope';
+import { StudioFamilyStore } from './studio/StudioFamilyStore';
+import { studioIdSchema, type StudioWorkspaceIdentity } from '@shared/studio';
 
 /** Session ids are generated here, but arrive back from the renderer over IPC - see `filePath`. */
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -279,6 +281,8 @@ export interface PromptCacheTtlMemory {
  * install before this looked like on disk.
  */
 export class SessionStore implements SessionWritesStore {
+  private readonly studioFamilies = new StudioFamilyStore();
+
   /** One preparation - the mkdir, and the legacy migration - per scope directory, not per call. */
   private readonly prepared = new Map<string, Promise<string>>();
 
@@ -448,6 +452,12 @@ export class SessionStore implements SessionWritesStore {
       ...(options.workerTask ? { workerTask: workerTaskSchema.parse(options.workerTask) } : {}),
       messages: [],
     };
+    const family =
+      origin && studioIdSchema.safeParse(origin.parentSessionId).success
+        ? await this.studioFamilies.resolve(directory, origin.parentSessionId, id => this.read(directory, id), false)
+        : null;
+    session.studioWorkspaceId = family?.workspaceId ?? session.id;
+    session.studioRootSessionId = family?.rootSessionId ?? session.id;
     await this.write(directory, session);
     return summarizeSession(session);
   }
@@ -604,6 +614,29 @@ export class SessionStore implements SessionWritesStore {
   async get(id: string): Promise<ChatSession | null> {
     const directory = await this.directoryFor(false);
     return directory ? this.read(directory, id) : null;
+  }
+
+  async resolveStudioWorkspace(id: string, expectedScope = this.scopeKey()): Promise<StudioWorkspaceIdentity | null> {
+    if (!expectedScope || this.scopeKey() !== expectedScope) return null;
+    const directory = await this.directoryFor(true);
+    if (!directory || this.scopeKey() !== expectedScope) return null;
+    const identity = await this.studioFamilies.resolve(directory, id, ancestor => this.read(directory, ancestor));
+    return this.scopeKey() === expectedScope ? identity : null;
+  }
+
+  async withStudioSession<T>(id: string, expectedScope: string | null, operation: () => Promise<T>): Promise<T | null> {
+    return this.serialize(id, async () => {
+      if (!expectedScope || this.scopeKey() !== expectedScope) return null;
+      const directory = await this.directoryFor(true);
+      if (!directory || this.scopeKey() !== expectedScope) return null;
+      try {
+        await stat(this.filePath(directory, id));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw error;
+      }
+      return operation();
+    });
   }
 
   /**
@@ -1454,6 +1487,10 @@ export class SessionStore implements SessionWritesStore {
       ...(workerTask.success ? { workerTask: workerTask.data } : {}),
       ...(origin ? { origin } : {}),
       ...(importOrigin ? { importOrigin } : {}),
+      ...(studioIdSchema.safeParse(parsed.studioWorkspaceId).success &&
+      studioIdSchema.safeParse(parsed.studioRootSessionId).success
+        ? { studioWorkspaceId: parsed.studioWorkspaceId, studioRootSessionId: parsed.studioRootSessionId }
+        : {}),
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
       ...(typeof parsed.remoteSessionId === 'string' ? { remoteSessionId: parsed.remoteSessionId } : {}),
       ...(suggestions.length > 0 ? { spawnSuggestions: suggestions } : {}),

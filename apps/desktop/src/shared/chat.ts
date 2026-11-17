@@ -1423,6 +1423,9 @@ export interface ChatSessionSummary extends ChatSessionMeta {
 
 export interface ChatSession extends ChatSessionMeta {
   messages: ChatMessage[];
+  /** Local family ownership, independent of the server notebook identity. */
+  studioWorkspaceId?: string;
+  studioRootSessionId?: string;
   /**
    * The b4m notebook this conversation files its generations under, created lazily by the
    * server on the first one.
