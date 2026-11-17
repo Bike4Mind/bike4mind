@@ -191,6 +191,9 @@ describe('loadSceneInputFile', () => {
     ['a file with no mime type', { ...audio, mimeType: undefined }],
     ['a moderation-blocked file', { ...audio, moderationStatus: 'blocked' }],
     ['a soft-deleted file', { ...audio, deletedAt: new Date() }],
+    ['a file with no recorded size', { ...audio, fileSize: undefined }],
+    ['a file with a null size', { ...audio, fileSize: null }],
+    ['a file with a negative size', { ...audio, fileSize: -1 }],
   ])('returns null for %s', async (_label, fabFile) => {
     mocks.findByIdAndUserId.mockResolvedValue(fabFile);
     await expect(loadSceneInputFile('user1', FILE_ID)).resolves.toBeNull();

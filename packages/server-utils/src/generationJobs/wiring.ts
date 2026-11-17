@@ -1,6 +1,6 @@
 import { assertMediaModelAdmission } from '../billing/assertMediaModelAdmission';
 import { createWriteStream } from 'node:fs';
-import { Readable } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { Resource } from 'sst';
 import { apiKeyService } from '@bike4mind/auth';
@@ -10,6 +10,7 @@ import {
   isImageServeable,
   isPlaceholderApiKey,
   isStorageLimitError,
+  SCENE_MAX_INPUT_BYTES,
   type IGenerationJobDocument,
   type IGenerationJobUpdatedAction,
   type ImageProviderId,
@@ -363,6 +364,8 @@ export const loadSceneInputFile: SceneJobDeps['loadInputFile'] = async (userId, 
   if (!fabFile || fabFile.deletedAt || !fabFile.filePath || !fabFile.mimeType) return null;
   // The upload moderation gate every FabFile read goes through: a pending or blocked file is not used.
   if (!isImageServeable(fabFile)) return null;
+  // The input cap sums these sizes; a row without one would turn the sum into NaN and skip the cap.
+  if (!Number.isFinite(fabFile.fileSize) || fabFile.fileSize < 0) return null;
   return { s3Key: fabFile.filePath, mimeType: fabFile.mimeType, bytes: fabFile.fileSize };
 };
 
@@ -370,7 +373,19 @@ export const loadSceneInputFile: SceneJobDeps['loadInputFile'] = async (userId, 
 const downloadSceneInputFile: SceneJobDeps['downloadInputFile'] = async ({ s3Key, destinationPath, signal }) => {
   const body = await getFilesStorage().getContent(s3Key);
   if (!(body instanceof Readable)) throw new Error(`unexpected S3 body type for ${s3Key}`);
-  await pipeline(body, createWriteStream(destinationPath), { signal });
+  // The recorded size is metadata; cap what is actually written so /tmp cannot be filled whatever the row says.
+  let written = 0;
+  const capBytes = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      written += chunk.byteLength;
+      if (written > SCENE_MAX_INPUT_BYTES) {
+        callback(new Error(`input ${s3Key} exceeds ${SCENE_MAX_INPUT_BYTES} bytes`));
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+  await pipeline(body, capBytes, createWriteStream(destinationPath), { signal });
 };
 
 const saveToGeneratedBucket: VideoJobDeps['saveToGeneratedBucket'] = async ({ key, bytes, contentType, signal }) => {

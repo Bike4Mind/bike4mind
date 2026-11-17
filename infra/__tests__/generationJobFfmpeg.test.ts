@@ -47,4 +47,9 @@ describe('ffmpeg in the generation-job worker', () => {
     );
     expect(importers).toEqual([]);
   });
+
+  it('is excluded from the Next server trace explicitly', () => {
+    const config = read('apps/client/next.config.mjs');
+    expect(config).toMatch(/outputFileTracingExcludes[\s\S]*?\*\*\/ffmpeg-static\/\*\*/);
+  });
 });
