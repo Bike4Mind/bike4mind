@@ -26,6 +26,9 @@ const mocks = vi.hoisted(() => ({
     refetch: vi.fn(),
   },
   update: { mutateAsync: vi.fn(), isPending: false },
+  status: null as Record<string, unknown> | null,
+  statusError: null as Error | null,
+  apiGet: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-router', () => ({
@@ -41,11 +44,11 @@ vi.mock('@client/app/hooks/data/useModelInfo', () => ({
   useModelInfo: () => ({ data: [{ id: 'model-fast', name: 'Fast model', type: 'text' }] }),
 }));
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { get: vi.fn().mockResolvedValue({ data: { workspaces: [] } }) },
+  api: { get: mocks.apiGet },
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
-import SecopsTriageTab, { countChangedFields } from './SecopsTriageTab';
+import SecopsTriageTab, { countChangedFields, describeTriageRun } from './SecopsTriageTab';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderTab = () =>
@@ -57,6 +60,13 @@ const renderTab = () =>
     </QueryClientProvider>
   );
 
+const readyStatus = () => ({
+  stage: 'test-stage',
+  enabled: true,
+  github: { connected: true, repo: 'test-org/test-repo', check: { ok: true } },
+  recentRuns: [],
+});
+
 const SECTIONS = [
   ['secops-triage-section-master', 'Master controls'],
   ['secops-triage-section-github', 'GitHub settings'],
@@ -65,6 +75,7 @@ const SECTIONS = [
 ] as const;
 
 const toggle = (testId: string) => fireEvent.click(within(screen.getByTestId(testId)).getByRole('switch'));
+const repoInput = () => within(screen.getByTestId('secops-triage-github-repo-input')).getByRole('textbox');
 
 describe('SecopsTriageTab', () => {
   beforeEach(() => {
@@ -78,6 +89,13 @@ describe('SecopsTriageTab', () => {
     mocks.router.navigate.mockReset();
     mocks.useBlocker.mockClear();
     useAdminModal.setState(useAdminModal.getInitialState());
+    mocks.status = readyStatus();
+    mocks.statusError = null;
+    mocks.apiGet.mockReset().mockImplementation(async (url: string) => {
+      if (url !== '/api/admin/secops-triage/status') return { data: { workspaces: [] } };
+      if (mocks.statusError) throw mocks.statusError;
+      return { data: mocks.status };
+    });
   });
 
   it('opens with the page header as its first element: sentence-case h1, one-line description, no icon', () => {
@@ -87,7 +105,9 @@ describe('SecopsTriageTab', () => {
 
     expect(tab.firstElementChild).toBe(header);
     expect(within(header).getByRole('heading', { level: 1 })).toHaveTextContent(/^SecOps triage$/);
-    expect(header).toHaveTextContent('Creates GitHub issues for critical and high security scan findings');
+    expect(header).toHaveTextContent(
+      'Files a GitHub issue for each critical or high finding reported by a security scan, and closes it when the finding is gone. A finding seen again reopens its issue, unless the issue was closed as not planned or as a duplicate.'
+    );
     expect(screen.queryByTestId('SecurityIcon')).not.toBeInTheDocument();
   });
 
@@ -173,12 +193,13 @@ describe('SecopsTriageTab', () => {
     renderTab();
     toggle('secops-triage-enabled-switch');
     toggle('secops-triage-dry-run-switch');
+    fireEvent.change(repoInput(), { target: { value: 'test-org/test-repo' } });
     fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
 
     await waitFor(() =>
       expect(mocks.update.mutateAsync).toHaveBeenCalledWith({
         key: 'secopsTriageConfig',
-        value: { ...SecopsTriageConfigSchema.parse({}), enabled: true, dryRun: true },
+        value: { ...SecopsTriageConfigSchema.parse({}), enabled: true, dryRun: true, githubRepo: 'test-org/test-repo' },
       })
     );
     expect(toast.success).toHaveBeenCalledWith('SecOps Triage configuration saved');
@@ -188,13 +209,13 @@ describe('SecopsTriageTab', () => {
   it('keeps the draft and the save bar when saving fails', async () => {
     mocks.update.mutateAsync.mockRejectedValueOnce(new Error('boom'));
     renderTab();
-    toggle('secops-triage-enabled-switch');
+    toggle('secops-triage-dry-run-switch');
     fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to save: boom'));
     expect(toast.success).not.toHaveBeenCalled();
     expect(screen.getByTestId('admin-save-bar')).toHaveTextContent('1 unsaved change');
-    expect(within(screen.getByTestId('secops-triage-enabled-switch')).getByRole('switch')).toBeChecked();
+    expect(within(screen.getByTestId('secops-triage-dry-run-switch')).getByRole('switch')).toBeChecked();
   });
 
   it('locks Save and Discard while a save is in flight', () => {
@@ -215,7 +236,7 @@ describe('SecopsTriageTab', () => {
     toggle('secops-triage-llm-enrichment-switch');
     fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
 
-    expect(toast.error).toHaveBeenCalledWith('A model must be selected when LLM Enrichment is enabled.');
+    expect(toast.error).toHaveBeenCalledWith('A model must be selected when LLM enrichment is enabled');
     expect(mocks.update.mutateAsync).not.toHaveBeenCalled();
   });
 
@@ -282,6 +303,263 @@ describe('SecopsTriageTab', () => {
     );
     toggle('secops-triage-enabled-switch');
     expect(screen.getByTestId('admin-save-bar')).toHaveTextContent('1 unsaved change');
+  });
+
+  it('describes dry run and the repository without naming a real repository', () => {
+    renderTab();
+
+    expect(screen.getByTestId('secops-triage-section-master')).toHaveTextContent(
+      'Logs each action without creating, commenting on, reopening or closing GitHub issues. The Slack summary is still posted, marked as a dry run.'
+    );
+    expect(repoInput()).toHaveAttribute('placeholder', 'owner/repo');
+    expect(screen.getByTestId('secops-triage-section-github')).toHaveTextContent(
+      'GitHub repository where issues are filed, in owner/repo form.'
+    );
+  });
+
+  describe('saving', () => {
+    it('opens a stored config that breaks a cross-field rule with its stored fields, and names the rule on save', () => {
+      mocks.rawConfig = { enabled: true, githubRepo: 'not a repo', slackChannelId: 'C123', maxIssuesPerScan: 5 };
+      renderTab();
+
+      expect(within(screen.getByTestId('secops-triage-enabled-switch')).getByRole('switch')).toBeChecked();
+      expect(repoInput()).toHaveValue('not a repo');
+      expect(screen.getByDisplayValue('C123')).toBeInTheDocument();
+
+      toggle('secops-triage-dry-run-switch');
+      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+
+      expect(toast.error).toHaveBeenCalledWith(
+        'A repository in owner/name form is required when SecOps triage is enabled'
+      );
+      expect(mocks.update.mutateAsync).not.toHaveBeenCalled();
+    });
+
+    it('keeps the stored fields of an enabled config with no repository when the repository is fixed', async () => {
+      mocks.rawConfig = { enabled: true, slackChannelId: 'C123', maxIssuesPerScan: 5, severityThreshold: 'critical' };
+      renderTab();
+
+      fireEvent.change(repoInput(), { target: { value: 'example-org/fixed' } });
+      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+
+      await waitFor(() => expect(mocks.update.mutateAsync).toHaveBeenCalledTimes(1));
+      expect(mocks.update.mutateAsync.mock.calls[0][0].value).toMatchObject({
+        enabled: true,
+        githubRepo: 'example-org/fixed',
+        slackChannelId: 'C123',
+        maxIssuesPerScan: 5,
+        severityThreshold: 'critical',
+      });
+    });
+
+    it.each([
+      ['empty', ''],
+      ['malformed', 'not a repo'],
+    ])('refuses to save triage enabled with an %s repository', (_label, repo) => {
+      renderTab();
+      toggle('secops-triage-enabled-switch');
+      fireEvent.change(repoInput(), { target: { value: repo } });
+      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+
+      expect(toast.error).toHaveBeenCalledWith(
+        'A repository in owner/name form is required when SecOps triage is enabled'
+      );
+      expect(mocks.update.mutateAsync).not.toHaveBeenCalled();
+    });
+
+    it('saves a disabled config without a repository', async () => {
+      renderTab();
+      toggle('secops-triage-dry-run-switch');
+      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+
+      await waitFor(() => expect(mocks.update.mutateAsync).toHaveBeenCalledTimes(1));
+      expect(mocks.update.mutateAsync.mock.calls[0][0].value).toMatchObject({ enabled: false, githubRepo: '' });
+    });
+
+    it.each(['', '0', '101'])('refuses to save %j max issues per scan with a readable message', value => {
+      renderTab();
+      fireEvent.change(within(screen.getByTestId('secops-triage-max-issues-input')).getByRole('spinbutton'), {
+        target: { value },
+      });
+      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+
+      expect(toast.error).toHaveBeenCalledWith('Max issues per scan must be between 1 and 100');
+      expect(mocks.update.mutateAsync).not.toHaveBeenCalled();
+    });
+
+    it('refreshes the status after a save', async () => {
+      renderTab();
+      await screen.findByTestId('secops-triage-status-connection-chip');
+      const statusCalls = () =>
+        mocks.apiGet.mock.calls.filter(([url]) => url === '/api/admin/secops-triage/status').length;
+      expect(statusCalls()).toBe(1);
+
+      toggle('secops-triage-dry-run-switch');
+      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+
+      await waitFor(() => expect(statusCalls()).toBe(2));
+    });
+  });
+
+  describe('status section', () => {
+    const status = () => screen.getByTestId('secops-triage-section-status');
+    const run = (overrides: Record<string, unknown>) => ({
+      scanSource: 'web-owasp',
+      status: 'completed',
+      dryRun: false,
+      findingCount: 1,
+      startedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+      ...overrides,
+    });
+
+    it('comes first in the form, above the master controls, and says it reflects the saved settings', async () => {
+      renderTab();
+
+      expect(status().nextElementSibling).toBe(screen.getByTestId('secops-triage-section-master'));
+      expect(within(status()).getByRole('heading')).toHaveTextContent('Status');
+      expect(status()).toHaveTextContent('Checks the saved settings, not unsaved edits.');
+      await screen.findByTestId('secops-triage-status-connection-chip');
+    });
+
+    it('shows a loading state inside the section while the form is already usable', () => {
+      mocks.apiGet.mockImplementation(async (url: string) =>
+        url === '/api/admin/secops-triage/status' ? new Promise(() => {}) : { data: { workspaces: [] } }
+      );
+      renderTab();
+
+      expect(within(status()).getByTestId('secops-triage-status-loading')).toHaveTextContent('Loading status');
+      toggle('secops-triage-enabled-switch');
+      expect(screen.getByTestId('admin-save-bar')).toHaveTextContent('1 unsaved change');
+    });
+
+    it('shows a connected, ready repository and no runs yet', async () => {
+      renderTab();
+
+      expect(await screen.findByTestId('secops-triage-status-connection-chip')).toHaveTextContent('Connected');
+      expect(screen.getByTestId('secops-triage-status-connection-chip')).toHaveAttribute('data-tone', 'good');
+      expect(screen.getByTestId('secops-triage-status-repo-chip')).toHaveTextContent('Ready');
+      expect(screen.getByTestId('secops-triage-status-repo')).toHaveTextContent('test-org/test-repo');
+      expect(screen.getByTestId('secops-triage-status-last-run')).toHaveTextContent('No runs recorded yet');
+    });
+
+    it('shows no connection', async () => {
+      mocks.status = { ...readyStatus(), github: { connected: false, repo: 'test-org/test-repo', check: null } };
+      renderTab();
+
+      expect(await screen.findByTestId('secops-triage-status-connection-chip')).toHaveTextContent('Not connected');
+      expect(screen.getByTestId('secops-triage-status-repo-chip')).toHaveTextContent('Could not be checked');
+    });
+
+    it.each([
+      ['not_configured', 'Not set', 'neutral'],
+      ['not_allowed', "Not in the connection's allowed repositories", 'bad'],
+      ['not_found', 'Not found', 'bad'],
+      ['public', 'Public (must be private)', 'bad'],
+      ['archived', 'Archived (read-only)', 'bad'],
+      ['issues_disabled', 'Issues disabled', 'bad'],
+    ])('labels a %s repository', async (reason, label, tone) => {
+      mocks.status = {
+        ...readyStatus(),
+        github: { connected: true, repo: 'test-org/test-repo', check: { ok: false, reason } },
+      };
+      renderTab();
+
+      const chip = await screen.findByTestId('secops-triage-status-repo-chip');
+      expect(chip).toHaveTextContent(label);
+      expect(chip).toHaveAttribute('data-tone', tone);
+    });
+
+    it('says the repository could not be checked when the lookup failed', async () => {
+      mocks.status = {
+        ...readyStatus(),
+        github: { connected: true, repo: 'test-org/test-repo', check: null, checkError: true },
+      };
+      renderTab();
+
+      expect(await screen.findByTestId('secops-triage-status-repo-chip')).toHaveTextContent('Could not be checked');
+    });
+
+    it('shows the last run with its source and outcome, and up to five earlier runs beneath it', async () => {
+      mocks.status = {
+        ...readyStatus(),
+        recentRuns: [
+          run({
+            counts: { created: 0, updated: 0, reopened: 0, closed: 0, suppressed: 0, belowThreshold: 1, overCap: 0 },
+          }),
+          ...Array.from({ length: 7 }, () => run({ scanSource: 'secrets', status: 'skipped', reason: 'disabled' })),
+        ],
+      };
+      renderTab();
+
+      const lastRun = await screen.findByTestId('secops-triage-status-last-run');
+      expect(lastRun).toHaveTextContent('Website scan');
+      expect(lastRun).toHaveTextContent('1 finding, 1 below threshold, 0 created');
+      expect(within(lastRun).getByText('5 minutes ago')).toBeInTheDocument();
+      const earlier = screen.getByTestId('secops-triage-status-earlier-runs');
+      expect(within(earlier).getAllByRole('listitem')).toHaveLength(5);
+      expect(earlier).toHaveTextContent('Secrets scan');
+      expect(earlier).toHaveTextContent('Skipped: triage is disabled');
+    });
+
+    it('keeps the form usable and offers a retry when the status request fails', async () => {
+      mocks.statusError = new Error('boom');
+      renderTab();
+
+      const error = await within(status()).findByTestId('admin-error-state');
+      expect(error).toHaveTextContent('Status could not be loaded.');
+      expect(screen.getByTestId('secops-triage-section-master')).toBeInTheDocument();
+      toggle('secops-triage-dry-run-switch');
+      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+      await waitFor(() => expect(mocks.update.mutateAsync).toHaveBeenCalledTimes(1));
+
+      mocks.statusError = null;
+      fireEvent.click(within(status()).getByTestId('admin-error-retry-btn'));
+      expect(await screen.findByTestId('secops-triage-status-connection-chip')).toHaveTextContent('Connected');
+    });
+  });
+});
+
+describe('describeTriageRun', () => {
+  const base = {
+    scanSource: 'web-owasp',
+    dryRun: false,
+    findingCount: 1,
+    startedAt: '2026-11-17T10:00:00.000Z',
+  };
+  const counts = { created: 0, updated: 0, reopened: 0, closed: 0, suppressed: 0, belowThreshold: 0, overCap: 0 };
+
+  it('summarises a completed run, adding only the non-zero extra counts', () => {
+    expect(describeTriageRun({ ...base, status: 'completed', counts: { ...counts, belowThreshold: 1 } })).toBe(
+      '1 finding, 1 below threshold, 0 created'
+    );
+    expect(
+      describeTriageRun({
+        ...base,
+        status: 'completed',
+        findingCount: 6,
+        counts: { ...counts, created: 1, updated: 1, reopened: 1, closed: 1, suppressed: 1, overCap: 1 },
+      })
+    ).toBe(
+      '6 findings, 0 below threshold, 1 created, 1 updated, 1 reopened, 1 closed, 1 left closed, 1 over the per-scan cap'
+    );
+    expect(describeTriageRun({ ...base, status: 'completed', dryRun: true, counts })).toBe(
+      'Dry run: 1 finding, 0 below threshold, 0 created'
+    );
+  });
+
+  it.each([
+    ['disabled', 'Skipped: triage is disabled'],
+    ['invalid_config', 'Skipped: the saved configuration is invalid'],
+    ['no_github_connection', 'Skipped: there is no GitHub connection'],
+    ['not_allowed', "Skipped: the repository is not in the connection's allowed repositories"],
+    ['archived', 'Skipped: the repository is archived'],
+    ['public', 'Skipped: the repository is public'],
+  ])('explains a run skipped for %s', (reason, text) => {
+    expect(describeTriageRun({ ...base, status: 'skipped', reason })).toBe(text);
+  });
+
+  it('shows the error of a failed run', () => {
+    expect(describeTriageRun({ ...base, status: 'failed', error: 'rate limited' })).toBe('Failed: rate limited');
   });
 });
 

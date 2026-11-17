@@ -472,6 +472,7 @@ export const infraHolders = {
       },
     ],
   },
+  SecopsTriageRun: { kind: 'noUserData', note: 'Platform security triage run summary.' },
   SecretRotation: {
     kind: 'holder',
     references: [

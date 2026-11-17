@@ -125,12 +125,16 @@ export const TRUST_AND_SAFETY_GUIDE: readonly AdminGuideEntry[] = [
     summary:
       'Image moderation incidents waiting for a verdict, oldest first, plus a Closed list of past verdicts. Opening an incident records a view in the audit log.',
     views: ['admin.moderation_incidents'],
-    settings: ['ImageModerationEnabled', 'ImageModerationReviewerEmails'],
+    settings: ['ImageModerationEnabled', 'ImageModerationReviewerEmails', 'ImageModerationEscalationEmails'],
     howTo: [
       'Switch between Needs review and Closed. Click an incident to open it; reviewers are alerted by email when one needs a verdict.',
+      'The totals above the queue show what waits, the oldest wait, escalations and how closed incidents ended. A banner appears while incidents wait and their list (Image Moderation Reviewer Emails, or Escalation Emails for escalated ones) has no address: no reviewer is emailed until it does.',
+      'Timeline on an incident lists, oldest first in UTC, when it was flagged, when reviewers were alerted and last reminded, when and how it was escalated, and how it was closed.',
       'Close as correctly blocked records that the block was right and nothing needs reporting. It leaves the queue and its reminders stop.',
       'Mark false positive records that the classifier was wrong. It closes the incident without a report and keeps it on file.',
       'Record report stores the id of a report you filed on the external reporting form first; it cannot be undone. Full admin access is required.',
+      'Escalate to second reviewer hands a pending incident to the second review step and emails the escalation reviewers; it stays open for a verdict. Incidents still waiting a day after they were flagged are escalated automatically. Held by in the queue shows which step has each incident.',
+      'Every verdict and escalation asks for a reason, recorded in the audit log. Do not describe the image in it.',
     ],
     keywords: [
       'image moderation',
@@ -139,6 +143,8 @@ export const TRUST_AND_SAFETY_GUIDE: readonly AdminGuideEntry[] = [
       'false positive',
       'moderation queue',
       'verdict',
+      'escalation',
+      'second reviewer',
     ],
   },
   {
@@ -203,12 +209,14 @@ export const TRUST_AND_SAFETY_GUIDE: readonly AdminGuideEntry[] = [
     id: 'secops-triage',
     title: 'SecOps triage',
     summary:
-      'Settings for the pipeline that turns critical and high security scan findings into GitHub issues and Slack alerts.',
+      'Settings for the pipeline that files a GitHub issue for each critical or high security scan finding, closes it when the finding is gone, and posts a Slack summary.',
     views: ['admin.secops_triage'],
     settings: ['secopsTriageConfig'],
     howTo: [
-      'Under Master controls, Enabled is the kill switch: when off, findings are still ingested but no GitHub issues are created. Turn on Dry run first to log actions without creating issues or posting to Slack.',
-      'GitHub settings: set the Repository, Severity Threshold, the Critical and High priority labels, and Max Issues Per Scan.',
+      'Status, at the top, shows whether the GitHub connection and the saved repository are ready, and the outcome of recent runs.',
+      'Under Master controls, Enabled is the kill switch: when off, findings are still ingested but no GitHub issues are created. Turn on Dry run first to log actions without creating, commenting on, reopening or closing issues; the Slack summary is still posted, marked as a dry run.',
+      'A finding that is detected again reopens its closed issue. To keep an issue closed, close it as not planned or as a duplicate.',
+      'GitHub settings: set the Repository (owner/repo, private, required while Enabled is on), Severity Threshold, the Critical and High priority labels, and Max Issues Per Scan.',
       'Slack notifications: pick a Workspace and enter the Slack Channel ID.',
       'LLM enrichment optionally adds a "Where It Was Found" and "How to Fix" section to each new issue; choose a Model. Save with the save bar. Full admin access is required.',
     ],

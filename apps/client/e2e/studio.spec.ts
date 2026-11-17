@@ -46,12 +46,21 @@ test.describe('Studio - navigation', () => {
 
   test('each tab has its own URL and shows its gallery', async ({ page, studioPage }) => {
     await studioPage.goto('video');
-    await expect(page.getByTestId('studio-tabs').getByRole('tab')).toHaveText([
-      'Video',
-      'Music',
-      'Speech',
-      'Sound effects',
-    ]);
+    if ((await studioPage.layout()) === 'createV2') {
+      // Create v2 renames two media and leads with Image when EnableStudioImage is on as well.
+      const imageOpen = await page.getByTestId('studio-rail-image').isVisible();
+      const legacyMedia = ['Video', 'Music', 'Voice', 'Sound FX'];
+      await expect(studioPage.mediumRail().getByRole('link')).toHaveText(
+        imageOpen ? ['Image', ...legacyMedia] : legacyMedia
+      );
+    } else {
+      await expect(page.getByTestId('studio-tabs').getByRole('tab')).toHaveText([
+        'Video',
+        'Music',
+        'Speech',
+        'Sound effects',
+      ]);
+    }
 
     // Speech/sound effects may already be populated by the generation tests (fullyParallel), so
     // accept either the empty state or a populated gallery.
@@ -83,6 +92,7 @@ test.describe('Studio - navigation', () => {
     await page.goto('/studio/not-a-modality');
     await expect(page.getByTestId('notfound-page')).toBeVisible({ timeout: TIMEOUTS.ACTION });
     await expect(page.getByTestId('studio-tabs')).toHaveCount(0);
+    await expect(page.getByTestId('studio-medium-rail')).toHaveCount(0);
   });
 });
 
@@ -94,7 +104,7 @@ test.describe('Studio - video and music forms', () => {
     const estimate = page.getByTestId('video-form-estimate');
 
     await test.step('defaults: a model is picked, submit waits for a prompt', async () => {
-      await expect(page.getByTestId('video-form-model-select')).not.toHaveText('');
+      await expect(studioPage.modelName('video')).not.toHaveText('');
       await expect(page.getByTestId('video-form-payer-note')).toBeVisible();
       await expect(estimate).toHaveText(/Estimated cost: [\d,]+ credits/);
       await expect(submit).toBeDisabled();
@@ -147,7 +157,7 @@ test.describe('Studio - video and music forms', () => {
     await studioPage.goto('music');
     const submit = page.getByTestId('music-form-submit-btn');
 
-    await expect(page.getByTestId('music-form-model-select')).not.toHaveText('');
+    await expect(studioPage.modelName('music')).not.toHaveText('');
     await expect(page.getByTestId('music-form-estimate')).toHaveText(/Estimated cost: [\d,]+ credits/);
     await expect(page.getByTestId('music-form-payer-note')).toBeVisible();
     await expect(submit).toBeDisabled();

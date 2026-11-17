@@ -1,0 +1,7 @@
+appId: com.bike4mind.app
+name: Sign in with the staging test user
+tags:
+  - live
+---
+- runFlow: ../subflows/sign-in.yaml
+- runFlow: ../subflows/assert-signed-in.yaml
