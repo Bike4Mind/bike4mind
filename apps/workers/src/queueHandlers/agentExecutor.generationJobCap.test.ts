@@ -110,3 +110,10 @@ describe('production generation deps factories', () => {
     expect(h.resolveScopedSetting.mock.calls[0]?.[0]).toBe('agentVideoClipsPerRun');
   });
 });
+
+describe('agentImagesPerRun setting bounds', () => {
+  it('defaults to 12 and floors at 1', async () => {
+    const { settingsMap } = await import('@bike4mind/common');
+    expect(settingsMap.agentImagesPerRun).toMatchObject({ defaultValue: 12, min: 1 });
+  });
+});

@@ -89,8 +89,9 @@ describe('GET /api/image-jobs/[id]', () => {
 
   it('serves the requester without a session check', async () => {
     mocks.findJob.mockResolvedValue(job({ questId: 'quest-1' }));
-    const { status } = await call();
+    const { status, body } = await call();
     expect(status).toBe(200);
+    expect(body.credits).toEqual({ reserved: 5, settled: 4 });
     expect(mocks.findJob).toHaveBeenCalledWith(JOB_ID);
     expect(mocks.findAccessibleSession).not.toHaveBeenCalled();
   });
@@ -102,6 +103,7 @@ describe('GET /api/image-jobs/[id]', () => {
     const { status, body } = await call(JOB_ID, 'sharee-1');
     expect(status).toBe(200);
     expect(body.id).toBe(JOB_ID);
+    expect(body.credits).toEqual({ reserved: null, settled: null });
     expect(mocks.findQuest).toHaveBeenCalledWith('quest-1');
     expect(mocks.findAccessibleSession).toHaveBeenCalledWith({ id: 'sharee-1' }, 'session-1');
   });

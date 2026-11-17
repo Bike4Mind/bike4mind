@@ -17,7 +17,10 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
   async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
     const job = await findReadableGenerationJob(String(req.query.id), req.user, 'image');
     if (!job) return res.status(404).json({ error: 'not_found', message: 'Image generation not found' });
-    return res.json(await toPublicGenerationJob(job, mapperDeps, IMAGE_GENERATION_PROJECTION));
+    const resource = await toPublicGenerationJob(job, mapperDeps, IMAGE_GENERATION_PROJECTION);
+    // Billing belongs to the requester; notebook readers see the job without it.
+    if (job.requestedBy !== req.user.id) return res.json({ ...resource, credits: { reserved: null, settled: null } });
+    return res.json(resource);
   }
 );
 

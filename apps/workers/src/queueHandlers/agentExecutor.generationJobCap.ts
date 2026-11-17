@@ -2,7 +2,7 @@
  * The per-run cap shared by the agent-mode generation tools (agentExecutor.videoToolConfig.ts,
  * agentExecutor.musicToolConfig.ts, agentExecutor.imageToolConfig.ts). One run can fan out across in-process subagents and many
  * iterations, so each kind is capped by a setting (platform default, org override; 0 removes the
- * tool) and counted atomically on the run's Quest (QuestRepository.claimAgentGenerationSlot).
+ * video or music tool, images floor at 1) and counted atomically on the run's Quest (QuestRepository.claimAgentGenerationSlot).
  */
 import type { QuestGenerationJobKind } from '@bike4mind/common';
 import { questRepository, adminSettingsRepository, scopedSettingsRepository } from '@bike4mind/database';
