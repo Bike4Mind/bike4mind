@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import { ToolBuilder, type ToolBuilderConfig } from './ToolBuilder';
 import type { VideoToolConfig } from './implementation/videoGeneration';
+import type { ImageToolConfig } from './implementation/imageGeneration';
 
 // Drives the REAL buildSharedTools wiring: the video tool's statusUpdate lands in ToolBuilder's
 // onStatusUpdate, which must write the job id to the stored quest before the tool returns.
@@ -25,7 +26,11 @@ const buildVideoTool = (createJob: VideoToolConfig['createJob'], addGenerationJo
     sendStatusUpdate,
     extraContextMessages: [],
   } as unknown as ToolBuilderConfig;
-  const quest = { id: 'q1', sessionId: 's1' } as { id: string; sessionId: string; generationJobs?: { id: string; kind: string }[] };
+  const quest = { id: 'q1', sessionId: 's1' } as {
+    id: string;
+    sessionId: string;
+    generationJobs?: { id: string; kind: string }[];
+  };
   const config: VideoToolConfig = { usableModels: ['test-video'], createJob };
 
   const tools = new ToolBuilder(deps).buildTools({
@@ -88,5 +93,61 @@ describe('ToolBuilder: video_generation persists the chat card job id', () => {
     expect(result.jobId).toBe('job-1');
     expect(quest.generationJobs).toEqual([{ id: 'job-1', kind: 'video' }]);
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('job-1'), expect.any(Error));
+  });
+});
+
+describe('ToolBuilder: image_generation persists the chat card job ids', () => {
+  it('writes every image job of the batch to the stored quest before the tool returns', async () => {
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
+    const addGenerationJobs = vi.fn().mockResolvedValue(undefined);
+    const sendStatusUpdate = vi.fn().mockResolvedValue(undefined);
+    const deps = {
+      user: { id: 'u1', currentCredits: 1_000_000 },
+      logger,
+      db: { quests: { addGenerationJobs } },
+      toolCreditsMap: new Map(),
+      toolCreditModels: new Set(),
+      sendStatusUpdate,
+      extraContextMessages: [],
+    } as unknown as ToolBuilderConfig;
+    const quest = { id: 'q1', sessionId: 's1' } as {
+      id: string;
+      sessionId: string;
+      generationJobs?: { id: string; kind: string }[];
+    };
+    const createJobs = vi.fn().mockResolvedValue({
+      ok: true,
+      created: true,
+      groupId: 'g1',
+      jobs: [
+        { id: 'img-1', state: 'pending' },
+        { id: 'img-2', state: 'pending' },
+      ],
+    });
+    const config: ImageToolConfig = { selection: { model: 'gpt-image-2' } as ImageToolConfig['selection'], createJobs };
+
+    const tools = new ToolBuilder(deps).buildTools({
+      enabledTools: ['image_generation'],
+      quest,
+      saveQuest: vi.fn().mockResolvedValue(null),
+      llm: { currentModel: 'm', complete: vi.fn() } as unknown as ICompletionBackend,
+      config: { image_generation: config },
+      organization: null,
+    } as never);
+    const tool = tools?.find(t => t.toolSchema.name === 'image_generation');
+    if (!tool) throw new Error('image_generation was not built');
+
+    const result = JSON.parse(await (tool.toolFn as ToolFn)({ prompt: 'a red bicycle', n: 2 }));
+
+    expect(result.jobIds).toEqual(['img-1', 'img-2']);
+    expect(createJobs).toHaveBeenCalledWith(expect.objectContaining({ count: 2, questId: 'q1' }));
+    expect(addGenerationJobs).toHaveBeenCalledWith('q1', [
+      { id: 'img-1', kind: 'image' },
+      { id: 'img-2', kind: 'image' },
+    ]);
+    expect(quest.generationJobs).toEqual([
+      { id: 'img-1', kind: 'image' },
+      { id: 'img-2', kind: 'image' },
+    ]);
   });
 });

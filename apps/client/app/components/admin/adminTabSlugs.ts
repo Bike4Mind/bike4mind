@@ -10,6 +10,7 @@ import {
   ADMIN_ANALYTICS_TAB_SLUG,
   ADMIN_EVENTS_TAB_SLUG,
   ADMIN_INTEGRATION_DEMAND_TAB_SLUG,
+  ADMIN_INTEGRATION_HEALTH_TAB_SLUG,
   ADMIN_MODEL_LOGS_TAB_SLUG,
   ADMIN_MODEL_METRICS_TAB_SLUG,
   ADMIN_ORGANIZATIONS_TAB_SLUG,
@@ -78,7 +79,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<Exclude<AdminTab, RetiredTab>, string>>
   [AdminTab.ContextInspector]: 'context-inspector',
   [AdminTab.RateLimits]: 'rate-limits',
   [AdminTab.DlqReplay]: ADMIN_DLQ_REPLAY_TAB_SLUG,
-  [AdminTab.IntegrationHealth]: 'integration-health',
+  [AdminTab.IntegrationHealth]: ADMIN_INTEGRATION_HEALTH_TAB_SLUG,
   [AdminTab.SreAgent]: 'sre-agent',
   [AdminTab.ManageGears]: 'manage-gears',
   [AdminTab.ApiReference]: 'api-reference',
@@ -110,6 +111,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<Exclude<AdminTab, RetiredTab>, string>>
   [AdminTab.Approvals]: 'approvals',
   [AdminTab.Tutorials]: 'tutorials',
   [AdminTab.AiOperations]: 'ai-operations',
+  [AdminTab.Roles]: 'roles',
 };
 
 // Retired tabs now live in Invite Center sections; their old slugs stay as redirects, and in-app links resolve here.

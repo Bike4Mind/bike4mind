@@ -14,7 +14,7 @@ import type { Logger } from '@bike4mind/observability';
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import { MemberCreditCapError } from '../../creditService';
 import { confirmingServerOf, withoutConfirmPrompt } from '../mcpPendingAction';
-import { isModelRequiresSubscriptionError, type ModelAdmission } from '../modelAdmission';
+import { isModelRequiresSubscriptionError, isOrgModelNotAllowedError, type ModelAdmission } from '../modelAdmission';
 
 /** Maximum delegation depth rendered inline in the UI. Children at this
  * depth and beyond have `delegate_to_agent` stripped so nesting stays bounded. */
@@ -497,7 +497,10 @@ export class ServerSubagentOrchestrator {
       // The parent's own backend already serves this id; no need to build another.
       if (model === parent.model) return parent;
       if (await this.isPaidOnlyForCaller(model)) {
-        this.deps.logger.warn(`🤖⚠️ [SubagentOrchestrator] "${model}" needs a paid plan; trying the next candidate`);
+        this.deps.logger.warn(
+          `🤖⚠️ [SubagentOrchestrator] "${model}" needs a paid plan or is not allowed by the organization; ` +
+            'trying the next candidate'
+        );
         continue;
       }
       let backend: ICompletionBackend | null;
@@ -540,7 +543,7 @@ export class ServerSubagentOrchestrator {
       await this.deps.modelAdmission?.assert(model);
       return false;
     } catch (err) {
-      return isModelRequiresSubscriptionError(err);
+      return isModelRequiresSubscriptionError(err) || isOrgModelNotAllowedError(err);
     }
   }
 

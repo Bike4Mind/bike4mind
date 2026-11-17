@@ -327,21 +327,22 @@ describe('spend cron access to the store', () => {
       }
     });
 
-    it('keeps the poller metric permission and gives the reconciliation cron only the store permissions', async () => {
+    it("keeps both crons' metric permission next to the store permissions", async () => {
       const { reconciliation, poller } = await loadCrons(true);
-      expect(poller.permissions).toContainEqual({ actions: ['cloudwatch:PutMetricData'], resources: ['*'] });
-      expect(poller.permissions).toHaveLength(3);
-      expect(reconciliation.permissions.map(permission => permission.actions)).toEqual([
-        ['secretsmanager:GetSecretValue'],
-        ['kms:Decrypt'],
-      ]);
+      for (const fn of [poller, reconciliation]) {
+        expect(fn.permissions.map(permission => permission.actions)).toEqual([
+          ['cloudwatch:PutMetricData'],
+          ['secretsmanager:GetSecretValue'],
+          ['kms:Decrypt'],
+        ]);
+      }
     });
 
     it('leaves the environment and linked secrets as before where the store does not exist', async () => {
       const { reconciliation, poller } = await loadCrons(false);
       expect(reconciliation.environment).toEqual({ DEFAULT: 'env' });
       expect(poller.environment).toEqual({ DEFAULT: 'env' });
-      expect(reconciliation.permissions).toEqual([]);
+      expect(reconciliation.permissions).toEqual([{ actions: ['cloudwatch:PutMetricData'], resources: ['*'] }]);
       expect(poller.permissions).toEqual([{ actions: ['cloudwatch:PutMetricData'], resources: ['*'] }]);
     });
   });

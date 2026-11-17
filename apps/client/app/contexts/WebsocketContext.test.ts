@@ -840,9 +840,14 @@ describe('WebsocketProvider - reauth after a token refresh', () => {
   it('re-sends tracked subscriptions with the current token on resubscribe_required', async () => {
     const rendered = render(element());
     const subscribe = (subscriptionId: string) =>
-      ({ action: 'subscribe_query', subscriptionId, collectionName: 'quests', query: {} }) as unknown as Parameters<
-        typeof send
-      >[0];
+      ({
+        action: 'subscribe_query',
+        subscriptionId,
+        collectionName: 'organizations',
+        query: { _id: 'org-a' },
+        fetchInitialData: true,
+        initialDataAfterSubscribe: true,
+      }) as unknown as Parameters<typeof send>[0];
     act(() => {
       send(subscribe('s1'));
       send(subscribe('s2'));
@@ -857,7 +862,15 @@ describe('WebsocketProvider - reauth after a token refresh', () => {
 
     expect(h.sendJsonMessage).toHaveBeenCalledTimes(1);
     expect(h.sendJsonMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'subscribe_query', subscriptionId: 's1', accessToken: 'tok-2' })
+      expect.objectContaining({
+        action: 'subscribe_query',
+        subscriptionId: 's1',
+        accessToken: 'tok-2',
+        collectionName: 'organizations',
+        query: { _id: 'org-a' },
+        fetchInitialData: true,
+        initialDataAfterSubscribe: true,
+      })
     );
     expect(h.queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['quests', 'session'] });
     expect(h.queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['invites'] });
