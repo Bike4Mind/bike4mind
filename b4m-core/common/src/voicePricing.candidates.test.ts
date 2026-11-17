@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { estimateTtsCreditCost, TTS_MAX_INPUT_CHARS } from '@bike4mind/common';
-import { estimateTtsHoldCredits, ttsCandidates } from './ttsCandidates';
+import { TTS_MAX_INPUT_CHARS } from './voiceGeneration';
+import { estimateTtsCreditCost, estimateTtsHoldCredits, ttsCandidates } from './voicePricing';
 
 describe('TTS candidate holds', () => {
   it.each(['openai', 'elevenlabs'] as const)('covers the pricier vendor when requesting %s', provider => {

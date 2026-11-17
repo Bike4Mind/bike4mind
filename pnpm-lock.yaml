@@ -274,7 +274,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/server-utils
       '@bike4mind/services':
-        specifier: workspace:*
+        specifier: workspace:@bike4mind/services-core@*
         version: link:../../b4m-core/services
       '@bike4mind/slack':
         specifier: workspace:*
@@ -1119,7 +1119,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/server-utils
       '@bike4mind/services':
-        specifier: workspace:*
+        specifier: workspace:@bike4mind/services-core@*
         version: link:../../b4m-core/services
       '@bike4mind/slack':
         specifier: workspace:*
@@ -1776,8 +1776,8 @@ importers:
         specifier: ^22.1.0
         version: 22.1.0
       glob:
-        specifier: ^13.0.6
-        version: 13.0.6
+        specifier: ^14.0.2
+        version: 14.0.6
       lodash:
         specifier: ^4.18.1
         version: 4.18.1
@@ -1885,7 +1885,7 @@ importers:
       '@bike4mind/observability':
         specifier: workspace:*
         version: link:../observability
-      '@bike4mind/services':
+      '@bike4mind/services-core':
         specifier: workspace:*
         version: link:../services
       '@bike4mind/utils':
@@ -2198,8 +2198,8 @@ importers:
         specifier: ^0.5.2
         version: 0.5.2
       glob:
-        specifier: ^13.0.6
-        version: 13.0.6
+        specifier: ^14.0.2
+        version: 14.0.6
       gray-matter:
         specifier: ^4.0.3
         version: 4.0.3
@@ -2358,7 +2358,7 @@ importers:
         specifier: workspace:*
         version: link:../sdk
       '@bike4mind/services':
-        specifier: workspace:*
+        specifier: workspace:@bike4mind/services-core@*
         version: link:../../b4m-core/services
       '@bike4mind/utils':
         specifier: workspace:*
@@ -2583,7 +2583,7 @@ importers:
         specifier: workspace:*
         version: link:../server-utils
       '@bike4mind/services':
-        specifier: workspace:*
+        specifier: workspace:@bike4mind/services-core@*
         version: link:../../b4m-core/services
       '@bike4mind/utils':
         specifier: workspace:*
@@ -2607,8 +2607,8 @@ importers:
         specifier: ^17.4.2
         version: 17.4.2
       glob:
-        specifier: ^13.0.6
-        version: 13.0.6
+        specifier: ^14.0.2
+        version: 14.0.6
       gray-matter:
         specifier: ^4.0.3
         version: 4.0.3
@@ -2780,7 +2780,7 @@ importers:
         specifier: workspace:*
         version: link:../../b4m-core/resource
       '@bike4mind/services':
-        specifier: workspace:*
+        specifier: workspace:@bike4mind/services-core@*
         version: link:../../b4m-core/services
       '@bike4mind/slack':
         specifier: workspace:*
@@ -4660,6 +4660,10 @@ packages:
     resolution:
       { integrity: sha512-wgm9Ehl2jpeqP3zw/7mo3kRHFp5MEDhqAdwy1fTGkHAwnkGOVsgpvQhL8B5n1qlb01jV3n/bI0ZfZp5lWA1k4w== }
     engines: { node: '>=18.0.0' }
+
+  '@isaacs/nonrecursive-glob-match@1.1.0':
+    resolution:
+      { integrity: sha512-GPm/Dbvk5RLmhRnxXIa7nTpK0xtl4E0wj0MslsuNiJ1FIROU+2+9lgUC/dgF7Ey4QCWhfEsgxilMRMCdHPfDfw== }
 
   '@jimp/core@1.6.1':
     resolution:
@@ -11010,9 +11014,9 @@ packages:
     deprecated: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
     hasBin: true
 
-  glob@13.0.6:
+  glob@14.0.6:
     resolution:
-      { integrity: sha512-Wjlyrolmm8uDpm/ogGyXZXb1Z+Ca2B8NbJwqBVg0axK9GbBeoS7yGV6vjXnYdGm6X53iehEuxxbyiKp8QmN4Vw== }
+      { integrity: sha512-OwXjVP2svY5EyLY75Vek96C8qK43gqrt4xsZ+qSILdnaEiJPXkd62mcfUSNx/TQErQRdu5uM5kF67sfONragKw== }
     engines: { node: 18 || 20 || >=22 }
 
   glob@7.2.3:
@@ -12482,11 +12486,6 @@ packages:
       { integrity: sha512-NxVFwLAnrd9i7KUBxC4DrUhmgjzOs+1Qm50D3oF1/oL+r1NpZ4gA7xvG0/zJ8evR7zIKn4vLf7qTNduWFtCrRw== }
     engines: { node: 20 || >=22 }
 
-  lru-cache@11.5.2:
-    resolution:
-      { integrity: sha512-4pfM1Ff0x50o0tQwb5ucw/RzNyD0/YJME6IVcStalZuMWxdt3sR3huStTtxz4PUmvZfRguvDejasvQ2kifR11g== }
-    engines: { node: 20 || >=22 }
-
   lru-cache@5.1.1:
     resolution:
       { integrity: sha512-KpNARQA3Iwv+jTA0utUVVbrh+Jlrr1Fv0e56GGzAFOXN7dk/FviaDW8LHmK52DlcH4WP2n6gI8vN1aesBFgo9w== }
@@ -12911,15 +12910,15 @@ packages:
     resolution:
       { integrity: sha512-UtJcAD4yEaGtjPezWuO9wC4nwUnVH/8/Im3yEHQP4b67cXlD/Qr9hdITCU1xDbSEXg2XKNaP8jsReV7vQd00/A== }
 
-  minimatch@10.2.5:
-    resolution:
-      { integrity: sha512-MULkVLfKGYDFYejP07QOurDLLQpcjk7Fw+7jXS2R2czRQzR56yHRveU5NDJEOviH+hETZKSkIk5c+T23GjFUMg== }
-    engines: { node: 18 || 20 || >=22 }
-
   minimatch@10.2.6:
     resolution:
       { integrity: sha512-vpLQEs+VLCr1nU0BXS07maYoFwlDAH0gngQuuttxIwutDFEMHq2blX+8vpgxDdK3J1PwjCJiep77OitTZ4Ll1A== }
     engines: { node: 18 || 20 || >=22 }
+
+  minimatch@11.0.5:
+    resolution:
+      { integrity: sha512-snPlVppFcYWfLLFQGhDxUyBcHNtMlWmn3jtj7pEaO+DP8pqL0IvAzXhMYmn1z9ASNtgmwLBdFxSf4tMUB0OTKA== }
+    engines: { node: 20 || >=22 }
 
   minimatch@3.1.5:
     resolution:
@@ -13763,9 +13762,9 @@ packages:
       { integrity: sha512-Xa4Nw17FS9ApQFJ9umLiJS4orGjm7ZzwUrwamcGQuHSzDyth9boKDaycYdDcZDuqYATXw4HFXgaqWTctW/v1HA== }
     engines: { node: '>=16 || 14 >=14.18' }
 
-  path-scurry@2.0.2:
+  path-scurry@3.0.0:
     resolution:
-      { integrity: sha512-3O/iVVsJAPsOnpwWIeD+d6z/7PmqApyQePUtCndjatj/9I5LylHvt5qluFaBT3I5h3r1ejfR056c+FCv+NnNXg== }
+      { integrity: sha512-1pTbQqH1wIwMi/eleQ5leFTTCkzFsPcgXNjwOA8YGGW/W4/kHT3dssE7Z6NH+zuqNLOzOB0uaD61yl7cAcVhgg== }
     engines: { node: 18 || 20 || >=22 }
 
   path-to-regexp@0.1.13:
@@ -14264,8 +14263,8 @@ packages:
   react-use-websocket@https://codeload.github.com/MillionOnMars/react-use-websocket/tar.gz/4e449870cc177e04fa6c879e4d35947a601ce684:
     resolution:
       {
-        gitHosted: true,
         integrity: sha512-coe6cEGS+ufx7gKtme40KQnbbue1ZM0S+AeL7tlIe4T7NqAXBBeY8EB+qatMSTn0Emsrt2N15xMzIKsiwy9pnw==,
+        gitHosted: true,
         tarball: https://codeload.github.com/MillionOnMars/react-use-websocket/tar.gz/4e449870cc177e04fa6c879e4d35947a601ce684,
       }
     version: 4.8.2
@@ -18815,6 +18814,8 @@ snapshots:
     dependencies:
       minipass: 7.1.3
 
+  '@isaacs/nonrecursive-glob-match@1.1.0': {}
+
   '@jimp/core@1.6.1':
     dependencies:
       '@jimp/file-ops': 1.6.1
@@ -21669,7 +21670,7 @@ snapshots:
       '@typescript-eslint/types': 8.63.0
       '@typescript-eslint/visitor-keys': 8.63.0
       debug: 4.4.3(supports-color@10.2.2)
-      minimatch: 10.2.5
+      minimatch: 10.2.6
       semver: 7.8.5
       tinyglobby: 0.2.17
       ts-api-utils: 2.5.0(typescript@5.9.3)
@@ -21905,7 +21906,7 @@ snapshots:
       obug: 2.1.4
       std-env: 4.2.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.12(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.12)(@vitest/ui@4.1.12)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@8.3.4(@types/node@24.12.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
+      vitest: 4.1.12(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.12)(@vitest/ui@4.1.12)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@7.3.7(@types/node@24.12.3)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
 
   '@vitest/expect@4.1.12':
     dependencies:
@@ -21970,7 +21971,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.0
-      vitest: 4.1.12(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.12)(@vitest/ui@4.1.12)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@8.3.4(@types/node@24.12.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
+      vitest: 4.1.12(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.12)(@vitest/ui@4.1.12)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@7.3.7(@types/node@24.12.3)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
 
   '@vitest/utils@4.1.12':
     dependencies:
@@ -24706,11 +24707,11 @@ snapshots:
       package-json-from-dist: 1.0.1
       path-scurry: 1.11.1
 
-  glob@13.0.6:
+  glob@14.0.6:
     dependencies:
-      minimatch: 10.2.6
+      minimatch: 11.0.5
       minipass: 7.1.3
-      path-scurry: 2.0.2
+      path-scurry: 3.0.0
 
   glob@7.2.3:
     dependencies:
@@ -25988,8 +25989,6 @@ snapshots:
 
   lru-cache@11.3.5: {}
 
-  lru-cache@11.5.2: {}
-
   lru-cache@5.1.1:
     dependencies:
       yallist: 3.1.1
@@ -26597,12 +26596,13 @@ snapshots:
 
   minimalistic-assert@1.0.1: {}
 
-  minimatch@10.2.5:
+  minimatch@10.2.6:
     dependencies:
       brace-expansion: 5.0.12
 
-  minimatch@10.2.6:
+  minimatch@11.0.5:
     dependencies:
+      '@isaacs/nonrecursive-glob-match': 1.1.0
       brace-expansion: 5.0.12
 
   minimatch@3.1.5:
@@ -27351,9 +27351,9 @@ snapshots:
       lru-cache: 10.4.3
       minipass: 7.1.3
 
-  path-scurry@2.0.2:
+  path-scurry@3.0.0:
     dependencies:
-      lru-cache: 11.5.2
+      lru-cache: 11.3.5
       minipass: 7.1.3
 
   path-to-regexp@0.1.13: {}

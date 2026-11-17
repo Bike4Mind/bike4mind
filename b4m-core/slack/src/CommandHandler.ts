@@ -40,7 +40,7 @@ function capErrorReply(reply: string): string {
 }
 
 import { SlackClient } from './SlackClient';
-import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvoke';
+import { ChatCompletionInvoke } from '@bike4mind/services-core/llm/ChatCompletionInvoke';
 import { createLoadingBar } from './utils/loadingBar';
 
 /**

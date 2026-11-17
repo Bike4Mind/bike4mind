@@ -10,7 +10,7 @@ import {
   sortAdminPermissions,
   sortAdminRoleIds,
 } from '@bike4mind/common';
-import { User, adminRoleRepository, withTransaction } from '@bike4mind/database';
+import { AdminRoleModel, User, adminRoleRepository, withTransaction } from '@bike4mind/database';
 import { Types } from 'mongoose';
 import { requireStepUp } from '@server/auth/stepUp';
 import { adminApi } from '@server/middlewares/adminApi';
@@ -93,11 +93,26 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:m
       if (!sameSet(before, sortAdminPermissions(stored)) || rolesStale) {
         throw new ConflictError('Admin permissions changed. Reload the profile before trying again.');
       }
-      if (sameSet(before, after) && sameSet(storedRoleIds, nextRoleIds)) {
+      // `before` matched the cleaned stored set, so any stored id outside it is no longer listed. Clearing
+      // those still writes: an account holding only unlisted ids stays an admin until they are gone.
+      const listed: readonly string[] = before;
+      const unlisted = stored.filter(id => !listed.includes(id));
+      const permissionsChanged = !sameSet(before, after) || unlisted.length > 0;
+      if (!permissionsChanged && sameSet(storedRoleIds, nextRoleIds)) {
         return { adminPermissions: before, adminRoleIds: storedRoleIds };
       }
 
       await requireStepUp(req);
+      const removedRoleIds = storedRoleIds.filter(id => !nextRoleIds.includes(id));
+      // A real write fences the snapshot against concurrent role edits. Snapshot reads alone do not
+      // conflict with those edits; retry must reread the permissions before recording the removal.
+      for (const roleId of removedRoleIds) {
+        await AdminRoleModel.updateOne(
+          { _id: new Types.ObjectId(roleId) },
+          { $inc: { __v: 1 } },
+          { runValidators: true, timestamps: false }
+        );
+      }
       const update = await User.updateOne(
         {
           _id: userId,
@@ -115,9 +130,16 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:m
       if (update.matchedCount !== 1) {
         throw new ConflictError('Admin permissions changed. Reload the profile before trying again.');
       }
-      const storedRoleNames = new Map(
-        (await adminRoleRepository.findByIds(storedRoleIds)).map(role => [role.id, role.name])
-      );
+      const storedRoles = await adminRoleRepository.findByIds(storedRoleIds);
+      const storedRoleNames = new Map(storedRoles.map(role => [role.id, role.name]));
+      // Capture effective permissions while the membership removal and its audit share a transaction.
+      // A dangling role grants nothing, and must be distinguishable from a missing historical snapshot.
+      const removedRolePermissions = storedRoleIds
+        .filter(id => !nextRoleIds.includes(id))
+        .map(roleId => ({
+          roleId,
+          permissions: storedRoles.find(role => role.id === roleId)?.permissions ?? [],
+        }));
       const nameOf = (id: string) => storedRoleNames.get(id) ?? nextRoles.find(role => role.id === id)?.name ?? id;
       const changes = {
         granted: after.filter(id => !before.includes(id)),
@@ -128,15 +150,15 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:m
       await recordAdminActionFromRequest(req, {
         action: 'user.permissions.updated',
         target: { kind: 'user', id: userId, displayName: user.name || user.username || userId },
-        summary: describeChange(changes),
+        summary: describeChange(changes) || `cleared unlisted permission ids ${unlisted.join(', ')}`,
         reason,
         changes: [
-          ...(sameSet(before, after) ? [] : [{ field: 'adminPermissions', before: [...stored], after }]),
+          ...(permissionsChanged ? [{ field: 'adminPermissions', before: [...stored], after }] : []),
           ...(sameSet(storedRoleIds, nextRoleIds)
             ? []
             : [{ field: 'adminRoleIds', before: storedRoleIds, after: nextRoleIds }]),
         ],
-        details: changes,
+        details: { ...changes, ...(removedRolePermissions.length > 0 && { removedRolePermissions }) },
       });
       return { adminPermissions: after, adminRoleIds: nextRoleIds };
     });
