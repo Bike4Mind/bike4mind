@@ -46,12 +46,17 @@ interface AdminGenerateApiKeyModalProps {
   user: AdminUserListItem;
 }
 
-// overwatch-ingest:write is left out: createUserApiKey requires a productId for it, which
-// this admin path never collects, so offering it would only buy a 400.
-const ingestScopeOptions = ADMIN_ONLY_API_KEY_SCOPES.filter(s => s.value !== ApiKeyScope.OVERWATCH_INGEST_WRITE);
 // A confined scope must be a key's only scope (createUserApiKey enforces it), so picking one
 // replaces the selection and picking any other scope drops it.
 const confinedScopeValues = new Set<ApiKeyScopeValue>(CONFINED_API_KEY_SCOPES);
+// overwatch-ingest:write is left out: createUserApiKey requires a productId for it, which
+// this admin path never collects, so offering it would only buy a 400.
+const ingestScopeOptions = ADMIN_ONLY_API_KEY_SCOPES.filter(
+  s => s.value !== ApiKeyScope.OVERWATCH_INGEST_WRITE && confinedScopeValues.has(s.value)
+);
+// Admin-provisioned scopes that combine with the generic ones (e.g. ai:end-user-attribution).
+const platformScopeOptions = ADMIN_ONLY_API_KEY_SCOPES.filter(s => !confinedScopeValues.has(s.value));
+const platformScopeValues = new Set<ApiKeyScopeValue>(platformScopeOptions.map(s => s.value));
 
 const INGEST_FULL_ADMIN_ONLY = 'Only full administrators can create API keys with admin-provisioned scopes';
 
@@ -141,7 +146,9 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
     [scopeOptions]
   );
   const allScopesSelected = selectAllScopeOptions.every(s => formData.scopes.includes(s.value));
-  const genericSelectedCount = formData.scopes.filter(s => !confinedScopeValues.has(s)).length;
+  const genericSelectedCount = formData.scopes.filter(
+    s => !confinedScopeValues.has(s) && !platformScopeValues.has(s)
+  ).length;
 
   const toggleScope = (value: ApiKeyScopeValue, checked: boolean) => {
     let scopes: ApiKeyScopeValue[];
@@ -177,7 +184,11 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
   );
 
   const toggleAllScopes = () => {
-    setFormData({ ...formData, scopes: allScopesSelected ? [] : selectAllScopeOptions.map(s => s.value) });
+    const keptPlatform = formData.scopes.filter(s => platformScopeValues.has(s));
+    setFormData({
+      ...formData,
+      scopes: allScopesSelected ? keptPlatform : [...keptPlatform, ...selectAllScopeOptions.map(s => s.value)],
+    });
   };
 
   if (generatedKey) {
@@ -264,6 +275,28 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
               }}
             >
               {scopeOptions.map(scope => renderScope(scope))}
+            </Box>
+          </FormControl>
+
+          <FormControl>
+            <FormLabel sx={{ mb: 0.5 }}>Platform scopes</FormLabel>
+            <Typography level="body-xs" color="neutral" sx={{ mb: 1 }}>
+              Admin-only. These add to the generic scopes above rather than replacing them.
+            </Typography>
+            {!canMintIngest && (
+              <Typography
+                level="body-xs"
+                color="warning"
+                sx={{ mb: 1 }}
+                data-testid="admin-generate-key-platform-reason"
+              >
+                {INGEST_FULL_ADMIN_ONLY}
+              </Typography>
+            )}
+            <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'sm', p: 1 }}>
+              {platformScopeOptions.map(scope =>
+                renderScope(scope, canMintIngest ? undefined : INGEST_FULL_ADMIN_ONLY)
+              )}
             </Box>
           </FormControl>
 

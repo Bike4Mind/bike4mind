@@ -127,7 +127,11 @@ export function nextRouteForContract<C extends EndpointContract>(
     try {
       return schema.parse(value);
     } catch (error) {
-      if (contract.validationErrorStatus === 400 && isZodError(error)) {
+      if (
+        isZodError(error) &&
+        (contract.validationErrorStatus === 400 ||
+          error.issues.some(issue => contract.badRequestFields?.includes(String(issue.path[0]))))
+      ) {
         throw new BadRequestError(fromZodError(error).message);
       }
       throw error;

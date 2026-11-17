@@ -36,11 +36,14 @@ export const synthesizeSpeechContract = defineEndpoint({
     '422 before any provider cost is incurred. ' +
     '`organization_id` picks the payer: an organization you belong to, or null for your personal ' +
     'credits; omitted bills your personal credits, as this endpoint always has. ' +
+    '`end_user_id` names the end user of your own product the speech is for; it needs an API key with the ' +
+    '`ai:end-user-attribution` scope. ' +
     GENERATED_AUDIO_DESCRIPTION,
   tags: ['Audio'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_GENERATE],
   request: ttsRequestSchema,
+  badRequestFields: ['end_user_id'],
   requestExample: { text: 'Your password has been reset.', provider: 'openai', voice: 'alloy', format: 'mp3' },
   responses: {
     ...generatedAudioResponses({
@@ -73,7 +76,10 @@ export const synthesizeSpeechContract = defineEndpoint({
       schema: ttsErrorResponseSchema,
     },
     400: {
-      description: `The billing organization could not be resolved. ${BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION}`,
+      description:
+        'A malformed `end_user_id`, or one sent by a caller that is not an API key with the ' +
+        '`ai:end-user-attribution` scope; or the billing organization could not be resolved. ' +
+        BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
       schema: ttsErrorResponseSchema,
     },
     403: {

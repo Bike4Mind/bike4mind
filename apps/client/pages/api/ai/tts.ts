@@ -24,6 +24,7 @@ import {
 import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
+import { recordPlatformEndUser, resolvePlatformEndUser } from '@bike4mind/server-utils/auth/platformEndUser';
 
 /**
  * Unified, multi-provider Text-to-Speech endpoint (#724).
@@ -56,7 +57,15 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
     languageCode,
     preview,
     organization_id,
+    end_user_id,
   } = req.validated;
+
+  // Neither TTS provider takes an end-user identifier, so it is only authorized and recorded here.
+  const platformEndUser = resolvePlatformEndUser(
+    end_user_id,
+    req.apiKeyInfo && req.user ? { ownerUserId: req.user.id, scopes: req.apiKeyInfo.scopes } : undefined
+  );
+  if (platformEndUser) recordPlatformEndUser(platformEndUser, req.logger);
 
   const vendor = provider ?? DEFAULT_TTS_PROVIDER;
 

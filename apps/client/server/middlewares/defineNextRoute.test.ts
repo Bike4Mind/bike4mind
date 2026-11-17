@@ -244,6 +244,22 @@ describe('nextRouteForContract', () => {
       expect(handlerFn).not.toHaveBeenCalled();
     });
 
+    it('400s a failure on a badRequestFields field and keeps 422 for every other field', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      const handlerFn = vi.fn();
+      const route = nextRouteForContract(makeContract({ badRequestFields: ['message'] })).post(handlerFn);
+      const other = nextRouteForContract(makeContract({ badRequestFields: ['other'] })).post(handlerFn);
+
+      const first = fire({ apiKey: 'b4m_live_key', body: { message: 42 } });
+      await route(first.req, first.res);
+      expect(first.res._getStatusCode()).toBe(400);
+
+      const second = fire({ apiKey: 'b4m_live_key', body: { message: 42 } });
+      await other(second.req, second.res);
+      expect(second.res._getStatusCode()).toBe(422);
+      expect(handlerFn).not.toHaveBeenCalled();
+    });
+
     describe('sessionCloneContract', () => {
       // Next hands a bodiless POST (no content-type, so text/plain) to the route as '', not undefined.
       it.each(['', {}])('treats an absent body (%j) as inherit, not a 400', async body => {

@@ -36,6 +36,7 @@ vi.mock('@bike4mind/database', () => ({
   User: {},
   authEventRepository: { deleteAllForUser: deleteAuthEventsMock },
   embedConversationRepository: { deleteAllForUser: deleteEmbedMock },
+  providerEndUserMappingRepository: { deleteAllForOwner: vi.fn() },
   integrationRequestRepository: { deleteAllForUser: deleteRequestsMock },
   hideDeletedAuthorAnnotations: hideAnnotationsMock,
   shadowDetectionRepository: { removeUser: removeFromDetectionsMock },

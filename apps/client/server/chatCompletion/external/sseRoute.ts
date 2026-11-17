@@ -55,6 +55,7 @@ import {
 import type { CompletionSettlement } from '@bike4mind/services/cliCompletions';
 import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
 import { resolveContractAuth } from '@bike4mind/server-utils/cli/resolveContractAuth';
+import { recordPlatformEndUser, resolvePlatformEndUser } from '@bike4mind/server-utils/auth/platformEndUser';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';
@@ -309,10 +310,12 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       const parsed = CompletionRequestSchema.safeParse(req.body);
       if (!parsed.success) {
         const errorMessage = fromZodError(parsed.error).message;
-        const emptyMessages = parsed.error.issues.some(
-          issue => issue.code === 'too_small' && issue.path.length === 1 && issue.path[0] === 'messages'
+        const badRequest = parsed.error.issues.some(
+          issue =>
+            (issue.code === 'too_small' && issue.path.length === 1 && issue.path[0] === 'messages') ||
+            issue.path[0] === 'end_user_id'
         );
-        throw emptyMessages ? new BadRequestError(errorMessage) : new UnprocessableEntityError(errorMessage);
+        throw badRequest ? new BadRequestError(errorMessage) : new UnprocessableEntityError(errorMessage);
       }
       body = normalizeCompletionRequest(parsed.data);
 
@@ -362,6 +365,12 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         await checkRateLimit(userId, source, { client: resolveRequestClient(headers) });
       }
 
+      const platformEndUser = resolvePlatformEndUser(
+        body.end_user_id,
+        apiKeyInfo && { ownerUserId: apiKeyInfo.userId, scopes: apiKeyInfo.scopes }
+      );
+      if (platformEndUser) recordPlatformEndUser(platformEndUser, logger);
+
       timing?.phase('rateLimited');
       logger.updateMetadata({ userId, model: body.model, apiKeyId: apiKeyInfo?.keyId });
       logger.info(`[CLI_LLM] Starting completion for user ${userId}, model: ${body.model}`, {
@@ -406,6 +415,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         getThinkingVisibility: resolveThinkingVisibility,
         creditHolds: createCompletionCreditHolds(logger),
         userId,
+        endUserId: platformEndUser?.attributionId,
         model: body.model,
         messages: body.messages as IMessage[],
         options: body.options,

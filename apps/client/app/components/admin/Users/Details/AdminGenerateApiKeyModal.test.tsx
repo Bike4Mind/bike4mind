@@ -217,6 +217,43 @@ describe('AdminGenerateApiKeyModal - ingest scopes', () => {
   });
 });
 
+describe('AdminGenerateApiKeyModal - platform scopes', () => {
+  const GENERIC = GENERIC_MODAL_API_KEY_SCOPES[0].value;
+  const PLATFORM = ApiKeyScope.AI_END_USER_ATTRIBUTION;
+  const scopeInput = (value: string) => screen.getByTestId(`admin-generate-key-scope-${value}`).querySelector('input')!;
+  const submitScopes = async () => {
+    fireEvent.change(screen.getByPlaceholderText(/Data Lake Upload/i), { target: { value: 'platform key' } });
+    await confirmGeneration();
+    return h.mutate.mock.calls[0][0].data.scopes;
+  };
+
+  it('adds the end-user attribution scope alongside the generic scopes', async () => {
+    renderModal();
+    fireEvent.click(scopeInput(GENERIC));
+    fireEvent.click(scopeInput(PLATFORM));
+    expect(await submitScopes()).toEqual([GENERIC, PLATFORM]);
+  });
+
+  it('keeps it through Select All and Clear All, and leaves it out of the generic counter', () => {
+    renderModal();
+    const counter = () => screen.getByTestId('admin-generate-key-scopes-count').textContent;
+    fireEvent.click(scopeInput(PLATFORM));
+    expect(counter()).toMatch(/\(0\//);
+    fireEvent.click(screen.getByText('Select All'));
+    expect(scopeInput(PLATFORM).checked).toBe(true);
+    fireEvent.click(screen.getByText('Clear All'));
+    expect(scopeInput(PLATFORM).checked).toBe(true);
+    expect(counter()).toMatch(/\(0\//);
+  });
+
+  it('is dropped by an ingest scope, which must be the only scope', async () => {
+    renderModal();
+    fireEvent.click(scopeInput(PLATFORM));
+    fireEvent.click(scopeInput(ApiKeyScope.QA_INGEST));
+    expect(await submitScopes()).toEqual([ApiKeyScope.QA_INGEST]);
+  });
+});
+
 describe('AdminGenerateApiKeyModal - ingest scopes for a delegate', () => {
   it('disables the ingest scopes with the reason for a delegate, but not the generic ones', () => {
     useUser.setState({

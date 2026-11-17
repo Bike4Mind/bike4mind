@@ -551,6 +551,14 @@ const HAND_WRITTEN_ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     endpoints: [],
   },
   {
+    value: ApiKeyScope.AI_END_USER_ATTRIBUTION,
+    label: 'AI: End-user attribution',
+    description:
+      'Can name its own end user with end_user_id on AI completions and text-to-speech, so model providers attribute each request to that end user. Opens no route by itself: the key still needs ai:generate or ai:chat',
+    // No route lists it in requiredScopes, so it claims no endpoint; the routes read it from the key.
+    endpoints: [],
+  },
+  {
     value: ApiKeyScope.RELEASE_NOTES_WRITE,
     label: 'Release Notes: Write',
     description:
@@ -564,7 +572,8 @@ const HAND_WRITTEN_ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
 
 /**
  * Scopes that are provisioned by admins only and must never appear in the user-facing
- * key creation UI. The ingest and automation scopes are excluded from USER_API_KEY_SCOPES by design.
+ * key creation UI. The ingest, automation and end-user attribution scopes are excluded from
+ * USER_API_KEY_SCOPES by design.
  */
 export const ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] =
   HAND_WRITTEN_ADMIN_ONLY_API_KEY_SCOPES.map(withDerivedEndpoints);

@@ -50,6 +50,14 @@ export enum ApiKeyScope {
   OVERWATCH_INGEST_WRITE = 'overwatch-ingest:write',
   /** Server-to-server credit grants for partner games. Admin-provisioned only - never shown in user-facing key creation UI. */
   REWARDS_GRANT = 'rewards:grant',
+  /**
+   * Lets a key that serves many end users of its owner's own product name each one with an
+   * `end_user_id` on `POST /api/ai/v1/completions` and `POST /api/ai/tts`, so providers attribute
+   * the request to that end user rather than to the key owner. Opens no route on its own: those
+   * routes still require `ai:generate` or `ai:chat`. Admin-provisioned only - never shown in
+   * user-facing key creation UI.
+   */
+  AI_END_USER_ATTRIBUTION = 'ai:end-user-attribution',
   /** Authorizes only embedded-widget chat against the single agent the key is
    *  bound to (`agentId`). Like CC_BRIDGE, a leaked embed key has a narrow blast
    *  radius: it can talk to one agent from allow-listed origins, nothing else. */
@@ -268,7 +276,7 @@ const CUSTOMER_MINTED_CONFINED_SCOPES: readonly ApiKeyScope[] = [ApiKeyScope.SKI
 
 /**
  * Built-in scopes left out of the public API reference. An explicit list, not a rule: `admin:*`, the
- * confined integration scopes except the customer-minted `skills:read` and `slack:post`, and the `optihashi:*` family. Documentation only -
+ * confined integration scopes except the customer-minted `skills:read` and `slack:post`, the `optihashi:*` family, and the admin-provisioned `ai:end-user-attribution`. Documentation only -
  * it never affects which scopes a key may hold or what the runtime accepts.
  */
 export const UNDOCUMENTED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
@@ -276,6 +284,7 @@ export const UNDOCUMENTED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   ...CONFINED_API_KEY_SCOPES.filter(scope => !CUSTOMER_MINTED_CONFINED_SCOPES.includes(scope)),
   ApiKeyScope.OPTIHASHI_READ,
   ApiKeyScope.OPTIHASHI_COMPUTE,
+  ApiKeyScope.AI_END_USER_ATTRIBUTION,
 ];
 
 /**

@@ -3,6 +3,7 @@ export * from './fleetUsageExport';
 export * from './agentExecution';
 export * from './chat';
 export * from './cliCompletions';
+export * from './platformEndUser';
 export * from './modelId';
 export * from './tools';
 export * from './webTools';

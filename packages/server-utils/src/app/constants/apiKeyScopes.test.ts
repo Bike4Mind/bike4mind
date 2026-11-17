@@ -146,6 +146,13 @@ describe('apiKeyScopes catalog', () => {
     expect(userValues).not.toContain(ApiKeyScope.RELEASE_NOTES_WRITE);
   });
 
+  it('lists ai:end-user-attribution as admin-only, never user-selectable, and not confined', () => {
+    // Not confined: it rides alongside ai:generate / ai:chat on the same key.
+    expect(ADMIN_ONLY_API_KEY_SCOPES.map(s => s.value)).toContain(ApiKeyScope.AI_END_USER_ATTRIBUTION);
+    expect(userValues).not.toContain(ApiKeyScope.AI_END_USER_ATTRIBUTION);
+    expect(CONFINED_API_KEY_SCOPES).not.toContain(ApiKeyScope.AI_END_USER_ATTRIBUTION);
+  });
+
   it('keeps the Overwatch read scope distinct from the ingest write scope', () => {
     // Not a read/write pair: the ingest scope is a per-product credential bound to one
     // productId that can write that product's stats, and is admin-provisioned only.

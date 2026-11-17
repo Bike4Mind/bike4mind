@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ModelIdSchema } from './modelId';
+import { PlatformEndUserIdSchema } from './platformEndUser';
 import { MAX_THINKING_BUDGET_TOKENS } from '../constants/llmLimits';
 import { COMPLETION_RUN_PURPOSES, COMPLETION_RUN_ROLES } from '../constants/completionRuns';
 // Specific file, not the `../types` barrel - this module is imported by
@@ -378,6 +379,7 @@ export const CompletionRequestSchema = z.object({
   max_tokens: z.number().optional(),
   sessionId: CompletionSessionIdSchema.optional(),
   run: CompletionRunAttributionSchema.optional(),
+  end_user_id: PlatformEndUserIdSchema.optional(),
   options: z
     .object({
       temperature: z.number().optional(),

@@ -25,6 +25,26 @@ Send a JSON body with a `model` and a `messages` array. Other options (tools, ex
 
 Send your API key as `Authorization: Bearer b4m_live_<key>`, or with the legacy `x-api-key: b4m_live_<key>` header. The two are equivalent. The key needs the `ai:chat` or `ai:generate` scope. See [Authentication](./authentication.md) for how to create a key (Profile menu -> More -> API Keys).
 
+## End-user attribution
+
+Every request to a model provider carries an opaque identifier for the end user it is made for, so the provider can attribute usage to that person. By default this is derived from the account that owns the API key.
+
+If one API key serves many end users of your own product, you can name each one with an optional `end_user_id` field:
+
+```json
+{
+  "model": "<model-id>",
+  "messages": [{ "role": "user", "content": "Hello" }],
+  "end_user_id": "player-42"
+}
+```
+
+- **Format:** 1 to 64 characters of letters, digits, `_`, `:` and `-`. Use your own opaque id, never a name, email address or other personal data.
+- **Scope:** the key needs the `ai:end-user-attribution` scope in addition to `ai:chat` or `ai:generate`. Bike4Mind grants this scope on request; you cannot add it when you create a key yourself. A request that sends `end_user_id` with any other key, or with a JWT, fails with `400`, as does a value in the wrong format.
+- **What the provider receives:** your id is combined with the key owner's account id and hashed before it is sent, so the provider sees a stable value per end user that does not reveal your id, and two products using the same id never collide.
+
+The same field is accepted by the text-to-speech endpoint (`POST /api/ai/tts`) under the same rules.
+
 ## Choosing a model
 
 Call `GET /api/v1/models` with your API key to list the model ids you can use. The list depends on which providers the deployment and your own provider keys enable, so if a sample returns 400 `unknown_model` or 503 `provider_not_configured`, use an id from that list. An unknown model returns a 400 with `errorCode: "unknown_model"`; a catalogued model whose provider is not configured returns 503 `provider_not_configured`.
@@ -64,6 +84,7 @@ Each API key has a per-minute and a per-day request limit; the in-app reference 
 
 Anything checked before the model provider is called fails with a JSON body and a real HTTP status, and no stream opens:
 
+- 400: an empty `messages` array, an unknown `model`, or an `end_user_id` that is malformed or sent without the `ai:end-user-attribution` scope.
 - 401: missing or invalid credentials.
 - 403: with `required_scopes` in the body, the API key lacks a scope. Without it, the account may be suspended or under a dispute (contact support), or a JWT caller may need to enroll in MFA in the web app.
 - 422: the body failed schema validation, or insufficient credits (see above).

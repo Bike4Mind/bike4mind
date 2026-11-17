@@ -13,6 +13,7 @@ import {
   mongoose,
   authEventRepository,
   embedConversationRepository,
+  providerEndUserMappingRepository,
   hideDeletedAuthorAnnotations,
   integrationRequestRepository,
   memoryPrincipalKeyRepository,
@@ -612,6 +613,7 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
   );
   await collectionFor('DataLakeAccessGrant').deleteMany({ principalType: 'user', principalId: userId });
   await embedConversationRepository.deleteAllForUser(userId);
+  await providerEndUserMappingRepository.deleteAllForOwner(userId);
   await integrationRequestRepository.deleteAllForUser(userId);
   await hideDeletedAuthorAnnotations(userId);
   await retainDeletedSignupTraces(userId);

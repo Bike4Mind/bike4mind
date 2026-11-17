@@ -57,6 +57,7 @@ const EXPECTED_NOT_CONFINED: ReadonlySet<ApiKeyScope> = new Set([
   ApiKeyScope.SKILLS_REVIEW,
   ApiKeyScope.PERSONAS_MINT,
   ApiKeyScope.API_KEYS_MANAGE,
+  ApiKeyScope.AI_END_USER_ATTRIBUTION,
 ]);
 
 describe('CONFINED_API_KEY_SCOPES', () => {
@@ -129,6 +130,7 @@ describe('public API reference scope classification', () => {
     ApiKeyScope.REWARDS_GRANT,
     ApiKeyScope.OPTIHASHI_READ,
     ApiKeyScope.OPTIHASHI_COMPUTE,
+    ApiKeyScope.AI_END_USER_ATTRIBUTION,
   ]);
 
   const EXPECTED_PUBLIC: ReadonlySet<ApiKeyScope> = new Set([

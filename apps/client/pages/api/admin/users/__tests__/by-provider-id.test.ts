@@ -17,10 +17,12 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown)
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 
 const mockFindOne = vi.fn();
+const mockFindMapping = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   User: {
     findOne: (filter: unknown) => ({ select: () => ({ lean: () => mockFindOne(filter) }) }),
   },
+  providerEndUserMappingRepository: { findByProviderEndUserId: (id: string) => mockFindMapping(id) },
 }));
 
 import handler from '../by-provider-id';
@@ -40,6 +42,7 @@ describe('GET /api/admin/users/by-provider-id', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFindOne.mockResolvedValue(null);
+    mockFindMapping.mockResolvedValue(null);
   });
 
   it('gates through adminApi with JWT auth, admin scope and support:read for GET', () => {
@@ -67,7 +70,36 @@ describe('GET /api/admin/users/by-provider-id', () => {
     expect(mockFindOne).toHaveBeenCalledWith({ providerEndUserId: DIGEST });
     expect(res._getStatusCode()).toBe(200);
     expect(res.getHeader('Cache-Control')).toBe('private, no-store');
-    expect(res._getJSONData()).toEqual({ id: 'u1', name: 'Ada', username: 'ada', email: 'ada@example.com' });
+    expect(res._getJSONData()).toEqual({
+      kind: 'user',
+      id: 'u1',
+      name: 'Ada',
+      username: 'ada',
+      email: 'ada@example.com',
+    });
+    expect(mockFindMapping).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a platform key's end user, naming the key owner", async () => {
+    mockFindMapping.mockResolvedValue({ ownerUserId: 'owner-1', endUserId: 'player-42' });
+    mockFindOne.mockImplementation(async (filter: Record<string, unknown>) =>
+      filter._id === 'owner-1' ? { _id: 'owner-1', name: 'Game Co', username: 'gameco' } : null
+    );
+
+    const res = await call({ id: DIGEST });
+
+    expect(mockFindMapping).toHaveBeenCalledWith(DIGEST);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({
+      kind: 'platform_end_user',
+      platformAccount: { id: 'owner-1', name: 'Game Co', username: 'gameco', email: null },
+      endUserId: 'player-42',
+    });
+  });
+
+  it('answers 404 when the mapped key owner no longer exists', async () => {
+    mockFindMapping.mockResolvedValue({ ownerUserId: 'gone', endUserId: 'player-42' });
+    await expect(call({ id: DIGEST })).rejects.toThrow('No account has this provider end-user identifier');
   });
 
   it('answers 404 when no account carries the identifier', async () => {

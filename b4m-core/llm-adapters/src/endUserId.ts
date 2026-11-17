@@ -39,3 +39,12 @@ export function toProviderEndUserId(internalId: string | null | undefined): stri
   if (!trimmed) return undefined;
   return createHash('sha256').update(trimmed).digest('hex');
 }
+
+/**
+ * The raw id a platform API key's own end user is attributed under, before toProviderEndUserId
+ * hashes it. Prefixed with the key owner's user id so two platforms reusing the same end-user id
+ * never collide, and so the digest cannot equal any account's own toProviderEndUserId(userId).
+ */
+export function platformEndUserKey(ownerUserId: string, endUserId: string): string {
+  return `${ownerUserId}:${endUserId}`;
+}

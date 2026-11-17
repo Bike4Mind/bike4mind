@@ -131,6 +131,11 @@ export type CompletionSettlement = {
 
 export interface CompletionParams {
   userId: string;
+  /**
+   * Raw id the LLM adapters hash into the provider end-user identifier (toProviderEndUserId).
+   * Defaults to `userId`; a platform key's request passes platformEndUserKey(owner, end_user_id).
+   */
+  endUserId?: string;
   model: string;
   messages: IMessage[];
   options?: {
@@ -762,7 +767,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   const llm = getLlmByModel(apiKeys, {
     modelInfo,
     logger: logger ?? new Logger(),
-    endUserId: userId,
+    endUserId: params.endUserId ?? userId,
   });
 
   if (!llm) {

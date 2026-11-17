@@ -77,6 +77,7 @@ vi.mock('@bike4mind/services/llm', async () => {
   };
 });
 
+const mockRecordSeen = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockFindCompletionRun = vi.hoisted(() => vi.fn());
 const mockConnectDB = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const dbConnection = vi.hoisted(() => ({ readyState: 1 }));
@@ -91,6 +92,7 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: {},
   cacheRepository: {},
   completionRunRepository: { findById: mockFindCompletionRun },
+  providerEndUserMappingRepository: { recordSeen: mockRecordSeen },
   User: {},
   userApiKeyRepository: { findById: vi.fn().mockResolvedValue({ id: 'key-1', name: 'cli' }) },
 }));
@@ -1488,5 +1490,60 @@ describe('POST /api/ai/v1/completions - run attribution', () => {
 
     expect(frames(text).some(f => f.type === 'settled')).toBe(false);
     expect(text).toContain('[DONE]');
+  });
+});
+
+describe('end_user_id', () => {
+  const PLATFORM_KEY = {
+    method: 'apiKey',
+    userId: 'owner-1',
+    apiKeyInfo: {
+      keyId: 'key-1',
+      userId: 'owner-1',
+      scopes: [ApiKeyScope.AI_GENERATE, ApiKeyScope.AI_END_USER_ATTRIBUTION],
+    },
+  };
+
+  it('attributes a scoped key request to the end user, namespaced under the key owner', async () => {
+    mockResolveContractAuth.mockResolvedValue(PLATFORM_KEY);
+    expect((await post({ ...COMPLETION, end_user_id: 'player-42' })).status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'owner-1', endUserId: 'owner-1:player-42' })
+    );
+    expect(mockRecordSeen).toHaveBeenCalledWith({
+      providerEndUserId: expect.stringMatching(/^[0-9a-f]{64}$/),
+      ownerUserId: 'owner-1',
+      endUserId: 'player-42',
+    });
+  });
+
+  it('refuses it with 400 from a key without the scope', async () => {
+    mockResolveContractAuth.mockResolvedValue({
+      ...PLATFORM_KEY,
+      apiKeyInfo: { ...PLATFORM_KEY.apiKeyInfo, scopes: [ApiKeyScope.AI_GENERATE] },
+    });
+    const body = await expectJsonError(await post({ ...COMPLETION, end_user_id: 'player-42' }), 400);
+    expect(body.error).toContain(ApiKeyScope.AI_END_USER_ATTRIBUTION);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockRecordSeen).not.toHaveBeenCalled();
+  });
+
+  it('refuses it with 400 from a JWT caller', async () => {
+    mockResolveContractAuth.mockResolvedValue({ method: 'jwt', userId: 'u1' });
+    await expectJsonError(await postAs({}, { ...COMPLETION, end_user_id: 'player-42' }), 400);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it.each(['', 'a'.repeat(65), 'jane@example.com', 'has space'])('refuses a malformed id %j with 400', async id => {
+    mockResolveContractAuth.mockResolvedValue(PLATFORM_KEY);
+    await expectJsonError(await post({ ...COMPLETION, end_user_id: id }), 400);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('leaves attribution to the caller when absent', async () => {
+    mockResolveContractAuth.mockResolvedValue(PLATFORM_KEY);
+    expect((await post()).status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ endUserId: undefined }));
+    expect(mockRecordSeen).not.toHaveBeenCalled();
   });
 });

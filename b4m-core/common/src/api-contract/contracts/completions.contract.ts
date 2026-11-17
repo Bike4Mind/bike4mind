@@ -42,6 +42,9 @@ export const createCompletionContract = defineEndpoint({
     "Check the model's " +
     '`supports_assistant_prefill` field from `GET /api/v1/models` before sending one. ' +
     'Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
+    'END USERS. A key that serves many end users of your own product can carry the `ai:end-user-attribution` scope ' +
+    '(granted by Bike4Mind) and send `end_user_id` with each request, so model providers attribute the request to ' +
+    'that end user rather than to the key owner.\n\n' +
     'RUNS AND SETTLEMENT. To group the spend of a multi-agent run (a root session and the workers it spawns), ' +
     'mint a run id with `POST /api/v1/completion-runs` and send it as `run` on each request. Spend is recorded ' +
     'against the run, never charged twice. The `settled` event (`{ type, requestId, creditsCharged, usdCost, runId }`) ' +
@@ -63,7 +66,7 @@ export const createCompletionContract = defineEndpoint({
     'tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a ' +
     '`400` rather than run without it.\n\n' +
     'ERRORS. Everything checked before the model provider is called fails with a JSON error body and ' +
-    'a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad ' +
+    'a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, an `end_user_id` that is malformed or comes from a caller without the `ai:end-user-attribution` scope, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad ' +
     'credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a body over 25 MB ' +
     '`413`, any other body that fails schema validation `422`, insufficient credits `422` with ' +
     '`errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: "run_not_found"`, and a catalogued model ' +

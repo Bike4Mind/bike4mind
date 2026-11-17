@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createHash } from 'crypto';
-import { toProviderEndUserId } from './endUserId';
+import { platformEndUserKey, toProviderEndUserId } from './endUserId';
 
 describe('toProviderEndUserId', () => {
   it('returns undefined for empty/absent input so the field can be omitted', () => {
@@ -37,5 +37,18 @@ describe('toProviderEndUserId', () => {
 
   it('trims surrounding whitespace before hashing so equivalent ids collapse', () => {
     expect(toProviderEndUserId('  user-123  ')).toBe(toProviderEndUserId('user-123'));
+  });
+});
+
+describe('platformEndUserKey', () => {
+  it('prefixes the end-user id with the key owner id', () => {
+    expect(platformEndUserKey('507f1f77bcf86cd799439011', 'player-42')).toBe('507f1f77bcf86cd799439011:player-42');
+  });
+
+  it('keeps the same end-user id of two owners apart, and apart from the owner itself', () => {
+    const a = toProviderEndUserId(platformEndUserKey('owner-a', 'player-42'));
+    const b = toProviderEndUserId(platformEndUserKey('owner-b', 'player-42'));
+    expect(a).not.toBe(b);
+    expect(a).not.toBe(toProviderEndUserId('owner-a'));
   });
 });

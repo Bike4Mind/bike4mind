@@ -14,6 +14,7 @@ export * from './DataLakeOwnershipOfferModel';
 export * from './DataLakeHealthSnapshotModel';
 export * from './EmbedConversationModel';
 export * from './EmbeddingCacheModel';
+export * from './ProviderEndUserMappingModel';
 export * from './LakeAccessEventModel';
 export * from './DataLakeSpendNotificationModel';
 export * from './DataLakeCorpusActionModel';

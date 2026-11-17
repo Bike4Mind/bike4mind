@@ -268,6 +268,13 @@ export const aiHolders = {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
+  ProviderEndUserMapping: {
+    kind: 'holder',
+    references: [{ path: 'ownerUserId', matchBy: 'userId', action: 'deleteDocument' }],
+    // A digest sent to model providers and a platform's own opaque id for its end user; neither is a
+    // Bike4Mind user id.
+    unrelatedPaths: ['providerEndUserId', 'endUserId'],
+  },
   RapidReplyAuditLog: {
     kind: 'holder',
     references: [

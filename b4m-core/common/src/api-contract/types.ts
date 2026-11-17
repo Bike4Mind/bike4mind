@@ -180,6 +180,12 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
   /** HTTP status used when request, path, or query validation fails. Defaults to 422. */
   validationErrorStatus?: 400 | 422;
   /**
+   * Top-level body fields whose validation failure answers 400 even when `validationErrorStatus`
+   * is 422 (e.g. `end_user_id`, refused with 400 on every route that takes it). Read by the Next
+   * adapter (apps/client/server/middlewares/defineNextRoute.ts) only.
+   */
+  badRequestFields?: readonly string[];
+  /**
    * Schema for dynamic path segments (e.g. `{id}` in `/api/sessions/{id}`).
    * Values arrive via Next.js's file-based routing convention as `req.query`
    * (Next merges route params into `query`, it does not populate `req.params`),

@@ -809,10 +809,23 @@ describe('POST /api/admin/users/:userId/generate-api-key - reason for admin-prov
     expect(mockCreateKey).not.toHaveBeenCalled();
   });
 
-  it.each(['overwatch-ingest:write', 'qa:ingest', 'rewards:grant'])('requires a reason for %s', async scope => {
-    const { req, res } = post({ name: 'svc', scopes: [scope] });
-    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/reload the page/i);
-    expect(mockCreateKey).not.toHaveBeenCalled();
+  it.each(['overwatch-ingest:write', 'qa:ingest', 'rewards:grant', 'ai:end-user-attribution'])(
+    'requires a reason for %s',
+    async scope => {
+      const { req, res } = post({ name: 'svc', scopes: [scope] });
+      await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/reload the page/i);
+      expect(mockCreateKey).not.toHaveBeenCalled();
+    }
+  );
+
+  it('mints ai:end-user-attribution alongside an AI scope on one key', async () => {
+    const scopes = ['ai:generate', 'ai:end-user-attribution'];
+    mockCreateKey.mockResolvedValue({ id: 'k1', name: 'platform', keyPrefix: 'b4m_live', scopes });
+    const { req, res } = post({ name: 'platform', scopes, reason: REASON });
+    await mockRefs.postHandler!(req, res);
+
+    expect(res.statusCode).toBe(201);
+    expect(mockCreateKey).toHaveBeenCalledWith('target-user', expect.objectContaining({ scopes }), expect.anything());
   });
 
   it('stores the reason on the audit entry', async () => {

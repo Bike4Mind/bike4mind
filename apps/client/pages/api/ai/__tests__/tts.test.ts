@@ -7,7 +7,8 @@ vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
 }));
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { CreditHolderType } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
+import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import { createMocks } from 'node-mocks-http';
 
 const { mocks, InsufficientCreditsPreflightError, TtsProviderNotConfiguredError, UnprocessableEntityError } =
@@ -31,6 +32,7 @@ const { mocks, InsufficientCreditsPreflightError, TtsProviderNotConfiguredError,
         getSignedUrl: vi.fn(),
         orgFindById: vi.fn(),
         orgFindAccessibleById: vi.fn(),
+        recordSeen: vi.fn(),
       },
     };
   });
@@ -76,6 +78,7 @@ vi.mock('@server/utils/synthesizeTts', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  providerEndUserMappingRepository: { recordSeen: (...a: unknown[]) => mocks.recordSeen(...a) },
   organizationRepository: {
     findById: (...a: unknown[]) => mocks.orgFindById(...a),
     shareable: { findAccessibleById: (...a: unknown[]) => mocks.orgFindAccessibleById(...a) },
@@ -169,6 +172,48 @@ beforeEach(() => {
   }));
   mocks.orgFindAccessibleById.mockImplementation(async (_user: unknown, id: string) => ({ id }));
   okSynthesis();
+});
+
+describe('POST /api/ai/tts - end_user_id', () => {
+  const PLATFORM_SCOPES = [ApiKeyScope.AI_GENERATE, ApiKeyScope.AI_END_USER_ATTRIBUTION];
+
+  beforeEach(() => mocks.recordSeen.mockResolvedValue(undefined));
+
+  it('records the end user of a key holding the scope, namespaced under the key owner', async () => {
+    const { res, promise } = run({ text: 'hi', end_user_id: 'player-42' }, { id: 'u1' }, { scopes: PLATFORM_SCOPES });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.recordSeen).toHaveBeenCalledWith({
+      providerEndUserId: toProviderEndUserId('u1:player-42'),
+      ownerUserId: 'u1',
+      endUserId: 'player-42',
+    });
+  });
+
+  it('refuses it with 400 from a key without the scope, before any provider cost', async () => {
+    const { promise } = run(
+      { text: 'hi', end_user_id: 'player-42' },
+      { id: 'u1' },
+      { scopes: [ApiKeyScope.AI_GENERATE] }
+    );
+    await expect(promise).rejects.toMatchObject({ statusCode: 400 });
+    expect(mocks.holdPreflightCredits).not.toHaveBeenCalled();
+    expect(mocks.synthesizeTts).not.toHaveBeenCalled();
+    expect(mocks.recordSeen).not.toHaveBeenCalled();
+  });
+
+  it('refuses it with 400 from a JWT caller', async () => {
+    const { promise } = run({ text: 'hi', end_user_id: 'player-42' });
+    await expect(promise).rejects.toMatchObject({ statusCode: 400 });
+    expect(mocks.synthesizeTts).not.toHaveBeenCalled();
+  });
+
+  it('records nothing when absent', async () => {
+    const { promise } = run({ text: 'hi' }, { id: 'u1' }, { scopes: PLATFORM_SCOPES });
+    await promise;
+    expect(mocks.synthesizeTts).toHaveBeenCalled();
+    expect(mocks.recordSeen).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/ai/tts', () => {

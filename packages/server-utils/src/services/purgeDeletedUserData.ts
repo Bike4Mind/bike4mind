@@ -3,6 +3,7 @@ import {
   authEventRepository,
   userLimitEventRepository,
   embedConversationRepository,
+  providerEndUserMappingRepository,
   hideDeletedAuthorAnnotations,
   integrationRequestRepository,
   abuseEvalSetRepository,
@@ -72,6 +73,12 @@ export async function purgeDeletedUserData(
     await embedConversationRepository.deleteAllForUser(userId);
   } catch (err) {
     logger.error(`Failed to purge embed conversations for deleted user ${userId}: ${String(err)}`);
+  }
+
+  try {
+    await providerEndUserMappingRepository.deleteAllForOwner(userId);
+  } catch (err) {
+    logger.error(`Failed to purge provider end-user mappings for deleted user ${userId}: ${String(err)}`);
   }
 
   try {
