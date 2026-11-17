@@ -42,16 +42,20 @@ const Row = styled('li')({
 
 const RowList = styled('ul')({ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: '8px' });
 
-const RowTitle = styled(Link)({
+// Styles the router Link through a wrapper: styled(Link) drops Link's typed `params`.
+const RowTitle = styled('div')({
   flex: '1 1 240px',
   minWidth: 0,
-  fontWeight: 600,
-  color: studioColor('text-strong'),
-  textDecoration: 'none',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-  '&:hover': { textDecoration: 'underline' },
+  display: 'flex',
+  '& > a': {
+    fontWeight: 600,
+    color: studioColor('text-strong'),
+    textDecoration: 'none',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    '&:hover': { textDecoration: 'underline' },
+  },
 });
 
 const updatedFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
@@ -196,12 +200,14 @@ const ProductionRow = ({ composition }: { composition: StudioCompositionSummaryR
           </Button>
         </form>
       ) : (
-        <RowTitle
-          to="/studio/productions/$compositionId"
-          params={{ compositionId: composition.id }}
-          data-testid={`${testId}-open-link`}
-        >
-          {composition.title}
+        <RowTitle>
+          <Link
+            to="/studio/productions/$compositionId"
+            params={{ compositionId: composition.id }}
+            data-testid={`${testId}-open-link`}
+          >
+            {composition.title}
+          </Link>
         </RowTitle>
       )}
       <Typography level="body-xs">{TEMPLATE_LABELS[composition.template].split(' (')[0]}</Typography>

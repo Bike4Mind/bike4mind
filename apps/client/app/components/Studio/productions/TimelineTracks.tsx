@@ -9,7 +9,7 @@ import {
   type StudioTimelineTrackKind,
 } from '@bike4mind/common';
 import { STUDIO_MICRO_LABEL, studioColor, studioRadius } from '../design/studioTokens';
-import { moveClip, removeClip, trimClipEnd, trimClipStart } from './timelineEdits';
+import { findClip, moveClip, removeClip, trimClipEnd, trimClipStart } from './timelineEdits';
 import { formatTimecode } from './timelinePlayback';
 import type { TimelineFile } from './useTimelineFiles';
 
@@ -150,13 +150,18 @@ type TimelineTracksProps = {
 };
 
 /** One row per track (an empty row for a kind with no track yet), grouped in the spec's kind order. */
-const laneRows = (timeline: StudioTimeline) =>
-  STUDIO_TIMELINE_TRACK_KINDS.flatMap(kind => {
+type LaneSpec = { kind: StudioTimelineTrackKind; track: StudioTimelineTrack | null; isFirstOfKind: boolean };
+
+const laneRows = (timeline: StudioTimeline): LaneSpec[] =>
+  STUDIO_TIMELINE_TRACK_KINDS.flatMap((kind): LaneSpec[] => {
     const tracks = timeline.tracks.filter(track => track.kind === kind);
     return tracks.length > 0
       ? tracks.map((track, index) => ({ kind, track, isFirstOfKind: index === 0 }))
       : [{ kind, track: null, isFirstOfKind: true }];
   });
+
+// Widens a track's clip array off the per-kind union so array methods type-check.
+const clipsOf = (track: StudioTimelineTrack): readonly StudioTimelineClip[] => track.clips;
 
 const rulerStepMs = (durationMs: number) =>
   RULER_STEP_CANDIDATES_MS.find(step => durationMs / step <= MAX_RULER_MARKS) ?? 60_000;
@@ -213,7 +218,7 @@ const TimelineTracks = ({
     const drag = dragRef.current;
     if (!drag) return;
     const deltaMs = ((event.clientX - drag.originX) / drag.laneWidth) * durationMs;
-    const clip = drag.origin.tracks.flatMap(track => track.clips).find(candidate => candidate.id === drag.clipId);
+    const clip = findClip(drag.origin, drag.clipId)?.clip;
     if (!clip) return;
     if (drag.mode === 'move') onChange(moveClip(drag.origin, drag.clipId, clip.startMs + deltaMs));
     if (drag.mode === 'trim-start') onChange(trimClipStart(drag.origin, drag.clipId, clip.startMs + deltaMs));
@@ -312,7 +317,7 @@ const TimelineTracks = ({
             )}
           </LaneHead>
           <Lane data-lane={kind} data-testid={`production-lane-${kind}`} onPointerDown={() => onSelect(null)}>
-            {track?.clips.map(clip => renderClip(track, clip))}
+            {track && clipsOf(track).map(clip => renderClip(track, clip))}
             <Playhead style={{ left: percent(timeMs, durationMs) }} />
           </Lane>
         </LaneRow>

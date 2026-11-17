@@ -31,14 +31,14 @@ const ClipInspector = ({ timeline, clipId, files, onChange, onDeselect }: ClipIn
       </StudioPanel>
     );
   }
-  const { track, clip } = located;
+  const { clip } = located;
   const patch = (fields: StudioClipPatch) => onChange(updateClip(timeline, clip.id, fields));
 
   return (
     <StudioPanel testId="production-inspector">
       <Stack spacing={1.5}>
         <StudioSectionLabel>
-          {track.kind === 'captions' ? 'Caption' : (files.get(clip.fileId)?.fileName ?? 'Clip')}
+          {'fileId' in clip ? (files.get(clip.fileId)?.fileName ?? 'Clip') : 'Caption'}
         </StudioSectionLabel>
         <Stack direction="row" spacing={1}>
           <SecondsField
@@ -72,7 +72,7 @@ const ClipInspector = ({ timeline, clipId, files, onChange, onDeselect }: ClipIn
                 step={0.05}
                 value={clip.volume}
                 onChange={(_, value) => typeof value === 'number' && patch({ volume: value })}
-                slotProps={{ input: { 'data-testid': 'production-inspector-volume-slider' } as object }}
+                slotProps={{ input: { 'data-testid': 'production-inspector-volume-slider' } }}
               />
             </FormControl>
             <Stack direction="row" spacing={1}>

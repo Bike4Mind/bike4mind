@@ -223,7 +223,7 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
               value={clock.timeMs}
               onChange={(_, value) => typeof value === 'number' && clock.seek(value)}
               sx={{ flex: 1, minWidth: '160px' }}
-              slotProps={{ input: { 'data-testid': 'production-seek-slider' } as object }}
+              slotProps={{ input: { 'data-testid': 'production-seek-slider' } }}
             />
             <StudioSegmentedControl
               aria-label="Preview size"
