@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { Context } from 'aws-lambda';
 
 // Mock the external dependencies before importing the handler.
 const mockConnectDB = vi.fn();
@@ -59,6 +60,7 @@ const mockOpenAIFetch = vi.fn();
 
 vi.mock('@bike4mind/services', () => ({
   spendReconciliationService: {
+    DEFAULT_SPEND_DEADLINE_MS: 240_000,
     fetchAnthropicSpend: (...args: unknown[]) => mockAnthropicFetch(...args),
     fetchOpenAISpend: (...args: unknown[]) => mockOpenAIFetch(...args),
   },
@@ -83,11 +85,20 @@ describe('spendReconciliation cron', () => {
     vi.unstubAllEnvs();
   });
 
-  const lambdaContext = {
+  const lambdaContext: Context = {
     awsRequestId: 'req-1',
     functionName: 'spendReconciliation',
     functionVersion: '1',
-  } as any;
+    callbackWaitsForEmptyEventLoop: false,
+    invokedFunctionArn: 'test-function',
+    memoryLimitInMB: '128',
+    logGroupName: 'test-group',
+    logStreamName: 'test-stream',
+    getRemainingTimeInMillis: () => 270_000,
+    done: () => {},
+    fail: () => {},
+    succeed: () => {},
+  };
 
   async function runHandler() {
     // Dynamic import so mocks are in place.
@@ -105,6 +116,113 @@ describe('spendReconciliation cron', () => {
     expect(mockAnthropicFetch).toHaveBeenCalledTimes(2);
     expect(mockOpenAIFetch).toHaveBeenCalledTimes(2);
     expect(mockAppend).toHaveBeenCalledTimes(4);
+  });
+
+  it('shares one provider deadline across its months and carries unused time forward', async () => {
+    mockAnthropicFetch.mockImplementation(async () => {
+      vi.setSystemTime(Date.now() + 10_000);
+      return { providerUsd: 100, breakdown: {} };
+    });
+    mockOpenAIFetch.mockResolvedValue({ providerUsd: 100, breakdown: {} });
+
+    await runHandler();
+
+    expect(mockAnthropicFetch).toHaveBeenCalledTimes(2);
+    expect(mockOpenAIFetch).toHaveBeenCalledTimes(2);
+    for (const call of mockAnthropicFetch.mock.calls) {
+      expect(call[2]).toBeUndefined();
+      expect(call[3]).toEqual({ deadlineMs: FIXED_NOW.getTime() + 120_000, onDiagnostic: expect.any(Function) });
+    }
+    for (const call of mockOpenAIFetch.mock.calls) {
+      expect(call[2]).toBeUndefined();
+      expect(call[3]).toEqual({ deadlineMs: FIXED_NOW.getTime() + 240_000, onDiagnostic: expect.any(Function) });
+    }
+    // The fast first group used only 20 seconds; the next one gets the remaining 220.
+    expect(Date.now()).toBe(FIXED_NOW.getTime() + 20_000);
+  });
+
+  it('reaches healthy OpenAI after Anthropic consumes its entire provider slice', async () => {
+    mockAnthropicFetch.mockImplementation(
+      async (_key: string, _month: string, _fetch: unknown, options: { deadlineMs: number }) => {
+        vi.setSystemTime(options.deadlineMs);
+        throw new Error('Provider request deadline exceeded');
+      }
+    );
+    mockOpenAIFetch.mockResolvedValue({ providerUsd: 210, breakdown: {} });
+
+    const result = await runHandler();
+
+    expect(mockAnthropicFetch).toHaveBeenCalledTimes(1);
+    expect(mockOpenAIFetch).toHaveBeenCalledTimes(2);
+    expect(mockAnthropicFetch.mock.calls[0][3].deadlineMs).toBe(FIXED_NOW.getTime() + 120_000);
+    expect(mockOpenAIFetch.mock.calls.every(call => call[3].deadlineMs === FIXED_NOW.getTime() + 240_000)).toBe(true);
+    expect(JSON.parse(result.body)).toMatchObject({ reconciled: 2, failed: 2 });
+    expect(mockAppend).toHaveBeenCalledTimes(2);
+    expect(mockAppend.mock.calls.every(call => call[0].provider === 'openai' && call[0].providerUsd === 210)).toBe(
+      true
+    );
+    expect(mockCloudWatchSend).toHaveBeenCalled();
+  });
+
+  it('gives a single configured provider all the remaining global budget', async () => {
+    const { Config } = await import('@bike4mind/server-utils/utils/config');
+    const config = Config as Record<string, unknown>;
+    const originalKey = config.ANTHROPIC_ADMIN_API_KEY;
+    config.ANTHROPIC_ADMIN_API_KEY = 'not-configured';
+    mockOpenAIFetch.mockResolvedValue({ providerUsd: 100, breakdown: {} });
+    try {
+      const result = await runHandler();
+      expect(JSON.parse(result.body)).toMatchObject({ reconciled: 2, failed: 0, skipped: 1 });
+      expect(mockAnthropicFetch).not.toHaveBeenCalled();
+      expect(mockOpenAIFetch).toHaveBeenCalledTimes(2);
+      for (const call of mockOpenAIFetch.mock.calls) {
+        expect(call[3].deadlineMs).toBe(FIXED_NOW.getTime() + 240_000);
+      }
+    } finally {
+      config.ANTHROPIC_ADMIN_API_KEY = originalKey;
+    }
+  });
+
+  it('stops admitting provider requests after the shared budget is exhausted', async () => {
+    mockAnthropicFetch.mockImplementationOnce(async () => {
+      vi.setSystemTime(FIXED_NOW.getTime() + 240_000);
+      throw new Error('Provider request deadline exceeded');
+    });
+
+    const result = await runHandler();
+
+    expect(JSON.parse(result.body)).toMatchObject({ reconciled: 0, failed: 4 });
+    expect(mockAnthropicFetch).toHaveBeenCalledTimes(1);
+    expect(mockOpenAIFetch).not.toHaveBeenCalled();
+    expect(mockAppend).not.toHaveBeenCalled();
+    expect(mockCloudWatchSend).toHaveBeenCalled();
+  });
+
+  it('reserves metrics headroom when the hosted invocation has less time remaining', async () => {
+    mockAnthropicFetch.mockResolvedValue(null);
+    mockOpenAIFetch.mockResolvedValue(null);
+    const { handler } = await import('./spendReconciliation');
+
+    await handler(undefined, { ...lambdaContext, getRemainingTimeInMillis: () => 45_000 });
+
+    expect(mockAnthropicFetch.mock.calls[0][3].deadlineMs).toBe(FIXED_NOW.getTime() + 7_500);
+    expect(mockAnthropicFetch.mock.calls[1][3].deadlineMs).toBe(FIXED_NOW.getTime() + 7_500);
+    expect(mockOpenAIFetch.mock.calls[0][3].deadlineMs).toBe(FIXED_NOW.getTime() + 15_000);
+  });
+
+  it('includes database connection time in the hosted provider budget', async () => {
+    mockConnectDB.mockImplementationOnce(async () => {
+      vi.setSystemTime(FIXED_NOW.getTime() + 20_000);
+    });
+    const { handler } = await import('./spendReconciliation');
+
+    const result = await handler(undefined, { ...lambdaContext, getRemainingTimeInMillis: () => 45_000 });
+
+    expect(JSON.parse(result.body)).toMatchObject({ reconciled: 0, failed: 4 });
+    expect(mockAnthropicFetch).not.toHaveBeenCalled();
+    expect(mockOpenAIFetch).not.toHaveBeenCalled();
+    expect(mockAppend).not.toHaveBeenCalled();
+    expect(mockCloudWatchSend).toHaveBeenCalled();
   });
 
   it('computes delta and deltaPct using max(provider, internal) as denominator', async () => {
@@ -171,7 +289,7 @@ describe('spendReconciliation cron', () => {
   });
 
   describe('with the admin key secret store', () => {
-    const errorLogger = { log: vi.fn(), error: vi.fn() };
+    const errorLogger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const storedKeys: Record<string, string | Error> = {};
 
     beforeEach(() => {
@@ -192,8 +310,18 @@ describe('spendReconciliation cron', () => {
 
       await runHandler();
 
-      expect(mockAnthropicFetch).toHaveBeenCalledWith('stored-anthropic-key', expect.any(String));
-      expect(mockOpenAIFetch).toHaveBeenCalledWith('stored-openai-key', expect.any(String));
+      expect(mockAnthropicFetch).toHaveBeenCalledWith(
+        'stored-anthropic-key',
+        expect.any(String),
+        undefined,
+        expect.objectContaining({ deadlineMs: FIXED_NOW.getTime() + 120_000 })
+      );
+      expect(mockOpenAIFetch).toHaveBeenCalledWith(
+        'stored-openai-key',
+        expect.any(String),
+        undefined,
+        expect.objectContaining({ deadlineMs: FIXED_NOW.getTime() + 240_000 })
+      );
     });
 
     it('skips a provider whose secret has no value yet', async () => {
