@@ -16,6 +16,7 @@ const querySchema = z.object({
 });
 
 const handler = adminApi({
+  auth: 'jwtOnly',
   requiredScopes: [ApiKeyScope.ADMIN],
   adminPermissions: { GET: MODERATION_PAGE_READ },
 }).get(async (req: Request, res) => {

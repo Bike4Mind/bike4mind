@@ -51,6 +51,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getSharedTokenizer: () => ({}),
   publishTelemetryAlertCallback: vi.fn(),
+  publishModerationEscalation: vi.fn(),
 }));
 
 vi.mock('@bike4mind/services/llm', async () => {
