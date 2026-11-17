@@ -57,7 +57,10 @@ public struct MediaExporter: Sendable {
     }
   }
 
+  /// Clears earlier exports first: the share sheet or Photos may still be reading a file after it is handed over,
+  /// so the previous copy is only safe to drop once the next export starts.
   private func place(_ downloaded: URL, as name: String) throws -> URL {
+    try? FileManager.default.removeItem(at: directory)
     let folder = directory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     let target = folder.appending(path: name)

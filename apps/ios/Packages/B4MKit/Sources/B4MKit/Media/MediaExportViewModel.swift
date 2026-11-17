@@ -56,8 +56,6 @@ public final class MediaExportViewModel {
   /// Clears a finished, failed or consumed state so the same action can run again.
   public func reset() { state = .idle }
 
-  public func completeFiles() { state = .finished("Saved to Files.") }
-
   static func message(for error: any Error) -> String {
     switch error {
     case MediaExportError.notAvailable: "This file is still being processed. Try again in a moment."

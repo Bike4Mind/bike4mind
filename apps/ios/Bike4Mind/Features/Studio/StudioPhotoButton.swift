@@ -44,13 +44,20 @@ struct StudioPhotoButton: View {
     .onChange(of: pickedPhoto) { _, picked in
       guard let picked else { return }
       pickedPhoto = nil
-      Task { await upload { try await Self.jpeg(from: picked) } }
+      Task {
+        await upload {
+          guard let data = try await picked.loadTransferable(type: Data.self) else {
+            throw CocoaError(.fileReadCorruptFile)
+          }
+          return try Self.jpeg(from: data)
+        }
+      }
     }
     .fullScreenCover(isPresented: $isTakingPhoto) {
       CameraPicker { url in
         isTakingPhoto = false
         guard let url else { return }
-        Task { await upload { try Data(contentsOf: url) } }
+        Task { await upload { try Self.jpeg(from: Data(contentsOf: url)) } }
       }
       .ignoresSafeArea()
     }
@@ -111,11 +118,9 @@ struct StudioPhotoButton: View {
     }
   }
 
-  /// Decodes whatever the picker hands back (HEIC included) and re-encodes a JPEG bounded to what the models take.
-  private static func jpeg(from item: PhotosPickerItem, maxDimension: CGFloat = 2048) async throws -> Data {
-    guard let data = try await item.loadTransferable(type: Data.self), let image = UIImage(data: data) else {
-      throw CocoaError(.fileReadCorruptFile)
-    }
+  /// Decodes a library pick (HEIC included) or a camera capture and re-encodes a JPEG bounded to what the models take.
+  private static func jpeg(from data: Data, maxDimension: CGFloat = 2048) throws -> Data {
+    guard let image = UIImage(data: data) else { throw CocoaError(.fileReadCorruptFile) }
     let longest = max(image.size.width, image.size.height)
     let scale = min(1, maxDimension / longest)
     let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)

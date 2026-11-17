@@ -34,6 +34,13 @@ final class MediaExportTests: XCTestCase {
     XCTAssertEqual(try Data(contentsOf: file), Data([1, 2, 3]))
   }
 
+  func testANewExportDropsThePreviousCopy() async throws {
+    let first = try await exporter().export(item())
+    let second = try await exporter().export(item())
+    XCTAssertFalse(FileManager.default.fileExists(atPath: first.path))
+    XCTAssertTrue(FileManager.default.fileExists(atPath: second.path))
+  }
+
   func testMissingExtensionComesFromTheMIMEType() {
     XCTAssertEqual(MediaExporter.fileName(for: item(name: "clip", mime: "video/quicktime")), "clip.mov")
     XCTAssertEqual(MediaExporter.fileName(for: item(name: "a/b", mime: "audio/wav")), "a-b.wav")
