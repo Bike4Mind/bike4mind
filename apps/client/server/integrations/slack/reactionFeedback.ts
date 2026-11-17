@@ -10,7 +10,14 @@ import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { fetchPinned } from '@bike4mind/server-utils/utils/ssrfProtection';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { z } from 'zod';
-import { feedbackDestinations, feedbackId, reactionSchema, signFeedback } from './feedbackProtocol';
+import {
+  feedbackDestinations,
+  feedbackId,
+  isFeedbackChannelEligible,
+  reactionSchema,
+  signFeedback,
+} from './feedbackProtocol';
+import { Logger } from '@bike4mind/observability';
 
 export function getFeedbackDestinations() {
   return feedbackDestinations(Config.SLACK_FEEDBACK_DESTINATIONS);
@@ -46,7 +53,7 @@ export async function forwardSlackReaction(teamId: string, appId: string, input:
   );
   const token = decryptToken(workspace.slackBotToken);
   if (!destination || !token) return;
-  const id = feedbackId(teamId, event.item.channel, event.item.ts);
+  const id = feedbackId(workspace.id, teamId, event.item.channel, event.item.ts);
   try {
     await SlackFeedbackDelivery.create({
       _id: id,
@@ -82,20 +89,10 @@ export async function forwardSlackReaction(teamId: string, appId: string, input:
       },
     });
   };
+  let accepted = false;
   try {
-    const orgLimit = await cacheRepository.tryIncrementWithinLimitFixedWindow(
-      `slack-feedback:org:${workspace.organizationId}`,
-      100,
-      3600000
-    );
-    const channelLimit = await cacheRepository.tryIncrementWithinLimitFixedWindow(
-      `slack-feedback:channel:${teamId}:${channel.channelId}`,
-      10,
-      3600000
-    );
-    if (!orgLimit.success || !channelLimit.success) return await finish('limited');
     const info = await client.conversations.info({ channel: channel.channelId });
-    if (!info.channel?.is_member || info.channel.is_im || info.channel.is_mpim || info.channel.is_ext_shared) {
+    if (!isFeedbackChannelEligible(info.channel)) {
       return await finish('ignored');
     }
     // reactions.get fetches the selected message, including replies, without reading channel history.
@@ -114,7 +111,14 @@ export async function forwardSlackReaction(teamId: string, appId: string, input:
     }
     const author = await client.users.info({ user: message.user });
     const reactor = await client.users.info({ user: event.user });
-    if (author.user?.is_bot || author.user?.deleted || reactor.user?.is_bot || reactor.user?.deleted || !reactor.user) {
+    if (
+      !author.user ||
+      author.user.is_bot ||
+      author.user.deleted ||
+      reactor.user?.is_bot ||
+      reactor.user?.deleted ||
+      !reactor.user
+    ) {
       return await finish('ignored');
     }
     const permalink = await client.chat.getPermalink({ channel: channel.channelId, message_ts: event.item.ts });
@@ -136,14 +140,32 @@ export async function forwardSlackReaction(teamId: string, appId: string, input:
     const currentWorkspace = await orgSlackWorkspaceRepository.findBySlackTeamIdWithToken(teamId);
     const currentChannel = await SlackFeedbackChannel.findOne({
       _id: feedbackId(workspace.id, channel.channelId),
+      workspaceId: workspace.id,
+      slackTeamId: teamId,
       organizationId: workspace.organizationId,
       enabled: true,
       destinationId: destination.id,
       emoji: event.reaction,
     }).lean();
-    if (!currentWorkspace || currentWorkspace.id !== workspace.id || !currentChannel) {
+    if (
+      !currentWorkspace ||
+      currentWorkspace.id !== workspace.id ||
+      currentWorkspace.organizationId !== workspace.organizationId ||
+      !currentChannel
+    ) {
       return await finish('ignored');
     }
+    const orgLimit = await cacheRepository.tryIncrementWithinLimitFixedWindow(
+      `slack-feedback:org:${workspace.organizationId}`,
+      100,
+      3600000
+    );
+    const channelLimit = await cacheRepository.tryIncrementWithinLimitFixedWindow(
+      `slack-feedback:channel:${teamId}:${channel.channelId}`,
+      10,
+      3600000
+    );
+    if (!orgLimit.success || !channelLimit.success) return await finish('limited');
     // Audit intent durably before the non-transactional external side effect. Claims are never retried.
     await SlackFeedbackDelivery.updateOne({ _id: id }, { $set: { state: 'sending' } });
     const timestamp = String(Math.floor(Date.now() / 1000));
@@ -163,13 +185,20 @@ export async function forwardSlackReaction(teamId: string, appId: string, input:
       },
       { discardBody: true }
     );
-    await response.body?.cancel();
+    accepted = response.ok;
+    await response.body?.cancel().catch(() => undefined);
     if (!response.ok) return await finish('failed');
     await finish('sent');
     await client.reactions
       .add({ channel: channel.channelId, timestamp: event.item.ts, name: 'eyes' })
       .catch(() => undefined);
-  } catch {
-    await finish('failed');
+  } catch (error) {
+    // SDK/network errors can embed tokens or destination URLs, so log only safe classifications.
+    Logger.error('Slack feedback forwarding failed', {
+      deliveryId: id,
+      accepted,
+      errorType: error instanceof Error ? error.name : 'UnknownError',
+    });
+    if (!accepted) await finish('failed');
   }
 }

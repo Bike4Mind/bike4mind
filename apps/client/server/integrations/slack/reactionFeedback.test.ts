@@ -12,11 +12,12 @@ const mocks = vi.hoisted(() => ({
   reaction: vi.fn(),
   fetch: vi.fn(),
   info: vi.fn(),
+  findChannel: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({ cacheRepository: { tryIncrementWithinLimitFixedWindow: mocks.limit } }));
 vi.mock('@bike4mind/database/infra', () => ({
   orgSlackWorkspaceRepository: { findBySlackTeamIdWithToken: mocks.workspace },
-  SlackFeedbackChannel: { findOne: () => ({ lean: mocks.channel }) },
+  SlackFeedbackChannel: { findOne: mocks.findChannel },
   SlackFeedbackDelivery: { create: mocks.create, updateOne: mocks.update },
   slackAuditLogRepository: { createLog: mocks.audit },
 }));
@@ -31,6 +32,12 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
         url: 'https://receiver.example/inbound',
         secret: 'synthetic-test-signing-key-not-real-12345',
       },
+      {
+        id: 'foreign',
+        organizationId: 'org2',
+        url: 'https://foreign.example',
+        secret: 'synthetic-foreign-signing-key-not-real-12345',
+      },
     ]),
   },
 }));
@@ -43,7 +50,7 @@ vi.mock('@slack/web-api', () => ({
   },
 }));
 import { forwardSlackReaction } from './reactionFeedback';
-import { signFeedback } from './feedbackProtocol';
+import { feedbackId, signFeedback } from './feedbackProtocol';
 const event = {
   type: 'reaction_added',
   reaction: 'bug',
@@ -52,6 +59,7 @@ const event = {
 };
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.findChannel.mockImplementation(() => ({ lean: mocks.channel }));
   mocks.workspace.mockResolvedValue({
     id: 'ws1',
     organizationId: 'org1',
@@ -73,7 +81,7 @@ beforeEach(() => {
   });
   mocks.user.mockResolvedValue({ user: { is_bot: false, profile: { email: 'reporter@example.com' } } });
   mocks.permalink.mockResolvedValue({ permalink: 'https://workspace.slack.com/archives/C123/p123456' });
-  mocks.fetch.mockResolvedValue({ ok: true, body: { cancel: vi.fn() } });
+  mocks.fetch.mockResolvedValue({ ok: true, body: { cancel: vi.fn().mockResolvedValue(undefined) } });
   mocks.reaction.mockResolvedValue({ ok: true });
 });
 it('forwards one signed untrusted report without attachment contents and durably audits before sending', async () => {
@@ -98,6 +106,28 @@ it('forwards one signed untrusted report without attachment contents and durably
   expect(mocks.create.mock.invocationCallOrder[0]).toBeLessThan(mocks.fetch.mock.invocationCallOrder[0]);
   expect(mocks.audit).toHaveBeenCalledWith(expect.objectContaining({ success: true, action: 'feedback_forward' }));
   expect(mocks.reaction).toHaveBeenCalledWith({ channel: 'C123', timestamp: '123.456', name: 'eyes' });
+  expect(mocks.findChannel).toHaveBeenNthCalledWith(1, {
+    _id: feedbackId('ws1', 'C123'),
+    workspaceId: 'ws1',
+    organizationId: 'org1',
+    slackTeamId: 'T1',
+    enabled: true,
+    emoji: 'bug',
+  });
+  expect(mocks.findChannel).toHaveBeenNthCalledWith(2, {
+    _id: feedbackId('ws1', 'C123'),
+    workspaceId: 'ws1',
+    organizationId: 'org1',
+    slackTeamId: 'T1',
+    enabled: true,
+    emoji: 'bug',
+    destinationId: 'receiver',
+  });
+  expect(mocks.limit).toHaveBeenNthCalledWith(1, 'slack-feedback:org:org1', 100, 3600000);
+  expect(mocks.limit).toHaveBeenNthCalledWith(2, 'slack-feedback:channel:T1:C123', 10, 3600000);
+  expect(mocks.create).toHaveBeenCalledWith(
+    expect.objectContaining({ _id: feedbackId('ws1', 'T1', 'C123', '123.456') })
+  );
 });
 it('does no message lookup without opt-in or for a foreign app or DM', async () => {
   mocks.channel.mockResolvedValue(null);
@@ -122,7 +152,7 @@ it('deduplicates before fetching Slack or consuming quota', async () => {
 it.each([0, 1])('fails closed for rate limit %i', async limited => {
   mocks.limit.mockResolvedValueOnce({ success: limited !== 0 }).mockResolvedValueOnce({ success: limited !== 1 });
   await forwardSlackReaction('T1', 'A1', event);
-  expect(mocks.get).not.toHaveBeenCalled();
+  expect(mocks.fetch).not.toHaveBeenCalled();
   expect(mocks.update).toHaveBeenCalledWith(expect.anything(), { $set: { state: 'limited' } });
 });
 it.each([{ bot_id: 'B1' }, { subtype: 'bot_message' }, { metadata: { event_type: 'b4m_api_post' } }, { user: 'UBOT' }])(
@@ -132,6 +162,7 @@ it.each([{ bot_id: 'B1' }, { subtype: 'bot_message' }, { metadata: { event_type:
     await forwardSlackReaction('T1', 'A1', event);
     expect(mocks.fetch).not.toHaveBeenCalled();
     expect(mocks.update).toHaveBeenCalledWith(expect.anything(), { $set: { state: 'ignored' } });
+    expect(mocks.limit).not.toHaveBeenCalled();
   }
 );
 it('never adds eyes on rejected or ambiguous delivery', async () => {
@@ -146,9 +177,38 @@ it('rechecks opt-in after message lookups before disclosing reporter content', a
   expect(mocks.get).toHaveBeenCalledOnce();
   expect(mocks.fetch).not.toHaveBeenCalled();
 });
-it('refuses a channel that became externally shared', async () => {
-  mocks.info.mockResolvedValue({ channel: { is_member: true, is_ext_shared: true } });
+it.each(['is_shared', 'is_org_shared', 'is_ext_shared', 'is_pending_ext_shared'])(
+  'refuses a channel with %s',
+  async flag => {
+    mocks.info.mockResolvedValue({ channel: { is_member: true, [flag]: true } });
+    await forwardSlackReaction('T1', 'A1', event);
+    expect(mocks.get).not.toHaveBeenCalled();
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  }
+);
+it.each([
+  ['author', 'is_bot'],
+  ['author', 'deleted'],
+  ['reactor', 'is_bot'],
+  ['reactor', 'deleted'],
+])('ignores %s with %s without spending quota', async (actor, flag) => {
+  mocks.user
+    .mockResolvedValueOnce({ user: { [flag]: actor === 'author' } })
+    .mockResolvedValueOnce({ user: { [flag]: actor === 'reactor' } });
   await forwardSlackReaction('T1', 'A1', event);
-  expect(mocks.get).not.toHaveBeenCalled();
+  expect(mocks.limit).not.toHaveBeenCalled();
   expect(mocks.fetch).not.toHaveBeenCalled();
+  expect(mocks.update).toHaveBeenCalledWith(expect.anything(), { $set: { state: 'ignored' } });
+});
+it('refuses a destination from another organization', async () => {
+  mocks.channel.mockResolvedValue({ channelId: 'C123', destinationId: 'foreign' });
+  await forwardSlackReaction('T1', 'A1', event);
+  expect(mocks.create).not.toHaveBeenCalled();
+  expect(mocks.fetch).not.toHaveBeenCalled();
+});
+it('does not overwrite accepted delivery state when audit persistence fails', async () => {
+  mocks.audit.mockRejectedValue(new Error('audit unavailable'));
+  await forwardSlackReaction('T1', 'A1', event);
+  expect(mocks.update).toHaveBeenCalledWith(expect.anything(), { $set: { state: 'sent' } });
+  expect(mocks.update).not.toHaveBeenCalledWith(expect.anything(), { $set: { state: 'failed' } });
 });

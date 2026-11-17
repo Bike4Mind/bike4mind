@@ -45,7 +45,7 @@ at most once to the original message's thread, only while the opt-in is still en
 
 ## Delivery and audit semantics
 
-Permanent unique claims deduplicate by workspace team, channel, and message timestamp.
+Permanent unique claims deduplicate by workspace connection, team, channel, and message timestamp.
 Limits are 10 attempts/channel/hour and 100 attempts/organization/hour, using atomic
 database counters. Limited and ambiguous/failed deliveries are not retried: this is
 deliberately at-most-once, not guaranteed delivery. The existing event handler awaits
@@ -55,6 +55,9 @@ The message content is not stored in delivery audit records. Operational Slack a
 logs retain their existing retention policy. The bot adds `eyes` after acceptance;
 failure to add that indicator does not resend the webhook. Callback status claims
 similarly prevent reposting after an ambiguous Slack timeout.
+Callback HTTP 502 is final: the status was attempted and must not be retried.
+A later duplicate returns `posted: false`, meaning already attempted, not proof
+that Slack displayed the status. A 409 before forward confirmation may be retried.
 
 Factory API posts carry `b4m_api_post` metadata and are ignored, as are bot messages,
 message subtypes and bot/deleted reactors. The receiving product is not implemented here.

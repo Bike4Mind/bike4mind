@@ -510,6 +510,14 @@ export const infraHolders = {
     secretPaths: ['downloadUrl'],
     unrelatedPaths: ['includeUserNames'],
   },
+  SlackFeedbackChannel: {
+    kind: 'holder',
+    references: [{ path: 'configuredBy', matchBy: 'userId', action: 'anonymize' }],
+  },
+  SlackFeedbackDelivery: {
+    kind: 'noUserData',
+    note: 'Organization delivery dedupe and audit. Reactor is an external Slack id, not a platform account id; no platform user mapping, message text or email is stored.',
+  },
   // `ownerUserId` is anonymized like an organization owner, so members keep the Space.
   Space: {
     kind: 'holder',

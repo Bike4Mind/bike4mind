@@ -8,7 +8,13 @@ import {
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getFeedbackDestinations } from '@server/integrations/slack/reactionFeedback';
-import { feedbackId, statusLabels, statusSchema, verifyFeedback } from '@server/integrations/slack/feedbackProtocol';
+import {
+  feedbackId,
+  isFeedbackChannelEligible,
+  statusLabels,
+  statusSchema,
+  verifyFeedback,
+} from '@server/integrations/slack/feedbackProtocol';
 
 const handler = baseApi({ auth: false }).post(async (req, res) => {
   const chunks: Buffer[] = [];
@@ -47,6 +53,8 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
   const workspace = await orgSlackWorkspaceRepository.findBySlackTeamIdWithToken(delivery.slackTeamId);
   const channel = await SlackFeedbackChannel.findOne({
     _id: feedbackId(delivery.workspaceId, delivery.channelId),
+    workspaceId: delivery.workspaceId,
+    slackTeamId: delivery.slackTeamId,
     organizationId: delivery.organizationId,
     enabled: true,
     destinationId: delivery.destinationId,
@@ -61,6 +69,11 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
   }
   const token = decryptToken(workspace.slackBotToken);
   if (!token) return res.status(409).json({ error: 'Integration is disabled' });
+  const client = new WebClient(token, { retryConfig: { retries: 0 }, timeout: 2000 });
+  const info = await client.conversations.info({ channel: delivery.channelId });
+  if (!isFeedbackChannelEligible(info.channel)) {
+    return res.status(409).json({ error: 'Channel is not eligible' });
+  }
   // Claim before posting: a replay or ambiguous Slack timeout must never post a second reply.
   const claim = await SlackFeedbackDelivery.updateOne(
     {
@@ -82,7 +95,6 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     metadata: { status, phase: 'claimed' },
   });
   try {
-    const client = new WebClient(token, { retryConfig: { retries: 0 }, timeout: 2000 });
     await client.chat.postMessage({
       channel: delivery.channelId,
       thread_ts: delivery.messageTs,

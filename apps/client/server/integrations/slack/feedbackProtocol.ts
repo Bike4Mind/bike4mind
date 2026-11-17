@@ -1,5 +1,30 @@
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { z } from 'zod';
+import { Logger } from '@bike4mind/observability';
+
+export function isFeedbackChannelEligible(
+  channel:
+    | {
+        is_member?: boolean;
+        is_im?: boolean;
+        is_mpim?: boolean;
+        is_shared?: boolean;
+        is_org_shared?: boolean;
+        is_ext_shared?: boolean;
+        is_pending_ext_shared?: boolean;
+      }
+    | undefined
+): boolean {
+  return (
+    !!channel?.is_member &&
+    !channel.is_im &&
+    !channel.is_mpim &&
+    !channel.is_shared &&
+    !channel.is_org_shared &&
+    !channel.is_ext_shared &&
+    !channel.is_pending_ext_shared
+  );
+}
 
 const destinationSchema = z
   .array(
@@ -19,9 +44,13 @@ export function feedbackDestinations(raw: string | undefined) {
   if (!raw || raw === 'not-configured') return [];
   try {
     const parsed = destinationSchema.safeParse(JSON.parse(raw));
-    if (!parsed.success || new Set(parsed.data.map(d => d.id)).size !== parsed.data.length) return [];
+    if (!parsed.success || new Set(parsed.data.map(d => d.id)).size !== parsed.data.length) {
+      Logger.warn('Slack feedback destination configuration is invalid');
+      return [];
+    }
     return parsed.data;
   } catch {
+    Logger.warn('Slack feedback destination configuration is not valid JSON');
     return [];
   }
 }

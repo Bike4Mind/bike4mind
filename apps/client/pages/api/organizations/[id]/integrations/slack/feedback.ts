@@ -7,7 +7,7 @@ import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getFeedbackDestinations } from '@server/integrations/slack/reactionFeedback';
-import { feedbackId } from '@server/integrations/slack/feedbackProtocol';
+import { feedbackId, isFeedbackChannelEligible } from '@server/integrations/slack/feedbackProtocol';
 import { respond } from '@server/utils/respond';
 
 const responseSchema = z.object({
@@ -32,7 +32,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .get(async (req, res) => {
     const org = await verifyOrgOwner(req.user!, String(req.query.id));
     const workspace = await orgSlackWorkspaceRepository.findByOrganizationId(org.id);
-    if (!workspace?.enabled) throw new NotFoundError('No Slack workspace connected');
+    if (!workspace) throw new NotFoundError('No Slack workspace connected');
     const channels = await SlackFeedbackChannel.find({
       workspaceId: workspace.id,
       organizationId: org.id,
@@ -50,18 +50,20 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .put(async (req, res) => {
     const org = await verifyOrgOwner(req.user!, String(req.query.id));
     const update = parseOrBadRequest(updateSchema, req.body);
-    const workspace = await orgSlackWorkspaceRepository.findByOrganizationIdWithToken(org.id);
+    const workspace = update.enabled
+      ? await orgSlackWorkspaceRepository.findByOrganizationIdWithToken(org.id)
+      : await orgSlackWorkspaceRepository.findByOrganizationId(org.id);
     if (!workspace) throw new NotFoundError('No Slack workspace connected');
     const id = feedbackId(workspace.id, update.channelId);
     if (update.enabled) {
       if (!getFeedbackDestinations().some(d => d.id === update.destinationId && d.organizationId === org.id)) {
         throw new BadRequestError('Destination is not provisioned for this organization');
       }
-      const token = decryptToken(workspace.slackBotToken);
+      const token = workspace.enabled && decryptToken(workspace.slackBotToken);
       if (!token) throw new BadRequestError('Reconnect Slack');
       const client = new WebClient(token, { retryConfig: { retries: 0 }, timeout: 2000 });
       const info = await client.conversations.info({ channel: update.channelId });
-      if (!info.channel?.is_member || info.channel.is_im || info.channel.is_mpim || info.channel.is_ext_shared) {
+      if (!isFeedbackChannelEligible(info.channel)) {
         throw new BadRequestError('Invite the bot to a non-shared channel in this workspace first');
       }
     }

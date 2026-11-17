@@ -10,6 +10,8 @@ const m = vi.hoisted(() => ({
   workspace: vi.fn(),
   claim: vi.fn(),
   audit: vi.fn(),
+  info: vi.fn(),
+  findChannel: vi.fn(),
   handlers: {} as Record<string, (req: unknown, res: unknown) => Promise<unknown>>,
 }));
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -21,7 +23,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@bike4mind/database/infra', () => ({
   orgSlackWorkspaceRepository: { findBySlackTeamIdWithToken: m.workspace },
-  SlackFeedbackChannel: { findOne: () => ({ lean: m.channel }) },
+  SlackFeedbackChannel: { findOne: m.findChannel },
   SlackFeedbackDelivery: { findById: () => ({ lean: m.delivery }), updateOne: m.claim },
   slackAuditLogRepository: { createLog: m.audit },
 }));
@@ -29,11 +31,13 @@ vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ decryptToke
 vi.mock('@server/integrations/slack/reactionFeedback', () => ({
   getFeedbackDestinations: () => [
     { id: 'receiver', organizationId: 'org1', secret: 'synthetic-callback-key-not-real-12345' },
+    { id: 'foreign', organizationId: 'org2', secret: 'synthetic-foreign-callback-key-12345' },
   ],
 }));
 vi.mock('@slack/web-api', () => ({
   WebClient: class {
     chat = { postMessage: m.post };
+    conversations = { info: m.info };
   },
 }));
 import '../status';
@@ -55,6 +59,8 @@ async function request(options: { signature?: string; body?: string } = {}) {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  m.findChannel.mockImplementation(() => ({ lean: m.channel }));
+  m.info.mockResolvedValue({ channel: { is_member: true } });
   m.delivery.mockResolvedValue({
     _id: deliveryId,
     destinationId: 'receiver',
@@ -85,6 +91,14 @@ it('accepts a signed synthetic callback and posts fixed text into only the origi
     })
   );
   expect(m.claim.mock.invocationCallOrder[0]).toBeLessThan(m.post.mock.invocationCallOrder[0]);
+  expect(m.findChannel).toHaveBeenCalledWith({
+    _id: feedbackId('ws1', 'C1'),
+    workspaceId: 'ws1',
+    slackTeamId: 'T1',
+    organizationId: 'org1',
+    enabled: true,
+    destinationId: 'receiver',
+  });
 });
 it('rejects invalid authentication without posting', async () => {
   expect((await request({ signature: 'wrong' })).statusCode).toBe(401);
@@ -117,3 +131,38 @@ it('caps raw body size and rejects arbitrary status text', async () => {
   expect((await request({ body: JSON.stringify({ deliveryId, status: '<!channel>' }) })).statusCode).toBe(400);
   expect(m.post).not.toHaveBeenCalled();
 });
+it('rejects a valid signature from another destination secret', async () => {
+  const body = JSON.stringify({ deliveryId, status: 'filed' });
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  expect(
+    (
+      await request({
+        body,
+        signature: signFeedback(body, timestamp, 'synthetic-foreign-callback-key-12345', 'status'),
+      })
+    ).statusCode
+  ).toBe(401);
+  expect(m.claim).not.toHaveBeenCalled();
+});
+it('refuses a delivery bound to another organization destination', async () => {
+  m.delivery.mockResolvedValue({ destinationId: 'foreign', organizationId: 'org1', state: 'sent' });
+  const body = JSON.stringify({ deliveryId, status: 'filed' });
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  expect(
+    (
+      await request({
+        body,
+        signature: signFeedback(body, timestamp, 'synthetic-foreign-callback-key-12345', 'status'),
+      })
+    ).statusCode
+  ).toBe(401);
+});
+it.each(['is_shared', 'is_org_shared', 'is_ext_shared', 'is_pending_ext_shared'])(
+  'does not post status to %s',
+  async flag => {
+    m.info.mockResolvedValue({ channel: { is_member: true, [flag]: true } });
+    expect((await request()).statusCode).toBe(409);
+    expect(m.claim).not.toHaveBeenCalled();
+    expect(m.post).not.toHaveBeenCalled();
+  }
+);

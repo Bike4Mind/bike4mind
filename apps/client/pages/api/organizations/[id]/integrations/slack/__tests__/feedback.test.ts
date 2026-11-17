@@ -102,22 +102,34 @@ it('enables only an explicitly checked channel', async () => {
     { upsert: true, runValidators: true }
   );
 });
+it('lists existing opt-ins while the workspace is disabled', async () => {
+  m.workspace.mockResolvedValue({ id: 'ws1', enabled: false, slackTeamId: 'T1' });
+  const { req, res } = request();
+  await m.handlers.GET(req, res);
+  expect(res._getJSONData().channels).toHaveLength(1);
+});
 it('refuses a destination belonging to another org', async () => {
   const { req, res } = request({ ...update, destinationId: 'foreign' });
   await expect(m.handlers.PUT(req, res)).rejects.toThrow('Destination is not provisioned');
   expect(m.info).not.toHaveBeenCalled();
   expect(m.update).not.toHaveBeenCalled();
 });
-it.each([{ is_ext_shared: true }, { is_im: true }, { is_mpim: true }, { is_member: false }])(
-  'refuses excluded channels %j',
-  async fields => {
-    m.info.mockResolvedValue({ channel: { is_member: true, ...fields } });
-    const { req, res } = request();
-    await expect(m.handlers.PUT(req, res)).rejects.toThrow('non-shared channel');
-    expect(m.update).not.toHaveBeenCalled();
-  }
-);
+it.each([
+  { is_shared: true },
+  { is_org_shared: true },
+  { is_pending_ext_shared: true },
+  { is_ext_shared: true },
+  { is_im: true },
+  { is_mpim: true },
+  { is_member: false },
+])('refuses excluded channels %j', async fields => {
+  m.info.mockResolvedValue({ channel: { is_member: true, ...fields } });
+  const { req, res } = request();
+  await expect(m.handlers.PUT(req, res)).rejects.toThrow('non-shared channel');
+  expect(m.update).not.toHaveBeenCalled();
+});
 it('allows opt-out without a Slack call and without upsert', async () => {
+  m.workspace.mockResolvedValue({ id: 'ws1', enabled: false, slackTeamId: 'T1' });
   const { req, res } = request({ channelId: 'C12345678', enabled: false });
   await m.handlers.PUT(req, res);
   expect(m.info).not.toHaveBeenCalled();

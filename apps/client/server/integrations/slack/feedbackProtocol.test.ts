@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import {
   feedbackDestinations,
   feedbackId,
@@ -52,5 +53,13 @@ describe('feedback protocol', () => {
       false
     );
     expect(feedbackId('ab', 'c')).not.toBe(feedbackId('a', 'bc'));
+  });
+  it('warns on invalid configuration without exposing any values', () => {
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
+    feedbackDestinations('{"secret":"must-not-log"');
+    feedbackDestinations('[{"secret":"must-not-log"}]');
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('must-not-log');
+    warn.mockRestore();
   });
 });
