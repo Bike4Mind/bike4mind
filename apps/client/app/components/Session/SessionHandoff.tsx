@@ -48,7 +48,7 @@ export function SessionHandoffButton({ sessionId, compact = false }: { sessionId
       const status = (error as { response?: { status?: number } }).response?.status;
       setMessage(
         status === 409
-          ? 'This device looks inactive. Open it, sign in, and try again.'
+          ? 'This device is unavailable. Check sign-in and notification settings, then try again.'
           : 'Could not send this conversation. Try again.'
       );
     } finally {
@@ -88,7 +88,7 @@ export function SessionHandoffButton({ sessionId, compact = false }: { sessionId
                 data-testid="session-handoff-device-btn"
                 onClick={() => void send(device.id)}
               >
-                {device.name} ({device.platform}){device.available ? '' : ' - inactive'}
+                {device.name} ({device.platform}){device.available ? '' : ' - unavailable'}
               </Button>
             ))}
             {!busy && devices.length === 0 && (

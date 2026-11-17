@@ -54,7 +54,7 @@ describe('session handoff', () => {
       const deps = fixture(kind === 'unknown' ? [] : [{ ...destination, available: kind !== 'inactive' }]);
       if (kind === 'signed-out') vi.mocked(deps.liveSids).mockResolvedValue(new Set());
       await expect(sendSessionHandoff('user', { sessionId, deviceId: destination.id }, deps)).rejects.toThrow(
-        /inactive/
+        /unavailable/
       );
       expect(deps.sendLive).not.toHaveBeenCalled();
       expect(deps.sendPush).not.toHaveBeenCalled();

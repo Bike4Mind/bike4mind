@@ -69,6 +69,8 @@ describe('handoff route boundary', () => {
     h.send.mockRejectedValue(new InactiveHandoffDeviceError());
     const res = await call(send);
     expect(res.statusCode).toBe(409);
-    expect(res._getJSONData()).toEqual({ error: 'This device looks inactive. Open it, sign in, and try again.' });
+    expect(res._getJSONData()).toEqual({
+      error: 'This device is unavailable. Check sign-in and notification settings, then try again.',
+    });
   });
 });

@@ -89,6 +89,11 @@ describe('the hosted build prunes test routes via postbuild', () => {
     );
   });
 
+  it('prunes never-loaded packages from the server traces OpenNext packages from', () => {
+    const pkg = JSON.parse(read('apps/client/package.json')) as { scripts: Record<string, string> };
+    expect(pkg.scripts.postbuild).toContain('pruneServerTrace.mjs --if-standalone .next');
+  });
+
   it('enables pre/post lifecycle scripts, or postbuild above never fires', () => {
     const npmrc = read('.npmrc');
     expect(npmrc).toMatch(/^enable-pre-post-scripts=true$/m);

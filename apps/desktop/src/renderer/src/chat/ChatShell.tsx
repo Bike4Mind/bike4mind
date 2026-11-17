@@ -247,9 +247,11 @@ export function ChatShell({
   account,
   onOpenModelServers,
   onOpenImportSettings,
+  updateNotice,
 }: {
   auth?: AuthState | null;
   account?: AccountStrip;
+  updateNotice?: (panelShown: boolean) => ReactNode;
   onOpenModelServers?: () => void;
   /** Settings > Import, scrolled to one source; the sidebar's sync hints are shown only with it. */
   onOpenImportSettings?: (focus: ClaudeImportKind) => void;
@@ -1511,6 +1513,7 @@ export function ChatShell({
         )}
       />
 
+      {screen !== 'conversation' && updateNotice?.(false)}
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
       ) : screen === 'models' ? (
@@ -1651,6 +1654,7 @@ export function ChatShell({
               card can never reach the composer, and everything it does not cover stays live. */}
           <Box
             ref={threadRegion}
+            data-testid="chat-update-notice-region"
             sx={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
           >
             {/* One tree for both surfaces, so entering or leaving orchestrate, or toggling the dock,
@@ -1772,6 +1776,8 @@ export function ChatShell({
                 }}
               />
             )}
+            {/* A modal panel leaves no room for a second card; Home keeps the update controller mounted. */}
+            {(!panelShown || panelDocked) && updateNotice?.(panelShown)}
           </Box>
 
           {ambient.settled && (

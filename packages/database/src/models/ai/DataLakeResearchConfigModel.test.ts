@@ -30,6 +30,7 @@ const input = (overrides: Partial<CreateDataLakeResearchConfigInput> = {}): Crea
   minRelevance: 0.6,
   costCeilingMicroUsd: 50_000,
   proposedTags: [],
+  itemRules: [],
   ...overrides,
 });
 
@@ -229,6 +230,36 @@ describe('DataLakeResearchConfigRepository', () => {
       const stored = await repo.findByIdInLake(config.id, LAKE);
       expect(stored?.nextRunAt).toBeNull();
       expect(stored?.lastScheduledOutcome).toBeNull();
+    });
+  });
+
+  describe('item rules', () => {
+    it('round-trips rules, and a document without the field reads as none', async () => {
+      const itemRules = [
+        { condition: 'Published by Acme', action: 'block' as const },
+        { condition: 'About sports', action: 'review' as const },
+      ];
+      const created = await repo.createConfig(input({ itemRules }));
+      expect((await repo.findByIdInLake(created.id, LAKE))?.itemRules).toEqual(itemRules);
+
+      const { insertedId } = await DataLakeResearchConfigModel.collection.insertOne({
+        dataLakeId: LAKE,
+        name: 'Old',
+        query: 'q',
+        maxResults: 10,
+        maxProposals: 5,
+        minRelevance: 0.6,
+        costCeilingMicroUsd: 50_000,
+        trigger: 'on_demand',
+        createdByUserId: 'user-1',
+      });
+      expect((await repo.findByIdInLake(String(insertedId), LAKE))?.itemRules).toEqual([]);
+    });
+
+    it('refuses an action other than block or review', async () => {
+      await expect(
+        repo.createConfig(input({ itemRules: [{ condition: 'c', action: 'allow' as never }] }))
+      ).rejects.toThrow();
     });
   });
 

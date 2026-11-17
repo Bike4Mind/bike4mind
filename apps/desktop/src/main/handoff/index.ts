@@ -8,41 +8,82 @@ import { markCompanionWindow } from '../windows';
 const partitionFor = (scope: string) =>
   `persist:server-conversations-${createHash('sha256').update(scope).digest('hex')}`;
 
+type Companion = { window: BrowserWindow; ownerScope: string };
+
 export function registerSessionHandoff(auth: AuthService): void {
-  let window: BrowserWindow | null = null;
-  let scope: string | null = null;
   const currentScope = () => {
     const state = auth.getState();
     return state.status === 'signed-in' && state.user ? `${state.environment.url}:${state.user.id}` : null;
   };
+  let companion: Companion | null = null;
+  // Persistent storage still belongs to this account after its window closes.
+  let observedAuthScope = currentScope();
+  let authEpoch = 0;
+  const clearing = new Map<string, Promise<void>>();
+  const needsClear = new Set<string>();
+
+  const clearOwnedPartition = (ownerScope: string): Promise<void> => {
+    needsClear.add(ownerScope);
+    const existing = clearing.get(ownerScope);
+    if (existing) return existing;
+    const pending = (async () => {
+      await session.fromPartition(partitionFor(ownerScope)).clearStorageData();
+      needsClear.delete(ownerScope);
+    })();
+    clearing.set(ownerScope, pending);
+    const finished = () => {
+      if (clearing.get(ownerScope) === pending) clearing.delete(ownerScope);
+    };
+    void pending.then(finished, (error: unknown) => {
+      finished();
+      console.warn(
+        'handoff: could not clear server conversations storage',
+        error instanceof Error ? error.message.slice(0, 200) : 'Unknown storage cleanup failure'
+      );
+    });
+    return pending;
+  };
+
   onAuthStateChanged(() => {
-    if (scope === currentScope()) return;
-    window?.close();
-    if (scope) {
-      session
-        .fromPartition(partitionFor(scope))
-        .clearStorageData()
-        .catch(error => console.warn('handoff: could not clear server conversations storage', error));
-    }
-    window = null;
-    scope = null;
+    const nextScope = currentScope();
+    if (observedAuthScope === nextScope) return;
+    const previousScope = observedAuthScope;
+    const previousWindow = companion?.window;
+    observedAuthScope = nextScope;
+    authEpoch += 1;
+    companion = null;
+    previousWindow?.close();
+    // Capture ownership before close(): Electron may synchronously emit its closed event.
+    if (previousScope) void clearOwnedPartition(previousScope);
   });
+
   ipcMain.handle(IPC_CHANNELS.handoffOpenServerSessions, async () => {
     const state = auth.getState();
     const nextScope = currentScope();
-    if (!nextScope) return;
-    if (window && !window.isDestroyed()) {
-      window.show();
-      window.focus();
+    if (!nextScope || nextScope !== observedAuthScope) return;
+    const requestedEpoch = authEpoch;
+    const environmentUrl = state.environment.url;
+    if (clearing.has(nextScope) || needsClear.has(nextScope)) {
+      try {
+        await clearOwnedPartition(nextScope);
+      } catch {
+        // Cleanup was logged above and stays dirty; never load the old account's stored session.
+        return;
+      }
+    }
+    if (currentScope() !== nextScope || authEpoch !== requestedEpoch) return;
+    // Check after cleanup so concurrent opens waiting on one partition create only one window.
+    if (companion?.ownerScope === nextScope && !companion.window.isDestroyed()) {
+      companion.window.show();
+      companion.window.focus();
       return;
     }
-    const base = new URL(state.environment.url);
+    const base = new URL(environmentUrl);
     if (
       base.protocol !== 'https:' &&
       !(base.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname))
     )
       return;
-    scope = nextScope;
     const opened = new BrowserWindow({
       width: 1100,
       height: 800,
@@ -54,7 +95,7 @@ export function registerSessionHandoff(auth: AuthService): void {
         partition: partitionFor(nextScope),
       },
     });
-    window = opened;
+    companion = { window: opened, ownerScope: nextScope };
     markCompanionWindow(opened);
     opened.webContents.setWindowOpenHandler(({ url }) => {
       if (isExternallyOpenable(url)) void shell.openExternal(url);
@@ -66,10 +107,7 @@ export function registerSessionHandoff(auth: AuthService): void {
       if (isExternallyOpenable(url)) void shell.openExternal(url);
     });
     opened.on('closed', () => {
-      if (window === opened) {
-        window = null;
-        scope = null;
-      }
+      if (companion?.window === opened) companion = null;
     });
     await opened.loadURL(new URL('/notebooks', base).href, {
       userAgent: `${opened.webContents.getUserAgent()} B4M-Server-Conversations`,

@@ -12,7 +12,7 @@ export type HandoffAdapters = {
 
 export class InactiveHandoffDeviceError extends Error {
   constructor() {
-    super('This device looks inactive. Open it, sign in, and try again.');
+    super('This device is unavailable. Check sign-in and notification settings, then try again.');
   }
 }
 

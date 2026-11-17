@@ -1,3 +1,4 @@
+import { isPushCategoryEnabled } from '@bike4mind/common';
 import {
   Connection,
   authSessionRepository,
@@ -11,9 +12,14 @@ import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { NotificationEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { readApnsCredentials } from '@bike4mind/server-utils/utils/pushDelivery';
 import { sessionDeepLink } from '@bike4mind/server-utils/utils/pushNotifications';
-import type { HandoffAdapters } from './sessionHandoff';
+import { InactiveHandoffDeviceError, type HandoffAdapters } from './sessionHandoff';
 
 const MAX_PUSH_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+async function isHandoffPushEnabled(userId: string): Promise<boolean> {
+  const user = await userRepository.findById(userId);
+  return !!user && isPushCategoryEnabled(user.preferences?.pushNotifications, 'session_handoff');
+}
 
 export const sessionHandoffAdapters: HandoffAdapters = {
   async destinations(userId) {
@@ -27,6 +33,7 @@ export const sessionHandoffAdapters: HandoffAdapters = {
       }),
       pushTokenRepository.findByUser(userId, 'device'),
     ]);
+    const pushEnabled = tokens.length > 0 && (await isHandoffPushEnabled(userId));
     const now = Date.now();
     const apns = readApnsCredentials() !== null;
     return [
@@ -45,7 +52,7 @@ export const sessionHandoffAdapters: HandoffAdapters = {
         platform: row.platform,
         sid: row.sid,
         pushId: row.id,
-        available: row.lastSeenAt.getTime() > now - MAX_PUSH_AGE_MS && row.platform === 'ios' && apns,
+        available: pushEnabled && row.lastSeenAt.getTime() > now - MAX_PUSH_AGE_MS && row.platform === 'ios' && apns,
       })),
     ];
   },
@@ -63,6 +70,7 @@ export const sessionHandoffAdapters: HandoffAdapters = {
       sessionId,
     }),
   async sendPush(userId, destinationId, sessionId, destinationSid) {
+    if (!(await isHandoffPushEnabled(userId))) throw new InactiveHandoffDeviceError();
     await NotificationEvents.Push.publish({
       userId,
       destinationId,

@@ -187,6 +187,7 @@ import { resolveDataSourceStatus } from './dataSourceStatus';
 import { scrubMissingKnowledgeIds } from '../sessionService/scrubMissingKnowledgeIds';
 import { scrubStaleSystemFiles } from '../sessionService/scrubStaleFileReferences';
 import { b4mTools, LATTICE_TOOL_NAMES } from './tools';
+import { withAudioToolJobs } from './tools/implementation/audioGeneration';
 import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
 import { createToolFailureGuard } from './tools/toolFailureGuard';
 import {
@@ -246,6 +247,7 @@ import { MongoAbility } from '@casl/ability';
 import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
+import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { resolveToolAvailability } from './toolAvailability';
 import { resolveToolConfigSafely } from './resolveToolConfigSafely';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
@@ -1301,6 +1303,7 @@ export class ChatCompletionProcess {
   private attachedKnowledgeFilesMemo: IFabFileDocument[] | null | undefined;
   private storage: IChatCompletionServiceOptions['storage'];
   private imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
+  private audioToolJobs: IChatCompletionServiceOptions['audioToolJobs'];
   private imageProcessorLambdaName?: string;
   private wsHttpsUrl: string;
   private abilityGetter: IChatCompletionServiceOptions['abilityGetter'];
@@ -1378,6 +1381,7 @@ export class ChatCompletionProcess {
     this.loadSystemPromptById = options.loadSystemPromptById;
     this.storage = options.storage;
     this.imageGenerateStorage = options.imageGenerateStorage;
+    this.audioToolJobs = options.audioToolJobs;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;
     this.logger = options.logger;
     this.user = options.user;
@@ -3116,10 +3120,13 @@ export class ChatCompletionProcess {
 
       if (adminModerationEnabled) {
         const moderationStartTime = Date.now();
-        // Only run OpenAI moderation if we have an OpenAI key available
-        if (apiKeyTable?.openai) {
+        const moderationOpenaiKey = resolveModerationOpenaiKey(
+          apiKeyTable?.openai,
+          getSettingsValue('openaiDemoKey', defaultAdminSettings)
+        );
+        if (moderationOpenaiKey) {
           try {
-            await new OpenaiModerationsService(apiKeyTable.openai, logger).checkPrompt(message);
+            await new OpenaiModerationsService(moderationOpenaiKey, logger).checkPrompt(message);
           } catch (moderationError) {
             // On a flag, record a per-user moderation hit and auto-escalate (throttle to
             // suspend_pending) BEFORE rethrowing to block this prompt. Recording
@@ -3910,7 +3917,7 @@ export class ChatCompletionProcess {
           edit_file: shadowSettings ? { model: runModel } : undefined,
           image_generation: imageToolConfig,
           edit_image: imageToolConfig,
-          audio_generation: audioConfig,
+          audio_generation: withAudioToolJobs(audioConfig, this.audioToolJobs),
           web_search: { imageUrlSigningSecret: this.telemetryHmacSecret },
           video_generation: videoToolConfig ?? undefined,
           music_generation: musicToolConfig ?? undefined,

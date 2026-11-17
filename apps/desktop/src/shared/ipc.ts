@@ -2,6 +2,7 @@ import type { NewSessionDefaults } from './sessionDefaults';
 import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
 import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopResult, LoopState } from './loop';
+import type { RunSpend } from './runSpend';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type { AttentionNotice, AttentionOpenEvent } from './attention';
 import type { AccountBilling, AccountCredits, AccountProfile, SubscribePlanResult } from './account';
@@ -252,6 +253,7 @@ export const IPC_CHANNELS = {
   chatClearContext: 'chat:clear-context',
   chatCompactContext: 'chat:compact-context',
   chatSuggestNextPrompt: 'chat:suggest-next-prompt',
+  chatGetRunSpend: 'chat:get-run-spend',
   chatGetQueued: 'chat:get-queued',
   chatCancelQueued: 'chat:cancel-queued',
   chatGetHeldRelays: 'chat:get-held-relays',
@@ -986,6 +988,8 @@ export interface DesktopApi {
      * `model` is the Settings pick; null or omitted is automatic.
      */
     suggestNextPrompt(sessionId: string, model?: string | null): Promise<string | null>;
+    /** The settled spend of the orchestration rooted at this session, for its job summary. */
+    getRunSpend(rootSessionId: string): Promise<RunSpend>;
     /**
      * Messages typed ahead for this conversation, waiting for the live turn to finish. Read on
      * open for the same reason as getSessionStatuses: the pushes below carry only CHANGES, and

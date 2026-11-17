@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   deny: vi.fn(),
   stepUp: vi.fn(),
   findRoles: vi.fn(),
+  fenceRole: vi.fn(),
   csrfGuard: ((_req: unknown, _res: unknown, next: () => void) => next()) as Guard,
 }));
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -40,6 +41,7 @@ vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mocks.stepUp }));
 vi.mock('@bike4mind/database', () => ({
   User: { findById: mocks.findById, updateOne: mocks.update },
   adminRoleRepository: { findByIds: mocks.findRoles },
+  AdminRoleModel: { updateOne: mocks.fenceRole },
   withTransaction: async (fn: () => Promise<unknown>) => fn(),
   AdminUserNoteModel: {},
   AdminUserNoteRevisionModel: {},
@@ -81,6 +83,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   target({ isAdmin: false, adminPermissions: [] });
   mocks.update.mockResolvedValue({ matchedCount: 1 });
+  mocks.fenceRole.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
   mocks.audit.mockResolvedValue({});
   mocks.stepUp.mockResolvedValue(undefined);
   mocks.findRoles.mockImplementation(async (ids: string[]) =>
@@ -248,6 +251,32 @@ describe('PUT /api/admin/users/:userId/permissions', () => {
     expect(mocks.audit).not.toHaveBeenCalled();
   });
 
+  it('clears a stored set holding only unlisted ids, with step-up and an audit entry', async () => {
+    target({ isAdmin: false, adminPermissions: ['retired:perm'] });
+    const res = await call({ before: [], adminPermissions: [], reason: REASON });
+    expect(res._getJSONData()).toEqual({ adminPermissions: [], adminRoleIds: [] });
+    expect(mocks.stepUp).toHaveBeenCalledOnce();
+    expect(mocks.update).toHaveBeenCalledWith(
+      { _id: TARGET, adminPermissions: ['retired:perm'] },
+      { $set: { adminPermissions: [] } },
+      { runValidators: true }
+    );
+    expect(mocks.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        summary: 'cleared unlisted permission ids retired:perm',
+        changes: [{ field: 'adminPermissions', before: ['retired:perm'], after: [] }],
+      })
+    );
+  });
+
+  it('still writes nothing when the only difference is a repeated listed id', async () => {
+    target({ isAdmin: false, adminPermissions: ['support:read', 'support:read'] });
+    await call({ before: ['support:read'], adminPermissions: ['support:read'], reason: REASON });
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.audit).not.toHaveBeenCalled();
+  });
+
   it('requires recent verification before writing', async () => {
     mocks.stepUp.mockRejectedValue(Object.assign(new Error('Recent verification required'), { statusCode: 403 }));
     await expect(call({ before: [], adminPermissions: ['support:read'], reason: REASON })).rejects.toMatchObject({
@@ -291,6 +320,31 @@ describe('PUT /api/admin/users/:userId/permissions', () => {
 
       expect(mocks.update.mock.calls[0][0].adminRoleIds).toEqual([SUPPORT_ROLE, BILLING_ROLE]);
       expect(mocks.audit.mock.calls[0][1].details.rolesRemoved).toEqual(['Support']);
+    });
+
+    it('records immutable removed-role permissions with the membership change', async () => {
+      target({ isAdmin: false, adminPermissions: [], adminRoleIds: [SUPPORT_ROLE] });
+      await call(roles([SUPPORT_ROLE], []));
+      expect(mocks.audit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          details: expect.objectContaining({
+            removedRolePermissions: [{ roleId: SUPPORT_ROLE, permissions: ['support:read', 'users:moderate'] }],
+          }),
+        })
+      );
+    });
+
+    it('records an explicit empty permission snapshot when removing a dangling role id', async () => {
+      const missingRole = '660000000000000000000009';
+      target({ isAdmin: false, adminPermissions: [], adminRoleIds: [missingRole] });
+      await call(roles([missingRole], []));
+      expect(mocks.audit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          details: expect.objectContaining({ removedRolePermissions: [{ roleId: missingRole, permissions: [] }] }),
+        })
+      );
     });
 
     it('refuses an unknown role', async () => {

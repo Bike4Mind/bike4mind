@@ -58,7 +58,7 @@ describe('session handoff UI', () => {
     fireEvent.click(screen.getByTestId('session-handoff-open-btn'));
     await waitFor(() => expect(screen.getAllByTestId('session-handoff-device-btn')[0]).toBeEnabled());
     fireEvent.click(screen.getAllByTestId('session-handoff-device-btn')[0]);
-    expect(await screen.findByTestId('session-handoff-feedback')).toHaveTextContent('inactive');
+    expect(await screen.findByTestId('session-handoff-feedback')).toHaveTextContent('unavailable');
   });
   it('waits for a click before navigating to the exact notebook through the normal router', async () => {
     wrap(<SessionHandoffReceiver />);

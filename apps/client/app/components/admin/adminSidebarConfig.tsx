@@ -62,7 +62,7 @@ import {
   Tag,
   Timer,
   TrendingUp,
-  UserPlus,
+  UserCheck,
   UserSearch,
   Users,
   UsersRound,
@@ -150,6 +150,7 @@ export enum AdminTab {
   AiOperations = 78,
   LegacyApiKeys = 79,
   Roles = 80,
+  AccessReview = 81,
 }
 
 /**
@@ -223,10 +224,8 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: Megaphone, tab: AdminTab.EmailMarketing, label: 'Email marketing' },
       { Icon: UsersRound, tab: AdminTab.Team, label: 'Team' },
       { Icon: ShieldCheck, tab: AdminTab.Roles, label: 'Roles', testid: 'admin-roles-btn' },
-      { Icon: UserPlus, tab: AdminTab.RegistrationInvites, label: 'Invites', testid: 'admin-invite-center-tab-btn' },
       { Icon: MessageSquare, tab: AdminTab.Feedback, label: 'Feedback', badge: 'feedback' },
       { Icon: MailCheck, tab: AdminTab.EmailVerification, label: 'Email verification' },
-      { Icon: Handshake, tab: AdminTab.PartnerSignupRules, label: 'Partner signups' },
       { Icon: Handshake, tab: AdminTab.SignupDomainHolds, label: 'Signup domain holds', badge: 'signupDomainHolds' },
       {
         Icon: UserSearch,
@@ -284,6 +283,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         testid: 'admin-audit-log-btn',
         badge: 'unreviewedAudit',
       },
+      { Icon: UserCheck, tab: AdminTab.AccessReview, label: 'Access review', testid: 'admin-access-review-btn' },
       {
         Icon: ClipboardCheck,
         tab: AdminTab.Approvals,

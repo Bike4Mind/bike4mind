@@ -22,6 +22,7 @@ import {
 } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 
 export const getInviteDetails = async (invite: IInviteDocument, includeUser?: boolean) => {
   const inviteWithDetails = invite;
@@ -179,6 +180,22 @@ export interface SharerInviteRecipientUser {
   name: string;
 }
 
+/**
+ * Names the inviter (`inviterName`) on Organization invites, for the team's pending-invitations
+ * table. Scoped to Organization: anyone who can list them already sees the inviter on the roster.
+ */
+async function attachOrgInviterNames(plains: Record<string, unknown>[]): Promise<void> {
+  const orgInvites = plains.filter(plain => plain.type === InviteType.Organization && plain.inviterId);
+  const ids = [...new Set(orgInvites.map(plain => String(plain.inviterId)))].filter(id => isValidObjectId(id));
+  if (ids.length === 0) return;
+  const users = await User.find({ _id: { $in: ids } }, { _id: 1, name: 1, username: 1 }).lean();
+  const names = new Map(users.map(user => [String(user._id), user.name || user.username]));
+  for (const plain of orgInvites) {
+    const name = names.get(String(plain.inviterId));
+    if (name) plain.inviterName = name;
+  }
+}
+
 /** `a***@example.com`. Shown only for an address that matches no user, so there is no id to give. */
 export function maskEmail(email: string): string {
   const at = email.lastIndexOf('@');
@@ -209,6 +226,7 @@ export async function toSharerInviteViews(
   viewer: Pick<IUserDocument, 'id' | 'email' | 'isAdmin'>
 ): Promise<Record<string, unknown>[]> {
   const plains = invites.map(invite => omitInviteToken(invite));
+  await attachOrgInviterNames(plains);
   if (viewer.isAdmin) {
     return plains;
   }
