@@ -236,6 +236,39 @@ describe('Studio states', () => {
     expect(find('studio-context-review')).toBeNull();
     expect((get('studio-prepare-btn') as HTMLButtonElement).disabled).toBe(true);
   });
+  it('does not duplicate delivered jobs alongside their assets', async () => {
+    const job = {
+      id: 'j1',
+      kind: 'image' as const,
+      originatingSessionId: 's1',
+      state: 'completed' as const,
+      createdAt: '2026-11-02',
+      updatedAt: '2026-11-02',
+      idempotencyKey: 'key',
+      assetIds: ['a1'],
+    };
+    await mount(
+      controller({
+        state: {
+          status: 'ready',
+          assets: [
+            {
+              id: 'a1',
+              kind: 'image',
+              title: 'Garden',
+              originatingSessionId: 's1',
+              createdAt: '2026-11-02',
+              updatedAt: '2026-11-02',
+              url: 'https://example.com/image.png',
+            },
+          ],
+          jobs: [job],
+        },
+      })
+    );
+    expect(find('studio-job-j1')).toBeNull();
+    expect(get('studio-asset-a1-btn')).toBeTruthy();
+  });
   it('only exposes supplied modality settings and validates numeric limits', async () => {
     const value = controller({
       capabilities: {

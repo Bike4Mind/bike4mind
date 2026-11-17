@@ -517,10 +517,12 @@ function StudioContent({ controller }: { controller?: StudioController }) {
       {controller?.state.status === 'ready' &&
         (() => {
           const assets = controller.state.assets;
+          const assetIds = new Set(assets.map(asset => asset.id));
+          const deliveredJobIds = new Set(assets.flatMap(asset => (asset.jobId ? [asset.jobId] : [])));
           const rows = [
             ...assets.map(item => ({ type: 'asset' as const, item })),
             ...controller.state.jobs
-              .filter(job => !assets.some(item => item.jobId === job.id || job.assetIds.includes(item.id)))
+              .filter(job => !deliveredJobIds.has(job.id) && !job.assetIds.some(id => assetIds.has(id)))
               .map(item => ({ type: 'job' as const, item })),
           ].sort((a, b) => b.item.createdAt.localeCompare(a.item.createdAt));
           return rows.length === 0 ? (
