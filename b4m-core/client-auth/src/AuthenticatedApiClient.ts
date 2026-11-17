@@ -314,6 +314,7 @@ export class AuthenticatedApiClient {
         // stay: the refresh endpoint just accepted them, so only it can say the session is gone.
         if (error.response?.status === 401 && originalRequest._retry) {
           const current = await this.readStoredTokens();
+          this.assertSession(current);
           this.logger.debug('AUTH: Token refresh retry failed');
           if (current?.accessToken === bearerToken(originalRequest)) {
             this.onStillUnauthorized?.('a request was still refused after the session was refreshed');
@@ -394,6 +395,7 @@ export class AuthenticatedApiClient {
 
     this.logger.debug('AUTH: Attempting token refresh');
     let response: RefreshTokenResponse;
+    this.assertSession(presented);
     try {
       response = await this.oauthClient.refreshToken(presented.refreshToken);
     } catch (refreshError) {
@@ -411,14 +413,21 @@ export class AuthenticatedApiClient {
       if (current) {
         const reason = `refresh token rejected by the server (HTTP ${status})`;
         this.logger.warn(`AUTH: Clearing stored tokens: ${reason}`);
+        this.assertSession(current);
         const cleared = await this.tokenStore.clearAuthTokens(presented.refreshToken);
-        if (cleared === false) {
-          // Storage moved on between the read above and the clear: keep whatever it holds now.
-          const now = await this.readStoredTokens();
-          if (now) return now;
-        } else {
-          const now = await this.readStoredTokens();
-          if (now) return now;
+        const now = await this.readStoredTokens();
+        this.assertSession(now);
+        // An inconclusive storage comparison can retain the rejected cached copy.
+        // Only a different credential can be adopted in place of this revoked one.
+        if (
+          now &&
+          (now.accessToken !== presented.accessToken ||
+            now.refreshToken !== presented.refreshToken ||
+            now.userId !== presented.userId)
+        ) {
+          return now;
+        }
+        if (!now && cleared !== false) {
           this.onTokensCleared?.(reason);
         }
       }
@@ -431,6 +440,7 @@ export class AuthenticatedApiClient {
     // overwriting it would put a superseded token back - whose next use reads as theft and
     // revokes the whole session. Cleared meanwhile means signed out: do not resurrect it.
     const current = await this.readStoredTokens();
+    this.assertSession(current);
     if (!current) throw new NotAuthenticatedError(this.reauthMessages.notLoggedIn);
     if (current.refreshToken !== presented.refreshToken) {
       this.logger.debug('AUTH: Stored tokens changed during refresh, keeping the stored ones');

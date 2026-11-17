@@ -186,6 +186,63 @@ describe('account-scoped HTTP requests', () => {
     expect(sent).not.toHaveBeenCalled();
   });
 
+  it.each([false, true, undefined])(
+    'never replays rejected credentials after an inconclusive clear (%s)',
+    async cleared => {
+      const { store, current } = storeFor(tokens('a'));
+      store.clearAuthTokens = vi.fn(async () => cleared);
+      const { options, refreshToken } = clientFor(store);
+      const onTokensCleared = vi.fn();
+      const client = new AuthenticatedApiClient({ ...options, onTokensCleared });
+      const dispatch = vi.fn<AxiosAdapter>(async config => {
+        throw refused(config, 401);
+      });
+      client.getAxiosInstance().defaults.adapter = dispatch;
+      refreshToken.mockRejectedValue(
+        new AxiosError('Refresh rejected', undefined, undefined, undefined, {
+          status: 400,
+          statusText: 'Rejected',
+          headers: {},
+          data: {},
+          config: {} as InternalAxiosRequestConfig,
+        })
+      );
+      await expect(client.post('/api/paid', {})).rejects.toMatchObject({
+        name: 'SessionRevokedError',
+        message: options.reauthMessages.refreshFailed,
+      });
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(refreshToken).toHaveBeenCalledTimes(1);
+      expect(current()).toEqual(tokens('a'));
+      expect(onTokensCleared).not.toHaveBeenCalled();
+    }
+  );
+
+  it('checks captured ownership immediately before a cleanup callback', async () => {
+    const { store } = storeFor(tokens('a'));
+    let active = true;
+    const { options, refreshToken } = clientFor(store, value => {
+      if (!value)
+        queueMicrotask(() => {
+          active = false;
+        });
+      return active;
+    });
+    const onTokensCleared = vi.fn();
+    const client = new AuthenticatedApiClient({ ...options, onTokensCleared });
+    refreshToken.mockRejectedValue(
+      new AxiosError('Refresh rejected', undefined, undefined, undefined, {
+        status: 400,
+        statusText: 'Rejected',
+        headers: {},
+        data: {},
+        config: {} as InternalAxiosRequestConfig,
+      })
+    );
+    await expect(client.refreshSession()).rejects.toMatchObject({ name: 'SessionChangedError' });
+    expect(onTokensCleared).not.toHaveBeenCalled();
+  });
+
   it('records bounded diagnostics without request content or credentials', async () => {
     const { store } = storeFor(tokens('a'));
     const { client, logger } = clientFor(store, value => !value || value.userId === 'a');

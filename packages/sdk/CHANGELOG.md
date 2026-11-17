@@ -1,5 +1,31 @@
 # @bike4mind/sdk
 
+## 3.0.0
+
+### Major Changes
+
+- [#7478](https://github.com/Bike4Mind/bike4mind/pull/7478) [`2d5a2ce`](https://github.com/Bike4Mind/bike4mind/commit/2d5a2cebf549b080ceca06f13ab287d5402a4fb4) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - org-level model and built-in tool policy
+
+### Minor Changes
+
+- [#7562](https://github.com/Bike4Mind/bike4mind/pull/7562) [`b3a724f`](https://github.com/Bike4Mind/bike4mind/commit/b3a724f7c6f7718375fa25ddfe00c1fb16d15eb4) Thanks [@onoya](https://github.com/onoya)! - publish the web search, web fetch and weather tools as v1 contracts
+
+- [#7580](https://github.com/Bike4Mind/bike4mind/pull/7580) [`bd7f820`](https://github.com/Bike4Mind/bike4mind/commit/bd7f82035d788b7cd87c72ff31b6b4fe131ef674) Thanks [@onoya](https://github.com/onoya)! - deliver push notifications to Android devices over FCM
+
+- [#7582](https://github.com/Bike4Mind/bike4mind/pull/7582) [`6b26028`](https://github.com/Bike4Mind/bike4mind/commit/6b2602812aafaa36e29878dbaf2c2877d402d951) Thanks [@onoya](https://github.com/onoya)! - list image models from the catalog and rank newer flagships first
+
+- [#7650](https://github.com/Bike4Mind/bike4mind/pull/7650) [`f7de841`](https://github.com/Bike4Mind/bike4mind/commit/f7de841d5347ed1e5dda7a349dc54bca9b0ee801) Thanks [@vinchi777](https://github.com/vinchi777)! - extend client bootstrap configuration projections
+
+- [#7671](https://github.com/Bike4Mind/bike4mind/pull/7671) [`2d7700d`](https://github.com/Bike4Mind/bike4mind/commit/2d7700d04b4e8680c5ff565866dacff33589d894) Thanks [@onoya](https://github.com/onoya)! - read a completion run's settled spend
+
+- [#7694](https://github.com/Bike4Mind/bike4mind/pull/7694) [`c1bb5f3`](https://github.com/Bike4Mind/bike4mind/commit/c1bb5f32db8aa56006e27239ac867fcf6f3b874f) Thanks [@onoya](https://github.com/onoya)! - run the image_generation and edit_image tools as image jobs
+
+- [#7784](https://github.com/Bike4Mind/bike4mind/pull/7784) [`376d72d`](https://github.com/Bike4Mind/bike4mind/commit/376d72d4cea3ce389ba32a942051686d79a57fd8) Thanks [@vinchi777](https://github.com/vinchi777)! - support API keyframes and draft pricing
+
+### Patch Changes
+
+- [#7667](https://github.com/Bike4Mind/bike4mind/pull/7667) [`2e57e2e`](https://github.com/Bike4Mind/bike4mind/commit/2e57e2ee13d2ece2b33e8977ff3cbf33ead633ea) Thanks [@onoya](https://github.com/onoya)! - make browser file uploads create-only
+
 ## 2.2.0
 
 ### Minor Changes
