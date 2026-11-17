@@ -201,16 +201,38 @@ describe('spendMonitor handler', () => {
     );
   });
 
+  it("reports a freeze another actor applied as not this incident's", async () => {
+    mocks.latestBucketStart.mockResolvedValue(new Date('2026-10-30T10:05:00.000Z'));
+    mocks.freezeSpend.mockResolvedValue({
+      freeze: { id: 'freeze-0', actor: { kind: 'admin', userId: 'u' } },
+      created: false,
+    });
+    await handler(event);
+    const [, deps] = mocks.runAutoPause.mock.calls[0];
+
+    await expect(
+      deps.freeze({
+        scope: { scopeType: 'User', scopeId: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
+        rule: 'account_ceiling',
+        spendAlertId: 'alert-1',
+        reason: 'Automatic pause',
+      })
+    ).resolves.toEqual({ freezeId: 'freeze-0', byThisIncident: false });
+  });
+
   it('freezes as the automatic actor with a worker audit context', async () => {
     mocks.latestBucketStart.mockResolvedValue(new Date('2026-10-30T10:05:00.000Z'));
-    mocks.freezeSpend.mockResolvedValue({ freeze: { id: 'freeze-1' }, created: true });
+    mocks.freezeSpend.mockResolvedValue({
+      freeze: { id: 'freeze-1', actor: { kind: 'automatic', rule: 'account_ceiling', spendAlertId: 'alert-1' } },
+      created: true,
+    });
     await handler(event);
     const [, deps] = mocks.runAutoPause.mock.calls[0];
 
     const scope = { scopeType: 'User', scopeId: 'aaaaaaaaaaaaaaaaaaaaaaaa' };
     await expect(
       deps.freeze({ scope, rule: 'account_ceiling', spendAlertId: 'alert-1', reason: 'Automatic pause' })
-    ).resolves.toEqual({ freezeId: 'freeze-1', created: true });
+    ).resolves.toEqual({ freezeId: 'freeze-1', byThisIncident: true });
 
     expect(mocks.freezeSpend).toHaveBeenCalledWith(
       expect.objectContaining({

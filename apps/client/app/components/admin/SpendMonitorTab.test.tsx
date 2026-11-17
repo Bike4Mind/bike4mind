@@ -31,6 +31,7 @@ const incident = (over: Record<string, unknown> = {}) => ({
   lastValue: 12_000,
   context: {},
   label: 'burner@example.com',
+  frozen: false,
   ...over,
 });
 
@@ -134,7 +135,7 @@ describe('SpendMonitorTab', () => {
     expect(screen.getAllByTestId('admin-stat-tile')[3]).toHaveTextContent('1+');
   });
 
-  it('labels the automatic pause outcome per mode', async () => {
+  it('labels each incident with its payer freeze state and the automatic decision', async () => {
     mockGets({
       overviewData: overview({
         incidents: [
@@ -150,6 +151,7 @@ describe('SpendMonitorTab', () => {
           }),
           incident({
             id: 'paused',
+            frozen: true,
             autoPause: {
               mode: 'enforce',
               decidedAt: '2026-11-17T10:05:00.000Z',
@@ -161,6 +163,7 @@ describe('SpendMonitorTab', () => {
           }),
           incident({
             id: 'already',
+            frozen: true,
             autoPause: {
               mode: 'enforce',
               decidedAt: '2026-11-17T10:05:00.000Z',
@@ -169,6 +172,18 @@ describe('SpendMonitorTab', () => {
               valueCredits: 2,
             },
           }),
+          incident({
+            id: 'lifted',
+            autoPause: {
+              mode: 'enforce',
+              decidedAt: '2026-11-17T10:05:00.000Z',
+              tier: 'standard',
+              thresholdCredits: 1,
+              valueCredits: 2,
+              freezeId: FREEZE_ID,
+            },
+          }),
+          incident({ id: 'manual', frozen: true }),
           incident({ id: 'none' }),
         ],
         autoPause: { mode: 'enforce', minCreditsByTier: { standard: 10_000, paid: 5_000, trusted: 0 } },
@@ -178,9 +193,11 @@ describe('SpendMonitorTab', () => {
 
     expect(await screen.findByTestId('spend-monitor-autopause-shadow')).toHaveTextContent('Would pause');
     expect(screen.getByTestId('spend-monitor-autopause-paused')).toHaveTextContent('Paused');
-    expect(screen.getByTestId('spend-monitor-autopause-already')).toHaveTextContent('Already frozen');
+    expect(screen.getByTestId('spend-monitor-autopause-already')).toHaveTextContent('Frozen');
+    expect(screen.getByTestId('spend-monitor-autopause-lifted')).toHaveTextContent('Lifted');
+    expect(screen.getByTestId('spend-monitor-autopause-manual')).toHaveTextContent('Frozen');
     expect(screen.queryByTestId('spend-monitor-autopause-none')).not.toBeInTheDocument();
-    expect(screen.getAllByTestId('admin-stat-tile')[4]).toHaveTextContent('On');
+    expect(screen.getAllByTestId('admin-stat-tile')[4]).toHaveTextContent('Enforce');
     expect(screen.getAllByTestId('admin-stat-tile')[4]).toHaveTextContent('Paid 5,000');
   });
 

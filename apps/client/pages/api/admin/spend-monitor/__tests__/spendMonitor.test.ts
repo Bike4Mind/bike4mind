@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   userFindByIds: vi.fn(),
   orgFind: vi.fn(),
   keyFind: vi.fn(),
+  freezeFindActive: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/adminApi', () => ({
@@ -50,6 +51,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findByIds: h.userFindByIds },
   organizationRepository: { find: h.orgFind },
   userApiKeyRepository: { find: h.keyFind },
+  spendFreezeRepository: { findActive: h.freezeFindActive },
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
@@ -95,6 +97,7 @@ describe('GET /api/admin/spend-monitor', () => {
     h.userFindByIds.mockResolvedValue([]);
     h.orgFind.mockResolvedValue([]);
     h.keyFind.mockResolvedValue([]);
+    h.freezeFindActive.mockResolvedValue(null);
   });
 
   it('declares support:read for GET', () => {
@@ -136,6 +139,27 @@ describe('GET /api/admin/spend-monitor', () => {
 
     expect(labels).toEqual({ u: 'u@example.com', o: 'Acme', p: null });
     expect(h.keyFind).not.toHaveBeenCalled();
+  });
+
+  it('reports whether each payer is frozen now, looking each scope up once', async () => {
+    h.findActive.mockResolvedValue([
+      incident({ id: 'u1', scopeType: 'User', scopeId: USER_ID }),
+      incident({ id: 'u2', scopeType: 'User', scopeId: USER_ID, rule: 'account_ceiling' }),
+      incident({ id: 'o', scopeType: 'Organization', scopeId: ORG_ID }),
+      incident({ id: 'p', scopeType: 'platform', scopeId: 'all', rule: 'platform_spike' }),
+    ]);
+    h.freezeFindActive.mockImplementation(async (scope: { scopeType: string }) =>
+      scope.scopeType === 'User' ? { id: 'freeze' } : null
+    );
+
+    const body = (await run())._getJSONData();
+    const frozen = Object.fromEntries(
+      body.incidents.map((row: { id: string; frozen: boolean }) => [row.id, row.frozen])
+    );
+
+    expect(frozen).toEqual({ u1: true, u2: true, o: false, p: false });
+    expect(h.freezeFindActive).toHaveBeenCalledTimes(2);
+    expect(h.freezeFindActive).toHaveBeenCalledWith({ scopeType: 'User', scopeId: USER_ID });
   });
 
   it('serializes the automatic pause decision date', async () => {

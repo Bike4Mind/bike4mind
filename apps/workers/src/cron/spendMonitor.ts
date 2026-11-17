@@ -125,13 +125,14 @@ const AUTO_PAUSE_AUDIT = {
 const autoPauseFreeze =
   (now: Date, logger: ILogger): AutoPauseDeps['freeze'] =>
   async ({ scope, rule, spendAlertId, reason }) => {
-    const { freeze, created } = await withTransaction(() =>
+    const { freeze } = await withTransaction(() =>
       spendFreezeService.freezeSpend(
         { scope, actor: { kind: 'automatic', rule, spendAlertId }, reason, audit: AUTO_PAUSE_AUDIT, now },
         { db: { spendFreezes: spendFreezeRepository, adminAuditLog: adminAuditLogRepository }, logger }
       )
     );
-    return { freezeId: freeze.id, created };
+    const byThisIncident = freeze.actor.kind === 'automatic' && freeze.actor.spendAlertId === spendAlertId;
+    return { freezeId: freeze.id, byThisIncident };
   };
 
 export async function handler(event: unknown): Promise<{ status: 'ok' | 'disabled'; rolled: number }> {

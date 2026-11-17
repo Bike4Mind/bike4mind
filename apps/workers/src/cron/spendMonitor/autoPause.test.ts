@@ -73,11 +73,40 @@ describe('selectAutoPauseCandidates', () => {
     expect(selectAutoPauseCandidates([alert({ status: 'acknowledged' })], config())).toEqual([]);
   });
 
-  it('skips incidents that already carry a decision', () => {
-    const decided = alert({
-      autoPause: { mode: 'shadow', decidedAt: now, tier: 'standard', thresholdCredits: 10_000, valueCredits: 12_000 },
-    });
-    expect(selectAutoPauseCandidates([decided], config())).toEqual([]);
+  const shadowDecision = {
+    mode: 'shadow' as const,
+    decidedAt: now,
+    tier: 'standard',
+    thresholdCredits: 10_000,
+    valueCredits: 12_000,
+  };
+
+  it('skips an incident already decided in the current mode', () => {
+    expect(selectAutoPauseCandidates([alert({ autoPause: shadowDecision })], config({ mode: 'shadow' }))).toEqual([]);
+    const enforced = alert({ autoPause: { ...shadowDecision, mode: 'enforce' } });
+    expect(selectAutoPauseCandidates([enforced], config())).toEqual([]);
+  });
+
+  it('reselects a shadow decision once the mode is enforce', () => {
+    const decided = alert({ autoPause: shadowDecision });
+    expect(selectAutoPauseCandidates([decided], config())).toMatchObject([{ alert: decided }]);
+  });
+
+  it('skips an incident in its clear run, whose lastValue is an earlier window', () => {
+    expect(selectAutoPauseCandidates([alert({ clearRuns: 1 })], config())).toEqual([]);
+  });
+
+  it.each(['account_context_unavailable', 'risk_flags_unknown'])(
+    'skips an incident whose tier fell back to standard for %s',
+    reason => {
+      const uncertain = alert({ context: { accountTier: 'standard', policyReasons: [reason] } });
+      expect(selectAutoPauseCandidates([uncertain], config())).toEqual([]);
+    }
+  );
+
+  it('selects a standard incident whose tier came from recorded risk', () => {
+    const risky = alert({ context: { accountTier: 'standard', policyReasons: ['payment_blocked'] } });
+    expect(selectAutoPauseCandidates([risky], config())).toHaveLength(1);
   });
 
   it.each(['platform', 'Agent', 'model'] as const)('skips %s incidents, which have no freezable payer', scopeType => {
@@ -95,7 +124,7 @@ const makeDeps = (alerts: SpendAlertRecord[]) => {
       findActive: vi.fn(async () => alerts),
       recordAutoPause: vi.fn(async () => true),
     },
-    freeze: vi.fn(async () => ({ freezeId: 'freeze-1', created: true })),
+    freeze: vi.fn(async () => ({ freezeId: 'freeze-1', byThisIncident: true })),
     post: vi.fn(async () => undefined),
     adminUrl: 'https://app.example.com/admin?tab=spend-monitor',
     logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -145,9 +174,9 @@ describe('runAutoPause', () => {
     expect(JSON.stringify(message)).toContain('https://app.example.com/admin?tab=spend-monitor');
   });
 
-  it('records the decision without a freeze id and stays quiet when the scope was already frozen', async () => {
+  it('records the decision without a freeze id and stays quiet when another freeze holds the scope', async () => {
     const deps = makeDeps([alert()]);
-    deps.freeze.mockResolvedValueOnce({ freezeId: 'existing', created: false });
+    deps.freeze.mockResolvedValueOnce({ freezeId: 'existing', byThisIncident: false });
 
     const result = await runAutoPause(now, deps, config());
 
@@ -155,6 +184,34 @@ describe('runAutoPause', () => {
     const [, decision] = deps.alerts.recordAutoPause.mock.calls[0] as unknown as [string, Record<string, unknown>];
     expect(decision).not.toHaveProperty('freezeId');
     expect(deps.post).not.toHaveBeenCalled();
+  });
+
+  it('posts before recording, so a failed post leaves the incident to retry', async () => {
+    const deps = makeDeps([alert()]);
+    deps.post.mockRejectedValueOnce(new Error('slack 500'));
+
+    await expect(runAutoPause(now, deps, config())).rejects.toThrow(AggregateError);
+    expect(deps.alerts.recordAutoPause).not.toHaveBeenCalled();
+  });
+
+  it('posts again on a retry that finds the freeze this incident applied', async () => {
+    const deps = makeDeps([alert()]);
+    deps.freeze.mockResolvedValueOnce({ freezeId: 'freeze-1', byThisIncident: true });
+
+    await expect(runAutoPause(now, deps, config())).resolves.toEqual({ shadow: 0, paused: 1 });
+    expect(deps.post).toHaveBeenCalledTimes(1);
+    expect(deps.alerts.recordAutoPause).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ freezeId: 'freeze-1' })
+    );
+  });
+
+  it('does not count or log a shadow decision another run recorded first', async () => {
+    const deps = makeDeps([alert()]);
+    deps.alerts.recordAutoPause.mockResolvedValueOnce(false);
+
+    await expect(runAutoPause(now, deps, config({ mode: 'shadow' }))).resolves.toEqual({ shadow: 0, paused: 0 });
+    expect(deps.logger.log).not.toHaveBeenCalled();
   });
 
   it('keeps going after one incident fails and reports every failure', async () => {

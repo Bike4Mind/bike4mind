@@ -92,8 +92,11 @@ export class SpendAlertRepository extends BaseRepository<ISpendAlertDocument> im
   }
 
   async recordAutoPause(id: string, autoPause: SpendAlertAutoPause): Promise<boolean> {
+    // An enforce decision may replace a shadow one (the mode changed while the incident was open).
+    const undecided =
+      autoPause.mode === 'enforce' ? { 'autoPause.mode': { $ne: 'enforce' } } : { autoPause: { $exists: false } };
     const result = await this.model.updateOne(
-      { _id: id, status: { $in: ACTIVE_STATUSES }, autoPause: { $exists: false } },
+      { _id: id, status: { $in: ACTIVE_STATUSES }, ...undecided },
       { $set: { autoPause } }
     );
     return result.matchedCount === 1;

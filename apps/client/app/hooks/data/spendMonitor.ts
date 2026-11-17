@@ -40,7 +40,7 @@ export function useActiveSpendFreezes() {
   });
 }
 
-/** A freeze changes both the incident rows' automatic-pause state and the frozen list. */
+/** A freeze or lift changes both the incident rows' freeze state and the frozen list. */
 function useInvalidateSpendMonitor() {
   const queryClient = useQueryClient();
   return () =>

@@ -1283,14 +1283,14 @@ function makeStringSetting(
   };
 }
 
-/**
- * The default per-user write limit's modes and its default cap. Shared with the middleware that reads
- * them (apps/client/server/middlewares/defaultWriteRateLimit.ts), which falls back to these values.
- */
 /** Modes of the spend monitor's automatic pause; read by apps/workers/src/cron/spendMonitor/autoPause.ts. */
 export const SPEND_AUTO_PAUSE_MODES = ['off', 'shadow', 'enforce'] as const;
 export type SpendAutoPauseMode = (typeof SPEND_AUTO_PAUSE_MODES)[number];
 
+/**
+ * The default per-user write limit's modes and its default cap. Shared with the middleware that reads
+ * them (apps/client/server/middlewares/defaultWriteRateLimit.ts), which falls back to these values.
+ */
 export const DEFAULT_WRITE_RATE_LIMIT_MODES = ['off', 'log', 'enforce'] as const;
 export type DefaultWriteRateLimitMode = (typeof DEFAULT_WRITE_RATE_LIMIT_MODES)[number];
 export const DEFAULT_WRITE_RATE_LIMIT_PER_MIN = 120;

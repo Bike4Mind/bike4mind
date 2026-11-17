@@ -41,7 +41,7 @@ import {
 
 const POLICY_HELP =
   'In shadow mode an incident that reaches its threshold is only marked "Would pause" and nothing is paused. The mode and the thresholds are edited on Admin settings.';
-const MODE_LABELS = { off: 'Off', shadow: 'Shadow', enforce: 'On' } as const;
+const MODE_LABELS = { off: 'Off', shadow: 'Shadow', enforce: 'Enforce' } as const;
 
 const muted = { color: 'admin.inkMuted' } as const;
 
@@ -84,16 +84,17 @@ type AccountCellProps = {
   testId: string;
 };
 
+/** The payer's freeze state now, read with the automatic decision recorded on the incident. */
 const AutoPauseCell = ({ incident }: { incident: SpendIncidentRow }) => {
-  const { autoPause } = incident;
-  if (!autoPause) return <Dash />;
+  const { autoPause, frozen } = incident;
   const testId = `spend-monitor-autopause-${incident.id}`;
+  if (frozen) {
+    const label = autoPause?.freezeId ? 'Paused' : 'Frozen';
+    return <StatusChip tone="bad" label={label} data-testid={testId} />;
+  }
+  if (!autoPause) return <Dash />;
   if (autoPause.mode === 'shadow') return <StatusChip tone="neutral" label="Would pause" data-testid={testId} />;
-  return autoPause.freezeId ? (
-    <StatusChip tone="bad" label="Paused" data-testid={testId} />
-  ) : (
-    <StatusChip tone="neutral" label="Already frozen" data-testid={testId} />
-  );
+  return <StatusChip tone="neutral" label="Lifted" data-testid={testId} />;
 };
 
 const FrozenByCell = ({ freeze }: { freeze: ActiveSpendFreezeRow }) => {

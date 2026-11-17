@@ -33,8 +33,11 @@ export type AutoPauseFreezeInput = {
 
 export type AutoPauseDeps = {
   alerts: Pick<ISpendAlertRepository, 'findActive' | 'recordAutoPause'>;
-  /** Applies a freeze as the automatic actor; idempotent, `created: false` when the scope was already frozen. */
-  freeze: (input: AutoPauseFreezeInput) => Promise<{ freezeId: string; created: boolean }>;
+  /**
+   * Applies a freeze as the automatic actor. Idempotent: an already frozen scope returns its active freeze,
+   * and `byThisIncident` says whether that freeze was applied for `spendAlertId` (now or on an earlier run).
+   */
+  freeze: (input: AutoPauseFreezeInput) => Promise<{ freezeId: string; byThisIncident: boolean }>;
   post: (message: SlackAlarmMessage) => Promise<void>;
   /** Spend monitor admin page, linked from the alarm. */
   adminUrl: string;
@@ -43,6 +46,9 @@ export type AutoPauseDeps = {
 
 const ACCOUNT_TIERS: ReadonlySet<string> = new Set<AccountTier>(['standard', 'paid', 'trusted']);
 const FREEZABLE_SCOPE_TYPES: ReadonlySet<string> = new Set<string>(SPEND_FREEZE_SCOPE_TYPES);
+
+/** Reasons the tier fell back to standard because the account could not be read; never paused on. */
+const UNCERTAIN_TIER_REASONS: ReadonlySet<string> = new Set(['account_context_unavailable', 'risk_flags_unknown']);
 
 const isFreezableScopeType = (scopeType: string): scopeType is SpendFreezeScopeType =>
   FREEZABLE_SCOPE_TYPES.has(scopeType);
@@ -53,15 +59,26 @@ const tierOf = (alert: SpendAlertRecord): AccountTier => {
   return typeof tier === 'string' && ACCOUNT_TIERS.has(tier) ? (tier as AccountTier) : 'standard';
 };
 
+const tierIsUncertain = (alert: SpendAlertRecord): boolean => {
+  const reasons = alert.context.policyReasons;
+  return Array.isArray(reasons) && reasons.some(reason => UNCERTAIN_TIER_REASONS.has(String(reason)));
+};
+
+/** Undecided, or decided in shadow mode and now evaluated in enforce mode. */
+const awaitsDecision = (alert: SpendAlertRecord, mode: SpendAutoPauseMode): boolean =>
+  !alert.autoPause || (mode === 'enforce' && alert.autoPause.mode !== 'enforce');
+
 /**
- * Open incidents on a freezable payer whose current window reaches their tier's threshold.
- * Acknowledged incidents are left to the admin handling them, and a decision is made once per incident.
+ * Open incidents on a freezable payer that breached in the latest window (clearRuns 0, so lastValue is
+ * that window's spend) at or above their tier's threshold. Acknowledged incidents are left to the admin
+ * handling them; an incident whose tier is a fallback for an unreadable account is never paused.
  */
 export function selectAutoPauseCandidates(alerts: SpendAlertRecord[], config: AutoPauseConfig): AutoPauseCandidate[] {
   if (config.mode === 'off') return [];
   const candidates: AutoPauseCandidate[] = [];
   for (const alert of alerts) {
-    if (alert.status !== 'open' || alert.autoPause || !isFreezableScopeType(alert.scopeType)) continue;
+    if (alert.status !== 'open' || alert.clearRuns > 0 || !awaitsDecision(alert, config.mode)) continue;
+    if (!isFreezableScopeType(alert.scopeType) || tierIsUncertain(alert)) continue;
     const tier = tierOf(alert);
     const thresholdCredits = config.minCreditsByTier[tier];
     if (thresholdCredits <= 0 || alert.lastValue < thresholdCredits) continue;
@@ -92,8 +109,10 @@ const pausedMessage = (candidate: AutoPauseCandidate, adminUrl: string): SlackAl
 
 /**
  * Evaluates the active incidents for automatic pausing. Shadow mode records "would pause" on the
- * incident; enforce mode freezes the payer through the injected freeze, records it and posts an alarm.
- * One incident failing does not stop the others; all failures are rethrown together at the end.
+ * incident; enforce mode freezes the payer through the injected freeze, posts an alarm and records it.
+ * The decision is recorded last, so a run that fails after the freeze retries the alarm (a duplicate
+ * post is preferred over none). One incident failing does not stop the others; all failures are
+ * rethrown together at the end.
  */
 export async function runAutoPause(
   now: Date,
@@ -117,21 +136,24 @@ export async function runAutoPause(
     };
     try {
       if (config.mode === 'shadow') {
-        if (await deps.alerts.recordAutoPause(alert.id, decision)) shadow += 1;
+        if (!(await deps.alerts.recordAutoPause(alert.id, decision))) continue;
+        shadow += 1;
         deps.logger.log('spend-monitor-auto-pause-shadow', { alertId: alert.id, ...scope, tier, thresholdCredits });
         continue;
       }
-      const { freezeId, created } = await deps.freeze({
+      const { freezeId, byThisIncident } = await deps.freeze({
         scope,
         rule: alert.rule,
         spendAlertId: alert.id,
         reason: pauseReason(candidate),
       });
-      const recorded = await deps.alerts.recordAutoPause(alert.id, created ? { ...decision, freezeId } : decision);
-      deps.logger.log('spend-monitor-auto-pause', { alertId: alert.id, ...scope, freezeId, created, recorded });
-      if (!created) continue;
-      paused += 1;
-      await deps.post(pausedMessage(candidate, deps.adminUrl));
+      if (byThisIncident) await deps.post(pausedMessage(candidate, deps.adminUrl));
+      const recorded = await deps.alerts.recordAutoPause(
+        alert.id,
+        byThisIncident ? { ...decision, freezeId } : decision
+      );
+      deps.logger.log('spend-monitor-auto-pause', { alertId: alert.id, ...scope, freezeId, byThisIncident, recorded });
+      if (byThisIncident) paused += 1;
     } catch (error) {
       deps.logger.warn('spend-monitor-auto-pause-failed', { alertId: alert.id, ...scope, error: String(error) });
       errors.push(error);

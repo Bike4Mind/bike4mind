@@ -52,7 +52,8 @@ export type SpendAlertStatus = 'open' | 'acknowledged' | 'resolved';
 export type SpendAlertSeverity = 'warning' | 'critical';
 
 /**
- * The automatic pause decision recorded on an incident, at most once. Written by
+ * The automatic pause decision recorded on an incident: once per mode, and a shadow decision is replaced
+ * when the incident is later evaluated in enforce mode. Written by
  * apps/workers/src/cron/spendMonitor/autoPause.ts and shown on the admin Spend monitor page.
  */
 export type SpendAlertAutoPause = {
@@ -62,7 +63,7 @@ export type SpendAlertAutoPause = {
   tier: string;
   thresholdCredits: number;
   valueCredits: number;
-  /** The freeze this decision created; absent in shadow mode or when the scope was already frozen. */
+  /** The freeze applied for this incident; absent in shadow mode or when another freeze already held the scope. */
   freezeId?: string;
 };
 
@@ -146,8 +147,8 @@ export interface ISpendAlertRepository extends IBaseRepository<SpendAlertRecord>
     options?: { unset?: (keyof ISpendAlert)[] }
   ): Promise<boolean>;
   /**
-   * Records the automatic pause decision on a still-active incident that has none. Returns false when
-   * another run recorded one first or the incident has resolved.
+   * Records the automatic pause decision on a still-active incident that has none, or replaces a shadow
+   * decision with an enforce one. Returns false when another run recorded it first or the incident resolved.
    */
   recordAutoPause(id: string, autoPause: SpendAlertAutoPause): Promise<boolean>;
 }
