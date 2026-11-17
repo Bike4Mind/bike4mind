@@ -14,6 +14,19 @@ vi.mock('./CheckoutForm', () => ({
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
+// jsdom does not apply the @media rules emotion emits for a breakpoint object, so the dialog's
+// responsive sx values never reach getComputedStyle. Read the rules emotion emitted for xs instead.
+const phoneRules = () => {
+  const classNames = [...screen.getByTestId('payment-modal-dialog').classList];
+  const emitted = [...document.querySelectorAll('style')].map(style => style.textContent ?? '').join('\n');
+  return emitted
+    .split('}')
+    .filter(rule => rule.includes('@media (min-width:0px)') && classNames.some(name => rule.includes(`.${name}`)));
+};
+
+const declares = (rules: string[], declaration: string) =>
+  rules.some(rule => rule.includes(`{${declaration}`) || rule.includes(`;${declaration}`));
+
 describe('PaymentModal', () => {
   const renderModal = () =>
     render(
@@ -40,20 +53,14 @@ describe('PaymentModal', () => {
   it('never forces the dialog wider than a phone screen', () => {
     renderModal();
 
-    const { minWidth, maxWidth } = getComputedStyle(screen.getByTestId('payment-modal-dialog'));
-    expect(minWidth).not.toBe('400px');
-    expect(maxWidth).toContain('100vw');
+    const rules = phoneRules();
+    expect(declares(rules, 'min-width:auto')).toBe(true);
+    expect(declares(rules, 'max-width:calc(100vw - 32px)')).toBe(true);
   });
 
   it('fills the phone width instead of shrinking to the card form', () => {
     renderModal();
 
-    // jsdom's computed width drops calc(), so read the rule emotion emitted for the dialog's class.
-    const dialogClasses = [...screen.getByTestId('payment-modal-dialog').classList];
-    const emitted = [...document.querySelectorAll('style')].map(style => style.textContent ?? '').join('\n');
-    const dialogRules = emitted
-      .split('}')
-      .filter(rule => dialogClasses.some(className => rule.includes(`.${className}`)));
-    expect(dialogRules.some(rule => /(^|[;{])width:calc\(100vw - 32px\)/.test(rule))).toBe(true);
+    expect(declares(phoneRules(), 'width:calc(100vw - 32px)')).toBe(true);
   });
 });
