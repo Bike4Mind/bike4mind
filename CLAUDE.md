@@ -49,6 +49,7 @@ Verify before pushing: `pnpm turbo:typecheck && pnpm turbo:test && pnpm lint:che
 
 Turbo gives cached, topologically-ordered builds; the `pnpm` commands still work as fallback.
 
+- **Many worktrees on one machine:** turbo's local cache defaults to `.turbo/cache` inside each worktree, so a fresh worktree misses on everything. Task hashes are content-based, not path-based, so worktrees can share one store: `export TURBO_CACHE_DIR="$HOME/.cache/turbo-b4m"` in your shell profile (the pre-push hook defaults to it). Prune it occasionally, e.g. `find "$TURBO_CACHE_DIR" -mtime +14 -delete`.
 - Repeat runs are near-instant on a cache hit. `turbo:core:build` builds packages in dependency order (common → utils → agents → services → …).
 - **Do not run `turbo build` unfiltered** — it would try to `next build` the SPA outside its deploy context. Use `pnpm turbo:core:build` / `pnpm turbo:build`.
 - If builds seem stale after a big change, add `--force`.

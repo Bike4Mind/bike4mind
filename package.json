@@ -37,7 +37,7 @@
     "lint:md:fix": "markdownlint '**/*.md' '**/*.mdx' --ignore node_modules --fix",
     "lockfile:restore": "bash scripts/restore-tracked-lockfile.sh",
     "migrate": "pnpm --filter scripts migrate",
-    "pre-push": "TURBO_SCM_BASE=${TURBO_SCM_BASE:-origin/main} pnpm exec turbo typecheck:fast --affected --concurrency=${TURBO_CONCURRENCY:-25%} && pnpm run typecheck:infra:local",
+    "pre-push": "TURBO_CACHE_DIR=${TURBO_CACHE_DIR:-$HOME/.cache/turbo-b4m} TURBO_SCM_BASE=${TURBO_SCM_BASE:-origin/main} pnpm exec turbo typecheck:fast --affected --concurrency=${TURBO_CONCURRENCY:-25%} && pnpm run typecheck:infra:local",
     "prepare": "husky || true",
     "sst": "sst",
     "sst:unlock:force": "bash scripts/sst-force-unlock.sh",
