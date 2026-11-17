@@ -61,7 +61,7 @@ const org = {
   id: ORG,
   userId: OWNER,
   adminUserIds: [APPOINTED_ADMIN],
-  users: [{ userId: MEMBER }],
+  users: [{ userId: MEMBER }, { userId: APPOINTED_ADMIN }],
   storageLimit: 5,
   currentStorageSize: 400,
 };
@@ -111,6 +111,16 @@ describe('GET /api/organizations/[id]/storage-usage', () => {
       { db: { fabFiles: { name: 'fabFiles' }, users: { name: 'users' } } },
       { maxTimeMS: ORG_STORAGE_USAGE_MAX_TIME_MS }
     );
+  });
+
+  it('404s an appointed admin with no users[] row without reading usage', async () => {
+    mockRefs.orgFindById.mockResolvedValue({ ...org, users: [{ userId: MEMBER }] });
+
+    await expect(call({ id: APPOINTED_ADMIN, isAdmin: false })).rejects.toMatchObject({
+      constructor: NotFoundError,
+      message: 'Organization not found',
+    });
+    expect(mockRefs.getOrganizationStorageUsage).not.toHaveBeenCalled();
   });
 
   it('404s an ordinary member without reading usage', async () => {

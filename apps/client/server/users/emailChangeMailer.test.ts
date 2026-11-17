@@ -31,8 +31,8 @@ describe('buildEmailChangeMailer', () => {
     expect(outbox[0].to).toBe('new@b.test');
     expect(outbox[0].subject).toBe('Confirm Your Email Address Change');
     expect(outbox[0].body).toContain('from <strong>old&amp;co@b.test</strong> to <strong>new@b.test</strong>');
-    expect(outbox[0].body).toContain('/verify-change');
-    expect(outbox[0].body).toContain('tok-1');
+    expect(outbox[0].body).toContain('https://app.test/verify-change#token=tok-1');
+    expect(outbox[0].body).not.toContain('?token=');
   });
 
   it('words the verification as adding a first address for an emailless account', async () => {

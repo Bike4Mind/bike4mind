@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Sheet, Stack } from '@mui/joy';
 import { useSearch } from '@tanstack/react-router';
 import { DLQ_QUEUE_PARAM } from '@bike4mind/common';
@@ -86,6 +86,19 @@ const DlqReplayTab: React.FC = () => {
   const unknownQueue = queueParam && queues && !(linkedQueue && isOnStage(linkedQueue)) ? queueParam : null;
   const gaps = listingGaps(listing.data?.queues ?? []);
   const messages = listing.data?.messages ?? [];
+  const openedLink = useRef<string | null>(null);
+  useEffect(() => {
+    if (typeof search.dlqMessage !== 'string') return;
+    const link = `${queueParam}:${search.dlqMessage}`;
+    if (openedLink.current === link) return;
+    const message = listing.data?.messages.find(
+      message => message.messageId === search.dlqMessage && (!queueParam || message.queueLabel === queueParam)
+    );
+    if (message) {
+      setOpenMessage(message);
+      openedLink.current = link;
+    }
+  }, [listing.data, search.dlqMessage, queueParam]);
 
   return (
     <Stack gap={ADMIN_REGION_GAP}>
