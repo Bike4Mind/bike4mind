@@ -421,8 +421,8 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
  * estimate and the submit button. Field test ids are `<prefix>-<id>` plus a per-kind suffix: `-input` (text),
  * `-toggle` and `-<value>-btn` (segmented), `-select`, `-slider` (range), `-switch`, `-note`, `-pick-btn`, `-name`,
  * `-preview`, `-clear-btn` and `-hint` (image), `-<value>-btn` (aspect), `-add-btn`, `-file-<id>` and
- * `-remove-<id>-btn` (references), `-chips` and `-<value>-chip` (chips). A field holding a value the model does not take adds `-invalid` and, with a fix,
- * `-fix-btn`, and holds submit.
+ * `-remove-<id>-btn` (references), `-chips` and `-<value>-chip` (chips). A field holding a value the model does not
+ * take adds `-invalid` and, with a fix, `-fix-btn`, and holds submit.
  */
 const CapabilityForm = ({
   testIdPrefix,

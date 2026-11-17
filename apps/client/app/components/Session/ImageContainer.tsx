@@ -246,16 +246,16 @@ const ImageContainer: FC<ImageContainerProps> = ({
 
   // Studio edits Files images, so a generated chat image is saved to Files first; anything else (or Studio off) keeps
   // the in-chat masker.
+  const studioEditS3Key = studioImageEnabled && isGeneratedImage(src) ? extractS3KeyFromUrl(src) : null;
   const handleEditClick = async () => {
-    const s3Key = studioImageEnabled && isGeneratedImage(src) ? extractS3KeyFromUrl(src) : null;
-    if (!s3Key) {
+    if (!studioEditS3Key) {
       setEditing(true);
       return;
     }
     setOpeningInStudio(true);
     try {
       const fileName = `image_${Date.now()}.png`;
-      const file = await copyGeneratedImageToFabFile(s3Key, fileName);
+      const file = await copyGeneratedImageToFabFile(studioEditS3Key, fileName);
       // The copy starts 'pending' until its upload scan; an edit job refuses a pending input, so scan it now.
       const scan = await moderateFabFileNow(file.id);
       if (scan === 'blocked') {
@@ -455,11 +455,7 @@ const ImageContainer: FC<ImageContainerProps> = ({
         </IconButton>
       </Tooltip>
       {!readOnly && (
-        <Tooltip
-          title={
-            studioImageEnabled && isGeneratedImage(src) && extractS3KeyFromUrl(src) ? 'Edit in Studio' : 'Edit Image'
-          }
-        >
+        <Tooltip title={studioEditS3Key ? 'Edit in Studio' : 'Edit Image'}>
           <Box component="span" sx={{ display: 'inline-block' }}>
             <IconButton
               onClick={() => void handleEditClick()}
