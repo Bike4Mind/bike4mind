@@ -69,6 +69,39 @@ describe('useSendMessage - briefcase toolsOverride on the orchestration path (#9
 });
 
 /**
+ * `forceAgent` (a programmatic launch that must run on the agent executor, e.g. Productions
+ * "Direct") has to route to `agent_executor` even with the user's agent toggle OFF, but only
+ * while the Agent Mode admin gate is on. Source-level for the same reason as above: the hook
+ * consumes ~15 providers, so these lock the routing expression rather than render it.
+ */
+describe('useSendMessage - forceAgent routes to the agent executor', () => {
+  const source = readFileSync(resolve(__dirname, 'useSendMessage.ts'), 'utf8');
+  const normalized = source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '')
+    .replace(/\s+/g, ' ');
+
+  it('declares forceAgent as a send option', () => {
+    expect(normalized).toMatch(/forceAgent\?: boolean;/);
+  });
+
+  it('forces the agent override when forceAgent is set, independent of the toggle', () => {
+    expect(normalized).toMatch(
+      /const userOverride: 'force_agent' \| undefined = agentToggleActive \|\| agentDefaultOn \|\| classifierUpgraded \|\| \(agentModeFeatureEnabled && options\?\.forceAgent === true\) \? 'force_agent' : undefined;/
+    );
+  });
+
+  it('never reads forceAgent outside the Agent Mode admin gate, so a disabled feature never dispatches', () => {
+    expect(normalized).not.toMatch(/(?<!agentModeFeatureEnabled && )options\?\.forceAgent/);
+  });
+
+  it('hands userOverride to routeQuery and dispatches the agent branch through agentExecution.start', () => {
+    expect(normalized).toMatch(/routeQuery\(\{[^}]*\buserOverride,/);
+    expect(source.indexOf("routeTarget === 'agent_executor'")).toBeLessThan(source.indexOf('agentExecution.start('));
+  });
+});
+
+/**
  * Per-send system context (a programmatic launch's `systemContext`). Same source-level approach
  * as above. The behaviour on each wire is covered where it is built: `LLMCommand.payload.test.ts`
  * (chat route) and `agentExecute.test.ts` / `startAgentExecution.test.ts` (agent route).

@@ -938,6 +938,12 @@ export const OrchestrationDefaultsSchema = z.object({
     'excel_generation',
     // Only offered when the run gets a video config, which enforces agentVideoClipsPerRun.
     'video_generation',
+    // Only offered when the run gets a production config: an admin with EnableStudioProductions on. Each writes
+    // only a composition the user owns, and every take, clip and track is a capped generation job.
+    'production_storyboard',
+    'production_generate_shot',
+    'production_add_audio',
+    'production_assemble',
     // Inline visualization artifacts: these emit an <artifact> block in the
     // tool result and write nothing - no storage, no user-data mutation - so
     // they are strictly safer than the storage-backed tools above. Without

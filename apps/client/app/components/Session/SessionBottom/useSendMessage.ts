@@ -111,6 +111,8 @@ interface SendClickOptions {
    * first send (`hostCreateSession`) re-dispatches only the prompt, so it does not carry this.
    */
   systemContext?: string;
+  /** Route this one send to the agent executor (still gated on the agent-mode feature flag). */
+  forceAgent?: boolean;
   /** Called when the send is refused before dispatch (one already in flight, validation, setup). */
   onRefused?: () => void;
 }
@@ -661,7 +663,12 @@ export function useSendMessage({
     }
 
     const userOverride: 'force_agent' | undefined =
-      agentToggleActive || agentDefaultOn || classifierUpgraded ? 'force_agent' : undefined;
+      agentToggleActive ||
+      agentDefaultOn ||
+      classifierUpgraded ||
+      (agentModeFeatureEnabled && options?.forceAgent === true)
+        ? 'force_agent'
+        : undefined;
     // Heuristic auto-routing (`routingComplexity === 'complex'` ->
     // agent_executor) is opt-in via the `'auto'` default - never the 'off'
     // default or a bare feature flag. Without this gate, a query the classifier

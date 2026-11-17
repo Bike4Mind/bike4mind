@@ -80,6 +80,11 @@ const CORE_TOOL_SIDE_EFFECTS: Record<B4MLLMTools, ToolSideEffects> = {
   music_generation: 'external',
   audio_generation: 'external',
   video_generation: 'external',
+  // Start generation jobs and rewrite the composition's shots and timeline.
+  production_storyboard: 'external',
+  production_generate_shot: 'external',
+  production_add_audio: 'external',
+  production_assemble: 'external',
   excel_generation: 'external',
   create_data_lake: 'external',
   save_content_to_data_lake: 'external',

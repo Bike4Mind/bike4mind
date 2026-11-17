@@ -51,6 +51,9 @@ vi.mock('@client/app/utils/filesAPICalls', () => ({
 }));
 vi.mock('./probeMediaDuration', () => ({ probeMediaDurationMs: async () => 6_000 }));
 // The Library browser has its own tests; here it only has to open and hand back the picked files.
+vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
+  useFeatureEnabled: () => ({ isFeatureEnabled: () => false }),
+}));
 vi.mock('@client/app/components/Files/EmbeddedFileBrowser', () => ({
   default: forwardRef(function PickerStub(
     {
