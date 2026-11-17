@@ -17,9 +17,13 @@ import StudioChip from '../design/StudioChip';
 import { StudioPanel, StudioSectionLabel } from '../design/StudioPanel';
 import StudioSegmentedControl from '../design/StudioSegmentedControl';
 import { studioColor } from '../design/studioTokens';
+import BrandKitPanel from './BrandKitPanel';
+import BriefPanel from './BriefPanel';
 import ClipInspector from './ClipInspector';
+import HookVariationButton from './HookVariationButton';
 import { probeMediaDurationMs } from './probeMediaDuration';
 import SecondsField from './SecondsField';
+import ShotsBoard from './ShotsBoard';
 import { formatTimecode } from './timelinePlayback';
 import {
   DEFAULT_IMAGE_CLIP_MS,
@@ -54,6 +58,13 @@ const Workspace = styled('div')({
   gap: '20px',
   gridTemplateColumns: 'minmax(0, 1fr)',
   '@media (min-width: 1100px)': { gridTemplateColumns: 'minmax(0, 1fr) 320px' },
+});
+
+const PlanGrid = styled('div')({
+  display: 'grid',
+  gap: '20px',
+  gridTemplateColumns: 'minmax(0, 1fr)',
+  '@media (min-width: 900px)': { gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)' },
 });
 
 const Toolbar = styled('div')({
@@ -126,8 +137,9 @@ const PlaybackTransport = ({ clock, durationMs }: { clock: PlaybackClock; durati
 };
 
 /**
- * The timeline editor for one production: its title, length and output shapes; the live preview with transport
- * and output switch; the tracks; and the selected clip's inspector. Edits stay in a local draft that autosaves.
+ * The editor for one production, top to bottom: its title, length and output shapes; the plan (brief, brand kit and
+ * shots board, each autosaving on its own); the live preview with transport and output switch; the tracks; and the
+ * selected clip's inspector. Timeline edits stay in a local draft that autosaves.
  */
 const ProductionEditor = ({ composition }: { composition: StudioCompositionResponse }) => {
   const [timeline, setTimeline] = useState(composition.timeline);
@@ -175,8 +187,7 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
     return probed ?? FALLBACK_MEDIA_CLIP_MS;
   };
 
-  const onFilesPicked = async (picked: IFabFileDocument[]) => {
-    const trackKind: StudioMediaTrackKind = pickRequest === 'image' ? 'video' : pickRequest;
+  const appendFiles = async (picked: IFabFileDocument[], trackKind: StudioMediaTrackKind) => {
     const lengths = await Promise.all(picked.map(clipLengthFor));
     // Applied to the latest draft, not the one from when the picker opened: probing takes a moment.
     let next = timelineRef.current;
@@ -194,10 +205,14 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
     if (lastClipId) setSelectedClipId(lastClipId);
   };
 
+  const onFilesPicked = (picked: IFabFileDocument[]) =>
+    appendFiles(picked, pickRequest === 'image' ? 'video' : pickRequest);
+
   return (
     <Stack spacing={2.5} data-testid="production-editor">
       <Toolbar>
         <TitleField compositionId={composition.id} initialTitle={composition.title} />
+        <HookVariationButton composition={composition} />
         <SecondsField
           label="Length"
           valueMs={timeline.durationMs}
@@ -229,6 +244,17 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
           {status.kind === 'error' ? `${STATUS_LABEL.error}: ${status.message}` : STATUS_LABEL[status.kind]}
         </Chip>
       </Toolbar>
+
+      <PlanGrid>
+        <BriefPanel composition={composition} />
+        <BrandKitPanel composition={composition} />
+      </PlanGrid>
+      <ShotsBoard
+        composition={composition}
+        timeline={timeline}
+        onTimelineChange={setTimeline}
+        onSendTake={file => void appendFiles([file], 'video')}
+      />
 
       <Workspace>
         <Stack spacing={1.5}>

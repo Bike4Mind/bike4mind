@@ -1,4 +1,4 @@
-import type { StudioCompositionContent } from './composition';
+import type { StudioCompositionContent, StudioCompositionReferences } from './composition';
 import {
   validateStudioTimeline,
   type StudioFileMediaKind,
@@ -6,7 +6,9 @@ import {
   type StudioTimelineReferenceContext,
 } from './validateTimeline';
 
-export type StudioCompositionIssue = StudioTimelineIssue;
+export type StudioCompositionIssue = Omit<StudioTimelineIssue, 'code'> & {
+  code: StudioTimelineIssue['code'] | 'unknown_take';
+};
 
 const validateShotIds = (content: Pick<StudioCompositionContent, 'shots'>): StudioCompositionIssue[] => {
   const seen = new Set<string>();
@@ -27,15 +29,32 @@ const validateShotIds = (content: Pick<StudioCompositionContent, 'shots'>): Stud
 
 type FileReference = { fileId: string; path: (string | number)[]; kinds?: readonly StudioFileMediaKind[] };
 
-// Shot files are candidates of any media kind; the brand kit holds pictures (and product clips).
+// Shot files are candidates of any media kind; the brief and brand kit hold pictures (and product clips).
+const PRODUCT_PHOTO_KINDS: readonly StudioFileMediaKind[] = ['image'];
 const LOGO_KINDS: readonly StudioFileMediaKind[] = ['image'];
 const PRODUCT_KINDS: readonly StudioFileMediaKind[] = ['image', 'video'];
 
+const validateChosenTakes = (content: Pick<StudioCompositionContent, 'shots'>): StudioCompositionIssue[] =>
+  content.shots.flatMap((shot, index): StudioCompositionIssue[] =>
+    shot.chosenFileId && !shot.fileIds.includes(shot.chosenFileId)
+      ? [
+          {
+            code: 'unknown_take',
+            path: ['shots', index, 'chosenFileId'],
+            message: `The chosen take of shot "${shot.title}" is not one of its takes`,
+          },
+        ]
+      : []
+  );
+
 const validateFileReferences = (
-  content: Pick<StudioCompositionContent, 'brandKit' | 'shots'>,
+  content: Pick<StudioCompositionContent, 'brief' | 'brandKit' | 'shots'>,
   { knownFileIds, fileKinds }: StudioTimelineReferenceContext
 ): StudioCompositionIssue[] => {
   const references: FileReference[] = [
+    ...(content.brief.productFileId
+      ? [{ fileId: content.brief.productFileId, path: ['brief', 'productFileId'], kinds: PRODUCT_PHOTO_KINDS }]
+      : []),
     ...(content.brandKit.logoFileId
       ? [{ fileId: content.brandKit.logoFileId, path: ['brandKit', 'logoFileId'], kinds: LOGO_KINDS }]
       : []),
@@ -62,14 +81,15 @@ const validateFileReferences = (
 
 /**
  * Every rule a parsed composition must meet beyond its schema: the timeline rules (paths prefixed with
- * `timeline`), unique shot ids, and, given the context, that the brand kit and shots reference only known files of a
- * kind their slot accepts.
+ * `timeline`), unique shot ids, chosen takes that are among the shot's takes, and, given the context, that the brief,
+ * brand kit and shots reference only known files of a kind their slot accepts.
  */
 export const validateStudioComposition = (
-  content: Pick<StudioCompositionContent, 'brandKit' | 'shots' | 'timeline'>,
+  content: StudioCompositionReferences,
   context: StudioTimelineReferenceContext = {}
 ): StudioCompositionIssue[] => [
   ...validateStudioTimeline(content.timeline, context).map(issue => ({ ...issue, path: ['timeline', ...issue.path] })),
   ...validateShotIds(content),
+  ...validateChosenTakes(content),
   ...validateFileReferences(content, context),
 ];

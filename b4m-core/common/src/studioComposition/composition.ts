@@ -7,6 +7,8 @@ import {
   studioTimelineFileIds,
   type StudioOutputAspectRatio,
   type StudioTimeline,
+  type StudioTimelineTrack,
+  type StudioTimelineTrackKind,
 } from './timeline';
 
 /**
@@ -38,6 +40,8 @@ export const STUDIO_COMPOSITION_LIMITS = {
   shotTitleMaxLength: 200,
   shotDescriptionMaxLength: 4000,
   shotFilesMax: 20,
+  shotPromptMaxLength: 4000,
+  shotIntentMaxLength: 500,
   listLimitMax: 100,
 } as const;
 
@@ -49,6 +53,8 @@ export const StudioCompositionBriefSchema = z.object({
   summary: z.string().trim().max(limits.briefSummaryMaxLength).optional(),
   audience: z.string().trim().max(limits.briefFieldMaxLength).optional(),
   callToAction: z.string().trim().max(limits.briefFieldMaxLength).optional(),
+  // The product photo the ad is built around; an image.
+  productFileId: StudioFileIdSchema.optional(),
 });
 export type StudioCompositionBrief = z.infer<typeof StudioCompositionBriefSchema>;
 
@@ -64,7 +70,11 @@ export const StudioBrandKitSchema = z.object({
 });
 export type StudioBrandKit = z.infer<typeof StudioBrandKitSchema>;
 
-/** One planned shot: what it should show and the candidate assets generated for it. */
+/**
+ * One planned shot: what it should show and the takes generated for it. `fileIds` lists every take, the chosen one
+ * included, so the alternatives are `fileIds` without `chosenFileId`. Shots are stored as Mixed, so new optional
+ * fields need no Mongoose change.
+ */
 export const StudioShotSchema = z.object({
   id: z
     .string()
@@ -75,6 +85,12 @@ export const StudioShotSchema = z.object({
   description: z.string().trim().max(limits.shotDescriptionMaxLength).optional(),
   durationMs: z.number().int().positive().optional(),
   fileIds: z.array(StudioFileIdSchema).max(limits.shotFilesMax).default([]),
+  // The generation prompt for the shot's takes.
+  prompt: z.string().trim().max(limits.shotPromptMaxLength).optional(),
+  // The shot's job in the cut, e.g. "hook", "product reveal" or "call to action".
+  intent: z.string().trim().max(limits.shotIntentMaxLength).optional(),
+  // Must be one of `fileIds` (validateStudioComposition).
+  chosenFileId: StudioFileIdSchema.optional(),
 });
 export type StudioShot = z.infer<typeof StudioShotSchema>;
 
@@ -123,9 +139,10 @@ export const StudioCompositionSummaryResponseSchema = StudioCompositionResponseS
 });
 export type StudioCompositionSummaryResponse = z.infer<typeof StudioCompositionSummaryResponseSchema>;
 
-/** POST body. A timeline left out starts from the template's default. */
+/** POST body. Shots or a timeline left out start from the template's defaults. */
 export const StudioCompositionCreateInputSchema = z.strictObject({
   ...StudioCompositionContentSchema.shape,
+  shots: StudioShotListSchema.optional(),
   timeline: StudioTimelineSchema.optional(),
 });
 export type StudioCompositionCreateBody = z.input<typeof StudioCompositionCreateInputSchema>;
@@ -148,20 +165,99 @@ export type StudioCompositionUpdateInput = z.output<typeof StudioCompositionUpda
 
 const DEFAULT_TIMELINE_FPS = 30;
 
-/** Ads ship in every placement shape at once; the other templates start landscape and add sizes as needed. */
-const TEMPLATE_DEFAULTS: Record<StudioCompositionTemplate, { durationMs: number; aspects: StudioOutputAspectRatio[] }> =
-  {
-    ad_campaign: { durationMs: 15_000, aspects: ['16:9', '9:16', '1:1'] },
-    social_pack: { durationMs: 15_000, aspects: ['9:16', '1:1', '4:5'] },
-    product_video: { durationMs: 30_000, aspects: ['16:9'] },
-    explainer: { durationMs: 60_000, aspects: ['16:9'] },
-    short_film: { durationMs: 120_000, aspects: ['16:9'] },
-    blank: { durationMs: 15_000, aspects: ['16:9'] },
-  };
+/**
+ * What a template starts a production with. Templates are data: the Productions home lists these, and creating a
+ * production reads its default timeline (length, output shapes, empty lanes) and starter shots from here.
+ */
+export type StudioCompositionTemplateDefinition = {
+  label: string;
+  description: string;
+  durationMs: number;
+  aspects: StudioOutputAspectRatio[];
+  /** Empty lanes the timeline starts with, bottom to top. */
+  trackKinds: StudioTimelineTrackKind[];
+  /** The shot list's opening outline; each starter becomes a shot with no takes yet. */
+  starterShots: { title: string; intent: string }[];
+};
 
-/** An empty timeline sized for the template: its default length and output shapes, no tracks yet. */
+const AD_SHOTS = [
+  { title: 'Hook', intent: 'hook' },
+  { title: 'Product', intent: 'product reveal' },
+  { title: 'Benefit', intent: 'benefit' },
+  { title: 'Call to action', intent: 'call to action' },
+];
+
+// Ads ship in every placement shape at once; the other templates start landscape and add sizes as needed.
+export const STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS: Record<
+  StudioCompositionTemplate,
+  StudioCompositionTemplateDefinition
+> = {
+  ad_campaign: {
+    label: 'Ad campaign',
+    description: 'A 15s ad in four shots, cut for 16:9, 9:16 and 1:1.',
+    durationMs: 15_000,
+    aspects: ['16:9', '9:16', '1:1'],
+    trackKinds: ['video', 'voice', 'music', 'captions'],
+    starterShots: AD_SHOTS,
+  },
+  social_pack: {
+    label: 'Social pack',
+    description: 'Short vertical and square cuts for social feeds.',
+    durationMs: 15_000,
+    aspects: ['9:16', '1:1', '4:5'],
+    trackKinds: ['video', 'music', 'captions'],
+    starterShots: [
+      { title: 'Hook', intent: 'hook' },
+      { title: 'Payoff', intent: 'payoff' },
+    ],
+  },
+  product_video: {
+    label: 'Product video',
+    description: 'A 30s product walkthrough in 16:9.',
+    durationMs: 30_000,
+    aspects: ['16:9'],
+    trackKinds: ['video', 'voice', 'music', 'captions'],
+    starterShots: [
+      { title: 'Intro', intent: 'hook' },
+      { title: 'Features', intent: 'features' },
+      { title: 'In use', intent: 'demonstration' },
+      { title: 'Call to action', intent: 'call to action' },
+    ],
+  },
+  explainer: {
+    label: 'Explainer',
+    description: 'A 60s narrated explainer in 16:9.',
+    durationMs: 60_000,
+    aspects: ['16:9'],
+    trackKinds: ['video', 'voice', 'music', 'captions'],
+    starterShots: [
+      { title: 'Problem', intent: 'problem' },
+      { title: 'Solution', intent: 'solution' },
+      { title: 'How it works', intent: 'explanation' },
+      { title: 'Wrap-up', intent: 'call to action' },
+    ],
+  },
+  short_film: {
+    label: 'Short film',
+    description: 'A 2 minute story in 16:9.',
+    durationMs: 120_000,
+    aspects: ['16:9'],
+    trackKinds: ['video', 'voice', 'sfx', 'music'],
+    starterShots: [],
+  },
+  blank: {
+    label: 'Blank',
+    description: 'An empty 15s timeline in 16:9.',
+    durationMs: 15_000,
+    aspects: ['16:9'],
+    trackKinds: ['video'],
+    starterShots: [],
+  },
+};
+
+/** An empty timeline sized for the template: its default length, output shapes and empty lanes. */
 export const defaultStudioTimeline = (template: StudioCompositionTemplate): StudioTimeline => {
-  const { durationMs, aspects } = TEMPLATE_DEFAULTS[template];
+  const { durationMs, aspects, trackKinds } = STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS[template];
   return {
     version: STUDIO_TIMELINE_VERSION,
     durationMs,
@@ -172,18 +268,36 @@ export const defaultStudioTimeline = (template: StudioCompositionTemplate): Stud
       aspectRatio,
       ...STUDIO_OUTPUT_DEFAULT_SIZES[aspectRatio],
     })),
-    tracks: [],
+    tracks: trackKinds.map((kind, index) => ({
+      id: `track-${kind}-${index + 1}`,
+      kind,
+      enabled: true,
+      clips: [],
+    })) as StudioTimelineTrack[],
   };
 };
 
-/** Every FabFile id the composition references (brand kit, shots, timeline), deduplicated. */
+/** The template's starter shots, with no takes yet. */
+export const defaultStudioShots = (template: StudioCompositionTemplate): StudioShot[] =>
+  STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS[template].starterShots.map(({ title, intent }, index) => ({
+    id: `shot-${index + 1}`,
+    title,
+    intent,
+    fileIds: [],
+  }));
+
+/** The content fields that reference Library files. */
+export type StudioCompositionReferences = Pick<StudioCompositionContent, 'brief' | 'brandKit' | 'shots' | 'timeline'>;
+
+/** Every FabFile id the composition references (brief, brand kit, shots, timeline), deduplicated. */
 export const studioCompositionFileIds = (
-  content: Pick<StudioCompositionContent, 'brandKit' | 'shots' | 'timeline'>
+  content: StudioCompositionReferences
 ): string[] => {
   const ids = [
+    ...(content.brief.productFileId ? [content.brief.productFileId] : []),
     ...(content.brandKit.logoFileId ? [content.brandKit.logoFileId] : []),
     ...content.brandKit.productFileIds,
-    ...content.shots.flatMap(shot => shot.fileIds),
+    ...content.shots.flatMap(shot => [...shot.fileIds, ...(shot.chosenFileId ? [shot.chosenFileId] : [])]),
     ...studioTimelineFileIds(content.timeline),
   ];
   return [...new Set(ids)];
