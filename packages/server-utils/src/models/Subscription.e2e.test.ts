@@ -577,6 +577,15 @@ describe('hasOtherGrantingUserSubscription', () => {
     expect(await subscriptionRepository.hasOtherGrantingUserSubscription('user_1', ENDED)).toBe(true);
   });
 
+  it('counts a real legacy admin grant with no subscription id or storage metadata', async () => {
+    const legacy = row({ status: 'active', source: 'admin_grant' });
+    const { subscriptionId: omitted, ...withoutSubscriptionId } = legacy;
+    expect(omitted).toBeTruthy();
+    await Subscription.collection.insertOne(withoutSubscriptionId);
+    expect(await subscriptionRepository.hasOtherGrantingUserSubscription('user_1', ENDED)).toBe(true);
+    expect(await subscriptionRepository.hasOtherGrantingUserSubscription('user_2', ENDED)).toBe(false);
+  });
+
   it('counts an active admin grant', async () => {
     await Subscription.create(row({ status: 'active', source: 'admin_grant', subscriptionId: 'admin_grant_abc' }));
 

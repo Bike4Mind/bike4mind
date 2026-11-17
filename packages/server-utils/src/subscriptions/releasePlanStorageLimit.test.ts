@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   hasOtherGrantingUserSubscription: vi.fn(),
   emitMetric: vi.fn(),
 }));
+vi.mock('@bike4mind/db-core', () => ({ withTransaction: async <T>(callback: () => Promise<T>) => callback() }));
 vi.mock('@bike4mind/database', () => ({ userRepository: { clearPlanStorageLimit: mocks.clearPlanStorageLimit } }));
 vi.mock('../models/Subscription', () => ({
   subscriptionRepository: { hasOtherGrantingUserSubscription: mocks.hasOtherGrantingUserSubscription },

@@ -475,7 +475,9 @@ describe('customer.subscription.deleted', () => {
   it("releases the user's plan storage allowance, owner taken from the row", async () => {
     mocks.updateByStripeSubscriptionId.mockResolvedValue({ ...userRow, status: 'active' });
 
-    await deliver(deleted('cancellation_requested'));
+    const event = deleted('cancellation_requested');
+    event.data.object.metadata = { userId: 'different_metadata_user' };
+    await deliver(event);
 
     expect(mocks.releasePlanStorageLimit).toHaveBeenCalledOnce();
     expect(mocks.releasePlanStorageLimit).toHaveBeenCalledWith('user_1', 'sub_1', logger);
