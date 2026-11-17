@@ -11,6 +11,11 @@
       "dockerfile": "infra/searxng/Dockerfile",
       "env": "SEARXNG_IMAGE",
       "hashInputs": ["selfhost/searxng/settings.yml"]
+    },
+    {
+      "name": "render-worker",
+      "dockerfile": "apps/workers/Dockerfile.renderworker",
+      "env": "RENDER_WORKER_IMAGE"
     }
   ],
   "externalImages": [
@@ -99,6 +104,7 @@
     "PUBLISHED_ARTIFACTS_BUCKET_NAME",
     "REDDIT_PIXEL_ID",
     "REFUSED_REQUEST_BURST_ALARM_PER_15MIN",
+    "RENDER_WORKER_MIN_TASKS",
     "SEED_STAGE_NAME",
     "SERVER_DOMAIN",
     "SES_CONFIGURATION_SET",

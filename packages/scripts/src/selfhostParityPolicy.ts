@@ -543,7 +543,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   broker('queue:infra/queues.ts:generationJobDLQ', '0eb29387a6952921e713298ba6acf3cd1aef5f60d84e67cffe177843b714f38f'),
   wired(
     'queue:infra/queues.ts:generationJobQueue',
-    '6f1c037210641aa0733f7b07b7c1c47c7520e464d14954c6085b2866707daaf9',
+    '2e35ded8dd8f4f9f90b5dfb40c9fb60229caf1789733fe607cf9c911926e9b2c',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:generationJobQueue',
@@ -739,6 +739,12 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   broker(
     'queue:infra/queues.ts:questExportQueueDLQ',
     '25de3f067cc3dbb3aa93798220af65df41849f0baad7ef6cd008e56706335966'
+  ),
+  broker('queue:infra/queues.ts:renderJobDLQ', 'e1f19aaf06fd6c17528906c2932480b7f10810779ba40ac2bad84885cd2c40f6'),
+  gapBecause(
+    'queue:infra/queues.ts:renderJobQueue',
+    '7c16ef5e8436376ea6e5b246f1965979fe7c60e0034b0d5db07c7cb0a4093e41',
+    'Drained by the render worker (apps/workers/src/render/main.ts) as its own process: the hosted RenderWorker Fargate service, the render-worker compose profile or the chart renderWorker Deployment, not the self-host worker.'
   ),
   wired(
     'queue:infra/queues.ts:researchEngineQueue',
@@ -1268,6 +1274,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'service:infra/chatCompletion.ts:ChatCompletion',
     'cf34cc039fc0de71bf1daaabf43f40deef92126f55e00be9c3025645c1769cfb',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
+  ),
+  gapBecause(
+    'service:infra/renderWorker.ts:RenderWorker',
+    '3013b63c8a3de2e2b75d3656319eb3e0d86de76a5013a88260f16b2c81466316',
+    'Hosted Fargate twin of the render worker; self-host runs the same image through the chart renderWorker Deployment or the render-worker compose profile (both opt-in).'
   ),
   gap('service:infra/searxng.ts:Searxng', 'fef5f4ce5e094d32525bb4a13828a34b67ba75a38ab72c70e526ba908c31f049'),
   gap(

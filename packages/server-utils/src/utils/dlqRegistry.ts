@@ -315,6 +315,18 @@ const DLQ_REGISTRY = [
     describe: entityAt('Job', 'jobId'),
   },
   {
+    label: 'render-job',
+    displayName: 'Studio Render Job',
+    application: 'GenerationJob',
+    sourceQueue: 'renderJobQueue',
+    description: 'Encodes a Studio composition to video on the render worker.',
+    replay: 'safe',
+    replayNote:
+      'The worker skips a job that is no longer running and treats an already succeeded render as done, so a replay only re-encodes a job that never finished.',
+    owner: 'Generation jobs',
+    describe: entityAt('Job', 'jobId'),
+  },
+  {
     label: 'liveops-triage',
     displayName: 'LiveOps Triage',
     application: 'LiveOpsTriage',

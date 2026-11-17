@@ -65,3 +65,4 @@ jobs:
         run: |
           helm lint selfhost/kubernetes -f selfhost/kubernetes/images.example.yaml
           helm lint selfhost/kubernetes -f selfhost/kubernetes/images.example.yaml -f selfhost/kubernetes/external-mongo.example.yaml
+          helm lint selfhost/kubernetes -f selfhost/kubernetes/render-worker-only.example.yaml

@@ -18,6 +18,7 @@ export * from './subscriberFanout';
 export * from './vpc';
 export * from './websocket';
 export * from './searxng';
+export * from './renderWorker';
 export * from './chatCompletion';
 export * from './web';
 export * from './llm';
