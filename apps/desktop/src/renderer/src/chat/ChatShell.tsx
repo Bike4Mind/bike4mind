@@ -53,6 +53,7 @@ import { PanelRightIcon } from './icons';
 import { OpenPaneButtons, PanesMenu, type PaneControl } from './PanesMenu';
 import { StudioPane } from './studio/StudioPane';
 import type { StudioController } from './studio/controller';
+import { useStudioController } from './studio/useStudioController';
 import { studioPaneLayout } from './studio/layout';
 import { ProjectSubtitleLine } from './ProjectSubtitleLine';
 import { MessageThread } from './MessageThread';
@@ -250,7 +251,7 @@ export function ChatShell({
   account,
   onOpenModelServers,
   onOpenImportSettings,
-  studio,
+  studio: suppliedStudio,
 }: {
   auth?: AuthState | null;
   account?: AccountStrip;
@@ -378,6 +379,12 @@ export function ChatShell({
   const [modelOpen, setModelOpen] = useState(false);
   const [studioOpen, setStudioOpen] = useState(false);
   const [studioRegion, studioWidth] = useElementWidth();
+  const liveStudio = useStudioController(
+    persistedId,
+    studioOpen && !suppliedStudio,
+    `${auth?.environment.url ?? ''}:${auth?.user?.id ?? ''}:${auth?.status ?? ''}`
+  );
+  const studio = suppliedStudio ?? liveStudio;
   // Per conversation rather than one flag: see terminalPanelState.ts.
   const [terminalSessions, setTerminalSessions] = useState(readTerminalOpenSessions);
   // Which conversation last asked for the keyboard to go to its terminal; see TerminalPanel.

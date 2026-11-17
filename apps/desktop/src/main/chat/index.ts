@@ -1,4 +1,5 @@
 import { registerOrchestrationIpc } from './orchestrationIpc';
+import { registerStudio } from './studio/registerStudio';
 import { randomUUID } from 'node:crypto';
 import { copyFile, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
@@ -637,6 +638,11 @@ export function registerChat(
   const broadcast = (event: ChatStreamEvent) => {
     send(IPC_CHANNELS.chatStreamEvent, event);
     if (event.type === 'tool-end') pullRequests.observeToolEnd(event.sessionId, event.call);
+    if (event.type === 'tool-end' && event.call.media?.length) {
+      void studioIntegration
+        .indexChatSession(event.sessionId)
+        .catch(error => logger.warn(`STUDIO: could not index chat media: ${String(error)}`));
+    }
   };
 
   const videoJobs = new VideoJobScheduler({
@@ -824,6 +830,19 @@ export function registerChat(
     sessionClosed: hooks.sessionClosed,
     releaseSessionTerminals: hooks.releaseSessionTerminals,
   });
+
+  const studioIntegration = registerStudio({
+    ipc: ipcMain,
+    directory: userData,
+    sessions: store,
+    service,
+    attachments,
+    media,
+    models,
+    auth,
+    changed: event => send(IPC_CHANNELS.studioChanged, event),
+  });
+  service.studioDisposed = studioIntegration.dispose;
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: unknown) =>
     service.listModels(force === 'local' ? 'local' : force === true)

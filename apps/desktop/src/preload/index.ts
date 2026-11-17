@@ -61,6 +61,18 @@ import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewState } from '@sh
 // passthrough: a passthrough would let renderer code reach every handler main ever
 // registers, which defeats the point of keeping the auth handlers out of its reach.
 const api: DesktopApi = {
+  studio: {
+    get: sessionId => ipcRenderer.invoke(IPC_CHANNELS.studioGet, sessionId),
+    prepare: draft => ipcRenderer.invoke(IPC_CHANNELS.studioPrepare, draft),
+    create: request => ipcRenderer.invoke(IPC_CHANNELS.studioCreate, request),
+    pickFiles: sessionId => ipcRenderer.invoke(IPC_CHANNELS.studioPickFiles, sessionId),
+    assetAction: request => ipcRenderer.invoke(IPC_CHANNELS.studioAssetAction, request),
+    onChanged: listener => {
+      const handler = (_event: unknown, event: Parameters<typeof listener>[0]) => listener(event);
+      ipcRenderer.on(IPC_CHANNELS.studioChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.studioChanged, handler);
+    },
+  },
   getAppInfo: () => ipcRenderer.invoke(IPC_CHANNELS.getAppInfo),
   setTheme: (mode, backgroundColor) => ipcRenderer.invoke(IPC_CHANNELS.setTheme, mode, backgroundColor),
   update: {

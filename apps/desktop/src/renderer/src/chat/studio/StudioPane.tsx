@@ -180,6 +180,7 @@ function CreationForm({
                 edit({
                   ...draft,
                   selection: {
+                    ...draft.selection,
                     mode: 'custom',
                     sessionIds: event.target.checked
                       ? [...selected, session.id]
@@ -193,6 +194,30 @@ function CreationForm({
           {controller.sessions.length === 0 && (
             <Typography level="body-xs">No sessions available for selection.</Typography>
           )}
+        </Stack>
+      )}
+      {controller.pickFiles && (
+        <Stack spacing={0.5}>
+          <Button
+            size="sm"
+            variant="outlined"
+            disabled={locked}
+            data-testid="studio-pick-files-btn"
+            onClick={() =>
+              void controller.pickFiles!()
+                .then(files => {
+                  if (files.length) edit({ ...draft, selection: { ...draft.selection, files } });
+                })
+                .catch(cause => setError(errorText(cause)))
+            }
+          >
+            Select context files
+          </Button>
+          {draft.selection.files?.map(file => (
+            <Typography key={file} level="body-xs">
+              {file}
+            </Typography>
+          ))}
         </Stack>
       )}
       {capability?.status === 'available' &&
@@ -264,6 +289,9 @@ function CreationForm({
       >
         Review context and {kind === 'speech' ? 'script' : 'prompt'}
       </Button>
+      <Typography level="body-xs">
+        Preparation uses your session model and may use credits. Creating media is a separate paid action.
+      </Typography>
       {review && (
         <Stack spacing={1} data-testid="studio-context-review">
           <Typography level="title-sm">Review before creating</Typography>

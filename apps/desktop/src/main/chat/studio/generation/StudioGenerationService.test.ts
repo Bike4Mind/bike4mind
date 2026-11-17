@@ -107,6 +107,31 @@ describe('Studio generation', () => {
     expect((await workspaces.get(session.id))?.jobs).toEqual([]);
   });
 
+  it('copies chat media into family storage and never reimports deleted assets', async () => {
+    const parent = await sessions.create();
+    const child = await sessions.create(undefined, {
+      origin: { parentSessionId: parent.id, depth: 1, seedPrompt: '' },
+    });
+    const stored = await media.save(parent.id, Buffer.from('chat image'), 'image/png');
+    const asset = {
+      id: 'chat-image',
+      kind: 'image' as const,
+      title: 'Chat image',
+      originatingSessionId: parent.id,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      url: stored.url,
+    };
+    await service.importChatAsset(parent.id, asset);
+    await media.forgetSession(parent.id);
+    const file = await service.locateAsset(child.id, asset.id);
+    expect(file && (await readFile(file.path, 'utf8'))).toBe('chat image');
+    await service.removeAsset(child.id, asset.id);
+    await service.importChatAsset(child.id, asset);
+    expect(await workspaces.getAsset(child.id, asset.id)).toBeNull();
+    expect(client.generateImage).not.toHaveBeenCalled();
+  });
+
   const requests: StudioGenerationRequest[] = [
     image,
     music,

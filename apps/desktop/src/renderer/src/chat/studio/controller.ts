@@ -59,6 +59,7 @@ export interface StudioController extends StudioIdentity {
     | { status: 'error'; error: string }
     | { status: 'ready'; assets: readonly StudioAsset[]; jobs: readonly StudioJob[] };
   busy?: boolean;
+  pickFiles?: () => Promise<string[]>;
   prepareCreation(draft: StudioCreationDraft): Promise<StudioReview>;
   create(request: { draft: StudioCreationDraft; reviewId: string; preparedPrompt: string }): Promise<void>;
   previewAsset?: (asset: StudioAsset) => Promise<void>;

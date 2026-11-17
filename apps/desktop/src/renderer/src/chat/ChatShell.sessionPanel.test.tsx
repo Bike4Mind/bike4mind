@@ -516,7 +516,7 @@ describe('the shell layout', () => {
     await act(async () => get('chat-panes-menu-btn').click());
     await act(async () => get('chat-panes-menu-studio-item').click());
     expect(get('studio-pane').dataset.variant).toBe(width >= 1120 ? 'docked' : 'drawer');
-    expect(get('studio-unavailable')).toBeTruthy();
+    expect(find('studio-unavailable')).toBeNull();
     expect(get('chat-composer-input')).toBe(composer);
     await act(async () => get('studio-close-btn').click());
     expect(find('studio-pane')).toBeNull();

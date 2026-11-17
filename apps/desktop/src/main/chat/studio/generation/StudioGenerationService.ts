@@ -57,6 +57,48 @@ export class StudioGenerationService {
 
   constructor(private readonly deps: StudioGenerationDeps) {}
 
+  async importChatAsset(sessionId: string, asset: StudioAsset): Promise<void> {
+    const connection = this.requireConnection();
+    const workspace = await this.requireWorkspace(sessionId, connection);
+    const source = parseMediaUrl(asset.url);
+    if (!source || source.sessionId !== asset.originatingSessionId) throw new Error('Invalid chat asset location.');
+    await this.lock(`${connection.scope}:${workspace.workspaceId}`, async () => {
+      if (await this.deps.workspaces.getJob(sessionId, asset.id)) return;
+      const file = await this.deps.media.read(source.sessionId, source.name);
+      this.assertConnection(connection);
+      if (!file) return;
+      const stored = await this.deps.media.saveForContent(
+        bucketFor(connection.scope, workspace.workspaceId, asset.id),
+        file.bytes,
+        file.bytes,
+        file.mimeType
+      );
+      this.assertConnection(connection);
+      if (
+        !(await this.deps.workspaces.upsertAsset(
+          sessionId,
+          { ...asset, url: stored.url, mimeType: stored.mimeType },
+          connection.scope
+        ))
+      )
+        throw new Error('Studio workspace unavailable.');
+      await this.saveJob(
+        sessionId,
+        {
+          id: asset.id,
+          kind: asset.kind,
+          originatingSessionId: asset.originatingSessionId,
+          state: 'completed',
+          createdAt: asset.createdAt,
+          updatedAt: asset.updatedAt,
+          idempotencyKey: asset.id,
+          assetIds: [asset.id],
+        },
+        connection
+      );
+    });
+  }
+
   async submit(sessionId: string, input: StudioGenerationRequest): Promise<StudioJob> {
     const request = {
       ...studioGenerationRequestSchema.parse(input),
@@ -65,13 +107,6 @@ export class StudioGenerationService {
     };
     const connection = this.requireConnection();
     const workspace = await this.requireWorkspace(sessionId, connection);
-    if (!(await this.deps.authorize({ sessionId, request: structuredClone(request) }))) {
-      throw new Error('Studio generation was not approved.');
-    }
-    this.assertConnection(connection);
-    if ((await this.requireWorkspace(sessionId, connection)).workspaceId !== workspace.workspaceId) {
-      throw new Error('The Studio workspace changed.');
-    }
     const now = new Date().toISOString();
     let job: StudioJob = {
       id: randomUUID(),
@@ -85,6 +120,13 @@ export class StudioGenerationService {
       provenance: request.provenance,
     };
     return this.lock(`${connection.scope}:${workspace.workspaceId}`, async () => {
+      if (!(await this.deps.authorize({ sessionId, request: structuredClone(request) }))) {
+        throw new Error('Studio generation was not approved.');
+      }
+      this.assertConnection(connection);
+      if ((await this.requireWorkspace(sessionId, connection)).workspaceId !== workspace.workspaceId) {
+        throw new Error('The Studio workspace changed.');
+      }
       await this.saveJob(sessionId, job, connection);
       try {
         if (request.kind === 'image') {

@@ -798,6 +798,7 @@ function childProject(project: ChatProject, worktree: { branch: string; base: st
 export type AutomaticTurnResult = { ok: true } | { ok: false; busy: boolean; error: string };
 
 export class ChatService {
+  studioDisposed?: () => void;
   private readonly loopRequests = new Map<string, AbortController>();
   private readonly loops = new LoopScheduler(
     id => this.hasTurnInFlight(id) || this.queuedMessages(id).length > 0,
@@ -2915,6 +2916,7 @@ export class ChatService {
   }
 
   dispose(): void {
+    this.studioDisposed?.();
     this.clearLoops();
     // Dropped BEFORE the aborts, so a promotion still in flight does not start a turn on the
     // way out: each abort settles a reply, and settleQueue would otherwise send it.
@@ -8044,6 +8046,41 @@ export class ChatService {
    * conversation has to move somewhere, and the model the user last chose is the likeliest one
    * they would pick for it themselves.
    */
+  async studioContextRoots(sessionId: string): Promise<readonly string[]> {
+    const scope = this.deps.store.scopeKey();
+    const session = await this.deps.store.get(sessionId);
+    if (!session) throw new Error('Session is unavailable.');
+    const roots = (await this.resolveToolScope(session)).roots;
+    if (scope !== this.deps.store.scopeKey()) throw new Error('Account changed.');
+    return roots;
+  }
+
+  async prepareStudioText(sessionId: string, system: string, input: string, signal: AbortSignal): Promise<string> {
+    const scope = this.deps.store.scopeKey();
+    const session = await this.deps.store.get(sessionId);
+    if (!session || scope !== this.deps.store.scopeKey()) throw new Error('Session is unavailable.');
+    let output = '';
+    await this.streamAuxiliary(
+      this.deps.getApiClient(),
+      {
+        model: session.model,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: input },
+        ],
+        tools: [],
+        maxTokens: 4096,
+      },
+      event => {
+        if (event.type === 'content') output += event.text ?? '';
+      },
+      signal
+    );
+    signal.throwIfAborted();
+    if (scope !== this.deps.store.scopeKey()) throw new Error('Account changed.');
+    return output;
+  }
+
   private async pickModel(models: readonly ChatModelOption[]): Promise<string | null> {
     const remembered = await this.deps.modelMemory?.read();
     return resolveDefaultModel(models, [remembered, this.deps.preferredModel]);
