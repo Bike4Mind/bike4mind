@@ -4,7 +4,7 @@ import { subscriptionRepository } from '../models/Subscription';
 import { emitMetric } from '../utils/cloudwatch';
 
 /**
- * Takes the plan storage allowance away from a user whose subscription has ended (#7379; a status in
+ * Takes the plan storage allowance away from a user whose subscription has ended (a status in
  * TERMINAL_SUBSCRIPTION_STATUSES, or customer.subscription.deleted): clears
  * `planStorageLimit`, so the enforced limit falls back to the manual override, or to
  * DEFAULT_STORAGE_LIMIT_MB without one. Nothing stored is deleted; a user left over the new limit

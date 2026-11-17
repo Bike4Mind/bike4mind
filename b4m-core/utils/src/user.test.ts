@@ -25,7 +25,7 @@ describe('checkStorageLimit', () => {
     );
   });
 
-  it('refuses any upload once a cancelled plan leaves usage above the default limit (#7379)', async () => {
+  it('refuses any upload once a cancelled plan leaves usage above the default limit', async () => {
     // What clearPlanStorageLimit leaves behind: storageLimit back at the default, usage unchanged.
     const lapsed = user({
       storageLimit: DEFAULT_STORAGE_LIMIT_MB,
