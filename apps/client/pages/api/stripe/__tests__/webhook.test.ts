@@ -481,6 +481,17 @@ describe('customer.subscription.deleted', () => {
     expect(mocks.releasePlanStorageLimit).toHaveBeenCalledWith('user_1', 'sub_1', logger);
   });
 
+  it('releases the allowance before the invoice cleanup, so a delivery that times out in it has still released', async () => {
+    mocks.updateByStripeSubscriptionId.mockResolvedValue({ ...userRow, status: 'active' });
+    mocks.voidOpenSubscriptionInvoices.mockReturnValueOnce(new Promise(() => {}));
+
+    // Not awaited: the handler waits on the cleanup, which here never settles.
+    void deliver(deleted('cancellation_requested'));
+    await vi.waitFor(() => expect(mocks.voidOpenSubscriptionInvoices).toHaveBeenCalled());
+
+    expect(mocks.releasePlanStorageLimit).toHaveBeenCalledOnce();
+  });
+
   it('leaves storage alone for an org-owned subscription and in a stage with no row', async () => {
     mocks.updateByStripeSubscriptionId.mockResolvedValueOnce({
       ...userRow,

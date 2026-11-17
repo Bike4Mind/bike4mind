@@ -588,3 +588,51 @@ describe('findNonTerminalStripeRows', () => {
     expect(found[0]).not.toHaveProperty('periodStartsAt');
   });
 });
+
+describe('hasOtherGrantingUserSubscription', () => {
+  const ENDED = 'sub_ended';
+
+  it('is false when the ended subscription is the only row', async () => {
+    await Subscription.create(row({ subscriptionId: ENDED, status: 'canceled' }));
+
+    expect(await subscriptionRepository.hasOtherGrantingUserSubscription('user_1', ENDED)).toBe(false);
+  });
+
+  it('does not count the ended subscription itself, even before its row is marked ended', async () => {
+    await Subscription.create(row({ subscriptionId: ENDED, status: 'active' }));
+
+    expect(await subscriptionRepository.hasOtherGrantingUserSubscription('user_1', ENDED)).toBe(false);
+  });
+
+  // Spelled out rather than derived from PLAN_STORAGE_GRANTING_STATUSES, so narrowing the set fails a case.
+  it.each(['active', 'trialing'] as const)('is true for another %s row (plan switch)', async status => {
+    await Subscription.create(row({ subscriptionId: ENDED, status: 'canceled' }));
+    await Subscription.create(row({ subscriptionId: 'sub_new', status }));
+
+    expect(await subscriptionRepository.hasOtherGrantingUserSubscription('user_1', ENDED)).toBe(true);
+  });
+
+  it('counts an active admin grant', async () => {
+    await Subscription.create(row({ status: 'active', source: 'admin_grant', subscriptionId: 'admin_grant_abc' }));
+
+    expect(await subscriptionRepository.hasOtherGrantingUserSubscription('user_1', ENDED)).toBe(true);
+  });
+
+  it.each(['past_due', 'unpaid', 'incomplete', 'paused', 'canceled', 'incomplete_expired'] as const)(
+    'ignores another %s row',
+    async status => {
+      await Subscription.create(row({ subscriptionId: 'sub_other', status }));
+
+      expect(await subscriptionRepository.hasOtherGrantingUserSubscription('user_1', ENDED)).toBe(false);
+    }
+  );
+
+  it("ignores another user's row and an org row with the same owner id", async () => {
+    await Subscription.create(row({ ownerId: 'user_2', subscriptionId: 'sub_u2' }));
+    await Subscription.create(
+      row({ ownerType: SubscriptionOwnerType.Organization, ownerId: 'user_1', subscriptionId: 'sub_org' })
+    );
+
+    expect(await subscriptionRepository.hasOtherGrantingUserSubscription('user_1', ENDED)).toBe(false);
+  });
+});
