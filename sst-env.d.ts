@@ -364,6 +364,10 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "SLACK_FEEDBACK_DESTINATIONS": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "STRIPE_PUBLISHABLE_KEY": {
       "type": "sst.sst.Secret"
       "value": string

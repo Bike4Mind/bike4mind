@@ -134,6 +134,7 @@ const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
 const StudioPage = lazy(() => import('./routes/studio/$modality'));
 const StudioProductionsPage = lazy(() => import('./routes/studio/productions'));
+const StudioProductionEditorPage = lazy(() => import('./routes/studio/productions.$compositionId'));
 const StudioLibraryPage = lazy(() => import('./routes/studio/library'));
 
 // Shared coercion for the optional string search params nearly every route declares.
@@ -616,6 +617,20 @@ export const studioProductionsRoute = createRoute({
       <StudioProductionsPage />
     </Suspense>
   ),
+});
+
+// One production open in the timeline editor. Static prefix, so it never collides with /studio/$modality.
+export const studioProductionEditorRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/studio/productions/$compositionId',
+  component: function StudioProductionEditorRouteComponent() {
+    const { compositionId } = studioProductionEditorRoute.useParams();
+    return (
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <StudioProductionEditorPage compositionId={compositionId} />
+      </Suspense>
+    );
+  },
 });
 
 export const studioLibraryRoute = createRoute({
@@ -1502,6 +1517,7 @@ const routeTree = rootRoute.addChildren([
     hearthRoute,
     studioRoute,
     studioProductionsRoute,
+    studioProductionEditorRoute,
     studioLibraryRoute,
     ...builtAppShellPremiumRoutes,
   ]),
