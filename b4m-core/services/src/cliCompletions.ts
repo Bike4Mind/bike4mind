@@ -264,6 +264,11 @@ export interface CompletionParams {
    */
   run?: CompletionRunAttribution;
   /**
+   * Opaque identifier the provider receives instead of the hash of `userId`: set for a platform key's
+   * end user (toPlatformEndUserProviderId). `userId` still owns billing and every other check.
+   */
+  providerEndUserId?: string;
+  /**
    * Where this completion request originated. Recorded on the credit
    * transaction (and analytics event) so reports can break down usage by
    * surface (cli, api, etc.). Defaults to 'api' since this service is only
@@ -792,6 +797,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     modelInfo,
     logger: logger ?? new Logger(),
     endUserId: userId,
+    providerEndUserId: params.providerEndUserId,
   });
 
   if (!llm) {
