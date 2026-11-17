@@ -16,16 +16,29 @@ import {
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
 vi.mock('sst', () => ({
-  Resource: new Proxy({} as Record<string, unknown>, { get: (_, key) => ({ value: `test-${String(key)}` }) }),
+  Resource: new Proxy({} as Record<string, unknown>, {
+    get: (_, key) => ({ value: `test-${String(key)}`, name: `test-${String(key)}` }),
+  }),
 }));
 
 const effects = vi.hoisted(() => ({
+  deleteImportPrefix: vi.fn(),
   deleteGenerated: vi.fn(),
   deletePrefix: vi.fn(),
   deleteFile: vi.fn(),
   sendCompleteEmail: vi.fn(),
   cdnAdd: vi.fn(),
   cdnFlush: vi.fn(),
+}));
+vi.mock('@bike4mind/fab-pipeline', async importActual => ({
+  ...(await importActual<typeof import('@bike4mind/fab-pipeline')>()),
+  S3Storage: class {
+    constructor(private readonly bucketName: string) {}
+    deletePermanently = effects.deleteFile;
+    deletePrefixPermanently(prefix: string) {
+      return effects.deleteImportPrefix(this.bucketName, prefix);
+    }
+  },
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ delete: effects.deleteGenerated, deletePermanently: effects.deleteGenerated }),
@@ -183,6 +196,7 @@ describe('retention ownership through actual account deletion and later organiza
     await expect(completeAccountDeletion(ownerId, { logger, erasureRegistry, now })).resolves.toEqual({
       deleted: true,
     });
+    expect(effects.deleteImportPrefix).toHaveBeenCalledWith('test-historyImportBucket', `notebooks/${ownerId}/`);
     expect(await User.exists({ _id: ownerId })).toBeNull();
     expect(await Session.collection.findOne({ _id: originId })).toBeNull();
     expect(await FabFile.exists({ _id: fileId })).not.toBeNull();

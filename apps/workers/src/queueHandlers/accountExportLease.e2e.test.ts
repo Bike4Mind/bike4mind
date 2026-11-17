@@ -8,7 +8,22 @@ import {
   MONGO_TEST_TIMEOUT_MS,
   settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
-const h = vi.hoisted(() => ({ erase: vi.fn(), prefix: vi.fn(), content: vi.fn() }));
+const h = vi.hoisted(() => ({
+  deleteImportPrefix: vi.fn(),
+  erase: vi.fn(),
+  prefix: vi.fn(),
+  content: vi.fn(),
+}));
+vi.mock('@bike4mind/fab-pipeline', async importActual => ({
+  ...(await importActual<typeof import('@bike4mind/fab-pipeline')>()),
+  S3Storage: class {
+    constructor(private readonly bucketName: string) {}
+    deletePermanently = h.erase;
+    deletePrefixPermanently(prefix: string) {
+      return h.deleteImportPrefix(this.bucketName, prefix);
+    }
+  },
+}));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ deletePermanently: h.erase, deletePrefixPermanently: h.prefix }),
 }));
@@ -214,6 +229,7 @@ describe('shared export and strict erasure fences with Mongo', () => {
     expect([...versions]).toEqual([[foreign, ['foreign']]]);
     expect(await OrganizationAuditEventModel.find({ actorUserId: userId }).sort({ _id: 1 }).lean()).toEqual(before);
     expect(h.prefix).toHaveBeenCalledWith(`exports/organization-data/${userId}/`);
+    expect(h.deleteImportPrefix).toHaveBeenCalledWith('test-historyImportBucket', `notebooks/${userId}/`);
   });
 
   it('refuses an old invocation checkpoint after token replacement', async () => {
