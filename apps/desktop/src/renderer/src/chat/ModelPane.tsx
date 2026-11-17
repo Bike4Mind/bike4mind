@@ -28,6 +28,7 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
+import type * as THREE from 'three';
 import type { ModelLighting, ModelUnits, ModelView } from '@shared/model3d';
 import {
   CaretDownIcon,
@@ -39,7 +40,9 @@ import {
   FolderIcon,
   FrameIcon,
   GridIcon,
+  MeasureIcon,
   RecordIcon,
+  SectionIcon,
   SunIcon,
   WarningIcon,
   WireframeIcon,
@@ -67,6 +70,9 @@ import {
 } from './model3d/modelPaneWidth';
 import { ResizeHandle } from './ResizeHandle';
 import { TURNTABLE_SECONDS } from './model3d/turntable';
+import type { ModelTool } from './model3d/inspection';
+import { ModelToolPanel } from './model3d/ModelToolPanel';
+import { DEFAULT_SECTION, type SectionState } from './model3d/section';
 
 /** First-run prompts: game-asset shaped, since that is who this pane is for first. */
 export const MODEL_EXAMPLE_PROMPTS = [
@@ -138,7 +144,7 @@ export const MODEL_LIGHTING_PRESETS: readonly { lighting: ModelLighting; label: 
   { lighting: 'night', label: 'Night' },
 ];
 const KEY_HELP =
-  'Arrow keys orbit (or move a picked moving part), plus and minus zoom, 0 to 4 pick a view, F fits the model, W wireframe, G grid, E explode, L lighting, N night, [ and ] pick a part, Enter edits it.';
+  'Arrow keys orbit (or move a picked moving part), plus and minus zoom, 0 to 4 pick a view, F fits the model, W wireframe, G grid, E explode, L lighting, N night, M measure, S section, Esc leaves either, [ and ] pick a part, Enter edits it.';
 
 function nextLighting(lighting: ModelLighting): ModelLighting {
   const index = MODEL_LIGHTING_PRESETS.findIndex(preset => preset.lighting === lighting);
@@ -276,6 +282,10 @@ export function ModelPane({
   const [grid, setGrid] = useState(false);
   const [lighting, setLighting] = useState<ModelLighting>('studio');
   const [exploded, setExploded] = useState(false);
+  // The measure or section tool, if on; both are view-only and leave the file alone.
+  const [tool, setTool] = useState<ModelTool | null>(null);
+  const [section, setSection] = useState<SectionState>(DEFAULT_SECTION);
+  const [measurePoints, setMeasurePoints] = useState<THREE.Vector3[]>([]);
   // The model grew past a camera the user placed (ModelViewport never moves that one on a rebuild).
   const [cropped, setCropped] = useState(false);
   const [adjusting, setAdjusting] = useState(false);
@@ -330,6 +340,11 @@ export function ModelPane({
   const clearPick = () => {
     setPicked(null);
     setPrompt(null);
+  };
+  // Measuring takes the clicks that would pick parts, so a selection would only sit there stale.
+  const toggleTool = (next: ModelTool) => {
+    if (next === 'measure' && tool !== 'measure') clearPick();
+    setTool(current => (current === next ? null : next));
   };
   const pickPart = ({ name: part, additive, point }: ViewportPick) => {
     // Empty space, or a second plain click on the only picked part, clears the selection.
@@ -441,6 +456,25 @@ export function ModelPane({
     return true;
   };
 
+  // Another model (or a recording) leaves the tools: a cut or dimension belongs to what it was made on.
+  useEffect(() => setTool(null), [state.path]);
+  useEffect(() => {
+    if (recording) setTool(null);
+  }, [recording]);
+  const units = summary?.units ?? 'mm';
+  const { setInspection } = engine;
+  useEffect(() => {
+    setInspection(
+      tool
+        ? {
+            section: tool === 'section' ? section : null,
+            measure: tool === 'measure' && measurePoints.length ? { points: measurePoints, units } : null,
+          }
+        : null
+    );
+  }, [setInspection, tool, section, measurePoints, units]);
+  useEffect(() => () => setInspection(null), [setInspection]);
+
   // Shortcuts act only while the view itself has focus, so they never steal a letter from a field.
   const onViewKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget || !object || recording) return;
@@ -465,7 +499,9 @@ export function ModelPane({
       '[': () => stepPick(-1),
       ']': () => stepPick(1),
       Enter: () => editable && pickedNames.length > 0 && openPrompt(handle?.partPoint(pickedNames) ?? null),
-      Escape: () => clearPick(),
+      m: () => toggleTool('measure'),
+      s: () => toggleTool('section'),
+      Escape: () => (tool ? setTool(null) : clearPick()),
     };
     const action = preset
       ? () => handle?.setView(preset.view)
@@ -625,7 +661,24 @@ export function ModelPane({
               onCroppedChange={setCropped}
               adjusting={adjusting}
               handleRef={viewportHandle}
+              tool={tool}
+              section={section}
+              units={units}
+              onMeasure={setMeasurePoints}
             />
+            {object && tool && !recording && (
+              <ModelToolPanel
+                tool={tool}
+                section={section}
+                onSectionChange={setSection}
+                measurePoints={measurePoints}
+                units={units}
+                onClose={() => {
+                  setTool(null);
+                  stageRef.current?.focus();
+                }}
+              />
+            )}
             {promptOpen && (
               <PartEditPrompt
                 key={`${promptOpen.point.x},${promptOpen.point.y}`}
@@ -701,6 +754,26 @@ export function ModelPane({
                     <ExplodeIcon />
                   </ViewToggle>
                 )}
+                <ViewToggle
+                  label="Measure"
+                  shortcut="M"
+                  pressed={tool === 'measure'}
+                  disabled={recording}
+                  onToggle={() => toggleTool('measure')}
+                  testId="model-pane-measure-btn"
+                >
+                  <MeasureIcon />
+                </ViewToggle>
+                <ViewToggle
+                  label="Section"
+                  shortcut="S"
+                  pressed={tool === 'section'}
+                  disabled={recording}
+                  onToggle={() => toggleTool('section')}
+                  testId="model-pane-section-btn"
+                >
+                  <SectionIcon />
+                </ViewToggle>
                 <Dropdown>
                   <Tooltip title="Lighting (L)" size="sm" placement="bottom" variant="solid">
                     <MenuButton

@@ -4,6 +4,7 @@ import { BokehPass } from 'three/examples/jsm/postprocessing/BokehPass.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import type { Pass } from 'three/examples/jsm/postprocessing/Pass.js';
 import { Reflector } from 'three/examples/jsm/objects/Reflector.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
@@ -502,6 +503,8 @@ export class ModelComposer {
   private readonly depthOfField: BokehPass;
   /** The fitted model's bounding radius, which the depth of field's blur is scaled by. */
   private radius = 1;
+  /** Overlays the depth-only passes must not draw (setInspection). */
+  private overlays: readonly THREE.Object3D[] = [];
 
   constructor(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.PerspectiveCamera) {
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
@@ -509,6 +512,8 @@ export class ModelComposer {
     const target = new THREE.WebGLRenderTarget(Math.max(size.x, 1), Math.max(size.y, 1), {
       type: THREE.HalfFloatType,
       samples: 4,
+      // The section tool caps its cut through the stencil (sectionCut.ts).
+      stencilBuffer: true,
     });
     this.composer = new EffectComposer(renderer, target);
     this.composer.addPass(new RenderPass(scene, camera));
@@ -522,6 +527,36 @@ export class ModelComposer {
     this.depthOfField.enabled = false;
     this.composer.addPass(this.depthOfField);
     this.composer.addPass(this.output);
+    this.hideOverlaysDuring(this.ambientOcclusion);
+    this.hideOverlaysDuring(this.depthOfField);
+  }
+
+  /**
+   * The section and measure overlays (sectionCut.ts, measureOverlay.ts), and the section's clip
+   * plane. GTAO and the depth of field draw the scene again with one override material for depth
+   * and normals: that material does not carry the parts' own clip planes, so the AO pass is given
+   * the cut here, and the overlays are hidden from both, since the cap's stencil-masked quad and
+   * the label sprite would otherwise land in the depth whole.
+   */
+  setInspection(overlays: readonly THREE.Object3D[], clip: THREE.Plane | null): void {
+    this.overlays = overlays;
+    const material = this.ambientOcclusion.normalMaterial;
+    const planes = clip ? [clip] : null;
+    if ((material.clippingPlanes?.length ?? 0) !== (planes?.length ?? 0)) material.needsUpdate = true;
+    material.clippingPlanes = planes;
+  }
+
+  private hideOverlaysDuring(pass: Pass): void {
+    const render = pass.render.bind(pass);
+    pass.render = (...args: Parameters<Pass['render']>) => {
+      const shown = this.overlays.filter(overlay => overlay.visible);
+      shown.forEach(overlay => (overlay.visible = false));
+      try {
+        render(...args);
+      } finally {
+        shown.forEach(overlay => (overlay.visible = true));
+      }
+    };
   }
 
   /** Scales the AO to the model: its sample radius is in world units, so mm and m models differ by 1000. */

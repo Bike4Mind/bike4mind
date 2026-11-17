@@ -41,6 +41,8 @@ vi.mock('./model3d/ModelViewport', () => ({
     exploded,
     onCroppedChange,
     handleRef,
+    tool,
+    onMeasure,
   }: {
     dimmed: boolean;
     lighting: string;
@@ -54,6 +56,8 @@ vi.mock('./model3d/ModelViewport', () => ({
     exploded: boolean;
     onCroppedChange?: (cropped: boolean) => void;
     handleRef?: { current: unknown };
+    tool?: string | null;
+    onMeasure?: (points: THREE.Vector3[]) => void;
   }) => {
     if (handleRef) handleRef.current = handle;
     return (
@@ -66,7 +70,12 @@ vi.mock('./model3d/ModelViewport', () => ({
         data-editing={editing.join(',')}
         data-clip={clip ?? ''}
         data-exploded={String(exploded)}
+        data-tool={tool ?? ''}
       >
+        <button
+          data-testid="measure-two-points"
+          onClick={() => onMeasure?.([new THREE.Vector3(0, 0, 0), new THREE.Vector3(3, 4, 0)])}
+        />
         <button
           data-testid="pick-lid"
           onClick={event => onPick({ name: 'lid', additive: event.shiftKey, point: { x: 40, y: 30 } })}
@@ -132,6 +141,7 @@ function engine(overrides: Partial<ModelEngine> = {}): ModelEngine {
     exportFile: vi.fn(async () => '/project/chest.glb'),
     saveRecording: vi.fn(async () => null),
     openFile: vi.fn(async () => {}),
+    setInspection: vi.fn(),
     ...overrides,
   };
 }
@@ -595,6 +605,37 @@ describe('ModelPane', () => {
     await act(async () => finish(new Uint8Array([1])));
     expect(byTestId('model-pane-rec-badge')).toBeNull();
     expect(byTestId('model-pane-record-btn')?.textContent).toBe('Record');
+  });
+
+  it('turns the measure and section tools on and off, and hands them to screenshots', () => {
+    const model = engine(BUILT);
+    render(model);
+    const stage = byTestId('model-pane-stage');
+    const press = (key: string) =>
+      act(() => {
+        stage?.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+      });
+    press('m');
+    expect(byTestId('model-pane-viewport')?.dataset.tool).toBe('measure');
+    expect(byTestId('model-pane-measure-btn')?.getAttribute('aria-pressed')).toBe('true');
+    expect(byTestId('model-pane-measure-readout')?.textContent).toBe('Click a point on the model');
+    act(() => byTestId('measure-two-points')?.click());
+    expect(byTestId('model-pane-measure-readout')?.textContent).toBe('5 mm (x 3, y 0, z 4)');
+    expect(model.setInspection).toHaveBeenLastCalledWith({
+      section: null,
+      measure: { points: [new THREE.Vector3(0, 0, 0), new THREE.Vector3(3, 4, 0)], units: 'mm' },
+    });
+    press('Escape');
+    expect(byTestId('model-pane-viewport')?.dataset.tool).toBe('');
+    expect(model.setInspection).toHaveBeenLastCalledWith(null);
+    act(() => byTestId('model-pane-section-btn')?.click());
+    act(() => byTestId('model-pane-section-axis-y')?.click());
+    expect(model.setInspection).toHaveBeenLastCalledWith({
+      section: { axis: 'y', offset: 0.5, flipped: false },
+      measure: null,
+    });
+    act(() => byTestId('model-pane-section-btn')?.click());
+    expect(byTestId('model-pane-section-panel')).toBeNull();
   });
 
   it('drives the camera and toggles from the keyboard while the view has focus', () => {
