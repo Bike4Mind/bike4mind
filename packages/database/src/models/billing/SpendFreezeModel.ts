@@ -107,9 +107,11 @@ export class SpendFreezeRepository extends BaseRepository<ISpendFreezeDocument> 
     input: Omit<ISpendFreeze, 'id' | 'liftedAt' | 'liftedBy' | 'liftReason'>,
     opts: { session?: unknown } = {}
   ): Promise<ISpendFreeze> {
-    const [doc] = await this.model.create([{ ...input, scopeId: toObjectId(input.scopeId), active: true }], {
-      session: opts.session as ClientSession | undefined,
-    });
+    // An explicit `session: undefined` would stop Mongoose injecting the ambient withTransaction session.
+    const [doc] = await this.model.create(
+      [{ ...input, scopeId: toObjectId(input.scopeId), active: true }],
+      opts.session ? { session: opts.session as ClientSession } : {}
+    );
     return toSpendFreeze(doc);
   }
 
@@ -121,7 +123,7 @@ export class SpendFreezeRepository extends BaseRepository<ISpendFreezeDocument> 
     const doc = await this.model.findOneAndUpdate(
       { ...ACTIVE, scopeType: scope.scopeType, scopeId: toObjectId(scope.scopeId) },
       { $set: lift, $unset: { active: 1 } },
-      { new: true, session: opts.session as ClientSession | undefined }
+      { new: true, ...(opts.session ? { session: opts.session as ClientSession } : {}) }
     );
     return doc ? toSpendFreeze(doc) : null;
   }

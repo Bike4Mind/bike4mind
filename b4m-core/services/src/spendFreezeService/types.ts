@@ -24,7 +24,7 @@ export type SpendFreezeChangeInput = {
   actor: SpendFreezeActor;
   reason: string;
   audit: SpendFreezeAudit;
-  /** Applies to the repository write only; the audit append runs outside it. */
+  /** Explicit session for the repository write; without one it joins the ambient withTransaction, as the audit append does. */
   session?: ClientSession;
   now?: Date;
 };
