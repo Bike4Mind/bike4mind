@@ -24,9 +24,9 @@ vi.mock('@bike4mind/database', () => ({
     exists: mocks.userExists,
   },
   Organization: {
-    exists: () => ({
+    exists: (filter: unknown) => ({
       setOptions: (options: unknown) => {
-        mocks.orgOptions(options);
+        mocks.orgOptions(filter, options);
         return mocks.orgExists();
       },
     }),
@@ -100,6 +100,37 @@ describe('redactAccountStripeCustomer', () => {
     expect(mocks.deleteTaxId.mock.calls.map(c => c[1])).toEqual(['txi_1']);
     expect(mocks.del).not.toHaveBeenCalled();
     expect(mocks.invoices).not.toHaveBeenCalled();
+  });
+
+  it('pages through payment methods and tax IDs', async () => {
+    mocks.listPaymentMethods
+      .mockResolvedValueOnce({ data: [{ id: 'pm_1' }], has_more: true })
+      .mockResolvedValueOnce({ data: [{ id: 'pm_2' }], has_more: false });
+    mocks.listTaxIds
+      .mockResolvedValueOnce({ data: [{ id: 'txi_1' }], has_more: true })
+      .mockResolvedValueOnce({ data: [{ id: 'txi_2' }], has_more: false });
+
+    await run();
+
+    expect(mocks.detach.mock.calls.map(c => c[0])).toEqual(['pm_1', 'pm_2']);
+    expect(mocks.deleteTaxId.mock.calls.map(c => c[1])).toEqual(['txi_1', 'txi_2']);
+  });
+
+  it.each([
+    // [lease checks that pass, update, detach, deleteTaxId writes expected]
+    [0, 0, 0, 0],
+    [1, 1, 0, 0],
+    [3, 1, 2, 0],
+  ])('stops writing to Stripe once the lease is lost after %i checks', async (passes, update, detach, taxId) => {
+    assertLease.mockImplementation(async () => {
+      if (assertLease.mock.calls.length > passes) throw new Error('lease lost');
+    });
+
+    await expect(run()).rejects.toThrow('lease lost');
+
+    expect(mocks.update).toHaveBeenCalledTimes(update);
+    expect(mocks.detach).toHaveBeenCalledTimes(detach);
+    expect(mocks.deleteTaxId).toHaveBeenCalledTimes(taxId);
   });
 
   it('cancels subscriptions of that customer before redacting', async () => {
@@ -177,7 +208,7 @@ describe('redactAccountStripeCustomer', () => {
     it('skips a customer an organization also holds, soft-deleted included', async () => {
       mocks.orgExists.mockResolvedValue({ _id: 'org-1' });
       await expect(run()).resolves.toEqual({ outcome: 'skippedShared' });
-      expect(mocks.orgOptions).toHaveBeenCalledWith({ includeDeleted: true });
+      expect(mocks.orgOptions).toHaveBeenCalledWith({ stripeCustomerId: 'cus_user' }, { includeDeleted: true });
       expect(logger.warn).toHaveBeenCalled();
       noStripeWrites();
     });
@@ -185,6 +216,7 @@ describe('redactAccountStripeCustomer', () => {
     it('skips a customer another user also holds', async () => {
       mocks.userExists.mockResolvedValue({ _id: 'user-2' });
       await expect(run()).resolves.toEqual({ outcome: 'skippedShared' });
+      expect(mocks.userExists).toHaveBeenCalledWith({ stripeCustomerId: 'cus_user', _id: { $ne: 'user-1' } });
       noStripeWrites();
     });
 

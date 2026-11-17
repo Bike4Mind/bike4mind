@@ -67,7 +67,7 @@ export async function redactAccountStripeCustomer(
 
   const metadata: Record<string, string> = { erased: 'true' };
   for (const key of Object.keys(customer.metadata ?? {})) {
-    if (!KEPT_METADATA_KEYS.has(key) && key !== 'erased') metadata[key] = ''; // '' unsets a Stripe metadata key
+    if (!KEPT_METADATA_KEYS.has(key) && key !== 'erased') metadata[key] = '';
   }
   await assertLease();
   // '' unsets a Stripe field; null is not accepted for strings.
@@ -77,15 +77,23 @@ export async function redactAccountStripeCustomer(
     options
   );
 
-  const methods = await stripe.customers.listPaymentMethods(customerId, { limit: 100 }, options);
-  for (const method of methods.data) {
-    await assertLease();
-    await stripe.paymentMethods.detach(method.id, {}, options);
+  // Detach and delete page by page: each write shrinks the list, so re-listing from the start is safe
+  // and no cursor is needed.
+  for (let more = true; more;) {
+    const methods = await stripe.customers.listPaymentMethods(customerId, { limit: 100 }, options);
+    for (const method of methods.data) {
+      await assertLease();
+      await stripe.paymentMethods.detach(method.id, {}, options);
+    }
+    more = methods.has_more && methods.data.length > 0;
   }
-  const taxIds = await stripe.customers.listTaxIds(customerId, { limit: 100 }, options);
-  for (const taxId of taxIds.data) {
-    await assertLease();
-    await stripe.customers.deleteTaxId(customerId, taxId.id, {}, options);
+  for (let more = true; more;) {
+    const taxIds = await stripe.customers.listTaxIds(customerId, { limit: 100 }, options);
+    for (const taxId of taxIds.data) {
+      await assertLease();
+      await stripe.customers.deleteTaxId(customerId, taxId.id, {}, options);
+    }
+    more = taxIds.has_more && taxIds.data.length > 0;
   }
 
   logger.info('[AccountDeletion] redacted the Stripe customer', { userId, customerId });

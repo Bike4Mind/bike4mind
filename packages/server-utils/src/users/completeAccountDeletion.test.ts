@@ -251,7 +251,10 @@ describe('completeAccountDeletion', () => {
       { _id: USER_ID, 'deletion.purgeLeaseId': expect.any(String) },
       { $unset: { 'deletion.purgeLeaseId': 1, 'deletion.purgeLeaseExpiresAt': 1 } }
     );
-    expect(h.redactStripe).toHaveBeenCalledWith(USER_ID, expect.objectContaining({ logger }));
+    expect(h.redactStripe).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ logger, assertLease: expect.any(Function) })
+    );
   });
 
   it('does not delete or email after losing its lease', async () => {

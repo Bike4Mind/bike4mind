@@ -260,7 +260,8 @@ export function readDocuments(
   projection?: readonly string[],
   session?: mongoose.ClientSession
 ): AsyncIterable<LeanDocument> {
-  return mongoose
+  const { schema } = mongoose.model(model);
+  const query = mongoose
     .model(model)
     .find(filter, projection ? projectionOf(projection) : undefined)
     .setOptions({ strictQuery: 'throw', includeDeleted: true, ...(session ? { session } : {}) })

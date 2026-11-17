@@ -12,7 +12,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { setPath, valuesAt } from './documentPaths';
-import { KNOWN_ERASURE_GAPS } from './accountErasureKnownGaps';
+import { KNOWN_ERASURE_GAPS, type ErasureResidue } from './accountErasureKnownGaps';
 import { erasureRegistry } from './erasureRegistry';
 import { DATA_HOLDER_REGISTRY } from './registry';
 import { SubjectErasurePlan } from './subjectErasurePlan';
@@ -179,17 +179,18 @@ const SEED_DEFAULTS: Record<string, Doc> = {
   ImportHistoryJob: { s3Bucket: 'test-historyImportBucket', s3Key: 'seed/archive.zip' },
 };
 
-type Seeded = { model: string; id: unknown; reference: string };
+/** `planned` is false for a child whose parent is only anonymized: it belongs to the parent's other owner. */
+type Seeded = { model: string; id: unknown; reference: string; planned: boolean };
 
 /** Inserts one document per registry reference, then one child per `viaParent` entry. */
 async function seedFromRegistry(subject: { userId: string; email: string }): Promise<Seeded[]> {
   const seeded: Seeded[] = [];
-  const parentDocs = new Map<string, Doc[]>();
-  const insert = async (model: string, doc: Doc, reference: string) => {
+  const parentDocs = new Map<string, { doc: Doc; erased: boolean }[]>();
+  const insert = async (model: string, doc: Doc, reference: string, erased: boolean, planned = true) => {
     const _id = (doc._id as unknown) ?? new ObjectId();
     await raw(model).insertOne({ ...SEED_DEFAULTS[model], ...doc, _id, createdAt: new Date(), updatedAt: new Date() });
-    seeded.push({ model, id: _id, reference });
-    parentDocs.set(model, [...(parentDocs.get(model) ?? []), { ...doc, _id }]);
+    seeded.push({ model, id: _id, reference, planned });
+    parentDocs.set(model, [...(parentDocs.get(model) ?? []), { doc: { ...doc, _id }, erased }]);
   };
   const parentKeys = new Map<string, Set<string>>();
   for (const holder of Object.values(DATA_HOLDER_REGISTRY)) {
@@ -212,11 +213,21 @@ async function seedFromRegistry(subject: { userId: string; email: string }): Pro
     if (holder.kind === 'subject') {
       // The subject row itself is written by the test; the references are on other users' rows.
       for (const reference of holder.references) {
-        await insert(model, documentFor(model, reference, subject), `${reference.path} (other user)`);
+        await insert(
+          model,
+          documentFor(model, reference, subject),
+          `${reference.path} (other user)`,
+          reference.action === 'deleteDocument'
+        );
       }
     } else if (holder.kind === 'holder') {
       for (const reference of holder.references) {
-        await insert(model, withParentKeys(model, documentFor(model, reference, subject)), reference.path);
+        await insert(
+          model,
+          withParentKeys(model, documentFor(model, reference, subject)),
+          reference.path,
+          reference.action === 'deleteDocument'
+        );
       }
     }
   }
@@ -225,15 +236,16 @@ async function seedFromRegistry(subject: { userId: string; email: string }): Pro
     const parents = parentDocs.get(holder.parent) ?? [];
     if (parents.length === 0) throw new Error(`${model}: no seeded parent ${holder.parent}`);
     const key = holder.parentKey ?? '_id';
-    for (const parent of parents) {
+    for (const { doc: parent, erased } of parents) {
       const value = valuesAt(parent, key)[0];
       const found = schemaPathFor(model, holder.foreignKey.split('.'));
       const fk = (found?.type as SchemaType | undefined)?.instance;
       const stored = fk === 'ObjectId' ? new ObjectId(String(value)) : String(value);
-      await insert(model, { [holder.foreignKey]: stored }, `child of ${holder.parent}`);
+      const followed = erased || holder.deleteWhenParentAnonymized === true;
+      await insert(model, { [holder.foreignKey]: stored }, `child of ${holder.parent}`, followed, followed);
     }
     for (const reference of holder.attribution ?? []) {
-      await insert(model, documentFor(model, reference, subject), `${reference.path} (attribution)`);
+      await insert(model, documentFor(model, reference, subject), `${reference.path} (attribution)`, false);
     }
   }
   return seeded;
@@ -273,10 +285,15 @@ beforeEach(async () => {
   effects.stripe.cancelSubscription.mockResolvedValue({});
 });
 
-// Exact match: a holder the purge newly misses fails here, and so does a gap that was closed but not removed.
-function expectOnlyKnownGaps(audit: { remaining: { model: string }[]; unclassified: string[] }) {
+type Audit = { remaining: { model: string; deleted: number; anonymized: number }[]; unclassified: string[] };
+const residue = (remaining: Audit['remaining']): Record<string, ErasureResidue> =>
+  Object.fromEntries(remaining.map(({ model, deleted, anonymized }) => [model, { deleted, anonymized }]));
+
+// Exact match on model and counts: a holder the purge newly misses fails, and so does a further row left
+// on an already-gapped model. A gap that was closed but not removed from the map fails as well.
+function expectOnlyKnownGaps(audit: Audit) {
   expect(audit.unclassified).toEqual([]);
-  expect(audit.remaining.map(({ model }) => model).sort()).toEqual(Object.keys(KNOWN_ERASURE_GAPS).sort());
+  expect(residue(audit.remaining)).toEqual(KNOWN_ERASURE_GAPS);
 }
 
 const PAST = new Date('2026-01-01T00:00:00.000Z');
@@ -313,14 +330,33 @@ const touchedCustomers = () =>
 
 describe.each(['self', 'admin'] as const)('account erasure matrix, %s path', source => {
   it('seeds every registry store, then leaves nothing but retained rows', async () => {
-    const { subject, adminId } = await seedSubject(source);
+    const { subject, adminId, seeded } = await seedSubject(source);
 
+    // The plan must match the documents seeded, so a reference it cannot see fails here even when a
+    // sibling reference on the same model matches. The subject's own row is the one User row not seeded.
+    // A holder matches exactly. A viaParent model is bounded: its children under a merely anonymized
+    // parent are the parent's other owner's, so the plan may skip those, but never an erased parent's.
     const before = await new SubjectErasurePlan(subject).collections();
-    const walked = Object.entries(DATA_HOLDER_REGISTRY)
-      .filter(([, holder]) => ['subject', 'holder', 'viaParent'].includes(holder.kind))
-      .map(([model]) => model);
-    const unseeded = walked.filter(model => !before.some(collection => collection.model === model));
-    expect(unseeded).toEqual([]);
+    const planned = Object.fromEntries(before.map(c => [c.model, c.deleted + c.anonymized + c.retained]));
+    const total: Record<string, number> = { User: 1 };
+    const required: Record<string, number> = { User: 1 };
+    for (const { model, planned: mustMatch } of seeded) {
+      total[model] = (total[model] ?? 0) + 1;
+      required[model] = (required[model] ?? 0) + (mustMatch ? 1 : 0);
+    }
+    expect(Object.keys(planned).sort()).toEqual(Object.keys(total).sort());
+    for (const [model, count] of Object.entries(planned)) {
+      const isChild = DATA_HOLDER_REGISTRY[model].kind === 'viaParent';
+      expect({
+        model,
+        count,
+        ok: isChild ? count >= required[model] && count <= total[model] : count === total[model],
+      }).toEqual({
+        model,
+        count,
+        ok: true,
+      });
+    }
 
     await expect(completeAccountDeletion(subject.userId, { logger, erasureRegistry })).resolves.toEqual({
       deleted: true,
@@ -346,8 +382,7 @@ describe.each(['self', 'admin'] as const)('account erasure matrix, %s path', sou
     if (source === 'admin') {
       expect(checks).toHaveLength(1);
       expect(checks[0].details).toMatchObject({ requestedBy: adminId, unclassified: [] });
-      const recorded = (checks[0].details.remaining as { model: string }[]).map(({ model }) => model).sort();
-      expect(recorded).toEqual(Object.keys(KNOWN_ERASURE_GAPS).sort());
+      expect(residue(checks[0].details.remaining as Audit['remaining'])).toEqual(KNOWN_ERASURE_GAPS);
     } else {
       expect(checks).toHaveLength(0);
     }
@@ -379,6 +414,18 @@ describe.each(['self', 'admin'] as const)('account erasure matrix, %s path', sou
       deleted: true,
     });
     expectOnlyKnownGaps(await erasureRegistry.audit(subject));
-    expect(await raw('ErasureRecord').countDocuments({ idHash: erasureIdHash(subject.userId) })).toBe(1);
+    const records = await raw('ErasureRecord')
+      .find({ idHash: erasureIdHash(subject.userId) })
+      .toArray();
+    expect(records).toHaveLength(1);
+    expect(records[0].initiatedBy).toBe(source);
+    expect(
+      await raw('AdminAuditLog').countDocuments({ action: 'user.deletion.completed', 'target.id': subject.userId })
+    ).toBe(1);
+    expect(effects.stripe.update).toHaveBeenCalledTimes(2);
+    expect(effects.stripe.update.mock.calls.map(call => call[0])).toEqual([
+      SUBJECT_STRIPE_CUSTOMER,
+      SUBJECT_STRIPE_CUSTOMER,
+    ]);
   });
 });
