@@ -195,7 +195,7 @@ vi.mock('@bike4mind/services/llm', async orig => {
     prefetchedSession = undefined;
     prefetchedOrganization = undefined;
     questMasterStartId = 'server-admitted-start';
-    questAdmittedAs = 'subscriber';
+    questAdmittedAs = 'free';
     invoke = (...a: unknown[]) => mockInvoke(...a);
   }
   // The wait=true path constructs this directly; the async-path tests never reach it.
@@ -1430,7 +1430,26 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     expect(res._getStatusCode()).toBe(200);
     expect(mockProcess).toHaveBeenCalledWith(
       expect.objectContaining({
-        body: expect.objectContaining({ questMasterStartId: 'server-admitted-start', questAdmittedAs: 'subscriber' }),
+        body: expect.objectContaining({ questMasterStartId: 'server-admitted-start', questAdmittedAs: 'free' }),
+      })
+    );
+  });
+
+  it('ignores client-supplied admission fields on the blocking path', async () => {
+    const { req, res } = fire({
+      body: {
+        message: 'hello',
+        sessionId: 'sess-1',
+        wait: true,
+        questMasterStartId: 'client-forged',
+        questAdmittedAs: 'subscriber',
+      },
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockProcess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({ questMasterStartId: 'server-admitted-start', questAdmittedAs: 'free' }),
       })
     );
   });
