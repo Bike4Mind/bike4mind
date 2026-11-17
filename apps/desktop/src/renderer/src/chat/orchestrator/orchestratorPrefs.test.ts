@@ -29,8 +29,17 @@ describe('orchestratorPrefs', () => {
   beforeEach(() => window.localStorage.clear());
   afterEach(() => vi.restoreAllMocks());
 
-  it('lists the three views', () => {
-    expect(ORCHESTRATOR_VIEWS).toEqual(['tavern', 'board', 'table']);
+  it('lists the scenes, then the layouts', () => {
+    expect(ORCHESTRATOR_VIEWS).toEqual(['tavern', 'aquarium', 'board', 'table', 'tile-wall']);
+  });
+
+  it('remembers each new view, and falls back to the Tavern for an id it does not know', () => {
+    writeView('s1', 'tile-wall');
+    writeView('s2', 'aquarium');
+    expect(readView('s1')).toBe('tile-wall');
+    expect(readView('s2')).toBe('aquarium');
+    window.localStorage.setItem('b4m.orchestrator.view.s3', 'koi-pond');
+    expect(readView('s3')).toBe('tavern');
   });
 
   it('defaults when nothing is stored', () => {

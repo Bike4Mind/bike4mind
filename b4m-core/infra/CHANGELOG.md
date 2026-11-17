@@ -1,5 +1,15 @@
 # @bike4mind/infra
 
+## 7.0.0
+
+### Major Changes
+
+- [#7512](https://github.com/Bike4Mind/bike4mind/pull/7512) [`38ce78b`](https://github.com/Bike4Mind/bike4mind/commit/38ce78ba44113c99af0042d40af4513a5f29b9e2) Thanks [@onoya](https://github.com/onoya)! - remove the in-app secret rotation tracker
+
+### Minor Changes
+
+- [#7447](https://github.com/Bike4Mind/bike4mind/pull/7447) [`d5a4742`](https://github.com/Bike4Mind/bike4mind/commit/d5a4742ccd9dc073e19cb1eba719cef79185f81e) Thanks [@vinchi777](https://github.com/vinchi777)! - export owner metadata and CSV bundle
+
 ## 6.3.0
 
 ### Minor Changes
