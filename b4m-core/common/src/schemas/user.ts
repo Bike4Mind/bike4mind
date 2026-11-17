@@ -47,6 +47,11 @@ export function hasDeveloperUserTag(tags: readonly string[] | null | undefined):
   return (tags ?? []).some(tag => developerTags.includes(tag));
 }
 
+/** Admins and developer-tagged users are never held to the free-tier gates (model allowlist, paid-only Studio surfaces). */
+export function isFreeTierExempt(user: { isAdmin?: boolean | null; tags?: readonly string[] | null }): boolean {
+  return Boolean(user.isAdmin) || hasDeveloperUserTag(user.tags);
+}
+
 /**
  * True if any of the user's tags grants Tavern access. Matched case-insensitively
  * against 'tavern' to mirror the sidebar nav gate (`SidenavNav`) exactly.
