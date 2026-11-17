@@ -138,6 +138,7 @@ export const VIDEO_GENERATION_PROJECTION = {
     duration_seconds: request.durationSeconds,
     aspect_ratio: request.aspectRatio,
     resolution: request.resolution,
+    ...(request.draft !== undefined && { draft: request.draft }),
   }),
   statusFields: (job: VideoJob) => ({ progress: job.progress ?? null }),
   outputOf: (job: VideoJob): VideoJobOutput | undefined => job.payload.output,

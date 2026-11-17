@@ -506,3 +506,31 @@ describe('useAdminListUrlState keys', () => {
     for (const key of PRIVATE_KEYS) expect(registered.has(key), key).toBe(false);
   });
 });
+
+describe('Rate Limits params', () => {
+  const RATE_LIMITS_KEYS = ['rateFrom', 'rateTo', 'rateIntegration', 'rateThrottled', 'rateView'];
+  const ownerOf = (param: string) =>
+    Object.entries(ADMIN_TAB_PARAMS)
+      .filter(([, params]) => (params as readonly string[]).includes(param))
+      .map(([slug]) => slug);
+
+  it('registers each param under the Rate Limits tab only', () => {
+    for (const key of RATE_LIMITS_KEYS) expect(ownerOf(key), key).toEqual(['rate-limits']);
+  });
+
+  // The tab parses and falls back itself, so validateSearch must hand an invalid value through untouched.
+  it('passes raw values through validateSearch, invalid ones included', () => {
+    expect(
+      parseAdminSearch({ tab: 'rate-limits', rateFrom: 'yesterday', rateIntegration: 'bogus', rateThrottled: true })
+    ).toMatchObject({ rateFrom: 'yesterday', rateIntegration: 'bogus', rateThrottled: 'true' });
+  });
+
+  it('keeps them on their own tab and drops them on another', () => {
+    const search = { rateIntegration: 'jira', rateView: 'raw' };
+    expect(adminSearchForTab(search, 'rate-limits')).toMatchObject(search);
+    expect(adminSearchForTab(search, 'model-metrics')).toMatchObject({
+      rateIntegration: undefined,
+      rateView: undefined,
+    });
+  });
+});

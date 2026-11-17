@@ -112,7 +112,8 @@ export const createVideoGenerationContract = defineEndpoint({
     422: {
       description:
         'The request cannot run: a body or capability violation (`errorCode` names it, e.g. ' +
-        '`unsupported_duration`, or `unsupported_input_role` for an input role the model does not take), an ' +
+        '`unsupported_duration`, `unsupported_keyframes`, `invalid_keyframes`, `unsupported_draft`, or ' +
+        '`unsupported_input_role` for an input role the model does not take). Keyframe/draft errors name the field. An ' +
         'unknown, unavailable or retired model (`model_unavailable`; for a retired model the message names ' +
         'the model to use instead), a model your ' +
         'administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an ' +
