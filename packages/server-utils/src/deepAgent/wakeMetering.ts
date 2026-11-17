@@ -27,13 +27,14 @@ export const MISSION_NEEDS_CREDITS_BLOCKER =
   'stopped: the mission owner ran out of credits. Topping up does not restart it; start a new mission to continue';
 export const MISSION_MODEL_REFUSED_BLOCKER =
   'stopped: the mission model is not available to its owner. Start a new mission once it is available';
-export const MISSION_SPEND_FROZEN_BLOCKER =
-  'stopped: spending is paused for the mission owner. Start a new mission once it is resumed';
 
-// Every account-standing refusal can be lifted (dispute resolved, suspension or moderation lifted, deletion
-// cancelled, review approved), so the mission waits and rechecks instead of pausing.
+// Every account-standing refusal and a spend freeze can be lifted (dispute resolved, suspension or moderation
+// lifted, deletion cancelled, review approved, spending resumed), so the mission waits and rechecks instead of pausing.
 export const MISSION_OWNER_RESTRICTED_BLOCKER =
   "waiting: the mission owner's account cannot use AI right now; the mission resumes on its own once that is resolved";
+export const MISSION_SPEND_FROZEN_BLOCKER =
+  'waiting: spending is paused for the mission owner; the mission resumes on its own once spending is resumed';
+const ACCOUNT_HOLD_BLOCKERS = [MISSION_OWNER_RESTRICTED_BLOCKER, MISSION_SPEND_FROZEN_BLOCKER];
 
 /** How long a wake for a restricted owner waits before rechecking, in ms. One user read per recheck, no LLM. */
 export const ACCOUNT_HOLD_RECHECK_MS = 60 * 60 * 1000;
@@ -154,14 +155,15 @@ export async function assertMissionOwnerCanUseAi(store: DeepAgentStore, agentId:
 }
 
 /**
- * Hold a scheduled mission while its owner's account is restricted: show the blocker, keep the interval, and
- * push the next wake out by ACCOUNT_HOLD_RECHECK_MS. A paused mission (no interval) stays paused; one held
- * before its first wake gets a handoff seeded so the cron rechecks it.
+ * Hold a scheduled mission while its owner's account is restricted or its spending frozen: show the blocker,
+ * keep the interval, and push the next wake out by ACCOUNT_HOLD_RECHECK_MS. A paused mission (no interval)
+ * stays paused; one held before its first wake gets a handoff seeded so the cron rechecks it.
  */
 export async function deferWakeForAccountStanding(
   store: DeepAgentStore,
   agentId: string,
-  logger: Logger
+  logger: Logger,
+  blocker: string = MISSION_OWNER_RESTRICTED_BLOCKER
 ): Promise<void> {
   const handoff = await store.loadHandoff(agentId);
   const nowIso = new Date().toISOString();
@@ -172,13 +174,13 @@ export async function deferWakeForAccountStanding(
       lastWakeAt: nowIso,
       lastActionSummary: '',
       nextIntendedAction: '',
-      openBlockers: [MISSION_OWNER_RESTRICTED_BLOCKER],
+      openBlockers: [blocker],
       updatedAt: nowIso,
     });
-  } else if (!handoff.openBlockers.includes(MISSION_OWNER_RESTRICTED_BLOCKER)) {
+  } else if (!handoff.openBlockers.includes(blocker)) {
     await store.saveHandoff({
       ...handoff,
-      openBlockers: [...handoff.openBlockers, MISSION_OWNER_RESTRICTED_BLOCKER],
+      openBlockers: [...handoff.openBlockers, blocker],
       updatedAt: nowIso,
     });
   }
@@ -186,18 +188,21 @@ export async function deferWakeForAccountStanding(
   // After the save: saving re-derives nextWakeAt from lastWakeAt + interval (DeepAgentHandoffModel.upsertForAgent).
   const resumeAt = new Date(Date.now() + ACCOUNT_HOLD_RECHECK_MS);
   await deepAgentHandoffRepository.releaseWakeClaim(agentId, resumeAt);
-  logger.warn('deep agent wake: owner account cannot use AI; deferring', { agentId, resumeAt });
+  logger.warn('deep agent wake: owner cannot spend on AI right now; deferring', { agentId, blocker, resumeAt });
 }
 
-/** Drop the account-standing blocker once the owner may use AI again. */
+/**
+ * Drop the account-hold blockers before a wake. A freeze is only detected mid-wake, so a still-frozen owner's
+ * wake re-adds its blocker when the meter refuses.
+ */
 export async function clearAccountStandingBlocker(store: DeepAgentStore, agentId: string): Promise<void> {
   const handoff = await store.loadHandoff(agentId);
-  if (!handoff?.openBlockers.includes(MISSION_OWNER_RESTRICTED_BLOCKER)) return;
+  if (!handoff?.openBlockers.some(b => ACCOUNT_HOLD_BLOCKERS.includes(b))) return;
   // Saving re-derives nextWakeAt, which would drop the cron's claim lease (claimDueAgentIds) mid-wake.
   const lease = (await deepAgentHandoffRepository.findByAgentId(agentId))?.nextWakeAt;
   await store.saveHandoff({
     ...handoff,
-    openBlockers: handoff.openBlockers.filter(b => b !== MISSION_OWNER_RESTRICTED_BLOCKER),
+    openBlockers: handoff.openBlockers.filter(b => !ACCOUNT_HOLD_BLOCKERS.includes(b)),
     updatedAt: new Date().toISOString(),
   });
   if (lease) await deepAgentHandoffRepository.releaseWakeClaim(agentId, lease);

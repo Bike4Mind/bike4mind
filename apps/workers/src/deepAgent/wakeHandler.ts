@@ -143,14 +143,16 @@ export async function processWake(
       await deferWakeForAccountStanding(deps.store, payload.agentId, logger);
       return;
     }
+    if (isSpendFrozenError(err)) {
+      await deferWakeForAccountStanding(deps.store, payload.agentId, logger, MISSION_SPEND_FROZEN_BLOCKER);
+      return;
+    }
     // None clears on retry, so pause instead of letting the cron re-claim the wake forever.
     const blocker = isInsufficientCredits(err)
       ? MISSION_NEEDS_CREDITS_BLOCKER
-      : isSpendFrozenError(err)
-        ? MISSION_SPEND_FROZEN_BLOCKER
-        : err instanceof MissionModelRefusedError
-          ? MISSION_MODEL_REFUSED_BLOCKER
-          : null;
+      : err instanceof MissionModelRefusedError
+        ? MISSION_MODEL_REFUSED_BLOCKER
+        : null;
     if (!blocker) throw err;
     await pauseMission(deps.store, payload.agentId, blocker, logger);
     return;
