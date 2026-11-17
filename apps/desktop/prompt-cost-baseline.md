@@ -11,7 +11,7 @@ length is not evidence that a provider charges them as loaded prompt tokens.
 Reproduce from `apps/desktop` after building workspace dependencies:
 
 ```sh
-B4M_PROMPT_BASELINE=1 VITEST_MAX_WORKERS=25% pnpm exec vitest run src/main/chat/promptFootprint.test.ts src/main/chat/deferredTools.test.ts src/main/chat/ChatService.deferredTools.test.ts
+B4M_PROMPT_BASELINE=1 VITEST_MAX_WORKERS=25% pnpm exec vitest run src/main/chat/promptFootprint.test.ts src/main/chat/deferredTools.test.ts src/main/chat/ChatService.deferredTools.test.ts --maxWorkers=1
 ```
 
 The fixture uses a synthetic root, instructions and skill listing, actual Desktop
@@ -86,12 +86,16 @@ the full issue complete.
 
 ## Verification limitations
 
-The initial focused run passed both footprint tests and all 17 deferred-tool
-helper tests. The service suite passed 17/18, exposing an overstrict new assertion
-that removals would not add a superseding state record; that assertion was corrected
-to preserve the existing replay contract. The subsequent chat/shared run exceeded
-240 seconds with failures and no final failure summary. Final focused reruns also
-timed out before a complete result; final integration assertions are not claimed
-as passing. Testing stopped at the five-minute budget. Desktop fast typecheck,
-changed-file ESLint and whitespace checks passed on the final code. No live app or
-provider end-to-end evaluation was performed.
+The final focused run passed all 37 tests across three files in 2.49 seconds:
+footprint 2/2, deferred-tool helpers 17/17, and ChatService deferred tools 18/18,
+including both mid-turn MCP change/restart cases. It used one worker and reproduced
+the sizes above. No additional runtime change was needed after the earlier replay
+assertion correction.
+
+An earlier broad chat/shared run exceeded 240 seconds with failures and no final
+failure summary, and earlier focused retries timed out. Their cause is unknown;
+the final focused pass does not establish that the broader suite passes. CI's
+general test jobs were skipped; completed packaging jobs are not substitute test
+evidence. No broad suite was rerun during the fresh five-minute verification
+budget. Desktop fast typecheck, changed-file ESLint and whitespace checks passed.
+No live app or provider end-to-end evaluation was performed.
