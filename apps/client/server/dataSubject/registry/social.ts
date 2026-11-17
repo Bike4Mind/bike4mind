@@ -13,7 +13,16 @@ export const socialHolders = {
   },
   Connection: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    references: [
+      {
+        path: 'userId',
+        matchBy: 'userId',
+        // Deleting the row would hide the socket from the sweep that closes it (realtimeConnectionRepository).
+        action: 'retain',
+        reason: 'Realtime connection row kept only until the connection sweep closes its socket and deletes it',
+        retention: { expiresBy: 'condition', until: 'the connection sweep closes the ended socket' },
+      },
+    ],
     secretPaths: ['sid'],
   },
   Feedback: {
@@ -56,12 +65,14 @@ export const socialHolders = {
     kind: 'noUserData',
     note: 'An organization-owned group (name, type); membership lives elsewhere.',
   },
-  // userId is the sender (may be 'SYSTEM'); receiverId is the person the message is for.
+  // userId is the sender (may be 'SYSTEM'); receiverId is the person the message is for. A sent
+  // message goes with its sender like an annotation: the inbox read (InboxModel.findByReceiverId)
+  // hides any message whose sender has no user row, so an anonymized copy is never shown.
   Inbox: {
     kind: 'holder',
     references: [
       { path: 'receiverId', matchBy: 'userId', action: 'deleteDocument' },
-      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
     ],
   },
   Invite: {

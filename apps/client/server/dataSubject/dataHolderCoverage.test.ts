@@ -12,6 +12,7 @@ import {
   schemaDeclaresPath,
 } from './schemaPaths';
 import type { DataHolder, UserReference } from './types';
+import { uniqueIndexPaths } from './placeholder';
 
 const registeredModels = mongoose.modelNames().sort();
 const classifiedModels = Object.keys(DATA_HOLDER_REGISTRY).sort();
@@ -235,6 +236,22 @@ describe('data holder registry', () => {
     expect(misplaced).toEqual([]);
   });
 
+  it('never redacts a unique index key to a shared placeholder', () => {
+    // The executor gives an anonymized `path` in a unique key a per-row placeholder, but `alsoRedact`
+    // fields get one shared value, which would collide (E11000) at the second erasure.
+    const collisions = classifiedModels.flatMap(name => {
+      const holder = DATA_HOLDER_REGISTRY[name];
+      if (holder.kind === 'noUserData') return [];
+      const unique = uniqueIndexPaths(mongoose.model(name).schema);
+      return referencesOf(holder).flatMap(reference =>
+        alsoRedactOf(reference)
+          .filter(path => unique.has(path))
+          .map(path => `${name}.${path}`)
+      );
+    });
+    expect(collisions).toEqual([]);
+  });
+
   it.each(
     classifiedModels.flatMap(name =>
       referencesOf(DATA_HOLDER_REGISTRY[name]).flatMap(reference =>
@@ -242,8 +259,15 @@ describe('data holder registry', () => {
       )
     )
   )('%s: where %s = %s is a value the schema allows', (modelName, key, value) => {
-    const enumValues = (mongoose.model(modelName).schema.path(key) as { enumValues?: unknown[] } | undefined)
-      ?.enumValues;
+    const schemaPath = mongoose.model(modelName).schema.path(key) as
+      { enumValues?: unknown[]; isRequired?: boolean } | undefined;
+    if (value === null) {
+      // Matching an absent field is only meaningful on a declared path that may be absent.
+      expect(schemaPath, `${modelName}.${key} is not a schema path`).toBeDefined();
+      expect(schemaPath?.isRequired).not.toBe(true);
+      return;
+    }
+    const enumValues = schemaPath?.enumValues;
     if (!enumValues?.length) {
       expect(WHERE_WITHOUT_ENUM, `${modelName}.${key} has no enum to check ${value} against`).toContain(
         `${modelName}.${key}`
