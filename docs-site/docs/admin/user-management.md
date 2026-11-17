@@ -59,7 +59,7 @@ The search box at the top of the Users tab finds users by name, username, email,
 
 ### Resolving a provider safety notice
 
-AI providers receive a 64-character lowercase hex identifier for each end user instead of the user's ID or email (OpenAI `safety_identifier`, Anthropic `metadata.user_id`). When a provider sends a safety or abuse notice that names one of these identifiers, you can resolve it to an account:
+AI providers receive a 64-character lowercase hex identifier for each end user instead of the user's ID or email (OpenAI `safety_identifier`, Anthropic `metadata.user_id`, and the `user` field on image-generation requests). When a provider sends a safety or abuse notice that names one of these identifiers, you can resolve it to an account:
 
 1. Open the **Users** tab in the admin panel.
 2. Paste the full 64-character value into the search box. Upper or lower case both work.
