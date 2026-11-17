@@ -343,7 +343,7 @@ export async function verifyApiKey(
         verified: true,
         clientId: validation.oauthExchangeClientId,
         stage: 'use',
-        reason: 'route_not_allowed',
+        reason: 'insufficient_scope',
         status: 403,
         userId: validation.userId,
         keyId: validation.keyId,

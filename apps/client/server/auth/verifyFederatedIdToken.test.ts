@@ -9,6 +9,7 @@ vi.mock('aws-jwt-verify', () => ({
 
 import { SimpleJwksCache } from 'aws-jwt-verify/jwk';
 import { SimpleFetcher } from 'aws-jwt-verify/https';
+import { FetchError, JwksValidationError, JwtInvalidSignatureError } from 'aws-jwt-verify/error';
 import { verifyFederatedIdToken, FederatedIdTokenError, __clearVerifierCache } from './verifyFederatedIdToken';
 
 const IDP = {
@@ -242,5 +243,23 @@ describe('verifyFederatedIdToken - staged subjectSource=sub requirement (OAUTH_A
 
     const result = await verifyFederatedIdToken('tok', B4M_IDP);
     expect(result.b4mUserId).toBe('b4m-user-777');
+  });
+
+  describe('JWKS availability', () => {
+    const failure = async (cause: unknown) => {
+      mockVerify.mockRejectedValue(cause);
+      return verifyFederatedIdToken('tok', IDP).catch((e: unknown) => e as FederatedIdTokenError);
+    };
+
+    it('flags a JWKS fetch failure as unavailable', async () => {
+      const err = await failure(new FetchError('https://idp.test/jwks', 'timed out'));
+      expect(err).toBeInstanceOf(FederatedIdTokenError);
+      expect(err.jwksUnavailable).toBe(true);
+    });
+
+    it('does not flag a signature failure or a malformed JWKS', async () => {
+      expect((await failure(new JwtInvalidSignatureError('bad signature'))).jwksUnavailable).toBe(false);
+      expect((await failure(new JwksValidationError('JWKS empty'))).jwksUnavailable).toBe(false);
+    });
   });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 /**
@@ -9,6 +9,7 @@ import { createMocks } from 'node-mocks-http';
 const h = vi.hoisted(() => ({
   verifyClientSecret: vi.fn(),
   findById: vi.fn(),
+  findByUserId: vi.fn(),
   verifyFederatedIdToken: vi.fn(),
   checkFederatedGrant: vi.fn(),
   isApiKeyAccessAllowed: vi.fn(),
@@ -34,7 +35,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/database/auth', () => ({
   oauthClientRepository: { verifyClientSecret: h.verifyClientSecret },
-  userApiKeyRepository: {},
+  userApiKeyRepository: { findByUserId: h.findByUserId },
   userRepository: { findById: h.findById },
   UserApiKeyAuditLog: {},
 }));
@@ -50,10 +51,17 @@ vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', () => ({
 vi.mock('@server/auth/federatedGrantGate', () => ({ checkFederatedGrant: h.checkFederatedGrant }));
 vi.mock('@server/auth/verifyFederatedIdToken', () => ({
   verifyFederatedIdToken: h.verifyFederatedIdToken,
-  FederatedIdTokenError: class FederatedIdTokenError extends Error {},
+  FederatedIdTokenError: class FederatedIdTokenError extends Error {
+    jwksUnavailable: boolean;
+    constructor(message: string, options?: { jwksUnavailable?: boolean }) {
+      super(message);
+      this.jwksUnavailable = options?.jwksUnavailable ?? false;
+    }
+  },
 }));
 vi.mock('@server/auth/oauthErrorLog', () => ({ logAndRecordSideAppMintRefusal: h.logOAuthError }));
 
+import { FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 import handler from '../ai-token';
 
 const CLIENT = {
@@ -146,16 +154,75 @@ describe('POST /api/oauth/ai-token account gates', () => {
     expect(lastRefusal()).toMatchObject({ error: 'invalid_scope', status: 403, verified: true });
   });
 
-  it('records the per-client rate limit as verified', async () => {
+  it('records the per-client rate limit as an app fault, keeping the wire error', async () => {
     h.tryIncrement.mockResolvedValue({ success: false, expiresAt: new Date(Date.now() + 5000) });
     const res = await run();
     expect(res._getStatusCode()).toBe(429);
-    expect(lastRefusal()).toMatchObject({ error: 'temporarily_unavailable', status: 429, verified: true });
+    expect(res._getJSONData().error).toBe('temporarily_unavailable');
+    expect(lastRefusal()).toMatchObject({
+      error: 'temporarily_unavailable',
+      recordAs: 'rate_limited',
+      status: 429,
+      verified: true,
+    });
   });
 
-  it('records an unexpected failure as a verified server_error before rethrowing', async () => {
-    h.verifyFederatedIdToken.mockRejectedValue(new Error('jwks unreachable'));
-    await expect(run()).rejects.toThrow('jwks unreachable');
-    expect(lastRefusal()).toMatchObject({ error: 'server_error', status: 500, verified: true });
+  describe('unexpected failures', () => {
+    const OWN = 'https://app.example.test';
+    const jwksFailure = () => new FederatedIdTokenError('ID token failed', { jwksUnavailable: true });
+    const withIssuer = (issuer: string) =>
+      h.verifyClientSecret.mockResolvedValue({
+        federatedIdp: { subjectSource: 'sub', issuer },
+        allowedScopes: ['ai:generate'],
+      });
+    const serverErrors = () => h.logOAuthError.mock.calls.filter(c => c[1].error === 'server_error');
+
+    beforeEach(() => vi.stubEnv('APP_URL', `${OWN}/`));
+    afterEach(() => vi.unstubAllEnvs());
+
+    it('records a JWKS fetch failure on our own issuer as server_error, with the same 401', async () => {
+      withIssuer(OWN);
+      h.verifyFederatedIdToken.mockRejectedValue(jwksFailure());
+      const res = await run();
+      expect(res._getStatusCode()).toBe(401);
+      expect(res._getJSONData().error).toBe('invalid_grant');
+      expect(lastRefusal()).toMatchObject({ error: 'invalid_grant', recordAs: 'server_error', verified: true });
+    });
+
+    it('records a JWKS fetch failure on a third-party issuer as idp_unavailable', async () => {
+      withIssuer('https://idp.other.test');
+      h.verifyFederatedIdToken.mockRejectedValue(jwksFailure());
+      const res = await run();
+      expect(res._getStatusCode()).toBe(401);
+      expect(lastRefusal()).toMatchObject({ error: 'invalid_grant', recordAs: 'idp_unavailable', verified: true });
+    });
+
+    it('keeps a signature or claim failure an app-side invalid_grant', async () => {
+      withIssuer(OWN);
+      h.verifyFederatedIdToken.mockRejectedValue(new FederatedIdTokenError('bad signature'));
+      await run();
+      expect(lastRefusal()).toMatchObject({ error: 'invalid_grant', recordAs: undefined });
+    });
+
+    it('records findByUserId throwing as one verified server_error, then rethrows', async () => {
+      h.findById.mockResolvedValue({ id: 'user-1', aupAcceptedVersion: 'v1' });
+      h.findByUserId.mockRejectedValue(new Error('mongo down'));
+      await expect(run()).rejects.toThrow('mongo down');
+      expect(serverErrors()).toHaveLength(1);
+      expect(lastRefusal()).toMatchObject({ error: 'server_error', status: 500, verified: true, userId: 'user-1' });
+    });
+
+    it('records an unexpected verifier throw once', async () => {
+      h.verifyFederatedIdToken.mockRejectedValue(new Error('boom'));
+      await expect(run()).rejects.toThrow('boom');
+      expect(serverErrors()).toHaveLength(1);
+    });
+
+    it('records verifyClientSecret throwing as unverified, never under the claimed id', async () => {
+      h.verifyClientSecret.mockRejectedValue(new Error('bcrypt exploded'));
+      await expect(run()).rejects.toThrow('bcrypt exploded');
+      expect(serverErrors()).toHaveLength(1);
+      expect(lastRefusal()).toMatchObject({ error: 'server_error', status: 500, verified: false });
+    });
   });
 });

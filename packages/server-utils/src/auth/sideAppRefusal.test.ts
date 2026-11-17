@@ -142,6 +142,8 @@ describe('classifySideAppRefusal', () => {
     ['access_denied', 'policy'],
     ['insufficient_scope', 'policy'],
     ['route_not_allowed', 'policy'],
+    ['rate_limited', 'app_fault'],
+    ['idp_unavailable', 'app_fault'],
     ['invalid_grant', 'app_fault'],
     ['invalid_request', 'app_fault'],
     ['invalid_client', 'app_fault'],

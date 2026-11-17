@@ -17,6 +17,8 @@ export const SIDE_APP_REFUSAL_CLASS: Readonly<Record<string, SideAppRefusalClass
   invalid_grant: 'app_fault',
   invalid_request: 'app_fault',
   invalid_client: 'app_fault',
+  rate_limited: 'app_fault',
+  idp_unavailable: 'app_fault',
   temporarily_unavailable: 'our_fault',
   server_error: 'our_fault',
 };

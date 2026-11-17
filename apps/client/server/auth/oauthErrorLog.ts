@@ -33,14 +33,23 @@ export function logOAuthError(
  */
 export function logAndRecordSideAppMintRefusal(
   logger: Pick<Logger, 'warn'> | undefined,
-  input: { route: string; clientId: unknown; error: string; status: number; verified: boolean; userId?: string }
+  input: {
+    route: string;
+    clientId: unknown;
+    error: string;
+    /** Stored reason when it differs from the wire error, so the record can say who was at fault. */
+    recordAs?: string;
+    status: number;
+    verified: boolean;
+    userId?: string;
+  }
 ): void {
   logOAuthError(logger, input);
   recordSideAppRefusal({
     verified: input.verified,
     clientId: typeof input.clientId === 'string' ? input.clientId : undefined,
     stage: 'mint',
-    reason: input.error,
+    reason: input.recordAs ?? input.error,
     status: input.status,
     userId: input.userId,
   });

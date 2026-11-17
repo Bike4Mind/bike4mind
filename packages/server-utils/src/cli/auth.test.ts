@@ -749,7 +749,7 @@ describe('verifyApiKey exchange keys', () => {
         verified: true,
         clientId: 'client-1',
         stage: 'use',
-        reason: 'route_not_allowed',
+        reason: 'insufficient_scope',
         status: 403,
         userId: 'u1',
         keyId: 'k1',
