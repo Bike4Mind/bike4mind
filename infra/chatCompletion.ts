@@ -165,7 +165,7 @@ const sharedOriginCertificateArn =
 // Host name the load balancer serves HTTPS on. It sits under the app host so its records land in
 // the hosted zone the stage already writes to, or beside the stage domain when the shared
 // certificate is in use. Stages where SST does not manage the app domain (no SERVER_DOMAIN, an
-// operator-supplied certificate, `sst dev`) have none and keep HTTP only.
+// operator-supplied certificate, `sst dev`) have none and forward on port 80.
 function originDomainFor(appDomain: string) {
   return sharedOriginCertificateArn ? `chat-origin-${domain}` : `chat-origin.${appDomain}`;
 }
@@ -214,16 +214,18 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   // Lambda's /process dispatch, which hairpins out through NAT to the ALB's public DNS). The
   // CHAT_COMPLETION_INTERNAL_SECRET bearer checked in internal/route.ts is then defense-in-depth.
   // With an origin domain the service URL is https://<originDomain>/, so both callers use the
-  // HTTPS listener.
+  // HTTPS listener and port 80 only redirects to it.
   loadBalancer: {
     public: true,
     ...(originDomain && originCertificateArn
       ? { domain: { name: originDomain, cert: originCertificateArn, dns: false } }
       : {}),
-    rules: [
-      ...(originDomain ? ([{ listen: '443/https', forward: '8080/http' }] as const) : []),
-      { listen: '80/http', forward: '8080/http' },
-    ],
+    rules: originDomain
+      ? [
+          { listen: '443/https', forward: '8080/http' },
+          { listen: '80/http', redirect: '443/https' },
+        ]
+      : [{ listen: '80/http', forward: '8080/http' }],
     health: {
       '8080/http': {
         path: '/health',
@@ -325,7 +327,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     },
     // Lock the public ALB's ingress to its two legitimate sources so /process is NOT reachable
     // from the open internet (defense-in-depth on top of the CHAT_COMPLETION_INTERNAL_SECRET
-    // bearer). SST's default SG opens 0.0.0.0/0; replace its ingress on the listener ports with:
+    // bearer). SST's default SG opens 0.0.0.0/0; replace its ingress with the forwarding port from:
     //   1. CloudFront's origin-facing edge IPs -> /api/ai/v1/completions (the only route CloudFront
     //      forwards here; CF fronts WAF at the edge).
     //   2. The VPC NAT egress IP -> the frontend Lambda's /process dispatch (it hairpins out through
@@ -347,22 +349,22 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
             .apply(eips => $util.all(eips.map(e => e.publicIp)))
             .apply(ips => ips.map(ip => `${ip}/32`));
 
-      // One rule per source spanning the listener ports: the CloudFront prefix list counts its
-      // full entry limit against the group's rule quota for every rule that references it, so a
-      // rule per port does not fit.
-      const toPort = originDomain ? 443 : 80;
+      // Only the port that forwards is admitted. The CloudFront prefix list counts its full entry
+      // limit against the group's rule quota for every rule that references it, so a second rule
+      // per source would not fit.
+      const forwardingPort = originDomain ? 443 : 80;
       sgArgs.ingress = $util.all([cloudfrontPrefixListId, natCidrs]).apply(([plId, cidrs]) => [
         {
           protocol: 'tcp',
-          fromPort: 80,
-          toPort,
+          fromPort: forwardingPort,
+          toPort: forwardingPort,
           prefixListIds: [plId],
           description: 'CloudFront edge to public /api/ai/v1/completions',
         },
         {
           protocol: 'tcp',
-          fromPort: 80,
-          toPort,
+          fromPort: forwardingPort,
+          toPort: forwardingPort,
           cidrBlocks: cidrs,
           description: 'VPC NAT egress to internal /process dispatch',
         },
