@@ -359,7 +359,7 @@ describe('BillingModal', () => {
       expect(getComputedStyle(screen.getByTestId('billing-balance')).minWidth).toBe('min-content');
     });
 
-    it('keeps the plan box beside the balance', () => {
+    it('still keeps the plan box beside the balance (regression guard; unchanged by the wrap fix)', () => {
       state.credits = 10000000;
       renderModal();
       const balance = screen.getByTestId('billing-balance');
