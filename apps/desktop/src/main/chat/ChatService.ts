@@ -398,6 +398,7 @@ type TaskDecisionIndexLoad = {
 
 /** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
 type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
+type AuxiliaryPurpose = Extract<CompletionRunAttribution['purpose'], 'title' | 'compaction' | 'suggestion'>;
 
 /** Rides with a message typed while the turn ran, so the model answers it without dropping the task. */
 const MID_TURN_NOTE =
@@ -3556,7 +3557,8 @@ export class ChatService {
             event => {
               if (event.type === 'content') answer += event.text ?? '';
             },
-            controller.signal
+            controller.signal,
+            { session, purpose: 'compaction' }
           );
           break;
         } catch (err) {
@@ -8055,12 +8057,17 @@ export class ChatService {
     return this.deps.modelSettings.get(model);
   }
 
-  /** Auxiliary generations honor the same device-local boundary as the main reply. */
+  /**
+   * Auxiliary generations honor the same device-local boundary as the main reply. A hosted one
+   * made for an orchestrated session is billed under that session's run with `purpose`, so the
+   * run's usage counts titles, summaries and suggestions beside its turns.
+   */
   private async streamAuxiliary(
     api: AuthenticatedApiClient | null,
     request: CompletionRequest,
     onEvent: (event: CompletionStreamEvent) => void,
-    signal: AbortSignal
+    signal: AbortSignal,
+    attributeTo?: { session: ChatSession; purpose: AuxiliaryPurpose }
   ): Promise<void> {
     if (isLocalModel(request.model)) {
       const thinking = createThinkFilter();
@@ -8081,7 +8088,20 @@ export class ChatService {
     }
     if (!api) throw new Error('Sign in to use a hosted model.');
     const { endpoint } = await this.resolveServerConfig(api);
-    await streamCompletion(api.getAxiosInstance(), endpoint, request, onEvent, signal);
+    const turnRun = attributeTo ? await this.runAttribution(attributeTo.session) : undefined;
+    const run = turnRun && attributeTo ? { ...turnRun, purpose: attributeTo.purpose } : undefined;
+    await withRunFallback(
+      run,
+      attribution =>
+        streamCompletion(
+          api.getAxiosInstance(),
+          endpoint,
+          attribution ? { ...request, run: attribution } : request,
+          onEvent,
+          signal
+        ),
+      () => (run && attributeTo ? this.forgetServerRun(attributeTo.session, run.runId) : undefined)
+    );
   }
 
   /**
@@ -8123,7 +8143,8 @@ export class ChatService {
         event => {
           if (event.type === 'content' || event.type === 'tool_use') reply += event.text ?? '';
         },
-        controller.signal
+        controller.signal,
+        { session, purpose: 'title' }
       );
 
       const title = sanitizeGeneratedTitle(reply);
@@ -8215,7 +8236,8 @@ export class ChatService {
         event => {
           if (event.type === 'content' || event.type === 'tool_use') answer += event.text ?? '';
         },
-        controller.signal
+        controller.signal,
+        { session, purpose: 'suggestion' }
       );
 
       // An abort is a normal outcome here - streamCompletion resolves on one - so the partial

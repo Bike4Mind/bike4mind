@@ -393,4 +393,108 @@ describe('orchestration run attribution', () => {
     await idle(parent.id);
     expect(await storedRunId(parent.id)).toBe(NEWER);
   });
+
+  describe('auxiliary calls', () => {
+    const bodies = () => post.mock.calls.map(entry => (entry as PostCall)[1]);
+    beforeEach(() => {
+      // A small model for the title and suggestion requests to pick.
+      const models: ChatModelOption[] = [
+        { id: 'planner', name: 'Planner', supportsTools: true },
+        { id: 'claude-haiku-4-5-20251001', name: 'Haiku', supportsTools: true },
+      ];
+      service.dispose();
+      service = new ChatService({
+        ...deps,
+        models: { list: async () => ({ models }), cached: () => models } as unknown as ModelCatalog,
+      });
+    });
+    const untitled = () =>
+      store.create('planner', {
+        mode: 'code',
+        project: {
+          directory: project,
+          workingDirectory: project,
+          name: 'Project',
+          branch: '',
+          workspace: false,
+          contextDirectories: [],
+        },
+      });
+    async function answeredRoot() {
+      const parent = await created();
+      await service.setSessionOrchestrate(parent.id, true);
+      await service.send(parent.id, 'Plan the work');
+      await waitStream(0);
+      finish(0, 'Here is the plan');
+      await idle(parent.id);
+      return parent;
+    }
+
+    it('sends the title request under the same run as the first turn', async () => {
+      const parent = await untitled();
+      await service.setSessionOrchestrate(parent.id, true);
+      await service.send(parent.id, 'Plan the work');
+      await waitStream(1);
+      const title = bodies().find(body => body.run?.purpose === 'title');
+      const turn = bodies().find(body => body.run?.purpose === 'turn');
+      expect(title?.run).toEqual({ runId: RUN_A, role: 'root', purpose: 'title' });
+      expect(turn?.run?.runId).toBe(RUN_A);
+      for (const index of [0, 1]) finish(index, 'A title');
+      await idle(parent.id);
+    });
+
+    it('sends a suggestion under the run with its own purpose', async () => {
+      const parent = await answeredRoot();
+      const pending = service.suggestNextPrompt(parent.id);
+      await waitStream(1);
+      finish(1, 'Run the tests');
+      await pending;
+      expect(call(1)[1].run).toEqual({ runId: RUN_A, role: 'root', purpose: 'suggestion' });
+      expect(mint).toHaveBeenCalledOnce();
+    });
+
+    it('sends a compaction under the run with its own purpose', async () => {
+      const parent = await answeredRoot();
+      const pending = service.compactContext(parent.id);
+      await waitStream(1);
+      finish(1, 'Summary of the plan');
+      await pending;
+      expect(call(1)[1].run).toEqual({ runId: RUN_A, role: 'root', purpose: 'compaction' });
+    });
+
+    it('sends auxiliary calls unattributed outside orchestration', async () => {
+      const parent = await untitled();
+      await service.send(parent.id, 'Just a question');
+      await waitStream(1);
+      for (const index of [0, 1]) finish(index, 'A title');
+      await idle(parent.id);
+      const pending = service.suggestNextPrompt(parent.id);
+      await waitStream(2);
+      finish(2, 'Ask another');
+      await pending;
+      // The turn, its title and the suggestion.
+      expect(post).toHaveBeenCalledTimes(3);
+      expect(bodies().every(body => body.run === undefined)).toBe(true);
+      expect(mint).not.toHaveBeenCalled();
+    });
+
+    it('resends a refused auxiliary call once without the run and forgets the id', async () => {
+      const parent = await answeredRoot();
+      post.mockImplementationOnce(() =>
+        Promise.reject(
+          Object.assign(new Error('Request failed'), {
+            isAxiosError: true,
+            response: { status: 404, data: JSON.stringify({ error: 'Run not found', errorCode: 'run_not_found' }) },
+          })
+        )
+      );
+      const pending = service.suggestNextPrompt(parent.id);
+      await waitStream(1);
+      finish(1, 'Run the tests');
+      await pending;
+      expect(call(1)[1].run?.purpose).toBe('suggestion');
+      expect(call(2)[1]).not.toHaveProperty('run');
+      expect(await storedRunId(parent.id)).toBeUndefined();
+    });
+  });
 });
