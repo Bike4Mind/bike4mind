@@ -229,9 +229,10 @@ export class GitHubRateLimitError extends Error {
   constructor(
     message: string,
     readonly retryAfterSeconds?: number,
-    readonly resetAt?: string
+    readonly resetAt?: string,
+    options?: { cause?: unknown }
   ) {
-    super(message);
+    super(message, options);
     this.name = 'GitHubRateLimitError';
   }
 }
@@ -248,16 +249,17 @@ export class GitHubRepoNotAllowedError extends Error {
 export class GitHubRequestError extends Error {
   constructor(
     message: string,
-    readonly status: number
+    readonly status: number,
+    options?: { cause?: unknown }
   ) {
-    super(message);
+    super(message, options);
     this.name = 'GitHubRequestError';
   }
 }
 
 export type GitHubOrganizationServiceResult =
   | { ok: true; service: GitHubService; connectionType: 'github_app' | 'service_account' }
-  | { ok: false; reason: 'missing' | 'disabled' | 'suspended' | 'error' };
+  | { ok: false; reason: 'missing' | 'disabled' | 'suspended' | 'misconfigured' | 'error' };
 
 export interface GitHubContributor {
   login: string;
@@ -330,6 +332,7 @@ export interface GitHubIssueOrPullItem {
 
 export interface SearchIssuesAndPullsResult {
   items: GitHubIssueOrPullItem[];
+  /** GitHub's own total_count; it can exceed the number of items returned. */
   totalCount: number;
 }
 
@@ -350,6 +353,14 @@ export class GitHubAuthInitError extends Error {
   ) {
     super(message);
     this.name = 'GitHubAuthInitError';
+  }
+}
+
+/** A permanent setup fault (missing key, unusable credentials) that retrying cannot fix. */
+class GitHubConfigurationError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'GitHubConfigurationError';
   }
 }
 
@@ -438,7 +449,7 @@ export class GitHubService {
       return { ok: true, service, connectionType: connection.connectionType };
     } catch (error) {
       logger.error('[GitHubService] Error creating service for organization', { orgId, error });
-      return { ok: false, reason: 'error' };
+      return { ok: false, reason: error instanceof GitHubConfigurationError ? 'misconfigured' : 'error' };
     }
   }
 
@@ -504,7 +515,7 @@ export class GitHubService {
       // Fail hard: without this key, stored credentials cannot be decrypted
       const errorMsg = '[GitHubService] CRITICAL: SECRET_ENCRYPTION_KEY not configured. Cannot decrypt credentials.';
       logger.error(errorMsg);
-      throw new Error('GitHub service configuration error. Please contact administrator.');
+      throw new GitHubConfigurationError('GitHub service configuration error. Please contact administrator.');
     }
 
     let octokit: Octokit;
@@ -529,7 +540,9 @@ export class GitHubService {
         reason: error instanceof GitHubAuthInitError ? error.reason : 'unknown',
         detail: error instanceof GitHubAuthInitError ? error.message : error instanceof Error ? error.name : 'unknown',
       });
-      throw new Error('[GitHubService] Failed to initialize GitHub authentication');
+      throw new GitHubConfigurationError('[GitHubService] Failed to initialize GitHub authentication', {
+        cause: error,
+      });
     }
 
     // Filter out empty/whitespace-only entries from whitelist to prevent bypass
@@ -1600,22 +1613,38 @@ export class GitHubService {
    * hammering an already-exhausted budget. Anything else is rethrown untouched.
    */
   private asRateLimitedErrorOrRethrow(error: unknown): unknown {
+    const throttle = this.classifyThrottle(error);
+    if (!throttle) return error;
+    return new GitHubRateLimitedError('GitHub rate limit exceeded', throttle.retryAfterSeconds, throttle.resetAt);
+  }
+
+  /**
+   * Single rate-limit decision for a failed GitHub response. A 403 is only a throttle
+   * when the budget is exhausted or a retry-after header is present (or, with
+   * matchMessage, the body says "rate limit"); otherwise it is a permissions error.
+   */
+  private classifyThrottle(
+    error: unknown,
+    options: { matchMessage?: boolean } = {}
+  ): { retryAfterSeconds: number | null; resetAt: string | null } | null {
     const status = (error as { status?: number }).status;
-    if (status !== 403 && status !== 429) return error;
+    if (status !== 403 && status !== 429) return null;
 
-    const headers = (error as { response?: { headers?: Record<string, string> } }).response?.headers ?? {};
-    const info = parseRateLimitHeaders(headers);
+    const response = (error as { response?: { headers?: Record<string, string>; data?: unknown } }).response;
+    const info = parseRateLimitHeaders(response?.headers ?? {});
 
-    // A 403 is only a throttle when the budget is actually exhausted; otherwise it
-    // is a permissions error and must not be reported as "retry later".
-    const isThrottle = status === 429 || info.remaining === 0 || info.retryAfterMs !== null;
-    if (!isThrottle) return error;
+    let isThrottle = status === 429 || info.remaining === 0 || info.retryAfterMs !== null;
+    if (!isThrottle && options.matchMessage) {
+      const body = response?.data as { message?: unknown } | undefined;
+      const text = [error instanceof Error ? error.message : '', typeof body?.message === 'string' ? body.message : ''];
+      isThrottle = text.join(' ').toLowerCase().includes('rate limit');
+    }
+    if (!isThrottle) return null;
 
-    return new GitHubRateLimitedError(
-      'GitHub rate limit exceeded',
-      info.retryAfterMs === null ? null : Math.ceil(info.retryAfterMs / 1000),
-      info.resetAt ? info.resetAt.toISOString() : null
-    );
+    return {
+      retryAfterSeconds: info.retryAfterMs === null ? null : Math.ceil(info.retryAfterMs / 1000),
+      resetAt: info.resetAt ? info.resetAt.toISOString() : null,
+    };
   }
 
   // ============================================
@@ -1671,33 +1700,17 @@ export class GitHubService {
     const status = (error as { status?: number }).status;
     if (typeof status !== 'number') return error;
 
-    const response = (error as { response?: { headers?: Record<string, string | number | undefined>; data?: unknown } })
-      .response;
-    const headers = response?.headers ?? {};
-    const body = response?.data as { message?: unknown } | undefined;
-    const message = [error instanceof Error ? error.message : '', typeof body?.message === 'string' ? body.message : '']
-      .join(' ')
-      .toLowerCase();
-
-    const retryAfter = Number(headers['retry-after']);
-    const hasRetryAfter = headers['retry-after'] !== undefined && Number.isFinite(retryAfter);
-    const isThrottle =
-      status === 429 ||
-      (status === 403 &&
-        (String(headers['x-ratelimit-remaining']) === '0' || hasRetryAfter || message.includes('rate limit')));
-
-    if (isThrottle) {
-      const reset = Number(headers['x-ratelimit-reset']);
+    const throttle = this.classifyThrottle(error, { matchMessage: true });
+    if (throttle) {
       return new GitHubRateLimitError(
         'GitHub rate limit exceeded',
-        hasRetryAfter ? Math.ceil(retryAfter) : undefined,
-        Number.isFinite(reset) && headers['x-ratelimit-reset'] !== undefined
-          ? new Date(reset * 1000).toISOString()
-          : undefined
+        throttle.retryAfterSeconds ?? undefined,
+        throttle.resetAt ?? undefined,
+        { cause: error }
       );
     }
 
-    return new GitHubRequestError(`GitHub API error (${status})`, status);
+    return new GitHubRequestError(`GitHub API error (${status})`, status, { cause: error });
   }
 
   private async executeRead<T>(operation: () => Promise<T>): Promise<T> {
@@ -1861,9 +1874,13 @@ export class GitHubService {
         page: options?.page,
       });
 
-      return {
-        totalCount: result.data.total_count,
-        items: result.data.items.map(item => ({
+      const requested = new Set(repos.map(repo => this.normalizeRepo(repo)));
+      const items = result.data.items
+        .filter(item => {
+          const itemRepo = item.repository_url.split('/').slice(-2).join('/');
+          return this.isRepoAllowed(itemRepo) && requested.has(this.normalizeRepo(itemRepo));
+        })
+        .map(item => ({
           repo: item.repository_url.split('/').slice(-2).join('/'),
           number: item.number,
           title: item.title,
@@ -1876,8 +1893,9 @@ export class GitHubService {
           createdAt: item.created_at,
           updatedAt: item.updated_at,
           closedAt: item.closed_at ?? null,
-        })),
-      };
+        }));
+
+      return { totalCount: result.data.total_count, items };
     });
   }
 

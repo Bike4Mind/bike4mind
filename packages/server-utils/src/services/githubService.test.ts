@@ -100,14 +100,9 @@ vi.mock('../security/tokenEncryption', () => ({
 }));
 
 // Mock @bike4mind/common
-vi.mock('@bike4mind/common', () => ({
-  parseRateLimitHeaders: vi.fn(() => ({
-    limit: 5000,
-    remaining: 4999,
-    resetAt: new Date(),
-    retryAfterMs: null,
-    usagePercent: 0,
-  })),
+vi.mock('@bike4mind/common', async importOriginal => ({
+  // Real header parsing, so rate-limit classification is exercised end to end.
+  parseRateLimitHeaders: (await importOriginal<typeof import('@bike4mind/common')>()).parseRateLimitHeaders,
   isNearLimit: vi.fn(() => false),
   buildRateLimitLogEntry: vi.fn(() => ({})),
 }));
@@ -1470,6 +1465,28 @@ describe('GitHubService', () => {
       expect(await GitHubService.forOrganization('org-1', logger)).toBeNull();
     });
 
+    it('reports misconfigured for a missing key and error for a DB throw', async () => {
+      mockConfig.SECRET_ENCRYPTION_KEY = '';
+      mockRepository.findByOrganizationIdWithCredentials.mockResolvedValueOnce(mockConnection);
+      expect(await GitHubService.forOrganizationResult('org-1', logger)).toEqual({
+        ok: false,
+        reason: 'misconfigured',
+      });
+
+      mockConfig.SECRET_ENCRYPTION_KEY = 'a'.repeat(64);
+      mockRepository.findByOrganizationIdWithCredentials.mockResolvedValueOnce({
+        ...mockAppConnection,
+        privateKey: undefined,
+      });
+      expect(await GitHubService.forOrganizationResult('org-1', logger)).toEqual({
+        ok: false,
+        reason: 'misconfigured',
+      });
+
+      mockRepository.findByOrganizationIdWithCredentials.mockRejectedValueOnce(new Error('db down'));
+      expect(await GitHubService.forOrganizationResult('org-1', logger)).toEqual({ ok: false, reason: 'error' });
+    });
+
     it('returns the service and connection type for service account and app connections', async () => {
       mockRepository.findByOrganizationIdWithCredentials.mockResolvedValueOnce(mockConnection);
       const pat = await GitHubService.forOrganizationResult('org-1', logger);
@@ -1633,6 +1650,14 @@ describe('GitHubService', () => {
       });
     });
 
+    it('returns [] from listCommitsByAuthor for an empty repository (409)', async () => {
+      mockOctokit.repos.listCommits.mockRejectedValue(
+        Object.assign(new Error('Git Repository is empty.'), { status: 409 })
+      );
+
+      await expect(service.listCommitsByAuthor('owner/repo', { author: 'dev' })).resolves.toEqual([]);
+    });
+
     describe('searchIssuesAndPulls', () => {
       const item = (number: number, pr: boolean) => ({
         number,
@@ -1669,6 +1694,27 @@ describe('GitHubService', () => {
           [2, true],
         ]);
         expect(result.items[0]).toMatchObject({ repo: 'owner/repo', labels: ['bug', 'plain'], user: 'dev' });
+      });
+
+      it('drops items from non-whitelisted or unrequested repos and keeps mixed-case matches', async () => {
+        const inRepo = (n: number, url: string) => ({ ...item(n, false), repository_url: url });
+        mockOctokit.search.issuesAndPullRequests.mockResolvedValue({
+          data: {
+            total_count: 99,
+            items: [
+              inRepo(1, 'https://api.github.com/repos/other/secret'),
+              inRepo(2, 'https://api.github.com/repos/owner/repo1'),
+              inRepo(3, 'https://api.github.com/repos/Owner/Repo'),
+            ],
+          },
+        });
+        mockRepository.findByOrganizationIdWithCredentials.mockResolvedValue(mockAppConnection);
+        const appService = (await GitHubService.forOrganization('org-1', logger)) as GitHubService;
+
+        const result = await appService.searchIssuesAndPulls(['owner/repo'], 'x');
+
+        expect(result.items.map(i => i.number)).toEqual([3]);
+        expect(result.totalCount).toBe(99);
       });
 
       it('rejects a repo outside the whitelist without searching', async () => {
@@ -1766,6 +1812,35 @@ describe('GitHubService', () => {
         expect(error).not.toBeInstanceOf(GitHubRateLimitError);
         expect(error).toBeInstanceOf(GitHubRequestError);
         expect(error.status).toBe(403);
+      });
+
+      it('agrees with asRateLimitedErrorOrRethrow on the same response', async () => {
+        const cases: Array<[number, Record<string, string>]> = [
+          [429, {}],
+          [403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1700000000' }],
+          [403, { 'retry-after': '30' }],
+          [403, { 'x-ratelimit-remaining': '4000' }],
+        ];
+        for (const [status, headers] of cases) {
+          const raw = Object.assign(new Error('boom'), { status, response: { headers, data: { message: 'boom' } } });
+          const shared = (
+            service as unknown as { asRateLimitedErrorOrRethrow(e: unknown): unknown }
+          ).asRateLimitedErrorOrRethrow(raw) as { retryAfterSeconds?: number | null; resetAt?: string | null };
+          const error = await failWith(status, headers).catch(e => e);
+
+          expect(error instanceof GitHubRateLimitError).toBe(shared !== raw);
+          if (error instanceof GitHubRateLimitError) {
+            expect(error.retryAfterSeconds).toBe(shared.retryAfterSeconds ?? undefined);
+            expect(error.resetAt).toBe(shared.resetAt ?? undefined);
+          }
+        }
+      });
+
+      it('keeps the original error as cause', async () => {
+        const error = await failWith(404, {}, 'Not Found upstream').catch(e => e);
+        expect(error).toBeInstanceOf(GitHubRequestError);
+        expect((error.cause as Error).message).toBe('Not Found upstream');
+        expect(error.message).toBe('GitHub API error (404)');
       });
 
       it('wraps other non-2xx responses in GitHubRequestError', async () => {
