@@ -20,10 +20,14 @@ import type { ProductionJobView, ProductionToolConfig } from './config';
 
 type Context = Omit<ToolContext, 'config'>;
 
-export type Submitted = { ok: true; jobIds: string[] } | { ok: false; message: string };
+export type Submitted = { ok: true; jobIds: string[] } | { ok: false; message: string; notReady?: true };
 
 const DEFAULT_WAIT_TIMEOUT_MS = 150_000;
 const DEFAULT_POLL_INTERVAL_MS = 3_000;
+// A new take is refused as a video input until its upload moderation passes (loadInputFabFile reads only a 'clean'
+// file), which takes some seconds after the image job saves it.
+const DEFAULT_INPUT_READY_TIMEOUT_MS = 60_000;
+const INPUT_NOT_READY = 'input_image_not_found';
 const MAX_PROMPT_CHARS = 4000;
 
 const jobUser = (context: Context) => ({
@@ -203,8 +207,8 @@ export async function submitShotClip(
     resolution: caps.defaults.resolution,
     inputImageFileId: input.stillFileId,
   };
-  try {
-    const result = await createWithRetry(attempt =>
+  const create = () =>
+    createWithRetry(attempt =>
       video.createJob({
         user: jobUser(context),
         request,
@@ -214,7 +218,19 @@ export async function submitShotClip(
         idempotencyKey: attemptKey(context, request, attempt),
       })
     );
+  try {
+    const deadline = Date.now() + (config.inputReadyTimeoutMs ?? DEFAULT_INPUT_READY_TIMEOUT_MS);
+    const interval = config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+    let result = await create();
+    while (result && !result.ok && result.code === INPUT_NOT_READY && Date.now() + interval <= deadline) {
+      if (context.getAbortSignal?.()?.aborted) break;
+      await sleep(interval);
+      result = await create();
+    }
     if (!result) return { ok: false, message: DEAD_REPLAY_MESSAGE };
+    if (!result.ok && result.code === INPUT_NOT_READY) {
+      return { ok: false, notReady: true, message: 'the chosen take is not ready to animate yet (its safety check)' };
+    }
     if (!result.ok) return { ok: false, message: `${result.code}: ${result.message}` };
     await context.statusUpdate({ generationJobs: [{ id: result.job.id, kind: 'video' }] });
     return { ok: true, jobIds: [result.job.id] };

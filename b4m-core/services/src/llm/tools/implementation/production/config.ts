@@ -70,6 +70,8 @@ export type ProductionToolConfig = {
   /** How long one tool call waits for its jobs before handing back what is still running. */
   waitTimeoutMs?: number;
   pollIntervalMs?: number;
+  /** How long a clip waits for a new take to clear moderation before reporting it pending. */
+  inputReadyTimeoutMs?: number;
 };
 
 export const isProductionToolConfig = (value: unknown): value is ProductionToolConfig =>

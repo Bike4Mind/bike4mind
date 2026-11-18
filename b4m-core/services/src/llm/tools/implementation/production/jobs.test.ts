@@ -8,6 +8,7 @@ import {
   pickMusicModel,
   pickVideoModel,
   submitMusic,
+  submitShotClip,
   videoDurationFor,
   waitForJobs,
 } from './jobs';
@@ -200,5 +201,58 @@ describe('submitMusic retries', () => {
     const result = await submitMusic(context, configWith(createJob), { prompt: 'calm', seconds: 10 });
     expect(result.ok).toBe(false);
     expect(createJob).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('submitShotClip waiting for a new take', () => {
+  const context = {
+    userId: 'user1',
+    questId: 'quest1',
+    user: { isAdmin: false },
+    statusUpdate: vi.fn(async () => undefined),
+  } as never;
+  const notReady = {
+    ok: false as const,
+    code: 'input_image_not_found',
+    message: 'Input image not found (first_frame)',
+  };
+  const input = {
+    model: 'veo-3.1-fast-generate-preview' as const,
+    prompt: 'slow push-in',
+    stillFileId: 'a'.repeat(24),
+    durationSeconds: 4,
+    aspectRatio: '16:9',
+  };
+  const configWith = (createJob: ReturnType<typeof vi.fn>, timing = { inputReadyTimeoutMs: 50, pollIntervalMs: 1 }) =>
+    ({ video: { usableModels: [input.model], createJob }, ...timing }) as unknown as ProductionToolConfig;
+
+  it('retries while the still is refused as an input, then starts the clip once it is accepted', async () => {
+    const createJob = vi
+      .fn()
+      .mockResolvedValueOnce(notReady)
+      .mockResolvedValueOnce(notReady)
+      .mockResolvedValueOnce({ ok: true, created: true, job: { id: 'clip', state: 'queued' } });
+    expect(await submitShotClip(context, configWith(createJob), input)).toEqual({ ok: true, jobIds: ['clip'] });
+    expect(createJob).toHaveBeenCalledTimes(3);
+    const [first] = createJob.mock.calls[0]! as [{ request: { inputImageFileId: string } }];
+    expect(first.request.inputImageFileId).toBe(input.stillFileId);
+  });
+
+  it('reports the take as not ready, not failed, once the wait runs out', async () => {
+    const createJob = vi.fn().mockResolvedValue(notReady);
+    const result = await submitShotClip(
+      context,
+      configWith(createJob, { inputReadyTimeoutMs: 0, pollIntervalMs: 1 }),
+      input
+    );
+    expect(result).toMatchObject({ ok: false, notReady: true });
+    expect(createJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not wait on any other refusal', async () => {
+    const createJob = vi.fn().mockResolvedValue({ ok: false, code: 'limit_reached', message: 'too many clips' });
+    const result = await submitShotClip(context, configWith(createJob), input);
+    expect(result).toEqual({ ok: false, message: 'limit_reached: too many clips' });
+    expect(createJob).toHaveBeenCalledTimes(1);
   });
 });

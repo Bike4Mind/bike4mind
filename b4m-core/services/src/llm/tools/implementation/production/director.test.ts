@@ -294,6 +294,24 @@ describe('production director tools', () => {
     expect(again.next).toContain('production_add_audio');
   });
 
+  it('reports a clip whose take is still in its safety check as pending, then animates it on the next call', async () => {
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    const createJob = harness.config.video!.createJob;
+    harness.config.video!.createJob = async () =>
+      ({ ok: false, code: 'input_image_not_found', message: 'Input image not found (first_frame)' }) as never;
+    harness.config.inputReadyTimeoutMs = 0;
+
+    const first = JSON.parse(await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID }));
+    expect(first.next).toContain('call production_generate_shot again');
+    expect(first.shots.every((shot: { problem?: string; pending?: string[] }) => !shot.problem && shot.pending)).toBe(
+      true
+    );
+
+    harness.config.video!.createJob = createJob;
+    await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID });
+    expect(harness.composition().shots.every(shot => shot.clipFileId)).toBe(true);
+  });
+
   it('refuses to replace shots that have takes unless replace is true', async () => {
     await run(productionStoryboardTool, harness, STORYBOARD);
     await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
