@@ -106,7 +106,14 @@ export async function composeBrief(
     if (hasActivity(activity)) {
       const gate = await deps.canCompose(input.userId);
       if (gate !== 'ok') {
-        await briefs.markFailed(input.briefId, gate);
+        // A scheduled start the user cannot pay for is dropped like an empty one, so a held account or an
+        // empty balance does not leave a failed row in the brief list every scheduled day.
+        if (input.scheduled) {
+          logger.info('[Brief] scheduled brief skipped; composition not allowed', { briefId: input.briefId, gate });
+          await briefs.discardComposing(input.briefId);
+        } else {
+          await briefs.markFailed(input.briefId, gate);
+        }
         return;
       }
       const instructions = await loadInstructionsSafely(deps, input.userId);

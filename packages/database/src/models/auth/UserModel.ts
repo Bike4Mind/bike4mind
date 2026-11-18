@@ -209,7 +209,8 @@ const UserPreferencesSchema = new Schema(
         { _id: false }
       ),
     },
-    // Validated by BriefScheduleSchema (@bike4mind/common) at the only writer, userRepository.setBriefSchedule.
+    // Validated by BriefScheduleSchema (@bike4mind/common) in PUT /api/v1/briefs/schedule. The general user
+    // update rewrites the whole preferences object, so it can carry a stale copy back; see IUserPreferences.
     briefSchedule: {
       type: new Schema(
         {
@@ -1658,8 +1659,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   /**
-   * Replaces the brief schedule and its due time together, so `nextBriefAt` never describes a schedule the
-   * user no longer has. A null `nextBriefAt` (schedule off) removes the field and drops the user from the
+   * Replaces the brief schedule and its due time together. A null `nextBriefAt` (schedule off) removes the field and drops the user from the
    * reconciler's index.
    */
   async setBriefSchedule(userId: string, schedule: BriefSchedule, nextBriefAt: Date | null): Promise<void> {

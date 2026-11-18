@@ -637,8 +637,9 @@ const voiceHoldSweepCron = runsScheduledJobs
 
 // Brief Schedule Reconcile - starts the scheduled assistant briefs that have come due, through the same
 // brief.compose event as POST /api/v1/briefs (its rule carries the DLQ). Each due user is claimed by a
-// compare-and-set on nextBriefAt, so overlapping runs start a slot once. The 5-minute schedule is the
-// retry. Self-host twin: apps/workers/src/selfhost/briefScheduleReconcile.ts; keep the schedules in step.
+// compare-and-set on nextBriefAt, so overlapping runs start a slot once. A start that throws hands its
+// slot back, so later runs retry it for up to an hour (RETRY_WINDOW_MS). Self-host twin:
+// apps/workers/src/selfhost/briefScheduleReconcile.ts; keep the schedules in step.
 const briefScheduleReconcileCron = runsScheduledJobs
   ? new sst.aws.Cron('briefScheduleReconcile', {
       schedule: 'rate(5 minutes)',

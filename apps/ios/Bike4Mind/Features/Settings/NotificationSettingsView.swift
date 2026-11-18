@@ -33,7 +33,8 @@ private struct NotificationSettingsContent: View {
       Group {
         masterSection
         // The schedule is server-side, so it shows even while the device-local category toggles stay hidden.
-        if model.isMasterEnabled {
+        // An enabled schedule stays visible with pushes off: it still composes and bills, so it must stay switchable.
+        if model.isMasterEnabled || brief.schedule.enabled {
           briefScheduleSection
         }
         if Self.showsCategoryPreferences, model.isMasterEnabled {

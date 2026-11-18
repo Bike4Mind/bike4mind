@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { briefWindow, computeNextBriefAt, type BriefScheduleTiming } from './briefSchedule';
+import { briefWindow, cachedFormatterCount, computeNextBriefAt, type BriefScheduleTiming } from './briefSchedule';
 
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 const schedule = (overrides: Partial<BriefScheduleTiming>): BriefScheduleTiming => ({
@@ -120,5 +120,18 @@ describe('briefWindow', () => {
 
   it('caps the window at a week', () => {
     expect(briefWindow(new Date('2026-10-01T00:00:00Z'), now).periodStart).toEqual(new Date('2026-11-11T12:00:00Z'));
+  });
+});
+
+describe('zone formatter cache', () => {
+  it('adds no entry for case variants of a cached zone and computes the same instant', () => {
+    const after = new Date('2026-11-18T12:00:00Z');
+    const canonical = computeNextBriefAt(schedule({ timeZone: 'Asia/Kolkata' }), after);
+    const size = cachedFormatterCount();
+
+    for (const variant of ['asia/kolkata', 'ASIA/KOLKATA', 'aSiA/kOlKaTa']) {
+      expect(computeNextBriefAt(schedule({ timeZone: variant }), after)).toEqual(canonical);
+    }
+    expect(cachedFormatterCount()).toBe(size);
   });
 });

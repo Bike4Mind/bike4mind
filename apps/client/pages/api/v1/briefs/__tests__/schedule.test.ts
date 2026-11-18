@@ -63,6 +63,25 @@ describe('/api/v1/briefs/schedule', () => {
     expect(res._getJSONData()).toEqual({ schedule: null, nextBriefAt: null });
   });
 
+  it.each([
+    ['dropped', null],
+    ['turned off', { ...schedule, enabled: false }],
+  ])('GET reports no due time for a schedule a preferences write %s', async (_label, stored) => {
+    userRepository.getBriefSchedule.mockResolvedValue({
+      schedule: stored,
+      nextBriefAt: new Date('2026-11-19T13:00:00Z'),
+    });
+    const res = await call('GET');
+    expect(res._getJSONData()).toEqual({ schedule: stored, nextBriefAt: null });
+  });
+
+  it('GET reports the due time of an enabled schedule', async () => {
+    const due = new Date('2026-11-19T13:00:00Z');
+    userRepository.getBriefSchedule.mockResolvedValue({ schedule, nextBriefAt: due });
+    const res = await call('GET');
+    expect(res._getJSONData()).toEqual({ schedule, nextBriefAt: due.toISOString() });
+  });
+
   it('PUT persists the schedule with its next due time in the schedule zone', async () => {
     const res = await call('PUT', schedule);
     const due = new Date('2026-11-18T13:00:00.000Z');
