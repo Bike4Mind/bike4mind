@@ -8,15 +8,19 @@ import {
   type ModelCaptureRequest,
   type ModelLighting,
   type ModelPose,
+  type ModelVersion,
+  type ModelVersionRecordRequest,
   type ModelView,
   type ModelViewState,
   modelKindFor,
+  versionLabel,
   siblingGlbPath,
   writeParamValue,
 } from '@shared/model3d';
 import { realpathNearest } from '../tools/paths';
 import { withPathLock } from '../tools/writeTools';
 import { isModelPaneGlbFile, stampModelPaneGlb } from './glbMarker';
+import type { ModelVersionInput } from './ModelVersionStore';
 
 export type { ModelCaptureRequest };
 
@@ -36,6 +40,18 @@ export type ModelLiveViewOptions = {
   recordTimeoutMs?: number;
 };
 
+/** One conversation's slice of the ModelVersionStore, bound by ModelLiveViews. */
+export type ModelVersionsBinding = {
+  record(input: ModelVersionInput): Promise<ModelVersion | null>;
+  list(): Promise<ModelVersion[]>;
+  get(number: number): Promise<ModelVersion | null>;
+  /** Tell the panes showing this conversation to list its versions again. */
+  changed(): void;
+};
+
+/** What the next kept version is labelled with, once a build of exactly `source` arrives. */
+type PendingNote = { source: string; note: string; restoredFrom?: number; jointAngles?: Record<string, number> };
+
 type Waiter = {
   from?: number;
   resolve: (report: ModelBuildReport) => void;
@@ -47,7 +63,7 @@ type PendingCapture = { resolve: (bytes: Uint8Array) => void; reject: (error: Er
 /**
  * One conversation's open model (ModelLiveViews keeps one per conversation), following that
  * conversation's last `model_view` or the user's own pick in its pane. Main owns the file: it watches it, hands its text to the renderer, and
- * performs the only writes (the sibling GLB and slider values). The renderer owns the build, which
+ * performs the only writes (the sibling GLB, slider values and a version the user restores). The renderer owns the build, which
  * runs in the sandboxed b4m-model: engine, and reports back per generation.
  *
  * Paths come from two places: the agent's tools, confined to the session's roots (modelTools.ts),
@@ -94,6 +110,8 @@ export class ModelLiveView {
   private reported = new Map<number, number>();
   private glbWrite: { generation: number; written: Promise<string | null> } | null = null;
   private captures = new Map<string, PendingCapture>();
+  private versionWrite: { generation: number; recorded: Promise<ModelVersion | null> } | null = null;
+  private pendingNote: PendingNote | null = null;
   private readonly debounceMs: number;
   private readonly buildTimeoutMs: number;
   private readonly captureTimeoutMs: number;
@@ -101,7 +119,8 @@ export class ModelLiveView {
 
   constructor(
     private readonly events: ModelLiveViewEvents,
-    options: ModelLiveViewOptions = {}
+    options: ModelLiveViewOptions = {},
+    private readonly versionStore: ModelVersionsBinding | null = null
   ) {
     this.debounceMs = options.debounceMs ?? 150;
     this.buildTimeoutMs = options.buildTimeoutMs ?? 30_000;
@@ -273,9 +292,80 @@ export class ModelLiveView {
       if (source === null) return false;
       const next = writeParamValue(source, key, value);
       if (next === null) return false;
-      if (next !== source) await writeFile(path, next, 'utf8');
+      if (next !== source) {
+        this.pendingNote = { source: next, note: `${key} = ${value}` };
+        await writeFile(path, next, 'utf8');
+      }
       return true;
     });
+  }
+
+  /**
+   * Keeps the current generation's good build as a version, with the pose and thumbnail its window
+   * sends; the path and source are main's own, never the renderer's. Every app window builds each
+   * generation, so the first request serves them all, and a stale generation keeps nothing.
+   */
+  recordVersion(request: ModelVersionRecordRequest): Promise<ModelVersion | null> {
+    if (this.versionWrite?.generation === request.generation) return this.versionWrite.recorded;
+    const recorded = this.recordVersionOnce(request).catch((error: unknown) => {
+      console.warn(`MODEL: could not keep a version: ${String(error)}`);
+      return null;
+    });
+    this.versionWrite = { generation: request.generation, recorded };
+    return recorded;
+  }
+
+  private async recordVersionOnce(request: ModelVersionRecordRequest): Promise<ModelVersion | null> {
+    const { path, kind, source, generation, missing } = this.state;
+    if (!this.versionStore || kind !== 'model' || !path || source === null || missing) return null;
+    if (request.generation !== generation) return null;
+    const pending = this.pendingNote?.source === source ? this.pendingNote : null;
+    if (pending) this.pendingNote = null;
+    const version = await this.versionStore.record({
+      path,
+      source,
+      jointAngles: pending?.jointAngles ?? request.jointAngles,
+      thumbnail: request.thumbnail,
+      note: pending?.note,
+      restoredFrom: pending?.restoredFrom,
+    });
+    if (version) this.versionStore.changed();
+    return version;
+  }
+
+  /** This conversation's kept versions, oldest first. */
+  versions(): Promise<ModelVersion[]> {
+    return this.versionStore?.list() ?? Promise.resolve([]);
+  }
+
+  version(number: number): Promise<ModelVersion | null> {
+    return this.versionStore?.get(number) ?? Promise.resolve(null);
+  }
+
+  /**
+   * Puts version `number`'s source back into its file and opens that file here. Nothing is removed:
+   * the rebuild it causes is kept as a new version noting where it came from, with the restored
+   * version's pose. The user asks for this in the pane; the agent restores with its own file tools,
+   * under their approvals (modelTools.ts).
+   */
+  async restoreVersion(number: number): Promise<ModelVersion> {
+    const version = await this.version(number);
+    if (!version) throw new Error(`There is no ${versionLabel(number)} in this conversation.`);
+    // Same lock key as file_write, so a restore cannot interleave with an agent edit.
+    await withPathLock(await realpathNearest(version.path), async () => {
+      const current = await readFile(version.path, 'utf8').catch(() => null);
+      if (current === version.source) return;
+      this.pendingNote = {
+        source: version.source,
+        note: `Restored ${versionLabel(number)}`,
+        restoredFrom: number,
+        jointAngles: version.jointAngles,
+      };
+      await writeFile(version.path, version.source, 'utf8');
+    });
+    if (this.state.path === version.path) await this.refresh();
+    else await this.open(version.path);
+    return version;
   }
 
   /** Bytes of the open binary asset (glb/stl); the renderer cannot read the disk itself. */

@@ -2,7 +2,12 @@ import { realpath, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
-import { isModelExportFormat, type ModelBuildReport, siblingGlbPath } from '@shared/model3d';
+import {
+  isModelExportFormat,
+  type ModelBuildReport,
+  type ModelVersionRecordRequest,
+  siblingGlbPath,
+} from '@shared/model3d';
 import { stampModelPaneGlb } from './glbMarker';
 import type { ModelLiveViews } from './ModelLiveViews';
 
@@ -117,6 +122,19 @@ export function setRecording(sender: WebContents, active: boolean): void {
   sender.setBackgroundThrottling(count === 0);
 }
 
+/** Only the fields main acts on; the path and source come from main's own state, never from here. */
+export function parseVersionRecord(value: unknown): ModelVersionRecordRequest | null {
+  if (!isRecord(value) || typeof value.generation !== 'number') return null;
+  const jointAngles: Record<string, number> = {};
+  if (isRecord(value.jointAngles)) {
+    for (const [name, angle] of Object.entries(value.jointAngles).slice(0, 256)) {
+      if (typeof angle === 'number' && Number.isFinite(angle)) jointAngles[name.slice(0, 200)] = angle;
+    }
+  }
+  const thumbnail = value.thumbnail instanceof Uint8Array ? value.thumbnail : null;
+  return { generation: value.generation, jointAngles, thumbnail };
+}
+
 function requireSessionId(value: unknown): string {
   if (typeof value !== 'string' || !value) throw new Error('A model request must name its conversation.');
   return value;
@@ -193,6 +211,23 @@ export function modelIpcHandlers(views: ModelLiveViews): void {
     if (format === 'webm') await writeFile(picked.filePath, value.bytes);
     else await writeExport(format, value.bytes, picked.filePath, current);
     return picked.filePath;
+  });
+
+  ipcMain.handle(
+    IPC_CHANNELS.modelListVersions,
+    async (_event, sessionId: unknown) => (await views.versions?.listWithThumbnails(requireSessionId(sessionId))) ?? []
+  );
+
+  ipcMain.handle(IPC_CHANNELS.modelRecordVersion, async (_event, sessionId: unknown, value: unknown) => {
+    const view = views.find(requireSessionId(sessionId));
+    const request = parseVersionRecord(value);
+    if (!view || !request) return null;
+    return view.recordVersion(request);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.modelRestoreVersion, async (_event, sessionId: unknown, number: unknown) => {
+    if (typeof number !== 'number' || !Number.isInteger(number)) throw new Error('Name a version by its number.');
+    return views.for(requireSessionId(sessionId)).restoreVersion(number);
   });
 
   ipcMain.handle(IPC_CHANNELS.modelSetRecording, (event, active: unknown) => {

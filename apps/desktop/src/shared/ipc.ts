@@ -145,6 +145,10 @@ import type {
   ModelCaptureRequestEvent,
   ModelExportFormat,
   ModelStateUpdate,
+  ModelVersion,
+  ModelVersionEntry,
+  ModelVersionRecordRequest,
+  ModelVersionsUpdate,
   ModelViewState,
 } from './model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
@@ -496,6 +500,12 @@ export const IPC_CHANNELS = {
   modelState: 'model:state',
   /** main -> renderer push: render these views of the current model and answer on modelCaptureResult. */
   modelCaptureRequest: 'model:capture-request',
+  /** Renderer -> main: kept builds of a conversation's model (main/chat/model3d/ModelVersionStore.ts). */
+  modelListVersions: 'model:list-versions',
+  modelRecordVersion: 'model:record-version',
+  modelRestoreVersion: 'model:restore-version',
+  /** main -> renderer push: a conversation kept a new version. */
+  modelVersions: 'model:versions',
   /**
    * Importing the user's own Chrome cookies, per site. Renderer -> main, every one of them.
    *
@@ -1235,6 +1245,13 @@ export interface DesktopApi {
     captureResult(result: { id: string; bytes?: Uint8Array; error?: string }): void;
     onState(listener: (update: ModelStateUpdate) => void): () => void;
     onCaptureRequest(listener: (request: ModelCaptureRequestEvent) => void): () => void;
+    /** Oldest first, with thumbnails. */
+    listVersions(sessionId: string): Promise<ModelVersionEntry[]>;
+    /** Keeps the good build of `generation`; null when nothing new was kept. */
+    recordVersion(sessionId: string, request: ModelVersionRecordRequest): Promise<ModelVersion | null>;
+    /** Writes the version back to its file and opens it; the rebuild is kept as a new version. */
+    restoreVersion(sessionId: string, number: number): Promise<ModelVersion>;
+    onVersions(listener: (update: ModelVersionsUpdate) => void): () => void;
   };
   /** The live iOS Simulator view; `available` is false off macOS. */
   simulator: {

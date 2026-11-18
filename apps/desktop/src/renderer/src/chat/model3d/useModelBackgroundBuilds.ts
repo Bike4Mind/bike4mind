@@ -41,7 +41,12 @@ function hasModel(state: ModelViewState): boolean {
   return state.path !== null && state.kind !== null && !state.missing;
 }
 
-async function buildAndReport(engine: ModelEngineFrame, sessionId: string, state: ModelViewState): Promise<void> {
+async function buildAndReport(
+  engine: ModelEngineFrame,
+  sessionId: string,
+  state: ModelViewState,
+  dark: boolean
+): Promise<void> {
   if (!hasModel(state)) return;
   const { generation } = state;
   const built = await buildState(engine, sessionId, state);
@@ -50,7 +55,9 @@ async function buildAndReport(engine: ModelEngineFrame, sessionId: string, state
     await window.b4m.model.reportBuild(sessionId, { generation, ok: false, error: built.error, line: built.line });
     return;
   }
-  if (state.kind === 'model') await reportGoodFileBuild(sessionId, generation, built.object, built.summary);
+  // Built off screen, so the version is kept at rest: no pane has posed it.
+  if (state.kind === 'model')
+    await reportGoodFileBuild(sessionId, generation, built.object, built.summary, { dark, jointAngles: {} });
   else await window.b4m.model.reportBuild(sessionId, { generation, ok: true, summary: built.summary });
 }
 
@@ -111,7 +118,7 @@ export function useModelBackgroundBuilds(activeSessionId: string | null, dark: b
         const latest = waiting.get(sessionId);
         waiting.delete(sessionId);
         // A conversation brought on screen meanwhile is the pane's to build.
-        if (latest && sessionId !== activeRef.current) await buildAndReport(engine, sessionId, latest);
+        if (latest && sessionId !== activeRef.current) await buildAndReport(engine, sessionId, latest, darkRef.current);
       });
     };
     enqueueRef.current = enqueue;
