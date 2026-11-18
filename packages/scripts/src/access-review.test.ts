@@ -31,6 +31,15 @@ const snapshot: AccessReviewSnapshot = {
   allApiKeysListed: false,
   counts,
   admins: [],
+  roles: [
+    {
+      id: 'role-1',
+      name: 'Support agent',
+      description: '',
+      permissions: ['support:read', 'users:moderate'],
+      members: [{ userId: 'u1', email: 'agent@example.org', username: 'agent', status: 'active' }],
+    },
+  ],
   apiKeys: [],
   supportAccess: [],
   impersonation: [],
@@ -104,6 +113,10 @@ describe('access-review entry point', () => {
     });
     expect(mocks.collectAccessReview).toHaveBeenCalledWith({ allApiKeys: false });
     expect(log).toHaveBeenCalledWith(expect.stringContaining('# Access review 2027-Q1'));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('## Admin roles (1)\n\n| Role | Permissions | Members |'));
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('| Support agent | support:read, users:moderate | agent@example.org |')
+    );
     expect(mocks.writeAccessReviewFile).not.toHaveBeenCalled();
   });
 
@@ -117,7 +130,10 @@ describe('access-review entry point', () => {
     expect(mocks.connectDB).toHaveBeenCalledWith('mongodb://config/production', undefined, expect.anything());
     expect(mocks.readFileSync).toHaveBeenCalledWith('/operator/before.json', 'utf8');
     expect(mocks.collectAccessReview).toHaveBeenCalledWith({ allApiKeys: true });
-    expect(mocks.writeAccessReviewFile).toHaveBeenCalledWith('/operator/after.json', `${JSON.stringify(snapshot, null, 2)}\n`);
+    expect(mocks.writeAccessReviewFile).toHaveBeenCalledWith(
+      '/operator/after.json',
+      `${JSON.stringify(snapshot, null, 2)}\n`
+    );
     const [path, markdown] = mocks.writeAccessReviewFile.mock.calls[1];
     expect(path).toBe('/operator/after.md');
     expect(markdown).toContain('| Full admin accounts | 3 | 1 | -2 |');
