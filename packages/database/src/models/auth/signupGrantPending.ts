@@ -173,6 +173,7 @@ type ListPendingInput = {
   heldReason?: SignupGrantPendingHeldReason;
   source?: 'default' | 'package';
   invite?: 'invited' | 'uninvited';
+  activeSince?: Date;
   sort: SignupGrantPendingSort;
   cursor?: SignupGrantPendingCursor;
   limit: number;
@@ -203,6 +204,7 @@ export const buildListPendingPipeline = (input: ListPendingInput): PipelineStage
   if (input.source === 'default') pre.push({ 'signupGrant.stage': { $type: 'string' }, $nor: [fromPackage] });
   if (input.invite === 'invited') pre.push({ signupInvite: { $type: 'object' } });
   if (input.invite === 'uninvited') pre.push({ signupInvite: { $not: { $type: 'object' } } });
+  if (input.activeSince) pre.push({ lastActiveAt: { $gte: input.activeSince } });
 
   const cursor = input.cursor;
   const cursorId = cursor ? new mongoose.Types.ObjectId(cursor.id) : null;

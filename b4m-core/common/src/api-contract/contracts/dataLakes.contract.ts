@@ -18,8 +18,10 @@ import { PaginationQuerySchema } from '../../schemas/pagination';
 import {
   ApiErrorSchema,
   InsufficientCreditsErrorSchema,
+  MeteredForbiddenErrorSchema,
   ProviderNotConfiguredErrorSchema,
   ScopeForbiddenErrorSchema,
+  SPEND_FROZEN_FORBIDDEN_NOTE,
 } from '../../schemas/chat';
 
 /**
@@ -234,8 +236,8 @@ export const searchDataLakeContract = defineEndpoint({
       schema: ApiErrorSchema,
     },
     403: {
-      description: `The API key lacks \`datalake:query\`, ${FEATURE_DISABLED_NOTE}.`,
-      schema: ScopeForbiddenErrorSchema,
+      description: `The API key lacks \`datalake:query\`, ${FEATURE_DISABLED_NOTE}. ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
+      schema: MeteredForbiddenErrorSchema,
     },
     404: {
       description:

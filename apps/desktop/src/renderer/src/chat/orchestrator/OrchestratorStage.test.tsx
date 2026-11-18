@@ -6,6 +6,8 @@ import { OrchestratorStage, type OrchestratorViewProps } from './OrchestratorSta
 import { EXAMPLE_QUESTS } from './exampleQuests';
 import type { AgentView } from './roster';
 import { TavernView } from './tavern/TavernView';
+import { Aquarium } from './aquarium/Aquarium';
+import { snapshotView } from './snapshotView';
 import { agentFixture, createThemedMount, el, query, typeInto } from './testUtils';
 
 const FIXTURE = [
@@ -169,6 +171,29 @@ describe('OrchestratorStage', () => {
     expect(query('orchestrator-peek-drawer')).toBeNull();
   });
 
+  it.each(['tavern', 'aquarium'] as const)(
+    'keeps the %s parent scene action distinct from attention focus',
+    async view => {
+      const onParentFocus = vi.fn();
+      const onParentToggle = vi.fn();
+      await themed.render(
+        <OrchestratorStage
+          agents={[agentFixture('w', 'working')]}
+          onParentFocus={onParentFocus}
+          onParentToggle={onParentToggle}
+          view={view}
+          onViewChange={onViewChange}
+          actions={actions}
+          introPlaying={false}
+          renderView={(_view, props) => <button data-testid="scene-parent-action" onClick={props.onInnkeeperSelect} />}
+        />
+      );
+      await act(async () => el('scene-parent-action').click());
+      expect(onParentToggle).toHaveBeenCalledTimes(view === 'tavern' ? 1 : 0);
+      expect(onParentFocus).toHaveBeenCalledTimes(view === 'aquarium' ? 1 : 0);
+    }
+  );
+
   it('opens the first failed agent from the failed pill, and leaves it out when none failed', async () => {
     await renderStage([agentFixture('d', 'done'), agentFixture('f', 'failed'), agentFixture('g', 'failed')]);
     expect(el('orchestrator-summary-strip').textContent).not.toContain('failed');
@@ -205,6 +230,89 @@ describe('OrchestratorStage', () => {
       document.body.dispatchEvent(handled);
     });
     expect(query('orchestrator-peek-drawer')).not.toBeNull();
+  });
+
+  it.each(['tavern', 'aquarium', 'table'] as const)(
+    'overlays details within the %s viewport without adding a layout column',
+    async view => {
+      await themed.render(
+        <OrchestratorStage
+          agents={FIXTURE}
+          view={view}
+          onViewChange={onViewChange}
+          actions={actions}
+          introPlaying={false}
+          renderView={(_id, props) => (
+            <div data-testid="scene-artwork" style={{ position: 'relative' }}>
+              <button data-testid="scene-select" onClick={() => props.onSelect('w1')} />
+              {props.agentDetailsOverlay}
+            </div>
+          )}
+        />
+      );
+      const scene = el('scene-select');
+      const viewport = el('orchestrator-scene-viewport');
+      await act(async () => scene.click());
+      const region = el('orchestrator-peek-drawer-region');
+      expect(viewport.contains(region)).toBe(true);
+      expect(el('scene-artwork').contains(region)).toBe(view !== 'table');
+      expect(el('scene-select')).toBe(scene);
+      expect(getComputedStyle(viewport).position).toBe('relative');
+      expect(getComputedStyle(region).position).toBe('absolute');
+      if (view === 'table') expect(getComputedStyle(region).inset).toBe('12px');
+      else {
+        expect(getComputedStyle(region).maxWidth).toBe('calc(100% - 24px)');
+        expect(getComputedStyle(region).maxHeight).toBe('calc(100% - 24px)');
+      }
+      expect(getComputedStyle(region).pointerEvents).toBe('none');
+      expect(getComputedStyle(el('orchestrator-peek-drawer')).pointerEvents).toBe('auto');
+      expect(getComputedStyle(el('orchestrator-peek-drawer')).backgroundColor).toBe(
+        view === 'tavern'
+          ? 'rgb(242, 236, 225)'
+          : view === 'aquarium'
+            ? 'rgb(231, 239, 240)'
+            : 'var(--joy-palette-background-surface)'
+      );
+    }
+  );
+
+  it('mounts Tavern details in the actual aspect-ratio artwork, not its frame or letterbox', async () => {
+    await themed.render(
+      <OrchestratorStage
+        agents={FIXTURE}
+        view="tavern"
+        onViewChange={onViewChange}
+        actions={actions}
+        introPlaying={false}
+        renderView={(_id, props) => <TavernView {...props} />}
+      />
+    );
+    const artwork = el('orchestrator-tavern');
+    await act(async () => el('orchestrator-needs-you-pill').click());
+    expect(el('orchestrator-peek-drawer-region').parentElement).toBe(artwork);
+    expect(el('orchestrator-tavern')).toBe(artwork);
+  });
+
+  it('opens compact details inside the Aquarium through its snapshot host', async () => {
+    const AquariumView = snapshotView(Aquarium, { displayName: 'Aquarium' });
+    await themed.render(
+      <OrchestratorStage
+        agents={FIXTURE}
+        view="aquarium"
+        onViewChange={onViewChange}
+        actions={actions}
+        introPlaying={false}
+        renderView={(_id, props) => <AquariumView {...props} />}
+      />
+    );
+    const tank = el('orchestrator-aquarium');
+    await act(async () => el('orchestrator-fish-w1').click());
+    expect(el('orchestrator-peek-drawer-region').parentElement).toBe(tank);
+    expect(el('orchestrator-aquarium')).toBe(tank);
+    expect(el('orchestrator-peek-actions').parentElement).toBe(el('orchestrator-peek-action-row'));
+    expect(document.activeElement).toBe(el('orchestrator-peek-drawer'));
+    await pressEscape();
+    expect(query('orchestrator-peek-drawer')).toBeNull();
   });
 
   it('claims the Escape that closes the drawer, so the docked conversation stays open', async () => {
@@ -333,6 +441,28 @@ describe('OrchestratorStage', () => {
       await renderSettled([agentFixture('n', 'needs-you')], false);
       expect(getComputedStyle(el('orchestrator-peek-drawer-region')).display).not.toBe('none');
       expect(query('orchestrator-peek-drawer')).not.toBeNull();
+    });
+
+    it('closes a portaled action menu on settle without losing the drawer draft or reopening on wake', async () => {
+      const agents = [agentFixture('n', 'needs-you')];
+      await renderSettled(agents, false);
+      await act(async () => el('orchestrator-needs-you-pill').click());
+      const drawer = el('orchestrator-peek-drawer');
+      await typeInto(el('orchestrator-peek-reply-input') as HTMLTextAreaElement, 'Keep my draft');
+      await act(async () => el('orchestrator-peek-actions-menu-btn').click());
+      expect(query('orchestrator-peek-archive-btn')).not.toBeNull();
+
+      await renderSettled(agents, true);
+      expect(query('orchestrator-peek-archive-btn')).toBeNull();
+      expect(query('orchestrator-peek-actions-menu')).toBeNull();
+      expect(el('orchestrator-peek-drawer')).toBe(drawer);
+
+      await renderSettled(agents, false);
+      expect(query('orchestrator-peek-archive-btn')).toBeNull();
+      expect(el('orchestrator-peek-actions-menu-btn').getAttribute('aria-expanded')).toBe('false');
+      expect((el('orchestrator-peek-reply-input') as HTMLTextAreaElement).value).toBe('Keep my draft');
+      await act(async () => el('orchestrator-peek-actions-menu-btn').click());
+      expect(query('orchestrator-peek-archive-btn')).not.toBeNull();
     });
 
     it('preserves the selected drawer when Escape is pressed while settled', async () => {

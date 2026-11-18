@@ -30,6 +30,7 @@ import {
   organizationRepository,
   creditTransactionRepository,
   apiKeyRepository,
+  spendFreezeRepository,
   fabFileRepository,
   FabFile,
   fabFileChunkRepository,
@@ -227,6 +228,9 @@ import {
   refusesUnrunnableModel,
   shouldGateIteration,
   stopBlockedAccountIteration,
+  stopSpendFrozenIteration,
+  SPEND_FROZEN_STOP_REASON,
+  ACCOUNT_CHECK_FAILED_MESSAGE,
   createSubagentAccountCheck,
   latchedAccountDenial,
   stopOutOfCredits,
@@ -240,6 +244,7 @@ import { buildAgentImageToolConfig, getAgentImageToolConfigDeps } from './agentE
 import { buildAgentRecentImagesNote, withRecentImagesNote } from './agentExecutor.recentImagesNote';
 import { resolveImageJobFiles } from '@server/generations/resolveImageJobFiles';
 import { publishRunGenerationJobs } from './agentExecutor.generationJobs';
+import { resolveMediaRoot } from './agentExecutor.mediaRoot';
 import {
   resolveTopLevelProfile,
   pickEffectiveMaxIterations,
@@ -276,6 +281,7 @@ import { applyOrgToolPolicy } from '@bike4mind/services/llm/orgToolPolicy';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
+import { createSpendFreezeDenialReader, type SpendFreezeDenialDeps } from './agentExecutor.spendFreeze';
 import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';
 import { publishRunPendingAction } from './agentExecutor.pendingAction';
 import {
@@ -831,6 +837,10 @@ async function readUserAccessDenial(userId: string): Promise<string | null> {
   return user ? aiAccessDeniedMessage(user) : 'User not found';
 }
 
+const spendFreezeReadDeps: SpendFreezeDenialDeps = {
+  spendFreezes: spendFreezeRepository,
+};
+
 /**
  * Flat token allowance set aside for instructions before the attachment share is computed.
  * Matches SYSTEM_PROMPT_RESERVE in ChatCompletionProcess so an agent turn and a chat turn size the
@@ -1341,6 +1351,20 @@ async function runExecution(
       });
     }
 
+    // Spend freezes stop new spend, so this applies to every invocation of a run, aggregation wakes included.
+    // A failed read throws into the outer catch, which fails the run and acks the message: it never starts unchecked.
+    const readSpendFreezeDenial = createSpendFreezeDenialReader(
+      { userId: execution.userId, organizationId: execution.organizationId, apiKeyId: execution.apiKeyId },
+      spendFreezeReadDeps
+    );
+    const spendFreezeDenial = await readSpendFreezeDenial();
+    if (spendFreezeDenial) {
+      logger.warn('[SpendFreeze] Spend is frozen; refusing to start execution');
+      await agentExecutionRepository.markFailed(executionId, { message: spendFreezeDenial });
+      await sendWs('failed', { executionId, reason: SPEND_FROZEN_STOP_REASON });
+      return;
+    }
+
     // Pre-flight credit check. With enforcement on, the balance must cover one whole iteration
     // (nextIterationCredits), the same bar the loop re-checks before every later one. An
     // aggregation-only wake keeps the plain floor here, like the member cap below: its children
@@ -1680,10 +1704,23 @@ async function runExecution(
     // aborted.
     const accountAbortController = new AbortController();
     let inProcessAccountDenial: string | null = null;
+    let inProcessDenialReason: string = 'account_blocked';
     const checkInProcessSubagentAccount = createSubagentAccountCheck({
       readAccessDenial: () => readUserAccessDenial(execution.userId),
       onDenied: reason => {
         inProcessAccountDenial = reason;
+        inProcessDenialReason = 'account_blocked';
+        accountAbortController.abort();
+      },
+      logger,
+    });
+    // A freeze is a separate refusal with its own stop reason; the parent loop's freeze gate below reads the latch.
+    const checkInProcessSubagentSpendFreeze = createSubagentAccountCheck({
+      readAccessDenial: readSpendFreezeDenial,
+      onDenied: reason => {
+        if (inProcessAccountDenial !== null) return;
+        inProcessAccountDenial = reason;
+        inProcessDenialReason = reason === ACCOUNT_CHECK_FAILED_MESSAGE ? 'account_blocked' : SPEND_FROZEN_STOP_REASON;
         accountAbortController.abort();
       },
       logger,
@@ -1820,6 +1857,7 @@ async function runExecution(
           step: truncatedStep,
         });
         await checkInProcessSubagentAccount(childExecutionId, iteration);
+        await checkInProcessSubagentSpendFreeze(childExecutionId, iteration);
       },
       // Ordered, chunked forwarding lives in agentExecutor.subagentTextDelta.ts.
       onTextDelta: subagentTextDeltas.send,
@@ -1916,7 +1954,11 @@ async function runExecution(
           executionId,
           childExecutionId,
           error:
-            accountDenial !== null ? 'account_blocked' : isTimeout ? 'Subagent timed out' : 'Subagent execution failed',
+            accountDenial !== null
+              ? inProcessDenialReason
+              : isTimeout
+                ? 'Subagent timed out'
+                : 'Subagent execution failed',
           isTimeout: timedOut,
           partialAnswer: timedOut ? partialResult?.finalAnswer : undefined,
         });
@@ -3183,6 +3225,30 @@ async function runExecution(
         logger.info('[Timeout] Self-dispatched to continuation queue');
         return;
       }
+
+      // A run outlives the message that admitted it, so a freeze landing mid-run stops it at the next iteration.
+      // A refusal latched by an in-process subagent's check is final, like the account one below.
+      const frozen = await stopSpendFrozenIteration(
+        {
+          executionId,
+          readFreezeDenial: latchedAccountDenial(
+            () => (inProcessDenialReason === SPEND_FROZEN_STOP_REASON ? inProcessAccountDenial : null),
+            readSpendFreezeDenial
+          ),
+          snapshot: () => {
+            const checkpoint = agent.toCheckpoint();
+            return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };
+          },
+        },
+        {
+          markFailed: (id, error) => agentExecutionRepository.markFailed(id, error),
+          sendWs,
+          persistRunAsQuest: (id, message) =>
+            persistRunAsQuest(id, message, logger, generatedImages, undefined, allSideEffects, retrievalSummary),
+          logger,
+        }
+      );
+      if (frozen) return;
 
       // A run outlives the message that admitted it, so an account blocked mid-run stops at the next iteration.
       const blocked = await stopBlockedAccountIteration(
@@ -4464,6 +4530,17 @@ async function processSubagentDispatch(
         sendWs,
       });
     };
+    // The child's own subject: its key, its billed org and, unless an org-billed key spends, its user. A failed
+    // read throws into the outer catch, which fails the child: it never runs unchecked.
+    const readSpendFreezeDenial = createSpendFreezeDenialReader(
+      { userId: child.userId, organizationId: child.organizationId, apiKeyId: child.apiKeyId },
+      spendFreezeReadDeps
+    );
+    const spendFreezeDenial = await readSpendFreezeDenial();
+    if (spendFreezeDenial) {
+      await refuseSubagent({ message: spendFreezeDenial, error: SPEND_FROZEN_STOP_REASON });
+      return;
+    }
     if (refusal) {
       await refuseSubagent(refusal);
       return;
@@ -4561,6 +4638,30 @@ async function processSubagentDispatch(
     const parentRun = child.parentExecutionId
       ? await agentExecutionRepository.findById(child.parentExecutionId)
       : undefined;
+    const mediaRoot = await resolveMediaRoot(child, id => agentExecutionRepository.findById(id));
+    const mediaQuestId = mediaRoot?.linkedQuestId;
+    const mediaToolNames =
+      mediaRoot && mediaQuestId
+        ? applySessionToolPolicy({
+            toolNames: (mediaRoot.resolvedEnabledTools ?? []).filter(
+              name =>
+                ['image_generation', 'edit_image', 'audio_generation', 'video_generation', 'music_generation'].includes(
+                  name
+                ) && !mediaRoot.profileDeniedTools?.includes(name)
+            ),
+            session,
+            profileDeniedTools: mediaRoot.profileDeniedTools,
+            scopeDeniedTools: child.scopeDeniedTools,
+            hasAttachments: false,
+            logger,
+          })
+        : [];
+    const mediaCaller = {
+      userId: child.userId,
+      organizationId: child.organizationId,
+      apiKeyId: mediaRoot?.apiKeyId ?? child.apiKeyId,
+      questId: mediaQuestId,
+    };
     // A dispatched child (subagent or DAG node) cannot pause for approval, so its tool calls
     // are refused unless the parent's lists, copied onto its row at creation, allow them.
     const childToolPermissions = {
@@ -4732,6 +4833,14 @@ async function processSubagentDispatch(
       });
     const toolCallbacks: ToolBuilderCallbacks = {
       onStatusUpdate: async changes => {
+        await publishRunGenerationJobs({
+          jobs: changes?.generationJobs,
+          questId: mediaQuestId,
+          executionId: mediaRoot?.id ?? parentId ?? childExecutionId,
+          questRepository,
+          sendWs,
+          logger,
+        });
         // KNOWN GAP (#1867): a dispatched subagent's retrieval calls are not accumulated here.
         // Unlike images (addImagesByAgentExecutionId below), there is no equivalent
         // mergeRetrievalByAgentExecutionId write path onto the parent's Quest, so a nested
@@ -4778,11 +4887,7 @@ async function processSubagentDispatch(
           },
         }),
       sessionId: child.sessionId,
-      // Inherited from the parent at create time (see baseFields / nodeDefaults). Inert today -
-      // this dispatch passes no `enabledTools`, so no knowledge tool can fire and nothing writes
-      // a lake-access row - but wired now so the native-tool path anticipated below does not
-      // start emitting half-linked audit rows. NEVER `child.questId` (#1867).
-      questId: child.linkedQuestId,
+      questId: mediaQuestId ?? child.linkedQuestId,
       // This subagent's own in-process delegations (no tracker is wired here, so the
       // orchestrator never dispatches them and this is their only charge).
       onSubagentCredits: async (credits, meta) => {
@@ -4802,10 +4907,28 @@ async function processSubagentDispatch(
     const subagentToolConfig = buildSubagentToolConfig({
       model: runModel,
       apiKeyTable: shadowSettings ? undefined : (apiKeyTable as ApiKeyTable),
-      imageConfig: child.imageConfig,
-      audioConfig: child.audioConfig,
-      // No imageJobConfig, videoConfig or musicConfig: this path offers no native tools (see the buildSharedTools call
-      // below), and the per-run caps live in agentExecutor.generationJobCap.ts for when it does.
+      imageConfig: child.imageConfig ?? mediaRoot?.imageConfig,
+      audioConfig: child.audioConfig ?? mediaRoot?.audioConfig,
+      audioJobs: await buildAgentAudioToolJobs(
+        { ...mediaCaller, toolEnabled: mediaToolNames.includes('audio_generation') },
+        getAgentAudioToolJobsDeps(logger)
+      ),
+      imageJobConfig: await buildAgentImageToolConfig(
+        {
+          ...mediaCaller,
+          selection: child.imageConfig ?? mediaRoot?.imageConfig,
+          toolEnabled: mediaToolNames.includes('image_generation') || mediaToolNames.includes('edit_image'),
+        },
+        getAgentImageToolConfigDeps(logger)
+      ),
+      videoConfig: await buildAgentVideoToolConfig(
+        { ...mediaCaller, toolEnabled: mediaToolNames.includes('video_generation') },
+        getAgentVideoToolConfigDeps(logger)
+      ),
+      musicConfig: await buildAgentMusicToolConfig(
+        { ...mediaCaller, toolEnabled: mediaToolNames.includes('music_generation') },
+        getAgentMusicToolConfigDeps(logger)
+      ),
       imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });
 
@@ -4828,20 +4951,31 @@ async function processSubagentDispatch(
     // Set when the per-iteration account check stops the run, so the terminal write reports the refusal
     // rather than a user abort. Mirrors stopBlockedAccountIteration on the parent loop.
     let accountDenial: string | null = null;
+    let denialReason: string = 'account_blocked';
     const checkAccount = createSubagentAccountCheck({
       readAccessDenial: () => readUserAccessDenial(child.userId),
       onDenied: reason => {
         accountDenial = reason;
+        denialReason = 'account_blocked';
+        abortController.abort();
+      },
+      logger,
+    });
+    const checkSpendFreeze = createSubagentAccountCheck({
+      readAccessDenial: readSpendFreezeDenial,
+      onDenied: reason => {
+        if (accountDenial !== null) return;
+        accountDenial = reason;
+        denialReason = reason === ACCOUNT_CHECK_FAILED_MESSAGE ? 'account_blocked' : SPEND_FROZEN_STOP_REASON;
         abortController.abort();
       },
       logger,
     });
 
     const builtTools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
+      enabledTools: mediaToolNames,
       getAbortSignal: () => abortController.signal,
       config: subagentToolConfig,
-      // This site passes no `enabledTools`, so the denylist is the only thing standing between a
-      // session-forbidden MCP tool and a dispatched subagent.
       orgToolPolicy: orgModelPolicy,
       sessionDisabledTools: [...sessionDeniedTools(session), ...(child.scopeDeniedTools ?? [])],
       mcpToolsByServer,
@@ -4852,10 +4986,6 @@ async function processSubagentDispatch(
       // them. Marking them agent-only here would hide them and reproduce the
       // 0-tools bug.
       agentOnlyMcpServers: [],
-      // Wired for parity with the parent path, but inert as long as this call passes no
-      // `enabledTools`: buildSharedTools applies the offerable filter only to that list, so today
-      // this site materializes MCP tools plus delegate/coordinate and nothing key-gated. Kept so a
-      // future change that gives this path native tools cannot silently bypass the filter.
       toolAvailability,
     });
     if (!builtTools) throw new Error('Failed to build tools for dispatched subagent');
@@ -4889,6 +5019,7 @@ async function processSubagentDispatch(
           step: truncatedStep,
         });
         await checkAccount(childExecutionId, iteration);
+        await checkSpendFreeze(childExecutionId, iteration);
       },
       onChildProgress: async ({ status }) => {
         await sendWs('subagent_progress', {
@@ -5117,7 +5248,7 @@ async function processSubagentDispatch(
             executionId: parentId,
             childExecutionId,
             agentName,
-            error: 'account_blocked',
+            error: denialReason,
             isTimeout: false,
             partialAnswer: result.finalAnswer,
           });
@@ -5231,7 +5362,7 @@ async function processSubagentDispatch(
           executionId: parentId,
           childExecutionId,
           agentName,
-          error: 'account_blocked',
+          error: denialReason,
           isTimeout: false,
         });
       } else if (wasAborted) {
