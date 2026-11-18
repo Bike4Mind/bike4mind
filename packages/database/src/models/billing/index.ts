@@ -11,7 +11,6 @@ export * from './PaymentRiskActionModel';
 export * from './PendingCreditHoldModel';
 export * from './ReferralSubscriptionRewardModel';
 export * from './UsageEventModel';
-export * from './spendExplorerPipelines';
 export * from './ModelPriceModel';
 export * from './ProviderInvoiceModel';
 export * from './SpendReconciliationModel';

@@ -17,18 +17,24 @@ import {
 
 const BUCKET_FORMAT: Record<SpendBucketSize, string> = { hour: '%Y-%m-%dT%H', day: '%Y-%m-%d' };
 
-// Providers invoice the model that ran, so key on the executed provider.
-const EXECUTED_PROVIDER = { $ifNull: ['$executedProvider', '$provider'] };
+// Old rows lack executed*, so always coalesce to the requested provider/model.
+export const EXECUTED_MODEL_GROUP_KEY = {
+  executedProvider: { $ifNull: ['$executedProvider', '$provider'] },
+  executedModel: { $ifNull: ['$executedModel', '$model'] },
+} as const;
 
-/** internal / partner / customer for one event: the owner's segment wins, then the acting user's. */
+// Providers invoice the model that ran, so key on the executed provider.
+const EXECUTED_PROVIDER = EXECUTED_MODEL_GROUP_KEY.executedProvider;
+
+/** internal / partner / customer for one event: the acting user's tag wins, then the payer's. */
 export function segmentExpression(ids: SpendSegmentIds): Record<string, unknown> {
   return {
     $switch: {
       branches: [
-        { case: { $in: ['$ownerId', ids.internal] }, then: 'internal' },
-        { case: { $in: ['$ownerId', ids.partner] }, then: 'partner' },
         { case: { $in: ['$userId', ids.internal] }, then: 'internal' },
         { case: { $in: ['$userId', ids.partner] }, then: 'partner' },
+        { case: { $in: ['$ownerId', ids.internal] }, then: 'internal' },
+        { case: { $in: ['$ownerId', ids.partner] }, then: 'partner' },
       ],
       default: 'customer',
     },

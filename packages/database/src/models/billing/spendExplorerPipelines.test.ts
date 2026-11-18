@@ -108,20 +108,22 @@ describe('spendTimeline', () => {
     ]);
   });
 
-  it('splits by segment: owner tag first, then the acting user', async () => {
+  it('splits by segment: user tag first, then payer tag', async () => {
     await seed([
       { at: '2026-11-10T01:00:00Z', costUsd: 1, ownerId: 'org-internal', userId: 'u-a' },
       { at: '2026-11-10T01:00:00Z', costUsd: 2, ownerId: 'org-partner', userId: 'u-internal' },
       { at: '2026-11-10T01:00:00Z', costUsd: 4, ownerId: 'org-x', userId: 'u-internal' },
       { at: '2026-11-10T01:00:00Z', costUsd: 8, ownerId: 'org-x', userId: 'u-b' },
+      // Both tagged: the user's own tag beats the payer's.
+      { at: '2026-11-10T01:00:00Z', costUsd: 16, ownerId: 'org-internal', userId: 'u-partner' },
     ]);
     const rows = await timeline({
       splitBy: 'segment',
-      segmentIds: { internal: ['org-internal', 'u-internal'], partner: ['org-partner'] },
+      segmentIds: { internal: ['org-internal', 'u-internal'], partner: ['org-partner', 'u-partner'] },
     });
     expect(Object.fromEntries(rows.map(r => [r.key, r.costUsd]))).toEqual({
-      internal: 5,
-      partner: 2,
+      internal: 7,
+      partner: 16,
       customer: 8,
     });
   });
