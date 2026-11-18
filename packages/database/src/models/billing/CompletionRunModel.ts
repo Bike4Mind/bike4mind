@@ -10,7 +10,7 @@ export type CompletionRunOwnerType = CreditHolderType.User | CreditHolderType.Or
  * workers it spawns). It is bound to the user and billing owner that minted it, so the completions
  * route can refuse a run another account created. Charges stay on the owner's balance and ledger.
  *
- * A run minted with `budgetCredits` also caps the whole run: `committedCredits` is what its settled
+ * A run minted with `budgetCredits` also caps admission into the run: `committedCredits` is what its settled
  * completions charged plus what its in-flight completions have claimed, and a completion is admitted
  * only while its claim fits under the budget (claimBudget). The PendingCreditHold row carries each
  * claim, so its settlement, refund or expired-hold sweep releases it exactly once

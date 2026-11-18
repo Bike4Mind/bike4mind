@@ -88,7 +88,7 @@ export function createCompletionCreditHolds(logger: Logger, apiKeyId?: string): 
             if (!settledHold) {
               return (await pendingCreditHoldRepository.findSettlement(holdId)) !== null;
             }
-            const recordedCredits = await settle();
+            const recordedCredits = await settle({ runClaimCredits: settledHold.runClaim?.credits });
             // The stored claim, not `pending`: a top-up can commit even when its acknowledgement was lost.
             if (settledHold.runClaim) await completionRunRepository.releaseClaim(settledHold.runClaim, recordedCredits);
             return true;

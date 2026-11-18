@@ -353,7 +353,7 @@ export const CompletionRunBudgetCreditsSchema = z
   .min(1)
   .max(COMPLETION_RUN_MAX_BUDGET_CREDITS)
   .describe(
-    "The most the run's completions may charge together, in credits. Each completion claims its share before the model is called, so concurrent completions cannot together be admitted past it."
+    "The most the run's completions may claim together, in credits. Each completion claims its share before the model is called, so concurrent completions cannot together be admitted past it. An estimate miss can take the run slightly over."
   );
 
 export const CreateCompletionRunRequestSchema = z.object({
@@ -361,7 +361,7 @@ export const CreateCompletionRunRequestSchema = z.object({
     'Your own id for the conversation that starts the run. A conversation can start many runs; each gets its own id.'
   ),
   budgetCredits: CompletionRunBudgetCreditsSchema.optional().describe(
-    'Caps what the run may charge, in credits. Omit it and the run draws only on the account balance, as before. A budget can be raised later but never added to a run minted without one.'
+    'Caps what its completions may claim, in credits; an estimate miss can take the run slightly over. Omit it and the run draws only on the account balance, as before. A budget can be raised later but never added to a run minted without one.'
   ),
 });
 

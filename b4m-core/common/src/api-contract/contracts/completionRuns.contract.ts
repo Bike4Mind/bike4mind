@@ -26,12 +26,12 @@ export const createCompletionRunContract = defineEndpoint({
     '(the organization for an organization-billed API key, otherwise the user), and a completion naming a run ' +
     'minted by anyone else is refused with `404` (`errorCode: "run_not_found"`). Minting a run charges nothing, ' +
     'and attributing a completion to it never charges that completion twice.\n\n' +
-    'With `budgetCredits`, the run also caps what its completions may charge together. Before calling the ' +
+    'With `budgetCredits`, the run also caps admission: what its completions may claim together. Before calling the ' +
     'model, each completion claims what its first round can cost at its full output budget (less, down to ' +
     'what a short answer costs, when the run has less left) and is capped to that claim, so concurrent ' +
     'completions can never together be admitted past the budget. The claim is priced from an estimate of ' +
-    'the input, so a completion that costs more than it claimed is still charged its actual cost to the ' +
-    'account balance; the run counts that cost and refuses later claims it can no longer cover. A run can ' +
+    'the input, so a completion that costs more than it claimed is still charged its actual cost, up to what the ' +
+    'balance can pay; the run counts that cost and refuses later claims it can no longer cover. A run can ' +
     'go over its budget by at most that miss for each completion in flight. A completion that runs ' +
     'server-side tools claims more the same way before each further round, and ends with ' +
     '`stopReason: "max_tokens"` when the run cannot cover one. A completion the budget cannot ' +

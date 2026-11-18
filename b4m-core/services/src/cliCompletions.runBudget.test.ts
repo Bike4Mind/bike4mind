@@ -49,6 +49,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
 });
 
 import type { ICompletionOptions } from '@bike4mind/llm-adapters';
+import { usdToCredits } from '@bike4mind/utils';
 import { executeCompletion, type CompletionCreditHolds } from './cliCompletions';
 
 const RUN_ID = '0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80';
@@ -90,7 +91,7 @@ function budgetedRun(budgetCredits: number | undefined) {
         return true;
       },
       async settle(_chargedCredits, settle) {
-        const recordedCredits = await settle();
+        const recordedCredits = await settle({ runClaimCredits: claim });
         settlements.push(recordedCredits);
         if (claim !== undefined) {
           run.committedCredits += recordedCredits - claim;
@@ -140,12 +141,14 @@ function buildDb() {
  * A provider that always answers to the full output budget it is handed and reports three times the
  * input the reservation estimated: actual usage above every estimate, the case a run budget must survive.
  */
-function overspendingProvider() {
+function overspendingProvider(reportedCredits: number[] = []) {
   complete.mockImplementation(async (_model, messages, options, onChunk) => {
     await new Promise(resolve => setTimeout(resolve, 5));
     const outputTokens = options.outputTokenCeiling ?? options.maxTokens ?? MAX_TOKENS;
     const promptChars = JSON.stringify(messages).length;
-    await onChunk(['answer'], { inputTokens: Math.ceil((promptChars / 2.5) * 3), outputTokens });
+    const inputTokens = Math.ceil((promptChars / 2.5) * 3);
+    reportedCredits.push(usdToCredits(inputTokens * (1 / 1_000_000) + outputTokens * (10 / 1_000_000)));
+    await onChunk(['answer'], { inputTokens, outputTokens });
   });
 }
 
@@ -160,7 +163,8 @@ describe('executeCompletion - shared run budget', () => {
   const send = (
     db: ReturnType<typeof buildDb>['db'],
     creditHolds: CompletionCreditHolds,
-    run: CompletionRunAttribution
+    run: CompletionRunAttribution,
+    logger?: { warn: (...args: unknown[]) => void; error: (...args: unknown[]) => void }
   ) =>
     executeCompletion({
       userId: 'user1',
@@ -170,6 +174,7 @@ describe('executeCompletion - shared run budget', () => {
       db,
       run,
       creditHolds,
+      logger: logger as never,
       source: 'desktop',
       onChunk: vi.fn().mockResolvedValue(undefined),
     });
@@ -181,12 +186,14 @@ describe('executeCompletion - shared run budget', () => {
    * is charged rather than dropped, so the run can end past its budget by at most each admitted completion's
    * own miss.
    */
-  it('keeps the final spend of concurrent root and worker completions within the budget', async () => {
+  it('admits concurrent root and worker completions only within the budget and charges each overrun to the balance', async () => {
     const probe = budgetedRun(1_000_000);
     await send(buildDb().db, probe.holds(), attribution('root'));
     const budgetCredits = Math.floor(probe.claims[0] * 2.5);
     const wallet = budgetedRun(budgetCredits);
     const { db } = buildDb();
+    const reportedCredits: number[] = [];
+    overspendingProvider(reportedCredits);
 
     const results = await Promise.allSettled([
       send(db, wallet.holds(), attribution('root')),
@@ -205,9 +212,14 @@ describe('executeCompletion - shared run budget', () => {
 
     const claimed = wallet.claims.reduce((sum, credits) => sum + credits, 0);
     const charged = wallet.settlements.reduce((sum, credits) => sum + credits, 0);
-    const overrun = wallet.overruns.reduce((sum, credits) => sum + credits, 0);
     expect(claimed).toBeLessThanOrEqual(budgetCredits);
-    expect(charged).toBeLessThanOrEqual(budgetCredits + overrun);
+    // The most a completion can miss its claim by is what the provider reported beyond it.
+    const mostReported = Math.max(...reportedCredits);
+    expect(reportedCredits).toHaveLength(admitted.length);
+    expect(wallet.settlements.every(credits => credits <= mostReported)).toBe(true);
+    for (const overrun of wallet.overruns) {
+      expect(overrun).toBeLessThanOrEqual(mostReported - Math.min(...wallet.claims));
+    }
     // Every claim was released into exactly what settled: no reservation is left behind.
     expect(wallet.run.committedCredits).toBe(charged);
   });
@@ -250,7 +262,43 @@ describe('executeCompletion - shared run budget', () => {
 
     expect(tight.claims[0]).toBe(Math.floor(fullClaim / 2));
     expect(complete.mock.calls[1][2].outputTokenCeiling).toBeLessThan(complete.mock.calls[0][2].outputTokenCeiling);
+    // The claim was the smaller remaining amount, and releasing it left the run holding the charge.
+    expect(tight.claims).toEqual([Math.floor(fullClaim / 2)]);
     expect(tight.run.committedCredits).toBe(tight.settlements[0]);
+    expect(tight.settlements[0]).toBeGreaterThan(tight.claims[0]);
+  });
+
+  describe('overrun warning', () => {
+    const OVERRUN_WARNING = expect.stringContaining('charged past the run budget');
+    const warnings = (logger: { warn: ReturnType<typeof vi.fn> }) =>
+      logger.warn.mock.calls.filter(([message]) => typeof message === 'string' && message.includes('run budget'));
+
+    it('logs when a committed settle charges past the stored claim', async () => {
+      const logger = { warn: vi.fn(), error: vi.fn() };
+      await send(buildDb().db, budgetedRun(10_000).holds(), attribution('root'), logger);
+      expect(logger.warn).toHaveBeenCalledWith(OVERRUN_WARNING, expect.anything());
+    });
+
+    it('does not log when the settle does not commit', async () => {
+      const logger = { warn: vi.fn(), error: vi.fn() };
+      const holds = { ...budgetedRun(10_000).holds(), settle: async () => false };
+      await send(buildDb().db, holds, attribution('root'), logger);
+      expect(warnings(logger)).toHaveLength(0);
+    });
+
+    it('does not log when the stored claim covers the charge but the in-memory claim does not', async () => {
+      const logger = { warn: vi.fn(), error: vi.fn() };
+      const base = budgetedRun(10_000).holds();
+      const holds = {
+        ...base,
+        async settle(_charged: number, settle: Parameters<CompletionCreditHolds['settle']>[1]) {
+          await settle({ runClaimCredits: 1_000_000_000 });
+          return true;
+        },
+      };
+      await send(buildDb().db, holds, attribution('root'), logger);
+      expect(warnings(logger)).toHaveLength(0);
+    });
   });
 
   it('refuses before any debit or provider call when the run cannot cover a short answer', async () => {

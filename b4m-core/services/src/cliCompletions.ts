@@ -137,9 +137,10 @@ export type CompletionCreditHolds = {
   refund(refund: () => Promise<void>): Promise<boolean>;
   /**
    * `settle` returns the credits its ledger row recorded: at most `chargedCredits`, less when the
-   * floored debit found a concurrent spend had drained the balance. A run claim is released against it.
+   * floored debit found a concurrent spend had drained the balance. A run claim is released against it,
+   * and `settle` is told the stored claim it released (undefined when the hold made none).
    */
-  settle(chargedCredits: number, settle: () => Promise<number>): Promise<boolean>;
+  settle(chargedCredits: number, settle: (released: { runClaimCredits?: number }) => Promise<number>): Promise<boolean>;
   /**
    * Grows this completion's run claim before a tool round, by up to `wantedCredits` and at least
    * `minimumCredits`. Resolves to the credits added: 0 when the run cannot spare them or the hold made
@@ -1598,7 +1599,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       let ledgerWritten = false;
       // settle() can be retried, so each attempt starts from the cap rather than a previous attempt's charge.
       const cappedCredits = chargedCredits;
-      const settle = async () => {
+      let storedRunClaimCredits: number | undefined;
+      const settle = async (released: { runClaimCredits?: number } = {}) => {
+        storedRunClaimCredits = released.runClaimCredits;
         // Reuse the settlement values computed above - recomputing would draw a
         // second stochastic rounding and desync the charge from what the client saw.
         const usdCost = finalUsdCost;
@@ -1719,15 +1722,17 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         ? await params.creditHolds.settle(chargedCredits, settle)
         : (await settle(), true);
       settlementCommitted = settled && ledgerWritten;
-      if (runCredits !== undefined && chargedCredits > runCredits) {
+      // The stored claim, not `runCredits`, which undercounts a top-up whose acknowledgement was lost.
+      const claimedCredits = storedRunClaimCredits ?? runCredits;
+      if (settlementCommitted && claimedCredits !== undefined && chargedCredits > claimedCredits) {
         logger?.warn?.('[CLI_CREDITS] Completion cost more than its run budget claim - charged past the run budget', {
           userId,
           holderId,
           model,
           runId: runLineage?.runId,
-          claimed: runCredits,
+          claimed: claimedCredits,
           charged: chargedCredits,
-          overrunCredits: chargedCredits - runCredits,
+          overrunCredits: chargedCredits - claimedCredits,
         });
       }
       if (chargedCredits < finalCredits) {
