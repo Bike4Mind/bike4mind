@@ -9,7 +9,10 @@ import { briefWindow } from './briefSchedule';
 import { BriefEvents } from '../utils/eventBus';
 
 type Deps = {
-  briefs: Pick<typeof assistantBriefRepository, 'findActiveComposing' | 'findLatestReady' | 'createComposing'>;
+  briefs: Pick<
+    typeof assistantBriefRepository,
+    'findActiveComposing' | 'findLatestReady' | 'createComposing' | 'discardComposing'
+  >;
   publishCompose: (event: { briefId: string; userId: string; scheduled?: boolean }) => Promise<unknown>;
   now: () => Date;
 };
@@ -36,11 +39,15 @@ export async function startBriefComposition(
   const { periodStart, periodEnd } = briefWindow(latest?.periodEnd, deps.now());
 
   const brief = await deps.briefs.createComposing({ userId, periodStart, periodEnd });
-  await deps.publishCompose({
-    briefId: brief._id.toString(),
-    userId,
-    ...(options.scheduled ? { scheduled: true } : {}),
-  });
+  const briefId = brief._id.toString();
+  try {
+    await deps.publishCompose({ briefId, userId, ...(options.scheduled ? { scheduled: true } : {}) });
+  } catch (err) {
+    // Drop the row before rethrowing: left composing, it would read as in flight to the retry (the
+    // scheduler's, or a second tap) for BRIEF_COMPOSING_STALE_MS while no worker ever composes it.
+    await deps.briefs.discardComposing(briefId).catch(() => undefined);
+    throw err;
+  }
   return brief;
 }
 

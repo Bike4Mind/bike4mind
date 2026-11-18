@@ -134,8 +134,8 @@ describe('runBriefScheduleReconcile', () => {
     expect((await run()).failed).toBe(1);
     expect(await nextBriefAtOf(userId)).toEqual(due);
 
-    // The first attempt left a composing row; once it is stale the retry goes through.
-    await AssistantBriefModel.collection.updateMany({}, { $set: { createdAt: minutesAgo(30) } });
+    // The failed attempt leaves no composing row behind to read as in flight, so the very next run starts it.
+    expect(await AssistantBriefModel.countDocuments({ userId })).toBe(0);
     const retried = await run();
     expect(retried.enqueued).toBe(1);
     expect((await nextBriefAtOf(userId))!.getTime()).toBeGreaterThan(now.getTime());

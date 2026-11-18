@@ -16,8 +16,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_WINDOW_MS = DAY_MS;
 const MAX_WINDOW_MS = 7 * DAY_MS;
 
-// Keyed by the lowercased name: Intl matches zone names case-insensitively and rejects unknown ones
-// before anything is cached, so the cache is bounded by the runtime's zone list.
+// Keyed by the ASCII-lowercased name: Intl matches zone names ASCII-case-insensitively and rejects unknown
+// ones before anything is cached, so the cache is bounded by the zones and UTC offsets Intl accepts. A full
+// toLowerCase() would fold a non-ASCII look-alike (KELVIN SIGN to "k") onto a cached zone Intl rejects.
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
 /** Number of cached zone formatters; exported for tests. */
@@ -26,7 +27,7 @@ export function cachedFormatterCount(): number {
 }
 
 function formatterFor(timeZone: string): Intl.DateTimeFormat {
-  const key = timeZone.toLowerCase();
+  const key = timeZone.replace(/[A-Z]/g, c => c.toLowerCase());
   let formatter = formatters.get(key);
   if (!formatter) {
     formatter = new Intl.DateTimeFormat('en-US', {
