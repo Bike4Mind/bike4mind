@@ -32,7 +32,7 @@ export function snapshotView(
     );
     const paused = useScenePause(pause);
 
-    // This host reads no quick approvals and has no Stop, so of the rest only answering does anything.
+    // This host reads no quick approvals and has no Stop: an approve is never in its snapshot and a stop rejects.
     const onAction = (action: ViewAction) => {
       const accepted = acceptViewAction(snapshot, action);
       if (!accepted) return;

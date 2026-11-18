@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { AgentState } from './agentState';
+import { isStoppableState, type AgentState } from './agentState';
 import { MAX_LABEL_CHARS, MAX_OPTIONS, MAX_OTHER_CHARS } from './questions';
 import { QUICK_SUMMARY_MAX } from './watch';
 
@@ -107,9 +107,6 @@ export const viewActionSchema = z.discriminatedUnion('kind', [
 export type ViewAction = z.infer<typeof viewActionSchema>;
 type AnswerAction = Extract<ViewAction, { kind: 'answer' }>;
 
-/** The agents a stop reaches: the same states the peek drawer offers Stop for. */
-const STOPPABLE: ReadonlySet<AgentState> = new Set(['working', 'needs-you']);
-
 /**
  * Whether the answer fits the decision as the snapshot shows it: picks among its option labels, at most
  * one unless it is multi-select, typed text instead of a pick on a single-select question (the card's
@@ -131,7 +128,7 @@ function fitsSnapshot(snapshot: ViewSnapshot, action: ViewAction): boolean {
     case 'open-agent':
       return snapshot.agents.some(agent => agent.id === action.agentId);
     case 'stop':
-      return snapshot.agents.some(agent => agent.id === action.agentId && STOPPABLE.has(agent.state));
+      return snapshot.agents.some(agent => agent.id === action.agentId && isStoppableState(agent.state));
     case 'approve':
       return (snapshot.approvals ?? []).some(approval => approval.id === action.approvalId);
     case 'answer': {

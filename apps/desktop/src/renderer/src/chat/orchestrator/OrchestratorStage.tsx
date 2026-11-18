@@ -22,7 +22,7 @@ import { acceptViewAction, type ViewAction } from '@shared/viewSnapshot';
 
 export interface AgentActions {
   open(id: string): void;
-  stop(id: string): void;
+  stop(id: string): void | Promise<void>;
   archive(id: string): void;
 }
 

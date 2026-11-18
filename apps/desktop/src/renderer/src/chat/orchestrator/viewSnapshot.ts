@@ -65,8 +65,8 @@ export function toViewSnapshot(
 export interface ViewActionHost {
   openAgent(agentId: string): void;
   openRoot(): void;
-  /** The stage's own Stop (AgentActions.stop); absent where the host has none, and the action is dropped. */
-  stop?(agentId: string): void;
+  /** The stage's own Stop (AgentActions.stop); absent where the host has none, and the action rejects. */
+  stop?(agentId: string): void | Promise<void>;
 }
 
 /**
@@ -85,6 +85,7 @@ export async function runViewAction(action: ViewAction, host: ViewActionHost): P
     case 'approve':
       return window.b4m.chat.respondToApproval(action.approvalId, { decision: action.mode });
     case 'stop':
-      return host.stop?.(action.agentId);
+      if (!host.stop) throw new Error('Stop is not available here');
+      return host.stop(action.agentId);
   }
 }

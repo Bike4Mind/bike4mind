@@ -4,7 +4,6 @@ import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
 import type { ColorPaletteProp } from '@mui/joy/styles';
 import { AGENT_STATE_LABEL, countAgentStates, type AgentState } from '@shared/agentState';
-import { MAX_LABEL_CHARS } from '@shared/questions';
 import type { ViewAction, ViewAgent, ViewApproval, ViewSnapshot } from '@shared/viewSnapshot';
 import { oneClickOptions, type BubbleOption } from './tavern/bubbleAnswer';
 
@@ -29,7 +28,7 @@ interface AttentionItem {
 function decisionAnswer(agent: ViewAgent): AttentionItem['answer'] {
   const decision = agent.decision;
   if (!decision || decision.multiSelect) return undefined;
-  const options = oneClickOptions(decision.options, MAX_LABEL_CHARS);
+  const options = oneClickOptions(decision.options);
   return options && { agentId: agent.id, decisionId: decision.id, options };
 }
 
@@ -66,7 +65,7 @@ function quietLine(snapshot: ViewSnapshot): string {
   const counts = countAgentStates(snapshot.agents.map(agent => agent.state));
   return QUIET_ORDER.filter(state => counts[state] > 0)
     .map(state => `${counts[state]} ${AGENT_STATE_LABEL[state].toLowerCase()}`)
-    .join(' · ');
+    .join(' \u00b7 ');
 }
 
 /** Ties a sent action to what it acted on, so a Stop comes back once the agent has moved on. */
