@@ -49,15 +49,15 @@ type LogLike = Pick<Logger, 'info' | 'warn' | 'error'>;
 export type BriefComposeDeps = {
   now: () => Date;
   users: { findById(id: string): Promise<{ id: string } | null> };
-  briefs: Pick<typeof assistantBriefRepository, 'findById' | 'markReady' | 'markFailed'>;
+  briefs: Pick<typeof assistantBriefRepository, 'findById' | 'markReady' | 'markFailed' | 'removeEmailSourcedItems'>;
   loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefActivity>;
   /** Whether the call may run: 'ok', or why not (AI access held, or the balance cannot cover it). */
   canCompose(userId: string): Promise<'ok' | 'ai_access_held' | 'insufficient_credits'>;
   /** Sends the activity prompt to the model and returns its raw reply. */
   complete(userId: string, briefId: string, prompt: string): Promise<string>;
   push(event: PushNotificationEvent): Promise<void>;
-  /** Records which triage items the ready brief carried; the rest stay pending for the next brief. */
-  markEmailsBriefed(userId: string, emailIds: string[], at: Date): Promise<unknown>;
+  /** `markBriefed` records the triage items a ready brief carried; the rest stay pending for the next brief. */
+  emails: Pick<typeof emailTriageItemRepository, 'markBriefed' | 'storedEmailIds'>;
   logger: LogLike;
 };
 
@@ -100,7 +100,7 @@ export async function composeBrief(deps: BriefComposeDeps, input: { briefId: str
     const settled = await briefs.markReady(input.briefId, composed, composedAt);
     if (!settled) return;
 
-    await deps.markEmailsBriefed(input.userId, briefedEmailIds(composed), composedAt);
+    await settleBriefedEmails(deps, input.userId, briefedEmailIds(composed), composedAt);
 
     await deps.push({
       userId: input.userId,
@@ -114,6 +114,24 @@ export async function composeBrief(deps: BriefComposeDeps, input: { briefId: str
   } catch (error) {
     logger.error('[Brief] composition failed', { briefId: input.briefId, error });
     await briefs.markFailed(input.briefId, 'composition_failed');
+  }
+}
+
+/**
+ * Runs after the brief is stored, and never throws so the push still goes out: an unmarked item is carried into
+ * the next brief again rather than lost. An email deleted while this brief composed has lost its triage item by
+ * now or will be pulled by its delete route, which removes triage items before brief items
+ * (apps/client/pages/api/users/[id]/ingested-emails.ts).
+ */
+async function settleBriefedEmails(deps: BriefComposeDeps, userId: string, emailIds: string[], at: Date) {
+  if (emailIds.length === 0) return;
+  try {
+    await deps.emails.markBriefed(userId, emailIds, at);
+    const stored = new Set(await deps.emails.storedEmailIds(userId, emailIds));
+    const deleted = emailIds.filter(id => !stored.has(id));
+    if (deleted.length > 0) await deps.briefs.removeEmailSourcedItems(userId, deleted);
+  } catch (error) {
+    deps.logger.error('[Brief] could not settle the briefed emails', { userId, error });
   }
 }
 
@@ -204,7 +222,7 @@ export const handler = withEventContext(async (event, logger) => {
         return reply;
       },
       push: pushEvent => publishPushNotification(pushEvent, logger),
-      markEmailsBriefed: (userId, emailIds, at) => emailTriageItemRepository.markBriefed(userId, emailIds, at),
+      emails: emailTriageItemRepository,
       logger,
     },
     input

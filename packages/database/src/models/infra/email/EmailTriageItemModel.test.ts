@@ -94,6 +94,15 @@ describe('emailTriageItemRepository.markBriefed', () => {
   });
 });
 
+describe('emailTriageItemRepository.storedEmailIds', () => {
+  it('returns only the owner emails that still have a triage item', async () => {
+    await emailTriageItemRepository.upsertForEmail(item({ emailId: 'a' }));
+    await emailTriageItemRepository.upsertForEmail(item({ emailId: 'c', userId: 'user-other' }));
+
+    expect(await emailTriageItemRepository.storedEmailIds('user-me', ['a', 'b', 'c'])).toEqual(['a']);
+  });
+});
+
 describe('emailTriageItemRepository.deleteByEmailIds', () => {
   it('deletes only the owner items for the given emails', async () => {
     await emailTriageItemRepository.upsertForEmail(item({ emailId: 'a' }));

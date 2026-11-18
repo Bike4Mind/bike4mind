@@ -28,19 +28,28 @@ function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {
       findById: vi.fn().mockResolvedValue(brief()),
       markReady: vi.fn().mockResolvedValue(true),
       markFailed: vi.fn().mockResolvedValue(true),
+      removeEmailSourcedItems: vi.fn().mockResolvedValue(0),
     },
     loadActivity: vi.fn().mockResolvedValue(activeActivity),
     canCompose: vi.fn().mockResolvedValue('ok'),
     complete: vi.fn().mockResolvedValue(JSON.stringify({ headline: 'Done.', handled: ['Did a thing.'] })),
     push: vi.fn().mockResolvedValue(undefined),
-    markEmailsBriefed: vi.fn().mockResolvedValue(0),
+    emails: {
+      markBriefed: vi.fn().mockResolvedValue(0),
+      storedEmailIds: vi.fn((_userId: string, ids: string[]) => Promise.resolve(ids)),
+    },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     ...overrides,
   } as unknown as BriefComposeDeps & {
-    briefs: { markReady: ReturnType<typeof vi.fn>; markFailed: ReturnType<typeof vi.fn> };
+    briefs: {
+      markReady: ReturnType<typeof vi.fn>;
+      markFailed: ReturnType<typeof vi.fn>;
+      removeEmailSourcedItems: ReturnType<typeof vi.fn>;
+    };
     push: ReturnType<typeof vi.fn>;
     complete: ReturnType<typeof vi.fn>;
-    markEmailsBriefed: ReturnType<typeof vi.fn>;
+    emails: { markBriefed: ReturnType<typeof vi.fn>; storedEmailIds: ReturnType<typeof vi.fn> };
+    logger: { error: ReturnType<typeof vi.fn> };
   };
   return deps;
 }
@@ -75,7 +84,33 @@ describe('composeBrief', () => {
       { id: 'd1', text: 'Renewal needs an answer.', source: { kind: 'email', emailId: 'e1' }, draftReply },
     ]);
     expect(deps.push).toHaveBeenCalledWith(expect.objectContaining({ body: '1 decision needs you.' }));
-    expect(deps.markEmailsBriefed).toHaveBeenCalledWith('u1', ['e1'], new Date('2026-11-17T01:00:00Z'));
+    expect(deps.emails.markBriefed).toHaveBeenCalledWith('u1', ['e1'], new Date('2026-11-17T01:00:00Z'));
+    expect(deps.briefs.removeEmailSourcedItems).not.toHaveBeenCalled();
+  });
+
+  const fyiActivity = {
+    ...activeActivity,
+    emails: [
+      { emailId: 'e1', kind: 'fyi', summary: 'Office closed Friday.' },
+      { emailId: 'e2', kind: 'fyi', summary: 'New parking rules.' },
+    ],
+  };
+
+  it('pulls the items of an email deleted while the brief composed', async () => {
+    const deps = makeDeps({ loadActivity: vi.fn().mockResolvedValue(fyiActivity) });
+    deps.emails.storedEmailIds.mockResolvedValue(['e2']);
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1' });
+    expect(deps.briefs.removeEmailSourcedItems).toHaveBeenCalledWith('u1', ['e1']);
+    expect(deps.push).toHaveBeenCalled();
+  });
+
+  it('still pushes a stored brief when marking its emails briefed fails', async () => {
+    const deps = makeDeps({ loadActivity: vi.fn().mockResolvedValue(fyiActivity) });
+    deps.emails.markBriefed.mockRejectedValue(new Error('db down'));
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1' });
+    expect(deps.push).toHaveBeenCalled();
+    expect(deps.briefs.markFailed).not.toHaveBeenCalled();
+    expect(deps.logger.error).toHaveBeenCalledWith('[Brief] could not settle the briefed emails', expect.anything());
   });
 
   it('marks no email briefed when the brief does not settle', async () => {
@@ -87,7 +122,7 @@ describe('composeBrief', () => {
     });
     deps.briefs.markReady.mockResolvedValue(false);
     await composeBrief(deps, { briefId: 'b1', userId: 'u1' });
-    expect(deps.markEmailsBriefed).not.toHaveBeenCalled();
+    expect(deps.emails.markBriefed).not.toHaveBeenCalled();
   });
 
   it('settles an empty window without calling the model', async () => {

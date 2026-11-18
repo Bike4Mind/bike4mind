@@ -98,6 +98,12 @@ export const emailTriageItemRepository = {
     return result.modifiedCount;
   },
 
+  /** The subset of `emailIds` that still has a triage item (one deleted with its email has none). */
+  async storedEmailIds(userId: string, emailIds: string[]): Promise<string[]> {
+    if (emailIds.length === 0) return [];
+    return EmailTriageItemModel.distinct('emailId', { userId, emailId: { $in: emailIds } });
+  },
+
   async deleteByEmailIds(userId: string, emailIds: string[]): Promise<number> {
     const result = await EmailTriageItemModel.deleteMany({ userId, emailId: { $in: emailIds } });
     return result.deletedCount;
