@@ -1,0 +1,70 @@
+function Desk({ x, y, flip = false }: { x: number; y: number; flip?: boolean }) {
+  return <g transform={`translate(${x} ${y})${flip ? ' rotate(180 38 23)' : ''}`}>
+    <rect x="5" y="10" width="76" height="43" fill="#3b3b3050" />
+    <rect x="0" y="4" width="76" height="40" fill="#785a39" /><rect width="76" height="35" fill="#b79968" />
+    <path d="M3 3H73V31H3Z" fill="#c9ad7a" /><path d="M4 8H72M4 24H72" stroke="#af905c" />
+    <rect x="23" y="-10" width="31" height="23" fill="#303b3c" /><rect x="26" y="-7" width="25" height="16" fill="#739993" />
+    <path d="M29 -3H45M29 1H40" stroke="#b4d3b7" strokeWidth="2" /><rect x="36" y="13" width="5" height="5" fill="#4f5a55" />
+    <rect x="23" y="22" width="30" height="7" fill="#ddd9c4" /><path d="M26 24H49M26 27H49" stroke="#9a9b87" />
+    <rect x="6" y="16" width="12" height="13" fill="#eee7cf" /><path d="M8 19H15M8 22H14" stroke="#8b9c94" />
+    <rect x="60" y="17" width="7" height="8" fill="#e5e0ca" /><rect x="61" y="17" width="5" height="2" fill="#614936" />
+    <rect x="22" y="49" width="32" height="19" fill="#454c47" /><rect x="25" y="47" width="26" height="6" fill="#657365" />
+  </g>;
+}
+
+function Plant({ x, y }: { x: number; y: number }) {
+  return <g transform={`translate(${x} ${y})`}><path d="M-9 0H9L6 13H-6Z" fill="#8c5f3e" /><path d="M0 2V-27M0 -10L-13 -22M0 -12L13 -25M0 -4L-16 -9M0 -3L15 -12" stroke="#425a36" strokeWidth="5" /><path d="M-5 -19H-15V-27H-6ZM5 -22H16V-30H6ZM-8 -7H-20V-15H-9ZM8 -8H21V-17H9ZM-4 -26H4V-37H-4Z" fill="#69804c" /></g>;
+}
+
+export function OfficeBackdrop() {
+  return <svg viewBox="0 0 1000 640" width="100%" height="100%" aria-hidden="true" shapeRendering="crispEdges" style={{ display: 'block' }}>
+    <defs>
+      <pattern id="office-carpet" width="12" height="12" patternUnits="userSpaceOnUse"><rect width="12" height="12" fill="#898c72" /><path d="M0 2H12M0 8H12" stroke="#96977d" /><path d="M3 0V12M9 0V12" stroke="#80846d" strokeDasharray="2 4" /></pattern>
+      <pattern id="office-tile" width="22" height="22" patternUnits="userSpaceOnUse"><rect width="22" height="22" fill="#d2c7a7" /><path d="M0 0H22V22" fill="none" stroke="#b5af94" /></pattern>
+      <pattern id="office-blinds" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="#bec6b6" /><rect width="8" height="3" fill="#e4e3c9" /><rect y="6" width="8" height="1" fill="#6f8178" /></pattern>
+    </defs>
+    <rect width="1000" height="640" fill="#253534" />
+    <rect x="14" y="40" width="972" height="578" fill="url(#office-carpet)" />
+    <path d="M16 40H984V90H16Z" fill="#d8ccb0" /><path d="M16 85H984V93H16Z" fill="#786f59" />
+    <rect x="24" y="48" width="950" height="7" fill="#eee5c9" />
+    {/* Back offices, sales floor, connecting kitchen and annex follow the Scranton set's landmarks. */}
+    <path d="M24 94H223V242H24ZM234 94H535V242H234Z" fill="#a4a68b" />
+    <rect x="547" y="93" width="178" height="237" fill="#b4af93" /><rect x="736" y="94" width="238" height="237" fill="url(#office-tile)" />
+    <rect x="548" y="345" width="176" height="260" fill="url(#office-tile)" />
+    <rect x="24" y="480" width="185" height="124" fill="#b3a68a" />
+    <path d="M20 40H980V615H20ZM228 90V254M22 248H167M192 248H537M540 90V287M540 324V610M730 90V270M730 310V610M730 337H976M544 337H675M700 337H730" fill="none" stroke="#414c41" strokeWidth="10" />
+    <path d="M23 39H979M20 43V612M980 43V612M22 616H980" fill="none" stroke="#eee2bd" strokeWidth="5" />
+    <path d="M228 96V226M242 246H506M30 246H157" stroke="url(#office-blinds)" strokeWidth="10" />
+    <path d="M228 97V225M245 246H505M30 246H157" stroke="#aac3b8" strokeWidth="4" opacity=".7" />
+    {[45, 116, 284, 368, 454, 774, 865].map(x => <g key={x}><rect x={x} y="53" width="56" height="29" fill="url(#office-blinds)" /><rect x={x} y="53" width="56" height="3" fill="#6e8074" /></g>)}
+    <rect x="65" y="98" width="88" height="10" fill="#544835" /><rect x="71" y="100" width="76" height="6" fill="#a78953" />
+    <Desk x={75} y={155} />
+    <rect x="40" y="191" width="24" height="25" fill="#485749" /><rect x="164" y="191" width="24" height="25" fill="#485749" />
+    <Plant x={196} y={141} />
+    <rect x="290" y="123" width="200" height="76" fill="#705838" /><rect x="286" y="116" width="200" height="76" fill="#b59767" /><rect x="294" y="121" width="184" height="65" fill="#c6aa78" />
+    {[305, 350, 395, 440].map(x => <g key={x}><rect x={x} y="99" width="27" height="15" fill="#435249" /><rect x={x} y="202" width="27" height="15" fill="#435249" /></g>)}
+    <rect x="492" y="100" width="29" height="83" fill="#d2c8a8" /><rect x="496" y="105" width="21" height="67" fill="#e9e3c9" /><path d="M501 118H513M501 124H510" stroke="#85907c" />
+    <rect x="563" y="111" width="146" height="204" fill="#666b5a" /><path d="M568 120H704M568 137H704M568 154H704M568 171H704M568 188H704M568 205H704M568 222H704M568 239H704M568 256H704M568 273H704M568 290H704" stroke="#a8a68c" strokeWidth="10" /><path d="M575 111V315M698 111V315" stroke="#d3c8a7" strokeWidth="4" />
+    <Desk x={249} y={326} /><Desk x={249} y={405} flip />
+    <Desk x={402} y={326} /><Desk x={402} y={405} flip />
+    <Desk x={244} y={540} /><Desk x={404} y={540} />
+    <path d="M47 327H145V357H115V415H47Z" fill="#705b3c" /><path d="M41 320H141V350H109V407H41Z" fill="#c5a775" /><rect x="54" y="306" width="30" height="21" fill="#3e504d" /><rect x="58" y="309" width="22" height="13" fill="#8fa99c" />
+    <rect x="30" y="280" width="90" height="19" fill="#ede7cf" /><text x="75" y="293" textAnchor="middle" fill="#354849" fontSize="9" fontFamily="monospace" fontWeight="bold">DUNDER MIFFLIN</text>
+    <rect x="43" y="520" width="115" height="37" fill="#515e4e" /><rect x="46" y="516" width="109" height="31" fill="#78816b" /><rect x="43" y="567" width="65" height="29" fill="#b69b6d" /><rect x="113" y="560" width="56" height="37" fill="#9d9e87" /><rect x="118" y="554" width="46" height="14" fill="#d5d4bc" />
+    <Plant x={185} y={587} /><Plant x={505} y={285} /><Plant x={29} y={460} />
+    <rect x="749" y="108" width="33" height="94" fill="#b6996d" /><rect x="748" y="104" width="36" height="6" fill="#eee5c9" /><rect x="750" y="111" width="29" height="27" fill="#354744" /><rect x="757" y="116" width="15" height="12" fill="#b0bca5" />
+    <rect x="923" y="108" width="40" height="76" fill="#526d61" /><rect x="928" y="114" width="25" height="51" fill="#293e39" /><path d="M932 124H949M932 136H949M932 148H949" stroke="#b5a466" strokeWidth="5" /><rect x="957" y="128" width="3" height="12" fill="#ddd1a6" />
+    <rect x="925" y="196" width="38" height="77" fill="#786154" /><rect x="930" y="202" width="23" height="53" fill="#3d3d38" /><path d="M934 211H949M934 224H949M934 237H949" stroke="#a4704d" strokeWidth="5" />
+    <g fill="#b8a073" stroke="#7f7659" strokeWidth="3"><rect x="805" y="178" width="73" height="42" /><rect x="805" y="271" width="73" height="42" /></g>
+    {[169, 222, 262, 315].map(y => <g key={y} fill="#596650"><rect x="805" y={y} width="20" height="9" /><rect x="858" y={y} width="20" height="9" /></g>)}
+    <rect x="565" y="361" width="141" height="31" fill="#b89b6f" /><rect x="563" y="356" width="145" height="7" fill="#ded9c0" /><rect x="574" y="363" width="34" height="20" fill="#889b91" /><path d="M586 364V353H597V357" fill="none" stroke="#d0d8c5" strokeWidth="3" />
+    <rect x="566" y="403" width="44" height="78" fill="#e4deca" /><path d="M566 430H610M603 412V424M603 441V465" stroke="#a2aa96" strokeWidth="3" />
+    <rect x="630" y="435" width="63" height="39" fill="#b69c71" /><rect x="643" y="422" width="20" height="10" fill="#566654" /><rect x="643" y="481" width="20" height="10" fill="#566654" />
+    <Desk x={763} y={415} /><Desk x={868} y={415} />
+    <Desk x={763} y={550} /><Desk x={868} y={550} />
+    <rect x="547" y="513" width="177" height="6" fill="#586450" /><rect x="625" y="519" width="6" height="88" fill="#586450" />
+    <g fontFamily="monospace" fontSize="10" fontWeight="bold" fill="#e7e3c9" letterSpacing="1"><text x="120" y="231" textAnchor="middle">MICHAEL'S OFFICE</text><text x="385" y="235" textAnchor="middle">CONFERENCE ROOM</text><text x="635" y="324" textAnchor="middle">STAIRWELL</text><text x="852" y="98" textAnchor="middle">BREAK ROOM</text><text x="635" y="503" textAnchor="middle">KITCHEN</text><text x="850" y="603" textAnchor="middle">THE ANNEX</text><text x="115" y="468" textAnchor="middle">RECEPTION</text><text x="358" y="486" textAnchor="middle">SALES / ACCOUNTING</text></g>
+    <path d="M169 248V218M169 218Q199 218 199 248M540 288H574M574 288Q574 320 540 320M730 272H762M762 272Q762 306 730 306" fill="none" stroke="#d8ceb0" strokeWidth="2" />
+    <text x="25" y="29" fill="#e7e3cd" fontFamily="monospace" fontSize="15" fontWeight="bold">DUNDER MIFFLIN</text><text x="978" y="29" textAnchor="end" fill="#aebbab" fontFamily="monospace" fontSize="10" letterSpacing="2">SCRANTON BRANCH / THE OFFICE</text>
+  </svg>;
+}
