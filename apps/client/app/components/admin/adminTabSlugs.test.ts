@@ -29,7 +29,7 @@ describe('adminTabToSlug', () => {
   });
 
   it('round-trips every tab through its slug', () => {
-    for (const tab of ALL_TABS.filter(tab => tab !== AdminTab.ModelLifecycle)) {
+    for (const tab of ALL_TABS.filter(tab => ![AdminTab.ModelLifecycle, AdminTab.HeldSignupGrants].includes(tab))) {
       expect(adminTabFromSlug(adminTabToSlug(tab))).toBe(tab);
     }
   });
@@ -130,6 +130,15 @@ describe('adminTabFromSlug', () => {
 
   it('resolves the users slug to the users tab', () => {
     expect(adminTabFromSlug(ADMIN_USERS_TAB_SLUG)).toBe(AdminTab.Users);
+  });
+
+  it('sends the held grants slug to Invite Center Pending while retaining the old tab', () => {
+    expect(adminTabToSlug(AdminTab.HeldSignupGrants)).toBe('held-signup-grants');
+    expect(adminTabFromSlug('held-signup-grants')).toBe(AdminTab.Waitlist);
+    expect(adminTabAlias('held-signup-grants')).toEqual({
+      tab: AdminTab.Waitlist,
+      search: { inviteSection: 'pending' },
+    });
   });
 
   /**
