@@ -61,6 +61,13 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
       dark: { background: '#1d2c31', border: '#49616a' },
     },
   },
+  office: {
+    label: 'Office',
+    description: 'Agents at work in a shared office',
+    group: 'scene',
+    icon: <BoardIcon />,
+    ambient: true,
+  },
   board: {
     label: 'Board',
     description: 'Columns by state, like a kanban',

@@ -219,8 +219,8 @@ export function OrchestratorStage({
     if (finale.shown) playChime(finaleSound.current);
   }, [finale.shown]);
 
-  // The Tavern seats the banner on its scene rather than in the letterbox above it.
-  const bannerInScene = view === 'tavern' && renderView !== undefined && agents.length > 0 && !focused;
+  const parentScene = view === 'tavern' || view === 'office';
+  const bannerInScene = parentScene && renderView !== undefined && agents.length > 0 && !focused;
   const banner = finale.shown && report && (
     <FinaleBanner
       agents={quest}
@@ -235,7 +235,7 @@ export function OrchestratorStage({
   );
 
   const detailsInScene =
-    (view === 'tavern' || view === 'aquarium') && renderView !== undefined && agents.length > 0 && !focused;
+    (parentScene || view === 'aquarium') && renderView !== undefined && agents.length > 0 && !focused;
   const detailsPosition = useAvatarDetailsPosition(selected?.id, detailsInScene && !settled, view);
   const detailsOverlay = selected && (
     // Stay mounted while settled so waking restores the draft and selection.
@@ -282,7 +282,7 @@ export function OrchestratorStage({
     introPlaying,
     personas,
     parent,
-    onInnkeeperSelect: view === 'tavern' ? (onParentToggle ?? onParentFocus) : onParentFocus,
+    onInnkeeperSelect: parentScene ? (onParentToggle ?? onParentFocus) : onParentFocus,
     celebrating: finale.shown,
     sceneOverlay: bannerInScene ? banner : undefined,
     agentDetailsOverlay: detailsInScene ? detailsOverlay : undefined,
@@ -312,7 +312,13 @@ export function OrchestratorStage({
     <NeedsYouCard
       key={askingAgent?.id ?? 'parent'}
       agent={askingAgent}
-      name={askingAgent ? (personas.get(askingAgent.id)?.label ?? askingAgent.title) : 'The Innkeeper'}
+      name={
+        askingAgent
+          ? (personas.get(askingAgent.id)?.label ?? askingAgent.title)
+          : view === 'office'
+            ? 'The orchestrator'
+            : 'The Innkeeper'
+      }
       onOpen={() => {
         ambient?.wake();
         if (askingAgent) setSelectedId(askingAgent.id);
@@ -354,7 +360,7 @@ export function OrchestratorStage({
           data-testid="orchestrator-ambient-status"
           sx={{ px: 1.5, py: 0.5 }}
         >
-          {summary || 'The tavern is quiet'}
+          {summary || (view === 'office' ? 'The office is quiet' : 'The tavern is quiet')}
         </Typography>
       ) : (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1 }}>
@@ -423,7 +429,8 @@ export function OrchestratorStage({
           {!bannerInScene && banner}
           {agents.length === 0 ? (
             <EmptyStage
-              tavern={view === 'tavern' && renderView ? renderView(view, viewProps) : null}
+              scene={parentScene && renderView ? renderView(view, viewProps) : null}
+              office={view === 'office'}
               onExampleQuest={onExampleQuest}
             />
           ) : snapshot ? (
@@ -441,22 +448,28 @@ export function OrchestratorStage({
   );
 }
 
-/**
- * With no agents: the Tavern still opens with the Innkeeper at the bar; Board and Table show a line.
- * ChatShell mounts the stage only while the session has an agent, so this is the stage's own fallback.
- */
-function EmptyStage({ tavern, onExampleQuest }: { tavern: ReactNode; onExampleQuest?(prompt: string): void }) {
+function EmptyStage({
+  scene,
+  office,
+  onExampleQuest,
+}: {
+  scene: ReactNode;
+  office: boolean;
+  onExampleQuest?(prompt: string): void;
+}) {
   const quests = onExampleQuest && <ExampleQuestButtons onPick={onExampleQuest} />;
-  if (tavern) {
+  if (scene) {
     return (
       <Box
         data-testid="orchestrator-empty-state"
         sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}
       >
-        {tavern}
+        {scene}
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.25, p: 2 }}>
           <Typography level="body-sm" textColor="text.secondary" textAlign="center">
-            No quests yet. Describe the work and the Innkeeper will split it across agents.
+            {office
+              ? 'No agents yet. Describe the work and it will be split across agents.'
+              : 'No quests yet. Describe the work and the Innkeeper will split it across agents.'}
           </Typography>
           {quests}
         </Box>
