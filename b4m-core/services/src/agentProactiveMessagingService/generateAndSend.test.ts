@@ -1,8 +1,29 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { describe, it, expect } from 'vitest';
-import { b4mTools } from '../llm/tools';
-import { buildProactiveMessageMessages, proactiveMessageTools } from './generateAndSend';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ForbiddenError, ORG_MODEL_NOT_ALLOWED_ERROR_CODE, type ReadOrgModelPolicy } from '@bike4mind/common';
+import { b4mTools, generateTools } from '../llm/tools';
+import {
+  buildProactiveMessageMessages,
+  generateAndSendProactiveMessage,
+  proactiveMessageTools,
+} from './generateAndSend';
+
+const h = vi.hoisted(() => ({
+  complete: vi.fn(),
+  generateTools: vi.fn(),
+}));
+
+vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
+  getAvailableModels: vi.fn(async () => [{ id: 'claude-sonnet-4-6', backend: 'anthropic' }]),
+  getLlmByModel: vi.fn(() => ({ complete: h.complete })),
+}));
+
+vi.mock('../llm/tools', async importOriginal => ({
+  ...(await importOriginal<typeof import('../llm/tools')>()),
+  generateTools: h.generateTools,
+}));
 import type {
   IAgentDocument,
   IChatHistoryItem,
@@ -11,8 +32,7 @@ import type {
 } from '@bike4mind/common';
 
 /**
- * generateAndSendProactiveMessage has no harness (it needs an LLM, storage and every repository),
- * so the tool deps it hands generateTools are pinned at the source, like the agentExecutor wiring in
+ * The tool deps generateAndSendProactiveMessage hands generateTools are pinned at the source, like the agentExecutor wiring in
  * apps/workers/src/queueHandlers/agentExecutor.lakeWriteTools.e2e.test.ts.
  */
 describe('generateAndSendProactiveMessage tool deps', () => {
@@ -47,11 +67,82 @@ describe('generateAndSendProactiveMessage tool deps', () => {
   });
 
   it('meters the message completion but leaves tool-internal calls on the raw backend', () => {
-    expect(source).toMatch(
-      /const llm = meter \? meterCompletionBackend\(backend, meter, modelInfo, models\) : backend;/
-    );
+    expect(source).toMatch(/const llm = meterCompletionBackend\(backend, meter, modelInfo, models\);/);
     expect(source).toMatch(/\.complete\(model, messages, completionOptions/);
     expect(source).toMatch(/\n\s+backend,\n\s+\{ web_search:/);
+  });
+});
+
+describe('generateAndSendProactiveMessage org model policy', () => {
+  const tool = (name: string) => ({ toolSchema: { name }, toolFn: vi.fn() });
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const db = {
+    quests: { create: vi.fn() },
+    sessions: { update: vi.fn(), findAllByIds: vi.fn() },
+    sessionAgentConfigs: { updateLastProactiveMessageAt: vi.fn() },
+    apiKeys: {},
+    adminSettings: {},
+    organizations: {},
+  };
+  const okMeter = vi.fn(async () => ({ refund: vi.fn(async () => undefined), settle: vi.fn(async () => 0) }));
+  const run = (orgModelPolicy: ReadOrgModelPolicy, meter: typeof okMeter = okMeter) =>
+    generateAndSendProactiveMessage({
+      config: { proactiveMessaging: { enabled: true } },
+      agent: { id: 'agent-1', name: 'Agent' },
+      session: { id: 'session-1' },
+      user: { id: 'user-1' },
+      getEntitlements: async () => [],
+      logger,
+      db,
+      apiKeyTable: {},
+      storage: {},
+      imageGenerateStorage: {},
+      meter,
+      orgModelPolicy,
+    } as never);
+  const offeredTools = () =>
+    (h.complete.mock.calls[0][2].tools as Array<{ toolSchema: { name: string } }>).map(t => t.toolSchema.name);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.generateTools.mockReturnValue({ image_generation: tool('image_generation'), web_search: tool('web_search') });
+    h.complete.mockImplementation(async (_model, _messages, _options, callback) => {
+      await callback(['hello']);
+    });
+  });
+
+  it('offers only the tools the org policy allows', async () => {
+    await run({ allowedProviders: null, allowedModels: null, allowedTools: ['web_search'] });
+
+    expect(offeredTools()).toEqual(['web_search']);
+    expect(db.quests.create).toHaveBeenCalledOnce();
+  });
+
+  it('offers every built tool when the policy is unrestricted', async () => {
+    await run(null);
+
+    expect(offeredTools()).toEqual(['image_generation', 'web_search']);
+  });
+
+  it('hands the tools the governing policy but no organizationId', async () => {
+    const policy: ReadOrgModelPolicy = { allowedProviders: null, allowedModels: ['claude'], allowedTools: null };
+    await run(policy);
+
+    const deps = vi.mocked(generateTools).mock.calls[0][3];
+    expect(deps.governingOrgModelPolicy).toBe(policy);
+    expect(deps).not.toHaveProperty('organizationId');
+  });
+
+  it('makes no provider call and posts nothing when the meter refuses the model', async () => {
+    const refusing = vi.fn(async () => {
+      throw new ForbiddenError('Model not allowed', { errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE });
+    });
+
+    await expect(
+      run({ allowedProviders: null, allowedModels: [], allowedTools: null }, refusing as never)
+    ).rejects.toThrow('Model not allowed');
+    expect(h.complete).not.toHaveBeenCalled();
+    expect(db.quests.create).not.toHaveBeenCalled();
   });
 });
 

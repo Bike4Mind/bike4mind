@@ -146,6 +146,7 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
           sessionId: config.sessionId,
           orgModelPolicy,
         }),
+        orgModelPolicy,
       });
     } catch (err) {
       // Refused before any provider call; retrying cannot help until the owner adds credits, the daily cap

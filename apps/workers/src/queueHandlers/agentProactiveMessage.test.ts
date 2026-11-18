@@ -60,7 +60,9 @@ vi.mock('@bike4mind/services/agentProactiveMessagingService', () => ({
   generateAndSendProactiveMessage: h.generateAndSendProactiveMessage,
 }));
 
-vi.mock('@bike4mind/utils', () => ({
+vi.mock('@bike4mind/utils', async () => ({
+  // modelAdmission's org-refusal check narrows on this class.
+  ForbiddenError: (await import('@bike4mind/common')).ForbiddenError,
   getSettingsByNames: vi.fn(),
   ClientMessageSender: class MockClientMessageSender {
     sendToClient = h.sendToClient;
@@ -236,6 +238,8 @@ describe('agentProactiveMessage consumer', () => {
       expect(h.orgFindById).toHaveBeenCalledExactlyOnceWith('org-1');
       const meterOpts = h.createCompletionMeter.mock.calls[0][3];
       expect(meterOpts.orgModelPolicy).toMatchObject({ allowedModels: ['claude'], allowedTools: ['web_search'] });
+      // One snapshot: the tools the service offers are filtered by the policy the meter admits against.
+      expect(h.generateAndSendProactiveMessage.mock.calls[0][0].orgModelPolicy).toBe(meterOpts.orgModelPolicy);
     });
 
     it('passes an unrestricted (null) policy without a lookup when the user has no org seat', async () => {
@@ -243,6 +247,7 @@ describe('agentProactiveMessage consumer', () => {
 
       expect(h.orgFindById).not.toHaveBeenCalled();
       expect(h.createCompletionMeter.mock.calls[0][3]).toMatchObject({ orgModelPolicy: null });
+      expect(h.generateAndSendProactiveMessage).toHaveBeenCalledWith(expect.objectContaining({ orgModelPolicy: null }));
     });
 
     it('treats a missing org document as unrestricted', async () => {

@@ -24,9 +24,11 @@ import {
   IUsageEventRepository,
   IOrganizationRepository,
   IScopedSettingsRepository,
+  type ReadOrgModelPolicy,
 } from '@bike4mind/common';
 import { b4mTools, generateTools } from '../llm/tools';
 import { meterCompletionBackend, type CompletionMeter } from '../billing/completionMeter';
+import { applyOrgToolPolicy } from '../llm/orgToolPolicy';
 
 /**
  * This host builds the whole tool registry but injects no `ToolContext.decide` runner, so `decide`
@@ -93,7 +95,12 @@ interface GenerateAndSendProactiveMessageAdapters {
    */
   imageUrlSigningSecret?: string;
   /** Admits and bills the message's LLM calls to the config owner; refusal throws before any provider call. */
-  meter?: CompletionMeter;
+  meter: CompletionMeter;
+  /**
+   * Policy of the org the meter bills, the same snapshot the meter admits against. Filters the offered
+   * tools and governs tool-internal model admission. null = unrestricted.
+   */
+  orgModelPolicy: ReadOrgModelPolicy;
 }
 
 /**
@@ -114,6 +121,7 @@ export async function generateAndSendProactiveMessage({
   imageGenerateStorage,
   imageUrlSigningSecret,
   meter,
+  orgModelPolicy,
 }: GenerateAndSendProactiveMessageAdapters): Promise<void> {
   try {
     logger.info(`Generating proactive message for agent ${agent.name} in session ${session.id}`);
@@ -140,7 +148,7 @@ export async function generateAndSendProactiveMessage({
     if (!backend || !modelInfo) {
       throw new Error(`Invalid LLM backend for model: ${model}`);
     }
-    const llm = meter ? meterCompletionBackend(backend, meter, modelInfo, models) : backend;
+    const llm = meterCompletionBackend(backend, meter, modelInfo, models);
 
     const toolDefinitions = generateTools(
       user.id,
@@ -166,6 +174,8 @@ export async function generateAndSendProactiveMessage({
         // The agent speaks first, on a schedule - no user request authenticated this turn.
         authOrigin: 'internal',
         getEntitlements,
+        // Policy only, no organizationId: a scheduled message must not write lake data into the org.
+        governingOrgModelPolicy: orgModelPolicy,
       },
       storage,
       imageGenerateStorage,
@@ -187,7 +197,10 @@ export async function generateAndSendProactiveMessage({
       models // availableModels: resolve COGS pricing for tool-internal operational calls
     );
 
-    const tools = Object.values(toolDefinitions);
+    const { tools, stripped } = applyOrgToolPolicy(Object.values(toolDefinitions), orgModelPolicy);
+    if (stripped.length > 0) {
+      logger.info(`Org tool policy removed ${stripped.join(', ')} from proactive message tools`);
+    }
 
     const completionOptions: Partial<ICompletionOptions> = {
       temperature: 0.7,
