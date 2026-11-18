@@ -76,10 +76,10 @@ export async function verifyJwtPayload(
         (user as any).mfaSignIn = { strategy: jwt_payload.signInStrategy, createdVia: jwt_payload.signInVia };
       }
       // Propagate the impersonation marker (set by loginAs) so request handlers
-      // can distinguish an admin-driven session from the real customer's - see logout.ts.
+      // can distinguish an admin-driven session from the real customer's - see signOutBrowserSession.ts.
       (user as any).impersonatedBy = jwt_payload.impersonatedBy;
       // Surface the session id so per-device logout can revoke exactly THIS session
-      // (see logout.ts + users/me/sessions.ts) without re-decoding the token.
+      // (see signOutBrowserSession.ts + users/me/sessions.ts) without re-decoding the token.
       (user as any).sid = jwt_payload.sid;
       // The realtime connect ticket inherits this token's expiry (see pages/api/websocket/ticket.ts).
       (user as any).accessTokenExpiresAt = jwt_payload.exp ? new Date(jwt_payload.exp * 1000) : undefined;

@@ -45,6 +45,7 @@ const view = (over: Record<string, unknown> = {}) => ({
   clientType: 'relying-party',
   tokenEndpointAuthMethod: 'client_secret_post',
   redirectUris: ['https://app.example.test/cb'],
+  postLogoutRedirectUris: [],
   allowedScopes: ['openid'],
   isActive: true,
   createdAt: '2026-01-01T00:00:00.000Z',
@@ -78,6 +79,20 @@ describe('route registration', () => {
 });
 
 describe('PATCH /api/admin/oauth-clients/[id]', () => {
+  it('audits postLogoutRedirectUris before/after', async () => {
+    const uris = ['https://app.example.test/signed-out'];
+    db.updateOAuthClient.mockResolvedValue({ before: view(), after: view({ postLogoutRedirectUris: uris }) });
+    const { req, res } = makeReqRes('PATCH', { body: { postLogoutRedirectUris: uris } });
+    await handlers.update.patch(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        changes: expect.arrayContaining([{ field: 'postLogoutRedirectUris', before: [], after: uris }]),
+      })
+    );
+  });
+
   it('rejects a non-admin with 403', async () => {
     const { req, res } = makeReqRes('PATCH', { user: { isAdmin: false, id: 'u1' }, body: { isActive: false } });
     await expect(handlers.update.patch(req, res)).rejects.toMatchObject({ statusCode: 403 });
@@ -99,6 +114,7 @@ describe('PATCH /api/admin/oauth-clients/[id]', () => {
         target: expect.objectContaining({ kind: 'oauthClient', id: 'c1' }),
         changes: [
           { field: 'redirectUris', before: ['https://app.example.test/cb'], after: uris },
+          { field: 'postLogoutRedirectUris', before: [], after: [] },
           { field: 'isActive', before: true, after: true },
           { field: 'allowedScopes', before: ['openid'], after: ['openid'] },
           { field: 'federatedIdp', before: null, after: null },

@@ -784,6 +784,8 @@ export const SettingKeySchema = z.enum([
   'minimumClientVersions',
   // SERVED AT /.well-known/assetlinks.json (apps/client/pages/api/well-known/assetlinks.ts)
   'androidAppCertFingerprints',
+  // SERVED AT /.well-known/apple-app-site-association (apps/client/pages/api/well-known/apple-app-site-association.ts)
+  'iosAppTeamId',
   'fileUploadLimitFreePerHour',
   'fileUploadLimitPaidPerHour',
   'pendingUploadLimit',
@@ -1470,6 +1472,7 @@ function makeBooleanSetting({
 
 // A SHA-256 certificate fingerprint as Digital Asset Links expects it: 32 colon-separated uppercase hex bytes.
 const ANDROID_CERT_FINGERPRINT_RE = /^[0-9A-F]{2}(?::[0-9A-F]{2}){31}$/;
+const APPLE_TEAM_ID_RE = /^[A-Z0-9]{10}$/;
 const AndroidCertFingerprintsSchema = z
   .array(z.string().regex(ANDROID_CERT_FINGERPRINT_RE, 'Expected 32 colon-separated uppercase hex bytes'))
   .max(10);
@@ -3192,6 +3195,7 @@ export const API_SERVICE_GROUPS = {
     settings: [
       { key: 'minimumClientVersions', order: 1 },
       { key: 'androidAppCertFingerprints', order: 2 },
+      { key: 'iosAppTeamId', order: 3 },
     ],
   },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
@@ -4271,6 +4275,22 @@ export const settingsMap = {
     order: 2,
     schema: AndroidCertFingerprintsSchema,
   }),
+  // Read by apps/client/pages/api/well-known/apple-app-site-association.ts.
+  iosAppTeamId: {
+    ...makeStringSetting({
+      key: 'iosAppTeamId',
+      name: 'iOS App Team ID',
+      defaultValue: '',
+      description:
+        'Apple Developer Team ID (10 uppercase letters or digits, e.g. "AB12CD34EF") that signs the iOS app (bundle id com.bike4mind.app). Served in /.well-known/apple-app-site-association so iOS lets the app complete its https sign-in callback and open universal links. Empty means no app is associated and signed builds cannot sign in. Public by design, not a secret.',
+      category: 'Admin',
+      group: API_SERVICE_GROUPS.API_CLIENTS.id,
+      order: 3,
+    }),
+    schema: z.string().refine(value => value === '' || APPLE_TEAM_ID_RE.test(value), {
+      message: 'Use a 10-character Apple Team ID such as AB12CD34EF, or leave it empty.',
+    }),
+  },
   // Both read by apps/client/server/files/fileUploadBudget.ts.
   fileUploadLimitFreePerHour: makeNumberSetting({
     key: 'fileUploadLimitFreePerHour',
