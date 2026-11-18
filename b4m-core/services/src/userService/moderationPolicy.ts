@@ -123,6 +123,7 @@ export async function applyModerationHit(deps: {
 
   if (transitionTo) {
     await users.setModerationStatus(userId, transitionTo, {
+      automatic: true,
       throttledUntil:
         transitionTo === 'throttled' ? new Date(now.getTime() + MODERATION_POLICY.throttleDurationMs) : null,
     });

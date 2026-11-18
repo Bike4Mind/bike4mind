@@ -177,6 +177,8 @@ const STATUS_FLAGS = [
   },
 ] as const;
 
+const toIsoOrNull = (value: Date | string | null | undefined) => (value ? new Date(value).toISOString() : null);
+
 /**
  * The flags this body actually flips. Generic edits resend the whole user, so a flag sent with its
  * current value is not a change and needs no reason.
@@ -377,13 +379,22 @@ const handler = baseApi().put(
           }
           const moderationBefore = snapshot?.moderation?.status ?? 'active';
           const moderationAfter = updated?.moderation?.status ?? 'active';
-          if (body.moderationStatus && updated && moderationBefore !== moderationAfter) {
+          // Every moderation decision is recorded, including one that keeps the status: it re-arms the
+          // throttle and marks the account reviewed.
+          if (body.moderationStatus && updated) {
+            const throttledBefore = toIsoOrNull(snapshot?.moderation?.throttledUntil);
+            const throttledAfter = toIsoOrNull(updated.moderation?.throttledUntil);
             await recordAdminActionFromRequest(req, {
               action: 'user.moderation_status.changed',
               target: auditTarget,
               summary: `set the moderation status to ${moderationAfter}`,
               reason: readAdminActionReason(body.statusChangeReason),
-              changes: [{ field: 'moderation.status', before: moderationBefore, after: moderationAfter }],
+              changes: [
+                { field: 'moderation.status', before: moderationBefore, after: moderationAfter },
+                ...(throttledBefore !== throttledAfter
+                  ? [{ field: 'moderation.throttledUntil', before: throttledBefore, after: throttledAfter }]
+                  : []),
+              ],
             });
           }
           if (creditAdjustment) {

@@ -132,7 +132,7 @@ const ReviewRowActions: React.FC<{ row: TextModerationReviewRow; onDecide: (deci
           ariaLabel={`Actions for ${displayName(row)}`}
           disabled={missing}
         >
-          {status !== 'active' && item('active')}
+          {(status !== 'active' || row.hasUnreviewedSevereHit) && item('active')}
           {status !== 'suspended' && item('throttled')}
           {status !== 'suspended' && <ListDivider />}
           {status !== 'suspended' && item('suspended')}

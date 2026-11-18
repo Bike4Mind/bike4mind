@@ -1323,14 +1323,14 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   async setModerationStatus(
     userId: string,
     status: UserModerationStatus,
-    options?: { throttledUntil?: Date | null }
+    options?: { throttledUntil?: Date | null; automatic?: boolean }
   ): Promise<IUserDocument | null> {
     return this.model.findOneAndUpdate(
       { _id: userId },
       {
         $set: {
           'moderation.status': status,
-          'moderation.statusChangedAt': new Date(),
+          ...(options?.automatic ? {} : { 'moderation.statusChangedAt': new Date() }),
           'moderation.throttledUntil': status === 'throttled' ? (options?.throttledUntil ?? null) : null,
         },
       },
@@ -2362,10 +2362,10 @@ UserSchema.index({ lastActiveAt: -1, _id: -1 }, { name: 'user_lastActiveAt_id' }
 UserSchema.index({ currentCredits: -1, _id: -1 }, { name: 'user_currentCredits_id' });
 UserSchema.index({ isBanned: 1 }, { partialFilterExpression: { isBanned: true }, name: 'user_isBanned_true' });
 // Serve findModerationReviewQueue, one per $or branch. Not partial: a partial index is only chosen when
-// the query provably implies its filter, which an $in does not. Built by the
-// ensure-user-moderation-review-indexes migration.
-UserSchema.index({ 'moderation.status': 1 }, { name: 'user_moderation_status' });
-UserSchema.index({ 'moderation.hits.categories': 1 }, { name: 'user_moderation_hit_categories' });
+// the query provably implies its filter, which an $in does not; sparse keeps users with no moderation
+// state out. Built by the ensure-user-moderation-review-indexes migration.
+UserSchema.index({ 'moderation.status': 1 }, { sparse: true, name: 'user_moderation_status' });
+UserSchema.index({ 'moderation.hits.categories': 1 }, { sparse: true, name: 'user_moderation_hit_categories' });
 // The persona caps and expiry sweep read only persona accounts, a handful among all users.
 UserSchema.index(
   { isPersona: 1, personaExpiresAt: 1 },
