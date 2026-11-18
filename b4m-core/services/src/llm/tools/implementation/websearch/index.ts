@@ -440,6 +440,7 @@ export async function performWebSearch(
         sourceSystem: 'web_search',
         relevanceScore: 1 - index * 0.1, // Higher relevance for earlier results
         fullContext: result.snippet,
+        ...(result.displayHost ? { displayHost: result.displayHost } : {}),
         // Only ever set when images were actually requested/found - keeps the "byte-identical
         // output when include_images is unset" contract honest for the stored citable too, not
         // just the text output below.
@@ -469,7 +470,7 @@ export async function performWebSearch(
         return (
           `${resultLabel(index)} **${stripNewlines(result.title)}**\n${stripNewlines(result.snippet)}\n` +
           imageLine +
-          `Source: [${safeHostname(result.url)}](${result.url})\n`
+          `Source: [${result.displayHost ?? safeHostname(result.url)}](${result.url})\n`
         );
       })
       .join('\n');
