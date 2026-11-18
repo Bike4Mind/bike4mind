@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config?: unknown) => {
@@ -53,9 +52,9 @@ describe.each([
     mockReadSideAppUsers.mockResolvedValue({ clientId: 'app-a', users: [] });
   });
 
-  it('requires the ADMIN scope', () => {
-    const config = (handler as unknown as { _config?: { requiredScopes?: string[] } })._config;
-    expect(config?.requiredScopes).toEqual([ApiKeyScope.ADMIN]);
+  it('accepts browser sessions only', () => {
+    const config = (handler as unknown as { _config?: { auth?: unknown } })._config;
+    expect(config?.auth).toBe('jwtOnly');
   });
 
   it('serves a full admin', async () => {
