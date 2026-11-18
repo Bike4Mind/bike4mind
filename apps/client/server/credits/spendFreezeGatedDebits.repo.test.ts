@@ -39,7 +39,6 @@ const CLAWBACK = 'clawback of granted credits, not metered spend';
 
 const SITES: Record<string, Array<[call: string, why: string]>> = {
   'apps/client/pages/api/ai/music.ts': [['reserveRequestCredits(', VIA_RESERVE]],
-  'apps/client/pages/api/ai/sound-effects.ts': [['reserveRequestCredits(', VIA_RESERVE]],
   'apps/client/pages/api/blog/generate-featured-image.ts': [['reserveRequestCredits(', VIA_RESERVE]],
   'apps/client/pages/api/help/chat.ts': [
     ['recordOperationalUsage(', 'gated-by the same request reserveCompletionCredits freeze check'],
