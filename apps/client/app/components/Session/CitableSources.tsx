@@ -213,8 +213,13 @@ const CitableSourceItem: FC<CitableSourceItemProps> = ({
     try {
       if (source.url) {
         const parsedUrl = new URL(source.url);
-        hostname = parsedUrl.hostname.replace('www.', '');
-        faviconUrl = getFaviconUrl(source.url);
+        // A redirect URL hides the real site, so web_search carries the destination host separately.
+        const displayHost =
+          typeof source.metadata?.displayHost === 'string' && source.metadata.displayHost
+            ? source.metadata.displayHost
+            : undefined;
+        hostname = (displayHost ?? parsedUrl.hostname).replace('www.', '');
+        faviconUrl = getFaviconUrl(displayHost ? `https://${displayHost}` : source.url);
       }
     } catch {
       hostname = source.url || '';
@@ -337,7 +342,7 @@ const CitableSourceItem: FC<CitableSourceItemProps> = ({
               <Typography
                 component="span"
                 level="body-xs"
-                data-testid={isInternal ? 'citable-source-origin-label' : undefined}
+                data-testid={isInternal ? 'citable-source-origin-label' : 'citable-source-host-label'}
                 sx={{
                   color: 'text.tertiary',
                   ml: 0.5,
