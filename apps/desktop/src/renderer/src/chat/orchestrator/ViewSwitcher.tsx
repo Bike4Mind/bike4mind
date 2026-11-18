@@ -22,6 +22,7 @@ import {
 import { isMac } from '../platform';
 import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs';
 import { AMBIENT_IDLE_MS } from './ambient';
+import { SkinMenuSection } from './SkinMenuSection';
 
 type ViewGroup = 'scene' | 'layout';
 
@@ -281,6 +282,7 @@ export function ViewSwitcher({
             </MenuItem>
           </>
         )}
+        <SkinMenuSection />
         <ListDivider />
         <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1.5, py: 0.5 }}>
           {`${SHORTCUT_HINT} to switch views`}

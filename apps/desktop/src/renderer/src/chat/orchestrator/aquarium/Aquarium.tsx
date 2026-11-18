@@ -254,7 +254,8 @@ export function Aquarium({ snapshot, onAction }: { snapshot: ViewSnapshot; onAct
         overflow: 'hidden',
         containerType: 'size',
         bgcolor: '#0e2a33',
-        backgroundImage: `url(${AQUARIUM_BACKDROP})`,
+        // Set on the root by the active skin (statePalette.ts skinCssVariables); a literal name keeps this view import-free.
+        backgroundImage: `var(--b4m-skin-aquarium-backdrop, url("${AQUARIUM_BACKDROP}"))`,
         backgroundSize: 'cover',
         backgroundPosition: 'center bottom',
         imageRendering: 'pixelated',
