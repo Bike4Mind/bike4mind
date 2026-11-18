@@ -304,10 +304,11 @@ const MAX_PLATFORM_NAME_CHARS = 40;
 
 /** Platform name from SerpAPI's `source` ("Reddit \u00b7 r/investing" -> "Reddit"), never a Google name. */
 function sourcePlatformName(source: string | undefined): string | undefined {
-  // Brackets and parentheses would break the `[label](url)` link web_search writes for the model.
+  // Brackets and parentheses would break the `[label](url)` link web_search writes for the model,
+  // and a raw newline could forge an extra line in it.
   const name = source
     ?.split(/\s\u00b7\s/)[0]
-    ?.replace(/[[\]()]/g, '')
+    ?.replace(/[[\]()\r\n]/g, '')
     .trim();
   return name && !/^google\b/i.test(name) ? name.slice(0, MAX_PLATFORM_NAME_CHARS) : undefined;
 }
