@@ -234,6 +234,7 @@ export function OrchestratorStage({
         onClose={() => setSelectedId(null)}
         actions={actions}
         skin={detailsInScene ? ORCHESTRATOR_VIEW_INFO[view].detailsSkin : undefined}
+        visible={!settled}
       />
     </Box>
   );

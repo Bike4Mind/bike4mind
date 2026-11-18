@@ -416,6 +416,28 @@ describe('OrchestratorStage', () => {
       expect(query('orchestrator-peek-drawer')).not.toBeNull();
     });
 
+    it('closes a portaled action menu on settle without losing the drawer draft or reopening on wake', async () => {
+      const agents = [agentFixture('n', 'needs-you')];
+      await renderSettled(agents, false);
+      await act(async () => el('orchestrator-needs-you-pill').click());
+      const drawer = el('orchestrator-peek-drawer');
+      await typeInto(el('orchestrator-peek-reply-input') as HTMLTextAreaElement, 'Keep my draft');
+      await act(async () => el('orchestrator-peek-actions-menu-btn').click());
+      expect(query('orchestrator-peek-archive-btn')).not.toBeNull();
+
+      await renderSettled(agents, true);
+      expect(query('orchestrator-peek-archive-btn')).toBeNull();
+      expect(query('orchestrator-peek-actions-menu')).toBeNull();
+      expect(el('orchestrator-peek-drawer')).toBe(drawer);
+
+      await renderSettled(agents, false);
+      expect(query('orchestrator-peek-archive-btn')).toBeNull();
+      expect(el('orchestrator-peek-actions-menu-btn').getAttribute('aria-expanded')).toBe('false');
+      expect((el('orchestrator-peek-reply-input') as HTMLTextAreaElement).value).toBe('Keep my draft');
+      await act(async () => el('orchestrator-peek-actions-menu-btn').click());
+      expect(query('orchestrator-peek-archive-btn')).not.toBeNull();
+    });
+
     it('preserves the selected drawer when Escape is pressed while settled', async () => {
       const agents = [agentFixture('n', 'needs-you')];
       await renderSettled(agents, false);
