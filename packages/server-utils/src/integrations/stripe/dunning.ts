@@ -9,6 +9,8 @@ export interface VoidOpenInvoicesResult {
 }
 
 export interface VoidOpenInvoicesOptions {
+  /** Checked after listing and before each void; rejection propagates instead of joining failed[]. */
+  beforeWrite?: () => void | Promise<void>;
   /**
    * Unix seconds, Stripe's own unit for timestamps. When set, only invoices
    * created strictly before this instant are voided.
@@ -80,6 +82,13 @@ export async function voidOpenSubscriptionInvoices(
     if (options.deadline !== undefined && Date.now() >= options.deadline) {
       failed.push(invoice.id);
       continue;
+    }
+    if (options.beforeWrite) {
+      await options.beforeWrite();
+      if (options.deadline !== undefined && Date.now() >= options.deadline) {
+        failed.push(invoice.id);
+        continue;
+      }
     }
     try {
       const requestOptions = requestOptionsNow();
