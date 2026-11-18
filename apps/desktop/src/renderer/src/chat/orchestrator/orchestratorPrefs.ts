@@ -1,6 +1,16 @@
-export type OrchestratorViewId = 'tavern' | 'aquarium' | 'board' | 'table' | 'tile-wall';
+export type OrchestratorViewId =
+  'tavern' | 'aquarium' | 'board' | 'table' | 'tile-wall' | 'swimlanes' | 'constellation' | 'transit';
 /** Menu and Mod+Shift+[ / ] order: the scenes, then the layouts (ViewSwitcher groups them the same way). */
-export const ORCHESTRATOR_VIEWS: readonly OrchestratorViewId[] = ['tavern', 'aquarium', 'board', 'table', 'tile-wall'];
+export const ORCHESTRATOR_VIEWS: readonly OrchestratorViewId[] = [
+  'tavern',
+  'aquarium',
+  'board',
+  'table',
+  'tile-wall',
+  'swimlanes',
+  'constellation',
+  'transit',
+];
 
 export type SessionSurface = 'chat' | 'orchestrate';
 
