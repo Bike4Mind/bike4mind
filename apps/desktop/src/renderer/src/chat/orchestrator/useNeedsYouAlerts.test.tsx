@@ -4,7 +4,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { AttentionNotice, AttentionOpenEvent } from '@shared/attention';
 import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useNeedsYouAlerts } from './useNeedsYouAlerts';
+import { writePresenter } from './orchestratorPrefs';
+import { PRESENTER_NOTICE_TITLE, useNeedsYouAlerts } from './useNeedsYouAlerts';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -82,6 +83,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root.unmount());
+  window.localStorage.clear();
   vi.clearAllMocks();
   vi.restoreAllMocks();
 });
@@ -159,6 +161,33 @@ describe('useNeedsYouAlerts', () => {
     await render({});
     await render({ root: 'needs-action' });
     expect(notify.mock.calls[0][0]).toMatchObject({ sessionId: 'root', rootId: 'root', title: 'Audit needs you' });
+  });
+
+  describe('Presenter mode', () => {
+    it('on: still alerts, with only the generic title and no session title or request', async () => {
+      writePresenter(true);
+      await render({});
+      await render({ child: 'needs-action', root: 'needs-action' });
+      expect(chime.playChime).toHaveBeenCalledTimes(1);
+      expect(notify.mock.calls.map(([notice]) => notice)).toEqual([
+        { sessionId: 'child', rootId: 'root', title: PRESENTER_NOTICE_TITLE, body: '' },
+        { sessionId: 'root', rootId: 'root', title: PRESENTER_NOTICE_TITLE, body: '' },
+      ]);
+      const shown = JSON.stringify(notify.mock.calls);
+      for (const real of ['Audit', 'Review the auth middleware', 'pnpm test']) expect(shown).not.toContain(real);
+    });
+
+    it('off: names the session and spells out the request', async () => {
+      writePresenter(false);
+      await render({});
+      await render({ root: 'needs-action' });
+      expect(notify.mock.calls[0][0]).toEqual({
+        sessionId: 'root',
+        rootId: 'root',
+        title: 'Audit needs you',
+        body: 'bash pnpm test',
+      });
+    });
   });
 
   it('stays quiet while the window is focused, but still chimes', async () => {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { AttentionOpenEvent } from '@shared/attention';
 import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { playChime } from './chime';
+import { readPresenter } from './orchestratorPrefs';
 import {
   alertableSessions,
   enteredNeedsYou,
@@ -93,8 +94,15 @@ async function announce(entered: readonly string[], sessions: readonly ChatSessi
   );
 }
 
+/** The whole notice while Presenter mode is on (presenter.ts): a shared screen shows OS notices too. */
+export const PRESENTER_NOTICE_TITLE = 'An agent needs you';
+
 async function notify(sessionId: string, sessions: readonly ChatSessionSummary[]): Promise<void> {
   const rootId = rootSessionOf(sessions, sessionId);
+  if (readPresenter()) {
+    await window.b4m.attention.notify({ sessionId, rootId, title: PRESENTER_NOTICE_TITLE, body: '' });
+    return;
+  }
   const title = needsYouTitle(sessions, sessionId, rootId);
   // A session that cannot be read still gets its notice, just without the request spelled out.
   const session = await window.b4m.chat.getSession(sessionId).catch(() => null);
