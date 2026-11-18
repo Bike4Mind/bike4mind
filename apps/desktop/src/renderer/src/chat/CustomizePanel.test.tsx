@@ -357,6 +357,15 @@ describe('the Customize screen', () => {
     expect(document.querySelector('[data-testid="skill-upload-dialog"]')).not.toBeNull();
   });
 
+  it('shows a failed row upload on the Installed tab', async () => {
+    market.readLocalSkill.mockResolvedValueOnce({ ok: false, error: 'Could not read that skill.' } as never);
+    renderScreen();
+    const local = allByTestId('customize-skill-row').find(row => text(row)?.includes('/chrome-browser'));
+    await act(async () => local?.querySelector<HTMLElement>('[data-testid="skill-row-upload-btn"]')?.click());
+    expect(isVisible(byTestId('skill-upload-pick-error'))).toBe(true);
+    expect(text(byTestId('skill-upload-pick-error'))).toContain('Could not read that skill.');
+  });
+
   it('shows a failed pick inline', async () => {
     renderScreen();
     act(() => byTestId('skills-discover-tab')?.click());

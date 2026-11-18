@@ -439,11 +439,6 @@ function SkillsSettings({
       </TabPanel>
       <TabPanel value="discover" keepMounted sx={{ p: 0 }}>
         <Stack spacing={1.5} data-testid="skills-discover">
-          {upload.error && (
-            <Alert color="danger" data-testid="skill-upload-pick-error">
-              {upload.error}
-            </Alert>
-          )}
           {onOpenSkillMarket && (
             <Sheet variant="outlined" sx={{ borderRadius: 'lg', p: 2, bgcolor: 'background.level1' }}>
               <Typography level="title-md">Skill Market</Typography>
@@ -471,6 +466,11 @@ function SkillsSettings({
           </Sheet>
         </Stack>
       </TabPanel>
+      {upload.error && (
+        <Alert color="danger" data-testid="skill-upload-pick-error" sx={{ mt: 2 }}>
+          {upload.error}
+        </Alert>
+      )}
       {upload.dialog}
     </Tabs>
   );
