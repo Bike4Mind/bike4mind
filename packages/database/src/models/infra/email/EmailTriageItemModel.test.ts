@@ -94,6 +94,17 @@ describe('emailTriageItemRepository.markBriefed', () => {
   });
 });
 
+describe('emailTriageItemRepository.upsertForEmail duplicate key', () => {
+  it('reports created: false when a concurrent upsert wins the unique index', async () => {
+    const spy = vi.spyOn(EmailTriageItemModel, 'updateOne').mockRejectedValueOnce({ code: 11000 });
+    try {
+      expect(await emailTriageItemRepository.upsertForEmail(item())).toEqual({ created: false });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe('emailTriageItemRepository.storedEmailIds', () => {
   it('returns only the owner emails that still have a triage item', async () => {
     await emailTriageItemRepository.upsertForEmail(item({ emailId: 'a' }));

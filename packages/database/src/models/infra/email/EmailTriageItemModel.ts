@@ -1,5 +1,5 @@
 import mongoose, { Schema } from 'mongoose';
-import type { BriefDraftReply } from '@bike4mind/common';
+import { BRIEF_LIMITS, type BriefDraftReply } from '@bike4mind/common';
 
 export const EMAIL_TRIAGE_KINDS = ['decision', 'handled', 'fyi'] as const;
 export type EmailTriageKind = (typeof EMAIL_TRIAGE_KINDS)[number];
@@ -30,13 +30,13 @@ const schema = new Schema<IEmailTriageItem>(
     userId: { type: String, required: true },
     emailId: { type: String, required: true, unique: true },
     kind: { type: String, enum: EMAIL_TRIAGE_KINDS, required: true },
-    summary: { type: String, required: true, maxlength: 400 },
+    summary: { type: String, required: true, maxlength: BRIEF_LIMITS.itemText },
     draftReply: {
       type: new Schema(
         {
-          to: { type: String, required: true },
-          subject: { type: String, required: true },
-          body: { type: String, required: true },
+          to: { type: String, required: true, maxlength: BRIEF_LIMITS.draftTo },
+          subject: { type: String, required: true, maxlength: BRIEF_LIMITS.draftSubject },
+          body: { type: String, required: true, maxlength: BRIEF_LIMITS.draftBody },
         },
         { _id: false }
       ),

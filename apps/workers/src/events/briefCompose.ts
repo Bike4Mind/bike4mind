@@ -119,7 +119,7 @@ export async function composeBrief(deps: BriefComposeDeps, input: { briefId: str
 
 /**
  * Runs after the brief is stored, and never throws so the push still goes out: an unmarked item is carried into
- * the next brief again rather than lost. An email deleted while this brief composed has lost its triage item by
+ * the next brief again rather than lost. The two steps are independent, so a failed mark still cleans up. An email deleted while this brief composed has lost its triage item by
  * now or will be pulled by its delete route, which removes triage items before brief items
  * (apps/client/pages/api/users/[id]/ingested-emails.ts).
  */
@@ -127,11 +127,15 @@ async function settleBriefedEmails(deps: BriefComposeDeps, userId: string, email
   if (emailIds.length === 0) return;
   try {
     await deps.emails.markBriefed(userId, emailIds, at);
+  } catch (error) {
+    deps.logger.error('[Brief] could not mark the briefed emails', { userId, error });
+  }
+  try {
     const stored = new Set(await deps.emails.storedEmailIds(userId, emailIds));
     const deleted = emailIds.filter(id => !stored.has(id));
     if (deleted.length > 0) await deps.briefs.removeEmailSourcedItems(userId, deleted);
   } catch (error) {
-    deps.logger.error('[Brief] could not settle the briefed emails', { userId, error });
+    deps.logger.error('[Brief] could not drop brief items of deleted emails', { userId, error });
   }
 }
 

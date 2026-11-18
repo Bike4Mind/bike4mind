@@ -26,6 +26,7 @@ import {
   User,
   IngestedEmailModel,
   emailTriageItemRepository,
+  assistantBriefRepository,
 } from '@bike4mind/database';
 // @ts-ignore - services may not be exported in types yet
 import { emailAnalysisService, apiKeyService } from '@bike4mind/services';
@@ -278,6 +279,7 @@ export const dispatch: SQSHandler = dispatchWithLogger(async (event: SQSEvent, c
         enabled: async () => Boolean(await adminSettingsRepository.getSettingsValue('EnableEmailTriage')),
         items: emailTriageItemRepository,
         emailExists: async emailId => (await ingestedEmailRepository.findById(emailId)) !== null,
+        removeBriefItems: (userId, ids) => assistantBriefRepository.removeEmailSourcedItems(userId, ids),
         complete: async prompt => {
           let reply = '';
           let tokensUsed: number | null = null;

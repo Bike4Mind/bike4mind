@@ -114,6 +114,8 @@ export type EmailTriageDeps = {
   items: Pick<typeof emailTriageItemRepository, 'existsForEmail' | 'upsertForEmail' | 'deleteByEmailIds'>;
   /** Whether the email is still stored (not deleted by its owner). */
   emailExists(emailId: string): Promise<boolean>;
+  /** Drops brief items already composed from the given emails. */
+  removeBriefItems(userId: string, emailIds: string[]): Promise<number>;
   /** Sends the prompt to the analysis model and returns its raw reply. */
   complete(prompt: string): Promise<{ reply: string; model: string; tokensUsed: number | null }>;
   logger: LogLike;
@@ -145,9 +147,11 @@ export async function triageEmail(
       tokensUsed,
     });
     // The owner may delete the email during the model call. Its delete route removes the email before its triage
-    // items (apps/client/pages/api/users/[id]/ingested-emails.ts), so checking after the insert leaves no orphan.
+    // and brief items (apps/client/pages/api/users/[id]/ingested-emails.ts), so checking after the insert leaves no
+    // orphan, and a brief composed from the new item in between is cleaned here.
     if (created && !(await deps.emailExists(email.id))) {
       await deps.items.deleteByEmailIds(email.userId, [email.id]);
+      await deps.removeBriefItems(email.userId, [email.id]);
       deps.logger.info('Email deleted during triage; dropped its triage item', { emailId: email.id });
       return 'email_deleted';
     }

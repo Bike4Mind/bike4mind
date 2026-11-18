@@ -36,6 +36,7 @@ vi.mock('@bike4mind/database', () => ({
   User: { findById: vi.fn().mockResolvedValue({ id: 'user-1' }) },
   IngestedEmailModel: { countDocuments: vi.fn().mockResolvedValue(0) },
   emailTriageItemRepository: { existsForEmail: m.existsForEmail, upsertForEmail: m.upsertForEmail },
+  assistantBriefRepository: { removeEmailSourcedItems: vi.fn() },
 }));
 
 vi.mock('@bike4mind/services', () => ({

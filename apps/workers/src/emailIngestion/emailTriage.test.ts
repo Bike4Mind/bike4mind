@@ -117,6 +117,7 @@ const makeDeps = (overrides: Partial<EmailTriageDeps> = {}) => {
       deleteByEmailIds: vi.fn(async () => 1),
     },
     emailExists: vi.fn(async () => true),
+    removeBriefItems: vi.fn(async () => 0),
     complete: vi.fn(async () => ({
       reply: '{"kind":"handled","summary":"Receipt filed"}',
       model: 'test-model',
@@ -147,6 +148,10 @@ describe('triageEmail', () => {
     expect(await triageEmail(deps, { email, analysis })).toBe('email_deleted');
     expect(deps.items.upsertForEmail).toHaveBeenCalledOnce();
     expect(deps.items.deleteByEmailIds).toHaveBeenCalledWith('user-1', ['email-1']);
+    expect(deps.removeBriefItems).toHaveBeenCalledWith('user-1', ['email-1']);
+    expect(vi.mocked(deps.items.deleteByEmailIds).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(deps.removeBriefItems).mock.invocationCallOrder[0]
+    );
   });
 
   it('makes no model call when the setting is off', async () => {

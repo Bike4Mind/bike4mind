@@ -110,7 +110,16 @@ describe('composeBrief', () => {
     await composeBrief(deps, { briefId: 'b1', userId: 'u1' });
     expect(deps.push).toHaveBeenCalled();
     expect(deps.briefs.markFailed).not.toHaveBeenCalled();
-    expect(deps.logger.error).toHaveBeenCalledWith('[Brief] could not settle the briefed emails', expect.anything());
+    expect(deps.logger.error).toHaveBeenCalledWith('[Brief] could not mark the briefed emails', expect.anything());
+  });
+
+  it('still drops brief items of a deleted email when marking briefed fails', async () => {
+    const deps = makeDeps({ loadActivity: vi.fn().mockResolvedValue(fyiActivity) });
+    deps.emails.markBriefed.mockRejectedValue(new Error('db down'));
+    deps.emails.storedEmailIds.mockResolvedValue(['e2']);
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1' });
+    expect(deps.briefs.removeEmailSourcedItems).toHaveBeenCalledWith('u1', ['e1']);
+    expect(deps.push).toHaveBeenCalled();
   });
 
   it('marks no email briefed when the brief does not settle', async () => {

@@ -118,5 +118,7 @@ describe('DELETE /api/users/[id]/ingested-emails', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mockDeleteTriage).toHaveBeenCalledWith('user-1', ids);
     expect(mockRemoveBriefItems).toHaveBeenCalledWith('user-1', ids);
+    expect(mockDeleteMany.mock.invocationCallOrder[0]).toBeLessThan(mockDeleteTriage.mock.invocationCallOrder[0]);
+    expect(mockDeleteTriage.mock.invocationCallOrder[0]).toBeLessThan(mockRemoveBriefItems.mock.invocationCallOrder[0]);
   });
 });
