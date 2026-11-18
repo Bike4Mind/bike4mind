@@ -16,6 +16,7 @@ import {
   type ImageRequestField,
   type OpenAIImageBackground,
   type OpenAIImageQuality,
+  reduceAspectRatio,
 } from '@bike4mind/common';
 import { resolveBilledImageQuality } from '../../../../imageCost';
 import {
@@ -101,14 +102,11 @@ const catalogEntryOf = (model: string): ImageModelCatalogEntry | undefined => {
   return parsed.success ? getImageModelCatalogEntry(parsed.data) : undefined;
 };
 
-const greatestCommonDivisor = (a: number, b: number): number => (b === 0 ? a : greatestCommonDivisor(b, a % b));
-
 /** The shape of a WxH size as a reduced ratio (1536x1024 -> 3:2); undefined for a size that does not parse. */
 function sizeAsAspectRatio(size: string): string | undefined {
   const edges = parseSizeEdges(size);
   if (!edges) return undefined;
-  const divisor = greatestCommonDivisor(edges.width, edges.height);
-  return `${edges.width / divisor}:${edges.height / divisor}`;
+  return reduceAspectRatio(edges.width, edges.height);
 }
 
 /**
