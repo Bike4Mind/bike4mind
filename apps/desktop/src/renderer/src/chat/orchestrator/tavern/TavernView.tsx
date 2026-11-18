@@ -800,6 +800,7 @@ export function TavernView({
         sx={{
           position: 'relative',
           width: 'min(100cqw, 100cqh * 16 / 9)',
+          anchorName: '--orchestrator-scene',
           aspectRatio: '16 / 9',
           containerType: 'size',
           overflow: 'hidden',

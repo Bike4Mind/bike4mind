@@ -257,6 +257,7 @@ export function Aquarium({
       aria-label={`Aquarium: ${summary}`}
       data-testid="orchestrator-aquarium"
       sx={{
+        anchorName: '--orchestrator-scene',
         position: 'relative',
         flex: 1,
         minHeight: 320,

@@ -263,6 +263,59 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('chat-thread-empty-host')).not.toBeNull();
   });
 
+  it.each(['tavern', 'aquarium'] as const)(
+    'overlays the single parent thread on the %s scene and gives agent details Escape priority',
+    async view => {
+      window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+      window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, view);
+      await openParent();
+      const thread = el('chat-thread-empty-host');
+      const mounts = threadMounts.count;
+      await enterOrchestrate();
+      const dock = el('orchestrator-dock');
+      expect(dock.hasAttribute('data-scene-conversation')).toBe(true);
+      expect(getComputedStyle(dock).position).toBe('absolute');
+      expect(query('orchestrator-dock-resize-handle')).toBeNull();
+      const scene = el(view === 'tavern' ? 'orchestrator-tavern' : 'orchestrator-aquarium');
+      expect(getComputedStyle(scene).getPropertyValue('anchor-name')).toBe('--orchestrator-scene');
+      const agent = el(view === 'tavern' ? `orchestrator-tavern-agent-${CHILD.id}` : `orchestrator-fish-${CHILD.id}`);
+      await act(async () => agent.click());
+      expect(el('orchestrator-stage').getAttribute('data-agent-details-open')).toBe('true');
+      await act(async () => el('orchestrator-dock-toggle-btn').click());
+      expect(query('orchestrator-peek-drawer')).toBeNull();
+      expect(query('orchestrator-dock')).not.toBeNull();
+      await act(async () => agent.click());
+      act(() =>
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+      );
+      expect(query('orchestrator-peek-drawer')).toBeNull();
+      expect(query('orchestrator-dock')).not.toBeNull();
+      expect(el('chat-thread-empty-host')).toBe(thread);
+      expect(threadMounts.count).toBe(mounts);
+      act(() =>
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+      );
+      expect(query('orchestrator-dock-hidden')).not.toBeNull();
+      expect(el('chat-thread-empty-host')).toBe(thread);
+    }
+  );
+
+  it('keeps the parent scene thread mounted through ambient settle and wake', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    await openParent();
+    await enterOrchestrate();
+    const thread = el('chat-thread-empty-host');
+    const mounts = threadMounts.count;
+    vi.useFakeTimers();
+    act(() => window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true })));
+    await act(async () => vi.advanceTimersByTime(46000));
+    expect(query('orchestrator-dock-hidden')).not.toBeNull();
+    expect(el('chat-thread-empty-host')).toBe(thread);
+    act(() => window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true })));
+    expect(query('orchestrator-dock')).not.toBeNull();
+    expect(threadMounts.count).toBe(mounts);
+  });
+
   it('shows the stage with the conversation docked beside it, and the dock toggles', async () => {
     await openParent();
     await enterOrchestrate();

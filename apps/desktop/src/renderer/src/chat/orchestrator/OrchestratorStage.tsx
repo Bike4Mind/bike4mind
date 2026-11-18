@@ -106,6 +106,8 @@ export interface OrchestratorStageProps {
   desk?: InnkeeperDesk;
   ambient?: StageAmbient;
   focus?: StageFocus;
+  /** Showing the parent conversation takes precedence over an agent peek. */
+  conversationRequest?: number;
 }
 
 const NO_PARENT: ParentView = {};
@@ -134,6 +136,7 @@ export function OrchestratorStage({
   desk,
   ambient,
   focus,
+  conversationRequest,
 }: OrchestratorStageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Keyed on ids, creation times and titles so status churn does not recompute names; the seed prompt
@@ -144,6 +147,10 @@ export function OrchestratorStage({
   const hasSelection = selected !== null;
   const settled = ambient?.settled === true;
   const focused = focus?.on === true && rootId !== undefined && agents.length > 0;
+
+  useEffect(() => {
+    if (conversationRequest) setSelectedId(null);
+  }, [conversationRequest]);
 
   useEffect(() => {
     if (!focusAgent) return;
@@ -289,6 +296,7 @@ export function OrchestratorStage({
   return (
     <Box
       data-testid="orchestrator-stage"
+      data-agent-details-open={hasSelection && !settled ? 'true' : undefined}
       sx={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}
     >
       {settled ? (

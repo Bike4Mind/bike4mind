@@ -38,6 +38,54 @@ afterEach(() => {
 });
 
 describe('ThreadDock', () => {
+  it('keeps one thread and its scroll state while moving between scene, hidden, docked and chat modes', async () => {
+    const render = (mode: ThreadDockMode, scene = true) =>
+      themed.render(
+        <ThreadDock
+          mode={mode}
+          scene={
+            scene
+              ? {
+                  skin: {
+                    light: { background: '#e7eff0', border: '#a9bec3' },
+                    dark: { background: '#1d2c31', border: '#49616a' },
+                  },
+                }
+              : undefined
+          }
+          hostRef={() => {}}
+          onClose={vi.fn()}
+        >
+          <div data-testid="thread-content">
+            <input defaultValue="draft" />
+          </div>
+        </ThreadDock>
+      );
+    await render('docked');
+    const thread = el('thread-content');
+    thread.scrollTop = 125;
+    const dock = el('orchestrator-dock');
+    expect(getComputedStyle(dock).position).toBe('absolute');
+    expect(getComputedStyle(dock).opacity).toBe('0.9');
+    const rules = [...document.styleSheets].flatMap(sheet => [...sheet.cssRules].map(rule => rule.cssText)).join('\n');
+    expect(rules).toContain(':focus-within');
+    expect(rules).toContain(':hover');
+    expect(rules).toMatch(/opacity:\s*1[;}]/);
+    expect(rules).toContain('prefers-reduced-motion: reduce');
+    expect(getComputedStyle(dock).getPropertyValue('position-anchor')).toBe('--orchestrator-scene');
+    expect(getComputedStyle(dock).backgroundColor).toBe('rgb(231, 239, 240)');
+    expect(query('orchestrator-dock-resize-handle')).toBeNull();
+    await render('hidden');
+    expect(getComputedStyle(el('orchestrator-dock-hidden')).visibility).toBe('hidden');
+    await render('docked');
+    await render('docked', false);
+    expect(query('orchestrator-dock-resize-handle')).not.toBeNull();
+    await render('chat', false);
+    expect(el('thread-content')).toBe(thread);
+    expect(thread.scrollTop).toBe(125);
+    expect(thread.querySelector('input')?.value).toBe('draft');
+  });
+
   it('docks at 380px behind an accessible separator', async () => {
     await renderDock();
     expect(handle().getAttribute('role')).toBe('separator');

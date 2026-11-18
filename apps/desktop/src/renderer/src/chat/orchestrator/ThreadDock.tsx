@@ -1,9 +1,11 @@
 import Box from '@mui/joy/Box';
 import IconButton from '@mui/joy/IconButton';
 import Typography from '@mui/joy/Typography';
+import { useTheme } from '@mui/joy/styles';
 import type { SxProps } from '@mui/joy/styles/types';
 import { useCallback, useEffect, useState, type ReactNode, type Ref } from 'react';
 import { ResizeHandle } from '../ResizeHandle';
+import type { AgentDetailsSkin } from './AgentPeekDrawer';
 import {
   DOCK_DEFAULT_WIDTH,
   DOCK_MIN_WIDTH,
@@ -74,14 +76,18 @@ export function ThreadDock({
   hostRef,
   onClose,
   children,
+  scene,
 }: {
   mode: ThreadDockMode;
   hostRef: Ref<HTMLDivElement>;
   /** Hides a docked thread: the dock's own close button and Escape, beside the stage header's toggle. */
   onClose?(): void;
   children: ReactNode;
+  scene?: { skin?: AgentDetailsSkin };
 }) {
   const dock = useDockWidth();
+  const modePalette = useTheme().palette.mode;
+  const palette = scene?.skin?.[modePalette];
   // The header stays mounted while hidden too, so reopening never shifts the thread under the reader.
   const hasHeader = mode !== 'chat' && onClose !== undefined;
 
@@ -97,28 +103,56 @@ export function ThreadDock({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [mode, onClose]);
 
+  // CSS anchoring keeps the single thread tree in place while following the letterboxed artwork.
   // A hidden dock stays laid out (visibility, not display), so the thread keeps its scroll offset.
   const sx: SxProps =
     mode === 'chat'
       ? { flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }
-      : {
-          width: dock.width,
-          flexShrink: 0,
-          minHeight: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          ...(mode === 'hidden'
-            ? { position: 'absolute', top: 0, right: 0, bottom: 0, visibility: 'hidden' }
-            : { position: 'relative', borderLeft: '1px solid', borderColor: 'divider' }),
-        };
+      : scene
+        ? {
+            position: 'absolute',
+            positionAnchor: '--orchestrator-scene',
+            top: 'calc(anchor(top) + 12px)',
+            left: 'calc(anchor(left) + 12px)',
+            width: 'min(440px, calc(anchor-size(width) - 24px))',
+            height: 'calc(anchor-size(height) - 24px)',
+            minWidth: 0,
+            minHeight: 0,
+            boxSizing: 'border-box',
+            display: 'flex',
+            flexDirection: 'column',
+            visibility: mode === 'hidden' ? 'hidden' : 'visible',
+            zIndex: 1,
+            border: '1px solid',
+            borderColor: palette?.border ?? 'divider',
+            bgcolor: palette?.background ?? 'background.surface',
+            borderRadius: 'md',
+            boxShadow: 'md',
+            overflow: 'hidden',
+            opacity: 0.9,
+            transition: 'opacity 160ms ease-out',
+            '&:hover, &:focus-within': { opacity: 1 },
+            '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
+          }
+        : {
+            width: dock.width,
+            flexShrink: 0,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            ...(mode === 'hidden'
+              ? { position: 'absolute', top: 0, right: 0, bottom: 0, visibility: 'hidden' }
+              : { position: 'relative', borderLeft: '1px solid', borderColor: 'divider' }),
+          };
 
   return (
     <Box
       ref={hostRef}
+      data-scene-conversation={scene && mode !== 'chat' ? '' : undefined}
       data-testid={mode === 'docked' ? 'orchestrator-dock' : mode === 'hidden' ? 'orchestrator-dock-hidden' : undefined}
       sx={sx}
     >
-      {mode === 'docked' && (
+      {mode === 'docked' && !scene && (
         <ResizeHandle
           edge="left"
           label="Resize the conversation"

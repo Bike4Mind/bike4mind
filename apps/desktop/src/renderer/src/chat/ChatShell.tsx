@@ -831,6 +831,7 @@ export function ChatShell({
   const orchestratorView = introPhase === 'off' ? orchestratorPrefs.view : 'tavern';
   const threadHost = useRef<HTMLDivElement | null>(null);
   const dockToggle = useRef<HTMLButtonElement | null>(null);
+  const [conversationRequest, setConversationRequest] = useState(0);
   // Focus lands on the header toggle, the way back in, rather than on a dock that just hid.
   const closeDock = useCallback(() => {
     setDockOpen(false);
@@ -843,6 +844,7 @@ export function ChatShell({
   const readParentReport = useCallback(
     (reportId: string) => {
       setDockOpen(true);
+      setConversationRequest(request => request + 1);
       // After the dock is shown again, or a hidden dock would scroll nothing into view.
       window.requestAnimationFrame(() => {
         const reply = reportReply(threadHost.current, reportId);
@@ -856,6 +858,7 @@ export function ChatShell({
   );
   const focusParentChat = useCallback(() => {
     setDockOpen(true);
+    setConversationRequest(request => request + 1);
     setComposerFocus(request => request + 1);
   }, [setDockOpen]);
 
@@ -1499,6 +1502,8 @@ export function ChatShell({
   );
 
   const threadDockMode: ThreadDockMode = !orchestratorShown ? 'chat' : dockVisible ? 'docked' : 'hidden';
+  const sceneConversation =
+    orchestratorShown && !orchestratorPrefs.focus && ORCHESTRATOR_VIEW_INFO[orchestratorView].group === 'scene';
 
   return (
     <Box sx={chatShellRootSx} {...drop.handlers} data-testid="chat-shell">
@@ -1744,6 +1749,9 @@ export function ChatShell({
                   [SESSION_PANEL_SPACE_VAR]: '0px',
                   transition: `padding-right ${COLUMN_LAYOUT_TRANSITION}`,
                   '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
+                  '&:has([data-agent-details-open="true"]) > [data-scene-conversation]': {
+                    visibility: 'hidden',
+                  },
                 }}
               >
                 {orchestratorShown && (
@@ -1769,6 +1777,7 @@ export function ChatShell({
                     desk={innkeeperDesk}
                     ambient={stageAmbient}
                     focus={stageFocus}
+                    conversationRequest={conversationRequest}
                     dockControl={
                       <Tooltip
                         size="sm"
@@ -1783,7 +1792,17 @@ export function ChatShell({
                           aria-pressed={orchestratorPrefs.dockOpen}
                           aria-label={orchestratorPrefs.dockOpen ? 'Hide the conversation' : 'Show the conversation'}
                           ref={dockToggle}
-                          onClick={() => setDockOpen(!orchestratorPrefs.dockOpen)}
+                          onClick={() => {
+                            if (
+                              sceneConversation &&
+                              threadHost.current?.parentElement?.querySelector('[data-agent-details-open="true"]')
+                            ) {
+                              focusParentChat();
+                            } else {
+                              setDockOpen(!orchestratorPrefs.dockOpen);
+                              if (!orchestratorPrefs.dockOpen) setConversationRequest(request => request + 1);
+                            }
+                          }}
                           data-testid="orchestrator-dock-toggle-btn"
                         >
                           <PanelRightIcon />
@@ -1792,7 +1811,12 @@ export function ChatShell({
                     }
                   />
                 )}
-                <ThreadDock mode={threadDockMode} hostRef={threadHost} onClose={closeDock}>
+                <ThreadDock
+                  mode={threadDockMode}
+                  hostRef={threadHost}
+                  onClose={closeDock}
+                  scene={sceneConversation ? { skin: ORCHESTRATOR_VIEW_INFO[orchestratorView].detailsSkin } : undefined}
+                >
                   {thread}
                 </ThreadDock>
               </Box>
