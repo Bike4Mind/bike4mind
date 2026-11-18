@@ -27,6 +27,8 @@ describe('manual cloud scan dispatch boundary', () => {
     expect(worker).toContain('cloudSecurityScanDeadLetter.sendPermission');
     expect(cron).toContain('transform: { target: cloudSecurityScanDeadLetter.ruleTarget.target }');
     expect(cron).toContain('cloudSecurityScanDeadLetter.allowRules');
+    expect(read('apps/workers/src/security/cloudScan.ts')).toContain('QueueUrl: Resource.secopsTriageQueue.url');
+    expect(read('infra/dlqAlarms.ts')).toContain('queue: cloudSecurityScanDeadLetter.queue');
   });
 
   it('keeps the cloud scan implementation and EC2 client outside the API route', () => {

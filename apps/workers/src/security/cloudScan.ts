@@ -1,6 +1,6 @@
 import { handler as runCloudScan } from '@bike4mind/server-utils/security/cloudScan';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
-import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { Resource } from 'sst';
 import { Logger } from '@bike4mind/observability';
 
 const sqsClient = new SQSClient({});
@@ -15,7 +15,7 @@ export const handler = async (event?: { trigger?: string }): Promise<void> => {
   try {
     await sqsClient.send(
       new SendMessageCommand({
-        QueueUrl: getSourceQueueUrl('secopsTriageQueue'),
+        QueueUrl: Resource.secopsTriageQueue.url,
         MessageBody: JSON.stringify({
           stage: snapshot.stage,
           scanSource: 'cloud',

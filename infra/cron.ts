@@ -47,7 +47,7 @@ import './organizationRetention';
 import { secrets } from './secrets';
 import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
 import { dlqTriagePermissions } from './dlqTriagePermissions';
-import { createEventBusDeadLetter } from './eventBusDeadLetter';
+import { cloudSecurityScanDeadLetter } from './cloudScanDeadLetter';
 
 if (runsScheduledJobs && dlqTriageSweepDeadLetter) {
   const deadLetter = dlqTriageSweepDeadLetter;
@@ -782,11 +782,6 @@ const integrationHealthCheckCron = runsScheduledJobs
       },
     })
   : undefined;
-
-const cloudSecurityScanDlq = new sst.aws.Queue('cloudSecurityScanDlq', {
-  transform: { queue: { messageRetentionSeconds: 1209600 } },
-});
-const cloudSecurityScanDeadLetter = createEventBusDeadLetter('CloudSecurityScan', cloudSecurityScanDlq);
 
 // Manual invokes also need this worker in stages without scheduled jobs.
 const cloudSecurityScanFunction = new sst.aws.Function('cloudSecurityScanFunction', {

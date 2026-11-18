@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({ scan: vi.fn(), send: vi.fn(), error: vi.fn() }));
 vi.mock('@bike4mind/server-utils/security/cloudScan', () => ({ handler: h.scan }));
-vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: () => 'triage-queue' }));
+vi.mock('sst', () => ({ Resource: { secopsTriageQueue: { url: 'triage-queue' } } }));
 vi.mock('@aws-sdk/client-sqs', () => ({
   SQSClient: class {
     send = h.send;
