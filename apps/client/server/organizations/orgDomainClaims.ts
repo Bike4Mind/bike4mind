@@ -524,7 +524,7 @@ async function ownerAdministersParent(space: ISpaceDocument, organizationId: str
     userRepository.findById(space.ownerUserId),
     organizationRepository.findById(organizationId),
   ]);
-  return Boolean(owner && organization && canAdministerOrganization(owner, organization));
+  return Boolean(owner && organization && hasOrgPermission(owner, organization, 'manageMembers'));
 }
 
 /**
