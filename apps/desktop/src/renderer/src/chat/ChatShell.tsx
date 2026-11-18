@@ -863,11 +863,6 @@ export function ChatShell({
   }, [setDockOpen]);
 
   // The ambient Tavern: after a quiet spell the dock and composer settle out and leave the scene.
-  const [slipRequest, setSlipRequest] = useState<{ seq: number; seed: string } | undefined>(undefined);
-  const openOrderSlip = useCallback(
-    (seed: string) => setSlipRequest(previous => ({ seq: (previous?.seq ?? 0) + 1, seed })),
-    []
-  );
   const ambient = useAmbientSettle({
     enabled:
       orchestratorPrefs.ambient &&
@@ -878,11 +873,10 @@ export function ChatShell({
       introPhase !== 'playing',
     // A reply streaming in is something to watch arrive, not to hide.
     held: () => conversation.streaming || ambientHeld(document),
-    // Typing into the quiet scene starts an order to the Innkeeper with that character.
     onSettledKey: event => {
       if (!isPrintableKey(event) || isEditable(event.target)) return;
       event.preventDefault();
-      openOrderSlip(event.key);
+      focusParentChat();
     },
   });
   const [ambientHint, setAmbientHint] = useState(false);
@@ -939,24 +933,22 @@ export function ChatShell({
     [sendToConversation, modelSessionId, conversationId, modelOption]
   );
   const dockVisible = orchestratorPrefs.dockOpen && !ambient.settled;
+  const toggleParentChat = () => {
+    const agentDetailsOpen = threadHost.current?.parentElement?.querySelector('[data-agent-details-open="true"]');
+    wakeAmbient();
+    if (!dockVisible || agentDetailsOpen) focusParentChat();
+    else closeDock();
+  };
   const innkeeperDesk = useMemo<InnkeeperDesk>(
     () => ({
-      // Straight to the conversation, not through onSend: that one also sends whatever is attached
-      // in the composer, which the user staged for a different message.
-      send: text => void sendToConversation(text),
       reply: parentReply,
       onReadReply: id => {
         wakeAmbient();
         readParentReport(id);
       },
-      onOpenConversation: () => {
-        wakeAmbient();
-        focusParentChat();
-      },
       conversationHidden: !dockVisible,
-      openRequest: slipRequest,
     }),
-    [sendToConversation, parentReply, wakeAmbient, readParentReport, focusParentChat, dockVisible, slipRequest]
+    [parentReply, wakeAmbient, readParentReport, dockVisible]
   );
   // The agent a clicked needs-you notice asked for; handed to its parent's stage once that is open.
   const [noticeFocus, setNoticeFocus] = useState<{ rootId: string; agentId: string } | null>(null);
@@ -1739,6 +1731,13 @@ export function ChatShell({
                 never remounts the thread and loses the reader's place in it. */}
               <Box
                 data-testid="chat-thread-region"
+                onClickCapture={event => {
+                  if (!sceneConversation || !dockVisible || !(event.target instanceof Element)) return;
+                  if (!event.currentTarget.contains(event.target)) return;
+                  if (threadHost.current?.contains(event.target)) return;
+                  if (event.target.closest('[data-conversation-toggle]')) return;
+                  closeDock();
+                }}
                 sx={{
                   position: 'relative',
                   display: 'flex',
@@ -1769,6 +1768,7 @@ export function ChatShell({
                     introPlaying={introPhase === 'playing'}
                     renderView={renderOrchestratorView}
                     onParentFocus={focusParentChat}
+                    onParentToggle={toggleParentChat}
                     report={parentReport}
                     onReadReport={readParentReport}
                     focusAgent={noticeFocus?.rootId === activeId ? noticeFocus.agentId : null}
@@ -1792,6 +1792,7 @@ export function ChatShell({
                           aria-pressed={orchestratorPrefs.dockOpen}
                           aria-label={orchestratorPrefs.dockOpen ? 'Hide the conversation' : 'Show the conversation'}
                           ref={dockToggle}
+                          data-conversation-toggle
                           onClick={() => {
                             if (
                               sceneConversation &&
@@ -1889,7 +1890,7 @@ export function ChatShell({
                     color="neutral"
                     onClick={() => {
                       wakeAmbient();
-                      openOrderSlip('');
+                      focusParentChat();
                     }}
                     data-testid="orchestrator-ambient-talk-btn"
                   >

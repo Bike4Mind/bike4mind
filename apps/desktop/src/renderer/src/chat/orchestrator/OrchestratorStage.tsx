@@ -43,7 +43,7 @@ export interface OrchestratorViewProps {
   sceneOverlay?: ReactNode;
   /** Agent details, positioned relative to the artwork rather than its surrounding letterbox. */
   agentDetailsOverlay?: ReactNode;
-  /** Talking to the orchestrating conversation from the scene; the Tavern draws it as the Innkeeper's order slip. */
+  /** The parent's latest reply, shown at the bar while its conversation is hidden. */
   desk?: InnkeeperDesk;
   /** The chrome has settled out (StageAmbient); the Tavern dims to last call and fills the pane. */
   settled?: boolean;
@@ -51,18 +51,12 @@ export interface OrchestratorViewProps {
 
 /** The parent conversation's front door in the scene: one thread, reached from the bar as well as the composer. */
 export interface InnkeeperDesk {
-  /** Sends to the parent conversation, as the composer does but without the composer's attachments. */
-  send(text: string): void;
   /** The parent's latest finished reply, for the Innkeeper's speech bubble. */
   reply?: { id: string; snippet: string };
   /** "Read all" on that bubble: show the reply in the conversation. */
   onReadReply(id: string): void;
-  /** Bring the whole conversation forward instead of the slip. */
-  onOpenConversation(): void;
   /** The conversation is out of sight, so a reply has nowhere else to show. */
   conversationHidden: boolean;
-  /** Bumped to open the slip; `seed` is a character typed while the Tavern was quiet. */
-  openRequest?: { seq: number; seed: string };
 }
 
 /** Focus mode (FocusPanel): owned by the shell, which also keeps the ambient settle off while it is on. */
@@ -82,8 +76,9 @@ export interface StageAmbient {
 export interface OrchestratorStageProps {
   agents: readonly AgentView[];
   parent?: ParentView;
-  /** Clicking the Innkeeper: bring the parent's own conversation forward. */
+  /** Bring the parent's own conversation forward for an attention action. */
   onParentFocus?(): void;
+  onParentToggle?(): void;
   /** The orchestrating session; scopes the remembered finale. Without it the finale never plays. */
   rootId?: string;
   /** The parent's closing summary, once its transcript ends on one; the finale waits for it. */
@@ -121,6 +116,7 @@ export function OrchestratorStage({
   agents,
   parent = NO_PARENT,
   onParentFocus,
+  onParentToggle,
   rootId,
   report,
   onReadReport,
@@ -254,7 +250,7 @@ export function OrchestratorStage({
     introPlaying,
     personas,
     parent,
-    onInnkeeperSelect: onParentFocus,
+    onInnkeeperSelect: onParentToggle ?? onParentFocus,
     celebrating: finale.shown,
     sceneOverlay: bannerInScene ? banner : undefined,
     agentDetailsOverlay: detailsInScene ? detailsOverlay : undefined,

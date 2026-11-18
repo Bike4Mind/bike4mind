@@ -287,7 +287,11 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions, skin, visibl
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     drawerRef.current?.focus();
     return () => {
-      if (opener && opener.isConnected) opener.focus();
+      if (
+        opener?.isConnected &&
+        (document.activeElement === document.body || drawerRef.current?.contains(document.activeElement))
+      )
+        opener.focus();
     };
   }, []);
 
