@@ -930,11 +930,11 @@ jobs:
       # means every setup step before it passed. A failure here fails this leg, so it reddens
       # Run Tests and CI Complete like any shard failure.
       #
-      # Fast typecheck: tsgo (TypeScript 7.0 native) runs first per package; on any
-      # failure it falls back to classic tsc, the authoritative gate. All packages
-      # are currently tsgo-clean, so tsc only runs if tsgo regresses or diverges.
-      # See typecheck-report.md.
-      - name: Type check (tsgo, tsc fallback)
+      # Fast typecheck: tsgo (TypeScript 7.0 native) per package. server-utils, workers
+      # and client run tsgo only, so PR gating there is tsgo-only; the other packages
+      # still fall back to classic tsc on a tsgo failure. Pure tsc for every package
+      # runs in nightly-tsc-baseline.yml. See typecheck-report.md.
+      - name: Type check (tsgo; tsc fallback in some packages)
         if: ${{ !cancelled() && matrix.shard.typecheck == 'true' && steps.sst-types.outcome == 'success' }}
         run: pnpm -w typecheck:fast && pnpm --recursive typecheck:fast
 

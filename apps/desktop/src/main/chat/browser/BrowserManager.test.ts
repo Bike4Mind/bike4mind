@@ -535,6 +535,20 @@ describe('BrowserManager tabs', () => {
     expect(internals(manager).byContents.size).toBe(1);
   });
 
+  it('stamps a tab the agent takes and pushes it, and leaves one the user opened unstamped', async () => {
+    await manager.tab('s', 'new');
+    expect(lastState().tabs[0].agentUsedAt).toBe(0);
+
+    const before = Date.now();
+    await context().page();
+    expect(lastState().tabs[0].agentUsedAt).toBeGreaterThanOrEqual(before);
+
+    await manager.tab('s', 'new');
+    expect(lastState().tabs.map(tab => (tab.agentUsedAt ?? 0) > 0)).toEqual([true, false]);
+    await context().selectTab(2);
+    expect(lastState().tabs.map(tab => (tab.agentUsedAt ?? 0) > 0)).toEqual([true, true]);
+  });
+
   it('never reuses an id within the conversation, even after every tab closed', async () => {
     await context().page();
     await context().closeTab(1);
@@ -1330,6 +1344,35 @@ describe('BrowserManager opening an artifact', () => {
       'http://localhost:3080/',
       expect.stringMatching(/^b4m-artifact:\/\/view\//),
     ]);
+  });
+
+  it('switches to the tab already showing a keyed artifact instead of opening it again', async () => {
+    await manager.navigate('s', 'http://localhost:3080/');
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>', 'chart');
+    await manager.tab('s', 'select', 1);
+
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>', 'chart');
+
+    expect(lastState()).toMatchObject({ activeTabId: 2, tabs: [{ id: 1 }, { id: 2 }] });
+    expect(contents.loads).toHaveLength(2);
+  });
+
+  it('opens a keyed artifact again once its tab has left it or its content changed', async () => {
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>', 'chart');
+    await manager.navigate('s', 'http://localhost:3080/');
+
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>', 'chart');
+    expect(lastState()).toMatchObject({ activeTabId: 2, tabs: [{ id: 1 }, { id: 2 }] });
+
+    await manager.openArtifact('s', 'Chart', '<p>v2</p>', 'chart');
+    expect(lastState()).toMatchObject({ activeTabId: 3 });
+  });
+
+  it('keeps opening a new tab for an artifact sent without a key', async () => {
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>');
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>');
+
+    expect(lastState()).toMatchObject({ activeTabId: 2, tabs: [{ id: 1 }, { id: 2 }] });
   });
 
   it('forgets every artifact when all browsers close', async () => {

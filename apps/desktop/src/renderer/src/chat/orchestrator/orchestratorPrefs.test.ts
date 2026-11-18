@@ -30,7 +30,16 @@ describe('orchestratorPrefs', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('lists the scenes, then the layouts', () => {
-    expect(ORCHESTRATOR_VIEWS).toEqual(['tavern', 'aquarium', 'board', 'table', 'tile-wall']);
+    expect(ORCHESTRATOR_VIEWS).toEqual([
+      'tavern',
+      'aquarium',
+      'board',
+      'table',
+      'tile-wall',
+      'swimlanes',
+      'constellation',
+      'transit',
+    ]);
   });
 
   it('remembers each session its own view', () => {

@@ -36,7 +36,9 @@ const validRequest = {
 };
 
 // creditHold is module-mocked, so the adapters are never touched.
-const unusedCredits = {} as CreditHoldAdapters;
+const unusedCredits = {
+  spendFreezes: { findActiveForSubject: vi.fn(async () => null) },
+} as unknown as CreditHoldAdapters;
 
 const makeDeps = (overrides: Partial<VideoJobDeps> = {}) => {
   const repository = createInMemoryGenerationJobRepository();

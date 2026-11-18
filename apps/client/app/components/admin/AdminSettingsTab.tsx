@@ -1,10 +1,10 @@
-import { useConfig, useSettingsFromServer } from '@client/app/hooks/data/settings';
+import { useSettingsFromServer } from '@client/app/hooks/data/settings';
+import { useStageHiddenSettingKeys } from './useStageHiddenSettingKeys';
 import {
   isBlankSettingValue,
   allSettingDefinitions,
   resolveSettingDefinition,
   settingsMap,
-  stageHiddenSettingKeys,
   SETTING_TABS,
   type SettingDefinition,
   API_SERVICE_GROUPS,
@@ -178,14 +178,9 @@ const AdminSettingsTab: React.FC = () => {
   const settingsFromServer = useSettingsFromServer();
   const openSettingHome = useOpenSettingHome();
   const { openSection } = useModelsNavigation();
-  const serverConfig = useConfig();
   const { currentUser } = useUser();
 
-  // Until the server reports this stage's list, hide every stage-gated setting rather than flash it.
-  const hiddenSettingKeys = useMemo(() => {
-    const keys = serverConfig.data?.hiddenAdminSettingKeys;
-    return new Set<string>(Array.isArray(keys) ? keys : stageHiddenSettingKeys(true));
-  }, [serverConfig.data]);
+  const hiddenSettingKeys = useStageHiddenSettingKeys();
 
   // Index server values by setting name once, so the hot search/filter paths
   // don't re-scan the whole list per setting on every keystroke.

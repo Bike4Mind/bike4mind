@@ -21,7 +21,8 @@ vi.mock('electron', () => ({
 }));
 
 const { writeFile: writeFileSpy } = await import('node:fs/promises');
-const { writeExport, parseBuildReport, setRecording, modelIpcHandlers } = await import('./modelIpc');
+const { writeExport, parseBuildReport, parseVersionRecord, setRecording, modelIpcHandlers } =
+  await import('./modelIpc');
 const { ModelLiveViews } = await import('./ModelLiveViews');
 const { IPC_CHANNELS } = await import('@shared/ipc');
 const { EMPTY_MODEL_STATE } = await import('@shared/model3d');
@@ -83,6 +84,25 @@ describe('writeExport', () => {
     expect(marked(join(root, 'chest.glb'))).toBe(false);
     await writeExport('stl', glb(), join(root, 'chest.glb'), model);
     expect(marked(join(root, 'chest.glb'))).toBe(false);
+  });
+});
+
+describe('parseVersionRecord', () => {
+  it('keeps the generation, finite joint angles and a byte thumbnail, and drops anything else', () => {
+    const thumbnail = new Uint8Array([1, 2]);
+    const parsed = parseVersionRecord({
+      generation: 4,
+      jointAngles: { lid: 30, bad: Number.NaN, text: '5' },
+      thumbnail,
+      path: '/etc/passwd',
+      source: 'injected',
+    });
+    expect(parsed).toEqual({ generation: 4, jointAngles: { lid: 30 }, thumbnail });
+  });
+
+  it('rejects a request without a generation and nulls a non-byte thumbnail', () => {
+    expect(parseVersionRecord({ jointAngles: {} })).toBeNull();
+    expect(parseVersionRecord({ generation: 1, thumbnail: 'data:' })?.thumbnail).toBeNull();
   });
 });
 

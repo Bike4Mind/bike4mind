@@ -51,6 +51,8 @@ import { ComposerOllamaNotice } from '../models/OllamaNotRunning';
 import { useModelServers } from '../models/useModelHub';
 import { PanelRightIcon } from './icons';
 import { OpenPaneButtons, PanesMenu, type PaneControl } from './PanesMenu';
+import { SessionArtifactsButton } from './SessionArtifactsButton';
+import { paneDocument, sessionArtifacts, type SessionArtifact } from './sessionArtifacts';
 import { StudioPane } from './studio/StudioPane';
 import type { StudioController } from './studio/controller';
 import { useStudioController } from './studio/useStudioController';
@@ -565,6 +567,17 @@ export function ChatShell({
       openArtifactInSessionBrowser(artifact, activeId, showBrowserPane),
     [activeId, showBrowserPane]
   );
+  const artifactsInSession = useMemo(() => sessionArtifacts(conversation.messages), [conversation.messages]);
+  const openSessionArtifact = useCallback(
+    ({ key, artifact }: SessionArtifact) =>
+      openArtifactInSessionBrowser(
+        { title: artifact.title, content: paneDocument(artifact) },
+        activeId,
+        showBrowserPane,
+        request => window.b4m.browser.openArtifact({ ...request, artifactKey: key })
+      ),
+    [activeId, showBrowserPane]
+  );
 
   const onFilesDropped = useCallback(
     (files: File[]) => {
@@ -818,6 +831,7 @@ export function ChatShell({
   const orchestratorView = introPhase === 'off' ? orchestratorPrefs.view : 'tavern';
   const threadHost = useRef<HTMLDivElement | null>(null);
   const dockToggle = useRef<HTMLButtonElement | null>(null);
+  const [conversationRequest, setConversationRequest] = useState(0);
   // Focus lands on the header toggle, the way back in, rather than on a dock that just hid.
   const closeDock = useCallback(() => {
     setDockOpen(false);
@@ -830,6 +844,7 @@ export function ChatShell({
   const readParentReport = useCallback(
     (reportId: string) => {
       setDockOpen(true);
+      setConversationRequest(request => request + 1);
       // After the dock is shown again, or a hidden dock would scroll nothing into view.
       window.requestAnimationFrame(() => {
         const reply = reportReply(threadHost.current, reportId);
@@ -843,15 +858,11 @@ export function ChatShell({
   );
   const focusParentChat = useCallback(() => {
     setDockOpen(true);
+    setConversationRequest(request => request + 1);
     setComposerFocus(request => request + 1);
   }, [setDockOpen]);
 
   // The ambient Tavern: after a quiet spell the dock and composer settle out and leave the scene.
-  const [slipRequest, setSlipRequest] = useState<{ seq: number; seed: string } | undefined>(undefined);
-  const openOrderSlip = useCallback(
-    (seed: string) => setSlipRequest(previous => ({ seq: (previous?.seq ?? 0) + 1, seed })),
-    []
-  );
   const ambient = useAmbientSettle({
     enabled:
       orchestratorPrefs.ambient &&
@@ -862,11 +873,10 @@ export function ChatShell({
       introPhase !== 'playing',
     // A reply streaming in is something to watch arrive, not to hide.
     held: () => conversation.streaming || ambientHeld(document),
-    // Typing into the quiet scene starts an order to the Innkeeper with that character.
     onSettledKey: event => {
       if (!isPrintableKey(event) || isEditable(event.target)) return;
       event.preventDefault();
-      openOrderSlip(event.key);
+      focusParentChat();
     },
   });
   const [ambientHint, setAmbientHint] = useState(false);
@@ -923,24 +933,22 @@ export function ChatShell({
     [sendToConversation, modelSessionId, conversationId, modelOption]
   );
   const dockVisible = orchestratorPrefs.dockOpen && !ambient.settled;
+  const toggleParentChat = () => {
+    const agentDetailsOpen = threadHost.current?.parentElement?.querySelector('[data-agent-details-open="true"]');
+    wakeAmbient();
+    if (!dockVisible || agentDetailsOpen) focusParentChat();
+    else closeDock();
+  };
   const innkeeperDesk = useMemo<InnkeeperDesk>(
     () => ({
-      // Straight to the conversation, not through onSend: that one also sends whatever is attached
-      // in the composer, which the user staged for a different message.
-      send: text => void sendToConversation(text),
       reply: parentReply,
       onReadReply: id => {
         wakeAmbient();
         readParentReport(id);
       },
-      onOpenConversation: () => {
-        wakeAmbient();
-        focusParentChat();
-      },
       conversationHidden: !dockVisible,
-      openRequest: slipRequest,
     }),
-    [sendToConversation, parentReply, wakeAmbient, readParentReport, focusParentChat, dockVisible, slipRequest]
+    [parentReply, wakeAmbient, readParentReport, dockVisible]
   );
   // The agent a clicked needs-you notice asked for; handed to its parent's stage once that is open.
   const [noticeFocus, setNoticeFocus] = useState<{ rootId: string; agentId: string } | null>(null);
@@ -1486,9 +1494,35 @@ export function ChatShell({
   );
 
   const threadDockMode: ThreadDockMode = !orchestratorShown ? 'chat' : dockVisible ? 'docked' : 'hidden';
+  const sceneConversation =
+    orchestratorShown && !orchestratorPrefs.focus && ORCHESTRATOR_VIEW_INFO[orchestratorView].group === 'scene';
+  const handledConversationClicks = useRef(new WeakSet<Event>());
+  useEffect(() => {
+    if (!sceneConversation || !dockVisible) return;
+    const onClick = (event: MouseEvent) => {
+      if (handledConversationClicks.current.has(event)) return;
+      if (event.target instanceof Element && event.target.closest('[role="menu"], [role="listbox"], [role="dialog"]'))
+        return;
+      closeDock();
+    };
+    window.addEventListener('click', onClick);
+    return () => window.removeEventListener('click', onClick);
+  }, [sceneConversation, dockVisible, closeDock]);
 
   return (
-    <Box sx={chatShellRootSx} {...drop.handlers} data-testid="chat-shell">
+    <Box
+      sx={chatShellRootSx}
+      {...drop.handlers}
+      data-testid="chat-shell"
+      onClickCapture={event => {
+        handledConversationClicks.current.add(event.nativeEvent);
+        if (!sceneConversation || !dockVisible || !(event.target instanceof Element)) return;
+        if (!event.currentTarget.contains(event.target)) return;
+        if (threadHost.current?.contains(event.target)) return;
+        if (event.target.closest('[data-conversation-toggle]')) return;
+        closeDock();
+      }}
+    >
       <SpawnFailureToast />
       {deleteSessionId && (
         <DeleteSessionDialog
@@ -1699,6 +1733,7 @@ export function ChatShell({
                   {/* Inside the reading column, not out at the window edge: a popup opening from
                   here cannot reach the pane, and one over the pane would be drawn behind the
                   web page - see agentBrowser.ts. */}
+                  <SessionArtifactsButton artifacts={artifactsInSession} onOpen={openSessionArtifact} />
                   <OpenPaneButtons panes={paneControls} focusAfterClose={panesMenuButtonRef} />
                   <PanesMenu
                     buttonRef={panesMenuButtonRef}
@@ -1730,6 +1765,9 @@ export function ChatShell({
                   [SESSION_PANEL_SPACE_VAR]: '0px',
                   transition: `padding-right ${COLUMN_LAYOUT_TRANSITION}`,
                   '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
+                  '&:has([data-agent-details-open="true"]) > [data-scene-conversation]': {
+                    visibility: 'hidden',
+                  },
                 }}
               >
                 {orchestratorShown && (
@@ -1747,6 +1785,7 @@ export function ChatShell({
                     introPlaying={introPhase === 'playing'}
                     renderView={renderOrchestratorView}
                     onParentFocus={focusParentChat}
+                    onParentToggle={toggleParentChat}
                     report={parentReport}
                     onReadReport={readParentReport}
                     focusAgent={noticeFocus?.rootId === activeId ? noticeFocus.agentId : null}
@@ -1755,6 +1794,7 @@ export function ChatShell({
                     desk={innkeeperDesk}
                     ambient={stageAmbient}
                     focus={stageFocus}
+                    conversationRequest={conversationRequest}
                     dockControl={
                       <Tooltip
                         size="sm"
@@ -1769,7 +1809,18 @@ export function ChatShell({
                           aria-pressed={orchestratorPrefs.dockOpen}
                           aria-label={orchestratorPrefs.dockOpen ? 'Hide the conversation' : 'Show the conversation'}
                           ref={dockToggle}
-                          onClick={() => setDockOpen(!orchestratorPrefs.dockOpen)}
+                          data-conversation-toggle
+                          onClick={() => {
+                            if (
+                              sceneConversation &&
+                              threadHost.current?.parentElement?.querySelector('[data-agent-details-open="true"]')
+                            ) {
+                              focusParentChat();
+                            } else {
+                              setDockOpen(!orchestratorPrefs.dockOpen);
+                              if (!orchestratorPrefs.dockOpen) setConversationRequest(request => request + 1);
+                            }
+                          }}
                           data-testid="orchestrator-dock-toggle-btn"
                         >
                           <PanelRightIcon />
@@ -1778,7 +1829,12 @@ export function ChatShell({
                     }
                   />
                 )}
-                <ThreadDock mode={threadDockMode} hostRef={threadHost} onClose={closeDock}>
+                <ThreadDock
+                  mode={threadDockMode}
+                  hostRef={threadHost}
+                  onClose={closeDock}
+                  scene={sceneConversation ? { skin: ORCHESTRATOR_VIEW_INFO[orchestratorView].detailsSkin } : undefined}
+                >
                   {thread}
                 </ThreadDock>
               </Box>
@@ -1851,7 +1907,7 @@ export function ChatShell({
                     color="neutral"
                     onClick={() => {
                       wakeAmbient();
-                      openOrderSlip('');
+                      focusParentChat();
                     }}
                     data-testid="orchestrator-ambient-talk-btn"
                   >
@@ -2243,6 +2299,7 @@ export function ChatShell({
           conversation={studioContainer}
           historyEnabled={!opening && conversation.session ? conversation.session.historyEnabled === true : null}
           onHistory={onHistory}
+          agentTurn={turnOpen}
         />
       )}
     </Box>

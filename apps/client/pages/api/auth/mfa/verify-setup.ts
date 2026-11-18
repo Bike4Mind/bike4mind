@@ -4,8 +4,9 @@ import { mfaService } from '@bike4mind/services';
 import { userRepository, passkeyCredentialRepository } from '@bike4mind/database';
 import { readSignInOrigin } from '@server/auth/signInSecondFactor';
 import { completeMfaEnrollment } from '@server/auth/completeMfaEnrollment';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { APP_ENROLLMENT_REFUSAL, refuseAppEnrollmentBeforeSecondFactor } from '@server/auth/appEnrollment';
-import { redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
+import { redactUserSecretsForSelf, selfUserResponseSchema, type IUser } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import * as z from 'zod';
 
@@ -59,6 +60,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
         });
       }
 
+      // Before any write or the session mint, and outside the try: a lookup failure must leave no
+      // session behind and must not be booked as a failed MFA attempt.
+      const { roleAdminPermissions = [] } = await resolveRoleAdminPermissions<
+        Pick<IUser, 'adminRoleIds' | 'roleAdminPermissions'>
+      >({ adminRoleIds: freshUser.adminRoleIds });
+
       // With no factor configured, any passkey still on file is an orphan of an earlier MFA that a
       // failed cleanup left behind. Purge them so a fresh enrollment never revives them. A
       // passkey-only user adding an app keeps theirs. Orphans predate this app setup, so the purge
@@ -71,7 +78,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
         );
       }
 
-      let setupBody: unknown;
+      let setupBody: { success: boolean; accessToken: string };
+      let enrolledUser: Awaited<ReturnType<typeof mfaService.verifyMFASetup>>['user'];
       try {
         // verifyMFASetup clears any failed-attempt/lockout state as part of its single
         // secret-preserving write - a separate clear here (built from the not-+selected
@@ -79,11 +87,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
         const result = await mfaService.verifyMFASetup(freshUser, cleanToken, userRepository);
         const tokens = await completeMfaEnrollment(req, res, freshUser);
 
-        setupBody = {
-          success: result.success,
-          ...tokens,
-          user: redactUserSecretsForSelf(result.user),
-        };
+        enrolledUser = result.user;
+        setupBody = { success: result.success, ...tokens };
       } catch (error: unknown) {
         // A code checked by mfaService was counted before it was compared; anything else is counted now.
         const updatedUser = await mfaService.recordFailedMfaAttempt(error, freshUser.id, userRepository);
@@ -106,9 +111,15 @@ const handler = baseApi({ auth: 'jwtOnly' })
         });
       }
 
-      // Outside the try: a response-boundary failure is our bug and must not be booked as a
-      // failed MFA attempt by the catch above.
-      return respond(res, verifySetupResponseSchema, setupBody);
+      // Outside the try: a response-boundary failure is our bug and must not be booked as a failed
+      // MFA attempt by the catch above. The permissions were resolved above; this reattaches them to
+      // the post-enrollment user without a second role query.
+      return respond(res, verifySetupResponseSchema, {
+        ...setupBody,
+        user: redactUserSecretsForSelf(
+          await resolveRoleAdminPermissions(enrolledUser, async () => [{ permissions: roleAdminPermissions }])
+        ),
+      });
     })
   );
 

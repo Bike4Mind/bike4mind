@@ -12,6 +12,7 @@ export const CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE = 'concurrency_limit_exceeded
 export const OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE = 'output_budget_exhausted';
 export const DAILY_FREE_LIMIT_REACHED_ERROR_CODE = 'daily_free_limit_reached';
 export const UPGRADE_REQUIRED_ERROR_CODE = 'upgrade_required';
+export const SPEND_FROZEN_ERROR_CODE = 'spend_frozen';
 export const ACCOUNT_SUSPENDED_ERROR_CODE = 'account_suspended';
 export const RUN_NOT_FOUND_ERROR_CODE = 'run_not_found';
 export const ORG_MODEL_NOT_ALLOWED_ERROR_CODE = 'org_model_not_allowed';
@@ -47,6 +48,8 @@ export const API_ERROR_CODES = [
   ACCOUNT_TRUST_REQUIRED_ERROR_CODE,
   /** The credential is valid but its owner's account is suspended; the body carries `suspension` (category, terms, appeal). Not retryable. */
   ACCOUNT_SUSPENDED_ERROR_CODE,
+  /** An admin paused new metered spend for the user, organization or API key; the body carries `frozenScope` and `frozenAt`, never the reason. Not retryable. */
+  SPEND_FROZEN_ERROR_CODE,
   /** The user owns as many agents as their tier allows; remediation is deleting one or upgrading. */
   AGENT_LIMIT_REACHED_ERROR_CODE,
   /** The caller cannot afford the request; remediation is buying credits. */
