@@ -326,12 +326,14 @@ describe('PendingSection', () => {
     mocks.search = { heldGrants: 'open' };
     rerender(<PendingSection />);
     expect(screen.getByTestId('held-grant-actions-stub')).toBeVisible();
+    expect(screen.getByTestId('pending-table')).not.toBeVisible();
     fireEvent.click(screen.getByTestId('invite-center-open-held-grants-btn'));
     expect(mocks.navigate.mock.calls.at(-1)![0].search({ heldGrants: 'open' }).heldGrants).toBeUndefined();
 
     mocks.search = {};
     rerender(<PendingSection />);
     expect(screen.getByTestId('held-grant-actions-stub')).not.toBeVisible();
+    expect(screen.getByTestId('pending-table')).toBeVisible();
   });
 
   it('opens held grant actions straight from the URL', () => {

@@ -310,11 +310,6 @@ export function PendingSection() {
 
   return (
     <Stack gap={1.5} data-testid="pending-section">
-      {heldActionsMounted && (
-        <div hidden={!heldActionsOpen}>
-          <HeldGrantActions />
-        </div>
-      )}
       <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center">
         <Button
           variant="outlined"
@@ -339,83 +334,90 @@ export function PendingSection() {
           </Button>
         ))}
       </Stack>
-      <PendingHeader />
-      <FilterBar state={listState} filters={FILTERS} onChange={updateList} search={false} />
-      {failed.length > 0 && (
-        <Alert color="warning" variant="soft" data-testid="pending-bulk-failed">
-          Could not change: {failed.map(id => emailOf.get(id) ?? id).join(', ')}
-        </Alert>
+      {heldActionsMounted && (
+        <div hidden={!heldActionsOpen}>
+          <HeldGrantActions />
+        </div>
       )}
-      {selectedIds.length > 0 && (
-        <BulkActionBar
-          selection={selection}
-          totalMatching={selectedIds.length}
-          onSelectAllMatching={() => undefined}
-          onClear={() => setSelection(NO_SELECTION)}
-        >
-          {overCap && <span data-testid="pending-bulk-over-cap">Select {MAX_PENDING_BULK} accounts or fewer.</span>}
-          {canRelease && (
+      <Stack gap={1.5} sx={{ display: heldActionsOpen ? 'none' : undefined }}>
+        <PendingHeader />
+        <FilterBar state={listState} filters={FILTERS} onChange={updateList} search={false} />
+        {failed.length > 0 && (
+          <Alert color="warning" variant="soft" data-testid="pending-bulk-failed">
+            Could not change: {failed.map(id => emailOf.get(id) ?? id).join(', ')}
+          </Alert>
+        )}
+        {selectedIds.length > 0 && (
+          <BulkActionBar
+            selection={selection}
+            totalMatching={selectedIds.length}
+            onSelectAllMatching={() => undefined}
+            onClear={() => setSelection(NO_SELECTION)}
+          >
+            {overCap && <span data-testid="pending-bulk-over-cap">Select {MAX_PENDING_BULK} accounts or fewer.</span>}
+            {canRelease && (
+              <Button
+                size="sm"
+                disabled={overCap}
+                data-testid="pending-bulk-release-btn"
+                onClick={() => setDialog('release')}
+              >
+                Release
+              </Button>
+            )}
             <Button
               size="sm"
+              color="danger"
+              variant="outlined"
               disabled={overCap}
-              data-testid="pending-bulk-release-btn"
-              onClick={() => setDialog('release')}
+              data-testid="pending-bulk-block-btn"
+              onClick={() => setDialog('block')}
             >
-              Release
+              Block
             </Button>
-          )}
-          <Button
-            size="sm"
-            color="danger"
-            variant="outlined"
-            disabled={overCap}
-            data-testid="pending-bulk-block-btn"
-            onClick={() => setDialog('block')}
-          >
-            Block
-          </Button>
-        </BulkActionBar>
-      )}
-      <DataTable
-        rows={rows}
-        columns={columns}
-        getRowId={row => row.id}
-        label="Pending signup grants"
-        loading={list.isPending}
-        error={list.isError ? 'Could not load pending signup grants.' : undefined}
-        onRetry={() => void list.refetch()}
-        empty={empty}
-        pagination={false}
-        selection={selection}
-        onSelectionChange={setSelection}
-        testId="pending-table"
-        rowTestId={row => `pending-row-${row.id}`}
-      />
-      {list.hasNextPage && (
-        <Stack direction="row" justifyContent="center">
-          <Button
-            variant="outlined"
-            color="neutral"
-            size="sm"
-            loading={list.isFetchingNextPage}
-            data-testid="pending-load-more-btn"
-            onClick={() => void list.fetchNextPage()}
-          >
-            Load more
-          </Button>
-        </Stack>
-      )}
-      {dialog && (
-        <PendingBulkDialog
-          kind={dialog}
-          userIds={selectedIds}
-          onClose={() => setDialog(null)}
-          onDone={outcome => {
-            setFailed(outcome.failedIds);
-            setSelection(NO_SELECTION);
-          }}
+          </BulkActionBar>
+        )}
+        <DataTable
+          rows={rows}
+          columns={columns}
+          getRowId={row => row.id}
+          label="Pending signup grants"
+          loading={list.isPending}
+          error={list.isError ? 'Could not load pending signup grants.' : undefined}
+          onRetry={() => void list.refetch()}
+          empty={empty}
+          pagination={false}
+          selection={selection}
+          onSelectionChange={setSelection}
+          testId="pending-table"
+          rowTestId={row => `pending-row-${row.id}`}
         />
-      )}
+        {list.hasNextPage && (
+          <Stack direction="row" justifyContent="center">
+            <Button
+              variant="outlined"
+              color="neutral"
+              size="sm"
+              loading={list.isFetchingNextPage}
+              data-testid="pending-load-more-btn"
+              onClick={() => void list.fetchNextPage()}
+            >
+              Load more
+            </Button>
+          </Stack>
+        )}
+        {dialog && (
+          <PendingBulkDialog
+            kind={dialog}
+            userIds={selectedIds}
+            onClose={() => setDialog(null)}
+            onDone={outcome => {
+              setFailed(outcome.failedIds);
+              setSelection(NO_SELECTION);
+            }}
+          />
+        )}
+      </Stack>
     </Stack>
   );
 }
