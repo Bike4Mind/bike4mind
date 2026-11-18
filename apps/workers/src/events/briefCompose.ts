@@ -18,6 +18,7 @@ import { recordSessionOperationalUsage } from '@workers/events/recordSessionOper
 import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
 import {
   assembleBrief,
+  briefedEmailIds,
   briefPushBody,
   buildBriefPrompt,
   emptyBrief,
@@ -55,6 +56,8 @@ export type BriefComposeDeps = {
   /** Sends the activity prompt to the model and returns its raw reply. */
   complete(userId: string, briefId: string, prompt: string): Promise<string>;
   push(event: PushNotificationEvent): Promise<void>;
+  /** Records which triage items the ready brief carried; the rest stay pending for the next brief. */
+  markEmailsBriefed(userId: string, emailIds: string[], at: Date): Promise<unknown>;
   logger: LogLike;
 };
 
@@ -93,8 +96,11 @@ export async function composeBrief(deps: BriefComposeDeps, input: { briefId: str
       composed = emptyBrief();
     }
 
-    const settled = await briefs.markReady(input.briefId, composed, deps.now());
+    const composedAt = deps.now();
+    const settled = await briefs.markReady(input.briefId, composed, composedAt);
     if (!settled) return;
+
+    await deps.markEmailsBriefed(input.userId, briefedEmailIds(composed), composedAt);
 
     await deps.push({
       userId: input.userId,
@@ -123,15 +129,8 @@ async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefAct
     now.getTime() - APPROVAL_TTL_MS,
     MAX_APPROVALS
   );
-  // Triage items are selected by creation time inside the brief's window rather than marked consumed: a
-  // failed brief leaves them for the next one, whose window starts where the last ready brief ended
-  // (apps/client/server/briefs/composeBrief.ts, bounded by its maximum lookback).
-  const emails = await emailTriageItemRepository.listForWindow(
-    brief.userId,
-    brief.periodStart,
-    brief.periodEnd,
-    MAX_EMAIL_ITEMS
-  );
+  // Pending rather than windowed: an item a failed brief or a section cap left out is carried to the next brief.
+  const emails = await emailTriageItemRepository.listPending(brief.userId, brief.periodEnd, MAX_EMAIL_ITEMS);
 
   return {
     periodStart: brief.periodStart,
@@ -205,6 +204,7 @@ export const handler = withEventContext(async (event, logger) => {
         return reply;
       },
       push: pushEvent => publishPushNotification(pushEvent, logger),
+      markEmailsBriefed: (userId, emailIds, at) => emailTriageItemRepository.markBriefed(userId, emailIds, at),
       logger,
     },
     input

@@ -17,11 +17,13 @@ export type IEmailTriageItem = {
   draftReply?: BriefDraftReply;
   model: string | null;
   tokensUsed: number | null;
+  /** When a ready brief carried this item; null until then, so an item a brief's caps left out stays pending. */
+  briefedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 };
 
-export type EmailTriageItemInput = Omit<IEmailTriageItem, '_id' | 'createdAt' | 'updatedAt'>;
+export type EmailTriageItemInput = Omit<IEmailTriageItem, '_id' | 'briefedAt' | 'createdAt' | 'updatedAt'>;
 
 const schema = new Schema<IEmailTriageItem>(
   {
@@ -42,11 +44,13 @@ const schema = new Schema<IEmailTriageItem>(
     },
     model: { type: String, default: null },
     tokensUsed: { type: Number, default: null },
+    briefedAt: { type: Date, default: null },
   },
   { timestamps: true, versionKey: false, collection: 'EmailTriageItem' }
 );
 
 schema.index({ userId: 1, createdAt: -1 });
+schema.index({ userId: 1, briefedAt: 1, createdAt: 1 });
 
 export const EmailTriageItemModel =
   (mongoose.models.EmailTriageItem as mongoose.Model<IEmailTriageItem> | undefined) ??
@@ -77,12 +81,21 @@ export const emailTriageItemRepository = {
     return (await EmailTriageItemModel.exists({ emailId })) !== null;
   },
 
-  /** Items created in [start, end), oldest first. */
-  async listForWindow(userId: string, start: Date, end: Date, limit: number): Promise<IEmailTriageItem[]> {
-    return EmailTriageItemModel.find({ userId, createdAt: { $gte: start, $lt: end } })
+  /** Items no ready brief has carried yet, created before `end`, oldest first. */
+  async listPending(userId: string, end: Date, limit: number): Promise<IEmailTriageItem[]> {
+    return EmailTriageItemModel.find({ userId, briefedAt: null, createdAt: { $lt: end } })
       .sort({ createdAt: 1 })
       .limit(limit)
       .lean();
+  },
+
+  async markBriefed(userId: string, emailIds: string[], at: Date): Promise<number> {
+    if (emailIds.length === 0) return 0;
+    const result = await EmailTriageItemModel.updateMany(
+      { userId, emailId: { $in: emailIds }, briefedAt: null },
+      { $set: { briefedAt: at } }
+    );
+    return result.modifiedCount;
   },
 
   async deleteByEmailIds(userId: string, emailIds: string[]): Promise<number> {

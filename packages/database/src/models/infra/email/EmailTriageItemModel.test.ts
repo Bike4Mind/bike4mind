@@ -60,13 +60,14 @@ describe('emailTriageItemRepository.upsertForEmail', () => {
   });
 });
 
-describe('emailTriageItemRepository.listForWindow', () => {
-  it('returns the owner items created in [start, end), oldest first', async () => {
+describe('emailTriageItemRepository.listPending', () => {
+  it('returns the owner unbriefed items created before end, oldest first, including ones older than any window', async () => {
     const t0 = new Date('2026-11-01T00:00:00.000Z');
     const at = (ms: number) => new Date(t0.getTime() + ms);
     await EmailTriageItemModel.insertMany(
       [
-        { ...item({ emailId: 'before' }), createdAt: at(-1) },
+        { ...item({ emailId: 'carried-over' }), createdAt: at(-1) },
+        { ...item({ emailId: 'already-briefed' }), createdAt: at(200), briefedAt: at(300) },
         { ...item({ emailId: 'second' }), createdAt: at(500) },
         { ...item({ emailId: 'first' }), createdAt: at(0) },
         { ...item({ emailId: 'at-end' }), createdAt: at(1000) },
@@ -75,9 +76,21 @@ describe('emailTriageItemRepository.listForWindow', () => {
       { timestamps: false } as Parameters<typeof EmailTriageItemModel.insertMany>[1]
     );
 
-    const listed = await emailTriageItemRepository.listForWindow('user-me', t0, at(1000), 10);
+    const listed = await emailTriageItemRepository.listPending('user-me', at(1000), 10);
 
-    expect(listed.map(i => i.emailId)).toEqual(['first', 'second']);
+    expect(listed.map(i => i.emailId)).toEqual(['carried-over', 'first', 'second']);
+  });
+});
+
+describe('emailTriageItemRepository.markBriefed', () => {
+  it('marks only the owner items, so the rest stay pending for the next brief', async () => {
+    await emailTriageItemRepository.upsertForEmail(item({ emailId: 'a' }));
+    await emailTriageItemRepository.upsertForEmail(item({ emailId: 'b' }));
+    await emailTriageItemRepository.upsertForEmail(item({ emailId: 'c', userId: 'user-other' }));
+
+    expect(await emailTriageItemRepository.markBriefed('user-me', ['a', 'c'], new Date())).toBe(1);
+    const pending = await emailTriageItemRepository.listPending('user-me', new Date(Date.now() + 1000), 10);
+    expect(pending.map(i => i.emailId)).toEqual(['b']);
   });
 });
 

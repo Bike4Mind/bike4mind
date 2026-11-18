@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BRIEF_LIMITS } from '@bike4mind/common';
 import {
   assembleBrief,
+  briefedEmailIds,
   briefPushBody,
   buildBriefPrompt,
   emptyBrief,
@@ -131,6 +132,16 @@ describe('assembleBrief', () => {
     expect(brief.decisions[0].approval?.questId).toBe('q1');
     expect(brief.decisions[1].approval?.questId).toBe('q2');
     expect(brief.decisions.at(-1)?.source?.emailId).toBe(`e${BRIEF_LIMITS.itemsPerSection - 3}`);
+  });
+
+  it('reports only the emails that survived the caps as briefed, so the rest carry to the next brief', () => {
+    const emails = Array.from({ length: 15 }, (_, index) => ({
+      emailId: `e${index}`,
+      kind: 'decision' as const,
+      summary: `Email ${index}`,
+    }));
+    const ids = briefedEmailIds(assembleBrief(reply, { ...baseActivity(), emails }));
+    expect(ids).toEqual(emails.slice(0, BRIEF_LIMITS.itemsPerSection - 2).map(email => email.emailId));
   });
 
   it('never lets model text displace a handled email from the capped section', () => {

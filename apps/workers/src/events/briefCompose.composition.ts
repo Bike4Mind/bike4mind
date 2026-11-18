@@ -179,6 +179,12 @@ export function assembleBrief(reply: string, activity: BriefActivity): ComposedB
   };
 }
 
+/** The triaged emails the brief actually carries, after every section cap. */
+export const briefedEmailIds = (brief: ComposedBrief): string[] =>
+  [...brief.happened, ...brief.handled, ...brief.decisions].flatMap(item =>
+    item.source?.kind === 'email' ? [item.source.emailId] : []
+  );
+
 /** A short push body: the decision count when any, else the model-written headline; the full brief is fetched with the user's credentials. */
 export function briefPushBody(brief: ComposedBrief): string {
   if (brief.decisions.length > 0) {
