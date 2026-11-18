@@ -139,6 +139,13 @@ describe('slackQuestProcessor getStaticOptions', () => {
     expect(getStaticOptions().workspaceDeniedTools).toBe(premiumWorkspaceDeniedTools);
     expect(getStaticOptions().workspaceSessionSettings).toBe(premiumWorkspaceSessionSettings);
   }, 120_000);
+
+  it('wires the moderation escalation notifier', async () => {
+    const { getStaticOptions } = await import('./slackQuestProcessor');
+    const { publishModerationEscalation } = await import('@bike4mind/server-utils/utils/chatCompletionDefaults');
+
+    expect(getStaticOptions().notifyModerationEscalation).toBe(publishModerationEscalation);
+  }, 120_000);
 });
 
 describe('slackQuestProcessor role-held admin permissions', () => {
