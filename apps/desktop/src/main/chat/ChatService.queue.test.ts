@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { SessionRevokedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
 import {
+  SERVER_UNREACHABLE_STOP,
   SESSION_EXPIRED_STOP,
   type BackgroundProcessInfo,
   type ChatQueueEvent,
@@ -170,6 +171,16 @@ describe('ChatService queued messages', () => {
     expect(post).toHaveBeenCalledTimes(1);
     expect(service.queuedMessages(id)).toEqual([]);
     expect(queueEvents.at(-1)?.returned?.reason).toBe('failed');
+  });
+
+  it('marks a turn that could not reach the server with its stop reason', async () => {
+    const { id } = await service.createSession();
+    post.mockRejectedValueOnce(Object.assign(new Error('connect'), { isAxiosError: true, code: 'ECONNREFUSED' }));
+    await service.send(id, 'first');
+    await waitForEvent('error');
+
+    expect(events.find(event => event.type === 'error')).toMatchObject({ stopReason: SERVER_UNREACHABLE_STOP });
+    expect((await service.getSession(id))?.messages.at(-1)).toMatchObject({ stopReason: SERVER_UNREACHABLE_STOP });
   });
 
   it('pauses a turn the session expired under, hands queued text back, and continues it after sign-in', async () => {

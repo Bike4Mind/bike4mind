@@ -198,7 +198,7 @@ import { devLog } from '../devlog/DevLogSink';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import {
   DEFAULT_COMPLETIONS_PATH,
-  ServerUnreachableError,
+  Bike4MindUnreachableError,
   streamCompletion,
   supportsPromptCache,
   withCacheBreakpoints,
@@ -4931,7 +4931,7 @@ export class ChatService {
         ? { stopReason: SESSION_EXPIRED_STOP }
         : err instanceof ServerCredentialsError
           ? { stopReason: SERVER_CREDENTIALS_STOP }
-          : err instanceof ServerUnreachableError
+          : err instanceof Bike4MindUnreachableError
             ? { stopReason: SERVER_UNREACHABLE_STOP }
             : {};
 

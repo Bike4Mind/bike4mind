@@ -441,7 +441,8 @@ describe('LocalLoopScheduler', () => {
   });
 
   it('puts back a run that could not reach the server, keeps the error streak, and holds the loop', async () => {
-    make({ errorStreak: 1 });
+    // At the limit, so an uncounted end that counted as a failure would also flip the loop to error.
+    make({ errorStreak: 3 });
     const t = ticket('a');
     scheduler.start();
     await settle();
@@ -456,7 +457,7 @@ describe('LocalLoopScheduler', () => {
     await settle();
     expect(store.run(first.id)).toMatchObject({ stopReason: 'requeued', reason: 'Bike4Mind server unreachable' });
     expect(store.ticket(t.id)).toMatchObject({ status: 'open', runCount: 0 });
-    expect(store.loop('loop-1')).toMatchObject({ status: 'live', errorStreak: 1 });
+    expect(store.loop('loop-1')).toMatchObject({ status: 'live', errorStreak: 3 });
     expect(alerts).toEqual([]);
     expect(scheduler.summary(store.loop('loop-1')!).idleReason).toBe('waiting: Bike4Mind server unreachable');
     await vi.advanceTimersByTimeAsync(60_000);
@@ -465,6 +466,47 @@ describe('LocalLoopScheduler', () => {
     await vi.advanceTimersByTimeAsync(SCHEDULER_MS.serverUnreachableBackoff);
     await settle();
     expect(chat.turns).toHaveLength(2);
+  });
+
+  it('doubles the hold while the server stays unreachable and resets it once a reply comes back', async () => {
+    make();
+    ticket('a');
+    scheduler.start();
+    await settle();
+    const unreachable = (turn: number) =>
+      scheduler.observe({
+        type: 'error',
+        sessionId: chat.turns[turn].sessionId,
+        messageId: 'm',
+        message: 'Cannot reach the Bike4Mind server.',
+        stopReason: SERVER_UNREACHABLE_STOP,
+      });
+    unreachable(0);
+    await settle();
+    await vi.advanceTimersByTimeAsync(SCHEDULER_MS.serverUnreachableBackoff);
+    await settle();
+    expect(chat.turns).toHaveLength(2);
+
+    unreachable(1);
+    await settle();
+    await vi.advanceTimersByTimeAsync(SCHEDULER_MS.serverUnreachableBackoff);
+    await settle();
+    expect(chat.turns).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(SCHEDULER_MS.serverUnreachableBackoff);
+    await settle();
+    expect(chat.turns).toHaveLength(3);
+
+    scheduler.observe({
+      type: 'usage',
+      sessionId: chat.turns[2].sessionId,
+      messageId: 'm1',
+      usage: { creditsUsed: 1 },
+    } as ChatStreamEvent);
+    unreachable(2);
+    await settle();
+    await vi.advanceTimersByTimeAsync(SCHEDULER_MS.serverUnreachableBackoff);
+    await settle();
+    expect(chat.turns).toHaveLength(4);
   });
 
   it('still blocks the ticket and counts the streak for an error from a reachable server', async () => {

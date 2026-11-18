@@ -447,11 +447,10 @@ export class RunNotFoundError extends Error {
 }
 
 /** No connection to the server opened at all, so the request never reached it and nothing was billed. */
-export class ServerUnreachableError extends Error {
-  readonly errorCode = 'server_unreachable';
-  constructor() {
-    super('Cannot reach the Bike4Mind server. Check the environment and your connection.');
-    this.name = 'ServerUnreachableError';
+export class Bike4MindUnreachableError extends Error {
+  constructor(options?: ErrorOptions) {
+    super('Cannot reach the Bike4Mind server. Check the environment and your connection.', options);
+    this.name = 'Bike4MindUnreachableError';
   }
 }
 
@@ -500,7 +499,7 @@ function toRequestError(error: unknown, body?: string): Error {
     if (status) {
       return new Error(body ? `${body} (status ${status})` : `The completion request failed with status ${status}.`);
     }
-    if (error.code && UNREACHABLE_CODES.has(error.code)) return new ServerUnreachableError();
+    if (error.code && UNREACHABLE_CODES.has(error.code)) return new Bike4MindUnreachableError({ cause: error });
     // Not retried here: the server does not cancel on disconnect, so the abandoned request may
     // still run and bill, and a silent resend could charge the turn twice.
     if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
