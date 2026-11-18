@@ -150,6 +150,14 @@ describe('GET /api/admin/dlq/messages', () => {
     expect((await peek(['support:read'])).messages[0].recommendation.action).not.toBe('discard');
   });
 
+  it('does not recommend discarding while another copy is in flight', async () => {
+    h.staleWhen = 'superseded-schedule';
+    h.receiveFromQueue.mockResolvedValue([scheduledRun('2026-01-02T03:00:00Z')]);
+    ruleResponses({ State: 'ENABLED', ScheduleExpression: 'rate(1 hour)' });
+    h.getQueueAttributes.mockResolvedValue({ approximateMessageCount: 1, approximateNotVisibleCount: 1 });
+    expect((await peek(['support:read'])).messages[0].recommendation.action).not.toBe('discard');
+  });
+
   it('does not recommend discarding when the schedule rule is disabled', async () => {
     h.staleWhen = 'superseded-schedule';
     h.receiveFromQueue.mockResolvedValue([scheduledRun('2026-01-02T03:00:00Z')]);

@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   handler: undefined as undefined | Handler,
   routeOptions: undefined as unknown,
   counts: {} as Record<string, number | Error>,
+  inFlight: {} as Record<string, number>,
   messages: {} as Record<string, Array<Record<string, unknown>> | Error>,
   browse: vi.fn(),
   findFailures: vi.fn(),
@@ -50,7 +51,10 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   getQueueAttributes: async (url: string) => {
     const count = h.counts[url.slice('dlq:'.length)];
     if (count instanceof Error) throw count;
-    return { approximateMessageCount: count ?? 0, approximateNotVisibleCount: 0 };
+    return {
+      approximateMessageCount: count ?? 0,
+      approximateNotVisibleCount: h.inFlight[url.slice('dlq:'.length)] ?? 0,
+    };
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/dlqMessages', () => ({
@@ -89,6 +93,7 @@ async function call() {
 beforeEach(() => {
   vi.clearAllMocks();
   h.counts = { billing: 2, files: 1, empty: 0, broken: 1 };
+  h.inFlight = {};
   h.messages = {
     billing: [sqsMessage('b-old', 100, '{"invoiceId":"in_1"}'), sqsMessage('b-new', 300)],
     files: [sqsMessage('f-mid', 200)],
@@ -155,6 +160,13 @@ describe('GET /api/admin/dlq/all-messages', () => {
       h.scheduleFacts.mock.calls.map(([entry, messages, depth]) => [entry.label, [messages.length, depth]])
     );
     expect(depthByQueue).toEqual({ billing: [2, 2], files: [1, -1] });
+  });
+
+  it('counts in-flight messages in the depth passed to schedule facts', async () => {
+    h.inFlight.billing = 1;
+    await call();
+    const billing = h.scheduleFacts.mock.calls.find(([entry]) => entry.label === 'billing');
+    expect(billing?.[2]).toBe(3);
   });
 
   it('still browses a queue whose count could not be read', async () => {

@@ -69,7 +69,7 @@ const handler = adminApi({
       ([logs]) => logs
     ),
     getQueueAttributes(dlqUrl).then(
-      attributes => attributes.approximateMessageCount,
+      attributes => attributes.approximateMessageCount + attributes.approximateNotVisibleCount,
       () => undefined
     ),
   ]);

@@ -97,10 +97,16 @@ const handler = adminApi({
     const settled = counts[index];
     return settled.status === 'fulfilled' && settled.value ? settled.value.approximateMessageCount : -1;
   };
+  const totalDepth = (index: number) => {
+    const settled = counts[index];
+    return settled.status === 'fulfilled' && settled.value
+      ? settled.value.approximateMessageCount + settled.value.approximateNotVisibleCount
+      : -1;
+  };
   // A queue whose count could not be read is browsed anyway rather than silently left out.
   const toBrowse: BrowsableQueue[] = registry.flatMap((entry, index) => {
     const dlqUrl = dlqUrls[index];
-    return dlqUrl !== null && approximateCount(index) !== 0 ? [{ entry, dlqUrl, depth: approximateCount(index) }] : [];
+    return dlqUrl !== null && approximateCount(index) !== 0 ? [{ entry, dlqUrl, depth: totalDepth(index) }] : [];
   });
 
   // Started before browsing and awaited per queue, so a slow lookup overlaps the SQS receives.
