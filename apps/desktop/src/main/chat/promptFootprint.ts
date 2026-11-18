@@ -11,7 +11,10 @@ export interface BlockFootprint {
   sha256: string;
 }
 
-/** Diagnostic serialization estimates, not provider token counts or evidence of a cache hit. */
+/**
+ * Diagnostic serialization estimates, not provider token counts or evidence of a cache hit.
+ * `bytes` is UTF-8 length; `estimatedTokens` is JSON characters (UTF-16 code units) / 3.
+ */
 export function promptFootprint(messages: readonly CompletionMessage[], tools: readonly WireTool[]): BlockFootprint[] {
   const schemas = (deferred: boolean) =>
     tools
