@@ -24,3 +24,4 @@ export * from './HeldCreditRewardModel';
 export * from './SpendAlertModel';
 export * from './BillingMismatchModel';
 export * from './UserLimitEventModel';
+export * from './spendExplorerPipelines';

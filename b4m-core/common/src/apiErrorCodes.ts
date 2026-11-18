@@ -121,6 +121,10 @@ export const API_ERROR_CODES = [
   'lyrics_too_long',
   /** A cancel that arrived after the provider started (and so billed) the song; returned with a 409. */
   'not_cancellable',
+  // Scene compositions (POST /api/v1/scene-compositions). Must stay in sync with SCENE_COMPOSITION_API_ERROR_CODES;
+  // the codes it shares with video and music are listed above.
+  /** A 404: an input file id is not one of the caller's readable files. */
+  'input_file_not_found',
   // Decisions (POST /api/v1/decisions); see DECISIONS_ERROR_CODES.
   /** The provider stayed overloaded or timed out through our one retry; the response carries Retry-After. */
   'provider_overloaded',

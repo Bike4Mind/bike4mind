@@ -50,6 +50,7 @@ export * from './AnalyticsTypes';
 export * from './FavoriteTypes';
 export * from './CreditTransactionTypes';
 export * from './UsageEventTypes';
+export * from './SpendExplorerTypes';
 export * from './UsagePatternSignalTypes';
 export * from './ModelPriceTypes';
 export * from './ModelPriceSnapshot';

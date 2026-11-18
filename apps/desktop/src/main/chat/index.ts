@@ -1,4 +1,6 @@
 import { registerOrchestrationIpc } from './orchestrationIpc';
+import { createStudioDiagnostics } from './studio/StudioDiagnostics';
+import { registerStudio } from './studio/registerStudio';
 import { randomUUID } from 'node:crypto';
 import { copyFile, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
@@ -638,6 +640,11 @@ export function registerChat(
   const broadcast = (event: ChatStreamEvent) => {
     send(IPC_CHANNELS.chatStreamEvent, event);
     if (event.type === 'tool-end') pullRequests.observeToolEnd(event.sessionId, event.call);
+    if (event.type === 'tool-end' && event.call.media?.length) {
+      void studioIntegration
+        .indexChatSession(event.sessionId)
+        .catch(() => createStudioDiagnostics(logger)('asset-index', { sessionId: event.sessionId }));
+    }
   };
 
   const videoJobs = new VideoJobScheduler({
@@ -650,7 +657,13 @@ export function registerChat(
         ? { client: new MediaApiClient(api), scope: `${scope.environmentUrl}|${scope.accountId}` }
         : null;
     },
-    emit: (sessionId, job) => broadcast({ type: 'video-job', sessionId, job }),
+    emit: (sessionId, job) => {
+      broadcast({ type: 'video-job', sessionId, job });
+      if (job.state === 'succeeded' && job.media)
+        void studioIntegration
+          .indexChatSession(sessionId, true)
+          .catch(() => createStudioDiagnostics(logger)('asset-index', { sessionId }));
+    },
     logger,
   });
 
@@ -825,6 +838,22 @@ export function registerChat(
     sessionClosed: hooks.sessionClosed,
     releaseSessionTerminals: hooks.releaseSessionTerminals,
   });
+
+  const studioIntegration = registerStudio({
+    logger,
+    ipc: ipcMain,
+    directory: userData,
+    sessions: store,
+    service,
+    attachments,
+    media,
+    models,
+    auth,
+    videoJobs: sessionId => videoJobs.list(sessionId),
+    changed: event => send(IPC_CHANNELS.studioChanged, event),
+  });
+  service.studioDisposed = studioIntegration.dispose;
+  service.studioWithSessionDeletion = studioIntegration.withSessionDeletion;
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: unknown) =>
     service.listModels(force === 'local' ? 'local' : force === true)

@@ -553,4 +553,20 @@ export const USERS_AND_BILLING_GUIDE: readonly AdminGuideEntry[] = [
       'promotional credits',
     ],
   },
+  {
+    id: 'spend-explorer',
+    title: 'Spend explorer',
+    summary:
+      'Recorded AI provider cost per request over any date range, split by provider, account type, model, feature, source or funding, with spikes marked against a rolling median and a drill-down to the accounts behind any day or hour.',
+    views: ['admin.spend_explorer'],
+    settings: [],
+    howTo: [
+      'Pick a range (7d, 14d, 30d, 90d or Custom); ranges of 3 days or less are shown per hour. All times are UTC.',
+      'Use "Split by" to restack the bars, and tick "Previous period" to compare with the window before.',
+      'Click a bar to list the accounts that drove it; each row is the user who ran the calls, with who paid (the user or their org) under "Billed to".',
+      'Click an account row for its spend by model; "Copy summary for Slack" copies a one-line summary of the range.',
+      'Tag an organization as internal, partner or customer in its Account segment card, or mark a user as partner from their profile, to split spend by account type.',
+    ],
+    keywords: ['spend', 'ai cost', 'cost spike', 'provider cost', 'top spenders', 'cogs', 'account type', 'partner'],
+  },
 ];

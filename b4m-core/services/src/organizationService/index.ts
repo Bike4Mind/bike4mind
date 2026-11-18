@@ -3,7 +3,7 @@ import type { SearchParameters } from './search';
 import { get } from './get';
 import { addMember } from './addMember';
 import { applyPartnerRuleMembership } from './applyPartnerRuleMembership';
-import getUsers from './getUsers';
+import getUsers, { getRoster } from './getUsers';
 import { create } from './create';
 import { update } from './update';
 import { deleteOrganization, deleteSchema } from './delete';
@@ -53,6 +53,7 @@ export {
   setMemberCreditOverride,
   applyPartnerRuleMembership,
   getUsers,
+  getRoster,
   create,
   update,
   deleteOrganization,

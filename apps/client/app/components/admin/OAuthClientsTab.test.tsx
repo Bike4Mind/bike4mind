@@ -5,6 +5,9 @@ import { toast } from 'sonner';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { AdminTab } from './adminSidebarConfig';
+import { useCreditAnalysisStore } from './CreditAnalysis/store';
+import { useAdminModal } from './useAdminModal';
 
 const { api, copy } = vi.hoisted(() => ({
   api: {
@@ -57,7 +60,7 @@ const client = {
 const SECRET = 'shown-once-secret';
 
 // Edit and rotate live in each row's "..." menu, which renders its items only while open.
-const openRowAction = async (action: 'edit' | 'rotate', clientId = client.clientId) => {
+const openRowAction = async (action: 'edit' | 'rotate' | 'usage', clientId = client.clientId) => {
   fireEvent.click(await screen.findByTestId(`oauth-client-actions-${clientId}`));
   fireEvent.click(await screen.findByTestId(`oauth-client-${action}-${clientId}`));
 };
@@ -236,6 +239,17 @@ describe('OAuthClientsTab', () => {
     pickReason('deactivate');
     fireEvent.click(screen.getByTestId('oauth-client-deactivate-confirm-btn'));
     await waitFor(() => expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', { isActive: false }));
+  });
+
+  it('opens the side apps view for the client from the row menu', async () => {
+    api.fetchOAuthClients.mockResolvedValue([client]);
+    renderTab();
+    await openRowAction('usage');
+    expect(useCreditAnalysisStore.getState()).toMatchObject({
+      activeTab: 'side-apps',
+      sideAppClientId: client.clientId,
+    });
+    expect(useAdminModal.getState().activeTab).toBe(AdminTab.CreditAnalytics);
   });
 
   it('edits redirect URIs', async () => {

@@ -2,12 +2,12 @@ import Box from '@mui/joy/Box';
 import Chip from '@mui/joy/Chip';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
-import type { ColorPaletteProp } from '@mui/joy/styles';
 import { AGENT_STATE_LABEL, type AgentState } from '@shared/agentState';
 import type { ViewAction, ViewSnapshot } from '@shared/viewSnapshot';
+import { stateJoyColor } from './statePalette';
 
 /*
- * Built on the view contract alone: this file may import only @shared/viewSnapshot, @shared/agentState,
+ * Built on the view contract alone: this file may import only @shared/viewSnapshot, @shared/agentState, ./statePalette,
  * React and the UI kit (TileWall.test.tsx holds it to that), so it is the proof that a view needs nothing
  * from the stage. snapshotView.tsx hosts it.
  */
@@ -20,15 +20,6 @@ const TILE_RANK: Record<AgentState, number> = {
   done: 3,
   stopped: 4,
   idle: 4,
-};
-
-const STATE_COLOR: Record<AgentState, ColorPaletteProp> = {
-  'needs-you': 'warning',
-  working: 'primary',
-  failed: 'danger',
-  done: 'success',
-  stopped: 'neutral',
-  idle: 'neutral',
 };
 
 const DIMMED: ReadonlySet<AgentState> = new Set(['stopped', 'idle']);
@@ -115,7 +106,7 @@ export function TileWall({ snapshot, onAction }: { snapshot: ViewSnapshot; onAct
       }}
     >
       {tiles(snapshot).map(tile => {
-        const color = STATE_COLOR[tile.state];
+        const color = stateJoyColor(tile.state);
         const asking = tile.state === 'needs-you';
         return (
           <Box

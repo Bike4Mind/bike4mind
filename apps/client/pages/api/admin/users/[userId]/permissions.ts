@@ -136,10 +136,10 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:m
       // A dangling role grants nothing, and must be distinguishable from a missing historical snapshot.
       const removedRolePermissions = storedRoleIds
         .filter(id => !nextRoleIds.includes(id))
-        .map(roleId => ({
-          roleId,
-          permissions: storedRoles.find(role => role.id === roleId)?.permissions ?? [],
-        }));
+        .map(roleId => {
+          const role = storedRoles.find(stored => stored.id === roleId);
+          return { roleId, permissions: role?.permissions ?? [], ...(role ? { roleName: role.name } : {}) };
+        });
       const nameOf = (id: string) => storedRoleNames.get(id) ?? nextRoles.find(role => role.id === id)?.name ?? id;
       const changes = {
         granted: after.filter(id => !before.includes(id)),
