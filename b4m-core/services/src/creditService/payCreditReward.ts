@@ -297,6 +297,8 @@ export type ReleaseHeldCreditRewardsResult = {
 export const REFERRAL_SUBSCRIPTION_REWARD_TTL_DAYS = 90;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// Rows held before expiresAt was stored fall back to heldAt + TTL, slightly later than the createdAt + TTL of new
+// rows; acceptable for that backlog.
 const rewardExpired = (reward: HeldCreditRewardRow, now: Date): boolean => {
   const expiresAt =
     reward.expiresAt ??
