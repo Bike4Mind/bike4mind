@@ -133,6 +133,7 @@ function buildDb() {
     creditTransactions: {} as never,
     users: users as never,
     usageEvents: { record: vi.fn().mockResolvedValue(undefined) } as never,
+    spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) } as never,
   };
   return { db, users, user };
 }
