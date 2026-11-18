@@ -34,11 +34,16 @@ final class BriefScheduleViewModelTests: XCTestCase {
     let vm = model(FakeBriefScheduleAPI())
     await vm.load()
     XCTAssertTrue(vm.isLoaded)
-    XCTAssertEqual(vm.schedule, BriefSchedule(enabled: false, timeOfDay: "08:00", days: [1, 2, 3, 4, 5], timeZone: "Asia/Kolkata"))
+    XCTAssertEqual(
+      vm.schedule,
+      BriefSchedule(enabled: false, timeOfDay: "08:00", days: [1, 2, 3, 4, 5], timeZone: "Asia/Kolkata")
+    )
   }
 
   func testEverySaveStampsTheDeviceTimeZone() async {
-    let api = FakeBriefScheduleAPI(stored: BriefSchedule(enabled: false, timeOfDay: "08:00", days: [1], timeZone: "Europe/Paris"))
+    let api = FakeBriefScheduleAPI(
+      stored: BriefSchedule(enabled: false, timeOfDay: "08:00", days: [1], timeZone: "Europe/Paris")
+    )
     let vm = model(api, zone: "America/New_York")
     await vm.load()
     await vm.setEnabled(true)
@@ -90,7 +95,9 @@ final class BriefScheduleViewModelTests: XCTestCase {
   }
 
   func testTheLastDayCannotBeRemoved() async {
-    let api = FakeBriefScheduleAPI(stored: BriefSchedule(enabled: true, timeOfDay: "08:00", days: [3], timeZone: "Asia/Kolkata"))
+    let api = FakeBriefScheduleAPI(
+      stored: BriefSchedule(enabled: true, timeOfDay: "08:00", days: [3], timeZone: "Asia/Kolkata")
+    )
     let vm = model(api)
     await vm.load()
     await vm.toggleDay(3)
