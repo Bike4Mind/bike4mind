@@ -74,7 +74,9 @@ import {
   buildApiKeyTable,
   getLlmByModel,
   getAvailableModels,
+  geminiThinkingOutputCap,
   reasonsWithinOutputBudget,
+  usesGeminiThinkingOutputCap,
   RUNTIME_DISCOVERED_BACKENDS,
   resolveOutputMaxTokens,
   type ICompletionOptions,
@@ -1106,16 +1108,24 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
     const minimumOutputTokens = Math.min(MIN_AFFORDABLE_OUTPUT_TOKENS, maxTokens);
     const toolSearch = completionsSupportsToolSearch(modelInfo);
-    const roundClaimCredits = (inputTokens: number) =>
-      toRunClaimCredits(
+    // Priced at what the adapter sends, as completionMeter holds: a Gemini thinking model gets its thinking
+    // reserve on top of maxTokens, and a claim sized to maxTokens alone would clamp that reserve away.
+    // Resolved on first use, which only a budgeted run reaches.
+    let claimOutputTokens: number | undefined;
+    const roundClaimCredits = (inputTokens: number) => {
+      claimOutputTokens ??= usesGeminiThinkingOutputCap(modelInfo)
+        ? geminiThinkingOutputCap(modelInfo, maxTokens).maxOutputTokens
+        : maxTokens;
+      return toRunClaimCredits(
         roundCreditRange({
           modelInfo: chargedModelInfo!,
           inputUsd: conservativeRoundInputUsd(chargedModelInfo!, inputTokens, cacheTtl),
           inputTokens,
           minimumOutputTokens,
-          maximumOutputTokens: maxTokens,
+          maximumOutputTokens: claimOutputTokens,
         })
       );
+    };
     // A run budget claim is the most the first round can cost, priced like the cap below, so a run's
     // concurrent completions can never together be admitted past its budget. Tool rounds top it up.
     const runClaim: CompletionRunBudgetClaim | undefined = runLineage && {

@@ -18,9 +18,17 @@ vi.mock('./creditService', async importOriginal => ({
   subtractCredits: vi.fn().mockResolvedValue(undefined),
 }));
 const complete = vi.hoisted(() => vi.fn());
+const usesGeminiThinkingOutputCap = vi.hoisted(() => vi.fn(() => false));
+// Mirrors geminiBackend: a thinking model is sent its caller cap plus a fixed thinking reserve.
+const GEMINI_THINKING_RESERVE = 16_000;
 vi.mock('@bike4mind/llm-adapters', () => ({
   buildApiKeyTable: (keys: object) => keys,
   reasonsWithinOutputBudget: vi.fn(() => false),
+  usesGeminiThinkingOutputCap,
+  geminiThinkingOutputCap: (_model: unknown, callerCap: number) => ({
+    maxOutputTokens: callerCap + GEMINI_THINKING_RESERVE,
+    callerCapBinds: true,
+  }),
   isAdaptiveThinkingByDefault: vi.fn(() => false),
   resolveOutputMaxTokens: vi.fn(
     ({ requested, fallback }: { requested?: number; fallback: number }) => requested ?? fallback
@@ -331,6 +339,15 @@ describe('executeCompletion - shared run budget', () => {
 
     expect(wallet.claims).toHaveLength(0);
     expect(complete.mock.calls[0][2].outputTokenCeiling).toBeGreaterThanOrEqual(MAX_TOKENS);
+  });
+
+  it('claims room for a Gemini thinking reserve, so a run with room does not clamp the thinking away', async () => {
+    usesGeminiThinkingOutputCap.mockReturnValueOnce(true);
+    const wallet = budgetedRun(1_000_000);
+
+    await send(buildDb().db, wallet.holds(), attribution('root'));
+
+    expect(complete.mock.calls[0][2].outputTokenCeiling).toBeGreaterThanOrEqual(MAX_TOKENS + GEMINI_THINKING_RESERVE);
   });
 });
 
