@@ -89,7 +89,7 @@ export const ACCESS_REVIEW_CSV_COLUMNS = [
 
 export const ACCESS_REVIEW_ROLE_CSV_COLUMNS = ['roleId', 'role', 'permissions', 'members'] as const;
 
-const heldRoleCell = (roles: AccessReviewAdmin['roles']) =>
+const roleCell = (roles: readonly { id: string; name: string | null }[]) =>
   roles.map(role => role.name ?? `deleted-role:${role.id}`).join(';');
 
 const permissionSourcesCell = (sources: AdminPermissionSource[]) =>
@@ -138,7 +138,7 @@ export function toAccessReviewCsvRows(
       row.dormant,
       ...decisionCells(row.decision),
       row.directPermissions.join(';'),
-      heldRoleCell(row.roles),
+      roleCell(row.roles),
       permissionSourcesCell(row.permissionSources),
     ]),
     ...(record?.decisions ?? [])
@@ -158,7 +158,7 @@ export function toAccessReviewCsvRows(
         '',
         ...decisionCells(decision),
         '',
-        (decision.roles ?? []).map(role => role.name).join(';'),
+        roleCell(decision.roles ?? []),
         '',
       ]),
     ...(roles.length > 0

@@ -192,7 +192,7 @@ describe('AccessReviewTab', () => {
       }),
     ]);
     renderWithTheme(<AccessReviewTab />);
-    expect(within(rowOf(DELEGATE)).getByTestId('admin-access-review-deleted-role-chip')).toHaveTextContent(
+    expect(within(rowOf(DELEGATE)).getByTestId('admin-access-review-deleted-role-chip-dead')).toHaveTextContent(
       'Deleted role'
     );
     expect(within(rowOf(DELEGATE)).queryByTestId('admin-access-review-permission-sources')).toBeNull();
@@ -340,7 +340,7 @@ describe('AccessReviewTab', () => {
             email: 'c@example.com',
             fullAdmin: false,
             permissions: ['users:read'],
-            roles: [SUPPORT],
+            roles: [SUPPORT, { id: 'gone', name: null }],
             decision: 'revoked',
             reviewer: { userId: ME, name: 'Me' },
             decidedAt: '2026-11-02T00:00:00.000Z',
@@ -352,7 +352,7 @@ describe('AccessReviewTab', () => {
     expect(within(rowOf(DELEGATE)).getByText('Revoked')).toBeInTheDocument();
     expect(within(rowOf(DELEGATE)).queryByTestId('admin-access-review-row-actions')).toBeNull();
     expect(within(rowOf(DELEGATE)).getAllByText('\u2014')).toHaveLength(3);
-    expect(within(rowOf(DELEGATE)).getByText('via roles: Support agent')).toBeInTheDocument();
+    expect(within(rowOf(DELEGATE)).getByText('via roles: Support agent, a deleted role')).toBeInTheDocument();
   });
 
   it('is not openable by a delegate holding settings:manage', () => {

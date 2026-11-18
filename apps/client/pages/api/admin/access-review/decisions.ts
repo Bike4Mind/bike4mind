@@ -53,6 +53,7 @@ const RemovedRolePermissionsSchema = z.object({
   removedRolePermissions: z.array(
     z.object({ roleId: z.string().min(1), permissions: z.array(z.string()), roleName: z.string().optional() })
   ),
+  rolesRemoved: z.array(z.string()).optional(),
 });
 
 type Removal = { entry: AccessChangeEntry; fullAdmin: boolean; permissions: string[]; roleIds: string[] };
@@ -175,17 +176,26 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'settings:
               'The removal audit has no verified role-permission snapshot. Historical role access cannot be confirmed.'
             );
           }
-          return snapshot.data.removedRolePermissions.filter(role => removal.roleIds.includes(role.roleId));
+          const { removedRolePermissions, rolesRemoved } = snapshot.data;
+          // Audits written before the snapshot carried names: permissions.ts builds rolesRemoved from the same
+          // filtered id list, so it is index-aligned, and holds the bare id for a role already gone at removal.
+          const aligned = rolesRemoved?.length === removedRolePermissions.length ? rolesRemoved : undefined;
+          return removedRolePermissions
+            .map((role, index) => {
+              const legacyName = aligned?.[index];
+              const name = role.roleName ?? (legacyName && legacyName !== role.roleId ? legacyName : null);
+              return { ...role, name, nameKnown: role.roleName !== undefined || aligned !== undefined };
+            })
+            .filter(role => removal.roleIds.includes(role.roleId));
         });
-        const unnamed = removedRoles.filter(role => !role.roleName).map(role => role.roleId);
-        // Audits written before the snapshot carried names fall back to the role's current name, then its id.
+        const unnamed = removedRoles.filter(role => !role.nameKnown).map(role => role.roleId);
         const currentNames = new Map(
           unnamed.length > 0 ? (await adminRoleRepository.findByIds(unnamed)).map(role => [role.id, role.name]) : []
         );
         const roleRefs = new Map(
           removedRoles.map(role => [
             role.roleId,
-            { id: role.roleId, name: role.roleName ?? currentNames.get(role.roleId) ?? role.roleId },
+            { id: role.roleId, name: role.nameKnown ? role.name : (currentNames.get(role.roleId) ?? null) },
           ])
         );
         entry = {

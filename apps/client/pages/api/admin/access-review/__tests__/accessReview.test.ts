@@ -450,24 +450,25 @@ describe('POST decisions', () => {
   });
 
   it.each([
-    [
-      'its current name',
-      [{ id: '660000000000000000000001', name: 'Billing', permissions: ['users:moderate'] }],
-      'Billing',
-    ],
-    ['its id once the role is gone', [], '660000000000000000000001'],
-  ])('names a removed role from an audit without a role name by %s', async (_case, current, name) => {
+    ['its removal-time name on the same audit', { rolesRemoved: ['Billing'] }, null, 'Billing'],
+    ['null when it was already gone at removal', { rolesRemoved: ['660000000000000000000001'] }, null, null],
+    ['its current name without a removal-time name', {}, 'Billing', 'Billing'],
+    ['null once the role is gone without a removal-time name', {}, undefined, null],
+  ])('names a removed role from an audit without a role name by %s', async (_case, extra, current, name) => {
     const roleId = '660000000000000000000001';
     target({ isAdmin: false, adminPermissions: [], adminRoleIds: [] });
     auditRows([
       {
         ...permissionsChange('audit-legacy', [{ field: 'adminRoleIds', before: [roleId], after: [] }]),
-        details: { removedRolePermissions: [{ roleId, permissions: ['credits:adjust'] }] },
+        details: { removedRolePermissions: [{ roleId, permissions: ['credits:adjust'] }], ...extra },
       },
     ]);
-    mocks.findRoles.mockResolvedValue(current);
+    mocks.findRoles.mockResolvedValue(
+      current === undefined ? [] : [{ id: roleId, name: current ?? 'Renamed', permissions: ['users:moderate'] }]
+    );
     await call(decisions, 'POST', { body: { userId: OTHER, decision: 'revoked' } });
-    expect(mocks.findRoles).toHaveBeenCalledWith([roleId]);
+    if ('rolesRemoved' in extra) expect(mocks.findRoles).not.toHaveBeenCalled();
+    else expect(mocks.findRoles).toHaveBeenCalledWith([roleId]);
     expect(mocks.recordDecision).toHaveBeenCalledWith(
       QUARTER,
       90,
@@ -636,7 +637,10 @@ describe('GET export', () => {
             email: 'gone@example.com',
             fullAdmin: false,
             permissions: ['credits:adjust'],
-            roles: [{ id: '660000000000000000000004', name: 'Billing' }],
+            roles: [
+              { id: '660000000000000000000004', name: 'Billing' },
+              { id: '660000000000000000000005', name: null },
+            ],
             decision: 'revoked',
             reviewer: { userId: REVIEWER, name: 'Rev' },
             decidedAt: NOW,
@@ -657,7 +661,7 @@ describe('GET export', () => {
       /,"support:read","'=Support, ""ops"";deleted-role:660000000000000000000002","support:read=direct \+ =Support, ""ops"""$/
     );
     expect(rows[1]).toContain('"revoked"');
-    expect(rows[1]).toMatch(/,"","Billing",""$/);
+    expect(rows[1]).toMatch(/,"","Billing;deleted-role:660000000000000000000005",""$/);
     expect(rows[2]).toBe('');
     expect(rows[3]).toBe('"roleId","role","permissions","members"');
     expect(rows[4]).toBe(`"660000000000000000000001","'=Support, ""ops""","support:read","agent"`);

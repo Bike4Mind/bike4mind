@@ -19,8 +19,11 @@ export type AccessReviewDecision = {
   fullAdmin: boolean;
   /** The admin's access when the decision was made, so a revoked row still shows what was removed. */
   permissions: string[];
-  /** The roles held (confirmed) or removed (revoked) at decision time; absent on records that predate role snapshots. */
-  roles?: { id: string; name: string }[];
+  /**
+   * The roles held (confirmed) or removed (revoked) at decision time; absent on records that predate role snapshots.
+   * `name` is null for a role that no longer existed when it was removed.
+   */
+  roles?: { id: string; name: string | null }[];
   decision: AccessReviewDecisionValue;
   reviewer: AccessReviewReviewer;
   decidedAt: Date;

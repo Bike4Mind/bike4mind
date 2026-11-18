@@ -71,7 +71,7 @@ function PermissionsCell({ row }: { row: ReviewRow }) {
       </Stack>
     );
   }
-  const viaRoles = (row.revoked?.roles ?? []).map(role => role.name);
+  const viaRoles = (row.revoked?.roles ?? []).map(role => role.name ?? 'a deleted role');
   return (
     <Stack>
       <Typography level="body-sm">{row.revoked?.permissions.join(', ') || '-'}</Typography>
@@ -88,7 +88,12 @@ const rolesCell = (row: ReviewRow): ReactNode => {
       {row.live.roles.map(role =>
         role.deleted ? (
           <Tooltip key={role.id} title={`This account still lists a deleted role (${role.id}). It grants nothing.`}>
-            <Chip size="sm" color="warning" variant="soft" data-testid="admin-access-review-deleted-role-chip">
+            <Chip
+              size="sm"
+              color="warning"
+              variant="soft"
+              data-testid={`admin-access-review-deleted-role-chip-${role.id}`}
+            >
               Deleted role
             </Chip>
           </Tooltip>

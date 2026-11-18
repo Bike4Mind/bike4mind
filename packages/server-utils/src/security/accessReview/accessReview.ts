@@ -307,7 +307,7 @@ export function formatAccessReviewMarkdown(snapshot: AccessReviewSnapshot, basel
       roles.map(role => [
         role.name,
         role.permissions.join(', '),
-        role.members.map(member => member.username ?? member.email ?? member.userId).join(', ') || null,
+        role.members.map(member => member.email ?? member.username ?? member.userId).join(', ') || null,
       ])
     ),
     '',

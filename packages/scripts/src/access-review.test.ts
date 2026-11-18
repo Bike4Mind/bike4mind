@@ -115,7 +115,7 @@ describe('access-review entry point', () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining('# Access review 2027-Q1'));
     expect(log).toHaveBeenCalledWith(expect.stringContaining('## Admin roles (1)\n\n| Role | Permissions | Members |'));
     expect(log).toHaveBeenCalledWith(
-      expect.stringContaining('| Support agent | support:read, users:moderate | agent |')
+      expect.stringContaining('| Support agent | support:read, users:moderate | agent@example.org |')
     );
     expect(mocks.writeAccessReviewFile).not.toHaveBeenCalled();
   });

@@ -14,7 +14,7 @@ The reminder needs the LiveOps Slack webhook admin setting. Without it the cron 
 
 `report:access-review` reads the app database without writing to it. It never reads API key secrets, hashes, digests or prefixes.
 
-- **Admin accounts:** every user with the full admin flag or any delegated admin permission, with account status (active, banned, deleted), the admin roles they hold, where each permission comes from (a direct grant, one or more roles, or both), last activity, and per-account counts of active sign-in sessions, trusted devices, passkeys, OAuth refresh tokens, paired bridge devices and active API keys.
+- **Admin accounts:** every user with the full admin flag, any direct delegated admin permission or any admin role (including a role that has since been deleted), with account status (active, banned, deleted), the admin roles they hold, where each permission comes from (a direct grant, one or more roles, or both), last activity, and per-account counts of active sign-in sessions, trusted devices, passkeys, OAuth refresh tokens, paired bridge devices and active API keys.
 - **Admin roles:** every admin role defined, with its permissions and the admin accounts holding it, including roles with no members. A role an account still lists after the role was deleted shows as a deleted role and grants nothing.
 - **Privileged API keys:** active, unexpired keys owned by an admin account or carrying the `admin:*` scope, with owner, scopes, created, last used and expiry. Pass `--all-keys` to list every active key.
 - **Support access and impersonation:** live support access grants and live impersonation sessions, with the session ID, the admin and the target account.

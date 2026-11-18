@@ -76,7 +76,10 @@ describe('AdminAccessReviewRepository', () => {
   it('round-trips the decision role snapshot and leaves it absent on a decision without one', async () => {
     const withRoles = new Types.ObjectId().toHexString();
     const without = new Types.ObjectId().toHexString();
-    const roles = [{ id: new Types.ObjectId().toHexString(), name: 'Support agent' }];
+    const roles = [
+      { id: new Types.ObjectId().toHexString(), name: 'Support agent' },
+      { id: new Types.ObjectId().toHexString(), name: null },
+    ];
     await adminAccessReviewRepository.recordDecision('2027-Q3', 90, ADA, {
       ...decisionFor(withRoles, 'confirmed'),
       roles,

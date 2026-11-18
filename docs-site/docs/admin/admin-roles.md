@@ -48,7 +48,7 @@ The quarterly access review (**Admin > Access review**) shows where each admin's
 - An **Admin roles** table lists every role with its permissions and members, including roles with no members.
 - The CSV export adds `directPermissions`, `roles` and `permissionSources` columns to each admin row. After a blank row, a role section lists each role with its permissions and members. A past quarter's export leaves out the role section, because today's roles would not describe that quarter.
 
-Revoking an admin's access from the review removes their direct permissions and every role they hold, and the review record keeps the names of the roles removed.
+Revoking an admin's access from the review removes their direct permissions and every role they hold, and the review record keeps the names the roles had when they were removed. A role that was already deleted at that point is recorded as a deleted role.
 
 ## Adding a template (contributors and self-hosters)
 

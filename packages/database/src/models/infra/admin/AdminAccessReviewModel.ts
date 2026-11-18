@@ -38,7 +38,7 @@ const DecisionSchema = new Schema(
     permissions: { type: [String], default: [] },
     roles: {
       type: [
-        new Schema({ id: { type: String, required: true }, name: { type: String, required: true } }, { _id: false }),
+        new Schema({ id: { type: String, required: true }, name: { type: String, default: null } }, { _id: false }),
       ],
       default: undefined,
     },
@@ -80,7 +80,7 @@ const toDecision = (decision: AccessReviewDecision): AccessReviewDecision => ({
   email: decision.email ?? null,
   fullAdmin: decision.fullAdmin,
   permissions: [...(decision.permissions ?? [])],
-  ...(decision.roles ? { roles: decision.roles.map(({ id, name }) => ({ id, name })) } : {}),
+  ...(decision.roles ? { roles: decision.roles.map(({ id, name }) => ({ id, name: name ?? null })) } : {}),
   decision: decision.decision,
   reviewer: toReviewer(decision.reviewer),
   decidedAt: decision.decidedAt,
