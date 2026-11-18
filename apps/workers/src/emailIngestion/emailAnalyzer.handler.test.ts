@@ -8,7 +8,7 @@ const m = vi.hoisted(() => ({
   findEmail: vi.fn(),
   updateEmail: vi.fn(),
   existsForEmail: vi.fn(),
-  upsertForEmail: vi.fn(),
+  storeForLiveEmail: vi.fn(),
   complete: vi.fn(),
   analyzeEmail: vi.fn(),
   sendEmail: vi.fn(),
@@ -35,7 +35,7 @@ vi.mock('@bike4mind/database', () => ({
   ingestedEmailRepository: { findById: m.findEmail, update: m.updateEmail },
   User: { findById: vi.fn().mockResolvedValue({ id: 'user-1' }) },
   IngestedEmailModel: { countDocuments: vi.fn().mockResolvedValue(0) },
-  emailTriageItemRepository: { existsForEmail: m.existsForEmail, upsertForEmail: m.upsertForEmail },
+  emailTriageItemRepository: { existsForEmail: m.existsForEmail, storeForLiveEmail: m.storeForLiveEmail },
   assistantBriefRepository: { removeEmailSourcedItems: vi.fn() },
 }));
 
@@ -95,7 +95,7 @@ beforeEach(() => {
   m.settings = { EnableEmailAnalysis: true, EnableEmailTriage: true, EmailAnalysisModel: MODEL };
   m.findEmail.mockResolvedValue(storedEmail());
   m.existsForEmail.mockResolvedValue(false);
-  m.upsertForEmail.mockResolvedValue({ created: true });
+  m.storeForLiveEmail.mockResolvedValue({ status: 'created' as const });
   m.analyzeEmail.mockResolvedValue(analysis);
   m.complete.mockImplementation(async (_model, _messages, _options, callback) => {
     await callback([triageReply], { inputTokens: 50, outputTokens: 10 });
@@ -109,7 +109,7 @@ describe('emailAnalyzer dispatch with triage', () => {
     expect(m.updateEmail).toHaveBeenCalledOnce();
     expect(m.complete).toHaveBeenCalledOnce();
     expect(m.complete.mock.calls[0][2]).not.toHaveProperty('tools');
-    expect(m.upsertForEmail).toHaveBeenCalledWith(
+    expect(m.storeForLiveEmail).toHaveBeenCalledWith(
       expect.objectContaining({
         emailId: 'email-1',
         kind: 'decision',
@@ -125,7 +125,7 @@ describe('emailAnalyzer dispatch with triage', () => {
     await run();
 
     expect(m.complete).not.toHaveBeenCalled();
-    expect(m.upsertForEmail).not.toHaveBeenCalled();
+    expect(m.storeForLiveEmail).not.toHaveBeenCalled();
   });
 
   it('skips the triage call when an item already exists for the email', async () => {
@@ -133,7 +133,7 @@ describe('emailAnalyzer dispatch with triage', () => {
     await run();
 
     expect(m.complete).not.toHaveBeenCalled();
-    expect(m.upsertForEmail).not.toHaveBeenCalled();
+    expect(m.storeForLiveEmail).not.toHaveBeenCalled();
   });
 
   it('keeps the analysis and resolves when triage fails', async () => {
@@ -141,7 +141,7 @@ describe('emailAnalyzer dispatch with triage', () => {
     await expect(run()).resolves.toBeUndefined();
 
     expect(m.updateEmail).toHaveBeenCalledOnce();
-    expect(m.upsertForEmail).not.toHaveBeenCalled();
+    expect(m.storeForLiveEmail).not.toHaveBeenCalled();
     expect(m.sendEmail).not.toHaveBeenCalled();
   });
 

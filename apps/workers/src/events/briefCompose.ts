@@ -1,4 +1,5 @@
 import { withEventContext } from '@workers/utils/eventContext';
+import { loadPendingBriefEmails } from './loadPendingBriefEmails';
 import { BriefEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   agentExecutionRepository,
@@ -40,7 +41,6 @@ import {
 const APPROVAL_TTL_MS = 15 * 60 * 1000; // Mirrors the pending-action lifecycle (pendingActions.contract.ts).
 const MAX_RUNS = 30;
 const MAX_APPROVALS = 12;
-const MAX_EMAIL_ITEMS = 24;
 const MODEL_MAX_TOKENS = 1500;
 const APPROVAL_SUMMARY_LIMIT = 600;
 
@@ -152,7 +152,7 @@ async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefAct
     MAX_APPROVALS
   );
   // Pending rather than windowed: an item a failed brief or a section cap left out is carried to the next brief.
-  const emails = await emailTriageItemRepository.listPending(brief.userId, brief.periodEnd, MAX_EMAIL_ITEMS);
+  const emails = await loadPendingBriefEmails(brief.userId, brief.periodEnd);
 
   return {
     periodStart: brief.periodStart,

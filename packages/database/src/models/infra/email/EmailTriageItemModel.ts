@@ -1,5 +1,8 @@
 import mongoose, { Schema } from 'mongoose';
 import { BRIEF_LIMITS, type BriefDraftReply } from '@bike4mind/common';
+import { withTransaction } from '@bike4mind/db-core';
+import { lockRetentionCreator } from '../../../utils/organizationRetention';
+import { IngestedEmailModel } from './IngestedEmailModel';
 
 export const EMAIL_TRIAGE_KINDS = ['decision', 'handled', 'fyi'] as const;
 export type EmailTriageKind = (typeof EMAIL_TRIAGE_KINDS)[number];
@@ -24,6 +27,8 @@ export type IEmailTriageItem = {
 };
 
 export type EmailTriageItemInput = Omit<IEmailTriageItem, '_id' | 'briefedAt' | 'createdAt' | 'updatedAt'>;
+
+type LiveEmailTriageResult = { status: 'created' } | { status: 'duplicate' } | { status: 'unavailable' };
 
 const schema = new Schema<IEmailTriageItem>(
   {
@@ -50,6 +55,7 @@ const schema = new Schema<IEmailTriageItem>(
 );
 
 schema.index({ userId: 1, briefedAt: 1, createdAt: 1 });
+schema.index({ userId: 1, briefedAt: 1, kind: 1, createdAt: 1 });
 
 export const EmailTriageItemModel =
   (mongoose.models.EmailTriageItem as mongoose.Model<IEmailTriageItem> | undefined) ??
@@ -59,6 +65,34 @@ const isDuplicateKeyError = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 11000;
 
 export const emailTriageItemRepository = {
+  /** Admit derived content only while both its owner and source email are live. No model work runs here. */
+  async storeForLiveEmail(input: EmailTriageItemInput): Promise<LiveEmailTriageResult> {
+    try {
+      return await withTransaction<LiveEmailTriageResult>(async session => {
+        if (!(await lockRetentionCreator(input.userId, session))) return { status: 'unavailable' };
+        // A real source write serializes with soft deletion; a pre-read would still admit a late insert.
+        const source = await IngestedEmailModel.updateOne(
+          { _id: input.emailId, userId: input.userId, deletedAt: null },
+          { $inc: { __v: 1 } },
+          { session, timestamps: false, maxTimeMS: 15_000, runValidators: true }
+        );
+        if (!source.acknowledged) throw new Error('Email admission write was not acknowledged');
+        if (source.matchedCount !== 1 || source.modifiedCount !== 1) return { status: 'unavailable' };
+        const stored = await EmailTriageItemModel.updateOne(
+          { emailId: input.emailId },
+          { $setOnInsert: input },
+          { session, upsert: true, runValidators: true, maxTimeMS: 15_000 }
+        );
+        if (!stored.acknowledged) throw new Error('Email triage insert was not acknowledged');
+        return { status: stored.upsertedCount === 1 ? 'created' : 'duplicate' };
+      });
+    } catch (error) {
+      // A duplicate can abort the transaction. Handle it only after the transaction has unwound.
+      if (isDuplicateKeyError(error)) return { status: 'duplicate' };
+      throw error;
+    }
+  },
+
   /** Insert-only: a re-analyzed email keeps its first triage. `created` is false when one already existed. */
   async upsertForEmail(input: EmailTriageItemInput): Promise<{ created: boolean }> {
     try {
@@ -81,8 +115,8 @@ export const emailTriageItemRepository = {
   },
 
   /** Items no ready brief has carried yet, created before `end`, oldest first. */
-  async listPending(userId: string, end: Date, limit: number): Promise<IEmailTriageItem[]> {
-    return EmailTriageItemModel.find({ userId, briefedAt: null, createdAt: { $lt: end } })
+  async listPending(userId: string, end: Date, limit: number, kind?: EmailTriageKind): Promise<IEmailTriageItem[]> {
+    return EmailTriageItemModel.find({ userId, briefedAt: null, createdAt: { $lt: end }, ...(kind && { kind }) })
       .sort({ createdAt: 1 })
       .limit(limit)
       .lean();

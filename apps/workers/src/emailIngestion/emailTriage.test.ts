@@ -113,7 +113,7 @@ const makeDeps = (overrides: Partial<EmailTriageDeps> = {}) => {
     enabled: vi.fn(async () => true),
     items: {
       existsForEmail: vi.fn(async () => false),
-      upsertForEmail: vi.fn(async () => ({ created: true })),
+      storeForLiveEmail: vi.fn<EmailTriageDeps['items']['storeForLiveEmail']>(async () => ({ status: 'created' })),
       deleteByEmailIds: vi.fn(async () => 1),
     },
     emailExists: vi.fn(async () => true),
@@ -130,10 +130,21 @@ const makeDeps = (overrides: Partial<EmailTriageDeps> = {}) => {
 };
 
 describe('triageEmail', () => {
+  it('skips persistence when the source or owner is unavailable without claiming cleanup', async () => {
+    const deps = makeDeps();
+    vi.mocked(deps.items.storeForLiveEmail).mockResolvedValue({ status: 'unavailable' });
+    expect(await triageEmail(deps, { email, analysis })).toBe('source_unavailable');
+    expect(deps.items.deleteByEmailIds).not.toHaveBeenCalled();
+    expect(deps.removeBriefItems).not.toHaveBeenCalled();
+    expect(deps.logger.info).toHaveBeenCalledWith('Email or owner unavailable; triage was not stored', {
+      emailId: email.id,
+    });
+  });
+
   it('stores the parsed triage for the email owner', async () => {
     const deps = makeDeps();
     expect(await triageEmail(deps, { email, analysis })).toBe('created');
-    expect(deps.items.upsertForEmail).toHaveBeenCalledWith({
+    expect(deps.items.storeForLiveEmail).toHaveBeenCalledWith({
       userId: 'user-1',
       emailId: 'email-1',
       kind: 'handled',
@@ -146,7 +157,7 @@ describe('triageEmail', () => {
   it('removes the item it just stored when the email was deleted during the model call', async () => {
     const deps = makeDeps({ emailExists: vi.fn(async () => false) });
     expect(await triageEmail(deps, { email, analysis })).toBe('email_deleted');
-    expect(deps.items.upsertForEmail).toHaveBeenCalledOnce();
+    expect(deps.items.storeForLiveEmail).toHaveBeenCalledOnce();
     expect(deps.items.deleteByEmailIds).toHaveBeenCalledWith('user-1', ['email-1']);
     expect(deps.removeBriefItems).toHaveBeenCalledWith('user-1', ['email-1']);
     expect(vi.mocked(deps.items.deleteByEmailIds).mock.invocationCallOrder[0]).toBeLessThan(
@@ -156,8 +167,8 @@ describe('triageEmail', () => {
 
   it('still drops brief items of a deleted email when deleting its triage item fails', async () => {
     const deps = makeDeps({ emailExists: vi.fn(async () => false) });
-    deps.items.deleteByEmailIds.mockRejectedValueOnce(new Error('db down'));
-    expect(await triageEmail(deps, { email, analysis })).toBe('email_deleted');
+    vi.mocked(deps.items.deleteByEmailIds).mockRejectedValueOnce(new Error('db down'));
+    expect(await triageEmail(deps, { email, analysis })).toBe('failed');
     expect(deps.removeBriefItems).toHaveBeenCalledWith('user-1', ['email-1']);
     expect(deps.logger.warn).toHaveBeenCalledWith('Could not drop the triage item of a deleted email', {
       emailId: 'email-1',
@@ -173,16 +184,16 @@ describe('triageEmail', () => {
 
   it('makes no model call when the email already has a triage item', async () => {
     const deps = makeDeps();
-    deps.items.existsForEmail.mockResolvedValue(true);
+    vi.mocked(deps.items.existsForEmail).mockResolvedValue(true);
     expect(await triageEmail(deps, { email, analysis })).toBe('exists');
     expect(deps.complete).not.toHaveBeenCalled();
-    expect(deps.items.upsertForEmail).not.toHaveBeenCalled();
+    expect(deps.items.storeForLiveEmail).not.toHaveBeenCalled();
   });
 
   it('logs and resolves when the model reply is invalid', async () => {
     const deps = makeDeps({ complete: vi.fn(async () => ({ reply: 'nope', model: 'm', tokensUsed: null })) });
     expect(await triageEmail(deps, { email, analysis })).toBe('failed');
-    expect(deps.items.upsertForEmail).not.toHaveBeenCalled();
+    expect(deps.items.storeForLiveEmail).not.toHaveBeenCalled();
     expect(deps.logger.warn).toHaveBeenCalled();
   });
 
@@ -193,7 +204,7 @@ describe('triageEmail', () => {
 
   it('reports a lost race as a duplicate', async () => {
     const deps = makeDeps();
-    deps.items.upsertForEmail.mockResolvedValue({ created: false });
+    vi.mocked(deps.items.storeForLiveEmail).mockResolvedValue({ status: 'duplicate' });
     expect(await triageEmail(deps, { email, analysis })).toBe('duplicate');
   });
 });

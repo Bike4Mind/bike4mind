@@ -111,7 +111,7 @@ type LogLike = Pick<Logger, 'info' | 'warn'>;
 
 export type EmailTriageDeps = {
   enabled(): Promise<boolean>;
-  items: Pick<typeof emailTriageItemRepository, 'existsForEmail' | 'upsertForEmail' | 'deleteByEmailIds'>;
+  items: Pick<typeof emailTriageItemRepository, 'existsForEmail' | 'storeForLiveEmail' | 'deleteByEmailIds'>;
   /** Whether the email is still stored (not deleted by its owner). */
   emailExists(emailId: string): Promise<boolean>;
   /** Drops brief items already composed from the given emails. */
@@ -121,7 +121,8 @@ export type EmailTriageDeps = {
   logger: LogLike;
 };
 
-export type TriageOutcome = 'disabled' | 'exists' | 'created' | 'duplicate' | 'email_deleted' | 'failed';
+export type TriageOutcome =
+  'disabled' | 'exists' | 'created' | 'duplicate' | 'source_unavailable' | 'email_deleted' | 'failed';
 
 /**
  * Never throws: the email is already analyzed, so a retry would skip triage at the analyzer's idempotency
@@ -139,21 +140,26 @@ export async function triageEmail(
 
     const { reply, model, tokensUsed } = await deps.complete(buildTriagePrompt(email, input.analysis));
     const triage = parseTriageReply(reply, email);
-    const { created } = await deps.items.upsertForEmail({
+    const stored = await deps.items.storeForLiveEmail({
       userId: email.userId,
       emailId: email.id,
       ...triage,
       model,
       tokensUsed,
     });
-    // The owner may delete the email during the model call. Its delete route removes the email before its triage
-    // and brief items (apps/client/pages/api/users/[id]/ingested-emails.ts), so checking after the insert leaves no
-    // orphan, and a brief composed from the new item in between is cleaned here.
+    if (stored.status === 'unavailable') {
+      deps.logger.info('Email or owner unavailable; triage was not stored', { emailId: email.id });
+      return 'source_unavailable';
+    }
+    const created = stored.status === 'created';
+    // Admission serialized with source deletion. Keep defensive cleanup for deletion after commit.
     if (created && !(await deps.emailExists(email.id))) {
+      let cleanupFailed = false;
       // Independent steps: a failed triage-item delete must not leave the brief items behind.
       try {
         await deps.items.deleteByEmailIds(email.userId, [email.id]);
       } catch (error) {
+        cleanupFailed = true;
         deps.logger.warn('Could not drop the triage item of a deleted email', {
           emailId: email.id,
           error: error instanceof Error ? error.message : String(error),
@@ -162,18 +168,20 @@ export async function triageEmail(
       try {
         await deps.removeBriefItems(email.userId, [email.id]);
       } catch (error) {
+        cleanupFailed = true;
         deps.logger.warn('Could not drop the brief items of a deleted email', {
           emailId: email.id,
           error: error instanceof Error ? error.message : String(error),
         });
       }
-      deps.logger.info('Email deleted during triage; cleaned up its derived items', { emailId: email.id });
+      if (cleanupFailed) return 'failed';
+      deps.logger.info('Email deleted after triage admission; cleaned up its derived items', { emailId: email.id });
       return 'email_deleted';
     }
     deps.logger.info('Email triaged', { emailId: email.id, kind: triage.kind, created });
     return created ? 'created' : 'duplicate';
   } catch (error) {
-    deps.logger.warn('Email triage failed; the email stays analyzed without a triage item', {
+    deps.logger.warn('Email triage failed; analysis will not be retried', {
       emailId: email.id,
       error: error instanceof Error ? error.message : String(error),
     });
