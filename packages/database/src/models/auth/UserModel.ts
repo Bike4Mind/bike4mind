@@ -202,6 +202,7 @@ const UserPreferencesSchema = new Schema(
           chat_completed: { type: Boolean },
           generation_ready: { type: Boolean },
           agent_message: { type: Boolean },
+          brief_ready: { type: Boolean },
         },
         { _id: false }
       ),
