@@ -185,6 +185,31 @@ export function generateIdToken(params: {
   } as jwt.SignOptions);
 }
 
+/**
+ * Verifies an `id_token_hint` (OIDC RP-Initiated Logout 1.0, section 2): our own RS256 signature,
+ * our issuer and, when the RP sent one, `aud == clientId`. Without a client_id the audience names
+ * the client. Expiry is ignored, as the spec allows, since an RP commonly signs out long after its
+ * id_token expired. Returns the subject and client, or null for any failure.
+ */
+export function verifyIdTokenHint(idTokenHint: string, clientId?: string): { sub: string; clientId: string } | null {
+  const { publicKey } = getKeyPair();
+  try {
+    // Never a string payload: the issuer check rejects one.
+    const { sub, aud } = jwt.verify(idTokenHint, publicKey, {
+      algorithms: ['RS256'],
+      issuer: requireEnv('APP_URL', process.env.APP_URL),
+      ...(clientId !== undefined ? { audience: clientId } : {}),
+      ignoreExpiration: true,
+    }) as jwt.JwtPayload;
+    const audience = clientId ?? aud;
+    return typeof sub === 'string' && sub && typeof audience === 'string' && audience
+      ? { sub, clientId: audience }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Client validation ────────────────────────────────────────────────────────
 
 export async function validateClient(clientId: string, redirectUri: string): Promise<IOAuthClientDocument | null> {
@@ -216,6 +241,7 @@ export function getOidcDiscovery() {
     token_endpoint: `${issuer}/api/oauth/token`,
     userinfo_endpoint: `${issuer}/api/oauth/userinfo`,
     jwks_uri: `${issuer}/api/oauth/jwks`,
+    end_session_endpoint: `${issuer}/oauth/logout`,
     response_types_supported: ['code'],
     subject_types_supported: ['public'],
     id_token_signing_alg_values_supported: ['RS256'],

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
@@ -6,6 +6,8 @@ import {
   adminReturnValidationError,
   ADMIN_SESSION_EXPIRED,
   ADMIN_SESSION_VALIDATION_FAILED,
+  clearClientSession,
+  tearDownClientSession,
   useGetIdentify,
   useUpdateUser,
 } from './user';
@@ -27,6 +29,8 @@ vi.mock('@client/app/utils/userAPICalls', () => ({
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: vi.fn(),
 }));
+
+vi.mock('@client/app/utils/clearClientCaches', () => ({ clearClientCaches: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('../useAccessToken', () => ({
   useAccessToken: vi.fn(),
@@ -192,5 +196,53 @@ describe('useUpdateUser', () => {
     await fail(new Error('boom'));
 
     expect(toast.error).toHaveBeenCalledWith('Failed to update Profile.');
+  });
+});
+
+describe('client session teardown', () => {
+  const originalLocation = window.location;
+  const replace = vi.fn();
+
+  const opts = () => ({
+    setCurrentUser: vi.fn(),
+    resetTokens: vi.fn(),
+    queryClient: { removeQueries: vi.fn() } as unknown as QueryClient,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...originalLocation, search: '', replace },
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, 'location', { configurable: true, value: originalLocation });
+  });
+
+  it('clearClientSession drops the user, tokens and user-specific queries without navigating', async () => {
+    const o = opts();
+    await clearClientSession(o);
+    expect(o.setCurrentUser).toHaveBeenCalledWith(null);
+    expect(o.resetTokens).toHaveBeenCalled();
+    const { predicate } = (o.queryClient.removeQueries as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(predicate({ queryKey: ['server-config-public'] })).toBe(false);
+    expect(predicate({ queryKey: ['server-config'] })).toBe(true);
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it('tearDownClientSession clears the session and reloads to /login, keeping redirectTo', async () => {
+    await tearDownClientSession(opts());
+    expect(replace).toHaveBeenCalledWith('/login');
+
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...originalLocation, search: '?redirectTo=/notebooks/1', replace },
+    });
+    const o = opts();
+    await tearDownClientSession(o);
+    expect(o.setCurrentUser).toHaveBeenCalledWith(null);
+    expect(replace).toHaveBeenLastCalledWith(`/login?redirectTo=${encodeURIComponent('/notebooks/1')}`);
   });
 });
