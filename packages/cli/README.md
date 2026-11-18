@@ -82,6 +82,8 @@ messages, Left/Right to change messages, and Up/Down or PageUp/PageDown to scrol
 wrapped text. Press Ctrl+O again to return to the input. Completed agent steps
 are available as plain JSON text below the message body. Session persistence is
 unchanged. As with other terminal applications, a forced kill cannot run cleanup.
+Command help and diagnostics are retained separately in the fullscreen history
+browser (most recent 64K characters); they do not become conversation messages.
 
 ### Chat without signing in
 

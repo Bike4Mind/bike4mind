@@ -226,6 +226,27 @@ describe('explicit fullscreen', () => {
     }
   });
 
+  it('retains console command output across redraws and restores console methods on exit', async () => {
+    const originalLog = console.log;
+    const h = await harness();
+    try {
+      console.log('COMMAND_HELP_SENTINEL %s', 'formatted');
+      console.error('COMMAND_ERROR_SENTINEL');
+      await h.flush();
+      await h.resize(40, 12);
+      await h.press('\u000f');
+      expect(h.bufferText()).toContain('COMMAND_HELP_SENTINEL formatted');
+      expect(h.bufferText()).toContain('COMMAND_ERROR_SENTINEL');
+      console.log('x'.repeat(70 * 1024));
+      console.warn('RETAINED_TAIL');
+      await h.flush();
+      await h.press('\u001b[6~');
+    } finally {
+      await h.close();
+    }
+    expect(console.log).toBe(originalLog);
+  });
+
   it('reaches older messages, wrapped text and completed steps after a resize', async () => {
     const session = useCliStore.getState().session!;
     useCliStore.setState({

@@ -25,6 +25,7 @@ import { processFileReferences, hasFileReferences } from '../utils/processFileRe
 import type { CommandDefinition } from '../config/commands.js';
 import { useStdoutDimensions } from '../hooks/useStdoutDimensions.js';
 import { FullscreenHistory } from './FullscreenHistory.js';
+import { useFullscreenOutput } from './FullscreenOutput.js';
 /**
  * Live-frame rows reserved for everything outside the step trace and any open
  * prompt: the thinking line and its margin, the bordered input box and the
@@ -182,6 +183,22 @@ export function App({
   // highlight in MessageItem.tsx). Subscribes to resize so the live frame
   // repaints at the new width instead of keeping the stale startup width.
   const [terminalCols, terminalRows] = useStdoutDimensions();
+  const fullscreenOutput = useFullscreenOutput();
+  const historyMessages = React.useMemo(
+    () =>
+      fullscreenOutput
+        ? [
+            ...messages,
+            {
+              id: 'fullscreen-output',
+              role: 'assistant' as const,
+              content: 'Command output (most recent 64K characters)\n\n' + fullscreenOutput,
+              timestamp: '',
+            },
+          ]
+        : messages,
+    [messages, fullscreenOutput]
+  );
   const [browsingHistory, setBrowsingHistory] = useState(false);
   useInput(
     (input, key) => {
@@ -273,7 +290,7 @@ export function App({
           <McpViewer config={config} mcpManager={mcpManager} onClose={() => setShowMcpViewer(false)} />
         </Box>
       ) : fullscreen && browsingHistory && !promptKey ? (
-        <FullscreenHistory messages={messages} rows={terminalRows} columns={terminalCols} />
+        <FullscreenHistory messages={historyMessages} rows={terminalRows} columns={terminalCols} />
       ) : (
         <>
           {/* HISTORY MESSAGES — rendered via <Static> so each message is
@@ -293,8 +310,11 @@ export function App({
           )}
           {fullscreen && (
             <Text dimColor wrap="truncate">
-              Ctrl+O: completed message history ({messages.length})
+              Ctrl+O: history ({messages.length} messages{fullscreenOutput ? ', command output' : ''})
             </Text>
+          )}
+          {fullscreen && fullscreenOutput && (
+            <Text wrap="truncate">{fullscreenOutput.slice(fullscreenOutput.lastIndexOf('\n') + 1)}</Text>
           )}
 
           <Box flexDirection="column">

@@ -1,5 +1,6 @@
-import type React from 'react';
+import React from 'react';
 import { render } from 'ink';
+import { FullscreenOutput } from './components/FullscreenOutput.js';
 
 export function fullscreenEnabled(
   requested = process.env.B4M_FULLSCREEN === '1',
@@ -33,7 +34,7 @@ export function renderFullscreen(
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
-  return render(node, {
+  return render(React.createElement(FullscreenOutput, null, node), {
     stdout: frameStream,
     stdin,
     debug: true,
