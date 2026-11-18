@@ -98,3 +98,6 @@ export function deriveAgentState(status: ChatSessionStatus | undefined, outcome:
   if (status === 'processing') return 'working';
   return outcome ? OUTCOME_STATE[outcome] : 'idle';
 }
+
+/** The states Stop reaches: a reply running, or waiting on the user. Shared by the peek drawer and the view contract. */
+export const isStoppableState = (state: AgentState): boolean => state === 'working' || state === 'needs-you';

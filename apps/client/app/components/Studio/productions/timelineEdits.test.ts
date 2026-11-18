@@ -16,7 +16,8 @@ import {
 const FILE_A = 'a'.repeat(24);
 const FILE_B = 'b'.repeat(24);
 
-const empty = (): StudioTimeline => defaultStudioTimeline('ad_campaign');
+// Starts with no tracks, so each edit's lane is the only one.
+const empty = (): StudioTimeline => ({ ...defaultStudioTimeline('ad_campaign'), tracks: [] });
 
 describe('addMediaClip', () => {
   it('creates the track on first use and appends later clips after the last one', () => {

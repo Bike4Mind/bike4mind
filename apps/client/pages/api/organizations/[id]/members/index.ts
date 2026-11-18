@@ -12,6 +12,7 @@ import { reportAndNotifyKeptPersonalLakeShares } from '@server/utils/keptPersona
 import { refreshSeatEntitlements } from '@server/organizations/refreshSeatEntitlements';
 import {
   OrganizationEvents,
+  organizationRosterScope,
   toSafeUser,
   toSafeUsers,
   toSafeOrganization,
@@ -41,13 +42,13 @@ const handler = baseApi()
   .get(async (req, res) => {
     const { id: organizationId } = req.query;
 
-    const users = await organizationService.getUsers(
+    const { organization, users } = await organizationService.getRoster(
       req.user,
       { id: organizationId as string },
       { db: { organizations: organizationRepository, users: userRepository } }
     );
 
-    return respond(res, safeUsersResponseSchema, toSafeUsers(users, 'same-org'));
+    return respond(res, safeUsersResponseSchema, toSafeUsers(users, organizationRosterScope(req.user, organization)));
   })
   .post(
     outboundActionGate(),

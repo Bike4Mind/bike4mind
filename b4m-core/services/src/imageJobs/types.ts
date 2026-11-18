@@ -1,4 +1,5 @@
 import type {
+  ApiKeyBillingOwnerType,
   GeneratedAssetLineageEntry,
   GeneratedAssetMetadata,
   GenerationJobDelivery,
@@ -104,6 +105,11 @@ export type CreateImageJobsInput = {
   count: number;
   source: GenerationJobSource;
   apiKeyId?: string;
+  /**
+   * Whether that key bills its owner or an organization. No longer read by the spend freeze check, which keeps
+   * the acting user for every key.
+   */
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
   /** The chat turn that started the batch; every job carries it, so its output is linked to that notebook. */
   questId?: string;
   /** Where the finished batch is posted besides the websocket update; every job in the batch carries it. */

@@ -119,6 +119,13 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
   },
   {
     kind: 's3',
+    bucket: 'modelPriceSnapshotBucket',
+    holds: 'Model price snapshot for the usage poller',
+    locatedBy: 'Not keyed by user',
+    erasure: { action: 'noPersonalData', note: 'Model ids and per-token prices only; overwritten every discovery run' },
+  },
+  {
+    kind: 's3',
     bucket: 'publishedArtifactsBucket',
     holds: 'Published artifact bundles and thumbnails',
     locatedBy: 'PublishedArtifact `storageKeyPrefix`',

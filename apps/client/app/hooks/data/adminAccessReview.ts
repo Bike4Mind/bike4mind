@@ -1,5 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AccessReviewDecision, AccessReviewDecisionValue, AdminAccessReviewRecord } from '@bike4mind/common';
+import type {
+  AccessReviewDecision,
+  AccessReviewDecisionValue,
+  AdminAccessReviewRecord,
+  AdminPermissionSource,
+} from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { downloadData } from '@client/app/utils/download';
 
@@ -8,6 +13,18 @@ type Wire<T> = { [K in keyof T]: T[K] extends Date ? string : T[K] extends Date 
 export type WireAccessReviewDecision = Wire<AccessReviewDecision>;
 export type WireAccessReviewRecord = Omit<Wire<AdminAccessReviewRecord>, 'decisions'> & {
   decisions: WireAccessReviewDecision[];
+};
+
+/** A role an admin holds; a deleted role still listed on the account has `name: null`. */
+export type AccessReviewHeldRole = { id: string; name: string | null; deleted: boolean };
+
+/** Mirrors `AccessReviewRole` in packages/server-utils/src/security/accessReview/accessReview.ts. */
+export type AccessReviewRole = {
+  id: string;
+  name: string;
+  description: string;
+  permissions: string[];
+  members: { userId: string; email: string | null; username: string | null; status: 'active' | 'banned' | 'deleted' }[];
 };
 
 /** One row of `GET /api/admin/access-review/report`; mirrors `AccessReviewRow` in apps/client/server/admin/accessReview.ts. */
@@ -19,6 +36,8 @@ export type AccessReviewRow = {
   permissions: string[];
   directPermissions: string[];
   adminRoleIds: string[];
+  roles: AccessReviewHeldRole[];
+  permissionSources: AdminPermissionSource[];
   lastAdminActionAt: string | null;
   lastSignInAt: string | null;
   mfaEnabled: boolean;
@@ -35,6 +54,7 @@ export type AccessReviewReport = {
   dormantDays: number;
   overdue: boolean;
   admins: AccessReviewRow[];
+  roles: AccessReviewRole[];
   record: WireAccessReviewRecord | null;
 };
 

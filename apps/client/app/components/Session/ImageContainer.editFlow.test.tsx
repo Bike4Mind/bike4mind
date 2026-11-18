@@ -8,7 +8,17 @@ const h = vi.hoisted(() => ({
   createFabFileOnServerWithUpload: vi.fn(),
   moderateFabFileNow: vi.fn(),
   deleteFileUtility: vi.fn(),
+  copyGeneratedImageToFabFile: vi.fn(),
   toastError: vi.fn(),
+  studioImageEnabled: false,
+  openStudioImageEdit: vi.fn(),
+}));
+
+vi.mock('@client/app/components/Studio/useStudioFeature', () => ({
+  useStudioFeature: () => h.studioImageEnabled,
+}));
+vi.mock('@client/app/components/ImageStudio/useOpenStudioImageEdit', () => ({
+  useOpenStudioImageEdit: () => h.openStudioImageEdit,
 }));
 
 vi.mock('sonner', () => ({ toast: { error: h.toastError, success: vi.fn() } }));
@@ -17,7 +27,7 @@ vi.mock('@client/app/utils/filesAPICalls', () => ({
   createFabFileOnServerWithUpload: h.createFabFileOnServerWithUpload,
   moderateFabFileNow: h.moderateFabFileNow,
   deleteFileUtility: h.deleteFileUtility,
-  copyGeneratedImageToFabFile: vi.fn(),
+  copyGeneratedImageToFabFile: h.copyGeneratedImageToFabFile,
 }));
 vi.mock('./ImageMaskerFlux', () => ({
   default: ({ onSave }: { onSave: (url: string, mask: string, prompt: string) => void }) => (
@@ -35,6 +45,7 @@ const appTheme = extendTheme({ ...getThemeConfig() });
 describe('ImageContainer edit flow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.studioImageEnabled = false;
     h.createFabFileOnServerWithUpload.mockResolvedValue({ id: 'mask1' });
     h.moderateFabFileNow.mockResolvedValue('clean');
   });
@@ -86,5 +97,46 @@ describe('ImageContainer edit flow', () => {
     await waitFor(() => expect(h.toastError).toHaveBeenCalledWith(expect.stringContaining('blocked by moderation')));
     expect(onSendMessage).not.toHaveBeenCalled();
     expect(h.deleteFileUtility).toHaveBeenCalledWith('mask1');
+  });
+
+  describe('with Studio image open', () => {
+    const GENERATED = 'https://generatedimagesbucket.s3.amazonaws.com/abc123.png?X-Amz-Signature=x';
+    const renderImage = (src: string) =>
+      render(
+        <CssVarsProvider theme={appTheme}>
+          <ImageContainer index={0} totalImages={1} images={[src]} src={src} onSendMessage={vi.fn()} />
+        </CssVarsProvider>
+      );
+
+    beforeEach(() => {
+      h.studioImageEnabled = true;
+      h.copyGeneratedImageToFabFile.mockResolvedValue({ id: 'file1', fileName: 'image_1.png' });
+    });
+
+    it('saves a generated image to Files, scans it, and opens it in Studio edit mode', async () => {
+      renderImage(GENERATED);
+      fireEvent.click(screen.getAllByTestId('image-edit-btn')[0]);
+      await waitFor(() => expect(h.openStudioImageEdit).toHaveBeenCalled());
+
+      expect(h.copyGeneratedImageToFabFile).toHaveBeenCalledWith('abc123.png', expect.any(String));
+      expect(h.moderateFabFileNow).toHaveBeenCalledWith('file1');
+      expect(h.openStudioImageEdit).toHaveBeenCalledWith({ fileId: 'file1', fileName: 'image_1.png' });
+      expect(screen.queryByTestId('stub-masker-save')).toBeNull();
+    });
+
+    it('does not open Studio when the copy is blocked by moderation', async () => {
+      h.moderateFabFileNow.mockResolvedValue('blocked');
+      renderImage(GENERATED);
+      fireEvent.click(screen.getAllByTestId('image-edit-btn')[0]);
+      await waitFor(() => expect(h.toastError).toHaveBeenCalled());
+      expect(h.openStudioImageEdit).not.toHaveBeenCalled();
+    });
+
+    it('keeps the in-chat masker for an image that is not a generated one', async () => {
+      renderImage('https://example.com/image.png');
+      fireEvent.click(screen.getAllByTestId('image-edit-btn')[0]);
+      expect(await screen.findByTestId('stub-masker-save')).toBeInTheDocument();
+      expect(h.copyGeneratedImageToFabFile).not.toHaveBeenCalled();
+    });
   });
 });

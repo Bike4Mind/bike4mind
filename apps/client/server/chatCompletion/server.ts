@@ -10,6 +10,7 @@ import { registerInternalRoutes } from './internal/route';
 import { registerExternalRoutes } from './external/sseRoute';
 import { registerEmbedRoutes } from './external/embedRoute';
 import { requireOriginVerify } from './originVerify';
+import { registerSecretsAtRest } from './secretsAtRestBoot';
 import { createTaskProtection } from './taskProtection';
 
 /**
@@ -163,6 +164,8 @@ async function main() {
   // along with every other in-flight request. Registers global handlers that log + swallow the
   // network-error class without exiting. Must run before any request is served.
   registerProcessErrorHandlers(bootLogger, 'ChatCompletion');
+
+  registerSecretsAtRest(bootLogger, Config.SECRET_ENCRYPTION_KEY, Config.SECRET_ENCRYPTION_KEY_PREVIOUS);
 
   const app = createApp();
 

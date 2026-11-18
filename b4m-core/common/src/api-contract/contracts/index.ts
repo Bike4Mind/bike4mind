@@ -86,6 +86,12 @@ import {
   listMusicGenerationsContract,
   listMusicModelsContract,
 } from './musicGeneration.contract';
+import {
+  cancelSceneCompositionContract,
+  createSceneCompositionContract,
+  getSceneCompositionContract,
+  listSceneCompositionsContract,
+} from './sceneComposition.contract';
 import { listVoicesContract, createVoiceSessionContract, endVoiceSessionContract } from './voice.contract';
 import {
   listProjectsContract,
@@ -219,6 +225,10 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getMusicGenerationContract,
   listMusicGenerationsContract,
   listMusicModelsContract,
+  cancelSceneCompositionContract,
+  createSceneCompositionContract,
+  getSceneCompositionContract,
+  listSceneCompositionsContract,
   listVoicesContract,
   createVoiceSessionContract,
   endVoiceSessionContract,

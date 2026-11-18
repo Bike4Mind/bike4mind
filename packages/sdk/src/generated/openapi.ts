@@ -12,7 +12,7 @@ export interface paths {
     put?: never;
     /**
      * Send a chat message
-     * @description Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`; one whose reasoning model spends its whole output budget thinking is answered with a 422 or 502 (see those responses). Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: "error"`, since the ACK was already sent. A terminal `status: "stopped"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: "error"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure is a classified billing reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has two members, but only `insufficient_credits` is raised as a quest errorCode by any current throw site on this endpoint - `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Organization-policy preflight refusals use 403 with `errorCode: "org_model_not_allowed"` or `"org_tool_not_allowed"`. An explicit-model JWT request can instead be accepted and refused during quest execution: that refusal appears on the 200 `wait: true` body or polled quest as `type: "error"`, without a policy `errorCode`. Check the quest outcome as described above. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.
+     * @description Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`; one whose reasoning model spends its whole output budget thinking is answered with a 422 or 502 (see those responses). Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: "error"`, since the ACK was already sent. A terminal `status: "stopped"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: "error"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure has a classified reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has four members: `insufficient_credits`, `spend_cap_exceeded`, `spend_frozen`, and `free_quest_limit_reached`. `insufficient_credits` and `spend_frozen` are raised as quest errorCodes on this endpoint: a spending pause in force when the request arrives is refused synchronously with a 403, and one that lands after the ACK reaches the quest. A new exhausted QuestMaster start is refused synchronously with 403 before a quest exists; an older queued start can instead settle as an error quest with `free_quest_limit_reached`. `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Organization-policy preflight refusals use 403 with `errorCode: "org_model_not_allowed"` or `"org_tool_not_allowed"`. An explicit-model JWT request can instead be accepted and refused during quest execution: that refusal appears on the 200 `wait: true` body or polled quest as `type: "error"`, without a policy `errorCode`. Check the quest outcome as described above. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.
      */
     post: operations['sendChatMessage'];
     delete?: never;
@@ -120,7 +120,7 @@ export interface paths {
     put?: never;
     /**
      * Execute a server-side tool
-     * @description Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`, `decide`) and returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT accepted on this endpoint. To call `web_search`, `web_fetch` or `weather_info` with an API key, use `POST /api/v1/tools/web-search`, `/api/v1/tools/web-fetch` or `/api/v1/tools/weather`. Rate-limited to 100 requests/hour per user, counted separately from other endpoints. `web_search` and `web_fetch` are billed per call from the caller's credits (or their organization's), and refused with a 422 `insufficient_credits` before the provider is called. `request_id` echoes the X-Request-ID response header.
+     * @description Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`, `decide`) and returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT accepted on this endpoint. To call `web_search`, `web_fetch` or `weather_info` with an API key, use `POST /api/v1/tools/web-search`, `/api/v1/tools/web-fetch` or `/api/v1/tools/weather`. Rate-limited to 100 requests/hour per user, counted separately from other endpoints. `web_search` and `web_fetch` are billed per call from the caller's credits (or their organization's), and refused with a 422 `insufficient_credits` before the provider is called, or with a 403 `spend_frozen` when spending is paused. `request_id` echoes the X-Request-ID response header.
      */
     post: operations['executeTool'];
     delete?: never;
@@ -208,7 +208,7 @@ export interface paths {
      *
      *     TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `"anthropic"` or `"bedrock"`), a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: "anthropic", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: "pause_turn"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside a `tool_result`'s content. On every other model `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.
      *
-     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a model the caller's organization policy does not allow `403` with `errorCode: "org_model_not_allowed"`, a body over 25 MB `413`, any other body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: "run_not_found"`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with `errorCode: "invalid_request"` (do not retry it unchanged). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), `output_budget_exhausted` when a reasoning model spent your whole `max_tokens` thinking and wrote no answer (raise `max_tokens` or omit it; do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
+     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a model the caller's organization policy does not allow `403` with `errorCode: "org_model_not_allowed"`, paused spending `403` with `errorCode: "spend_frozen"`, a body over 25 MB `413`, any other body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: "run_not_found"`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with `errorCode: "invalid_request"` (do not retry it unchanged). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), `output_budget_exhausted` when a reasoning model spent your whole `max_tokens` thinking and wrote no answer (raise `max_tokens` or omit it; do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
      */
     post: operations['createCompletion'];
     delete?: never;
@@ -647,7 +647,7 @@ export interface paths {
     };
     /**
      * Get what a generated file was made from and into
-     * @description Returns the trail around a file: `ancestors` (the file itself first, then what it was made from, walked up to 8 generations and 32 files) and `children` (up to 24 readable files made directly from it, newest first), with one `edges` entry per link naming the `role` the parent played (`first_frame`, `last_frame`, `reference`, `style`, `extend_of`, `variation_of`, `edit_source`, `mask`). An ancestor you cannot read is returned `redacted` with only its id and depth, and its own inputs are not followed. `request` on a node is the stored generation request, for re-running it with different settings. Safe (GET) requests are exempt from the per-day API-key quota; only the per-minute burst limit applies. Authenticate with an API key (`b4m_live_`) carrying `files:read`, or a JWT.
+     * @description Returns the trail around a file: `ancestors` (the file itself first, then what it was made from, walked up to 8 generations and 32 files) and `children` (up to 24 readable files made directly from it, newest first), with one `edges` entry per link naming the `role` the parent played (`first_frame`, `last_frame`, `reference`, `style`, `extend_of`, `variation_of`, `edit_source`, `mask`, `scene_video`, `scene_audio`, `scene_cover`). An ancestor you cannot read is returned `redacted` with only its id and depth, and its own inputs are not followed. `request` on a node is the stored generation request, for re-running it with different settings. Safe (GET) requests are exempt from the per-day API-key quota; only the per-minute burst limit applies. Authenticate with an API key (`b4m_live_`) carrying `files:read`, or a JWT.
      */
     get: operations['getFileLineage'];
     put?: never;
@@ -1218,6 +1218,70 @@ export interface paths {
      * @description Returns the music models that are enabled, available in this deployment and have a usable provider key for the caller, with their capabilities and credit price. Validate requests against these capabilities: an unsupported duration, lyrics or vocals option is a 422, never silently adjusted. A few limits only show when the song is rendered (e.g. more lyrics than fit a very short song); such a job ends `failed`.
      */
     get: operations['listMusicModels'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/scene-compositions/{id}/cancel': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Cancel a scene composition
+     * @description Requests cancellation and returns the job. A job still `pending` (waiting to start, or to retry) moves to `cancelled` shortly after. A Scene renders in one uninterruptible step, so a `running` job cannot be cancelled: the request is refused with a 409 (`not_cancellable`) and the job runs to its end. A finished job is returned unchanged.
+     */
+    post: operations['cancelSceneComposition'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/scene-compositions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List your scene compositions
+     * @description Your jobs, newest first, optionally filtered by `state` and `source`. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`.
+     */
+    get: operations['listSceneCompositions'];
+    put?: never;
+    /**
+     * Compose a Scene from a video and a music track
+     * @description Queues a Scene: one shareable clip made from a video file and an audio file you own, with optional cover art, and returns `202` with the job. The Scene runs exactly as long as the video: its picture is copied unchanged and the audio is trimmed (or looped) to fit, with optional fades. The video may run at most 300 seconds, and the input files together may total at most 200 MB. Poll `GET /api/v1/scene-compositions/{id}` until `state` is `succeeded`, `failed` or `cancelled`. The finished Scene is saved to your Files with the `generated` and `scene` tags, linked to its inputs (see `GET /api/v1/files/{id}/lineage`); if that save fails it is kept outside Files and `output.file_id` is null. `output.availability` works as on the other generation jobs: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one), `pending_scan` means keep re-fetching, and `unavailable` means stop polling. A file that cannot be read as the media its slot needs (no video stream, an over-long video) ends the job `failed` with `unsupported_input`. Composing is free: no credits are reserved or charged. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original job, and the same key with a different body is a 422 `idempotency_key_reused`.
+     */
+    post: operations['createSceneComposition'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/scene-compositions/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get a scene composition
+     * @description Returns one job you requested. Each read signs a fresh `output.url` (valid 15 minutes, see `expires_at`).
+     */
+    get: operations['getSceneComposition'];
     put?: never;
     post?: never;
     delete?: never;
@@ -2278,7 +2342,7 @@ export interface components {
       name?: string;
     };
     /**
-     * @description Outcome fields of the quest polled at `GET /api/v1/quests/{id}` after this ACK. A finished turn that failed is `status: "done"` with `type: "error"` and the failure text in `reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check `type` first, and also treat a terminal `status: "stopped"` (a missing session, a user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an optional refinement of `type: "error"`, present only for a classified billing failure; credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use. `QUEST_ERROR_CODES` publishes a second member, `spend_cap_exceeded`, but no current throw site on this endpoint raises it as a quest errorCode: its only one, the embed chat route's pre-flight 422, fires outside the process try/catch that would classify it onto the quest. Most `type: "error"` turns - an abort, a provider timeout or overload - have NO `errorCode`; its absence does not mean success, only that the failure is unclassified. A recovered stuck quest that still has renderable content is not a failure at all: it keeps `type: "message"` even though it did not finish, so a caller gets the content rather than an error. `fallbackInfo` is present only when the requested model failed and another model produced the reply: `fallbackModel` answered, `primaryModel` is what was asked for, and `reason` is the error from the first failed attempt on the requested model. The poll body carries further fields not modelled here, including `images`, `files`, `toolPayloads`, `promptMeta`, and the attachment report (`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.
+     * @description Outcome fields of the quest polled at `GET /api/v1/quests/{id}` after this ACK. A finished turn that failed is `status: "done"` with `type: "error"` and the failure text in `reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check `type` first, and also treat a terminal `status: "stopped"` (a missing session, a user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an optional refinement of `type: "error"`, present only for a classified failure; credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use, and a spending pause that lands after the ACK arrives as `spend_frozen`. An older queued QuestMaster start can instead settle with `free_quest_limit_reached`; new exhausted starts are refused synchronously with 403 before a quest exists. `QUEST_ERROR_CODES` has four members; its other code is `spend_cap_exceeded`, but no current throw site on this endpoint raises it as a quest errorCode: its only one, the embed chat route's pre-flight 422, fires outside the process try/catch that would classify it onto the quest. Most `type: "error"` turns - an abort, a provider timeout or overload - have NO `errorCode`; its absence does not mean success, only that the failure is unclassified. A recovered stuck quest that still has renderable content is not a failure at all: it keeps `type: "message"` even though it did not finish, so a caller gets the content rather than an error. `fallbackInfo` is present only when the requested model failed and another model produced the reply: `fallbackModel` answered, `primaryModel` is what was asked for, and `reason` is the error from the first failed attempt on the requested model. The poll body carries further fields not modelled here, including `images`, `files`, `toolPayloads`, `promptMeta`, and the attachment report (`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.
      * @example {
      *       "id": "664f1c2b9a1e4d0012ab34cd",
      *       "status": "done",
@@ -2294,7 +2358,7 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -2324,7 +2388,7 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -2356,7 +2420,7 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -2381,7 +2445,7 @@ export interface components {
           /** @enum {string} */
           type: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
           /** @enum {string} */
-          errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+          errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
           tools?: {
             /** @enum {string} */
             toolMode?: 'fast' | 'smart';
@@ -2443,7 +2507,7 @@ export interface components {
           /** @enum {string} */
           type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
           /** @enum {string} */
-          errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+          errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
           tools?: {
             /** @enum {string} */
             toolMode?: 'fast' | 'smart';
@@ -2467,7 +2531,12 @@ export interface components {
       name?: string;
       /** @enum {string} */
       errorCode?:
-        'account_suspended' | 'model_requires_subscription' | 'org_model_not_allowed' | 'org_tool_not_allowed';
+        | 'account_suspended'
+        | 'model_requires_subscription'
+        | 'free_quest_limit_reached'
+        | 'org_model_not_allowed'
+        | 'org_tool_not_allowed'
+        | 'spend_frozen';
       suspension?: {
         /**
          * @description Which Terms of Service rule the account was suspended under. New categories may be added.
@@ -2484,6 +2553,13 @@ export interface components {
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
       also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
     };
     sendChatMessageResponse422: {
       error: string;
@@ -2858,6 +2934,21 @@ export interface components {
       executionTimeMs?: number;
       request_id: string;
     };
+    executeToolResponse403:
+      | {
+          success: boolean;
+          result?: unknown;
+          error?: string;
+          errorType?: string;
+          errorCode?: string;
+          executionTimeMs?: number;
+          request_id: string;
+        }
+      | {
+          error: string;
+          request_id?: string;
+          name?: string;
+        };
     executeToolResponse422:
       | {
           success: boolean;
@@ -2911,6 +3002,40 @@ export interface components {
     searchWebResponse200: {
       result: string;
     };
+    searchWebResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'spend_frozen';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
+    };
     searchWebResponse422: {
       error: string;
       request_id?: string;
@@ -2920,7 +3045,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -2942,6 +3067,40 @@ export interface components {
     fetchWebPageResponse200: {
       result: string;
     };
+    fetchWebPageResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'spend_frozen';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
+    };
     fetchWebPageResponse422: {
       error: string;
       request_id?: string;
@@ -2951,7 +3110,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -3072,6 +3231,8 @@ export interface components {
           code?:
             | 'insufficient_credits'
             | 'spend_cap_exceeded'
+            | 'spend_frozen'
+            | 'free_quest_limit_reached'
             | 'invalid_request'
             | 'provider_error'
             | 'provider_rejected'
@@ -3109,7 +3270,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'account_suspended' | 'model_requires_subscription' | 'org_model_not_allowed';
+      errorCode?: 'account_suspended' | 'model_requires_subscription' | 'org_model_not_allowed' | 'spend_frozen';
       suspension?: {
         /**
          * @description Which Terms of Service rule the account was suspended under. New categories may be added.
@@ -3126,6 +3287,13 @@ export interface components {
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
       also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
     };
     createCompletionResponse404: {
       error: string;
@@ -3147,7 +3315,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     createCompletionResponse503: {
       error: string;
@@ -3798,7 +3966,11 @@ export interface components {
       name?: string;
       /** @enum {string} */
       errorCode?:
-        'account_suspended' | 'billing_organization_mismatch' | 'org_model_not_allowed' | 'org_tool_not_allowed';
+        | 'account_suspended'
+        | 'billing_organization_mismatch'
+        | 'org_model_not_allowed'
+        | 'org_tool_not_allowed'
+        | 'spend_frozen';
       suspension?: {
         /**
          * @description Which Terms of Service rule the account was suspended under. New categories may be added.
@@ -3815,6 +3987,13 @@ export interface components {
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
       also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
     };
@@ -3993,6 +4172,40 @@ export interface components {
           delivery?: 'inline';
           audio: string;
         };
+    generateMusicResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'spend_frozen';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
+    };
     generateMusicResponse413: {
       error: string;
     };
@@ -4005,7 +4218,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -4138,7 +4351,11 @@ export interface components {
       name?: string;
       /** @enum {string} */
       errorCode?:
-        'account_suspended' | 'billing_organization_mismatch' | 'org_model_not_allowed' | 'org_tool_not_allowed';
+        | 'account_suspended'
+        | 'billing_organization_mismatch'
+        | 'org_model_not_allowed'
+        | 'org_tool_not_allowed'
+        | 'spend_frozen';
       suspension?: {
         /**
          * @description Which Terms of Service rule the account was suspended under. New categories may be added.
@@ -4155,6 +4372,13 @@ export interface components {
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
       also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
     };
     generateSoundEffectResponse413: {
       error: string;
@@ -4168,7 +4392,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     generateSoundEffectResponse502: {
       error: string;
@@ -5195,7 +5419,7 @@ export interface components {
         /** @enum {string} */
         type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
         /** @enum {string} */
-        errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+        errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
         reply?: string | null;
         replies?: string[];
         fallbackInfo?: {
@@ -5401,7 +5625,7 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -5778,7 +6002,7 @@ export interface components {
         file_name: string | null;
         mime_type: string | null;
         /** @enum {string|null} */
-        generator: 'music' | 'video' | 'image' | 'speech' | 'sound_effect' | null;
+        generator: 'music' | 'video' | 'image' | 'speech' | 'sound_effect' | 'scene' | null;
         model_id: string | null;
         prompt: string | null;
         download_url: string | null;
@@ -5794,7 +6018,7 @@ export interface components {
         file_name: string | null;
         mime_type: string | null;
         /** @enum {string|null} */
-        generator: 'music' | 'video' | 'image' | 'speech' | 'sound_effect' | null;
+        generator: 'music' | 'video' | 'image' | 'speech' | 'sound_effect' | 'scene' | null;
         model_id: string | null;
         prompt: string | null;
         download_url: string | null;
@@ -5806,7 +6030,7 @@ export interface components {
       edges: {
         parent_id: string;
         child_id: string;
-        /** @description How the parent was used. Known values: first_frame, last_frame, reference, style, extend_of, variation_of, edit_source, mask. Treat others as generic. */
+        /** @description How the parent was used. Known values: first_frame, last_frame, reference, style, extend_of, variation_of, edit_source, mask, scene_video, scene_audio, scene_cover. Treat others as generic. */
         role: string;
       }[];
       truncated: boolean;
@@ -5898,6 +6122,40 @@ export interface components {
       name?: string;
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected';
+    };
+    createEmbeddingsResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'spend_frozen';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
     };
     createEmbeddingsResponse422: {
       error: string;
@@ -6023,6 +6281,40 @@ export interface components {
       /** @enum {string} */
       errorCode?: 'provider_not_configured' | 'provider_rejected';
     };
+    createTextRefinementResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'spend_frozen';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
+    };
     createTextRefinementResponse422: {
       error: string;
       request_id?: string;
@@ -6032,7 +6324,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     createTextRefinementResponse503: {
       error: string;
@@ -6197,6 +6489,40 @@ export interface components {
         | 'input_image_not_found';
       /** @description Path of the offending field, e.g. questions[1].choices. */
       param?: string;
+    };
+    createDecisionResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'spend_frozen';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
     };
     createDecisionResponse404: {
       error: string;
@@ -6450,7 +6776,7 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -6669,7 +6995,7 @@ export interface components {
          * @description Machine-readable failure class, present only on `type: "error"` turns that have one.
          * @enum {string}
          */
-        errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+        errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
         /**
          * Format: date-time
          * @description When the turn started; the sort key of the listing.
@@ -6828,6 +7154,40 @@ export interface components {
         candidatesFiltered?: number;
       };
     };
+    searchSessionsResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'spend_frozen';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
+    };
     searchSessionsResponse422: {
       error: string;
       request_id?: string;
@@ -6837,7 +7197,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -7130,6 +7490,40 @@ export interface components {
         paused_files: number;
       };
     };
+    searchDataLakeResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'spend_frozen';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
+    };
     searchDataLakeResponse422: {
       error: string;
       request_id?: string;
@@ -7139,7 +7533,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     searchDataLakeResponse503: {
       error: string;
@@ -7482,7 +7876,11 @@ export interface components {
       name?: string;
       /** @enum {string} */
       errorCode?:
-        'account_suspended' | 'billing_organization_mismatch' | 'org_model_not_allowed' | 'org_tool_not_allowed';
+        | 'account_suspended'
+        | 'billing_organization_mismatch'
+        | 'org_model_not_allowed'
+        | 'org_tool_not_allowed'
+        | 'spend_frozen';
       suspension?: {
         /**
          * @description Which Terms of Service rule the account was suspended under. New categories may be added.
@@ -7499,6 +7897,13 @@ export interface components {
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
       also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
     };
     createVideoGenerationResponse404: {
       error: string;
@@ -7991,7 +8396,11 @@ export interface components {
       name?: string;
       /** @enum {string} */
       errorCode?:
-        'account_suspended' | 'billing_organization_mismatch' | 'org_model_not_allowed' | 'org_tool_not_allowed';
+        | 'account_suspended'
+        | 'billing_organization_mismatch'
+        | 'org_model_not_allowed'
+        | 'org_tool_not_allowed'
+        | 'spend_frozen';
       suspension?: {
         /**
          * @description Which Terms of Service rule the account was suspended under. New categories may be added.
@@ -8008,6 +8417,13 @@ export interface components {
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
       also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
     };
     createMusicGenerationResponse422: {
       error: string;
@@ -8229,6 +8645,382 @@ export interface components {
     };
     /**
      * @example {
+     *       "id": "664f1c2b9a1e4d0012ab34cd",
+     *       "object": "scene_composition",
+     *       "state": "pending",
+     *       "video_file_id": "664f1c2b9a1e4d0012ab34bb",
+     *       "audio_file_id": "664f1c2b9a1e4d0012ab34ee",
+     *       "cover_file_id": null,
+     *       "title": null,
+     *       "audio": {
+     *         "fit": "trim",
+     *         "fade_in_seconds": 0,
+     *         "fade_out_seconds": 1.5
+     *       },
+     *       "source": "api",
+     *       "error": null,
+     *       "output": null,
+     *       "credits": {
+     *         "reserved": null,
+     *         "settled": null
+     *       },
+     *       "created_at": "2026-11-17T00:00:00.000Z",
+     *       "updated_at": "2026-11-17T00:00:00.000Z"
+     *     }
+     */
+    cancelSceneCompositionResponse200: {
+      id: string;
+      /** @enum {string} */
+      object: 'scene_composition';
+      /** @enum {string} */
+      state: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+      video_file_id: string;
+      audio_file_id: string;
+      cover_file_id: string | null;
+      title: string | null;
+      audio: {
+        /** @enum {string} */
+        fit: 'trim' | 'loop';
+        fade_in_seconds: number;
+        fade_out_seconds: number;
+      };
+      /** @enum {string} */
+      source: 'api' | 'studio' | 'agent';
+      error: {
+        /** @enum {string} */
+        code: 'unsupported_input' | 'provider_timeout' | 'provider_error' | 'output_too_large' | 'cancelled';
+        message: string;
+      } | null;
+      output: {
+        /**
+         * @description `ready`: url is set. `pending_scan`: the saved file is still being scanned; re-fetch the job until it changes (self-hosted installs can stay here for up to ~30 minutes). `unavailable`: the file was blocked by the scan or deleted and url will never be set; stop polling.
+         * @enum {string}
+         */
+        availability: 'ready' | 'pending_scan' | 'unavailable';
+        /** @description Signed download URL, valid until expires_at; re-fetch the job for a fresh one. Set only when availability is `ready`, otherwise null. */
+        url: string | null;
+        /** @description ISO 8601. When url stops working; null whenever url is. */
+        expires_at: string | null;
+        content_type: string;
+        /** @description The length of the Scene, which is the length of its video. */
+        duration_seconds: number;
+        /** @description The Files entry, or null when the Scene was stored outside Files. */
+        file_id: string | null;
+      } | null;
+      /** @description Composing a Scene is free: nothing is reserved, and `settled` is 0 once the job ends. */
+      credits: {
+        reserved: number | null;
+        settled: number | null;
+      };
+      created_at: string;
+      updated_at: string;
+    };
+    cancelSceneCompositionResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        | 'invalid_request'
+        | 'input_file_not_found'
+        | 'unsupported_input'
+        | 'limit_exceeded'
+        | 'storage_limit_exceeded'
+        | 'idempotency_key_reused'
+        | 'invalid_idempotency_key'
+        | 'not_cancellable';
+    };
+    /**
+     * @example {
+     *       "id": "664f1c2b9a1e4d0012ab34cd",
+     *       "object": "scene_composition",
+     *       "state": "pending",
+     *       "video_file_id": "664f1c2b9a1e4d0012ab34bb",
+     *       "audio_file_id": "664f1c2b9a1e4d0012ab34ee",
+     *       "cover_file_id": null,
+     *       "title": null,
+     *       "audio": {
+     *         "fit": "trim",
+     *         "fade_in_seconds": 0,
+     *         "fade_out_seconds": 1.5
+     *       },
+     *       "source": "api",
+     *       "error": null,
+     *       "output": null,
+     *       "credits": {
+     *         "reserved": null,
+     *         "settled": null
+     *       },
+     *       "created_at": "2026-11-17T00:00:00.000Z",
+     *       "updated_at": "2026-11-17T00:00:00.000Z"
+     *     }
+     */
+    createSceneCompositionResponse202: {
+      id: string;
+      /** @enum {string} */
+      object: 'scene_composition';
+      /** @enum {string} */
+      state: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+      video_file_id: string;
+      audio_file_id: string;
+      cover_file_id: string | null;
+      title: string | null;
+      audio: {
+        /** @enum {string} */
+        fit: 'trim' | 'loop';
+        fade_in_seconds: number;
+        fade_out_seconds: number;
+      };
+      /** @enum {string} */
+      source: 'api' | 'studio' | 'agent';
+      error: {
+        /** @enum {string} */
+        code: 'unsupported_input' | 'provider_timeout' | 'provider_error' | 'output_too_large' | 'cancelled';
+        message: string;
+      } | null;
+      output: {
+        /**
+         * @description `ready`: url is set. `pending_scan`: the saved file is still being scanned; re-fetch the job until it changes (self-hosted installs can stay here for up to ~30 minutes). `unavailable`: the file was blocked by the scan or deleted and url will never be set; stop polling.
+         * @enum {string}
+         */
+        availability: 'ready' | 'pending_scan' | 'unavailable';
+        /** @description Signed download URL, valid until expires_at; re-fetch the job for a fresh one. Set only when availability is `ready`, otherwise null. */
+        url: string | null;
+        /** @description ISO 8601. When url stops working; null whenever url is. */
+        expires_at: string | null;
+        content_type: string;
+        /** @description The length of the Scene, which is the length of its video. */
+        duration_seconds: number;
+        /** @description The Files entry, or null when the Scene was stored outside Files. */
+        file_id: string | null;
+      } | null;
+      /** @description Composing a Scene is free: nothing is reserved, and `settled` is 0 once the job ends. */
+      credits: {
+        reserved: number | null;
+        settled: number | null;
+      };
+      created_at: string;
+      updated_at: string;
+    };
+    createSceneCompositionResponse400: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /**
+       * @description Stable refusal code: `storage_limit_exceeded` (your total storage), `org_storage_limit_exceeded` (the organization limit), or `file_too_large` (the per-file size limit). Branch on this, not on the message.
+       * @enum {string}
+       */
+      errorCode?: 'storage_limit_exceeded' | 'org_storage_limit_exceeded' | 'file_too_large';
+      /** @description Bytes already stored against the limit. 0 for `org_storage_limit_exceeded` and `file_too_large`. */
+      used_bytes?: number;
+      /** @description The limit, in bytes, that the request ran into. */
+      limit_bytes?: number;
+      /** @description Size of the refused upload, in bytes. */
+      requested_bytes?: number;
+      /**
+       * @description Whose limit was hit: `user` or `org`. Always `user` for `file_too_large`, a platform-wide cap.
+       * @enum {string}
+       */
+      owner?: 'user' | 'org';
+    };
+    createSceneCompositionResponse404: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        | 'invalid_request'
+        | 'input_file_not_found'
+        | 'unsupported_input'
+        | 'limit_exceeded'
+        | 'storage_limit_exceeded'
+        | 'idempotency_key_reused'
+        | 'invalid_idempotency_key'
+        | 'not_cancellable';
+    };
+    createSceneCompositionResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        | 'invalid_request'
+        | 'input_file_not_found'
+        | 'unsupported_input'
+        | 'limit_exceeded'
+        | 'storage_limit_exceeded'
+        | 'idempotency_key_reused'
+        | 'invalid_idempotency_key'
+        | 'not_cancellable';
+    };
+    /**
+     * @example {
+     *       "video_file_id": "664f1c2b9a1e4d0012ab34bb",
+     *       "audio_file_id": "664f1c2b9a1e4d0012ab34ee"
+     *     }
+     */
+    createSceneCompositionRequest: {
+      /** @description The picture: a video file of at most 300 seconds. The Scene runs exactly as long as it, and its video stream is copied unchanged (any audio it has is replaced). One of your own files (GET /api/v1/files). */
+      video_file_id: string;
+      /** @description The soundtrack: an audio file, e.g. a music generation output. One of your own files (GET /api/v1/files). */
+      audio_file_id: string;
+      /** @description How the soundtrack is fitted to the video. Omitted, it is trimmed with a short fade-out. */
+      audio?: {
+        /**
+         * @description `trim` (default): cut the audio where the video ends. `loop`: repeat the audio until the video ends.
+         * @enum {string}
+         */
+        fit?: 'trim' | 'loop';
+        /** @description Seconds of audio fade-in, 0 to 10. Defaults to 0. */
+        fade_in_seconds?: number;
+        /** @description Seconds of audio fade-out, 0 to 10. Defaults to 1.5. */
+        fade_out_seconds?: number;
+      };
+      /** @description Optional cover art: an image file, embedded as the Scene thumbnail. One of your own files (GET /api/v1/files). */
+      cover_file_id?: string;
+      /** @description A name for the Scene; it also names the saved file. */
+      title?: string;
+    };
+    /**
+     * @example {
+     *       "id": "664f1c2b9a1e4d0012ab34cd",
+     *       "object": "scene_composition",
+     *       "state": "pending",
+     *       "video_file_id": "664f1c2b9a1e4d0012ab34bb",
+     *       "audio_file_id": "664f1c2b9a1e4d0012ab34ee",
+     *       "cover_file_id": null,
+     *       "title": null,
+     *       "audio": {
+     *         "fit": "trim",
+     *         "fade_in_seconds": 0,
+     *         "fade_out_seconds": 1.5
+     *       },
+     *       "source": "api",
+     *       "error": null,
+     *       "output": null,
+     *       "credits": {
+     *         "reserved": null,
+     *         "settled": null
+     *       },
+     *       "created_at": "2026-11-17T00:00:00.000Z",
+     *       "updated_at": "2026-11-17T00:00:00.000Z"
+     *     }
+     */
+    getSceneCompositionResponse200: {
+      id: string;
+      /** @enum {string} */
+      object: 'scene_composition';
+      /** @enum {string} */
+      state: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+      video_file_id: string;
+      audio_file_id: string;
+      cover_file_id: string | null;
+      title: string | null;
+      audio: {
+        /** @enum {string} */
+        fit: 'trim' | 'loop';
+        fade_in_seconds: number;
+        fade_out_seconds: number;
+      };
+      /** @enum {string} */
+      source: 'api' | 'studio' | 'agent';
+      error: {
+        /** @enum {string} */
+        code: 'unsupported_input' | 'provider_timeout' | 'provider_error' | 'output_too_large' | 'cancelled';
+        message: string;
+      } | null;
+      output: {
+        /**
+         * @description `ready`: url is set. `pending_scan`: the saved file is still being scanned; re-fetch the job until it changes (self-hosted installs can stay here for up to ~30 minutes). `unavailable`: the file was blocked by the scan or deleted and url will never be set; stop polling.
+         * @enum {string}
+         */
+        availability: 'ready' | 'pending_scan' | 'unavailable';
+        /** @description Signed download URL, valid until expires_at; re-fetch the job for a fresh one. Set only when availability is `ready`, otherwise null. */
+        url: string | null;
+        /** @description ISO 8601. When url stops working; null whenever url is. */
+        expires_at: string | null;
+        content_type: string;
+        /** @description The length of the Scene, which is the length of its video. */
+        duration_seconds: number;
+        /** @description The Files entry, or null when the Scene was stored outside Files. */
+        file_id: string | null;
+      } | null;
+      /** @description Composing a Scene is free: nothing is reserved, and `settled` is 0 once the job ends. */
+      credits: {
+        reserved: number | null;
+        settled: number | null;
+      };
+      created_at: string;
+      updated_at: string;
+    };
+    listSceneCompositionsResponse200: {
+      data: {
+        id: string;
+        /** @enum {string} */
+        object: 'scene_composition';
+        /** @enum {string} */
+        state: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+        video_file_id: string;
+        audio_file_id: string;
+        cover_file_id: string | null;
+        title: string | null;
+        audio: {
+          /** @enum {string} */
+          fit: 'trim' | 'loop';
+          fade_in_seconds: number;
+          fade_out_seconds: number;
+        };
+        /** @enum {string} */
+        source: 'api' | 'studio' | 'agent';
+        error: {
+          /** @enum {string} */
+          code: 'unsupported_input' | 'provider_timeout' | 'provider_error' | 'output_too_large' | 'cancelled';
+          message: string;
+        } | null;
+        output: {
+          /**
+           * @description `ready`: url is set. `pending_scan`: the saved file is still being scanned; re-fetch the job until it changes (self-hosted installs can stay here for up to ~30 minutes). `unavailable`: the file was blocked by the scan or deleted and url will never be set; stop polling.
+           * @enum {string}
+           */
+          availability: 'ready' | 'pending_scan' | 'unavailable';
+          /** @description Signed download URL, valid until expires_at; re-fetch the job for a fresh one. Set only when availability is `ready`, otherwise null. */
+          url: string | null;
+          /** @description ISO 8601. When url stops working; null whenever url is. */
+          expires_at: string | null;
+          content_type: string;
+          /** @description The length of the Scene, which is the length of its video. */
+          duration_seconds: number;
+          /** @description The Files entry, or null when the Scene was stored outside Files. */
+          file_id: string | null;
+        } | null;
+        /** @description Composing a Scene is free: nothing is reserved, and `settled` is 0 once the job ends. */
+        credits: {
+          reserved: number | null;
+          settled: number | null;
+        };
+        created_at: string;
+        updated_at: string;
+      }[];
+      next_cursor: string | null;
+    };
+    /**
+     * @example {
      *       "voices": [
      *         {
      *           "id": "21m00Tcm4TlvDq8ikWAM",
@@ -8303,6 +9095,40 @@ export interface components {
         sessionToken: string;
       };
     };
+    createVoiceSessionResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'spend_frozen';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
+    };
     createVoiceSessionResponse422: {
       error: string;
       request_id?: string;
@@ -8312,7 +9138,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     createVoiceSessionResponse503: {
       error: string;
@@ -8957,7 +9783,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -8979,6 +9805,40 @@ export interface components {
     createTranscriptionResponse200: {
       text: string;
     };
+    createTranscriptionResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'spend_frozen';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
+    };
     createTranscriptionResponse422: {
       error: string;
       request_id?: string;
@@ -8988,7 +9848,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     createTranscriptionResponse503: {
       error: string;
@@ -9398,6 +10258,40 @@ export interface components {
       /** @description The visual prompt the portrait was generated from. */
       generation_prompt: string;
     };
+    generateAgentAvatarResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'spend_frozen';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
+    };
     generateAgentAvatarResponse422: {
       error: string;
       request_id?: string;
@@ -9407,7 +10301,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     /** @example {} */
     generateAgentAvatarRequest: {
@@ -9418,6 +10312,40 @@ export interface components {
       /** @description The generated description. It is returned, not saved to the agent. */
       description: string;
     };
+    generateAgentDescriptionResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'spend_frozen';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
+    };
     generateAgentDescriptionResponse422: {
       error: string;
       request_id?: string;
@@ -9427,11 +10355,45 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     generateAgentSystemPromptResponse200: {
       /** @description The generated system prompt, already saved to the agent. */
       system_prompt: string;
+    };
+    generateAgentSystemPromptResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'spend_frozen';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
     };
     generateAgentSystemPromptResponse422: {
       error: string;
@@ -9442,11 +10404,45 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     enhanceAgentFieldResponse200: {
       /** @description The enhanced text. It is returned, not saved to the agent. */
       enhanced_value: string;
+    };
+    enhanceAgentFieldResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'spend_frozen';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
     };
     enhanceAgentFieldResponse422: {
       error: string;
@@ -9457,7 +10453,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -9490,7 +10486,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -9524,6 +10520,40 @@ export interface components {
       /** @description ISO 8601 timestamp. */
       updated_at: string | null;
     };
+    createAgentFromContextResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'spend_frozen';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
+    };
     createAgentFromContextResponse422: {
       error: string;
       request_id?: string;
@@ -9533,7 +10563,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -10701,7 +11731,7 @@ export interface operations {
       };
     };
     responses: {
-      /** @description Message accepted - NOT a completed turn. The default (async) path returns this queued ACK; the outcome arrives on `GET /api/v1/quests/{id}` (see the `sendChatMessage200PollResult` schema). With `wait: true` the body is instead the completed turn: the ACK fields plus the reply (`response`/`responses`), `toolPayloads`, `createdAt`, `performance` timings and, when requested, `promptDetails`/`promptText`. A turn that FAILS still resolves with `200`, never a 4xx, on both that `wait: true` body and the polled quest (`GET /api/v1/quests/{id}`) - the prose explaining why lands in `reply`/`response` like any other answer, so the reply text alone cannot tell a failure from an answer. `type` is the field that can: both surfaces carry it unconditionally, so match on `type: "error"` first - it covers credit exhaustion, a provider timeout or overload, and an in-process aborted turn; a real answer carries the turn's actual completion type instead (`"message"` for an ordinary reply). Two related states do NOT set `type: "error"`: a user-cancelled turn resolves as `status: "stopped"` with `type` left at `"message"`, and a recovered stuck quest that still has renderable content resolves as a success (`status: "done"`, no error) by design, to avoid destroying content to report a failure. The one exception is output-budget exhaustion: a `wait: true` request answers it with the 422 or 502 error envelope (plus `quest_id`) instead of this body. `errorCode` then names the failure reason, but only for the billing failures that have one - `"insufficient_credits"` today; it is absent on every other `type: "error"` turn, so never use its absence to infer success. On a real answer `errorCode` is absent from the `wait: true` body. The body also carries `sessionId`, the notebook the turn was recorded in - for an API-key caller that sent none (or any caller sending `newConversation: true`), that is the freshly created notebook's id; pass it back as the request's `sessionId` to continue. Contrast the tts/music/soundEffects contracts, which reject synchronously with a 422 carrying the same `errorCode` vocabulary. */
+      /** @description Message accepted - NOT a completed turn. The default (async) path returns this queued ACK; the outcome arrives on `GET /api/v1/quests/{id}` (see the `sendChatMessage200PollResult` schema). With `wait: true` the body is instead the completed turn: the ACK fields plus the reply (`response`/`responses`), `toolPayloads`, `createdAt`, `performance` timings and, when requested, `promptDetails`/`promptText`. A turn that FAILS still resolves with `200`, never a 4xx, on both that `wait: true` body and the polled quest (`GET /api/v1/quests/{id}`) - the prose explaining why lands in `reply`/`response` like any other answer, so the reply text alone cannot tell a failure from an answer. `type` is the field that can: both surfaces carry it unconditionally, so match on `type: "error"` first - it covers credit exhaustion, a provider timeout or overload, and an in-process aborted turn; a real answer carries the turn's actual completion type instead (`"message"` for an ordinary reply). Two related states do NOT set `type: "error"`: a user-cancelled turn resolves as `status: "stopped"` with `type` left at `"message"`, and a recovered stuck quest that still has renderable content resolves as a success (`status: "done"`, no error) by design, to avoid destroying content to report a failure. The one exception is output-budget exhaustion: a `wait: true` request answers it with the 422 or 502 error envelope (plus `quest_id`) instead of this body. `errorCode` names a classified failure: `insufficient_credits`, `spend_frozen` (a spending pause that landed after the ACK), or `free_quest_limit_reached` when an older queued QuestMaster start is refused during processing. A new exhausted start is refused synchronously with 403 before a quest exists. Other `type: "error"` turns may have no classifier, so never use its absence to infer success. On a real answer `errorCode` is absent from the `wait: true` body. The body also carries `sessionId`, the notebook the turn was recorded in - for an API-key caller that sent none (or any caller sending `newConversation: true`), that is the freshly created notebook's id; pass it back as the request's `sessionId` to continue. Contrast the tts/music/soundEffects contracts, which reject synchronously with a 422 carrying the same `errorCode` vocabulary. */
       200: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -10758,7 +11788,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), organization-policy preflight refuses the model (`errorCode: "org_model_not_allowed"`), or an API-key caller named a built-in tool the organization does not allow (`errorCode: "org_tool_not_allowed"`). */
+      /** @description The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), a free account already started its QuestMaster quest (`errorCode: "free_quest_limit_reached"`), organization-policy preflight refuses the model (`errorCode: "org_model_not_allowed"`), or an API-key caller named a built-in tool the organization does not allow (`errorCode: "org_tool_not_allowed"`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -12086,7 +13116,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Valid JWT, but the account is suspended or has a dispute pending. */
+      /** @description Valid JWT, but the account is suspended or has a dispute pending, or a billed tool call was refused because spending is paused for the account or its organization (`success: false`, `errorCode: "spend_frozen"`; not retryable until the pause is lifted). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -12094,7 +13124,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['executeToolResponse403'];
         };
       };
       /** @description The path does not serve this HTTP method. */
@@ -12238,7 +13268,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key holds neither `ai:chat` nor `ai:generate`, or the account may not use outbound tools right now (an administrator restricted it, or it is new or unverified: `errorCode: "account_trust_required"`). */
+      /** @description The API key holds neither `ai:chat` nor `ai:generate`, or the account may not use outbound tools right now (an administrator restricted it, or it is new or unverified: `errorCode: "account_trust_required"`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -12258,7 +13288,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['searchWebResponse403'];
         };
       };
       /** @description The path does not serve this HTTP method. */
@@ -12450,7 +13480,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key holds neither `ai:chat` nor `ai:generate`, or the account may not use outbound tools right now (an administrator restricted it, or it is new or unverified: `errorCode: "account_trust_required"`). */
+      /** @description The API key holds neither `ai:chat` nor `ai:generate`, or the account may not use outbound tools right now (an administrator restricted it, or it is new or unverified: `errorCode: "account_trust_required"`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -12470,7 +13500,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['fetchWebPageResponse403'];
         };
       };
       /** @description The path does not serve this HTTP method. */
@@ -12815,7 +13845,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), or the caller's organization policy does not allow the model (`errorCode: "org_model_not_allowed"`). */
+      /** @description The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), or the caller's organization policy does not allow the model (`errorCode: "org_model_not_allowed"`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -13386,7 +14416,7 @@ export interface operations {
           'application/json': components['schemas']['synthesizeSpeechResponse401'];
         };
       };
-      /** @description The API key lacks the `ai:generate` scope (`required_scopes` names it), or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
+      /** @description The API key lacks the `ai:generate` scope (`required_scopes` names it), or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -13718,15 +14748,33 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`). */
+      /** @description The API key lacks the `ai:generate` scope (`required_scopes` names it), or the account is suspended (`errorCode: account_suspended`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['generateMusicResponse403'];
         };
       };
       /** @description The path does not serve this HTTP method. */
@@ -14052,7 +15100,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks the `ai:generate` scope (`required_scopes` names it), or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
+      /** @description The API key lacks the `ai:generate` scope (`required_scopes` names it), or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -17385,15 +18433,27 @@ export interface operations {
           'application/json': components['schemas']['createEmbeddingsResponse401'];
         };
       };
-      /** @description The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`). */
+      /** @description The API key lacks `ai:generate` (`required_scopes` names it), or the account is suspended (`errorCode: account_suspended`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['createEmbeddingsResponse403'];
         };
       };
       /** @description The path does not serve this HTTP method. */
@@ -17735,7 +18795,7 @@ export interface operations {
           'application/json': components['schemas']['createTextRefinementResponse401'];
         };
       };
-      /** @description The API key does not hold `ai:generate`, or AI features are disabled on this account by an administrator. */
+      /** @description The API key does not hold `ai:generate`, or AI features are disabled on this account by an administrator. Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -17755,7 +18815,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['createTextRefinementResponse403'];
         };
       };
       /** @description The path does not serve this HTTP method. */
@@ -17993,7 +19053,7 @@ export interface operations {
           'application/json': components['schemas']['createDecisionResponse401'];
         };
       };
-      /** @description The API key holds neither `ai:decide` nor `ai:generate`. */
+      /** @description The API key holds neither `ai:decide` nor `ai:generate`. Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -18013,7 +19073,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['createDecisionResponse403'];
         };
       };
       /** @description An image `file_id` does not exist or is not readable by the caller. Reading one also needs the `files:read` scope; a key without it gets 403. */
@@ -19397,7 +20457,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key holds neither `notebooks:read` nor `notebooks:write`, or AI features are disabled on the account. */
+      /** @description The API key holds neither `notebooks:read` nor `notebooks:write`, or AI features are disabled on the account. Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -19417,7 +20477,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['searchSessionsResponse403'];
         };
       };
       /** @description The path does not serve this HTTP method. */
@@ -21167,7 +22227,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `datalake:query`, or Data Lakes are disabled on this deployment. */
+      /** @description The API key lacks `datalake:query`, or Data Lakes are disabled on this deployment. Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -21187,7 +22247,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['searchDataLakeResponse403'];
         };
       };
       /** @description No lake with that id or slug is visible to the caller. A lake that exists but is not yours to read is reported as 404 too, so lake ids cannot be probed through this endpoint. A lake the caller can read but is not entitled to search is reported the same way, as is a lake that is not `active` yet (a draft lake is readable but not yet searchable). */
@@ -21847,7 +22907,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
+      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -22702,7 +23762,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
+      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -23134,6 +24194,734 @@ export interface operations {
       };
     };
   };
+  cancelSceneComposition: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The job after the cancel request. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['cancelSceneCompositionResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks the `ai:generate` scope. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No scene composition with that id was requested by the caller (a malformed id is also a 404). */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The Scene is already rendering (`running`); `errorCode` is `not_cancellable`. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['cancelSceneCompositionResponse409'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  listSceneCompositions: {
+    parameters: {
+      query?: {
+        limit?: number;
+        cursor?: string;
+        state?: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+        source?: 'api' | 'studio' | 'agent';
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description A page of jobs. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['listSceneCompositionsResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks the `ai:generate` scope. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description A malformed `cursor`, `limit`, `state` or `source`. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  createSceneComposition: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['createSceneCompositionRequest'];
+      };
+    };
+    responses: {
+      /** @description Accepted; the job is queued (or replayed for a repeated Idempotency-Key). */
+      202: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createSceneCompositionResponse202'];
+        };
+      };
+      /** @description Your Files storage has no room for the Scene (`storage_limit_exceeded`, as on the Files upload routes). The body carries `used_bytes`, `limit_bytes`, `requested_bytes` and `owner`, always together; `requested_bytes` is the most the Scene can take (the size of its inputs), not its final size. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createSceneCompositionResponse400'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks the `ai:generate` scope. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description An input file id is not one of your files, is deleted, or is still being scanned (`errorCode: input_file_not_found`). */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createSceneCompositionResponse404'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request cannot run: a malformed body (`invalid_request`), a file of the wrong kind for its slot (`unsupported_input`), inputs over the size limit (`limit_exceeded`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createSceneCompositionResponse422'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getSceneComposition: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The job. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getSceneCompositionResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks the `ai:generate` scope. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No scene composition with that id was requested by the caller (a malformed id is also a 404). */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
   listVoices: {
     parameters: {
       query?: never;
@@ -23354,7 +25142,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold `ai:generate`, Voice is not enabled on this deployment (`voiceV2Enabled` is off), or the caller already has the maximum number of concurrent voice sessions open (end one first). */
+      /** @description The API key does not hold `ai:generate`, Voice is not enabled on this deployment (`voiceV2Enabled` is off), or the caller already has the maximum number of concurrent voice sessions open (end one first). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -23374,7 +25162,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['createVoiceSessionResponse403'];
         };
       };
       /** @description The `sessionId` does not exist or is not owned by the caller (a malformed id is also a 404). */
@@ -26617,7 +28405,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `ai:generate`. */
+      /** @description The API key lacks `ai:generate`. Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -26637,7 +28425,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['createTranscriptionResponse403'];
         };
       };
       /** @description `file_key` is not one of your uploads, or the upload is missing or expired. */
@@ -29988,7 +31776,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`. */
+      /** @description The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`. Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -30008,7 +31796,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['generateAgentAvatarResponse403'];
         };
       };
       /** @description No agent with that id is yours. An agent shared with you, one that does not exist, a deleted agent and a malformed id are all reported as 404, so agent ids cannot be probed through this endpoint. */
@@ -30211,7 +31999,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`. */
+      /** @description The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`. Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -30231,7 +32019,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['generateAgentDescriptionResponse403'];
         };
       };
       /** @description No agent with that id is yours. An agent shared with you, one that does not exist, a deleted agent and a malformed id are all reported as 404, so agent ids cannot be probed through this endpoint. */
@@ -30434,7 +32222,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`. */
+      /** @description The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`. Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -30454,7 +32242,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['generateAgentSystemPromptResponse403'];
         };
       };
       /** @description No agent with that id is yours. An agent shared with you, one that does not exist, a deleted agent and a malformed id are all reported as 404, so agent ids cannot be probed through this endpoint. */
@@ -30661,7 +32449,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`. */
+      /** @description The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`. Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -30681,7 +32469,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['enhanceAgentFieldResponse403'];
         };
       };
       /** @description No agent with that id is yours. An agent shared with you, one that does not exist, a deleted agent and a malformed id are all reported as 404, so agent ids cannot be probed through this endpoint. */
@@ -31065,7 +32853,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`. */
+      /** @description The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`. Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -31085,7 +32873,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['createAgentFromContextResponse403'];
         };
       };
       /** @description No notebook with that id is available to the caller: it does not exist, the id is malformed, or you hold neither ownership nor create access to it. The cases are not told apart. */

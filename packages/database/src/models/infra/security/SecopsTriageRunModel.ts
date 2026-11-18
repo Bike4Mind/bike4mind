@@ -129,6 +129,19 @@ export class SecopsTriageRunRepository {
       .lean<LeanRun[]>();
     return docs.map(toItem);
   }
+
+  /** The stage's newest run of each scan source, newest first. */
+  async findLatestPerSourceByStage(stage: string): Promise<SecopsTriageRunItem[]> {
+    const docs = await SecopsTriageRunModel.aggregate<LeanRun>([
+      { $match: { stage } },
+      // startedAt alone, so the { stage, startedAt } index serves this sort without an in-memory one.
+      { $sort: { startedAt: -1 } },
+      { $group: { _id: '$scanSource', run: { $first: '$$ROOT' } } },
+      { $replaceRoot: { newRoot: '$run' } },
+      { $sort: { startedAt: -1, _id: -1 } },
+    ]);
+    return docs.map(toItem);
+  }
 }
 
 export const secopsTriageRunRepository = new SecopsTriageRunRepository();

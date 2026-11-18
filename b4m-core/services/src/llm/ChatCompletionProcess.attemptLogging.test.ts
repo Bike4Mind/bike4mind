@@ -9,6 +9,7 @@ import {
 import { getLlmByModel, getAvailableModels, LlmTimeoutError } from '@bike4mind/llm-adapters';
 import { ChatModels, ModelBackend, type IMessage } from '@bike4mind/common';
 import { ChatCompletionProcess } from './ChatCompletionProcess';
+import { userKeyProviders } from '../apiKeyService';
 
 vi.mock('./llmUsageSettledLog', () => ({ logLlmUsageSettled: vi.fn() }));
 vi.mock('../userService/moderationPolicy', () => ({
@@ -84,6 +85,7 @@ vi.mock('../apiKeyService', () => ({
   getEffectiveApiKey: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
   sharedAdminKeyProviders: vi.fn(),
+  userKeyProviders: vi.fn(() => new Set()),
   getOpenWeatherKey: vi.fn().mockResolvedValue(undefined),
   getWolframAlphaKey: vi.fn().mockResolvedValue(undefined),
   getFmpApiKey: vi.fn().mockResolvedValue(undefined),
@@ -110,6 +112,7 @@ const FAILED_SUMMARY = 'LLM completion failed with';
 describe('ChatCompletionProcess failed attempt logging', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(userKeyProviders).mockReturnValue(new Set());
     mockedGetAvailableModels.mockReset().mockResolvedValue([
       {
         id: ChatModels.GPT4,
@@ -185,6 +188,7 @@ describe('ChatCompletionProcess failed attempt logging', () => {
       creditTransactions: {},
       agents: {},
       projects: { findById: vi.fn() },
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
     };
     const tokenizer = {
       countTokens: vi.fn().mockResolvedValue(100),
@@ -243,7 +247,11 @@ describe('ChatCompletionProcess failed attempt logging', () => {
       projectId: undefined,
       organizationId: undefined,
     };
-    await service.process({ body, logger } as never).catch(() => undefined);
+    const rethrown = await service.process({ body, logger } as never).then(
+      () => undefined,
+      (thrown: unknown) => thrown
+    );
+    return { rethrown, questUpdates: db.quests.update.mock.calls.map(([saved]) => saved) };
   };
 
   const summaryCalls = (fn: ReturnType<typeof vi.fn>) =>
@@ -275,5 +283,44 @@ describe('ChatCompletionProcess failed attempt logging', () => {
     expect(logger.error).toHaveBeenCalledWith(unexpected);
     expect(summaryCalls(logger.warn)).toHaveLength(1);
     expect(summaryCalls(logger.debug)).toHaveLength(0);
+  });
+
+  describe('a provider rejecting the API key (401)', () => {
+    const PROVIDER_MESSAGE =
+      '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}';
+    const rejectedKey = () => Object.assign(new Error(PROVIDER_MESSAGE), { status: 401 });
+    const loggedProviderMessage = (fn: ReturnType<typeof vi.fn>) =>
+      fn.mock.calls.some(args => args.some(arg => JSON.stringify(arg ?? null)?.includes('invalid x-api-key')));
+
+    it('on the user own key: warns once with structured fields, settles with a clear reply, never rethrows', async () => {
+      vi.mocked(userKeyProviders).mockReturnValue(new Set(['openai']));
+      const { rethrown, questUpdates } = await runFailingTurn(rejectedKey());
+
+      expect(logger.warn).toHaveBeenCalledWith('[User API Key] Provider rejected the user-supplied API key', {
+        provider: 'openai',
+        model: ChatModels.GPT4,
+        status: 401,
+        keySource: 'user',
+      });
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(loggedProviderMessage(logger.warn)).toBe(false);
+      expect(summaryCalls(logger.warn)).toHaveLength(0);
+      // Settled, not rethrown: the /process route's failure log and ProcessingFailed metric never run.
+      expect(rethrown).toBeUndefined();
+      expect(questUpdates.at(-1)).toMatchObject({
+        type: 'error',
+        status: 'done',
+        reply: 'Your OpenAI API key was rejected by the provider. Update or remove it in your API key settings.',
+      });
+    });
+
+    it('on our platform key: still logged at error and rethrown, because that is an outage', async () => {
+      vi.mocked(userKeyProviders).mockReturnValue(new Set(['anthropic']));
+      const error = rejectedKey();
+      const { rethrown } = await runFailingTurn(error);
+
+      expect(logger.error).toHaveBeenCalledWith(error);
+      expect(rethrown).toBe(error);
+    });
   });
 });

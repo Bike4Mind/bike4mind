@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 export const AMBIENT_IDLE_MS = 45_000;
 
 /**
- * Marks something open that the user is in the middle of (the order slip), so the
+ * Marks something open that the user is in the middle of, so the
  * chrome never settles out from under it.
  */
 export const AMBIENT_HOLD_ATTR = 'data-ambient-hold';
@@ -30,7 +30,7 @@ function hasText(element: Element): boolean {
 
 /**
  * Whether anything on screen says the user is mid-task: an unsent draft in the composer, text in
- * the focused field, or an open menu, dialog, drawer or slip. An empty focused composer does not
+ * the focused field, or an open menu, dialog or drawer. An empty focused composer does not
  * hold, or a watcher who sent a message and walked away would never get the quiet scene.
  */
 export function ambientHeld(doc: Document): boolean {
@@ -41,13 +41,13 @@ export function ambientHeld(doc: Document): boolean {
   return composer !== null && hasText(composer);
 }
 
-/** A field that takes typing, where a keystroke belongs to the field rather than to an order. */
+/** A field that takes typing, where a keystroke belongs to the field rather than waking the composer. */
 export function isEditable(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return target.isContentEditable || target.matches('input, textarea, select');
 }
 
-/** A key that types a character, so a keystroke in the quiet tavern can become the first letter of an order. */
+/** A key that types a character, rather than a shortcut or composition in progress. */
 export function isPrintableKey(event: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'isComposing'>) {
   return event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey && !event.isComposing;
 }

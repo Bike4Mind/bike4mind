@@ -6,8 +6,9 @@ import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 import { soundEffectsRequestSchema } from '../../soundGeneration';
 import {
   ApiErrorSchema,
-  BillingOrganizationForbiddenErrorSchema,
   InsufficientCreditsErrorSchema,
+  MeteredBillingOrganizationForbiddenErrorSchema,
+  SPEND_FROZEN_FORBIDDEN_NOTE,
 } from '../../schemas/chat';
 import {
   BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION,
@@ -92,8 +93,8 @@ export const generateSoundEffectContract = defineEndpoint({
     403: {
       description:
         'The API key lacks the `ai:generate` scope (`required_scopes` names it), or ' +
-        `${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION}`,
-      schema: BillingOrganizationForbiddenErrorSchema,
+        `${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION} ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
+      schema: MeteredBillingOrganizationForbiddenErrorSchema,
     },
     404: {
       description: 'A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`.',

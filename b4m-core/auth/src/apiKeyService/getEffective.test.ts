@@ -5,6 +5,7 @@ import {
   getSearxngUrl,
   getWebSearchProviderSetting,
   sharedAdminKeyProviders,
+  userKeyProviders,
 } from './getEffective';
 import type { IAdminSettingsRepository, IApiKeyRepository, IApiKeyDocument } from '@bike4mind/common';
 import { ApiKeyType } from '@bike4mind/common';
@@ -149,6 +150,34 @@ describe('getEffectiveLLMApiKeys', () => {
     // The sentinel is intentionally surfaced to the caller (e.g. to show an "expired key"
     // warning in the UI) rather than silently swapping in the demo key.
     expect(result.openai).toBe('expired');
+  });
+
+  describe('userKeyProviders', () => {
+    const resolve = (userKeys: Partial<IApiKeyDocument>[], settings: Record<string, string | null>) =>
+      getEffectiveLLMApiKeys('user-123', {
+        db: { apiKeys: makeApiKeyRepo(userKeys), adminSettings: makeAdminSettingsRepo() },
+        getSettingsByNames: makeGetSettingsByNames(settings),
+      });
+
+    it('names only the providers resolved from the user own saved key, expired included', async () => {
+      const result = await resolve(
+        [
+          { type: ApiKeyType.anthropic, apiKey: 'sk-ant-user' },
+          { type: ApiKeyType.gemini, apiKey: 'g-old', expiresAt: new Date('2000-01-01') },
+        ],
+        { openaiDemoKey: 'sk-demo', anthropicDemoKey: 'sk-ant-demo' }
+      );
+      expect([...userKeyProviders(result)].sort()).toEqual(['anthropic', 'gemini']);
+    });
+
+    it('is empty for a table resolved from platform keys only', async () => {
+      const result = await resolve([], { anthropicDemoKey: 'sk-ant-demo' });
+      expect(userKeyProviders(result).size).toBe(0);
+    });
+
+    it('is empty for an object getEffectiveLLMApiKeys did not return', () => {
+      expect(userKeyProviders({ anthropic: 'sk-ant-user' }).size).toBe(0);
+    });
   });
 
   describe('sharedAdminKeyProviders', () => {
