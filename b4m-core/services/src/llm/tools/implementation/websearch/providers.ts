@@ -277,8 +277,44 @@ function dedupeImages(values: (string | undefined)[]): string[] {
 interface SerpApiOrganicResult {
   title?: string;
   link?: string;
+  displayed_link?: string;
   snippet?: string;
   thumbnail?: string;
+}
+
+// Matches the pinned `google_domain` of the SerpAPI requests above.
+const GOOGLE_HOSTS: ReadonlySet<string> = new Set(['google.com', 'www.google.com']);
+
+/**
+ * SerpAPI can return Google's own redirect (`google.com/goto?url=<opaque token>`) as `link`, with
+ * the real page only in the breadcrumb-style `displayed_link` ("https://host > a > b"). Rebuilds the
+ * URL from that breadcrumb: the host is right and the path is as displayed, but Google drops the
+ * query string from the breadcrumb, so the result can be the parent of the exact page. Any other
+ * link, and a breadcrumb that is truncated or not a plain URL (a video hit shows "920+ views"),
+ * passes `link` through unchanged.
+ */
+function resolveSerpApiLink(link: string, displayedLink: string | undefined): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(link);
+  } catch {
+    return link;
+  }
+  if (!GOOGLE_HOSTS.has(parsed.hostname) || !/^\/(goto|url)$/.test(parsed.pathname)) return link;
+  if (!displayedLink || displayedLink.includes('\u2026') || displayedLink.includes('...')) return link;
+
+  try {
+    const rebuilt = new URL(
+      displayedLink
+        .trim()
+        .split(/\s+\u203a\s+/)
+        .join('/')
+    );
+    const isWeb = rebuilt.protocol === 'https:' || rebuilt.protocol === 'http:';
+    return isWeb && !GOOGLE_HOSTS.has(rebuilt.hostname) ? rebuilt.toString() : link;
+  } catch {
+    return link;
+  }
 }
 
 /**
@@ -726,9 +762,10 @@ export function createSerpApiProvider(adapters: GetEffectiveApiKeyAdapters): Web
           // `organic_results[].thumbnail` is a ~92px preview. Order the big ones first so the card's
           // hero tile - the one scaled up the most - is not the most pixelated image available.
           const images = dedupeImages([...(extraImages.get(r.link!) ?? []), safeImageUrl(r.thumbnail)]);
+          const url = resolveSerpApiLink(r.link!, r.displayed_link);
           return {
-            title: r.title ?? r.link!,
-            url: r.link!,
+            title: r.title ?? url,
+            url,
             snippet: r.snippet ?? '',
             ...(images.length > 0 ? { thumbnail: images[0], images } : {}),
           };
