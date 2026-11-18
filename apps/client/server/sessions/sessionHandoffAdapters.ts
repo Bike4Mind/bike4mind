@@ -7,7 +7,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { sessionService } from '@bike4mind/services';
-import { Resource } from '@bike4mind/resource';
+import { Resource } from 'sst';
 import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { NotificationEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { readApnsCredentials } from '@bike4mind/server-utils/utils/pushDelivery';

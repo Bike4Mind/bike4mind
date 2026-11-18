@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { InactiveHandoffDeviceError, sendSessionHandoff } from './sessionHandoff';
 
 type PreferenceUser = { preferences?: { pushNotifications?: { session_handoff?: boolean } } };
 const h = vi.hoisted(() => ({
+  hostedEndpoint: 'https://hosted-websocket.example.test',
   connections: vi.fn(),
   tokens: vi.fn(),
   user: vi.fn<(userId: string) => Promise<PreferenceUser | null>>(),
@@ -19,7 +20,7 @@ vi.mock('@bike4mind/database', () => ({
   sessionRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({ sessionService: { getSession: h.authorize } }));
-vi.mock('@bike4mind/resource', () => ({ Resource: { websocket: { managementEndpoint: 'https://example.invalid' } } }));
+vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: h.hostedEndpoint } } }));
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToConnection: h.sendLive }));
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ NotificationEvents: { Push: { publish: h.publish } } }));
 vi.mock('@bike4mind/server-utils/utils/pushDelivery', () => ({
@@ -44,6 +45,8 @@ const userWith = (enabled: boolean): PreferenceUser => ({
 });
 
 beforeEach(() => {
+  vi.stubEnv('B4M_SELF_HOST', 'false');
+  vi.stubEnv('WEBSOCKET_MANAGEMENT_ENDPOINT', undefined);
   vi.resetAllMocks();
   h.connections.mockResolvedValue([live]);
   h.tokens.mockResolvedValue([token]);
@@ -53,8 +56,21 @@ beforeEach(() => {
   h.publish.mockResolvedValue(undefined);
   h.sendLive.mockResolvedValue(undefined);
 });
+afterEach(() => vi.unstubAllEnvs());
 
 describe('session handoff persisted notification preference', () => {
+  it('uses the hosted SST websocket binding without a self-host endpoint', async () => {
+    h.tokens.mockResolvedValue([]);
+
+    await sendSessionHandoff(USER, { sessionId: SESSION, deviceId: 'live:live-connection' }, sessionHandoffAdapters);
+
+    expect(h.sendLive).toHaveBeenCalledExactlyOnceWith('connection-id', h.hostedEndpoint, {
+      action: 'session_handoff',
+      sessionId: SESSION,
+    });
+    expect(h.publish).not.toHaveBeenCalled();
+  });
+
   it.each(['missing', 'enabled'] as const)(
     'makes a configured native destination available with %s preference',
     async preference => {
