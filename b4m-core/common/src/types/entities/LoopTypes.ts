@@ -291,6 +291,13 @@ export const stageConfigOf = (loop: Pick<ILoop, 'stageConfig'>, stage?: string):
 export const desktopStagesOf = (loop: Pick<ILoop, 'stageConfig'>): string[] =>
   (loop.stageConfig ?? []).filter(entry => entry.runner === 'desktop').map(entry => entry.stage);
 
+/** Every work stage (all but the last) waits for a desktop runner, so the cloud never runs the loop. */
+export const isDesktopOnlyLoop = (loop: Pick<ILoop, 'stages' | 'stageConfig'>): boolean => {
+  const desktop = desktopStagesOf(loop);
+  const work = loop.stages.slice(0, -1);
+  return work.length > 0 && work.every(stage => desktop.includes(stage));
+};
+
 /** What a cloud run's reflection call wrote about it; `credits` is what the call cost, already in the run's total. */
 export interface ILoopRunReflection {
   reflection: string;

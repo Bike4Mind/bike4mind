@@ -1397,6 +1397,43 @@ describe('runLoopSchedulerTick - stage config', () => {
     expect((await reload(live.id)).nextRunAt).toEqual(LATER);
   });
 
+  describe('a desktop-only loop', () => {
+    const DESKTOP_ONLY = {
+      stages: STAGES,
+      stageConfig: [
+        { stage: 'todo', runner: 'desktop' },
+        { stage: 'review', runner: 'desktop' },
+      ],
+    };
+
+    it('starts no cloud run for its desktop tickets on any tick or dispatch, and waits for its next interval', async () => {
+      const loop = await createLoop(DESKTOP_ONLY);
+      const desktop = await createTicket(loop.id, { stage: 'review' });
+
+      await runLoopSchedulerTick(NOW, logger);
+      const parked = await reload(loop.id);
+      expect(parked.nextRunAt.getTime()).toBeGreaterThan(NOW.getTime());
+      expect(parked.leaseUntil ?? null).toBeNull();
+
+      await runLoopSchedulerTick(parked.nextRunAt, logger);
+      await dispatchLoopNow(loop.id, parked.nextRunAt, logger);
+
+      expect(h.startAgentExecution).not.toHaveBeenCalled();
+      expect(await ticketOf(desktop.id)).toMatchObject({ status: 'open' });
+      expect((await reload(loop.id)).nextRunAt.getTime()).toBeGreaterThan(parked.nextRunAt.getTime());
+    });
+
+    it('still triages its untriaged tickets', async () => {
+      const loop = await createLoop(DESKTOP_ONLY);
+      await createTicket(loop.id, { stage: 'todo', priority: undefined, prioritySetBy: undefined });
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+      expect(await reload(loop.id)).toMatchObject({ activeExecutionIds: ['exec-1'] });
+    });
+  });
+
   it('leaves a ticket advanced into a desktop stage open there, unclaimed on the next tick', async () => {
     const loop = await createLoop({
       stages: STAGES,

@@ -4,6 +4,7 @@ import {
   ACTIVE_AGENT_EXECUTION_STATUSES,
   activeLaneCount,
   desktopStagesOf,
+  isDesktopOnlyLoop,
   loopMaxConcurrent,
   loopRunModel,
   nextUtcMidnight,
@@ -984,7 +985,7 @@ async function releaseTicket(ticket: IWorkItem, logger: Logger): Promise<void> {
 type LaneOpened = boolean | 'again';
 
 /**
- * Pushes a loop with a lane running but nothing to claim to its next interval (a `tickets` wake-mode loop: no next
+ * Pushes a loop with a lane running (or a desktop-only loop) but nothing to claim to its next interval (a `tickets` wake-mode loop: no next
  * run); a ticket change makes it due again.
  */
 async function parkLaneless(loop: ILoop, now: Date): Promise<void> {
@@ -1038,7 +1039,8 @@ async function dispatchLoop(
     onlyPriorities = p2.onlyPriorities;
     ready = (await listReady(loop)).filter(ticket => untriaged.length === 0 || ticket.priority);
     const ticketsLeft = claimable(loop, ready, onlyPriorities).length;
-    if (activeLanes > 0 && ticketsLeft === 0) {
+    // A desktop-only loop has no cloud work: a goal run would only spend the budget its desktop claims need.
+    if (ticketsLeft === 0 && (activeLanes > 0 || isDesktopOnlyLoop(loop))) {
       if (p2.cloudReady) await holdForP2(loop, now, logger);
       else await parkLaneless(loop, now);
       return false;

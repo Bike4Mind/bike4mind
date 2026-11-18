@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { effectiveMergePolicy, loopRunModel, nextUtcMidnight, serviceLevelBreach } from './LoopTypes';
+import {
+  effectiveMergePolicy,
+  isDesktopOnlyLoop,
+  loopRunModel,
+  nextUtcMidnight,
+  serviceLevelBreach,
+} from './LoopTypes';
 
 describe('effectiveMergePolicy', () => {
   it('defaults to review and serves green-ci as review when the org turned it off', () => {
@@ -64,5 +70,19 @@ describe('serviceLevelBreach', () => {
     expect(serviceLevelBreach(ticket({ status: 'blocked' }), {}, now)).toBeNull();
     expect(serviceLevelBreach(ticket({ epic: true }), {}, now)).toBeNull();
     expect(serviceLevelBreach(ticket({ status: 'blocked', blockedOn: 'dependencies' }), {}, now)).not.toBeNull();
+  });
+});
+
+describe('isDesktopOnlyLoop', () => {
+  const desktop = (...stages: string[]) => stages.map(stage => ({ stage, runner: 'desktop' as const }));
+  it('is true only when every stage but the last is a desktop stage', () => {
+    expect(isDesktopOnlyLoop({ stages: ['todo', 'done'], stageConfig: desktop('todo') })).toBe(true);
+    expect(isDesktopOnlyLoop({ stages: ['todo', 'review', 'done'], stageConfig: desktop('todo', 'review') })).toBe(
+      true
+    );
+    expect(isDesktopOnlyLoop({ stages: ['todo', 'review', 'done'], stageConfig: desktop('review') })).toBe(false);
+    expect(isDesktopOnlyLoop({ stages: ['todo', 'done'], stageConfig: desktop('done') })).toBe(false);
+    expect(isDesktopOnlyLoop({ stages: ['done'], stageConfig: desktop('done') })).toBe(false);
+    expect(isDesktopOnlyLoop({ stages: ['todo', 'done'] })).toBe(false);
   });
 });
