@@ -143,6 +143,7 @@ type AccountStateSnapshot = Parameters<typeof userService.entersBlockedState>[0]
   suspensionReasonCategory?: string | null;
   isModerated?: boolean;
   email?: string | null;
+  moderation?: { status?: string | null; throttledUntil?: Date | string | null } | null;
 };
 
 type AuditTargetSnapshot = {
