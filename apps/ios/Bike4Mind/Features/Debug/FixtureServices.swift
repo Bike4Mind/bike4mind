@@ -26,6 +26,7 @@
     static let stepUp: any StepUpAPI = FixtureStepUpAPI()
     static let briefAPI: any BriefAPI = FixtureBriefAPI()
     static let instructionAPI: any InstructionAPI = FixtureInstructionAPI()
+    static let briefSchedule: any BriefScheduleAPI = FixtureBriefScheduleAPI()
     /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
     static let workingQuestID = "fixture-0-q4"
 
@@ -327,6 +328,18 @@
       }
       func sendEmailCode() async throws -> String { "fixture-pending-token" }
       func verify(_ proof: StepUpProof) async throws -> Date { Date().addingTimeInterval(300) }
+    }
+
+    /// Keeps the last saved schedule for the run, so Settings shows what was just picked.
+    private actor FixtureBriefScheduleAPI: BriefScheduleAPI {
+      private var stored: BriefSchedule?
+
+      func schedule() async throws -> BriefSchedule? { stored }
+
+      func save(_ schedule: BriefSchedule) async throws -> BriefSchedule {
+        stored = schedule
+        return schedule
+      }
     }
 
     private struct NoopPushTokenAPI: PushTokenAPI {
