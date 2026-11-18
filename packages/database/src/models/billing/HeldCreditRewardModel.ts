@@ -14,6 +14,7 @@ export type HeldCreditReward = {
   description: string;
   metadata?: Record<string, unknown>;
   lotRef?: string;
+  expiresAt?: Date;
   heldAt: Date;
   status: HeldCreditRewardStatus;
   paidAt?: Date | null;
@@ -37,6 +38,7 @@ const heldCreditRewardSchema = new Schema<HeldCreditRewardDoc>(
     metadata: { type: Schema.Types.Mixed },
     // Stamped as the paid lot's stripeRef so a refund take-back finds the lot.
     lotRef: { type: String },
+    expiresAt: { type: Date },
     heldAt: { type: Date, required: true },
     status: { type: String, enum: ['held', 'paid', 'void', 'paused'], required: true, default: 'held' },
     paidAt: { type: Date, default: null },

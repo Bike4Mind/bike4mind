@@ -221,6 +221,11 @@ export async function releaseDueSubscriptionRewards({
 
   for (const candidate of due) {
     try {
+      const expiresAt = new Date(candidate.createdAt.getTime() + 90 * DAY_MS);
+      if (expiresAt <= now) {
+        if (await referralSubscriptionRewardRepository.cancelPending(candidate.id, 'expired', now)) result.cancelled++;
+        continue;
+      }
       const [inviter, payer] = await Promise.all([
         User.findById(candidate.inviterId).select(INVITER_FIELDS).lean<RewardParty>(),
         User.findById(candidate.payerId).select(PARTY_FIELDS).lean<RewardParty>(),
@@ -262,6 +267,7 @@ export async function releaseDueSubscriptionRewards({
                 reason: REFERRAL_REWARD_REASON,
                 description: 'Referral reward: subscription payment from an invited friend',
                 lotRef: ref,
+                expiresAt,
                 metadata: {
                   step: claimed.step,
                   [REFERRED_USER_ID_METADATA_KEY]: claimed.payerId,

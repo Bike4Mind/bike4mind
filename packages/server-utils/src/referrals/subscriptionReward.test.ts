@@ -324,6 +324,7 @@ describe('recordSubscriptionPaymentReward', () => {
 describe('releaseDueSubscriptionRewards', () => {
   const due = {
     id: 'r1',
+    createdAt: NOW,
     inviterId: 'inviter1',
     payerId: 'friend1',
     invoiceId: 'in_1',

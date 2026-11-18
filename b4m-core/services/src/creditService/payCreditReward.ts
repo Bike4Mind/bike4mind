@@ -27,6 +27,7 @@ export type HeldCreditRewardInput = {
   metadata?: Record<string, unknown>;
   /** Stamped as the paid lot's stripeRef, so a refund take-back can find the lot (clawbackCreditLotsByStripeRef). */
   lotRef?: string;
+  expiresAt?: Date;
 };
 
 /** `paused` is a blocked account's reward, out of the queue until unblock restores it to `held`. */
@@ -243,9 +244,14 @@ export async function payCreditReward(
   const [own] = await adapters.heldRewards.findByTransactionIds([reward.transactionId]);
   // A voided row was refused at release; answering 'duplicate' would read as claimed and loop the user.
   if (own) {
+    if (own.status === 'held' && rewardExpired(own, new Date())) {
+      await adapters.heldRewards.settle(reward.transactionId, 'void');
+      return { outcome: 'blocked' };
+    }
     if (own.status === 'held') return { outcome: 'queued' };
     return { outcome: own.status === 'void' || own.status === 'paused' ? 'blocked' : 'duplicate' };
   }
+  if (reward.expiresAt && reward.expiresAt.getTime() <= Date.now()) return { outcome: 'blocked' };
 
   if (
     drawnInRefundScope(adapters, 'trickle', reward.transactionId) ||
@@ -287,10 +293,17 @@ export type ReleaseHeldCreditRewardsResult = {
   paidRewards: Array<{ source: CreditRewardSource; creditTransactionId: string }>;
 };
 
+const rewardExpired = (reward: HeldCreditRewardRow, now: Date): boolean => {
+  const expiresAt =
+    reward.expiresAt ??
+    (reward.source === 'referral_subscription' ? new Date(reward.heldAt.getTime() + 90 * 24 * 60 * 60 * 1000) : null);
+  return !!expiresAt && expiresAt.getTime() <= now.getTime();
+};
+
 /** Pays queued rewards oldest first against today's trickle pool, stopping at the first that does not fit. */
 export async function releaseHeldCreditRewards(
   adapters: PayCreditRewardAdapters,
-  { limit }: { limit: number }
+  { limit, now = new Date() }: { limit: number; now?: Date }
 ): Promise<ReleaseHeldCreditRewardsResult> {
   const result: ReleaseHeldCreditRewardsResult = {
     scanned: 0,
@@ -309,6 +322,11 @@ export async function releaseHeldCreditRewards(
     try {
       if (await adapters.db.creditTransactions.findOne({ transactionId: reward.transactionId })) {
         await adapters.heldRewards.settle(reward.transactionId, 'paid');
+        continue;
+      }
+      if (rewardExpired(reward, now)) {
+        await adapters.heldRewards.settle(reward.transactionId, 'void');
+        result.voided++;
         continue;
       }
       const block = await partiesBlock(reward, adapters);
