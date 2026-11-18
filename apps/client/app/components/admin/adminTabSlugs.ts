@@ -135,7 +135,7 @@ export type AdminTabRedirect = { tab: AdminTab; search?: Partial<AdminSearch> };
 export const ADMIN_TAB_SLUG_REDIRECTS: ReadonlyMap<string, AdminTabRedirect> = new Map([
   ['subscribers', { tab: AdminTab.Waitlist }],
   [RETIRED_TAB_SLUGS[AdminTab.RegistrationInvites], { tab: AdminTab.Waitlist, search: { inviteSection: 'invites' } }],
-  [RETIRED_TAB_SLUGS[AdminTab.PartnerSignupRules], { tab: AdminTab.Waitlist, search: { inviteSection: 'packages' } }],
+  [RETIRED_TAB_SLUGS[AdminTab.PartnerSignupRules], { tab: AdminTab.Waitlist, search: { inviteSection: 'partners' } }],
   [RETIRED_TAB_SLUGS[AdminTab.HeldSignupGrants], { tab: AdminTab.Waitlist, search: { inviteSection: 'pending' } }],
   [
     RETIRED_TAB_SLUGS[AdminTab.SecOpsTriage],

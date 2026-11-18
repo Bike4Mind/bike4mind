@@ -59,7 +59,7 @@ describe('adminTabRedirectFromSlug', () => {
   it.each([
     ['subscribers', undefined],
     ['registration-invites', 'invites'],
-    ['partner-signup-rules', 'packages'],
+    ['partner-signup-rules', 'partners'],
     ['held-signup-grants', 'pending'],
   ])('sends %s to the waitlist tab with section %s', (slug, section) => {
     const redirect = adminTabRedirectFromSlug(slug);
@@ -94,7 +94,7 @@ describe('adminTabLinkSearch', () => {
 
   it.each([
     [AdminTab.RegistrationInvites, 'invites'],
-    [AdminTab.PartnerSignupRules, 'packages'],
+    [AdminTab.PartnerSignupRules, 'partners'],
     [AdminTab.HeldSignupGrants, 'pending'],
   ])('links retired tab %s to its Invite Center section', (tab, section) => {
     expect(adminTabLinkSearch(tab)).toEqual({ tab: 'waitlist', inviteSection: section });
