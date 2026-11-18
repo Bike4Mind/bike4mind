@@ -23,6 +23,8 @@ import { registerModelScheme } from './chat/model3d/engineProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
 import { isExternallyOpenable } from '@shared/externalLinks';
 import { persistConsoleWarnings } from './logFile';
+import { registerSkinScheme } from './mods/skinProtocol';
+import { registerSkins } from './mods';
 import { registerUpdates } from './update';
 import { registerTerminals } from './terminal';
 import { registerUsage } from './usage';
@@ -39,6 +41,7 @@ const rendererDevUrl = process.env.ELECTRON_RENDERER_URL;
 registerMediaScheme();
 registerArtifactScheme();
 registerModelScheme();
+registerSkinScheme();
 
 function buildAppInfo(): AppInfo {
   const versionBasis = currentVersionBasis();
@@ -293,6 +296,8 @@ void app.whenReady().then(async () => {
     }
     quitState = 'ready';
   };
+
+  registerSkins();
 
   // Everything a quit would throw away, counted fresh each time it is asked for. The updater
   // puts this to the user rather than acting on it: a streaming reply and a dev server are both

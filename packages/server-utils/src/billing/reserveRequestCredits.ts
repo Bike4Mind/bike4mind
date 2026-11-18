@@ -3,6 +3,7 @@ import {
   creditTransactionRepository,
   organizationRepository,
   pendingCreditHoldRepository,
+  spendFreezeRepository,
   usageEventRepository,
   userRepository,
   warmExchangeAttribution,
@@ -18,6 +19,7 @@ import { assertApiKeyOrgMembership } from './assertApiKeyOrgMembership';
 import { attributeToRequestApiKey } from './attributeToRequestApiKey';
 
 import { resolveRequestBillingOrgId } from './resolveRequestBillingOrgId';
+import { spendFreezeSubjectForRequest, type SpendFreezeApiKey } from './spendFreezeSubject';
 import { assertAiAccessAllowed } from '../auth/assertAiAccessAllowed';
 import { checkFreeTierDailySpendCap } from './freeTierDailyCapGate';
 import { observeCreditHold, recordSettlementAfterSweep } from './creditHoldTelemetry';
@@ -68,6 +70,7 @@ export const holdAdapters = {
   creditTransactions: creditTransactionRepository,
   deductCredits: creditService.deductCreditsWithOrgSupport,
   newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+  spendFreezes: spendFreezeRepository,
   onInsufficientCredits: recordInsufficientCredits,
 };
 
@@ -86,6 +89,12 @@ type ReserveRequestCreditsParams = {
   billingOrganizationId?: string | null;
   /** How long the hold may stay unsettled before the sweep refunds it; defaults to CREDIT_HOLD_TTL_MS. */
   holdTtlMs?: number;
+  /**
+   * The key behind work that has no request of its own (a queued or in-turn meter). It joins the spend
+   * freeze subject only and never changes the billing owner; a request that authenticated with a key
+   * uses `req.apiKeyInfo` instead.
+   */
+  spendFreezeApiKey?: SpendFreezeApiKey;
 };
 
 /**
@@ -112,6 +121,7 @@ export async function reserveRequestCredits({
   featureLabel,
   billingOrganizationId: explicitBillingOrgId,
   holdTtlMs = CREDIT_HOLD_TTL_MS,
+  spendFreezeApiKey,
 }: ReserveRequestCreditsParams): Promise<CreditReservation> {
   if (!req.user) throw new BadRequestError('User not found');
   // Before the enforceCredits short-circuit: a moderated user is refused with credits on or off.
@@ -120,6 +130,16 @@ export async function reserveRequestCredits({
   const billingOrganizationId = resolveRequestBillingOrgId(req, explicitBillingOrgId);
   const ownerId = billingOrganizationId ?? userId;
   const ownerType = billingOrganizationId ? CreditHolderType.Organization : CreditHolderType.User;
+
+  // Also before the enforceCredits short-circuit, and ahead of the free-tier cap so a frozen subject is
+  // never told to wait for UTC midnight.
+  await creditService.assertSpendNotFrozen(
+    spendFreezeSubjectForRequest(
+      { user: req.user, apiKeyInfo: req.apiKeyInfo ?? spendFreezeApiKey },
+      billingOrganizationId ?? null
+    ),
+    { db: { spendFreezes: spendFreezeRepository } }
+  );
 
   // Daily cap check for free-tier accounts (no-op when enforceCredits is off).
   await checkFreeTierDailySpendCap({
@@ -145,6 +165,8 @@ export async function reserveRequestCredits({
           requiredCredits,
           featureLabel,
           logger: req.logger,
+          apiKeyId: req.apiKeyInfo?.keyId,
+          spendFreezeChecked: true,
           // Re-checked against the roster holdCredits just fetched - no extra query.
           assertBillable: (billingUser, billingOrg) =>
             assertApiKeyOrgMembership({ billingOrg, billingUser, isApiKeyCaller: Boolean(req.apiKeyInfo) }),

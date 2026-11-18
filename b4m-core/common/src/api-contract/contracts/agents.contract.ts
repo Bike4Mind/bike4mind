@@ -17,7 +17,13 @@ import {
   UpdateAgentRequestSchema,
 } from '../../schemas/agentPublic';
 import { PaginationQuerySchema } from '../../schemas/pagination';
-import { ApiErrorSchema, InsufficientCreditsErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
+import {
+  ApiErrorSchema,
+  InsufficientCreditsErrorSchema,
+  MeteredForbiddenErrorSchema,
+  ScopeForbiddenErrorSchema,
+  SPEND_FROZEN_FORBIDDEN_NOTE,
+} from '../../schemas/chat';
 
 /**
  * The integrator-facing subset of the agent API. Each route is a `/api/v1` twin of an SPA route
@@ -185,7 +191,7 @@ const AUTHORING_SCOPE_NOTE =
 
 const AUTHORING_FORBIDDEN =
   `${WRITE_FORBIDDEN} The same status also answers a caller whose account has AI access revoked; that body ` +
-  'carries only `error`, with no `required_scopes`.';
+  `carries only \`error\`, with no \`required_scopes\`. ${SPEND_FROZEN_FORBIDDEN_NOTE}`;
 
 const AUTHORING_400 = 'The assistant cannot run: the feature is disabled or not configured on this deployment.';
 
@@ -231,7 +237,7 @@ export const generateAgentAvatarContract = defineEndpoint({
         `${BILLING_400} Nothing is written.`,
       schema: ApiErrorSchema,
     },
-    403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    403: { description: AUTHORING_FORBIDDEN, schema: MeteredForbiddenErrorSchema },
     404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
     422: { description: `${BODY_422} ${AUTHORING_CREDITS_422}`, schema: InsufficientCreditsErrorSchema },
     429: {
@@ -266,7 +272,7 @@ export const generateAgentDescriptionContract = defineEndpoint({
   responses: {
     200: { description: 'The generated description.', schema: GenerateAgentDescriptionResponseSchema },
     400: { description: BILLING_400, schema: ApiErrorSchema },
-    403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    403: { description: AUTHORING_FORBIDDEN, schema: MeteredForbiddenErrorSchema },
     404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
     422: { description: AUTHORING_CREDITS_422, schema: InsufficientCreditsErrorSchema },
     429: {
@@ -296,7 +302,7 @@ export const generateAgentSystemPromptContract = defineEndpoint({
   responses: {
     200: { description: 'The saved system prompt.', schema: GenerateAgentSystemPromptResponseSchema },
     400: { description: `${AUTHORING_400} ${BILLING_400} Nothing is written.`, schema: ApiErrorSchema },
-    403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    403: { description: AUTHORING_FORBIDDEN, schema: MeteredForbiddenErrorSchema },
     404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
     422: { description: AUTHORING_CREDITS_422, schema: InsufficientCreditsErrorSchema },
     429: {
@@ -337,7 +343,7 @@ export const enhanceAgentFieldContract = defineEndpoint({
       description: `No model is available to run the enhancement on this deployment. ${BILLING_400}`,
       schema: ApiErrorSchema,
     },
-    403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    403: { description: AUTHORING_FORBIDDEN, schema: MeteredForbiddenErrorSchema },
     404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
     422: { description: `${BODY_422} ${AUTHORING_CREDITS_422}`, schema: InsufficientCreditsErrorSchema },
     429: {
@@ -411,7 +417,7 @@ export const createAgentFromContextContract = defineEndpoint({
         `valid JSON. ${BILLING_400} Nothing is created.`,
       schema: ApiErrorSchema,
     },
-    403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    403: { description: AUTHORING_FORBIDDEN, schema: MeteredForbiddenErrorSchema },
     404: {
       description:
         'No notebook with that id is available to the caller: it does not exist, the id is malformed, or you ' +

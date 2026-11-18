@@ -1,5 +1,13 @@
 # @bike4mind/infra
 
+## 7.1.0
+
+### Minor Changes
+
+- [#7683](https://github.com/Bike4Mind/bike4mind/pull/7683) [`1b65299`](https://github.com/Bike4Mind/bike4mind/commit/1b65299a311a4ce5d8ee3e6036046c53b54502fb) Thanks [@onoya](https://github.com/onoya)! - speech and sound effects as generation job kinds
+
+- [#7802](https://github.com/Bike4Mind/bike4mind/pull/7802) [`39ed23f`](https://github.com/Bike4Mind/bike4mind/commit/39ed23fcce2a7e2491aa72c2d211137ef4e54c91) Thanks [@cgtorniado](https://github.com/cgtorniado)! - alarm on unpriced usage-poller tokens and price them from a model price snapshot
+
 ## 7.0.0
 
 ### Major Changes

@@ -36,6 +36,12 @@ const DecisionSchema = new Schema(
     email: { type: String, default: null },
     fullAdmin: { type: Boolean, required: true },
     permissions: { type: [String], default: [] },
+    roles: {
+      type: [
+        new Schema({ id: { type: String, required: true }, name: { type: String, default: null } }, { _id: false }),
+      ],
+      default: undefined,
+    },
     decision: { type: String, enum: ['confirmed', 'revoked'], required: true },
     reviewer: { type: ReviewerSchema, required: true },
     decidedAt: { type: Date, required: true },
@@ -74,6 +80,7 @@ const toDecision = (decision: AccessReviewDecision): AccessReviewDecision => ({
   email: decision.email ?? null,
   fullAdmin: decision.fullAdmin,
   permissions: [...(decision.permissions ?? [])],
+  ...(decision.roles ? { roles: decision.roles.map(({ id, name }) => ({ id, name: name ?? null })) } : {}),
   decision: decision.decision,
   reviewer: toReviewer(decision.reviewer),
   decidedAt: decision.decidedAt,

@@ -81,6 +81,7 @@ function buildDb(opts: { org?: object; reservedBalance?: number; recordLimitEven
       findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100 }),
     },
     usageEvents: { record: vi.fn().mockResolvedValue(undefined) },
+    spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
     organizations: {
       findById: vi.fn().mockResolvedValue(org),
       incrementCredits: vi.fn().mockResolvedValue({ ...org, currentCredits: 490 }),

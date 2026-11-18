@@ -44,6 +44,7 @@ test.describe('Admin access review', () => {
   const adminA = getTestUsers().admin;
   let adminB: string;
   let delegateC: string;
+  let role: { id: string; name: string };
 
   test.beforeAll(async ({ request }) => {
     adminB = await createUser(request, 'access-review-b', true);
@@ -54,6 +55,17 @@ test.describe('Admin access review', () => {
       data: { before: [], adminPermissions: ['users:read'], reason: 'access review e2e setup' },
     });
     expect(grant.ok(), `delegate grant failed: ${grant.status()}`).toBe(true);
+    const created = await request.post(`${baseURL}/api/admin/admin-roles`, {
+      headers: auth(adminA.accessToken),
+      data: { name: `access-review-role-${test.info().retry}-${getTestRunId()}`, permissions: ['support:read'] },
+    });
+    expect(created.ok(), `role create failed: ${created.status()}`).toBe(true);
+    role = (await created.json()) as { id: string; name: string };
+  });
+
+  test.afterAll(async ({ request }) => {
+    if (role)
+      await request.delete(`${baseURL}/api/admin/admin-roles/${role.id}`, { headers: auth(adminA.accessToken) });
   });
 
   test('the report lists the seeded admins and a self-confirm is refused', async ({ request }) => {
@@ -114,8 +126,11 @@ test.describe('Admin access review', () => {
     const csv = await res.text();
     const header = csv.split(/\r?\n/)[0];
     expect(header).toBe(
-      '"quarter","userId","email","username","fullAdmin","permissions","grantedBy","grantedAt","lastAdminActionAt","lastSignInAt","mfaEnabled","dormant","decision","reviewerName","reviewerUserId","decidedAt","reviewCompletedAt"'
+      '"quarter","userId","email","username","fullAdmin","permissions","grantedBy","grantedAt","lastAdminActionAt","lastSignInAt","mfaEnabled","dormant","decision","reviewerName","reviewerUserId","decidedAt","reviewCompletedAt","directPermissions","roles","permissionSources"'
     );
+    const lines = csv.split(/\r?\n/);
+    expect(lines.find(line => line.startsWith('"roleId"'))).toBe('"roleId","role","permissions","members"');
+    expect(lines).toContain(`"${role.id}","${role.name}","support:read",""`);
     expect(csv).not.toMatch(/totpSecret|backupCodes|keyHash|apiKey/i);
     expect(csv).toContain(delegateC);
   });

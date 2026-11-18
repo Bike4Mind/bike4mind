@@ -1,4 +1,11 @@
-import type { ModelBuildReport, ModelLighting, ModelPose, ModelView, ModelViewState } from '@shared/model3d';
+import type {
+  ModelBuildReport,
+  ModelLighting,
+  ModelPose,
+  ModelVersion,
+  ModelView,
+  ModelViewState,
+} from '@shared/model3d';
 import type { SpawnOptions, TaskAction } from '@shared/orchestration';
 import type { CustomCommand } from '@bike4mind/cli/skills';
 import type { VideoModel } from '@bike4mind/common';
@@ -354,6 +361,8 @@ export interface ModelViewPort {
   /** An 8 s turntable clip of the current model, as WebM. */
   recordTurntable(lighting: ModelLighting): Promise<Uint8Array>;
   glbPath(): string | null;
+  /** This conversation's kept builds, oldest first (ModelVersionStore.ts). */
+  versions(): Promise<ModelVersion[]>;
 }
 
 export interface ModelContext {

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { hasAdminPermission } from '@bike4mind/common';
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -29,6 +30,7 @@ vi.mock('@server/auth/completeMfaEnrollment', () => ({
 const mockFindById = vi.fn();
 const mockFindByIdWithMfaSecrets = vi.fn();
 const mockRecordFailedAttempt = vi.fn();
+const mockFindRoles = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   userRepository: {
     findById: (...a: unknown[]) => mockFindById(...a),
@@ -37,6 +39,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   passkeyCredentialRepository: {},
   passkeyChallengeRepository: {},
+  adminRoleRepository: { findByIds: (...a: unknown[]) => mockFindRoles(...a) },
 }));
 
 const RP = { rpID: 'app.example.com', rpName: 'Example', origin: 'https://app.example.com' };
@@ -123,7 +126,7 @@ describe('/api/auth/mfa/passkey/authenticate', () => {
     expect(mockCompleteMfaLogin).toHaveBeenCalledWith(
       req,
       res,
-      { id: 'user-1', tokenVersion: 3 },
+      expect.objectContaining({ id: 'user-1', tokenVersion: 3 }),
       { rememberDevice: true }
     );
   });
@@ -293,6 +296,86 @@ describe('/api/auth/mfa/passkey/register', () => {
     expect(res._getStatusCode()).toBe(409);
     expect(res._getJSONData()).toMatchObject({ code: 'limit_reached' });
     expect(mockLogAuthAudit).not.toHaveBeenCalled();
+  });
+});
+
+const ROLE_ID = 'a'.repeat(24);
+const DELETED_ROLE_ID = 'c'.repeat(24);
+
+const authenticateWith = async (adminRoleIds: unknown[]) => {
+  mockFinishAuthentication.mockResolvedValue({ user: { id: 'user-1', adminRoleIds }, credentialId: 'pk-1' });
+  const { req, res } = makeReqRes({ response: assertion });
+  await authenticateHandler(req as never, res as never);
+  return res._getJSONData().user;
+};
+
+const registerWith = async (adminRoleIds: unknown[]) => {
+  mockFindById
+    .mockResolvedValueOnce({ id: 'user-1', mfa: {} })
+    .mockResolvedValueOnce({ id: 'user-1', mfa: { passkeyEnabled: true }, adminRoleIds });
+  mockFinishRegistration.mockResolvedValue({
+    credential: { id: 'pk-1', name: 'Laptop', deviceType: 'multiDevice', backedUp: true, createdAt: new Date() },
+    firstFactor: true,
+    backupCodes: ['c1'],
+  });
+  const { req, res } = makeReqRes({ response: attestation });
+  await registerHandler(req as never, res as never);
+  return res._getJSONData().user;
+};
+
+describe.each([
+  ['authenticate', authenticateWith],
+  ['register', registerWith],
+])('/api/auth/mfa/passkey/%s - role-held admin permissions', (_route, respondWith) => {
+  beforeEach(() => {
+    mockFindRoles.mockReset();
+  });
+
+  it('counts a permission held only through a role', async () => {
+    mockFindRoles.mockResolvedValue([{ permissions: ['support:read'] }]);
+
+    const user = await respondWith([ROLE_ID]);
+
+    expect(user.roleAdminPermissions).toEqual(['support:read']);
+    expect(hasAdminPermission(user, 'support:read')).toBe(true);
+  });
+
+  it('refuses the permission on the next call once the role is removed', async () => {
+    mockFindRoles.mockResolvedValue([{ permissions: ['support:read'] }]);
+    expect(hasAdminPermission(await respondWith([ROLE_ID]), 'support:read')).toBe(true);
+    mockFindRoles.mockClear();
+
+    const after = await respondWith([]);
+
+    expect(after.roleAdminPermissions).toEqual([]);
+    expect(hasAdminPermission(after, 'support:read')).toBe(false);
+    expect(mockFindRoles).not.toHaveBeenCalled();
+  });
+
+  it('grants nothing for a deleted or malformed role id', async () => {
+    mockFindRoles.mockResolvedValue([]);
+
+    const user = await respondWith([DELETED_ROLE_ID, 'not-an-id']);
+
+    expect(mockFindRoles).toHaveBeenCalledWith([DELETED_ROLE_ID]);
+    expect(user.roleAdminPermissions).toEqual([]);
+    expect(hasAdminPermission(user, 'support:read')).toBe(false);
+  });
+});
+
+describe('/api/auth/mfa/passkey/authenticate - role lookup failure', () => {
+  it('aborts before the session is minted', async () => {
+    mockFindRoles.mockReset().mockRejectedValue(new Error('roles unavailable'));
+    mockFinishAuthentication.mockResolvedValue({
+      user: { id: 'user-1', adminRoleIds: [ROLE_ID] },
+      credentialId: 'pk-1',
+    });
+    mockCompleteMfaLogin.mockClear();
+    const { req, res } = makeReqRes({ response: assertion });
+
+    await expect(authenticateHandler(req as never, res as never)).rejects.toThrow('roles unavailable');
+
+    expect(mockCompleteMfaLogin).not.toHaveBeenCalled();
   });
 });
 

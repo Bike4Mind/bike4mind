@@ -61,10 +61,11 @@ import {
 } from '@shared/ipc';
 import type { PrBarState, PrOption, PrSummaryEvent } from '@shared/pullRequest';
 import type { TerminalCreateRequest, TerminalDataEvent, TerminalsChangedEvent } from '@shared/terminal';
+import type { SkinSummary } from '@shared/mods';
 import type { UpdateState } from '@shared/update';
 import type { UsageWindowId } from '@shared/usage';
 import type { FleetState } from '@shared/fleet';
-import type { ModelCaptureRequestEvent, ModelStateUpdate } from '@shared/model3d';
+import type { ModelCaptureRequestEvent, ModelStateUpdate, ModelVersionsUpdate } from '@shared/model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewState } from '@shared/simulator';
 
 // Written out one method per channel rather than a generic invoke(channel, ...args)
@@ -88,6 +89,14 @@ const api: DesktopApi = {
   },
   getAppInfo: () => ipcRenderer.invoke(IPC_CHANNELS.getAppInfo),
   setTheme: (mode, backgroundColor) => ipcRenderer.invoke(IPC_CHANNELS.setTheme, mode, backgroundColor),
+  skins: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.skinsList),
+    onChanged: listener => {
+      const handler = (_event: unknown, skins: SkinSummary[]) => listener(skins);
+      ipcRenderer.on(IPC_CHANNELS.skinsChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.skinsChanged, handler);
+    },
+  },
   update: {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.updateGetState),
     check: () => ipcRenderer.invoke(IPC_CHANNELS.updateCheck),
@@ -454,6 +463,15 @@ const api: DesktopApi = {
       const handler = (_event: unknown, request: ModelCaptureRequestEvent) => listener(request);
       ipcRenderer.on(IPC_CHANNELS.modelCaptureRequest, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.modelCaptureRequest, handler);
+    },
+    listVersions: sessionId => ipcRenderer.invoke(IPC_CHANNELS.modelListVersions, sessionId),
+    wantsVersion: (sessionId, generation) => ipcRenderer.invoke(IPC_CHANNELS.modelWantsVersion, sessionId, generation),
+    recordVersion: (sessionId, request) => ipcRenderer.invoke(IPC_CHANNELS.modelRecordVersion, sessionId, request),
+    restoreVersion: (sessionId, number) => ipcRenderer.invoke(IPC_CHANNELS.modelRestoreVersion, sessionId, number),
+    onVersions: listener => {
+      const handler = (_event: unknown, update: ModelVersionsUpdate) => listener(update);
+      ipcRenderer.on(IPC_CHANNELS.modelVersions, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.modelVersions, handler);
     },
   },
   simulator: {

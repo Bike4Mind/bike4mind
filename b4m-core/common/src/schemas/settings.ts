@@ -1930,6 +1930,8 @@ export const SIGNUP_RISK_SIGNALS = [
   'quickApiKey',
   'fastSpend',
   'generatedLocalPart',
+  'wafAnonIp',
+  'wafBotSignal',
 ] as const;
 export type SignupRiskSignal = (typeof SIGNUP_RISK_SIGNALS)[number];
 
@@ -1950,6 +1952,9 @@ export const SignupRiskScoringSchema = z
         quickApiKey: signupRiskWeight(15),
         fastSpend: signupRiskWeight(20),
         generatedLocalPart: signupRiskWeight(10),
+        // Edge labels on signupMeta, recorded only where label forwarding is on. Off until a weight is set.
+        wafAnonIp: signupRiskWeight(0),
+        wafBotSignal: signupRiskWeight(0),
       })
       .strict()
       .prefault({}),
@@ -2844,9 +2849,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'blockedEmailDomains', order: 3 },
       { key: 'signupGrantRiskPolicy', order: 8 },
       { key: 'signupGrantUnprotectedMaxCredits', order: 8.1 },
-      { key: 'signupGrantActivityMinActiveSeconds', order: 11.5 },
-      { key: 'signupGrantActivityPreviewTestMode', order: 14.5 },
-      { key: 'signupUnlockPaymentHoldHours', order: 14.6 },
       { key: 'maxSignupsPerIpPerDay', order: 15 },
       { key: 'maxSignupsPerAsnPerHour', order: 16 },
       { key: 'newAccountSpendCapDays', order: 19.1 },
@@ -5691,7 +5693,6 @@ export const settingsMap = {
     userReadable: true,
     description:
       'Active time in a UTC day, counted from heartbeat pings while the app is open and in use, before the activity drip pays. Invalid values fall back to 60.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantActivityPreviewTestMode: makeBooleanSetting({
@@ -5701,7 +5702,6 @@ export const settingsMap = {
     description:
       'PR previews only: use five-minute earning windows instead of UTC days to test the activity drip. Each window still requires the configured active time; use a minimum below five minutes. Production, staging and personal environments always use UTC days. The platform daily budget is unchanged. Reload the test user tab after toggling this switch.',
     hideOnProductionStages: true,
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupUnlockPaymentHoldHours: makeNumberSetting({
@@ -5714,7 +5714,6 @@ export const settingsMap = {
     userReadable: true,
     description:
       'Hours a subscription, credit pack or card payment must settle before it releases the locked signup credits. A dispute, refund or early fraud warning in that window cancels the release. Zero releases them on payment.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantInitialCredits: makeNumberSetting({

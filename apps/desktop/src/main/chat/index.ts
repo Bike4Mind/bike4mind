@@ -92,6 +92,7 @@ import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
 import { registerModelProtocol } from './model3d/engineProtocol';
 import { ModelLiveViews } from './model3d/ModelLiveViews';
+import { ModelVersionStore } from './model3d/ModelVersionStore';
 import { modelIpcHandlers } from './model3d/modelIpc';
 import { ChatService, sessionForRenderer, type ChatServiceDeps } from './ChatService';
 import { DeferredToolsSetting, parseDeferredToolsOverride } from './DeferredToolsSetting';
@@ -740,20 +741,25 @@ export function registerChat(
       })
   );
 
-  const modelViews = new ModelLiveViews({
-    state: (sessionId, state) => send(IPC_CHANNELS.modelState, { sessionId, state }),
-    // One rendering is enough: the focused app window, else the first.
-    captureTarget: () => {
-      const target = focusedAppWindow();
-      return target && !target.isDestroyed() ? target.webContents.id : null;
+  const modelViews = new ModelLiveViews(
+    {
+      state: (sessionId, state) => send(IPC_CHANNELS.modelState, { sessionId, state }),
+      // One rendering is enough: the focused app window, else the first.
+      captureTarget: () => {
+        const target = focusedAppWindow();
+        return target && !target.isDestroyed() ? target.webContents.id : null;
+      },
+      captureRequest: (target, request) => {
+        const window = appWindows().find(entry => !entry.isDestroyed() && entry.webContents.id === target);
+        if (!window) return false;
+        window.webContents.send(IPC_CHANNELS.modelCaptureRequest, request);
+        return true;
+      },
+      versionsChanged: sessionId => send(IPC_CHANNELS.modelVersions, { sessionId }),
     },
-    captureRequest: (target, request) => {
-      const window = appWindows().find(entry => !entry.isDestroyed() && entry.webContents.id === target);
-      if (!window) return false;
-      window.webContents.send(IPC_CHANNELS.modelCaptureRequest, request);
-      return true;
-    },
-  });
+    {},
+    new ModelVersionStore(join(userData, 'model-versions'), { warn: message => logger.warn(message) })
+  );
 
   const simulatorDriver = new XcodeSimulatorDriver();
   const simulatorView = new SimulatorLiveView(
@@ -1452,11 +1458,12 @@ export function registerChat(
     if (
       typeof request?.sessionId !== 'string' ||
       typeof request?.title !== 'string' ||
-      typeof request?.content !== 'string'
+      typeof request?.content !== 'string' ||
+      (request.artifactKey !== undefined && typeof request.artifactKey !== 'string')
     ) {
       throw new Error('A conversation, a title and the artifact content are required.');
     }
-    return browser.openArtifact(request.sessionId, request.title, request.content);
+    return browser.openArtifact(request.sessionId, request.title, request.content, request.artifactKey);
   });
   ipcMain.handle(IPC_CHANNELS.browserGo, (_event, request: BrowserGoRequest): BrowserPaneState => {
     const actions: readonly BrowserGoAction[] = ['back', 'forward', 'reload'];
