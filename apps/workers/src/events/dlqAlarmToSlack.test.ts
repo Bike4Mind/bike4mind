@@ -131,12 +131,13 @@ describe('dlqAlarmToSlack handler', () => {
   it('does not look accounts up for other alarms, resolutions, or alarms this stage drops', async () => {
     await handler(makeEvent(alarmPayload('ALARM')));
     await handler(makeEvent(alarmPayload('OK', YOUNG_ACCOUNT_ALARM)));
+    await handler(makeEvent(alarmPayload('OK', 'bike4mind-production-refused-request-burst')));
     resource.App.stage = 'dev';
     await handler(makeEvent(alarmPayload('ALARM', 'bike4mind-dev-test-alarm')));
     expect(detail.youngAccountSpendSection).not.toHaveBeenCalled();
     expect(providerDetail.providerSpendSection).not.toHaveBeenCalled();
     expect(refusedDetail.refusedRequestBurstSection).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it('posts an explained message when alarm transitions to ALARM state', async () => {

@@ -4,19 +4,23 @@ import { GetInsightRuleReportCommand, type GetInsightRuleReportCommandOutput } f
 vi.mock('sst', () => ({ Resource: {} }));
 vi.mock('@bike4mind/db-core', () => ({ connectDB: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ userRepository: { findIdsBySignupIp: vi.fn() } }));
+vi.mock('./relayDb', () => ({ connectRelayDb: vi.fn() }));
 
 import {
   ACCOUNT_LIMIT,
   SECTION_TITLE,
   TOP_IP_LIMIT,
-  code,
+  inlineCode,
   fetchTopContributors,
   formatSignupAccounts,
+  formatTopIps,
   formatTopPaths,
   refusedRequestBurstSection,
   reportWindow,
   type InsightReportClient,
 } from './refusedRequestBurstDetail';
+import { userRepository } from '@bike4mind/database';
+import { connectRelayDb } from './relayDb';
 import type { CloudWatchAlarmPayload } from './cloudwatchAlarmTypes';
 
 const alarm: CloudWatchAlarmPayload = {
@@ -83,8 +87,8 @@ describe('fetchTopContributors', () => {
 
 describe('formatting', () => {
   it('escapes caller-controlled values and keeps them on one inline code span', () => {
-    expect(code('/api/x?<script>&`')).toBe("`/api/x?&lt;script&gt;&amp;'`");
-    expect(code('a'.repeat(200))).toHaveLength(2 + 120 + 3);
+    expect(inlineCode('/api/x?<script>&`')).toBe("`/api/x?&lt;script&gt;&amp;'`");
+    expect(inlineCode('a'.repeat(200))).toHaveLength(2 + 120 + 3);
   });
 
   it("lists only the top IP's paths", () => {
@@ -132,9 +136,9 @@ describe('refusedRequestBurstSection', () => {
       'Last 30 minutes:',
       '- `198.51.100.1`: 180 refused',
       '- `198.51.100.2`: 20 refused',
+      'Accounts that signed up from `198.51.100.1`: `u1`.',
       'Paths from `198.51.100.1`:',
       '- `/api/identify`: 150',
-      'Accounts that signed up from `198.51.100.1`: `u1`.',
     ]);
     expect(findSignupAccountIds).toHaveBeenCalledWith('198.51.100.1', ACCOUNT_LIMIT + 1);
   });
@@ -178,5 +182,62 @@ describe('refusedRequestBurstSection', () => {
     const text = await refusedRequestBurstSection(alarm, { ipRule: IP_RULE, client, findSignupAccountIds });
     expect(text).toContain('No contributor in the window yet');
     expect(findSignupAccountIds).not.toHaveBeenCalled();
+  });
+
+  it('reads the rule names from the environment and looks accounts up in the database by default', async () => {
+    const { client, send } = clientFor({
+      [IP_RULE]: report([[['198.51.100.1'], 180]]),
+      [PATH_RULE]: report([[['198.51.100.1', '/api/identify'], 150]]),
+    });
+    vi.stubEnv('REFUSED_REQUEST_IP_RULE', IP_RULE);
+    vi.stubEnv('REFUSED_REQUEST_IP_PATH_RULE', PATH_RULE);
+    vi.mocked(userRepository.findIdsBySignupIp).mockResolvedValue(['u9']);
+    try {
+      const text = await refusedRequestBurstSection(alarm, { client });
+      expect(send.mock.calls.map(call => call[0].input.RuleName)).toEqual([IP_RULE, PATH_RULE]);
+      expect(connectRelayDb).toHaveBeenCalled();
+      expect(userRepository.findIdsBySignupIp).toHaveBeenCalledWith('198.51.100.1', undefined, ACCOUNT_LIMIT + 1);
+      expect(text).toContain('`u9`');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('asks only the IP rule when no path rule is configured and says when a top IP has no paths', async () => {
+    const { client, send } = clientFor({
+      [IP_RULE]: report([[['198.51.100.1'], 180]]),
+      [PATH_RULE]: report([[['198.51.100.2', '/api/x'], 5]]),
+    });
+    const findSignupAccountIds = vi.fn(async () => []);
+    const withoutPaths = await refusedRequestBurstSection(alarm, { ipRule: IP_RULE, client, findSignupAccountIds });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(withoutPaths).not.toContain('Paths from');
+    const noMatch = await refusedRequestBurstSection(alarm, {
+      ipRule: IP_RULE,
+      ipPathRule: PATH_RULE,
+      client,
+      findSignupAccountIds,
+    });
+    expect(noMatch).toContain('Paths from `198.51.100.1`: none in the fetched report.');
+  });
+
+  it('skips contributors with no key and keeps the accounts line when long paths overflow the section', async () => {
+    expect(formatTopIps([{ keys: [], count: 1 }])).toEqual(['- ``: 1 refused']);
+    const longPath = `/${'&'.repeat(119)}`;
+    const { client } = clientFor({
+      [IP_RULE]: report([[['198.51.100.1'], 180]]),
+      [PATH_RULE]: report(
+        Array.from({ length: 5 }, (_, i): [string[], number] => [['198.51.100.1', `${longPath}${i}`], 50 - i])
+      ),
+    });
+    const text = await refusedRequestBurstSection(alarm, {
+      ipRule: IP_RULE,
+      ipPathRule: PATH_RULE,
+      client,
+      findSignupAccountIds: async () => ['u1'],
+    });
+    expect(text.length).toBeLessThanOrEqual(3000);
+    expect(text).toContain('Accounts that signed up from `198.51.100.1`: `u1`.');
+    expect(text).not.toMatch(/&[a-z]*$/);
   });
 });

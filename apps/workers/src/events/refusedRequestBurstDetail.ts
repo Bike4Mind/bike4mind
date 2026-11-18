@@ -6,12 +6,11 @@
  */
 import { CloudWatchClient, GetInsightRuleReportCommand } from '@aws-sdk/client-cloudwatch';
 import { userRepository } from '@bike4mind/database';
-import { connectDB } from '@bike4mind/db-core';
 import { Logger } from '@bike4mind/observability';
-import { Resource } from 'sst';
 
 import { escapeMrkdwn, parseStateChangeTime } from './alarmSlackMessage';
 import type { CloudWatchAlarmPayload } from './cloudwatchAlarmTypes';
+import { connectRelayDb } from './relayDb';
 import { adminUserUrl } from './youngAccountSpendDetail';
 
 /** Set by infra/dlqAlarms.ts on the relay; names from infra/refusedRequestRules.ts. */
@@ -94,18 +93,12 @@ export async function fetchTopContributors(
 }
 
 async function findSignupAccountIdsInDb(ip: string, limit: number): Promise<string[]> {
-  await connectDB(Resource.MONGODB_URI.value.replace('%STAGE%', Resource.App.stage), new Logger(), {
-    serverSelectionTimeoutMS: DB_TIMEOUT_MS,
-    connectTimeoutMS: DB_TIMEOUT_MS,
-    socketTimeoutMS: DB_TIMEOUT_MS,
-    timeoutMS: DB_TIMEOUT_MS,
-    bufferCommands: false,
-  });
+  await connectRelayDb(DB_TIMEOUT_MS);
   return userRepository.findIdsBySignupIp(ip, undefined, limit);
 }
 
 /** A caller-supplied value as inline code: escaped, without backticks, and bounded. */
-export function code(value: string): string {
+export function inlineCode(value: string): string {
   const clean = value.replace(/`/g, "'");
   const bounded = clean.length > VALUE_MAX ? `${clean.slice(0, VALUE_MAX)}...` : clean;
   return `\`${escapeMrkdwn(bounded)}\``;
@@ -115,25 +108,30 @@ const errorReason = (error: unknown) => (error instanceof Error ? error.message 
 
 export function formatTopIps(ips: Contributor[]): string[] {
   if (ips.length === 0) return ['No contributor in the window yet; the rule report can lag the alarm by a minute.'];
-  return ips.map(ip => `- ${code(ip.keys[0] ?? '')}: ${ip.count} refused`);
+  return ips.map(ip => `- ${inlineCode(ip.keys[0] ?? '')}: ${ip.count} refused`);
 }
 
 export function formatTopPaths(ip: string, pairs: Contributor[]): string[] {
   const paths = pairs.filter(pair => pair.keys[0] === ip && pair.keys[1]).slice(0, TOP_PATH_LIMIT);
-  if (paths.length === 0) return [`Paths from ${code(ip)}: none in the fetched report.`];
-  return [`Paths from ${code(ip)}:`, ...paths.map(pair => `- ${code(pair.keys[1] ?? '')}: ${pair.count}`)];
+  if (paths.length === 0) return [`Paths from ${inlineCode(ip)}: none in the fetched report.`];
+  return [`Paths from ${inlineCode(ip)}:`, ...paths.map(pair => `- ${inlineCode(pair.keys[1] ?? '')}: ${pair.count}`)];
 }
 
 export function formatSignupAccounts(ip: string, ids: string[], appUrl: string | undefined): string {
-  if (ids.length === 0) return `Accounts that signed up from ${code(ip)}: none.`;
-  const shown = ids.slice(0, ACCOUNT_LIMIT).map(id => (appUrl ? `<${adminUserUrl(appUrl, id)}|${id}>` : code(id)));
+  if (ids.length === 0) return `Accounts that signed up from ${inlineCode(ip)}: none.`;
+  const shown = ids
+    .slice(0, ACCOUNT_LIMIT)
+    .map(id => (appUrl ? `<${adminUserUrl(appUrl, id)}|${id}>` : inlineCode(id)));
   const more = ids.length > ACCOUNT_LIMIT ? ' (and more)' : '';
-  return `Accounts that signed up from ${code(ip)}: ${shown.join(', ')}${more}.`;
+  return `Accounts that signed up from ${inlineCode(ip)}: ${shown.join(', ')}${more}.`;
 }
 
 function section(lines: string[]): string {
   const text = [SECTION_TITLE, ...lines].join('\n');
-  return text.length > SECTION_TEXT_MAX ? `${text.slice(0, SECTION_TEXT_MAX)}...` : text;
+  if (text.length <= SECTION_TEXT_MAX) return text;
+  // Cut at a line boundary so an escaped entity is never left half written.
+  const kept = text.slice(0, SECTION_TEXT_MAX);
+  return `${kept.slice(0, Math.max(kept.lastIndexOf('\n'), 0))}\n...`;
 }
 
 /**
@@ -157,7 +155,7 @@ export async function refusedRequestBurstSection(
   } catch (error) {
     Logger.warn(`[refusedRequestBurstDetail] top IPs unavailable for ${alarm.AlarmName}: ${errorReason(error)}`);
     return section([
-      `Could not be loaded (${errorReason(error)}). Open the ${code(ipRule)} rule in Contributor Insights.`,
+      `Could not be loaded (${errorReason(error)}). Open the ${inlineCode(ipRule)} rule in Contributor Insights.`,
     ]);
   }
 
@@ -170,20 +168,20 @@ export async function refusedRequestBurstSection(
     (options.findSignupAccountIds ?? findSignupAccountIdsInDb)(topIp, ACCOUNT_LIMIT + 1),
   ]);
 
-  if (pairs.status === 'rejected') {
-    Logger.warn(`[refusedRequestBurstDetail] top paths unavailable: ${errorReason(pairs.reason)}`);
-    lines.push(`Paths from ${code(topIp)}: could not be loaded (${errorReason(pairs.reason)}).`);
-  } else if (pairs.value) {
-    lines.push(...formatTopPaths(topIp, pairs.value));
-  }
-
   if (accountIds.status === 'rejected') {
     Logger.warn(`[refusedRequestBurstDetail] signup accounts unavailable: ${errorReason(accountIds.reason)}`);
     lines.push(
-      `Accounts that signed up from ${code(topIp)}: could not be checked (${errorReason(accountIds.reason)}).`
+      `Accounts that signed up from ${inlineCode(topIp)}: could not be checked (${errorReason(accountIds.reason)}).`
     );
   } else {
     lines.push(formatSignupAccounts(topIp, accountIds.value, options.appUrl));
   }
+  if (pairs.status === 'rejected') {
+    Logger.warn(`[refusedRequestBurstDetail] top paths unavailable: ${errorReason(pairs.reason)}`);
+    lines.push(`Paths from ${inlineCode(topIp)}: could not be loaded (${errorReason(pairs.reason)}).`);
+  } else if (pairs.value) {
+    lines.push(...formatTopPaths(topIp, pairs.value));
+  }
+
   return section(lines);
 }
