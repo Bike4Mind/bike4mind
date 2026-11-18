@@ -471,6 +471,7 @@ describe('ChatService deferred tools', () => {
         const replay = await turn(id, 'continue after service restart');
         expect(headHash(replay)).toBe(headHash(second));
         expectDeclaredBeforeUse(replay);
+        // After a removal the next turn's record drops the withdrawn tool, so it replays a second reminder.
         expect(JSON.stringify(replay.messages).match(/Your tools and access from this turn on:/g)).toHaveLength(
           change === 'tool_removal' ? 2 : 1
         );

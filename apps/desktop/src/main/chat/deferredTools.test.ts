@@ -332,4 +332,23 @@ describe('appendLiveToolChange', () => {
       content: [{ type: `tool_${change}`, tool: { type: 'tool_reference', name: 'b' } }],
     });
   });
+
+  it('compares each change against the state the previous change delivered', () => {
+    const messages: CompletionMessage[] = [{ role: 'user', content: 'go' }];
+    const a = { tools: ['a'], text: 'same' };
+    const b = { tools: ['a', 'b'], text: 'same' };
+    const c = { tools: ['a', 'b', 'c'], text: 'changed' };
+    appendLiveToolChange(messages, a, b);
+    messages.push({ role: 'assistant', content: [] }, { role: 'user', content: [{ type: 'tool_result' }] });
+    appendLiveToolChange(messages, b, c);
+    expect(messages[0]).toEqual({ role: 'user', content: 'go' });
+    expect(messages[3].content).toEqual([
+      { type: 'tool_result' },
+      { type: 'text', text: '<system-reminder>\nchanged\n</system-reminder>' },
+    ]);
+    expect(messages.filter(message => message.role === 'system')).toEqual([
+      { role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'b' } }] },
+      { role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'c' } }] },
+    ]);
+  });
 });
