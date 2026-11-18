@@ -71,6 +71,12 @@ describe('CitableSources host label', () => {
     expect(screen.getByTestId('citable-source-host-label')).toHaveTextContent('google.com');
   });
 
+  it('labels a redirect URL with a platform name and shows no favicon for it', () => {
+    const { container } = renderRedirect({ sourceSystem: 'web_search', displayHost: 'Reddit' });
+    expect(screen.getByTestId('citable-source-host-label')).toHaveTextContent('Reddit');
+    expect(container.querySelector('img')).toBeNull();
+  });
+
   it('ignores a displayHost that is not a string', () => {
     renderRedirect({ sourceSystem: 'web_search', displayHost: 42 } as unknown as CitableSource['metadata']);
     expect(screen.getByTestId('citable-source-host-label')).toHaveTextContent('google.com');
