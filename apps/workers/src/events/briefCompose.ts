@@ -5,6 +5,7 @@ import {
   assistantBriefRepository,
   questRepository,
   userRepository,
+  assistantInstructionRepository,
   type IAssistantBrief,
 } from '@bike4mind/database';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
@@ -52,9 +53,21 @@ export type BriefComposeDeps = {
   canCompose(userId: string): Promise<'ok' | 'ai_access_held' | 'insufficient_credits'>;
   /** Sends the activity prompt to the model and returns its raw reply. */
   complete(userId: string, briefId: string, prompt: string): Promise<string>;
+  /** The user's standing instruction texts. Absent or failing means the brief is composed without them. */
+  loadInstructions?(userId: string): Promise<string[]>;
   push(event: PushNotificationEvent): Promise<void>;
   logger: LogLike;
 };
+
+async function loadInstructionsSafely(deps: BriefComposeDeps, userId: string): Promise<string[]> {
+  if (!deps.loadInstructions) return [];
+  try {
+    return await deps.loadInstructions(userId);
+  } catch (error) {
+    deps.logger.warn('[Brief] could not load standing instructions; composing without them', { userId, error });
+    return [];
+  }
+}
 
 export async function composeBrief(deps: BriefComposeDeps, input: { briefId: string; userId: string }): Promise<void> {
   const { briefs, logger } = deps;
@@ -85,7 +98,8 @@ export async function composeBrief(deps: BriefComposeDeps, input: { briefId: str
         await briefs.markFailed(input.briefId, gate);
         return;
       }
-      const reply = await deps.complete(input.userId, input.briefId, buildBriefPrompt(activity));
+      const instructions = await loadInstructionsSafely(deps, input.userId);
+      const reply = await deps.complete(input.userId, input.briefId, buildBriefPrompt(activity, instructions));
       composed = assembleBrief(reply, activity);
     } else {
       composed = emptyBrief();
@@ -152,6 +166,8 @@ export const handler = withEventContext(async (event, logger) => {
       users: userRepository,
       briefs: assistantBriefRepository,
       loadActivity,
+      loadInstructions: async userId =>
+        (await assistantInstructionRepository.listByUser(userId)).map(instruction => instruction.text),
       canCompose: async userId => {
         const user = await userRepository.findById(userId);
         if (!user || aiAccessDeniedMessage(user)) return 'ai_access_held';
