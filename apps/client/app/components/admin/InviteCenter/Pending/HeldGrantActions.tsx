@@ -287,7 +287,7 @@ export default function HeldGrantActions() {
         getRowId={row => row.id}
         label="Held signup grants"
         minWidth="40rem"
-        testId="held-grant-actionsle"
+        testId="held-signup-grants-table"
         loading={query.isPending}
         error={query.error ? getErrorMessage(query.error) : undefined}
         onRetry={() => {
