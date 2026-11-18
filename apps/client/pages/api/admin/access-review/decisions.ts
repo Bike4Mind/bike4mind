@@ -53,7 +53,8 @@ const RemovedRolePermissionsSchema = z.object({
   removedRolePermissions: z.array(
     z.object({ roleId: z.string().min(1), permissions: z.array(z.string()), roleName: z.string().optional() })
   ),
-  rolesRemoved: z.array(z.string()).optional(),
+  // Names only: a malformed list must not fail the permission snapshot it sits beside.
+  rolesRemoved: z.array(z.string()).optional().catch(undefined),
 });
 
 type Removal = { entry: AccessChangeEntry; fullAdmin: boolean; permissions: string[]; roleIds: string[] };

@@ -454,6 +454,7 @@ describe('POST decisions', () => {
     ['null when it was already gone at removal', { rolesRemoved: ['660000000000000000000001'] }, null, null],
     ['its current name without a removal-time name', {}, 'Billing', 'Billing'],
     ['null once the role is gone without a removal-time name', {}, undefined, null],
+    ['its current name when the removal-time names are malformed', { rolesRemoved: [7] }, 'Billing', 'Billing'],
   ])('names a removed role from an audit without a role name by %s', async (_case, extra, current, name) => {
     const roleId = '660000000000000000000001';
     target({ isAdmin: false, adminPermissions: [], adminRoleIds: [] });
@@ -467,7 +468,8 @@ describe('POST decisions', () => {
       current === undefined ? [] : [{ id: roleId, name: current ?? 'Renamed', permissions: ['users:moderate'] }]
     );
     await call(decisions, 'POST', { body: { userId: OTHER, decision: 'revoked' } });
-    if ('rolesRemoved' in extra) expect(mocks.findRoles).not.toHaveBeenCalled();
+    if ('rolesRemoved' in extra && typeof extra.rolesRemoved[0] === 'string')
+      expect(mocks.findRoles).not.toHaveBeenCalled();
     else expect(mocks.findRoles).toHaveBeenCalledWith([roleId]);
     expect(mocks.recordDecision).toHaveBeenCalledWith(
       QUARTER,
