@@ -282,6 +282,18 @@ describe('cleanResearchItemRuleCondition', () => {
     expect(cleanResearchItemRuleCondition('\u{16FE4}')).toBe('');
   });
 
+  it('keys a capital and a lowercase letter with a combining mark identically', () => {
+    expect(researchItemRuleKey({ condition: 'T\u0308 x', action: 'block' })).toBe(
+      researchItemRuleKey({ condition: 't\u0308 x', action: 'block' })
+    );
+  });
+
+  it('keeps visible format marks such as Arabic number signs', () => {
+    for (const condition of ['\u0600\u0661\u0662 rule', '\u06DD rule']) {
+      expect(cleanResearchItemRuleCondition(condition)).toBe(condition);
+    }
+  });
+
   it('keys composed and decomposed accents identically and stores the NFC form', () => {
     const composed = 'caf\u00E9 article';
     const decomposed = 'cafe\u0301 article';
