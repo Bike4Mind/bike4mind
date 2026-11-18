@@ -35,11 +35,13 @@ vi.mock('./UserCard', () => ({
     canRevokeMembers: boolean;
     selectable: boolean;
     selected: boolean;
+    showEmails: boolean;
     onToggleSelect?: () => void;
   }) => (
     <div
       data-testid="roster-row"
       data-user-id={p.user.id}
+      data-show-emails={String(p.showEmails)}
       data-revoke={String(p.canRevokeMembers)}
       data-selectable={String(p.selectable)}
     >
@@ -93,6 +95,7 @@ const renderRoster = (props: Props = {}) => {
       canRevokeMember={id => id !== 'mgr'}
       canManageCreditBudgets
       canManageManagers={false}
+      showEmails
       {...props}
     />,
     { wrapper: Wrapper }
@@ -225,6 +228,27 @@ describe('MemberRoster finding people', () => {
     renderRoster({ canManageCreditBudgets: false });
     await userEvent.click(screen.getByTestId('organization-members-sort-key'));
     expect(screen.queryByRole('option', { name: 'Sort by usage' })).toBeNull();
+  });
+});
+
+describe('MemberRoster names-only view', () => {
+  it('shows the Email column and searches by email when emails are shown', () => {
+    renderRoster();
+    expect(screen.getByTestId('organization-members-header-email')).toHaveTextContent('Email');
+    expect(screen.getByTestId('organization-members-search-input')).toHaveAttribute(
+      'aria-label',
+      'Search members by name or email'
+    );
+    expect(screen.getAllByTestId('roster-row').every(el => el.getAttribute('data-show-emails') === 'true')).toBe(true);
+  });
+
+  it('drops the Email column and email search wording, and tells every row', () => {
+    renderRoster({ showEmails: false });
+    expect(screen.queryByTestId('organization-members-header-email')).toBeNull();
+    const search = screen.getByTestId('organization-members-search-input');
+    expect(search).toHaveAttribute('aria-label', 'Search members by name');
+    expect(search).toHaveAttribute('placeholder', 'Search by name');
+    expect(screen.getAllByTestId('roster-row').every(el => el.getAttribute('data-show-emails') === 'false')).toBe(true);
   });
 });
 

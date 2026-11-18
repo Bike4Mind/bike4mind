@@ -138,8 +138,14 @@ describe('paginate', () => {
 describe('rosterGridColumns', () => {
   it('has six tracks, plus a leading selection track when selectable', () => {
     const tracks = (value: string) => value.split(/ (?=minmax|\d+px)/).length;
-    expect(tracks(rosterGridColumns(false))).toBe(6);
-    expect(tracks(rosterGridColumns(true))).toBe(7);
-    expect(rosterGridColumns(true).startsWith('32px ')).toBe(true);
+    expect(tracks(rosterGridColumns({ selectable: false, showEmails: true }))).toBe(6);
+    expect(tracks(rosterGridColumns({ selectable: true, showEmails: true }))).toBe(7);
+    expect(rosterGridColumns({ selectable: true, showEmails: true }).startsWith('32px ')).toBe(true);
+  });
+
+  it('drops the email track in a names-only roster', () => {
+    const tracks = (value: string) => value.split(/ (?=minmax|\d+px)/).length;
+    expect(tracks(rosterGridColumns({ selectable: false, showEmails: false }))).toBe(5);
+    expect(tracks(rosterGridColumns({ selectable: true, showEmails: false }))).toBe(6);
   });
 });

@@ -6,6 +6,7 @@ import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium
 const mockProcess = vi.hoisted(() => vi.fn());
 const processOptions = vi.hoisted(() => vi.fn());
 const mockCapCheck = vi.hoisted(() => vi.fn());
+const mockFindActiveFreeze = vi.hoisted(() => vi.fn(async (): Promise<unknown> => null));
 const mockRecordFirstChatValue = vi.hoisted(() => vi.fn(async () => false));
 const mockLiveActivityEnd = vi.hoisted(() => vi.fn(async () => undefined));
 
@@ -72,6 +73,7 @@ vi.mock('@bike4mind/database', async () => {
     Session: { findById: vi.fn(async () => ({ userId: 'user-1' })) },
     User: { findById: vi.fn(async () => ({ _id: 'user-1' })) },
     sessionRepository: { findById: vi.fn(async () => ({ id: 'session-1' })) },
+    spendFreezeRepository: { findActiveForSubject: mockFindActiveFreeze },
   };
 });
 
@@ -219,7 +221,14 @@ describe('processQuest', () => {
     const { processQuest } = await import('./questProcessor');
     const { createCompletionMeter } = await import('@bike4mind/server-utils/billing/meterPlatformCompletion');
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
-    const params = { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, apiKeyId: 'k1' };
+    const params = {
+      userId: 'user-1',
+      sessionId: 'session-1',
+      questId: 'quest-1',
+      params: {},
+      apiKeyId: 'k1',
+      apiKeyBillingOwnerType: 'Organization',
+    };
 
     await processQuest(params as never, logger as never);
     const options = processOptions.mock.calls.at(-1)?.[0] as {
@@ -231,6 +240,7 @@ describe('processQuest', () => {
       sessionId: 'session-1',
       organizationId: 'org-1',
       apiKeyId: 'k1',
+      apiKeyBillingOwnerType: 'Organization',
     });
   });
 
@@ -364,6 +374,61 @@ describe('processQuest', () => {
     expect(mockProcess).not.toHaveBeenCalled();
     settle.mockRestore();
   }, 120_000);
+
+  describe('spend freeze', () => {
+    const frozenRecord = { scopeType: 'User', frozenAt: new Date('2026-11-16T00:00:00.000Z'), reason: 'internal' };
+    const run = async (extra: Record<string, unknown> = {}) => {
+      const { processQuest } = await import('./questProcessor');
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+      return processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, ...extra } as never,
+        logger as never
+      );
+    };
+
+    it('settles a frozen quest as spend_frozen and acks, with no cap check and no model call', async () => {
+      const { questRepository } = await import('@bike4mind/database');
+      const settle = vi.spyOn(questRepository, 'settleIfUnfinished').mockResolvedValue(true);
+      mockFindActiveFreeze.mockResolvedValueOnce(frozenRecord);
+      mockProcess.mockClear();
+      mockCapCheck.mockClear();
+      mockLiveActivityEnd.mockClear();
+
+      await expect(run()).resolves.toBeUndefined();
+
+      expect(settle).toHaveBeenCalledWith(
+        'quest-1',
+        expect.objectContaining({ status: 'stopped', type: 'error', errorCode: 'spend_frozen' })
+      );
+      const settled = settle.mock.calls[0][1] as { reply: string };
+      expect(settled.reply).not.toContain('internal');
+      expect(mockCapCheck).not.toHaveBeenCalled();
+      expect(mockProcess).not.toHaveBeenCalled();
+      expect(mockLiveActivityEnd.mock.calls).toEqual([['failed']]);
+      settle.mockRestore();
+    }, 120_000);
+
+    it('leaves the creating user out of an org-billed key turn and carries the billing org', async () => {
+      mockFindActiveFreeze.mockClear();
+      await run({ apiKeyId: 'key-1', apiKeyBillingOwnerType: 'Organization', organizationId: 'org-1' });
+      expect(mockFindActiveFreeze).toHaveBeenCalledWith({
+        userId: 'user-1',
+        organizationId: 'org-1',
+        apiKeyId: 'key-1',
+      });
+    }, 120_000);
+
+    it('checks the user on a session turn', async () => {
+      mockFindActiveFreeze.mockClear();
+      await run();
+      expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'user-1', organizationId: null, apiKeyId: null });
+    }, 120_000);
+
+    it('propagates a freeze lookup failure so the queue retries', async () => {
+      mockFindActiveFreeze.mockRejectedValueOnce(new Error('mongo down'));
+      await expect(run()).rejects.toThrow('mongo down');
+    }, 120_000);
+  });
 
   describe('first_value', () => {
     const visitId = 'a'.repeat(32);

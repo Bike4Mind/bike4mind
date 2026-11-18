@@ -47,6 +47,9 @@ import {
 import { isAxiosError } from 'axios';
 import { getErrorMessage } from '@client/app/utils/error';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
+import { AdminTab } from './adminSidebarConfig';
+import { useCreditAnalysisStore } from './CreditAnalysis/store';
+import { useAdminModal } from './useAdminModal';
 import {
   ADMIN_REASON_PRESETS,
   ActionDialog,
@@ -371,15 +374,20 @@ function ClientRowMenu({
   client,
   onEdit,
   onRotate,
+  onViewUsage,
 }: {
   client: OAuthClientView;
   onEdit: () => void;
   onRotate: () => void;
+  onViewUsage: () => void;
 }) {
   return (
     <RowActionsMenu testId={`oauth-client-actions-${client.clientId}`} ariaLabel={`Actions for ${client.name}`}>
       <MenuItem onClick={onEdit} data-testid={`oauth-client-edit-${client.clientId}`}>
         Edit client
+      </MenuItem>
+      <MenuItem onClick={onViewUsage} data-testid={`oauth-client-usage-${client.clientId}`}>
+        View usage
       </MenuItem>
       {isConfidential(client) && (
         <MenuItem onClick={onRotate} data-testid={`oauth-client-rotate-${client.clientId}`}>
@@ -669,7 +677,15 @@ export default function OAuthClientsTab() {
           </Box>
         }
         rowActions={client => (
-          <ClientRowMenu client={client} onEdit={() => openEdit(client)} onRotate={() => setRotateTarget(client)} />
+          <ClientRowMenu
+            client={client}
+            onEdit={() => openEdit(client)}
+            onRotate={() => setRotateTarget(client)}
+            onViewUsage={() => {
+              useCreditAnalysisStore.getState().openSideApps(client.clientId);
+              useAdminModal.getState().setActiveTab(AdminTab.CreditAnalytics);
+            }}
+          />
         )}
         // Fixed columns total 59.5rem; redirect URIs take the rest and truncate. Below 68rem the table
         // scrolls sideways inside its frame.

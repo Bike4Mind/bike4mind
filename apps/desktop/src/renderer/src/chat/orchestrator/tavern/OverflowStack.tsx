@@ -64,6 +64,7 @@ export function OverflowStack({
       <MenuButton
         ref={buttonRef}
         data-testid={`orchestrator-tavern-overflow-${zone}`}
+        data-agent-avatar={holdsSelection ? selectedId : undefined}
         data-urgent={urgent || undefined}
         aria-label={`${count} more ${ZONE_PLACE[zone]}${needsYou}; list them`}
         variant="plain"

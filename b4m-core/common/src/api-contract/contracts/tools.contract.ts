@@ -27,7 +27,8 @@ export const executeToolContract = defineEndpoint({
     'accepted on this endpoint. To call `web_search`, `web_fetch` or `weather_info` with an API key, use ' +
     '`POST /api/v1/tools/web-search`, `/api/v1/tools/web-fetch` or `/api/v1/tools/weather`. Rate-limited to 100 requests/hour per user, counted separately from ' +
     "other endpoints. `web_search` and `web_fetch` are billed per call from the caller's credits (or " +
-    "their organization's), and refused with a 422 `insufficient_credits` before the provider is called. " +
+    "their organization's), and refused with a 422 `insufficient_credits` before the provider is called, or " +
+    'with a 403 `spend_frozen` when spending is paused. ' +
     '`request_id` echoes the X-Request-ID response header.',
   tags: ['AI'],
   auth: 'jwtOnly',
@@ -46,7 +47,16 @@ export const executeToolContract = defineEndpoint({
     },
     400: { description: 'Malformed JSON body.', schema: ApiErrorSchema },
     401: { description: 'Missing or invalid JWT (an API key is rejected here).', schema: ApiErrorSchema },
-    403: { description: 'Valid JWT, but the account is suspended or has a dispute pending.', schema: ApiErrorSchema },
+    403: {
+      description:
+        'Valid JWT, but the account is suspended or has a dispute pending, or a billed tool call was refused ' +
+        'because spending is paused for the account or its organization (`success: false`, ' +
+        '`errorCode: "spend_frozen"`; not retryable until the pause is lifted).',
+      schema: z.union([ToolExecutionResponseSchema, ApiErrorSchema]),
+      bespokeErrorShape:
+        'A billed tool call refused by a spend freeze returns the full ToolExecutionResponse (success: false), ' +
+        'not an error envelope.',
+    },
     422: {
       description:
         'Request body failed validation, or the caller cannot afford a billed tool call (`success: false`, ' +

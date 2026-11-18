@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
 import { agentRepository, userRepository } from '@bike4mind/database';
-import type { IUserDocument } from '@bike4mind/common';
+import { isSpendFrozenError, type IUserDocument } from '@bike4mind/common';
 import { assertOwnerCanFundWake, isInsufficientCredits } from '@bike4mind/server-utils/deepAgent/wakeMetering';
 import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
@@ -167,6 +167,8 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
       if (/not your agent|no agent /.test(message)) return res.status(404).json({ error: AGENT_NOT_FOUND_MESSAGE });
       if (isInsufficientCredits(error)) return res.status(422).json({ error: message });
       if (isAiAccessRefusal(error)) return res.status(403).json({ error: message });
+      // The shared error handler serves its 403 envelope (errorCode, frozenScope, frozenAt).
+      if (isSpendFrozenError(error)) throw error;
       logger.error('mission create failed', error as Error);
       return res.status(500).json({ error: message });
     }

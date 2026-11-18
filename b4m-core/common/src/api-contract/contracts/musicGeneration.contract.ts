@@ -8,8 +8,9 @@ import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts.
 import {
   ApiErrorSchema,
-  BillingOrganizationForbiddenErrorSchema,
+  MeteredBillingOrganizationForbiddenErrorSchema,
   ScopeForbiddenErrorSchema,
+  SPEND_FROZEN_FORBIDDEN_NOTE,
   StorageLimitErrorSchema,
 } from '../../schemas/chat';
 import {
@@ -116,8 +117,8 @@ export const createMusicGenerationContract = defineEndpoint({
       schema: StorageLimitErrorSchema,
     },
     403: {
-      description: `The API key lacks the \`ai:generate\` scope, or ${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION}`,
-      schema: BillingOrganizationForbiddenErrorSchema,
+      description: `The API key lacks the \`ai:generate\` scope, or ${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION} ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
+      schema: MeteredBillingOrganizationForbiddenErrorSchema,
     },
     404: {
       description: 'A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`.',
