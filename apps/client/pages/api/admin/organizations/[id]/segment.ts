@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AccountSegmentSchema, ApiKeyScope } from '@bike4mind/common';
+import { AccountSegmentSchema } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
@@ -14,7 +14,7 @@ const bodySchema = z.object({ accountSegment: AccountSegmentSchema });
  * field, so it is unset rather than stored. Spend explorer splits AI cost by it. The write and its
  * audit entry commit together.
  */
-const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { PUT: 'settings:manage' } }).put(
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:manage' } }).put(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const organizationId = req.query.id;
     if (!organizationId) throw new BadRequestError('Organization id is required');
