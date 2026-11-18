@@ -72,6 +72,15 @@ const SKINNED: Record<OrchestratorViewId, () => void> = {
     const dot = el('orchestrator-tile-w').querySelector<HTMLElement>('[data-testid="orchestrator-tile-dot"]');
     expect(dot && getComputedStyle(dot).backgroundColor).toContain('--b4m-skin-state-working');
   },
+  swimlanes: () => {
+    expect(el('orchestrator-swimlanes')).toBeDefined();
+  },
+  constellation: () => {
+    expect(el('orchestrator-constellation')).toBeDefined();
+  },
+  transit: () => {
+    expect(el('orchestrator-transit')).toBeDefined();
+  },
 };
 
 beforeEach(() => {

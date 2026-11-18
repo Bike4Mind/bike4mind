@@ -15,12 +15,13 @@ import type { OrchestratorViewId } from './orchestratorPrefs';
 import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
+import { ORCHESTRATOR_VIEW_INFO, ViewSwitcher } from './ViewSwitcher';
 import { useApplySkin, useSkinTheme } from './skins';
 import { SKIN_STAGE_VARIABLE } from './statePalette';
-import { ViewSwitcher } from './ViewSwitcher';
 import { useQuickApprovals } from './quickApprovals';
 import { runViewAction, toViewSnapshot } from './viewSnapshot';
 import { acceptViewAction, type ViewAction } from '@shared/viewSnapshot';
+import { useAvatarDetailsPosition } from './useAvatarDetailsPosition';
 
 export interface AgentActions {
   open(id: string): void;
@@ -43,7 +44,9 @@ export interface OrchestratorViewProps {
   celebrating?: boolean;
   /** Drawn over the top of the scene by a view that has one (the Tavern); other views leave it to the stage. */
   sceneOverlay?: ReactNode;
-  /** Talking to the orchestrating conversation from the scene; the Tavern draws it as the Innkeeper's order slip. */
+  /** Agent details, positioned relative to the artwork rather than its surrounding letterbox. */
+  agentDetailsOverlay?: ReactNode;
+  /** The parent's latest reply, shown at the bar while its conversation is hidden. */
   desk?: InnkeeperDesk;
   /** The chrome has settled out (StageAmbient); the Tavern dims to last call and fills the pane. */
   settled?: boolean;
@@ -51,18 +54,12 @@ export interface OrchestratorViewProps {
 
 /** The parent conversation's front door in the scene: one thread, reached from the bar as well as the composer. */
 export interface InnkeeperDesk {
-  /** Sends to the parent conversation, as the composer does but without the composer's attachments. */
-  send(text: string): void;
   /** The parent's latest finished reply, for the Innkeeper's speech bubble. */
   reply?: { id: string; snippet: string };
   /** "Read all" on that bubble: show the reply in the conversation. */
   onReadReply(id: string): void;
-  /** Bring the whole conversation forward instead of the slip. */
-  onOpenConversation(): void;
   /** The conversation is out of sight, so a reply has nowhere else to show. */
   conversationHidden: boolean;
-  /** Bumped to open the slip; `seed` is a character typed while the Tavern was quiet. */
-  openRequest?: { seq: number; seed: string };
 }
 
 /** Focus mode (FocusPanel): owned by the shell, which also keeps the ambient settle off while it is on. */
@@ -82,8 +79,9 @@ export interface StageAmbient {
 export interface OrchestratorStageProps {
   agents: readonly AgentView[];
   parent?: ParentView;
-  /** Clicking the Innkeeper: bring the parent's own conversation forward. */
+  /** Bring the parent's own conversation forward for an attention action. */
   onParentFocus?(): void;
+  onParentToggle?(): void;
   /** The orchestrating session; scopes the remembered finale. Without it the finale never plays. */
   rootId?: string;
   /** The parent's closing summary, once its transcript ends on one; the finale waits for it. */
@@ -106,6 +104,8 @@ export interface OrchestratorStageProps {
   desk?: InnkeeperDesk;
   ambient?: StageAmbient;
   focus?: StageFocus;
+  /** Showing the parent conversation takes precedence over an agent peek. */
+  conversationRequest?: number;
 }
 
 const NO_PARENT: ParentView = {};
@@ -119,6 +119,7 @@ export function OrchestratorStage({
   agents,
   parent = NO_PARENT,
   onParentFocus,
+  onParentToggle,
   rootId,
   report,
   onReadReport,
@@ -134,6 +135,7 @@ export function OrchestratorStage({
   desk,
   ambient,
   focus,
+  conversationRequest,
 }: OrchestratorStageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Keyed on ids, creation times and titles so status churn does not recompute names; the seed prompt
@@ -144,6 +146,23 @@ export function OrchestratorStage({
   const hasSelection = selected !== null;
   const settled = ambient?.settled === true;
   const focused = focus?.on === true && rootId !== undefined && agents.length > 0;
+  const handledDetailsClicks = useRef(new WeakSet<Event>());
+
+  useEffect(() => {
+    if (!hasSelection || settled) return;
+    const onClick = (event: MouseEvent) => {
+      if (handledDetailsClicks.current.has(event)) return;
+      if (event.target instanceof Element && event.target.closest('[role="menu"], [role="listbox"], [role="dialog"]'))
+        return;
+      setSelectedId(null);
+    };
+    window.addEventListener('click', onClick);
+    return () => window.removeEventListener('click', onClick);
+  }, [hasSelection, settled]);
+
+  useEffect(() => {
+    if (conversationRequest) setSelectedId(null);
+  }, [conversationRequest]);
 
   useEffect(() => {
     if (!focusAgent) return;
@@ -215,6 +234,46 @@ export function OrchestratorStage({
     />
   );
 
+  const detailsInScene =
+    (view === 'tavern' || view === 'aquarium') && renderView !== undefined && agents.length > 0 && !focused;
+  const detailsPosition = useAvatarDetailsPosition(selected?.id, detailsInScene && !settled, view);
+  const detailsOverlay = selected && (
+    // Stay mounted while settled so waking restores the draft and selection.
+    <Box
+      ref={detailsPosition}
+      data-testid="orchestrator-peek-drawer-region"
+      sx={{
+        position: 'absolute',
+        ...(detailsInScene
+          ? {
+              top: 12,
+              left: 12,
+              width: 320,
+              maxWidth: 'calc(100% - 24px)',
+              maxHeight: 'calc(100% - 24px)',
+              '& > [data-agent-details-panel]': { maxHeight: 'calc(100cqh - 24px)' },
+            }
+          : { inset: 12 }),
+        zIndex: 400,
+        display: settled ? 'none' : 'flex',
+        justifyContent: 'flex-end',
+        alignItems: 'flex-start',
+        pointerEvents: 'none',
+        overflow: 'hidden',
+      }}
+    >
+      <AgentPeekDrawer
+        key={selected.id}
+        agent={selected}
+        persona={personas.get(selected.id)}
+        onClose={() => setSelectedId(null)}
+        actions={actions}
+        skin={detailsInScene ? ORCHESTRATOR_VIEW_INFO[view].detailsSkin : undefined}
+        visible={!settled}
+      />
+    </Box>
+  );
+
   const viewProps: OrchestratorViewProps = {
     agents,
     rootId,
@@ -223,9 +282,10 @@ export function OrchestratorStage({
     introPlaying,
     personas,
     parent,
-    onInnkeeperSelect: onParentFocus,
+    onInnkeeperSelect: view === 'tavern' ? (onParentToggle ?? onParentFocus) : onParentFocus,
     celebrating: finale.shown,
     sceneOverlay: bannerInScene ? banner : undefined,
+    agentDetailsOverlay: detailsInScene ? detailsOverlay : undefined,
     desk,
     settled: ambient?.settled === true,
   };
@@ -264,6 +324,14 @@ export function OrchestratorStage({
   return (
     <Box
       data-testid="orchestrator-stage"
+      data-agent-details-open={hasSelection && !settled ? 'true' : undefined}
+      onClickCapture={event => {
+        handledDetailsClicks.current.add(event.nativeEvent);
+        if (!hasSelection || settled || !(event.target instanceof Element)) return;
+        if (!event.currentTarget.contains(event.target)) return;
+        if (event.target.closest('[data-agent-details-panel]')) return;
+        setSelectedId(null);
+      }}
       data-skin={skin.id ?? 'default'}
       sx={{
         display: 'flex',
@@ -337,7 +405,10 @@ export function OrchestratorStage({
           {dockControl}
         </Box>
       )}
-      <Box sx={{ display: 'flex', flex: 1, minHeight: 0 }}>
+      <Box
+        data-testid="orchestrator-scene-viewport"
+        sx={{ position: 'relative', isolation: 'isolate', display: 'flex', flex: 1, minWidth: 0, minHeight: 0 }}
+      >
         <Box
           sx={{
             position: 'relative',
@@ -364,19 +435,7 @@ export function OrchestratorStage({
           )}
           {needsYouCard}
         </Box>
-        {selected && (
-          // Settles out with the rest of the chrome but stays mounted, selection and all, so waking
-          // brings it back where it was (ambient.ts gives focus back to it too).
-          <Box data-testid="orchestrator-peek-drawer-region" sx={{ display: settled ? 'none' : 'contents' }}>
-            <AgentPeekDrawer
-              key={selected.id}
-              agent={selected}
-              persona={personas.get(selected.id)}
-              onClose={() => setSelectedId(null)}
-              actions={actions}
-            />
-          </Box>
-        )}
+        {!detailsInScene && detailsOverlay}
       </Box>
     </Box>
   );

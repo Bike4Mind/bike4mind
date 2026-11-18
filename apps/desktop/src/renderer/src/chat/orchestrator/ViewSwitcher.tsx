@@ -22,6 +22,7 @@ import {
 import { isMac } from '../platform';
 import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs';
 import { AMBIENT_IDLE_MS } from './ambient';
+import type { AgentDetailsSkin } from './AgentPeekDrawer';
 import { SkinMenuSection } from './SkinMenuSection';
 
 type ViewGroup = 'scene' | 'layout';
@@ -33,6 +34,7 @@ interface ViewInfo {
   icon: ReactNode;
   /** Settles into a quiet scene when idle (ambient.ts), so the menu offers "Quiet when idle". */
   ambient: boolean;
+  detailsSkin?: AgentDetailsSkin;
 }
 
 /** Every view's menu entry; typed by id so adding a view to ORCHESTRATOR_VIEWS fails until it has one. */
@@ -43,6 +45,10 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     group: 'scene',
     icon: <TavernIcon />,
     ambient: true,
+    detailsSkin: {
+      light: { background: '#f2ece1', border: '#c4b8a5' },
+      dark: { background: '#29251f', border: '#5d5345' },
+    },
   },
   aquarium: {
     label: 'Aquarium',
@@ -50,6 +56,10 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     group: 'scene',
     icon: <AquariumIcon />,
     ambient: true,
+    detailsSkin: {
+      light: { background: '#e7eff0', border: '#a9bec3' },
+      dark: { background: '#1d2c31', border: '#49616a' },
+    },
   },
   board: {
     label: 'Board',
