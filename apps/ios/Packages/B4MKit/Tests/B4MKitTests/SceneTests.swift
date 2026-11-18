@@ -110,7 +110,8 @@ final class SceneWireTests: XCTestCase {
   func testFadesOffSendsZeroFades() async throws {
     let transport = FakeTransport { _ in (202, Data(openAPIExampleJob.utf8)) }
     let client = StudioClient(baseURL: base, tokens: FakeTokens(), transport: transport)
-    _ = try await client.composeScene(SceneRequest(videoFileID: "v1", audioFileID: "a1", fadeInSeconds: 0, fadeOutSeconds: 0))
+    _ = try await client.composeScene(
+      SceneRequest(videoFileID: "v1", audioFileID: "a1", fadeInSeconds: 0, fadeOutSeconds: 0))
     let requests = await transport.requests
     let audio = try XCTUnwrap(try body(try XCTUnwrap(requests.first))["audio"] as? [String: Any])
     XCTAssertEqual(audio["fade_in_seconds"] as? Double, 0)
