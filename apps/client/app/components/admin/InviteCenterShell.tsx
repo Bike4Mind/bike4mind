@@ -66,12 +66,9 @@ export function InviteCenterShell({ waitlist }: { waitlist: ReactNode }) {
 
   if (!isFullAdmin(currentUser)) {
     return (
-      <Stack gap={ADMIN_REGION_GAP}>
-        <AdminPageHeader title="Invite Center" />
-        <div data-testid="invite-center-section-pending">
-          <HeldGrantActions />
-        </div>
-      </Stack>
+      <div data-testid="invite-center-section-pending">
+        <HeldGrantActions />
+      </div>
     );
   }
 
