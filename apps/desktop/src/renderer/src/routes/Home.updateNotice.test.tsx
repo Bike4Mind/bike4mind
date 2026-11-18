@@ -123,13 +123,16 @@ const byTestId = (id: string) => document.querySelector<HTMLElement>(`[data-test
 const notices = () => Array.from(document.querySelectorAll<HTMLElement>('[data-testid="update-notice"]'));
 const expectCornerAnchored = (el: HTMLElement) => {
   const style = getComputedStyle(el);
-  expect(style.position).toBe('fixed');
+  expect(style.position).toBe('absolute');
   expect(style.right).toBe('12px');
   expect(style.bottom).toBe('12px');
+  expect(el.parentElement).toBe(byTestId('chat-update-notice-region'));
+  expect(getComputedStyle(el.parentElement!).position).toBe('relative');
+  expect(el.parentElement?.contains(byTestId('chat-composer-region'))).toBe(false);
 };
 
 describe('the update card in the signed-in window', () => {
-  it('stays at the window bottom-right when the session panel opens and closes', async () => {
+  it('stays at the thread bottom-right and below the docked session panel', async () => {
     writeSessionPanelOpen(false);
     vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0, 0, 1280, 720));
     const session = {
@@ -160,6 +163,7 @@ describe('the update card in the signed-in window', () => {
     await act(async () => byTestId('chat-toggle-session-panel-btn')?.click());
     expect(byTestId('session-panel')?.getAttribute('role')).toBe('complementary');
     expectCornerAnchored(notices()[0]);
+    expect(Number(getComputedStyle(notices()[0]).zIndex)).toBeLessThan(desktopTheme.zIndex.table);
 
     await act(async () => byTestId('chat-toggle-session-panel-btn')?.click());
     expect(byTestId('session-panel')).toBeNull();
@@ -215,11 +219,12 @@ describe('the update card in the signed-in window', () => {
     expect(install).toHaveBeenLastCalledWith(true);
   });
 
-  it('anchors to the window bottom-right whether the sidebar is open or collapsed', async () => {
+  it('anchors above the composer whether the sidebar is open or collapsed', async () => {
     await mount();
     expect(byTestId('sidebar')).not.toBeNull();
     expect(notices()).toHaveLength(1);
     expectCornerAnchored(notices()[0]);
+    expect(byTestId('chat-update-notice-region')?.nextElementSibling).toBe(byTestId('chat-composer-region'));
     expect(byTestId('sidebar')?.contains(notices()[0])).toBe(false);
 
     await act(async () => byTestId('sidebar-toggle-btn')?.click());

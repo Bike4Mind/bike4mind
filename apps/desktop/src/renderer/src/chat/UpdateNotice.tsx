@@ -54,8 +54,9 @@ export function UpdateNotice({ state, onOpenRelease, onDismiss, actions, contain
         position: contained ? 'absolute' : 'fixed',
         bottom: EDGE,
         right: EDGE,
-        zIndex: 'snackbar',
-        width: `min(280px, calc(100vw - ${2 * EDGE}px))`,
+        // Keep session panel controls above the notice when the thread is short.
+        zIndex: contained ? 1 : 'snackbar',
+        width: `min(280px, calc(100% - ${2 * EDGE}px))`,
         p: 1.5,
         borderRadius: 'md',
         boxShadow: 'md',
