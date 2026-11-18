@@ -45,6 +45,10 @@ export const contentHolders = {
     parentKey: 'id',
     attribution: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
   },
+  AssistantBrief: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
   BriefcasePrompt: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],

@@ -45,6 +45,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/sessions/{id}/clone',
   },
+  composeBrief: {
+    method: 'POST',
+    path: '/api/v1/briefs',
+  },
   createAgent: {
     method: 'POST',
     path: '/api/v1/agents',
@@ -217,6 +221,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/artifacts/{id}/versions/{version}',
   },
+  getBrief: {
+    method: 'GET',
+    path: '/api/v1/briefs/{id}',
+  },
   getClaudeBundleZip: {
     method: 'GET',
     path: '/api/v1/skills/market/bundles/{id}/claude-plugin.zip',
@@ -332,6 +340,10 @@ export const operations = {
   listArtifacts: {
     method: 'GET',
     path: '/api/v1/artifacts',
+  },
+  listBriefs: {
+    method: 'GET',
+    path: '/api/v1/briefs',
   },
   listCreditTransactions: {
     method: 'GET',
