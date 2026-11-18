@@ -44,6 +44,7 @@ import { registerCreditLotSweep } from './creditLotSweep';
 import { registerSpendReconciliation } from './spendReconciliation';
 import { registerCreditPurchaseReconciliation } from './creditPurchaseReconciliation';
 import { registerVoiceHoldSweep } from './voiceHoldSweep';
+import { registerBriefScheduleReconcile } from './briefScheduleReconcile';
 import { registerCreditHoldSweep } from './creditHoldSweep';
 import { registerReferralRewardRelease } from './referralRewardRelease';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
@@ -160,6 +161,7 @@ async function main() {
   registerSpendReconciliation(worker);
   registerCreditPurchaseReconciliation(worker);
   registerVoiceHoldSweep(worker);
+  registerBriefScheduleReconcile(worker);
   registerCreditHoldSweep(worker);
   registerReferralRewardRelease(worker);
 

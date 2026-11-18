@@ -1684,6 +1684,35 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return { schedule: user?.preferences?.briefSchedule ?? null, nextBriefAt: user?.nextBriefAt ?? null };
   }
 
+  /** Users whose scheduled brief is due, earliest first. Served by the `user_nextBriefAt` partial index. */
+  async findDueBriefSchedules(
+    now: Date,
+    limit: number
+  ): Promise<{ id: string; schedule: BriefSchedule | null; nextBriefAt: Date }[]> {
+    const users = await this.model
+      .find({ nextBriefAt: { $lte: now } }, { 'preferences.briefSchedule': 1, nextBriefAt: 1 })
+      .sort({ nextBriefAt: 1 })
+      .limit(limit)
+      .lean<(Pick<IUserDocument, 'preferences'> & { _id: unknown; nextBriefAt: Date })[]>();
+    return users.map(user => ({
+      id: String(user._id),
+      schedule: user.preferences?.briefSchedule ?? null,
+      nextBriefAt: user.nextBriefAt,
+    }));
+  }
+
+  /**
+   * Moves a due user to its next slot (or off the schedule with null), only while `nextBriefAt` still holds
+   * the value the caller read. That compare-and-set is the claim: false means another run took this slot.
+   */
+  async advanceNextBriefAt(userId: string, expected: Date, next: Date | null): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, nextBriefAt: expected },
+      next ? { $set: { nextBriefAt: next } } : { $unset: { nextBriefAt: 1 } }
+    );
+    return result.modifiedCount === 1;
+  }
+
   /**
    * Find a user by their Slack user ID
    * Used for OAuth user linking to prevent duplicate Slack ID associations
