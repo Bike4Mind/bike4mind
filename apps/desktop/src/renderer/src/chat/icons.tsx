@@ -707,6 +707,26 @@ export function WireframeIcon() {
   );
 }
 
+/** The model pane's measure tool: a ruler laid across, with ticks. */
+export function MeasureIcon() {
+  return (
+    <Glyph>
+      <path d="M1.75 10.25 10.25 1.75l4 4-8.5 8.5z" />
+      <path d="M4.5 7.5l1.5 1.5M6.75 5.25l1.5 1.5M9 3l1.5 1.5" strokeWidth="1" />
+    </Glyph>
+  );
+}
+
+/** The model pane's section tool: a cube with a plane cutting through it. */
+export function SectionIcon() {
+  return (
+    <Glyph>
+      <path d="M8 1.75 13.75 5v6L8 14.25 2.25 11V5z" />
+      <path d="M1 8.75 8 5l7 3.75L8 12.5z" strokeWidth="1" />
+    </Glyph>
+  );
+}
+
 /** The model pane's exploded view: a cube split into pieces pushed apart from its centre. */
 export function ExplodeIcon() {
   return (

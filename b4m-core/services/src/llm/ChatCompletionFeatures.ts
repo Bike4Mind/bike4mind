@@ -1,3 +1,4 @@
+import { isQuestMasterCompatible } from './questMasterEligibility';
 import type { AudioToolJobs } from './tools/implementation/audioGeneration';
 import {
   type EmbeddingRuntime,
@@ -18,7 +19,6 @@ import {
   ChatCompletionCreateInput,
   ChatCompletionCreateInputSchema,
   isLowSignalNamingPrompt,
-  ChatModels,
   ContextTelemetry,
   ContextTelemetryAlerts,
   IConnection,
@@ -544,6 +544,10 @@ export interface IChatCompletionServiceOptions {
    * entitlement-scoped data lakes in retrieval. Omitted -> no keys -> tag-only matching.
    */
   getEntitlements?: (user: IUserDocument) => Promise<string[]>;
+  /** Hosts with account allowances atomically admit a new plan before any provider or credit work. */
+  admitQuestStart: (user: IUserDocument, startId: string) => Promise<'subscriber' | 'free'>;
+  /** Gives back a free start admitted for a turn that failed before dispatch. Omitted -> the start stays spent. */
+  releaseQuestStart?: (user: IUserDocument, startId: string) => Promise<void>;
   /**
    * How much model reasoning the caller may see (services/thinkingVisibility.ts), injected by the
    * app tier like getEntitlements. Omitted -> `raw`; a failed resolution withholds.
@@ -1248,22 +1252,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
       return { shouldContinue: true };
     }
 
-    // Check if the model is compatible with QuestMaster
-    // Some models may not follow XML/JSON formatting instructions reliably
-    const incompatibleModels = [
-      // O-series reasoning models (don't support tool calling in streaming mode)
-      ChatModels.O1,
-      ChatModels.O1_PREVIEW,
-      ChatModels.O1_MINI,
-      ChatModels.O3_MINI,
-      // GPT-5 models WITHOUT tool support (supportsTools: false)
-      // Other GPT-5 models now use function calling via questMaster.ts
-      ChatModels.GPT5_CHAT_LATEST,
-      ChatModels.GPT5_1_CHAT_LATEST,
-      ChatModels.GPT5_2_CHAT_LATEST,
-    ];
-
-    if (incompatibleModels.includes(model as ChatModels)) {
+    if (!isQuestMasterCompatible(model)) {
       this.logger.log(
         `QuestMaster: Skipping for model ${model} as it may not be fully compatible with structured JSON output`
       );

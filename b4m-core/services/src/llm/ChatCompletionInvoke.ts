@@ -13,6 +13,7 @@ import {
   LLMModelConfig,
   ModelInfo,
   ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+  getQuestErrorCode,
   PromptMeta,
   PromptMetaZodSchema,
   readOrgModelPolicy,
@@ -42,6 +43,8 @@ import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { classifyQueryComplexity } from './queryComplexityClassifier';
 import { orgDisallowedTools } from './orgToolPolicy';
 import { filterBuiltInTools } from './tools/toolManager';
+import { randomUUID } from 'node:crypto';
+import { isQuestMasterCompatible } from './questMasterEligibility';
 
 export class ChatCompletionInvoke {
   public db: IChatCompletionServiceOptions['db'];
@@ -54,6 +57,8 @@ export class ChatCompletionInvoke {
   private turnStartAutoNameDispatched = false;
   private invokeLambda?: (params: z.infer<typeof QuestStartBodySchema>) => Promise<void>;
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
+  private admitQuestStart: IChatCompletionServiceOptions['admitQuestStart'];
+  private releaseQuestStart: IChatCompletionServiceOptions['releaseQuestStart'];
   private autoNameSession: IChatCompletionServiceOptions['autoNameSession'];
   /** Session fetched during invoke; exposed for the wait=true path to avoid a re-fetch in process. */
   public prefetchedSession: ISessionDocument | null = null;
@@ -64,12 +69,22 @@ export class ChatCompletionInvoke {
     return this.turnStartAutoNameDispatched;
   }
 
+  public get questMasterStartId(): string | undefined {
+    return this.questStartParams?.questMasterStartId;
+  }
+
+  public get questAdmittedAs(): 'subscriber' | 'free' | undefined {
+    return this.questStartParams?.questAdmittedAs;
+  }
+
   constructor(options: IChatCompletionServiceOptions) {
     this.db = options.db;
     this.logger = options.logger;
     this.user = options.user;
     this.invokeLambda = options.invokeLambda;
     this.getEntitlements = options.getEntitlements;
+    this.admitQuestStart = options.admitQuestStart;
+    this.releaseQuestStart = options.releaseQuestStart;
     this.autoNameSession = options.autoNameSession;
   }
 
@@ -297,13 +312,6 @@ export class ChatCompletionInvoke {
       }
     }
 
-    // Start sessions.update early (will await later in parallel with admin settings)
-    const sessionUpdatePromise = this.db.sessions.update({
-      id: sessionId,
-      lastUpdated: now,
-      updatedAt: now,
-    });
-
     // Initialize promptMeta for this completion attempt.
     const promptMeta: Partial<PromptMeta> = {
       model: {
@@ -393,6 +401,21 @@ export class ChatCompletionInvoke {
         throw new NotFoundError('Quest not found');
       }
     }
+
+    // Admitted before the quest exists, so a refusal reaches the caller as a 403 with no quest to clean up.
+    const startsPlan =
+      enableQuestMaster &&
+      !questMaster &&
+      isQuestMasterCompatible(model.id) &&
+      (await this.db.adminSettings.getSettingsValue('EnableQuestMaster')) === true;
+    const questMasterStartId = startsPlan ? randomUUID() : undefined;
+    const questAdmittedAs = questMasterStartId ? await this.admitQuestStart(this.user, questMasterStartId) : undefined;
+    const releaseFreeStart = async () => {
+      if (questAdmittedAs !== 'free' || !questMasterStartId || !this.releaseQuestStart) return;
+      await this.releaseQuestStart(this.user, questMasterStartId).catch(err =>
+        this.logger.warn(`Failed to release free QuestMaster start ${questMasterStartId}`, err)
+      );
+    };
 
     // Parallelize independent operations: quest ops + admin settings + session update
     const [
@@ -487,16 +510,23 @@ export class ChatCompletionInvoke {
       loadFreeTierAllowedModels(this.db.adminSettings),
       this.db.adminSettings.getSettingsValue('AutoNameNotebook'),
 
-      // Session update (fire-and-forget but ensure completion)
-      sessionUpdatePromise,
-    ]);
+      // Begin only after allowance admission, and observe rejection with the other writes.
+      this.db.sessions.update({ id: sessionId, lastUpdated: now, updatedAt: now }),
+    ]).catch(async err => {
+      await releaseFreeStart();
+      throw err;
+    });
 
     if (!this.modelConfigurationsCache && modelConfigurations) {
       this.modelConfigurationsCache = modelConfigurations;
     }
 
-    if (!quest) return;
+    if (!quest) {
+      await releaseFreeStart();
+      return;
+    }
 
+    let dispatchAttempted = false;
     try {
       if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
         throw new InternalServerError('Default embedding model not found or not supported');
@@ -567,6 +597,8 @@ export class ChatCompletionInvoke {
         params,
         dashboardParams,
         enableQuestMaster,
+        questMasterStartId,
+        questAdmittedAs,
         enableMementos,
         enableArtifacts,
         enableAgents,
@@ -610,6 +642,8 @@ export class ChatCompletionInvoke {
 
       if (this.invokeLambda && this.questStartParams) {
         this.logger.info('🌍 [SERVER] invokeLambda start:', new Date().toISOString());
+        // A rejected acknowledgement does not prove the receiver rejected the work.
+        dispatchAttempted = true;
         await this.invokeLambda(this.questStartParams);
         // Pinned only after the access check and dispatch: a model that cannot run must not stick to the session.
         if (session.lastUsedModel !== model.id) {
@@ -621,6 +655,8 @@ export class ChatCompletionInvoke {
         throw new InternalServerError('No invokeLambda function provided');
       }
     } catch (error) {
+      // Release only before dispatch. Once attempted, retain the claim on ambiguous failures.
+      if (!dispatchAttempted) await releaseFreeStart();
       let errorMessage = `Something went wrong. Please try again.`;
       if (isZodError(error)) {
         errorMessage = fromZodError(error).message;
@@ -642,6 +678,7 @@ export class ChatCompletionInvoke {
         type: quest.type,
         status: quest.status,
         reply: quest.reply,
+        errorCode: getQuestErrorCode(error),
       });
     }
     return quest;

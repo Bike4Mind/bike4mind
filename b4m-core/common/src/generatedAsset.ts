@@ -1,6 +1,7 @@
 import z from 'zod';
 
-export const GENERATED_ASSET_GENERATORS = ['music', 'video', 'image', 'speech', 'sound_effect'] as const;
+// `scene`: a video and a music track muxed into one clip by our own worker (a compose generation job).
+export const GENERATED_ASSET_GENERATORS = ['music', 'video', 'image', 'speech', 'sound_effect', 'scene'] as const;
 
 export type GeneratedAssetGenerator = (typeof GENERATED_ASSET_GENERATORS)[number];
 
@@ -20,6 +21,7 @@ export const GENERATED_ASSET_GENERATOR_TAG: Record<GeneratedAssetGenerator, stri
   sound_effect: 'sound-effect',
   video: 'video',
   image: 'image',
+  scene: 'scene',
 };
 
 /**
@@ -35,6 +37,10 @@ export const GENERATED_ASSET_LINEAGE_ROLES = [
   'variation_of',
   'edit_source',
   'mask',
+  // A Scene's inputs (compose generation jobs): its picture, its soundtrack and its cover art.
+  'scene_video',
+  'scene_audio',
+  'scene_cover',
 ] as const;
 
 export type GeneratedAssetLineageRole = (typeof GENERATED_ASSET_LINEAGE_ROLES)[number];

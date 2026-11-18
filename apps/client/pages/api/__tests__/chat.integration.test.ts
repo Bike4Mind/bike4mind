@@ -23,6 +23,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import { Logger } from '@bike4mind/observability';
+import { ForbiddenError } from '@bike4mind/common';
 
 const {
   mockCheckFreeTierDailySpendCap,
@@ -193,6 +194,8 @@ vi.mock('@bike4mind/services/llm', async orig => {
     }
     prefetchedSession = undefined;
     prefetchedOrganization = undefined;
+    questMasterStartId = 'server-admitted-start';
+    questAdmittedAs = 'free';
     invoke = (...a: unknown[]) => mockInvoke(...a);
   }
   // The wait=true path constructs this directly; the async-path tests never reach it.
@@ -1419,6 +1422,88 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().promptDetails).toEqual(DETAILS);
+  });
+
+  it('carries the server admission id into the blocking process body', async () => {
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockProcess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({ questMasterStartId: 'server-admitted-start', questAdmittedAs: 'free' }),
+      })
+    );
+  });
+
+  it('ignores client-supplied admission fields on the blocking path', async () => {
+    const { req, res } = fire({
+      body: {
+        message: 'hello',
+        sessionId: 'sess-1',
+        wait: true,
+        questMasterStartId: 'client-forged',
+        questAdmittedAs: 'subscriber',
+      },
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockProcess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({ questMasterStartId: 'server-admitted-start', questAdmittedAs: 'free' }),
+      })
+    );
+  });
+
+  it.each([true, false])('returns a typed allowance refusal without processing (wait=%s)', async wait => {
+    mockInvoke.mockRejectedValueOnce(
+      new ForbiddenError('Free quest already started', {
+        errorCode: 'free_quest_limit_reached',
+      })
+    );
+    const { req, res } = fire({
+      body: { message: 'hello', sessionId: 'sess-1', wait, enableTools: true, enableQuestMaster: true },
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'free_quest_limit_reached' });
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])(
+    'runs legacy tools without QuestMaster after the free start is spent (wait=%s)',
+    async wait => {
+      mockInvoke.mockImplementationOnce(async ({ body }) => {
+        expect(body.enableQuestMaster).toBe(true);
+        throw new ForbiddenError('Free quest already started', { errorCode: 'free_quest_limit_reached' });
+      });
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait, enableTools: true } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockInvoke).toHaveBeenCalledTimes(2);
+      expect(mockInvoke).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({ enableQuestMaster: false, enableMementos: true, enableAgents: true }),
+        })
+      );
+      expect(mockDeleteSession).not.toHaveBeenCalled();
+      if (wait) {
+        expect(mockProcess).toHaveBeenCalledWith(
+          expect.objectContaining({ body: expect.objectContaining({ enableQuestMaster: false }) })
+        );
+      } else {
+        expect(mockProcess).not.toHaveBeenCalled();
+      }
+    }
+  );
+
+  it('does not retry unrelated legacy tools refusals', async () => {
+    mockInvoke.mockRejectedValueOnce(new ForbiddenError('Subscription lookup failed'));
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', enableTools: true } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(mockProcess).not.toHaveBeenCalled();
   });
 
   it('omits the breakdown without the flag, keeping the response shape unchanged', async () => {
