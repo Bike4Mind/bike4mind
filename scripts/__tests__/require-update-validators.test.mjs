@@ -1,8 +1,11 @@
 import { RuleTester } from 'eslint';
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import tseslint from 'typescript-eslint';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import rule from '../../eslint-rules/require-update-validators.mjs';
 
 RuleTester.describe = describe;
@@ -64,13 +67,31 @@ describe('bulk suppression enforcement through the repository config', () => {
     );
   const call = 'globalThis.model.updateOne({}, {});\n';
 
-  it('consumes the existing two-call baseline without changing it', () => {
-    const result = spawnSync(process.execPath, [eslint, 'scripts/migrate-sre-v2.mjs', '--quiet'], {
+  // Suppressions only apply to files on disk, not --stdin, so the baseline case lints a temporary file.
+  const fixture = `scripts/update-validator-baseline-fixture-${process.pid}.mjs`;
+  const tempDir = mkdtempSync(join(tmpdir(), 'update-validators-'));
+  const suppressions = join(tempDir, 'suppressions.json');
+  writeFileSync(suppressions, JSON.stringify({ [fixture]: { 'b4m/require-update-validators': { count: 2 } } }));
+  const lintBaselined = code => {
+    writeFileSync(join(cwd, fixture), code);
+    return spawnSync(process.execPath, [eslint, fixture, '--quiet', '--suppressions-location', suppressions], {
       cwd,
       encoding: 'utf8',
     });
+  };
+  afterEach(() => rmSync(join(cwd, fixture), { force: true }));
+  afterAll(() => rmSync(tempDir, { recursive: true, force: true }));
+
+  it('consumes a baselined call count', () => {
+    const result = lintBaselined(call.repeat(2));
     expect(result.stdout + result.stderr).toBe('');
     expect(result.status).toBe(0);
+  });
+
+  it('rejects a call beyond the baselined count', () => {
+    const result = lintBaselined(call.repeat(3));
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('b4m/require-update-validators');
   });
 
   it('rejects an additional unvalidated call', () => {
