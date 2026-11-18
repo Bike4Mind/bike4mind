@@ -3,6 +3,7 @@ import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OrchestratorStage } from './OrchestratorStage';
 import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs';
+import { presenterAgentTitle } from './presenter';
 import type { AgentView } from './roster';
 import { agentFixture, createThemedMount, el, query } from './testUtils';
 import { renderOrchestratorView } from './viewRegistry';
@@ -94,6 +95,9 @@ describe('Presenter mode on every view', () => {
     await renderStage(view);
     expect(el('orchestrator-presenting-badge').textContent).toBe('Presenting');
     expectNoLeaks();
+    // The leak check alone would pass on a view that drew nothing; every agent must show as its placeholder.
+    const text = `${document.body.textContent ?? ''} ${document.body.innerHTML}`;
+    ROSTER.forEach((_, index) => expect(text).toContain(presenterAgentTitle(index + 1)));
   });
 
   it('Focus mode shows placeholders and answers with the real option', async () => {
