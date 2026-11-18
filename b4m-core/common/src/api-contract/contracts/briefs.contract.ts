@@ -116,7 +116,7 @@ export const putBriefScheduleContract = defineEndpoint({
   requestExample: { enabled: true, timeOfDay: '08:00', days: [1, 2, 3, 4, 5], timeZone: 'America/New_York' },
   responses: {
     200: { description: 'The saved schedule.', schema: BriefScheduleResponseSchema },
-    400: { description: 'Invalid schedule.', schema: ApiErrorSchema },
+    400: { description: 'Malformed JSON request body.', schema: ApiErrorSchema },
     401: { description: 'Missing or invalid JWT.', schema: ApiErrorSchema },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
