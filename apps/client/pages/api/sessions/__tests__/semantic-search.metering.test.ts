@@ -28,6 +28,7 @@ const m = vi.hoisted(() => ({
   settleEmbedding: vi.fn(),
   refundEmbedding: vi.fn(),
   findOrg: vi.fn(),
+  findFreeze: vi.fn(),
   meter: vi.fn(),
   settle: vi.fn(),
   reserveText: vi.fn(),
@@ -66,6 +67,7 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   usageEventRepository: { record: async () => undefined },
   creditTransactionRepository: {},
+  spendFreezeRepository: { findActiveForSubject: m.findFreeze },
   organizationRepository: { findById: m.findOrg },
   userRepository: {},
   sessionRepository: {
@@ -197,6 +199,7 @@ beforeEach(() => {
     return 1;
   });
   m.findOrg.mockResolvedValue(null);
+  m.findFreeze.mockResolvedValue(null);
   // Expansion reports 100/20 tokens, the re-rank 300/40.
   m.complete
     .mockImplementationOnce(async (_m, _msgs, _o, cb) => cb(['{}'], { inputTokens: 100, outputTokens: 20 }))
@@ -300,6 +303,30 @@ describe('POST /api/sessions/semantic-search metering', () => {
     await expect(call(100)).rejects.toMatchObject({ statusCode: 422 });
     expect(m.complete).toHaveBeenCalledOnce();
     expect(m.settle).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a frozen caller with 403 spend_frozen before any provider call, credits on or off', async () => {
+    m.enforce = false;
+    m.findFreeze.mockResolvedValue({ scopeType: 'User', frozenAt: new Date('2026-11-01T00:00:00Z') });
+
+    await expect(call(100)).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { errorCode: 'spend_frozen', frozenScope: 'user' },
+    });
+    expect(m.findFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: null, apiKeyId: null });
+    expect(m.complete).not.toHaveBeenCalled();
+    expect(m.embed).not.toHaveBeenCalled();
+  });
+
+  it('checks an org-billed key against its org, the key and its user', async () => {
+    m.findOrg.mockResolvedValue({ id: 'o2', currentCredits: 50 });
+    m.findFreeze.mockResolvedValue({ scopeType: 'Organization', frozenAt: new Date('2026-11-01T00:00:00Z') });
+
+    await expect(
+      call(0, undefined, { billingOwnerType: 'Organization', organizationId: 'o2', keyId: 'k1' })
+    ).rejects.toMatchObject({ statusCode: 403, additionalInfo: { errorCode: 'spend_frozen' } });
+    expect(m.findFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: 'o2', apiKeyId: 'k1' });
+    expect(m.complete).not.toHaveBeenCalled();
   });
 
   it('reads the org once and gates on its pool', async () => {

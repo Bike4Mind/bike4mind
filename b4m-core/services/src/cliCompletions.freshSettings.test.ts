@@ -89,6 +89,7 @@ function buildDb(adminSettings: ReturnType<typeof buildSettingsStore>) {
       creditTransactions: {} as never,
       users: users as never,
       usageEvents: { record: vi.fn().mockResolvedValue(undefined) } as never,
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
       organizations: { findById: vi.fn() } as never,
     },
     users,

@@ -3,7 +3,9 @@ import * as z from 'zod';
 import { apiKeyService } from '@bike4mind/services';
 import { ApiKeyType, estimateTtsCreditCost, resolveAudioVendorBackend, type ApiErrorCode } from '@bike4mind/common';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
+import { apiKeyRepository, adminSettingsRepository, spendFreezeRepository } from '@bike4mind/database';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { deductTtsCredits } from '@server/utils/deductTtsCredits';
 import {
   holdPreflightCredits,
@@ -66,6 +68,10 @@ const handler = baseApi().post(async (req, res) => {
   await (
     await createModelAdmission(req.user!, undefined, false, { organizationId: billingOrganizationId })
   ).assert(TTS_MODEL, { orgModelBackend: resolveAudioVendorBackend('openai') });
+  // The hold below runs only when credits are enforced; the freeze applies either way.
+  await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, billingOrganizationId ?? null), {
+    db: { spendFreezes: spendFreezeRepository },
+  });
   let hold: PreflightCreditHold | undefined;
   if (userId && req.user && (await isCreditsEnforced())) {
     try {

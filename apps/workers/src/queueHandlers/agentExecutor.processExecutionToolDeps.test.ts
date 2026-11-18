@@ -314,6 +314,7 @@ vi.mock('@bike4mind/database', async () => {
     count: 1,
     expiresAt: new Date(),
   } as never);
+  vi.spyOn(actual.spendFreezeRepository, 'findActiveForSubject').mockResolvedValue(null);
   return { ...actual, connectDB: vi.fn().mockResolvedValue(undefined) };
 });
 
