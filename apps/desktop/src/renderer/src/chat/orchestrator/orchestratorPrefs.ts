@@ -76,8 +76,9 @@ export function writeView(sessionId: string, view: OrchestratorViewId, projectDi
 }
 
 /**
- * Forgets a deleted session's surface and view. The project and global last choices are not the session's, so they stay. Called from the delete path only: the session list is
+ * Forgets a deleted session's surface and view. Called from the delete path only: the session list is
  * scoped to the signed-in account while storage is install-wide, so "not listed" never means "gone".
+ * The project and global last choices are not the session's, so they stay.
  */
 export function forgetSessionPrefs(sessionId: string): void {
   try {
