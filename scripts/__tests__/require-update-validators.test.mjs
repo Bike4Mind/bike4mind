@@ -11,7 +11,7 @@ RuleTester.afterAll = afterAll;
 
 const tester = new RuleTester({ languageOptions: { parser: tseslint.parser } });
 
-for (const method of ['findOneAndUpdate', 'updateOne', 'updateMany']) {
+for (const method of ['findOneAndUpdate', 'findByIdAndUpdate', 'updateOne', 'updateMany']) {
   const invalid = code => ({ code, errors: [{ messageId: 'validators', data: { method } }] });
   tester.run(`require-update-validators: ${method}`, rule, {
     valid: [

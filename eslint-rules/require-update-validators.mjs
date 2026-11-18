@@ -1,4 +1,4 @@
-const UPDATE_METHODS = new Set(['findOneAndUpdate', 'updateOne', 'updateMany']);
+const UPDATE_METHODS = new Set(['findOneAndUpdate', 'findByIdAndUpdate', 'updateOne', 'updateMany']);
 const OPT_OUT = /\bupdate-validators-off:\s*\S[^\r\n]*/;
 
 function unwrap(node) {
