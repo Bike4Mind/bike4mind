@@ -55,11 +55,7 @@ import {
   type CreateSceneCompositionJobDeps,
   type SceneJobDeps,
 } from '@bike4mind/services/sceneJobs';
-import {
-  createRenderJobHandler,
-  type CreateRenderJobsDeps,
-  type RenderJobDeps,
-} from '@bike4mind/services/renderJobs';
+import { createRenderJobHandler, type CreateRenderJobsDeps, type RenderJobDeps } from '@bike4mind/services/renderJobs';
 import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
 import {
   callerOwnsGeneratedImage,

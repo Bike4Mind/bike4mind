@@ -16,6 +16,7 @@ const PUBLIC_ERROR_MESSAGES: Record<GenerationJobErrorCode, string> = {
   enqueue_failed: 'The export could not be started. Your credits were refunded.',
   cancelled: 'The export was cancelled. Your credits were refunded.',
   account_blocked: 'This account cannot export videos.',
+  unsupported_input: 'A clip file could not be used for this export. Your credits were refunded.',
 };
 
 export const toStudioRenderJob = (job: RenderJob): StudioRenderJob => {
