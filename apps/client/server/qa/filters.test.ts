@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { parseQaFilters } from './filters';
+import { parseQaFilters, parseQaSummaryFilters } from './filters';
 import { rangeInstants, resolveRange, spanDays } from '../../app/components/QaStatus/dateRange';
 
 afterEach(() => {
@@ -86,5 +86,39 @@ describe('parseQaFilters', () => {
     expect(() =>
       parseQaFilters({ product: 'product-a', from: '2025-01-01T00:00:00Z', to: '2026-11-01T00:00:00Z' })
     ).toThrow();
+  });
+});
+
+describe('parseQaSummaryFilters', () => {
+  it('needs no product, ignores product and tenant, and defaults to the last 7 days', () => {
+    expect(parseQaSummaryFilters({}, NOW)).toEqual({ branch: 'main', from: daysBefore(7), to: NOW });
+    expect(
+      parseQaSummaryFilters({ product: 'product-a', tenant: 'tenant-a', env: 'staging', range: '30d' }, NOW)
+    ).toEqual({
+      env: 'staging',
+      branch: 'main',
+      from: daysBefore(30),
+      to: NOW,
+    });
+  });
+
+  it('takes the picker from/to over range', () => {
+    expect(
+      parseQaSummaryFilters(
+        { range: '30d', from: '2026-11-01T00:00:00.000+08:00', to: '2026-11-14T00:00:00.000+08:00' },
+        NOW
+      )
+    ).toEqual({
+      branch: 'main',
+      from: new Date('2026-10-31T16:00:00.000Z'),
+      to: new Date('2026-11-13T16:00:00.000Z'),
+    });
+  });
+
+  it('applies the same range checks as the other reads', () => {
+    expect(() => parseQaSummaryFilters({ range: '90d' })).toThrow();
+    expect(() => parseQaSummaryFilters({ from: '2026-11-01T00:00:00.000Z' })).toThrow();
+    expect(() => parseQaSummaryFilters({ from: '2026-11-14T00:00:00.000Z', to: '2026-11-01T00:00:00.000Z' })).toThrow();
+    expect(() => parseQaSummaryFilters({ from: '2025-01-01T00:00:00.000Z', to: '2026-11-01T00:00:00.000Z' })).toThrow();
   });
 });

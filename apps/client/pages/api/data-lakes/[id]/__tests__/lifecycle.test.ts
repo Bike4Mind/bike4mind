@@ -38,6 +38,7 @@ const h = vi.hoisted(() => ({
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as the serve/gears tests).
+vi.mock('@bike4mind/server-utils/auth/sideAppRefusal', () => ({ recordSideAppRefusal: vi.fn() }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};

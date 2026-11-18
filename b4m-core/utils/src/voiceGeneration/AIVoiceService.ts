@@ -13,6 +13,8 @@ export interface VoiceSynthesisOptions {
   // ElevenLabs language_code (ISO 639-1). Pins the output language on models
   // that support it; other providers ignore it.
   language?: string;
+  // Aborts the provider call; an abort surfaces as a thrown transport error.
+  signal?: AbortSignal;
 }
 
 export interface VoiceSynthesisResult {

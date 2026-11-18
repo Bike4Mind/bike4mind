@@ -343,34 +343,50 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
           </DialogTitle>
           <ModalClose data-testid="billing-modal-close" sx={{ top: { xs: 16, sm: 20 }, right: { xs: 16, sm: 24 } }} />
           <Box sx={{ display: 'flex', gap: { xs: 3, sm: 6 }, alignItems: 'flex-start' }}>
-            <Box data-testid="billing-balance">
+            {/* globals.css sets `* { min-width: 0 }`, which lifts a flex item's content-width floor. min-content
+                restores it here, so the plan box gives way first and the unit wraps instead of being overrun. */}
+            <Box data-testid="billing-balance" sx={{ minWidth: 'min-content' }}>
               <Typography level="body-xs" sx={statLabelSx}>
                 {t('billing.balance', 'Balance')}
               </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, mt: 0.5 }}>
-                <CreditIcon
-                  aria-hidden
-                  data-testid="billing-balance-icon"
-                  sx={{
-                    alignSelf: 'center',
-                    fontSize: { xs: '1.5rem', sm: '1.875rem' },
-                    color: 'subscription.creditsModal.iconFill',
-                  }}
-                />
+              <Box
+                data-testid="billing-balance-row"
+                sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 0.75, mt: 0.5 }}
+              >
+                <Box
+                  data-testid="billing-balance-figure"
+                  sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, flexShrink: 0 }}
+                >
+                  <CreditIcon
+                    aria-hidden
+                    data-testid="billing-balance-icon"
+                    sx={{
+                      alignSelf: 'center',
+                      fontSize: { xs: '1.5rem', sm: '1.875rem' },
+                      color: 'subscription.creditsModal.iconFill',
+                    }}
+                  />
+                  <Typography
+                    component="span"
+                    data-testid="billing-balance-amount"
+                    sx={{
+                      fontSize: { xs: '1.75rem', sm: '2.25rem' },
+                      lineHeight: 1,
+                      fontWeight: 600,
+                      letterSpacing: '-0.02em',
+                      fontVariantNumeric: 'tabular-nums',
+                      color: noCredits ? 'danger.plainColor' : isLowCredits ? 'warning.plainColor' : 'text.primary',
+                    }}
+                  >
+                    {formatCreditAmount(credits)}
+                  </Typography>
+                </Box>
                 <Typography
                   component="span"
-                  sx={{
-                    fontSize: { xs: '1.75rem', sm: '2.25rem' },
-                    lineHeight: 1,
-                    fontWeight: 600,
-                    letterSpacing: '-0.02em',
-                    fontVariantNumeric: 'tabular-nums',
-                    color: noCredits ? 'danger.plainColor' : isLowCredits ? 'warning.plainColor' : 'text.primary',
-                  }}
+                  level="body-sm"
+                  data-testid="billing-balance-unit"
+                  sx={{ color: 'text.tertiary' }}
                 >
-                  {formatCreditAmount(credits)}
-                </Typography>
-                <Typography component="span" level="body-sm" sx={{ color: 'text.tertiary' }}>
                   {t('credits.unit', 'credits')}
                 </Typography>
               </Box>

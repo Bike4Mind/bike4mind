@@ -43,6 +43,7 @@ export * from './video';
 export * from './image';
 export * from './embeddings';
 export * from './music';
+export * from './scene';
 export * from './integrations';
 export * from './decisions';
 export * from './soundGeneration';
@@ -235,6 +236,7 @@ export * from './storageOwner';
 export * from './storageBreakdown';
 export * from './organizationStorage';
 export * from './adminPermissions';
+export * from './mfaEnforcement';
 export * from './adminRoles';
 
 export { VERIFIED_SLACK_IDENTITY_FILTER } from './slackIdentity';

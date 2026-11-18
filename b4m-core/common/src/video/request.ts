@@ -21,6 +21,12 @@ export const VideoGenerationRequestSchema = z.object({
   durationSeconds: z.number().positive(),
   aspectRatio: z.enum(ASPECT_RATIOS),
   resolution: z.enum(RESOLUTION_TIERS),
+  keyframes: z
+    .array(z.strictObject({ fileId: z.string().min(1), timeSeconds: z.number().nonnegative() }))
+    .min(1)
+    .max(100)
+    .optional(),
+  draft: z.boolean().optional(),
   inputs: z.array(VideoInputSchema).max(VIDEO_INPUTS_MAX).optional(),
   // Legacy single-image form, read as one first_frame input by videoRequestInputs. Kept so job payloads stored
   // before `inputs` existed still read, and older callers still parse. New code sets `inputs`.
@@ -36,13 +42,17 @@ export type VideoInputImageRef = { kind: 'file'; id: string } | { kind: 'generat
 export const videoInputRef = (input: VideoInput): VideoInputImageRef =>
   'fileId' in input ? { kind: 'file', id: input.fileId } : { kind: 'generated', key: input.generatedImageKey };
 
-type RequestInputFields = Pick<VideoGenerationRequest, 'inputs' | 'inputImageFileId' | 'inputGeneratedImageKey'>;
+type RequestInputFields = Pick<
+  VideoGenerationRequest,
+  'inputs' | 'inputImageFileId' | 'inputGeneratedImageKey' | 'keyframes'
+>;
 
 /**
  * The request's input images, with the legacy single-image fields read as a first_frame input. The one read path
  * for inputs: validateAgainstCapabilities rejects a request that mixes the two forms, so nothing is dropped here.
  */
 export const videoRequestInputs = (request: RequestInputFields): VideoInput[] => {
+  if (request.keyframes) return request.keyframes.map(frame => ({ role: 'reference', fileId: frame.fileId }));
   if (request.inputs) return request.inputs;
   if (request.inputImageFileId) return [{ role: 'first_frame', fileId: request.inputImageFileId }];
   if (request.inputGeneratedImageKey)

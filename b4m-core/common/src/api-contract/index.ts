@@ -89,6 +89,12 @@ export {
   listMusicGenerationsContract,
   listMusicModelsContract,
 } from './contracts/musicGeneration.contract';
+export {
+  cancelSceneCompositionContract,
+  createSceneCompositionContract,
+  getSceneCompositionContract,
+  listSceneCompositionsContract,
+} from './contracts/sceneComposition.contract';
 export { listVoicesContract, createVoiceSessionContract, endVoiceSessionContract } from './contracts/voice.contract';
 export {
   listProjectsContract,

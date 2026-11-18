@@ -1,5 +1,5 @@
 /**
- * Test-only harness shared by the video and music route integration tests in pages/api/v1/__tests__. It imports vitest, so
+ * Test-only harness shared by the video, music and scene route integration tests in pages/api/v1/__tests__. It imports vitest, so
  * app code must never import it. vi.mock calls cannot live here (vitest hoists them per test file): each test
  * file keeps its own vi.mock lines and points every factory at the builders below.
  */
@@ -17,6 +17,7 @@ export const h = {
   rateLimit: vi.fn(),
   createVideoJob: vi.fn(),
   createMusicJob: vi.fn(),
+  createSceneCompositionJob: vi.fn(),
   listByRequester: vi.fn(),
   findById: vi.fn(),
   requestCancel: vi.fn(),
@@ -84,6 +85,11 @@ export const musicJobsServiceMock = async (orig: ImportOriginal) => ({
   createMusicJob: (...a: unknown[]) => h.createMusicJob(...a),
 });
 
+export const sceneJobsServiceMock = async (orig: ImportOriginal) => ({
+  ...(await orig<ModuleExports>()),
+  createSceneCompositionJob: (...a: unknown[]) => h.createSceneCompositionJob(...a),
+});
+
 export const databaseMock = async (orig: ImportOriginal) => {
   const actual = await orig<ModuleExports>();
   const RealUser = actual.User as Record<string, unknown>;
@@ -111,6 +117,7 @@ export const wiringMock = () => ({
   getImageJobDeps: () => ({}),
   getCreateMusicJobDeps: () => ({}),
   getMusicJobDeps: () => ({}),
+  getCreateSceneCompositionJobDeps: () => ({}),
   getGenerationJobEngine: () => ({ requestCancel: (...a: unknown[]) => h.requestCancel(...a) }),
 });
 
@@ -223,6 +230,32 @@ export const musicJob = (overrides: Partial<IGenerationJobDocument> = {}): IGene
     payload: {
       request: { model: 'test-music', prompt: 'a calm piano piece', instrumental: false, durationSeconds: 5 },
       providerId: 'test',
+    },
+    pollCount: 0,
+    attempts: 0,
+    cancelRequested: false,
+    deadlineAt: new Date('2026-10-06T00:20:00Z'),
+    creditHold: null,
+    createdAt: new Date('2026-10-06T00:00:00Z'),
+    updatedAt: new Date('2026-10-06T00:00:00Z'),
+    ...overrides,
+  }) as IGenerationJobDocument;
+
+export const sceneJob = (overrides: Partial<IGenerationJobDocument> = {}): IGenerationJobDocument =>
+  ({
+    id: JOB_ID,
+    kind: 'compose',
+    ownerType: CreditHolderType.User,
+    ownerId: 'user-1',
+    requestedBy: 'user-1',
+    source: 'api',
+    state: 'pending',
+    payload: {
+      request: {
+        videoFileId: 'a'.repeat(24),
+        audioFileId: 'b'.repeat(24),
+        audio: { fit: 'trim', fadeInSeconds: 0, fadeOutSeconds: 1.5 },
+      },
     },
     pollCount: 0,
     attempts: 0,

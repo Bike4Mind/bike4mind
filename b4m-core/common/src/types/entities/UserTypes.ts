@@ -16,6 +16,7 @@ import type { RiskEvidenceRecord, RiskEvidenceSummary, RiskEvidenceTrigger } fro
 import type { SignupGrant, SignupGrantAssessment } from '../../signupGrant';
 import type { ClientSurface } from '../analytics';
 import type { AdminPermissionId } from '../../adminPermissions';
+import type { UserAccountSegment } from './SpendExplorerTypes';
 
 export enum CollectionType {
   NOTEBOOK = 'notebook',
@@ -359,6 +360,12 @@ export type AccountDeletionSource = (typeof ACCOUNT_DELETION_SOURCES)[number];
 /** Days between a deletion request and the purge; the user can cancel until then. */
 export const ACCOUNT_DELETION_GRACE_DAYS = 14;
 
+/**
+ * Days after a deletion request at which one still not completed raises the deadline alarm, leaving
+ * five days of margin inside the one-month erasure window.
+ */
+export const ACCOUNT_DELETION_DEADLINE_ALERT_DAYS = 25;
+
 export interface AccountDeletionRetainedRecord {
   category: string;
   reason: string;
@@ -430,6 +437,8 @@ export interface IClientUsageEntry {
 
 export interface IUser extends ICreditHolder {
   id: string;
+  /** Durable admission id; deleting a QuestMaster plan never restores the allowance. */
+  freeQuestStartId?: string;
   username: string;
   name: string;
   email: string | null;
@@ -966,10 +975,25 @@ export interface IUser extends ICreditHolder {
   isInternal?: boolean;
 
   /**
+   * Set by an admin through the user's partner toggle. Only `partner` is ever stored from the user
+   * route; absent reads as `customer`. Internal stays `isInternal`, the only source of that for a user.
+   * Spend explorer splits cost by it. Never an authorization source.
+   */
+  accountSegment?: UserAccountSegment;
+
+  /**
    * Minted through POST /api/v1/personas, never through signup. Only these accounts can be deleted
    * through the persona routes, and the expiry sweep disables them at `personaExpiresAt`.
    */
   isPersona?: boolean;
+
+  /**
+   * `'force'` makes this one account owe MFA enrollment as if the admin enforced MFA, with the
+   * stage-wide `enforceMFA` setting untouched, so e2e can drive the real enforcement path. Set only
+   * by POST /api/test/create-user; no signup, profile or admin update path writes it. Every reader
+   * goes through isMfaForcedForUser (common mfaEnforcement.ts).
+   */
+  mfaEnforcement?: 'force' | null;
 
   /** When the persona expiry sweep disables this persona account; set only on persona accounts. */
   personaExpiresAt?: Date | null;

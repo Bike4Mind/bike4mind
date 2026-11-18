@@ -40,6 +40,10 @@ export const QuestStartBodySchema = z
     params: ChatCompletionCreateInputSchema,
     dashboardParams: DashboardParamsSchema.optional(),
     enableQuestMaster: z.boolean().optional(),
+    /** Server-generated admission id, never copied from the client request. */
+    questMasterStartId: z.string().optional(),
+    /** Invoke-time admission, preserved across queue redelivery and subscription changes. */
+    questAdmittedAs: z.enum(['subscriber', 'free']).optional(),
     enableMementos: z.boolean().optional(),
     enableArtifacts: z.boolean().optional(),
     /** See ChatCompletionInvokeParamsSchema.promptMode - must stay in sync with it. */

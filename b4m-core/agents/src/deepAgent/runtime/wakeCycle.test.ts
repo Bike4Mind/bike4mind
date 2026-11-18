@@ -203,6 +203,23 @@ describe('runWakeCycle', () => {
     expect(store.episodes[0].drivesBefore.curiosity).toBeCloseTo(0.5, 5);
   });
 
+  it('treats a seeded never-woken handoff (wakeCount 0) as a first wake: no decay', async () => {
+    store.charters.set('agent-1', makeCharter({ drives: { ...NEUTRAL, curiosity: 1.0 } }));
+    store.handoffs.set('agent-1', {
+      agentId: 'agent-1',
+      wakeCount: 0,
+      lastWakeAt: new Date(T0 - 2 * 60 * 60 * 1000).toISOString(),
+      lastActionSummary: '',
+      nextIntendedAction: '',
+      openBlockers: [],
+      updatedAt: new Date(T0 - 2 * 60 * 60 * 1000).toISOString(),
+    });
+
+    const outcome = await runWakeCycle('agent-1', baseDeps(store, makeSteps()));
+    expect(store.episodes[0].drivesBefore.curiosity).toBe(1.0);
+    expect(outcome.handoff.wakeCount).toBe(1);
+  });
+
   it('clamps LLM-proposed drive jumps to MAX_DRIVE_DELTA_PER_WAKE (math owns the vector)', async () => {
     store.charters.set('agent-1', makeCharter());
     // Reflect proposes a wild jump: curiosity 0.5 -> 1.0 (Δ+0.5) and caution
