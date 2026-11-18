@@ -20,6 +20,7 @@ import {
   generationCallbackQueue,
   generationJobQueue,
   riskEvidenceQueue,
+  secopsTriageQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
 import { BLOCK_ALL_PUBLIC_ACCESS, encryptBucketAtRest } from './bucketSecurity';
@@ -46,6 +47,7 @@ import './organizationRetention';
 import { secrets } from './secrets';
 import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
 import { dlqTriagePermissions } from './dlqTriagePermissions';
+import { createEventBusDeadLetter } from './eventBusDeadLetter';
 
 if (runsScheduledJobs && dlqTriageSweepDeadLetter) {
   const deadLetter = dlqTriageSweepDeadLetter;
@@ -781,53 +783,60 @@ const integrationHealthCheckCron = runsScheduledJobs
     })
   : undefined;
 
-// Cloud Security Scan - runs daily to evaluate baseline AWS configuration
+const cloudSecurityScanDlq = new sst.aws.Queue('cloudSecurityScanDlq', {
+  transform: { queue: { messageRetentionSeconds: 1209600 } },
+});
+const cloudSecurityScanDeadLetter = createEventBusDeadLetter('CloudSecurityScan', cloudSecurityScanDlq);
+
+// Manual invokes also need this worker in stages without scheduled jobs.
+const cloudSecurityScanFunction = new sst.aws.Function('cloudSecurityScanFunction', {
+  vpc: lambdaVpc,
+  handler: 'apps/workers/src/security/cloudScan.handler',
+  runtime: 'nodejs24.x',
+  timeout: '5 minutes',
+  link: [...allSecrets, secopsTriageQueue],
+  environment: {
+    ...DEFAULT_LAMBDA_ENVIRONMENT,
+  },
+  transform: cloudSecurityScanDeadLetter.functionTarget,
+  permissions: [
+    cloudSecurityScanDeadLetter.sendPermission,
+    {
+      actions: ['iam:GetAccountSummary'],
+      resources: ['*'],
+    },
+    {
+      actions: ['s3:ListAllMyBuckets', 's3:GetBucketPublicAccessBlock', 's3:GetEncryptionConfiguration'],
+      resources: ['*'],
+    },
+    {
+      actions: ['cloudtrail:DescribeTrails', 'cloudtrail:GetTrailStatus'],
+      resources: ['*'],
+    },
+    {
+      actions: ['ec2:DescribeSecurityGroups'],
+      resources: ['*'],
+    },
+    {
+      actions: ['iam:GenerateCredentialReport', 'iam:GetCredentialReport', 'iam:ListPolicies', 'iam:GetPolicyVersion'],
+      resources: ['*'],
+    },
+    {
+      actions: ['secretsmanager:ListSecrets'],
+      resources: ['*'],
+    },
+  ],
+});
+
 const cloudSecurityScanCron = runsScheduledJobs
   ? new sst.aws.Cron('CloudSecurityScan', {
       schedule: 'rate(1 day)',
-      function: {
-        vpc: lambdaVpc,
-        handler: 'apps/workers/src/security/cloudScan.handler',
-        runtime: 'nodejs24.x',
-        timeout: '5 minutes',
-        link: [...allSecrets],
-        environment: {
-          ...DEFAULT_LAMBDA_ENVIRONMENT,
-        },
-        permissions: [
-          {
-            actions: ['iam:GetAccountSummary'],
-            resources: ['*'],
-          },
-          {
-            actions: ['s3:ListAllMyBuckets', 's3:GetBucketPublicAccessBlock', 's3:GetEncryptionConfiguration'],
-            resources: ['*'],
-          },
-          {
-            actions: ['cloudtrail:DescribeTrails', 'cloudtrail:GetTrailStatus'],
-            resources: ['*'],
-          },
-          {
-            actions: ['ec2:DescribeSecurityGroups'],
-            resources: ['*'],
-          },
-          {
-            actions: [
-              'iam:GenerateCredentialReport',
-              'iam:GetCredentialReport',
-              'iam:ListPolicies',
-              'iam:GetPolicyVersion',
-            ],
-            resources: ['*'],
-          },
-          {
-            actions: ['secretsmanager:ListSecrets'],
-            resources: ['*'],
-          },
-        ],
-      },
+      job: cloudSecurityScanFunction.arn,
+      transform: { target: cloudSecurityScanDeadLetter.ruleTarget.target },
     })
   : undefined;
+
+if (cloudSecurityScanCron) cloudSecurityScanDeadLetter.allowRules([$util.output(cloudSecurityScanCron)]);
 
 /**
  * Security Scan Scheduler
@@ -1713,6 +1722,7 @@ export {
   emailCampaignSchedulerCron,
   liveopsTriageDispatcherCron,
   cloudSecurityScanCron,
+  cloudSecurityScanFunction,
   integrationHealthCheckCron,
   securityScanSchedulerCron,
   deepAgentWakeCron,
