@@ -11,7 +11,7 @@ import {
   UNDOCUMENTED_API_KEY_SCOPES,
 } from '../types/entities/UserApiKeyTypes';
 import { CONTRACTS, chatContract, getMeContract, synthesizeSpeechContract } from '../api-contract';
-import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
+import { QUEST_OUTCOME_ERROR_CODES } from '../types/entities/SessionTypes';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spec doc is loosely typed for traversal
 const doc = buildOpenApiDocument('9.9.9') as any;
@@ -483,7 +483,7 @@ describe('buildOpenApiDocument', () => {
     const component = doc.components.schemas.sendChatMessage200PollResult;
     expect(component.properties.type.enum).toContain('error');
     // The same vocabulary the synchronous 422s classify with, not a chat-local one.
-    expect(component.properties.errorCode.enum).toEqual([...QUEST_ERROR_CODES]);
+    expect(component.properties.errorCode.enum).toEqual([...QUEST_OUTCOME_ERROR_CODES]);
     expect(doc.components.schemas.generateMusicResponse422.properties.errorCode.enum).toContain('insufficient_credits');
   });
 
