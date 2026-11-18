@@ -293,12 +293,11 @@ export type ReleaseHeldCreditRewardsResult = {
   paidRewards: Array<{ source: CreditRewardSource; creditTransactionId: string }>;
 };
 
-/** Days from the reward's creation after which an unpaid referral subscription reward is cancelled or voided. */
+/** Days after the payment hold ends before an unpaid referral subscription reward expires. */
 export const REFERRAL_SUBSCRIPTION_REWARD_TTL_DAYS = 90;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// Rows held before expiresAt was stored fall back to heldAt + TTL, slightly later than the createdAt + TTL of new
-// rows; acceptable for that backlog.
+// Historical rows without a deadline use queue entry time, which cannot precede the payment hold's end.
 const rewardExpired = (reward: HeldCreditRewardRow, now: Date): boolean => {
   const expiresAt =
     reward.expiresAt ??

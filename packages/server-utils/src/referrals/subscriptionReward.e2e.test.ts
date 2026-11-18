@@ -160,8 +160,8 @@ describe('releaseDueSubscriptionRewards against a real replica set', () => {
 
   it('expires an unpaid reward at its deadline without freeing the payment step', async () => {
     const inviter = await seedDueReward();
-    const createdAt = new Date(NOW.getTime() - TTL_MS);
-    await ReferralSubscriptionRewardModel.collection.updateOne({ invoiceId: 'in_1' }, { $set: { createdAt } });
+    const releaseAt = new Date(NOW.getTime() - TTL_MS);
+    await ReferralSubscriptionRewardModel.updateOne({ invoiceId: 'in_1' }, { $set: { releaseAt } });
     const paymentOutcome = vi.fn(stillPaid);
 
     expect(await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome })).toMatchObject({
@@ -179,8 +179,8 @@ describe('releaseDueSubscriptionRewards against a real replica set', () => {
 
   it('still releases a pending reward 1ms before its deadline', async () => {
     const inviter = await seedDueReward();
-    const createdAt = new Date(NOW.getTime() - TTL_MS + 1);
-    await ReferralSubscriptionRewardModel.collection.updateOne({ invoiceId: 'in_1' }, { $set: { createdAt } });
+    const releaseAt = new Date(NOW.getTime() - TTL_MS + 1);
+    await ReferralSubscriptionRewardModel.updateOne({ invoiceId: 'in_1' }, { $set: { releaseAt } });
 
     expect(await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid })).toMatchObject({
       released: 1,
@@ -189,6 +189,37 @@ describe('releaseDueSubscriptionRewards against a real replica set', () => {
     });
     expect((await User.findById(inviter.id))?.currentCredits).toBe(REWARD_CREDITS);
   });
+
+  it.each([creditService.REFERRAL_SUBSCRIPTION_REWARD_TTL_DAYS, 365])(
+    'keeps the full queued reward window after a %i-day hold',
+    async holdDays => {
+      const inviter = await seedDueReward();
+      const createdAt = new Date(NOW.getTime() - holdDays * 24 * 60 * 60 * 1000);
+      await ReferralSubscriptionRewardModel.collection.updateOne(
+        { invoiceId: 'in_1' },
+        { $set: { createdAt, releaseAt: NOW } }
+      );
+      await setTricklePool(0);
+
+      expect(await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid })).toMatchObject({
+        released: 1,
+        cancelled: 0,
+        failed: 0,
+      });
+      const transactionId = `referral-subscription:${inviter.id}:in_1`;
+      const [queued] = await heldCreditRewardRepository.findByTransactionIds([transactionId]);
+      expect(queued).toMatchObject({ status: 'held', expiresAt: new Date(NOW.getTime() + TTL_MS) });
+
+      await setTricklePool(1_000_000);
+      expect(
+        await creditService.releaseHeldCreditRewards(buildCreditRewardAdapters(), {
+          limit: 10,
+          now: new Date(NOW.getTime() + TTL_MS - 1),
+        })
+      ).toMatchObject({ paid: 1, voided: 0, failed: 0 });
+      expect((await User.findById(inviter.id))?.currentCredits).toBe(REWARD_CREDITS);
+    }
+  );
 
   describe('admin signup grant block', () => {
     const block = (userId: string) => User.updateOne({ _id: userId }, { $set: { 'signupGrant.blocked': { at: NOW } } });
@@ -373,7 +404,7 @@ describe('releaseDueSubscriptionRewards against a real replica set', () => {
       await releaseOnDryPool();
       const queued = await heldRow();
       const recorded = await reward();
-      const expiresAt = new Date(recorded!.createdAt.getTime() + TTL_MS);
+      const expiresAt = new Date(recorded!.releaseAt.getTime() + TTL_MS);
       expect(queued?.expiresAt).toEqual(expiresAt);
       await setTricklePool(1_000_000);
 
