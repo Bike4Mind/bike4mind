@@ -182,6 +182,7 @@ describe('createSerpApiProvider', () => {
       ['a non-URL such as a video view count', '920+ views'],
       ['a breadcrumb that is itself a Google host', 'https://www.google.com \u203a search'],
       ['no displayed_link', undefined],
+      ['a breadcrumb with a non-web scheme', 'ftp://example.com \u203a a'],
     ])('sets no displayHost for %s', async (_label, displayed_link) => {
       const results = await searchWith({ link: goto, displayed_link });
 
