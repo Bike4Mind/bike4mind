@@ -205,7 +205,7 @@ export const BriefEvents = {
     z.object({
       briefId: z.string(),
       userId: z.string(),
-      /** Set by the schedule reconciler: an empty window is discarded instead of delivered. */
+      /** Set by the schedule reconciler: an empty window or a refused gate is discarded instead of delivered. */
       scheduled: z.boolean().optional(),
     })
   ),
