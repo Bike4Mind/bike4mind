@@ -34,7 +34,10 @@ const ShotArg = z.object({
     .trim()
     .max(limits.shotVoiceLineMaxLength)
     .optional()
-    .describe('The voiceover line spoken over this shot; it also becomes the caption.'),
+    .describe(
+      'The voiceover line spoken over this shot; it also becomes the caption. Keep it short enough to say ' +
+        'within the shot, about 2 words per second (8 words for a 4 second shot): a longer line is cut.'
+    ),
 });
 
 const schema = z.object({
