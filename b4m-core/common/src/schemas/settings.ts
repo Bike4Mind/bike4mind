@@ -1924,6 +1924,8 @@ export const SIGNUP_RISK_SIGNALS = [
   'quickApiKey',
   'fastSpend',
   'generatedLocalPart',
+  'wafAnonIp',
+  'wafBotSignal',
 ] as const;
 export type SignupRiskSignal = (typeof SIGNUP_RISK_SIGNALS)[number];
 
@@ -1944,6 +1946,9 @@ export const SignupRiskScoringSchema = z
         quickApiKey: signupRiskWeight(15),
         fastSpend: signupRiskWeight(20),
         generatedLocalPart: signupRiskWeight(10),
+        // Edge labels on signupMeta, recorded only where label forwarding is on. Off until a weight is set.
+        wafAnonIp: signupRiskWeight(0),
+        wafBotSignal: signupRiskWeight(0),
       })
       .strict()
       .prefault({}),
