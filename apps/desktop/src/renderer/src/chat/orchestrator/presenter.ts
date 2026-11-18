@@ -61,6 +61,16 @@ export const APPROVAL_FIELD_REDACTION = {
   label: 'replace',
 } as const satisfies Record<keyof ViewApproval, FieldRedaction>;
 
+export const DESK_FIELD_REDACTION = {
+  send: 'keep',
+  reply: 'drop',
+  onReadReply: 'keep',
+  onOpenConversation: 'keep',
+  conversationHidden: 'keep',
+  // The one character the user typed to open the slip: their own input, not the work's.
+  openRequest: 'keep',
+} as const satisfies Record<keyof InnkeeperDesk, FieldRedaction>;
+
 /** Ids and timing stay, so answering still reaches the real decision; every word is replaced, by position. */
 function redactDecision(decision: PendingDecision): PendingDecision {
   const { question } = decision;
@@ -96,6 +106,16 @@ function redactAgent(agent: AgentView, number: number): AgentView {
   };
 }
 
+function redactDesk(desk: InnkeeperDesk): InnkeeperDesk {
+  return {
+    send: desk.send,
+    onReadReply: desk.onReadReply,
+    onOpenConversation: desk.onOpenConversation,
+    conversationHidden: desk.conversationHidden,
+    ...(desk.openRequest && { openRequest: desk.openRequest }),
+  };
+}
+
 /**
  * Agent numbers for Presenter mode: the ones already given stay, and agents not yet numbered take the
  * next numbers in roster order. Returns `previous` itself when nobody is new, so a caller can memo on it.
@@ -122,7 +142,7 @@ export interface PresentedStage {
 /**
  * The stage's data as Presenter mode shows it (the *_FIELD_REDACTION tables say what happens to each
  * field). `numbers` comes from numberAgents; an agent missing from it is numbered after the rest, so a
- * title never falls back to the real one. The desk keeps its controls and loses the parent's reply text.
+ * title never falls back to the real one.
  */
 export function redactForPresenter(stage: PresentedStage, numbers: ReadonlyMap<string, number>): PresentedStage {
   const complete = numberAgents(numbers, stage.agents);
@@ -134,7 +154,7 @@ export function redactForPresenter(stage: PresentedStage, numbers: ReadonlyMap<s
       sessionId: approval.sessionId,
       label: presenterApprovalLabel(index),
     })),
-    ...(stage.desk && { desk: { ...stage.desk, reply: undefined } }),
+    ...(stage.desk && { desk: redactDesk(stage.desk) }),
   };
 }
 

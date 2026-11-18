@@ -5,6 +5,7 @@ import type { InnkeeperDesk } from './OrchestratorStage';
 import {
   AGENT_FIELD_REDACTION,
   APPROVAL_FIELD_REDACTION,
+  DESK_FIELD_REDACTION,
   PARENT_FIELD_REDACTION,
   PRESENTER_HIDDEN_TEXT,
   numberAgents,
@@ -144,17 +145,18 @@ describe('redactForPresenter', () => {
   });
 
   it("drops the desk's reply text and keeps its controls", () => {
-    const desk: InnkeeperDesk = {
+    const desk: { [K in keyof Required<InnkeeperDesk>]: InnkeeperDesk[K] } = {
       send: () => undefined,
+      reply: { id: 'reply-1', snippet: `${SECRET} reply` },
       onReadReply: () => undefined,
       onOpenConversation: () => undefined,
       conversationHidden: true,
-      reply: { id: 'reply-1', snippet: `${SECRET} reply` },
+      openRequest: { seq: 2, seed: 'h' },
     };
+    expect(sortedKeys(DESK_FIELD_REDACTION)).toEqual(sortedKeys(desk));
     const shown = redactForPresenter({ agents: [], parent: {}, approvals: [], desk }, new Map()).desk;
-    expect(shown?.reply).toBeUndefined();
-    expect(shown?.send).toBe(desk.send);
-    expect(shown?.conversationHidden).toBe(true);
+    expect(shown).toBeDefined();
+    expectFieldByField(DESK_FIELD_REDACTION, desk, shown ?? {});
   });
 
   it('numbers an agent missing from the map after the rest rather than showing its title', () => {
