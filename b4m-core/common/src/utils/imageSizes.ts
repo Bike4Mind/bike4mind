@@ -29,6 +29,21 @@ export function parseSizeEdges(size?: string | null): { width: number; height: n
   return { width, height };
 }
 
+/** Reduces a width and height to their smallest whole-number ratio ('3:2'); undefined when both are zero. */
+export function reduceAspectRatio(width: number, height: number): string | undefined {
+  let a = width;
+  let b = height;
+  while (b !== 0) {
+    const temp = b;
+    b = a % b;
+    a = temp;
+  }
+  if (a === 0) {
+    return undefined;
+  }
+  return `${Math.round(width / a)}:${Math.round(height / a)}`;
+}
+
 /**
  * True when a custom gpt-image-2 resolution meets OpenAI's documented limits.
  * gpt-image-2 accepts any resolution satisfying these, not only the presets in

@@ -3,9 +3,14 @@ import { Request } from 'express';
 import { Resource } from 'sst';
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
+import { requireStepUp } from '@server/auth/stepUp';
 import { imageModerationIncidentRepository, withTransaction } from '@bike4mind/database';
 import { ncmecService } from '@bike4mind/services';
-import { recordAdminActionFromRequest, userAuditTarget } from '@bike4mind/server-utils/utils/adminAudit';
+import {
+  parseAdminActionReason,
+  recordAdminActionFromRequest,
+  userAuditTarget,
+} from '@bike4mind/server-utils/utils/adminAudit';
 
 // Resolve NCMEC credentials from SST Resource (linked secrets expose Resource.X.value, not
 // process.env.X). Fall back to process.env for local dev and self-host. useSandbox defaults
@@ -33,7 +38,8 @@ function isNcmecConfigured(creds: ReturnType<typeof resolveNcmecCredentials>): b
 }
 
 /**
- * Admin verdict for an image-moderation incident.
+ * Admin verdict for an image-moderation incident. Every verdict needs a recently verified session
+ * (step-up), like the view route.
  *
  * Normal verdicts (incident in pending_review/absent):
  *   confirmed_csam  -> submit an NCMEC CyberTip and mark the incident 'reported'.
@@ -71,14 +77,15 @@ const ncmecReportIdSchema = z
   .max(64)
   .regex(/^[A-Za-z0-9-]+$/);
 
+// The verdicts the review page records carry the reviewer's reason, checked by parseAdminActionReason.
 const bodySchema = z.union([
   z.object({ verdict: z.literal('confirmed_csam') }),
-  z.object({ verdict: z.literal('false_positive') }),
-  z.object({ verdict: z.literal('no_action') }),
+  z.object({ verdict: z.literal('false_positive'), reason: z.unknown() }),
+  z.object({ verdict: z.literal('no_action'), reason: z.unknown() }),
   z.object({ verdict: z.literal('mark_reported'), ncmecReportId: ncmecReportIdSchema }),
   z.object({ verdict: z.literal('requeue') }),
   z.object({ verdict: z.literal('retry_finish') }),
-  z.object({ verdict: z.literal('record_manual_report'), ncmecReportId: ncmecReportIdSchema }),
+  z.object({ verdict: z.literal('record_manual_report'), ncmecReportId: ncmecReportIdSchema, reason: z.unknown() }),
 ]);
 
 type Verdict = z.infer<typeof bodySchema>['verdict'];
@@ -88,12 +95,14 @@ const recordVerdict = async (
   req: Request,
   incident: { incidentId: string; userId: string },
   verdict: Verdict,
-  details: Record<string, unknown> = {}
+  details: Record<string, unknown> = {},
+  reason?: string
 ) => {
   await recordAdminActionFromRequest(req, {
     action: 'moderation.incident.verdict_recorded',
     target: await userAuditTarget(incident.userId),
     summary: `recorded verdict on moderation incident ${incident.incidentId}`,
+    reason,
     details: { incidentId: incident.incidentId, verdict, ...details },
   });
 };
@@ -102,6 +111,7 @@ const handler = adminApi({
   requiredScopes: [ApiKeyScope.ADMIN],
   adminPermissions: { POST: 'users:moderate' },
 }).post(async (req: Request, res) => {
+  await requireStepUp(req);
   const incidentId = String(req.query.id);
 
   const parsed = bodySchema.safeParse(req.body ?? {});
@@ -240,6 +250,7 @@ const handler = adminApi({
   }
 
   if (body.verdict === 'record_manual_report') {
+    const reason = parseAdminActionReason(body.reason);
     const adminId = req.user.id;
     const updated = await withTransaction(async () => {
       const recorded = await imageModerationIncidentRepository.recordManualReport(incidentId, {
@@ -247,10 +258,13 @@ const handler = adminApi({
         reportedBy: adminId,
       });
       if (recorded) {
-        await recordVerdict(req, { incidentId, userId: recorded.userId }, body.verdict, {
-          ncmecReportId: body.ncmecReportId,
-          previousReviewStatus: recorded.previousReviewStatus ?? null,
-        });
+        await recordVerdict(
+          req,
+          { incidentId, userId: recorded.userId },
+          body.verdict,
+          { ncmecReportId: body.ncmecReportId, previousReviewStatus: recorded.previousReviewStatus ?? null },
+          reason
+        );
       }
       return recorded;
     });
@@ -423,10 +437,11 @@ const handler = adminApi({
   }
 
   if (body.verdict === 'no_action') {
+    const reason = parseAdminActionReason(body.reason);
     const adminId = req.user.id;
     const updated = await withTransaction(async () => {
       const reviewed = await imageModerationIncidentRepository.markNoAction(incidentId, adminId);
-      if (reviewed) await recordVerdict(req, { incidentId, userId: reviewed.userId }, body.verdict);
+      if (reviewed) await recordVerdict(req, { incidentId, userId: reviewed.userId }, body.verdict, {}, reason);
       return reviewed;
     });
     if (!updated) {
@@ -439,6 +454,7 @@ const handler = adminApi({
   }
 
   // false_positive: no NCMEC submission, just update the status.
+  const reason = parseAdminActionReason(body.reason);
   const adminId = req.user.id;
   const updated = await withTransaction(async () => {
     const reviewed = await imageModerationIncidentRepository.updateReviewStatus(
@@ -447,7 +463,7 @@ const handler = adminApi({
       undefined,
       adminId
     );
-    if (reviewed) await recordVerdict(req, { incidentId, userId: reviewed.userId }, body.verdict);
+    if (reviewed) await recordVerdict(req, { incidentId, userId: reviewed.userId }, body.verdict, {}, reason);
     return reviewed;
   });
   if (!updated) {

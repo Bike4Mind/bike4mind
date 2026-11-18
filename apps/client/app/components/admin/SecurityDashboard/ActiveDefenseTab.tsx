@@ -5,7 +5,7 @@ import { useSecurityScanCooldown } from '@client/app/hooks/useSecurityScanCooldo
 import { AdminPageHeader, DataTable, ErrorState, SectionCard, StatusChip, UpdatingBar } from '../shared';
 import { SecurityFindingsTable } from './SecurityFindingsTable';
 
-const COOLDOWN_MS = 30 * 60 * 1000;
+export const ACTIVE_DEFENSE_COOLDOWN_MS = 30 * 60 * 1000;
 const formatDateTime = (value: Date | string | undefined) => {
   if (!value) return 'Not recorded';
   const date = new Date(value);
@@ -16,7 +16,10 @@ const ActiveDefenseTab = () => {
   const { data, isLoading, isFetching, error, refetch } = useAttackSimulationData();
   const runMutation = useRunAttackSimulation();
   const latestTerminalRun = data?.runs?.find(run => run.status === 'completed' || run.status === 'failed');
-  const cooldown = useSecurityScanCooldown(latestTerminalRun?.finishedAt ?? latestTerminalRun?.startedAt, COOLDOWN_MS);
+  const cooldown = useSecurityScanCooldown(
+    latestTerminalRun?.finishedAt ?? latestTerminalRun?.startedAt,
+    ACTIVE_DEFENSE_COOLDOWN_MS
+  );
   const latestRun = data?.runs?.[0];
   const runs = data?.runs ?? [];
   const findings = (data?.findings ?? []).map(finding => ({

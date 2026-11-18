@@ -42,6 +42,9 @@ vi.mock('@bike4mind/database', () => ({
   mongoose: { Types: { ObjectId: class {} } },
 }));
 
+const recordOrganizationRead = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@server/utils/orgReadAudit', () => ({ recordOrganizationRead }));
+
 import '@pages/api/organizations/users';
 
 type ChainableQuery<T> = Promise<T> & { select: () => ChainableQuery<T> };
@@ -86,6 +89,35 @@ describe('GET /api/organizations/users - verifyOrgPermission gate', () => {
 
     expect(order).toEqual(['verifyOrgPermission:org1', 'findById']);
     expect(verifyOrgPermission).toHaveBeenCalledWith(req.user, 'org1', 'manageMembers');
+  });
+
+  it('records the organization returned by the gate as a member-activity read', async () => {
+    recordOrganizationRead.mockClear();
+    verifyOrgPermission.mockResolvedValueOnce({ id: 'org2', name: 'Globex' });
+    findById.mockImplementation(() => chainable(null));
+
+    const { req, res } = mocks(
+      { id: 'admin1', isAdmin: true, organizationId: 'org1' },
+      {
+        filters: { orgId: '507f1f77bcf86cd799439022' },
+      }
+    );
+    await expect(mockRefs.getHandler!(req, res)).rejects.toMatchObject({ statusCode: 404 });
+
+    expect(recordOrganizationRead).toHaveBeenCalledWith(req, [{ id: 'org2', name: 'Globex' }], {
+      view: 'member_activity',
+    });
+  });
+
+  it('stops before reading member activity when the audit write fails', async () => {
+    recordOrganizationRead.mockRejectedValueOnce(new Error('audit down'));
+    verifyOrgPermission.mockResolvedValueOnce({ id: 'org2', name: 'Globex' });
+
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true, organizationId: 'org1' });
+    await mockRefs.getHandler!(req, res);
+
+    expect(findById).not.toHaveBeenCalled();
+    expect(res._getStatusCode()).toBe(500);
   });
 
   it('never reaches Organization.findById when verifyOrgPermission rejects', async () => {
@@ -136,6 +168,6 @@ describe('GET /api/organizations/users - verifyOrgPermission gate', () => {
     await expect(mockRefs.getHandler!(req, res)).rejects.toMatchObject({ statusCode: 404 });
 
     expect(verifyOrgPermission).toHaveBeenCalledWith(req.user, 'org1', 'manageMembers');
-    expect(verifyOrgPermission).not.toHaveBeenCalledWith(expect.anything(), otherOrgId);
+    expect(verifyOrgPermission).not.toHaveBeenCalledWith(expect.anything(), otherOrgId, expect.anything());
   });
 });

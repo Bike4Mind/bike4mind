@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import mongoose, { Schema } from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
+import { readDocuments } from './subjectMatcher';
 import { SubjectRecordExport, assertEveryModelClassified, type ExportedRecord } from './subjectRecordExport';
 import type { DataHolderRegistry } from './types';
 
@@ -49,6 +50,10 @@ const AuthAudit = mongoose.model(
 const Session = mongoose.model(
   'DsTestSession',
   new Schema({ userId: ObjectId, impersonatedBy: ObjectId, device: { ip: String } })
+);
+const HiddenField = mongoose.model(
+  'DsTestHiddenField',
+  new Schema({ ownerId: ObjectId, label: String, internalLease: { type: { jobId: String }, select: false } })
 );
 const Undeclared = mongoose.model('DsTestUndeclared', new Schema({ ownerId: ObjectId }));
 
@@ -471,6 +476,31 @@ describe('SubjectRecordExport', () => {
       }
     );
     await expect(collect(exporter, 'DsTestUndeclared')).rejects.toThrow(/not in schema|strictQuery/i);
+  });
+
+  it('does not export a select:false path; only an erasure read opts in to it', async () => {
+    const ownerId = new mongoose.Types.ObjectId();
+    await HiddenField.create({ ownerId, label: 'kept', internalLease: { jobId: 'job-1' } });
+    const subject = { userId: ownerId.toString(), email: null };
+    const exporter = new SubjectRecordExport(subject, {
+      DsTestHiddenField: {
+        kind: 'holder',
+        references: [{ path: 'ownerId', matchBy: 'userId', action: 'deleteDocument' }],
+      },
+    });
+    const exported = await collect(exporter, 'DsTestHiddenField');
+    expect(exported).toHaveLength(1);
+    expect(JSON.stringify(json(exported))).not.toContain('job-1');
+
+    const read = async (includeHidden?: boolean) => {
+      const documents: Record<string, unknown>[] = [];
+      for await (const doc of readDocuments('DsTestHiddenField', { ownerId }, undefined, { includeHidden })) {
+        documents.push(doc as Record<string, unknown>);
+      }
+      return documents;
+    };
+    expect((await read())[0]).not.toHaveProperty('internalLease');
+    expect((await read(true))[0]).toHaveProperty('internalLease.jobId', 'job-1');
   });
 });
 

@@ -15,7 +15,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { oauthIpRateLimit } from '@server/middlewares/oauthIpRateLimit';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { isPassportStrategyRegistered } from '@server/auth/passportStrategyRegistry';
 import { Request } from 'express';
 import passport from 'passport';
 import { z } from 'zod';
@@ -111,6 +112,20 @@ const handler = baseApi({ auth: false })
   .use(oauthIpRateLimit('oauth-callback'))
   .get(async (req: Request<{}, unknown, unknown, { strategy: AuthStrategy; state: string }>, res, next) => {
     const { strategy } = req.query;
+
+    // Providers are registered with passport only when configured (see ./index.ts, which shares this
+    // check); an unregistered one would otherwise throw "Unknown authentication strategy" as a 500.
+    if (!isPassportStrategyRegistered(passport, strategy)) {
+      throw new NotFoundError('Unknown authentication provider');
+    }
+
+    // A provider always returns with either `code` or `error`. Without both, passport-oauth2 would
+    // start a new authorization flow from this callback URL instead of completing one.
+    const { code, error: providerError } = req.query as { code?: unknown; error?: unknown };
+    if (!code && !providerError) {
+      console.warn('OAuth callback without code or error', { strategy });
+      return res.redirect('/login?error=missing_code');
+    }
 
     // Okta state is handled via the JWT-based OktaJwtStateStore in auth.ts; the
     // state is self-contained in the JWT, so no session workaround is needed.

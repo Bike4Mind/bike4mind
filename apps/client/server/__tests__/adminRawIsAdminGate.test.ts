@@ -193,6 +193,10 @@ const OWNER_OR_ADMIN = new Map<string, string>([
     'organizations/[id]/integrations/slack/index.ts',
     'manageIntegrations holder manages the org; verifyOrgPermission lets an admin through',
   ],
+  [
+    'organizations/[id]/integrations/slack/feedback.ts',
+    'manageIntegrations holder manages the org; verifyOrgPermission lets an admin through',
+  ],
   ['organizations/[id]/invoices.ts', 'manageBilling holder manages the org; verifyOrgPermission lets an admin through'],
   [
     'organizations/[id]/member-credit-budget.ts',

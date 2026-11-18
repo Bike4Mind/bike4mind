@@ -1,5 +1,13 @@
 # @bike4mind/client-auth
 
+## 0.5.0
+
+### Minor Changes
+
+- [#7811](https://github.com/Bike4Mind/bike4mind/pull/7811) [`b97dca6`](https://github.com/Bike4Mind/bike4mind/commit/b97dca6d9d94ac731253ebbeefd802c1d24c1d54) Thanks [@vinchi777](https://github.com/vinchi777)! - add session Studio generation and asset workspaces
+
+- [#7811](https://github.com/Bike4Mind/bike4mind/pull/7811) [`b97dca6`](https://github.com/Bike4Mind/bike4mind/commit/b97dca6d9d94ac731253ebbeefd802c1d24c1d54) Thanks [@vinchi777](https://github.com/vinchi777)! - Add session-bound API clients with shared token refresh, and keep Studio availability, generation records and conversation deletion consistent with the active account.
+
 ## 0.4.0
 
 ### Minor Changes

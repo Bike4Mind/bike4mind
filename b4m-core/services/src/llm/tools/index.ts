@@ -84,6 +84,12 @@ export type {
 export { isVideoToolConfig, type VideoToolConfig } from './implementation/videoGeneration';
 export { isMusicToolConfig, type MusicToolConfig } from './implementation/musicGeneration';
 export {
+  AUDIO_JOB_INLINE_TIMEOUT_MS,
+  withAudioToolJobs,
+  type AudioToolConfig,
+  type AudioToolJobs,
+} from './implementation/audioGeneration';
+export {
   isImageJobToolConfig,
   type ImageLimitRefusal,
   type ImageToolConfig,

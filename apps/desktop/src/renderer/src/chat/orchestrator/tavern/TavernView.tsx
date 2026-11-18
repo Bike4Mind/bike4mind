@@ -30,11 +30,13 @@ import { useAgentAnnouncements } from './announcements';
 import { innkeeperAct, innkeeperBubble } from './innkeeper';
 import { NeedsYouBubble } from './NeedsYouBubble';
 import { OverflowStack, type StackedAgent } from './OverflowStack';
+import { PLAQUE_EDGE, PLAQUE_WOOD } from './plaque';
+import { QuestBoard } from './QuestBoard';
+import { useQuestNotes } from './quests';
 import {
   DOOR_POINT,
   INNKEEPER_POINT,
   LABEL_SPAN,
-  STATE_LAMP,
   assignCharacters,
   nameLabelLayout,
   needsYouGroups,
@@ -46,6 +48,7 @@ import {
   type SlotPoint,
   type TavernZone,
 } from './scene';
+import { stateLampColor } from '../statePalette';
 import { TavernLight, type TavernMood } from './TavernLight';
 import { INNKEEPER_ART, TAVERN_BACKDROP, characterSprite, type CharacterId, type InnkeeperPose } from './tavernArt';
 import { useScenePause, type ScenePauseOptions } from './useScenePause';
@@ -203,7 +206,7 @@ function Bubble({
         py: '0.25em',
         borderRadius: '6px',
         border: '2px solid #2a1d10',
-        bgcolor: urgent ? '#f5c542' : 'rgba(255, 250, 240, 0.94)',
+        bgcolor: urgent ? stateLampColor('needs-you') : 'rgba(255, 250, 240, 0.94)',
         color: '#2a1d10',
         fontSize: urgent ? 'clamp(11px, 2.8cqh, 18px)' : 'clamp(9px, 2.1cqh, 13px)',
         fontWeight: urgent ? 700 : 500,
@@ -275,11 +278,6 @@ function ContactShadow({ hidden = false }: { hidden?: boolean }) {
   );
 }
 
-// Wood: a lit top edge and a dark bottom one, notched corners in the pixel-art way (no radius).
-const PLAQUE_WOOD = 'linear-gradient(#6b4523, #4a2e14)';
-const PLAQUE_EDGE =
-  'inset 0 1px 0 rgba(255, 214, 150, 0.35), 0 -1px 0 #1f1208, 0 1px 0 #1f1208, -1px 0 0 #1f1208, 1px 0 0 #1f1208, 0 2px 0 rgba(0, 0, 0, 0.45)';
-
 function NameLabelPlate({
   testId,
   label,
@@ -302,7 +300,7 @@ function NameLabelPlate({
         {
           '--label-max': `${label.maxWidth}cqw`,
           '--label-drop': `${label.lane * LABEL_SPAN}cqh`,
-          '--lamp': state ? STATE_LAMP[state] : 'transparent',
+          '--lamp': state ? stateLampColor(state) : 'transparent',
         } as CssVars
       }
       sx={{
@@ -684,6 +682,7 @@ export function TavernView({
     stacks.set(placement.zone, stack);
   }
   const paused = useScenePause(pause);
+  const quests = useQuestNotes(agents);
   const announcement = useAgentAnnouncements(agents, shortName);
   const summaryId = useId();
   const summary = describeAgentStates(
@@ -828,6 +827,7 @@ export function TavernView({
             transition: 'opacity 0.6s ease-in',
           }}
         />
+        <QuestBoard notes={quests} name={shortName} selectedId={selectedId} onSelect={onSelect} />
         <TavernLight mood={mood} />
         {visible.map(({ agent, placement }) => (
           <Sprite

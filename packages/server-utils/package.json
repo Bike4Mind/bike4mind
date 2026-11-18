@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/server-utils",
-  "version": "0.0.17",
+  "version": "0.0.19",
   "private": true,
   "type": "module",
   "exports": {
@@ -40,7 +40,7 @@
     "@bike4mind/memory": "workspace:*",
     "@bike4mind/observability": "workspace:*",
     "@bike4mind/resource": "workspace:*",
-    "@bike4mind/services": "workspace:*",
+    "@bike4mind/services": "workspace:@bike4mind/services-core@*",
     "@bike4mind/slack": "workspace:*",
     "@bike4mind/utils": "workspace:*",
     "@casl/ability": "^6.8.1",

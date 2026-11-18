@@ -10,7 +10,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Context } from 'aws-lambda';
 import type { Logger } from '@bike4mind/observability';
 
-const { runModelDiscovery, repos, emitMetrics, connectDB, whenCatalogSeeded, sourceFactories } = vi.hoisted(() => {
+const {
+  runModelDiscovery,
+  publishModelPriceSnapshot,
+  repos,
+  emitMetrics,
+  connectDB,
+  whenCatalogSeeded,
+  sourceFactories,
+} = vi.hoisted(() => {
   // One stub instance per source name, so two builds of the adapters produce
   // arrays that compare equal and the registry stays inspectable by name.
   const stubs = new Map<string, unknown>();
@@ -22,6 +30,7 @@ const { runModelDiscovery, repos, emitMetrics, connectDB, whenCatalogSeeded, sou
   };
   return {
     runModelDiscovery: vi.fn(),
+    publishModelPriceSnapshot: vi.fn(async () => {}),
     emitMetrics: vi.fn(async () => {}),
     connectDB: vi.fn(async () => undefined),
     whenCatalogSeeded: vi.fn(async () => true),
@@ -67,6 +76,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics }));
+vi.mock('./modelPriceSnapshotWriter', () => ({ publishModelPriceSnapshot }));
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
 
@@ -205,5 +215,22 @@ describe('hosted cron handler', () => {
     emitMetrics.mockRejectedValueOnce(new Error('cloudwatch down'));
 
     await expect(handler({})).rejects.toThrow('mongo unreachable');
+  });
+
+  it('publishes the price snapshot after a run, including a skipped one', async () => {
+    await handler({});
+    runModelDiscovery.mockResolvedValue(runResult({ outcome: 'skipped', skipReason: 'lease-held' }));
+    await handler({});
+    expect(publishModelPriceSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it('publishes the price snapshot when the run throws after connecting, but not before', async () => {
+    runModelDiscovery.mockRejectedValueOnce(new Error('boom'));
+    await expect(handler({})).rejects.toThrow('boom');
+    expect(publishModelPriceSnapshot).toHaveBeenCalledTimes(1);
+
+    connectDB.mockRejectedValueOnce(new Error('mongo unreachable'));
+    await expect(handler({})).rejects.toThrow('mongo unreachable');
+    expect(publishModelPriceSnapshot).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,3 +1,5 @@
+import { isQuestMasterCompatible } from './questMasterEligibility';
+import { resolveSuccessorChain } from '@bike4mind/llm-adapters';
 import {
   type EmbeddingCredential,
   type EmbeddingRuntime,
@@ -187,6 +189,7 @@ import { resolveDataSourceStatus } from './dataSourceStatus';
 import { scrubMissingKnowledgeIds } from '../sessionService/scrubMissingKnowledgeIds';
 import { scrubStaleSystemFiles } from '../sessionService/scrubStaleFileReferences';
 import { b4mTools, LATTICE_TOOL_NAMES } from './tools';
+import { withAudioToolJobs } from './tools/implementation/audioGeneration';
 import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
 import { createToolFailureGuard } from './tools/toolFailureGuard';
 import {
@@ -279,6 +282,7 @@ import { SkillsFeature, type QuestWithSkillCatalog } from './features/SkillsFeat
 import { StatusManager } from './StatusManager';
 import { DEFAULT_VERBATIM_WINDOW_FRACTION, SYSTEM_PROMPT_RESERVE_TOKENS } from './historyBudgetConstants';
 import { buildContextOverflowMessage, ContextOverflowError, isContextOverflowError } from './contextOverflowMessage';
+import { asUserApiKeyRejection, UserApiKeyRejectedError, userApiKeyRejectedReply } from './userApiKeyRejection';
 import {
   ALWAYS_ON_FLOOR_SOURCES,
   buildTaggedContextMessages,
@@ -727,6 +731,7 @@ export function isAbortError(error: unknown): boolean {
 export function isOperatorFault(error: unknown): boolean {
   if (resolveQuestErrorCode(error)) return false;
   if (isOutputBudgetExhaustedError(error)) return false;
+  if (error instanceof UserApiKeyRejectedError) return false;
   if (error instanceof HTTPError && error.statusCode >= 400 && error.statusCode < 500) return false;
   if (!(error instanceof Error)) return true;
   return !(
@@ -1302,6 +1307,7 @@ export class ChatCompletionProcess {
   private attachedKnowledgeFilesMemo: IFabFileDocument[] | null | undefined;
   private storage: IChatCompletionServiceOptions['storage'];
   private imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
+  private audioToolJobs: IChatCompletionServiceOptions['audioToolJobs'];
   private imageProcessorLambdaName?: string;
   private wsHttpsUrl: string;
   private abilityGetter: IChatCompletionServiceOptions['abilityGetter'];
@@ -1379,6 +1385,7 @@ export class ChatCompletionProcess {
     this.loadSystemPromptById = options.loadSystemPromptById;
     this.storage = options.storage;
     this.imageGenerateStorage = options.imageGenerateStorage;
+    this.audioToolJobs = options.audioToolJobs;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;
     this.logger = options.logger;
     this.user = options.user;
@@ -1394,6 +1401,7 @@ export class ChatCompletionProcess {
     this.coreTutorialTurns = options.coreTutorialTurns;
     this.getScopeFilter = options.getScopeFilter;
     this.getEntitlements = options.getEntitlements;
+    this.admitQuestStart = options.admitQuestStart;
     this.getThinkingVisibility = options.getThinkingVisibility;
     this.getMcpClient = options.getMcpClient;
     this.customMcp = options.customMcp;
@@ -2184,6 +2192,8 @@ export class ChatCompletionProcess {
     return resolveRecentImageJobFiles({ recentImageJobs, resolver, userId: this.user.id, logger });
   }
 
+  private admitQuestStart: IChatCompletionServiceOptions['admitQuestStart'];
+
   public async process({
     body,
     logger,
@@ -2241,6 +2251,21 @@ export class ChatCompletionProcess {
     if (prefetchedQuest?.type === 'error') {
       logger.info(`Skipping process: quest ${prefetchedQuest.id} was already saved as an error`);
       return;
+    }
+
+    if (
+      body.enableQuestMaster &&
+      !body.questMaster &&
+      isQuestMasterCompatible(resolveSuccessorChain(body.params.model)) &&
+      (await this.db.adminSettings.getSettingsValue('EnableQuestMaster')) === true
+    ) {
+      // A message queued without admission (sent before this check shipped, or EnableQuestMaster turned on
+      // after invoke) is admitted here; the quest id stays the same across redelivery.
+      if (!body.questMasterStartId || !body.questAdmittedAs) {
+        await this.admitQuestStart(this.user, body.questId);
+      } else if (body.questAdmittedAs === 'free') {
+        await this.admitQuestStart(this.user, body.questMasterStartId);
+      }
     }
 
     // Started now so its reads overlap context assembly instead of delaying the first token.
@@ -3914,7 +3939,7 @@ export class ChatCompletionProcess {
           edit_file: shadowSettings ? { model: runModel } : undefined,
           image_generation: imageToolConfig,
           edit_image: imageToolConfig,
-          audio_generation: audioConfig,
+          audio_generation: withAudioToolJobs(audioConfig, this.audioToolJobs),
           web_search: { imageUrlSigningSecret: this.telemetryHmacSecret },
           video_generation: videoToolConfig ?? undefined,
           music_generation: musicToolConfig ?? undefined,
@@ -6190,8 +6215,13 @@ export class ChatCompletionProcess {
               break;
             }
             lastError = attemptError as Error;
+            // Same message and status, so the fallback classifiers below see the provider error unchanged.
+            lastError = asUserApiKeyRejection(lastError, currentModel, apiKeyTable) ?? lastError;
             // Recoverable interruptions keep their stack at warn; unexpected failures page.
-            if (isExpectedCompletionError(lastError)) {
+            if (lastError instanceof UserApiKeyRejectedError) {
+              // The user's own saved key, not ours: an expected user-side outcome, logged once here.
+              logger.warn('[User API Key] Provider rejected the user-supplied API key', lastError.logFields);
+            } else if (isExpectedCompletionError(lastError)) {
               // Already warned by the backend or the attempt summary below.
             } else if (
               isAbortError(lastError) ||
@@ -6254,15 +6284,18 @@ export class ChatCompletionProcess {
               isSafetyRefusalError(lastError) || isLlmTimeoutError(lastError)
                 ? logger.debug.bind(logger)
                 : logger.warn.bind(logger);
-            logAttempt(
-              `\u274C [${Date.now() - processStartTime}ms] LLM completion failed with ${
-                currentModel.id
-              } (attempt ${fallbackAttempt}):`,
-              {
-                error: lastError.message,
-                shouldRetry: isRetryableError,
-              }
-            );
+            // A rejected user key was logged once above; the summary would repeat the provider message.
+            if (!(lastError instanceof UserApiKeyRejectedError)) {
+              logAttempt(
+                `\u274C [${Date.now() - processStartTime}ms] LLM completion failed with ${
+                  currentModel.id
+                } (attempt ${fallbackAttempt}):`,
+                {
+                  error: lastError.message,
+                  shouldRetry: isRetryableError,
+                }
+              );
+            }
 
             // Tool pairing recovery: if this is a tool_use/tool_result pairing error,
             // strip all tool blocks from history and retry with the same model
@@ -8046,6 +8079,14 @@ export class ChatCompletionProcess {
       } else if (err instanceof Error && isOverloadedError(err)) {
         logger.error(`[Overloaded Error] Quest ${questId}: ${err.message}`);
         setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
+        quest.type = 'error';
+        setTerminalQuestStatus(quest, 'done');
+        finalQuest = await saveQuest(quest);
+        return;
+      } else if (err instanceof UserApiKeyRejectedError) {
+        // Expected user-side outcome, already warned once in the attempt loop. Settled rather than
+        // rethrown, so /process logs no processing failure and emits no ProcessingFailed metric.
+        setErrorReply(userApiKeyRejectedReply(err.provider));
         quest.type = 'error';
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
