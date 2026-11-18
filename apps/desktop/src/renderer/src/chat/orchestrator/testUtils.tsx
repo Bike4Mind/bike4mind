@@ -40,7 +40,9 @@ export const viewAgentFixture = (id: string, state: AgentState, extra: Partial<V
   parentId: 'root',
   depth: 1,
   updatedAt: '2026-10-01T00:00:00.000Z',
-  ...(state === 'needs-you' && { decision: { id: `d-${id}`, question: `Question from ${id}?` } }),
+  ...(state === 'needs-you' && {
+    decision: { id: `d-${id}`, question: `Question from ${id}?`, options: ['Yes', 'No'] },
+  }),
   ...extra,
 });
 

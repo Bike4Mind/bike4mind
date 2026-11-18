@@ -94,9 +94,11 @@ vi.mock('./UserCard', () => ({
     user: { id: string; role: string; creditUsage: { used: number } | null; permissions: string[] };
     canRevokeMembers: boolean;
     canManageManagers: boolean;
+    showEmails: boolean;
   }) => (
     <div
       data-testid={`member-card-${p.user.id}`}
+      data-show-emails={String(p.showEmails)}
       data-revoke={String(p.canRevokeMembers)}
       data-manage-managers={String(p.canManageManagers)}
       data-credit-usage={p.user.creditUsage?.used ?? 'hidden'}
@@ -418,6 +420,43 @@ describe('OrganizationMembers roster controls', () => {
     expect(screen.getByTestId('organization-members-add-no-seats-btn')).toBeDisabled();
     expect(screen.getByTestId('organization-members-seats-card')).toBeTruthy();
     expect(screen.queryByTestId('member-add-modal')).toBeNull();
+  });
+});
+
+describe('OrganizationMembers roster email visibility', () => {
+  beforeEach(() => {
+    mocks.members = [{ id: 'm1', name: 'Member One', email: 'm1@example.test' }];
+    mocks.searchUsers = [];
+    mocks.invitations = [];
+    mocks.seats = { maxSeats: 0, currentSeats: 0, availableSeats: 0 };
+  });
+
+  const memberRow = (userId: string) => ({ userId, permissions: [Permission.read] });
+
+  it.each([
+    ['owner', { id: 'owner1', isAdmin: false }, {}],
+    [
+      'manager',
+      { id: 'viewer', isAdmin: false },
+      { adminUserIds: ['viewer'], users: [memberRow('viewer')] as IOrganizationDocument['users'] },
+    ],
+    ['staff (site admin)', { id: 'staff1', isAdmin: true }, {}],
+  ])('shows the %s the email column', (_role, viewer, org) => {
+    mocks.viewer = viewer;
+    renderMembers(buildOrg(org as Partial<IOrganizationDocument>));
+    expect(screen.getByTestId('organization-members-header-email')).toBeTruthy();
+    expect(screen.getByTestId('member-card-m1').getAttribute('data-show-emails')).toBe('true');
+  });
+
+  it('gives a plain member a names-only roster', () => {
+    mocks.viewer = { id: 'viewer', isAdmin: false };
+    renderMembers(buildOrg({ users: [memberRow('viewer'), memberRow('m1')] as IOrganizationDocument['users'] }));
+    expect(screen.queryByTestId('organization-members-header-email')).toBeNull();
+    expect(screen.getByTestId('member-card-m1').getAttribute('data-show-emails')).toBe('false');
+    expect(screen.getByTestId('organization-members-search-input')).toHaveAttribute(
+      'aria-label',
+      'Search members by name'
+    );
   });
 });
 

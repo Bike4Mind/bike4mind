@@ -16,6 +16,7 @@ import type { RiskEvidenceRecord, RiskEvidenceSummary, RiskEvidenceTrigger } fro
 import type { SignupGrant, SignupGrantAssessment } from '../../signupGrant';
 import type { ClientSurface } from '../analytics';
 import type { AdminPermissionId } from '../../adminPermissions';
+import type { UserAccountSegment } from './SpendExplorerTypes';
 
 export enum CollectionType {
   NOTEBOOK = 'notebook',
@@ -972,6 +973,13 @@ export interface IUser extends ICreditHolder {
    * Never an authorization source.
    */
   isInternal?: boolean;
+
+  /**
+   * Set by an admin through the user's partner toggle. Only `partner` is ever stored from the user
+   * route; absent reads as `customer`. Internal stays `isInternal`, the only source of that for a user.
+   * Spend explorer splits cost by it. Never an authorization source.
+   */
+  accountSegment?: UserAccountSegment;
 
   /**
    * Minted through POST /api/v1/personas, never through signup. Only these accounts can be deleted

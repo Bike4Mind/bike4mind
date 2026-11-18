@@ -3,6 +3,7 @@ import { Stack, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
 import { MarginDashboard } from './components/MarginDashboard';
 import { UsageDashboard } from './components/UsageDashboard';
 import { PlatformUsageDashboard } from './components/PlatformUsageDashboard';
+import { SideAppsDashboard } from './components/SideAppsDashboard';
 import { CreditHolderType } from '@bike4mind/common';
 import { TransactionLedger } from './components/TransactionLedger';
 import { CreditAdjustmentsLog } from './components/CreditAdjustmentsLog';
@@ -57,6 +58,9 @@ export const CreditAnalyticsTab: React.FC = () => {
           <Tab value="api-usage" data-testid="credit-analysis-api-usage-tab">
             API usage
           </Tab>
+          <Tab value="side-apps" data-testid="credit-analysis-side-apps-tab">
+            Side apps
+          </Tab>
           <Tab value="ledger" data-testid="credit-analysis-ledger-tab">
             Ledger
           </Tab>
@@ -82,6 +86,10 @@ export const CreditAnalyticsTab: React.FC = () => {
 
         <TabPanel value="api-usage" sx={{ p: 0 }}>
           <PlatformUsageDashboard />
+        </TabPanel>
+
+        <TabPanel value="side-apps" sx={{ p: 0 }}>
+          <SideAppsDashboard />
         </TabPanel>
 
         <TabPanel value="ledger" sx={{ p: 0 }}>

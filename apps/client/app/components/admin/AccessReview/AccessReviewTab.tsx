@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { type ReactNode, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -14,12 +14,17 @@ import {
   Typography,
 } from '@mui/joy';
 import { toast } from 'sonner';
-import { ACCESS_REVIEW_DORMANT_DAYS_MAX, ACCESS_REVIEW_DORMANT_DAYS_MIN } from '@bike4mind/common';
+import {
+  ACCESS_REVIEW_DORMANT_DAYS_MAX,
+  ACCESS_REVIEW_DORMANT_DAYS_MIN,
+  formatAdminPermissionSource,
+} from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import {
   downloadAccessReviewCsv,
   useAccessReviewDecision,
   useAccessReviewReport,
+  type AccessReviewRole,
   type AccessReviewRow,
   type WireAccessReviewDecision,
 } from '@client/app/hooks/data/adminAccessReview';
@@ -48,15 +53,66 @@ const decisionOf = (row: ReviewRow) => row.live?.decision ?? row.revoked;
 
 function PermissionsCell({ row }: { row: ReviewRow }) {
   const fullAdmin = row.live?.fullAdmin ?? row.revoked?.fullAdmin ?? false;
-  const permissions = row.live?.permissions ?? row.revoked?.permissions ?? [];
   if (fullAdmin)
     return (
       <Chip size="sm" color="primary">
         Full admin
       </Chip>
     );
-  return <Typography level="body-sm">{permissions.join(', ') || '-'}</Typography>;
+  if (row.live) {
+    if (row.live.permissionSources.length === 0) return <Typography level="body-sm">-</Typography>;
+    return (
+      <Stack data-testid="admin-access-review-permission-sources">
+        {row.live.permissionSources.map(source => (
+          <Typography key={source.permission} level="body-sm">
+            {source.permission} - {formatAdminPermissionSource(source)}
+          </Typography>
+        ))}
+      </Stack>
+    );
+  }
+  const viaRoles = (row.revoked?.roles ?? []).map(role => role.name ?? 'a deleted role');
+  return (
+    <Stack>
+      <Typography level="body-sm">{row.revoked?.permissions.join(', ') || '-'}</Typography>
+      {viaRoles.length > 0 && <Typography level="body-xs">via roles: {viaRoles.join(', ')}</Typography>}
+    </Stack>
+  );
 }
+
+const rolesCell = (row: ReviewRow): ReactNode => {
+  if (!row.live) return '\u2014';
+  if (row.live.roles.length === 0) return '-';
+  return (
+    <Stack direction="row" gap={0.5} flexWrap="wrap">
+      {row.live.roles.map(role =>
+        role.deleted ? (
+          <Tooltip key={role.id} title={`This account still lists a deleted role (${role.id}). It grants nothing.`}>
+            <Chip
+              size="sm"
+              color="warning"
+              variant="soft"
+              data-testid={`admin-access-review-deleted-role-chip-${role.id}`}
+            >
+              Deleted role
+            </Chip>
+          </Tooltip>
+        ) : (
+          <Chip
+            key={role.id}
+            size="sm"
+            variant="soft"
+            color="neutral"
+            title={role.name ?? undefined}
+            data-testid={`admin-access-review-role-chip-${role.id}`}
+          >
+            {role.name}
+          </Chip>
+        )
+      )}
+    </Stack>
+  );
+};
 
 function DecisionCell({ row }: { row: ReviewRow }) {
   const decision = decisionOf(row);
@@ -87,7 +143,8 @@ function DecisionCell({ row }: { row: ReviewRow }) {
 // Column widths plus the 3.5rem actions column sum to the DataTable minWidth below; keep them in step.
 const columns: DataColumn<ReviewRow>[] = [
   { id: 'admin', label: 'Admin', width: '12rem', wrap: true, render: row => label(row) },
-  { id: 'permissions', label: 'Permissions', width: '7rem', wrap: true, render: row => <PermissionsCell row={row} /> },
+  { id: 'roles', label: 'Roles', width: '7rem', wrap: true, render: rolesCell },
+  { id: 'permissions', label: 'Permissions', width: '11rem', wrap: true, render: row => <PermissionsCell row={row} /> },
   {
     id: 'granted',
     label: 'Granted by',
@@ -152,6 +209,50 @@ const columns: DataColumn<ReviewRow>[] = [
       ) : null,
   },
   { id: 'decision', label: 'Decision', width: '9rem', wrap: true, render: row => <DecisionCell row={row} /> },
+];
+
+const memberLabel = (member: AccessReviewRole['members'][number]) => member.email ?? member.username ?? member.userId;
+
+// Column widths sum to the roles DataTable minWidth below; keep them in step.
+const roleColumns: DataColumn<AccessReviewRole>[] = [
+  {
+    id: 'role',
+    label: 'Role',
+    width: '12rem',
+    wrap: true,
+    render: role => (
+      <Stack>
+        <Typography level="body-sm">{role.name}</Typography>
+        {role.description && <Typography level="body-xs">{role.description}</Typography>}
+      </Stack>
+    ),
+  },
+  {
+    id: 'permissions',
+    label: 'Permissions',
+    width: '16rem',
+    wrap: true,
+    render: role => role.permissions.join(', ') || '-',
+  },
+  {
+    id: 'members',
+    label: 'Members',
+    width: '16rem',
+    wrap: true,
+    render: role => (
+      <Stack>
+        <Typography level="body-xs">
+          {role.members.length} {role.members.length === 1 ? 'member' : 'members'}
+        </Typography>
+        {role.members.map(member => (
+          <Typography key={member.userId} level="body-sm">
+            {memberLabel(member)}
+            {member.status !== 'active' ? ` (${member.status})` : ''}
+          </Typography>
+        ))}
+      </Stack>
+    ),
+  },
 ];
 
 /** The quarterly admin access review: every admin's access, its provenance and activity, and a decision per admin. */
@@ -300,7 +401,7 @@ export default function AccessReviewTab() {
         error={isError && !data ? 'The access review could not be loaded.' : undefined}
         onRetry={() => void refetch()}
         pagination={false}
-        minWidth="59.5rem"
+        minWidth="70.5rem"
         maxHeight="none"
         empty={
           <EmptyState
@@ -314,6 +415,35 @@ export default function AccessReviewTab() {
           />
         }
       />
+
+      {/* A failed load is reported once, by the admin table above. */}
+      {!(isError && !data) && (
+        <Stack sx={{ gap: 2, minWidth: 0 }}>
+          <Typography level="title-md" component="h2">
+            Admin roles
+          </Typography>
+          <DataTable
+            label="Admin roles"
+            testId="admin-access-review-roles-table"
+            rows={data?.roles ?? []}
+            columns={roleColumns}
+            getRowId={role => role.id}
+            rowTestId={role => `admin-access-review-role-row-${role.id}`}
+            loading={isPending}
+            onRetry={() => void refetch()}
+            pagination={false}
+            minWidth="44rem"
+            maxHeight="none"
+            empty={
+              <EmptyState
+                title="No admin roles defined"
+                description="Roles created on the Roles page appear here with their members."
+                action={null}
+              />
+            }
+          />
+        </Stack>
+      )}
 
       {revoking && <RevokeAccessDialog admin={revoking} dormantDays={dormantDays} onClose={() => setRevoking(null)} />}
     </Stack>

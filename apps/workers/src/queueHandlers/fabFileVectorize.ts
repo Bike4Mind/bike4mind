@@ -25,6 +25,7 @@ import {
   fabFileRepository,
   organizationRepository,
   scopedSettingsRepository,
+  spendFreezeRepository,
   usageEventRepository,
   User,
   withTransaction,
@@ -50,9 +51,11 @@ import {
   fileEmbeddingService,
   isOperationalBillingEnabled,
   recordOperationalUsage,
+  spendFreezeService,
 } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { reserveRequestCredits, type CreditReservation } from '@bike4mind/server-utils/billing/reserveRequestCredits';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
 import { activePlanResolver } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 import { getEmbeddingModelCost, provenancePayloadShape } from '@bike4mind/common';
@@ -380,6 +383,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     if (cacheMisses.length > 0) {
       const missTexts = cacheMisses.map(m => m.text);
       const missTokenCounts = cacheMisses.map(m => m.tokenCount);
+
+      // Ahead of every reservation, lake or not, billable or not: a freeze applies with credits off too.
+      // The refusal is a terminal credit refusal, so the failure path below fails the file and consumes the message.
+      await spendFreezeService.assertSpendNotFrozen(
+        spendFreezeSubjectForRequest(
+          { user, apiKeyInfo: existingFabFile.apiKeyId ? { keyId: existingFabFile.apiKeyId } : undefined },
+          user.organizationId ? String(user.organizationId) : null
+        ),
+        { db: { spendFreezes: spendFreezeRepository } }
+      );
 
       // COST GOVERNANCE GATE - data-lake work, resolved by MEMBERSHIP rather than by batchId
       // alone (see resolveIngestSpendScope for why those differ, and why the tag-joined members
