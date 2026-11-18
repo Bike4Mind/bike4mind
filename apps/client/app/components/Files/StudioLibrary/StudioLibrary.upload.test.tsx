@@ -8,11 +8,12 @@ import { getThemeConfig } from '@client/app/utils/themes';
 /**
  * The Library page through the real browser, search hook and upload mutation, against a fake /api/files/search that
  * applies the source filters the way the server does (fabFileService/search.ts): `generated` keeps only generated
- * files, `uploaded` only the rest.
+ * files, `uploaded` only the rest. Type, shared, owned and pagination are ignored. The browser internals are mocked
+ * on purpose: this pins the request filters and the tiles shown, not the browser's component tree.
  */
 
 type StoredFile = IFabFileDocument & { generated: boolean };
-type SearchParams = { filters?: { generated?: boolean; uploaded?: boolean; type?: string } };
+type SearchParams = { filters?: { generated?: boolean; uploaded?: boolean } };
 
 const { store, searchRequests, createFabFileOnServerWithUpload } = vi.hoisted(() => ({
   store: [] as StoredFile[],
@@ -143,6 +144,19 @@ describe('StudioLibrary - uploads', () => {
     }
     expect(screen.queryByTestId('file-browser-locked-filter-chip-source')).not.toBeInTheDocument();
     expect(screen.getByTestId('file-browser-generated-filter-btn')).toBeInTheDocument();
+  });
+
+  it('narrows the grid to generated files with the Generated toggle, and widens it again', async () => {
+    store.push(fakeFile('g1', 'generated.png', true), fakeFile('u1', 'uploaded.png', false));
+    renderLibrary();
+    await waitFor(() => expect(tileNames()).toEqual(expect.arrayContaining(['generated.png', 'uploaded.png'])));
+
+    fireEvent.click(screen.getByTestId('file-browser-generated-filter-btn'));
+    await waitFor(() => expect(tileNames()).toEqual(['generated.png']));
+    expect(searchRequests.at(-1)?.filters?.generated).toBe(true);
+
+    fireEvent.click(screen.getByTestId('file-browser-generated-filter-btn'));
+    await waitFor(() => expect(tileNames()).toEqual(expect.arrayContaining(['generated.png', 'uploaded.png'])));
   });
 
   it('shows a file uploaded from the page without a reload', async () => {
