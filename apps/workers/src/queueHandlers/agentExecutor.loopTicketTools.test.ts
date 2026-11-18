@@ -566,6 +566,34 @@ describe('desktop-stage tickets', () => {
   });
 });
 
+describe('loop_ticket_list', () => {
+  const tools = () => buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
+  const open = { id: 't1', loopId: OWN, stage: 'todo', status: 'open' };
+  const closed = { id: 't2', loopId: OWN, stage: 'done', status: 'closed' };
+
+  beforeEach(() => {
+    items.listForUser.mockImplementation(async (_userId: string, filters: { status: string[] }) => {
+      const data = [open, closed].filter(t => filters.status.includes(t.status));
+      return { data, hasMore: false, total: data.length };
+    });
+  });
+
+  it('leaves closed tickets out unless asked, and counts them', async () => {
+    const listed = JSON.parse(await run(tools(), 'loop_ticket_list', {}));
+    expect(listed.tickets.map((t: { id: string }) => t.id)).toEqual(['t1']);
+    expect(listed.closedOmitted).toBe(1);
+
+    const asked = JSON.parse(await run(tools(), 'loop_ticket_list', { status: 'closed' }));
+    expect(asked.tickets.map((t: { id: string }) => t.id)).toEqual(['t2']);
+    expect(asked).not.toHaveProperty('closedOmitted');
+  });
+
+  it('says in its description that closed tickets are left out', () => {
+    const schema = tools().loop_ticket_list.implementation({ userId: 'u1' } as never).toolSchema;
+    expect(schema.description).toMatch(/status: 'closed'/);
+  });
+});
+
 describe('loop_ticket_split', () => {
   const DEP = '507f1f77bcf86cd799439021';
   const tools = () => buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });

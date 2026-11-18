@@ -262,15 +262,16 @@ function ticketTool(
   switch (tool) {
     case 'loop_ticket_list': {
       const status = typeof input.status === 'string' ? input.status : undefined;
+      const inStage = store.tickets(loop.id).filter(ticket => !input.stage || ticket.stage === input.stage);
+      const closedOmitted = status ? 0 : inStage.filter(ticket => ticket.status === 'closed').length;
       return {
         loopId: loop.id,
         stages: loop.stages,
-        tickets: store
-          .tickets(loop.id)
+        tickets: inStage
           .filter(ticket => (status ? ticket.status === status : ticket.status !== 'closed'))
-          .filter(ticket => !input.stage || ticket.stage === input.stage)
           .slice(0, 100)
           .map(summarize),
+        ...(closedOmitted > 0 && { closedOmitted }),
       };
     }
     case 'loop_ticket_create': {

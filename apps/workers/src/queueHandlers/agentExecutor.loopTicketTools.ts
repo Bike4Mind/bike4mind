@@ -220,18 +220,31 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
         asToolResult(async () => {
           const params = (value ?? {}) as { loopId?: string; stage?: string; status?: string };
           const loop = await ownLoop(params.loopId ?? loopId);
+          const statusGiven = WORK_ITEM_STATUSES.includes(params.status as WorkItemStatus);
           const tickets = await workItemRepository.listForUser(
             userId,
             {
               loopId: loop.id,
               // Closed tickets only on request, so they don't crowd open work out of the page.
-              status: WORK_ITEM_STATUSES.includes(params.status as WorkItemStatus)
+              status: statusGiven
                 ? [params.status as WorkItemStatus]
                 : WORK_ITEM_STATUSES.filter(status => status !== 'closed'),
             },
             { page: 1, limit: LIST_LIMIT },
             { by: 'createdAt', direction: 'asc' }
           );
+          // Counted only for an unfiltered list: the repository has no stage filter to count within.
+          const closedOmitted =
+            statusGiven || params.stage
+              ? 0
+              : (
+                  await workItemRepository.listForUser(
+                    userId,
+                    { loopId: loop.id, status: ['closed'] },
+                    { page: 1, limit: 1 },
+                    { by: 'createdAt', direction: 'asc' }
+                  )
+                ).total;
           const desktopStages = desktopStagesOf(loop);
           return {
             loopId: loop.id,
@@ -241,12 +254,13 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
               .filter(t => !params.stage || t.stage === params.stage)
               .map(t => summarize(t, desktopStages)),
             hasMore: tickets.hasMore,
+            ...(closedOmitted > 0 && { closedOmitted }),
           };
         }),
       toolSchema: {
         name: 'loop_ticket_list',
         description:
-          "List the tickets of this loop (or another of the owner's loops by loopId), with their stage and status. Tickets marked desktopRunner sit in a stage the owner's desktop app works: never work, edit or move them.",
+          "List the tickets of this loop (or another of the owner's loops by loopId), with their stage and status. Closed tickets are left out unless you pass status: 'closed'; closedOmitted counts them. Tickets marked desktopRunner sit in a stage the owner's desktop app works: never work, edit or move them.",
         parameters: {
           type: 'object',
           properties: {

@@ -32,6 +32,19 @@ describe('loop ticket tools', () => {
     expect(call('loop_ticket_update', { id: 'nope', title: 'x' })).toBe('Error: ticket not found');
   });
 
+  it('leaves closed tickets out of the list unless asked, and counts them', () => {
+    const { store, loop, call } = setup();
+    const open = createTicket(store, loop, { title: 'Open' }, 'owner');
+    const done = createTicket(store, loop, { title: 'Done' }, 'owner');
+    store.putTicket({ ...done, status: 'closed' });
+    const listed = JSON.parse(call('loop_ticket_list', {}));
+    expect(listed.tickets.map((t: { id: string }) => t.id)).toEqual([open.id]);
+    expect(listed.closedOmitted).toBe(1);
+    const closed = JSON.parse(call('loop_ticket_list', { status: 'closed' }));
+    expect(closed.tickets.map((t: { id: string }) => t.id)).toEqual([done.id]);
+    expect(closed).not.toHaveProperty('closedOmitted');
+  });
+
   it('caps the tickets one run files', () => {
     const { run, call } = setup();
     run.creates = 20;

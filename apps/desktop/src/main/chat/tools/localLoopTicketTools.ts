@@ -29,17 +29,21 @@ const tool = (name: string, description: string, parameters: ToolSchema['paramet
 });
 
 export const LOCAL_LOOP_TICKET_TOOLS: ToolDefinition[] = [
-  tool('loop_ticket_list', 'List the tickets of this loop, with their stage and status.', {
-    type: 'object',
-    properties: {
-      stage: { type: 'string', description: 'Only tickets in this stage.' },
-      status: {
-        type: 'string',
-        enum: ['open', 'in_progress', 'blocked', 'closed'],
-        description: 'Only tickets with this status.',
+  tool(
+    'loop_ticket_list',
+    "List the tickets of this loop, with their stage and status. Closed tickets are left out unless you pass status: 'closed'; closedOmitted counts them.",
+    {
+      type: 'object',
+      properties: {
+        stage: { type: 'string', description: 'Only tickets in this stage.' },
+        status: {
+          type: 'string',
+          enum: ['open', 'in_progress', 'blocked', 'closed'],
+          description: 'Only tickets with this status.',
+        },
       },
-    },
-  }),
+    }
+  ),
   tool(
     'loop_ticket_create',
     "File a ticket into this loop. It starts in the loop's first stage unless a stage is given. To file a step only the owner can do (a decision, credentials, a human-only action), set status blocked with a reason: the owner is notified. To hold a ticket until other tickets close, list them as dependencies and set status blocked with blockedOn dependencies instead: it reopens on its own and the owner is not notified.",
