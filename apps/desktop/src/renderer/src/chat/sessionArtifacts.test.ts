@@ -48,13 +48,19 @@ describe('sessionArtifacts', () => {
 });
 
 describe('paneDocument', () => {
-  it('passes HTML through and wraps an SVG in a page', () => {
-    expect(paneDocument({ type: 'html', content: '<p>x</p>' })).toBe('<p>x</p>');
-    expect(paneDocument({ type: 'svg', content: '<svg></svg>' })).toContain('<body style="margin:0"><svg></svg>');
+  it('passes HTML through untouched', () => {
+    expect(paneDocument({ type: 'html', title: 'Page', content: '<p>x</p>' })).toBe('<p>x</p>');
+  });
+
+  it('wraps an SVG in a page titled after the artifact, even when the SVG has its own title', () => {
+    const page = paneDocument({ type: 'svg', title: 'Beta & co', content: '<svg><title>inner</title></svg>' });
+    expect(page).toMatch(/^<!DOCTYPE html><html><head><meta charset="utf-8"><title>Beta &amp; co<[/]title><[/]head>/);
+    expect(page).toContain('<body style="margin:0"><svg><title>inner</title></svg></body>');
   });
 
   it('shows any other type as escaped source', () => {
-    const page = paneDocument({ type: 'code', content: 'if (a < b && c) {}' });
+    const page = paneDocument({ type: 'code', title: 'Snippet', content: 'if (a < b && c) {}' });
+    expect(page).toContain('<title>Snippet</title>');
     expect(page).toContain('<pre');
     expect(page).toContain('if (a &lt; b &amp;&amp; c) {}');
   });
