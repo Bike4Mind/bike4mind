@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { StudioAudioClip } from '@bike4mind/common';
+import type { StudioAudioClip, StudioShot } from '@bike4mind/common';
 import type { ToolContext, ToolDefinition } from '../../base/types';
 import { buildUnavailableTool, toToolParameters } from '../generationJobTool';
 import { createProductionAudio } from './audio';
@@ -55,6 +55,13 @@ const description =
 
 type Outcome<T> = { clips: T; notes: string[] };
 
+// A clip sets its shot's length, so lengthening that shot would drop the clip and spend another one.
+const fitAdvice = (shot: StudioShot): string =>
+  shot.clipFileId
+    ? 'Shorten the line in production_storyboard (same prompts, so the takes and clips are kept), then replace the voiceover.'
+    : 'Shorten the line or lengthen the shot in production_storyboard (same prompts, so the takes are kept), then ' +
+      'replace the voiceover.';
+
 async function makeVoiceover(
   audio: ProductionAudioAdapter | null,
   slots: readonly ShotSlot[],
@@ -76,7 +83,7 @@ async function makeVoiceover(
     if (!placed || placed.durationMs < line.durationMs)
       notes.push(
         `the voice line for ${line.slot.shot.id} runs ${line.durationMs} ms, longer than the time it has; it is cut ` +
-          `to ${placed?.durationMs ?? 0} ms. Shorten the line or lengthen the shot, then replace the voiceover.`
+          `to ${placed?.durationMs ?? 0} ms. ${fitAdvice(line.slot.shot)}`
       );
   }
   return { clips, notes };

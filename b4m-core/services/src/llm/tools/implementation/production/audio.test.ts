@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { GenerationJobState } from '@bike4mind/common';
-import { createProductionAudio } from './audio';
+import { createProductionAudio, MP3_TAIL_MARGIN_MS } from './audio';
 import type { ProductionAudioSettings } from './config';
 
 const FILE_ID = 'a'.repeat(24);
@@ -46,7 +46,7 @@ describe('createProductionAudio', () => {
 
     const result = await audio.speech({ text: 'Meet the bottle that keeps up.' });
 
-    expect(result).toEqual({ ok: true, fileId: FILE_ID, durationMs: 2500 });
+    expect(result).toEqual({ ok: true, fileId: FILE_ID, durationMs: 2500 - MP3_TAIL_MARGIN_MS });
     const [input] = vi.mocked(jobs.createSpeechJob).mock.calls[0]!;
     expect(input.request).toMatchObject({ text: 'Meet the bottle that keeps up.', voice: 'nova', format: 'mp3' });
     expect(input).toMatchObject({ source: 'agent', saveToFiles: true, questId: 'quest1' });
@@ -62,9 +62,21 @@ describe('createProductionAudio', () => {
 
     const result = await audio.soundEffect({ prompt: 'a cap pops', durationSeconds: 1.5 });
 
-    expect(result).toEqual({ ok: true, fileId: FILE_ID, durationMs: 1500 });
+    expect(result).toEqual({ ok: true, fileId: FILE_ID, durationMs: 1500 - MP3_TAIL_MARGIN_MS });
     const [input] = vi.mocked(jobs.createSoundEffectJob).mock.calls[0]!;
     expect(input.request).toMatchObject({ provider: 'elevenlabs', text: 'a cap pops', durationSeconds: 1.5 });
+  });
+
+  it('never places a sound effect longer than the length it asked for', async () => {
+    // The measured length counts the mp3's padding frames, here 42 ms past the 5 s file the editor plays.
+    const jobs = makeJobs({
+      runInline: vi.fn(async () => finished('sound_effect', { fileId: FILE_ID, durationSeconds: 5.042 })),
+    });
+    const audio = createProductionAudio(makeContext(), { jobs });
+
+    const result = await audio.soundEffect({ prompt: 'a closing chime', durationSeconds: 5 });
+
+    expect(result).toEqual({ ok: true, fileId: FILE_ID, durationMs: 5000 - MP3_TAIL_MARGIN_MS });
   });
 
   it('reports a clip still running at the inline timeout as pending', async () => {

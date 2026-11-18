@@ -25,10 +25,21 @@ type CreatedAudioJob = Awaited<
 const SFX_PROVIDER = 'elevenlabs';
 const SPEECH_WORDS_PER_MINUTE = 150;
 
+/**
+ * The measured length of an mp3 counts every frame, including the encoder's start delay and end padding that a
+ * player drops, so it can read up to two frames (about 52 ms) longer than the clip the editor plays. A placed clip
+ * keeps this much clear of the end so it never plays past its source.
+ */
+export const MP3_TAIL_MARGIN_MS = 60;
+
 const estimateSpeechSeconds = (text: string): number =>
   (text.trim().split(/\s+/).length / SPEECH_WORDS_PER_MINUTE) * 60;
 
-function toResult(job: IGenerationJobDocument | null, fallbackSeconds: number): ProductionAudioResult {
+function toResult(
+  job: IGenerationJobDocument | null,
+  fallbackSeconds: number,
+  maxSeconds = Infinity
+): ProductionAudioResult {
   if (!job) {
     return { ok: false, code: 'pending', message: 'still generating; call production_add_audio again to place it' };
   }
@@ -39,8 +50,8 @@ function toResult(job: IGenerationJobDocument | null, fallbackSeconds: number): 
   if (!output.fileId) {
     return { ok: false, code: 'not_saved', message: 'the clip was generated but could not be saved to Files' };
   }
-  const seconds = output.durationSeconds || fallbackSeconds;
-  return { ok: true, fileId: output.fileId, durationMs: Math.round(seconds * 1000) };
+  const seconds = Math.min(output.durationSeconds || fallbackSeconds, maxSeconds);
+  return { ok: true, fileId: output.fileId, durationMs: Math.max(1, Math.round(seconds * 1000) - MP3_TAIL_MARGIN_MS) };
 }
 
 /**
@@ -55,7 +66,9 @@ export function createProductionAudio(context: Context, audio: ProductionAudioSe
     kind: AudioJobKind,
     request: SpeechJobRequest | SoundEffectJobRequest,
     modelId: string,
-    fallbackSeconds: number
+    fallbackSeconds: number,
+    // A sound effect is made at the length asked for; its measured length can only run long.
+    maxSeconds?: number
   ): Promise<ProductionAudioResult> => {
     const input = (attempt: number): CreateAudioJobInput => ({
       user: {
@@ -97,7 +110,7 @@ export function createProductionAudio(context: Context, audio: ProductionAudioSe
       timeoutMs: AUDIO_JOB_INLINE_TIMEOUT_MS,
       minStepMs: inlineMinStepMs(kind),
     });
-    return toResult(job, fallbackSeconds);
+    return toResult(job, fallbackSeconds, maxSeconds);
   };
 
   return {
@@ -120,7 +133,7 @@ export function createProductionAudio(context: Context, audio: ProductionAudioSe
         durationSeconds,
         promptInfluence: audio.promptInfluence,
       };
-      return run('sound_effect', request, DEFAULT_SOUND_MODEL_ID, durationSeconds);
+      return run('sound_effect', request, DEFAULT_SOUND_MODEL_ID, durationSeconds, durationSeconds);
     },
   };
 }

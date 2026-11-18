@@ -312,18 +312,42 @@ describe('production director tools', () => {
     expect(harness.composition().shots.every(shot => shot.clipFileId)).toBe(true);
   });
 
-  it('refuses to replace shots that have takes unless replace is true', async () => {
+  it('refuses to change a shot that has takes unless replace is true', async () => {
     await run(productionStoryboardTool, harness, STORYBOARD);
     await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
     const takenShots = harness.composition().shots;
+    const reprompted = {
+      ...STORYBOARD,
+      shots: STORYBOARD.shots.map((shot, index) => (index === 1 ? { ...shot, prompt: 'The bottle on a beach' } : shot)),
+    };
 
-    const refused = await run(productionStoryboardTool, harness, STORYBOARD);
+    const refused = await run(productionStoryboardTool, harness, reprompted);
     expect(refused).toMatch(/^Error: .*replace: true/);
     expect(harness.composition().shots).toEqual(takenShots);
 
-    const replaced = JSON.parse(await run(productionStoryboardTool, harness, { ...STORYBOARD, replace: true }));
+    const replaced = JSON.parse(await run(productionStoryboardTool, harness, { ...reprompted, replace: true }));
     expect(replaced.shots).toHaveLength(3);
-    expect(harness.composition().shots.every(shot => shot.fileIds.length === 0)).toBe(true);
+    expect(harness.composition().shots.map(shot => shot.fileIds.length > 0)).toEqual([true, false, true]);
+  });
+
+  it('keeps takes and clips when a re-run only retimes shots, dropping a clip its shot outgrows', async () => {
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID });
+    const before = harness.composition().shots;
+    expect(before.every(shot => shot.clipFileId)).toBe(true);
+    const retimed = {
+      ...STORYBOARD,
+      shots: STORYBOARD.shots.map((shot, index) =>
+        index === 0 ? { ...shot, durationSeconds: 20 } : { ...shot, voiceLine: 'Shorter.' }
+      ),
+    };
+
+    const result = JSON.parse(await run(productionStoryboardTool, harness, retimed));
+    expect(result.clipsDropped).toEqual(['shot-1']);
+    const after = harness.composition().shots;
+    expect(after.map(shot => shot.chosenFileId)).toEqual(before.map(shot => shot.chosenFileId));
+    expect(after.map(shot => shot.clipFileId)).toEqual([undefined, before[1]!.clipFileId, before[2]!.clipFileId]);
+    expect(after.every(shot => shot.voiceLine === 'Shorter.' || shot.id === 'shot-1')).toBe(true);
   });
 
   it('keeps stills on the timeline when animate is false', async () => {
