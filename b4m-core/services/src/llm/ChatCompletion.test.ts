@@ -15697,6 +15697,99 @@ describe('prompt moderation', () => {
     expect(BedrockGuardrailsService).not.toHaveBeenCalled();
   });
 
+  describe('an API key moderation exception', () => {
+    const keyTurn = { ...startParams, apiKeyId: 'key-1' };
+    const flagWith = (
+      Service: typeof OpenaiModerationsService | typeof BedrockGuardrailsService,
+      categories: string[]
+    ) =>
+      vi.mocked(Service).mockImplementation(function (this: { checkPrompt: unknown }) {
+        this.checkPrompt = vi.fn().mockRejectedValue(new FlaggedContentError('blocked', categories));
+      } as never);
+    const keyWith = (categories: string[], overrides: Record<string, unknown> = {}) => {
+      const findModerationException = vi.fn().mockResolvedValue({
+        userId: 'user1',
+        status: 'active',
+        moderationException: { categories, reason: 'r', setBy: 'admin-1', setAt: new Date() },
+        ...overrides,
+      });
+      service.db.userApiKeys = { findModerationException };
+      return findModerationException;
+    };
+
+    it.each([
+      [
+        'openai',
+        { openaiKey: 'demo-key', guardrailId: null },
+        OpenaiModerationsService,
+        ['violence', 'violence/graphic'],
+      ],
+      ['bedrock', { openaiKey: null, guardrailId: 'my-guardrail' }, BedrockGuardrailsService, ['VIOLENCE']],
+    ] as const)(
+      'continues a %s-flagged turn the key is excepted from and records no hit',
+      async (_s, knobs, Service, categories) => {
+        wireModMocks(knobs);
+        enableAdminFlags('ModerationEnabled');
+        flagWith(Service, [...categories]);
+        const find = keyWith([...categories]);
+
+        await service.process({ body: keyTurn, logger: mockLogger });
+
+        expect(find).toHaveBeenCalledExactlyOnceWith('key-1');
+        expect(applyModerationHit).not.toHaveBeenCalled();
+        expect(mockLogger.info).toHaveBeenCalledWith(
+          expect.stringContaining('continued under its API key exception'),
+          expect.objectContaining({ apiKeyId: 'key-1', categories: [...categories] })
+        );
+      }
+    );
+
+    it.each([
+      ['one flagged category is outside the exception', ['violence', 'hate'], () => keyWith(['violence'])],
+      [
+        'the key has no exception',
+        ['violence'],
+        () => (service.db.userApiKeys = { findModerationException: vi.fn().mockResolvedValue(null) }),
+      ],
+      ['the key belongs to another user', ['violence'], () => keyWith(['violence'], { userId: 'user2' })],
+      ['the key is disabled', ['violence'], () => keyWith(['violence'], { status: 'disabled' })],
+      [
+        'the lookup fails',
+        ['violence'],
+        () => (service.db.userApiKeys = { findModerationException: vi.fn().mockRejectedValue(new Error('db down')) }),
+      ],
+      ['no key repository is wired', ['violence'], () => undefined],
+    ] as const)('keeps the block and records the hit when %s', async (_label, flagged, arrange) => {
+      wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+      enableAdminFlags('ModerationEnabled');
+      flagWith(OpenaiModerationsService, [...flagged]);
+      arrange();
+
+      await service.process({ body: keyTurn, logger: mockLogger }).catch(() => undefined);
+
+      expect(mockLogger.info).not.toHaveBeenCalledWith(
+        expect.stringContaining('continued under its API key exception'),
+        expect.anything()
+      );
+
+      expect(applyModerationHit).toHaveBeenCalledWith(
+        expect.objectContaining({ hit: expect.objectContaining({ source: 'openai', categories: [...flagged] }) })
+      );
+    });
+
+    it('never reads the exception for a turn no API key started', async () => {
+      wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+      enableAdminFlags('ModerationEnabled');
+      flagWith(OpenaiModerationsService, ['violence']);
+      const find = keyWith(['violence']);
+
+      await service.process({ body: startParams, logger: mockLogger }).catch(() => undefined);
+
+      expect(find).not.toHaveBeenCalled();
+      expect(applyModerationHit).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('records a moderation hit with source bedrock when Bedrock Guardrails blocks a prompt', async () => {
     wireModMocks({ openaiKey: null, guardrailId: 'my-guardrail' });
     enableAdminFlags('ModerationEnabled');
