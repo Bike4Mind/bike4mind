@@ -4,7 +4,7 @@ import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
 import { completeMfaLogin } from '@server/auth/completeMfaLogin';
 import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
-import { redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
+import { redactUserSecretsForSelf, selfUserResponseSchema, type IUser } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import * as z from 'zod';
 
@@ -54,9 +54,9 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
       // Before the code is checked and the session minted, and outside the try: a lookup failure
       // must leave no session behind and must not be booked as a failed MFA attempt.
-      const { roleAdminPermissions = [] } = await resolveRoleAdminPermissions({
-        adminRoleIds: freshUser.adminRoleIds,
-      });
+      const { roleAdminPermissions = [] } = await resolveRoleAdminPermissions<
+        Pick<IUser, 'adminRoleIds' | 'roleAdminPermissions'>
+      >({ adminRoleIds: freshUser.adminRoleIds });
 
       let loginBody: { deviceRemembered: boolean; accessToken: string };
       let loggedInUser: Awaited<ReturnType<typeof mfaService.verifyMFA>>['user'];
