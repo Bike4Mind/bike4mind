@@ -9,6 +9,7 @@ import type {
   ChatArtifactPublishProgress,
   ChatArtifactPublishRequest,
   ChatAttachmentInput,
+  ChatFilePathAction,
   ChatImageAction,
   ChatImageRef,
   ChatQueueEvent,
@@ -70,6 +71,21 @@ import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewState } from '@sh
 // passthrough: a passthrough would let renderer code reach every handler main ever
 // registers, which defeats the point of keeping the auth handlers out of its reach.
 const api: DesktopApi = {
+  studio: {
+    get: sessionId => ipcRenderer.invoke(IPC_CHANNELS.studioGet, sessionId),
+    page: request => ipcRenderer.invoke(IPC_CHANNELS.studioPage, request),
+    jobAction: request => ipcRenderer.invoke(IPC_CHANNELS.studioJobAction, request),
+    prepare: draft => ipcRenderer.invoke(IPC_CHANNELS.studioPrepare, draft),
+    create: request => ipcRenderer.invoke(IPC_CHANNELS.studioCreate, request),
+    pickFiles: sessionId => ipcRenderer.invoke(IPC_CHANNELS.studioPickFiles, sessionId),
+    uploadReference: sessionId => ipcRenderer.invoke(IPC_CHANNELS.studioUploadReference, sessionId),
+    assetAction: request => ipcRenderer.invoke(IPC_CHANNELS.studioAssetAction, request),
+    onChanged: listener => {
+      const handler = (_event: unknown, event: Parameters<typeof listener>[0]) => listener(event);
+      ipcRenderer.on(IPC_CHANNELS.studioChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.studioChanged, handler);
+    },
+  },
   getAppInfo: () => ipcRenderer.invoke(IPC_CHANNELS.getAppInfo),
   setTheme: (mode, backgroundColor) => ipcRenderer.invoke(IPC_CHANNELS.setTheme, mode, backgroundColor),
   update: {
@@ -308,6 +324,7 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatCompactContext, sessionId, focus),
     suggestNextPrompt: (sessionId: string, model?: string | null) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSuggestNextPrompt, sessionId, model ?? null),
+    getRunSpend: (rootSessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetRunSpend, rootSessionId),
     getQueuedMessages: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetQueued, sessionId),
     cancelQueuedMessage: (sessionId: string, queuedId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatCancelQueued, sessionId, queuedId),
@@ -340,6 +357,16 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatImageAction, image, action),
     attachImage: (sessionId: string, image: ChatImageRef) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatAttachImage, sessionId, image),
+    checkFilePaths: (sessionId: string, paths: string[]) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatCheckFilePaths, sessionId, paths),
+    openFilePath: (sessionId: string, path: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatOpenFilePath, sessionId, path),
+    readFilePath: (sessionId: string, path: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatReadFilePath, sessionId, path),
+    filePathAction: (sessionId: string, path: string, action: ChatFilePathAction) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatFilePathAction, sessionId, path, action),
+    attachFilePath: (sessionId: string, path: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatAttachFilePath, sessionId, path),
     respondToApproval: (approvalId: string, answer: ChatApprovalAnswer) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatRespondToApproval, approvalId, answer),
     listArtifacts: () => ipcRenderer.invoke(IPC_CHANNELS.chatListArtifacts),

@@ -7,9 +7,17 @@ import type { ChatImageJob } from '@client/app/hooks/data/imageJobs';
 
 const h = vi.hoisted(() => ({
   query: {} as { data?: ChatImageJob; isPending: boolean; refetch: () => Promise<unknown> },
+  studioImageEnabled: true,
+  openStudioImageEdit: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/data/imageJobs', () => ({ useImageJob: () => h.query }));
+vi.mock('@client/app/components/Studio/useStudioFeature', () => ({
+  useStudioFeature: () => h.studioImageEnabled,
+}));
+vi.mock('@client/app/components/ImageStudio/useOpenStudioImageEdit', () => ({
+  useOpenStudioImageEdit: () => h.openStudioImageEdit,
+}));
 
 import ImageJobCard from './ImageJobCard';
 
@@ -53,6 +61,8 @@ const show = (data: ChatImageJob | undefined, isPending = false) => render(ui(da
 
 beforeEach(() => {
   refetch.mockClear();
+  h.openStudioImageEdit.mockClear();
+  h.studioImageEnabled = true;
 });
 
 describe('ImageJobCard', () => {
@@ -130,5 +140,32 @@ describe('ImageJobCard', () => {
   ] as const)('falls back to fixed copy for a %s job without an error', (state, fragment) => {
     show(job({ state }));
     expect(screen.getByTestId('image-job-card-error').textContent).toContain(fragment);
+  });
+
+  describe('Edit in Studio', () => {
+    it('opens the saved image in Studio edit mode with the model it was made with', () => {
+      show(job({ state: 'succeeded', output: output() }));
+      fireEvent.click(screen.getByTestId('image-job-card-edit-btn'));
+      expect(h.openStudioImageEdit).toHaveBeenCalledWith(
+        { fileId: 'file-1', fileName: 'Image from chat' },
+        'gpt-image-1.5'
+      );
+    });
+
+    it('is not offered before the image is saved to Files', () => {
+      show(job({ state: 'succeeded', output: output({ file_id: null }) }));
+      expect(screen.queryByTestId('image-job-card-edit-btn')).toBeNull();
+    });
+
+    it.each(['pending_scan', 'unavailable'] as const)('is not offered while the image is %s', availability => {
+      show(job({ state: 'succeeded', output: output({ availability, url: null }) }));
+      expect(screen.queryByTestId('image-job-card-edit-btn')).toBeNull();
+    });
+
+    it('is not offered while Studio image is closed', () => {
+      h.studioImageEnabled = false;
+      show(job({ state: 'succeeded', output: output() }));
+      expect(screen.queryByTestId('image-job-card-edit-btn')).toBeNull();
+    });
   });
 });

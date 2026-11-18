@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import {
   AspectRatio,
   Box,
+  Button,
   Card,
   Chip,
   CircularProgress,
@@ -14,6 +15,9 @@ import type { GenerationJobState } from '@bike4mind/common';
 import { STATE_COLORS, useStablePlayerSrc } from '@client/app/hooks/data/generationJobCard';
 import { isTerminalGenerationState } from '@client/app/hooks/data/generationJobPolling';
 import { useImageJob, type ChatImageJob } from '@client/app/hooks/data/imageJobs';
+import { useOpenStudioImageEdit } from '@client/app/components/ImageStudio/useOpenStudioImageEdit';
+import { useStudioFeature } from '@client/app/components/Studio/useStudioFeature';
+import { useSessionReadOnly } from './SessionReadOnlyContext';
 
 const STATE_LABELS: Record<GenerationJobState, string> = {
   pending: 'Queued',
@@ -107,6 +111,9 @@ const ImageJobCard = ({ jobId }: { jobId: string }) => {
   // Kept across re-signs so a fresh URL does not reload a shown image; the newest one is taken only after an error.
   const readyUrl = job?.state === 'succeeded' && job.output?.availability === 'ready' ? job.output.url : null;
   const player = useStablePlayerSrc(readyUrl, refresh);
+  const studioImageEnabled = useStudioFeature('image');
+  const readOnly = useSessionReadOnly();
+  const openStudioImageEdit = useOpenStudioImageEdit();
 
   if (isPending) {
     return (
@@ -137,9 +144,29 @@ const ImageJobCard = ({ jobId }: { jobId: string }) => {
         <Chip size="sm" variant="soft" color={chip.color} data-testid="image-job-card-state">
           {chip.label}
         </Chip>
-        <Chip size="sm" variant="outlined">
-          {job.model}
-        </Chip>
+        <Stack direction="row" alignItems="center" gap={1}>
+          <Chip size="sm" variant="outlined">
+            {job.model}
+          </Chip>
+          {studioImageEnabled &&
+            !readOnly &&
+            job.state === 'succeeded' &&
+            job.output?.availability === 'ready' &&
+            job.output.file_id && (
+              <Button
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                onClick={() => {
+                  const fileId = job.output?.file_id;
+                  if (fileId) openStudioImageEdit({ fileId, fileName: 'Image from chat' }, job.model);
+                }}
+                data-testid="image-job-card-edit-btn"
+              >
+                Edit
+              </Button>
+            )}
+        </Stack>
       </Stack>
     </Card>
   );

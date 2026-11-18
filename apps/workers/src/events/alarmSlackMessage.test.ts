@@ -74,6 +74,40 @@ const buttons = (m: SlackAlarmMessage | null) =>
 const contextOf = (m: SlackAlarmMessage | null) =>
   (bodyOf(m).find(b => b.type === 'context')?.elements?.[0].text as string) ?? '';
 
+describe('account deletion deadline alarm routing', () => {
+  const alarm = { ...sample, AlarmName: 'bike4mind-production-account-deletion-deadline' };
+
+  it('pages production with the actual jobs catalog and sweep runbook', () => {
+    const message = formatAlarmSlackMessage(alarm, 'production', { mention: 'here' });
+    expect(message).not.toBeNull();
+    expect(message?.text).toContain('<!here>');
+    expect(header(message)).toBe(':rotating_light: PRODUCTION ALARM: Account deletion needs attention');
+    expect(contextOf(message)).toContain('level page  |  category jobs');
+    expect(sectionText(message, 'Why it matters')).toContain('sweep has not reported');
+    expect(sectionText(message, 'What to do')).toContain('infra/account-deletion-deadline-alarm.md');
+    expect(sectionText(message, 'What to do')).toContain('dead-letter queue');
+  });
+
+  it('keeps a development deadline page visible without a production mention', () => {
+    const message = formatAlarmSlackMessage({ ...alarm, AlarmName: 'bike4mind-dev-account-deletion-deadline' }, 'dev', {
+      mention: 'here',
+    });
+    expect(message).not.toBeNull();
+    expect(contextOf(message)).toContain('level page  |  category jobs');
+    expect(message?.text).not.toContain('<!here>');
+    expect(header(message)).toContain('Account deletion needs attention');
+  });
+
+  it('renders a real recovery but keeps initial insufficient-data settlement quiet', () => {
+    const recovered = formatAlarmSlackMessage({ ...alarm, NewStateValue: 'OK', OldStateValue: 'ALARM' }, 'production');
+    expect(recovered).not.toBeNull();
+    expect(bodyOf(recovered)[0].text?.text).toContain('back to normal');
+    expect(
+      formatAlarmSlackMessage({ ...alarm, NewStateValue: 'OK', OldStateValue: 'INSUFFICIENT_DATA' }, 'production')
+    ).toBeNull();
+  });
+});
+
 describe('formatAlarmSlackMessage on production', () => {
   it('renders a page-level alarm with a siren header, red bar, numbers and buttons', () => {
     const message = formatAlarmSlackMessage(burst, 'production', { appUrl: 'https://app.example.com/' });
@@ -437,6 +471,7 @@ describe('ALARM_CATALOG', () => {
       'llm-spend-rate': 'provider-spend',
       'llm-spend-hourly': 'provider-spend',
       'llm-spend-hourly-warn': 'provider-spend',
+      'refused-request-burst': 'refused-request-burst',
     });
     expect(ALARM_CATALOG['young-account-spend-rate'].action).toContain('listed above');
     expect(alarmCatalogEntry({ ...sample, AlarmName: 'bike4mind-dev-young-account-spend-rate' }, 'dev')?.detail).toBe(
@@ -491,13 +526,14 @@ describe('ALARM_CATALOG', () => {
     expect(dlqCatalogEntry('dlq-email-send-age')?.category).toBe('jobs');
   });
 
-  it('files only provider-reported spend, reconciliation drift and ungranted purchases under cost', () => {
+  it('files only provider-reported spend, unpriced tokens, reconciliation drift and ungranted purchases under cost', () => {
     const cost = Object.entries(ALARM_CATALOG)
       .filter(([, entry]) => entry.category === 'cost')
       .map(([key]) => key)
       .sort();
     expect(cost).toEqual([
       'provider-reported-spend-hourly',
+      'provider-unpriced-tokens-hourly',
       'spend-reconciliation-drift',
       'ungranted-credit-purchases',
     ]);
@@ -550,6 +586,14 @@ describe('ALARM_CATALOG', () => {
     expect(ALARM_CATALOG['provider-usage-poll-errors'].level).toBe('warn');
     expect(ALARM_CATALOG['llm-spend-young-accounts'].level).toBe('page');
     expect(ALARM_CATALOG['completion-credit-overdraft'].level).toBe('warn');
+  });
+
+  it('warns, as a cost alarm, on unpriced tokens and names the provider', () => {
+    const alarm = { ...sample, AlarmName: 'test-app-production-provider-unpriced-tokens-hourly-openai' };
+    expect(alarmCatalogEntry(alarm, 'production')).toMatchObject({ level: 'warn', category: 'cost' });
+    const text = JSON.stringify(formatAlarmSlackMessage(alarm, 'production'));
+    expect(text).toContain('AI spend at OpenAI is partly unpriced');
+    expect(text).not.toContain('{provider}');
   });
 
   it('pages on reconciliation drift and warns, as a job, on a run that reconciled nothing', () => {

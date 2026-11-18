@@ -1,3 +1,5 @@
+import { isQuestMasterCompatible } from './questMasterEligibility';
+import { resolveSuccessorChain } from '@bike4mind/llm-adapters';
 import {
   type EmbeddingCredential,
   type EmbeddingRuntime,
@@ -187,6 +189,7 @@ import { resolveDataSourceStatus } from './dataSourceStatus';
 import { scrubMissingKnowledgeIds } from '../sessionService/scrubMissingKnowledgeIds';
 import { scrubStaleSystemFiles } from '../sessionService/scrubStaleFileReferences';
 import { b4mTools, LATTICE_TOOL_NAMES } from './tools';
+import { withAudioToolJobs } from './tools/implementation/audioGeneration';
 import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
 import { createToolFailureGuard } from './tools/toolFailureGuard';
 import {
@@ -1302,6 +1305,7 @@ export class ChatCompletionProcess {
   private attachedKnowledgeFilesMemo: IFabFileDocument[] | null | undefined;
   private storage: IChatCompletionServiceOptions['storage'];
   private imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
+  private audioToolJobs: IChatCompletionServiceOptions['audioToolJobs'];
   private imageProcessorLambdaName?: string;
   private wsHttpsUrl: string;
   private abilityGetter: IChatCompletionServiceOptions['abilityGetter'];
@@ -1379,6 +1383,7 @@ export class ChatCompletionProcess {
     this.loadSystemPromptById = options.loadSystemPromptById;
     this.storage = options.storage;
     this.imageGenerateStorage = options.imageGenerateStorage;
+    this.audioToolJobs = options.audioToolJobs;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;
     this.logger = options.logger;
     this.user = options.user;
@@ -1394,6 +1399,7 @@ export class ChatCompletionProcess {
     this.coreTutorialTurns = options.coreTutorialTurns;
     this.getScopeFilter = options.getScopeFilter;
     this.getEntitlements = options.getEntitlements;
+    this.admitQuestStart = options.admitQuestStart;
     this.getThinkingVisibility = options.getThinkingVisibility;
     this.getMcpClient = options.getMcpClient;
     this.customMcp = options.customMcp;
@@ -2184,6 +2190,8 @@ export class ChatCompletionProcess {
     return resolveRecentImageJobFiles({ recentImageJobs, resolver, userId: this.user.id, logger });
   }
 
+  private admitQuestStart: IChatCompletionServiceOptions['admitQuestStart'];
+
   public async process({
     body,
     logger,
@@ -2241,6 +2249,21 @@ export class ChatCompletionProcess {
     if (prefetchedQuest?.type === 'error') {
       logger.info(`Skipping process: quest ${prefetchedQuest.id} was already saved as an error`);
       return;
+    }
+
+    if (
+      body.enableQuestMaster &&
+      !body.questMaster &&
+      isQuestMasterCompatible(resolveSuccessorChain(body.params.model)) &&
+      (await this.db.adminSettings.getSettingsValue('EnableQuestMaster')) === true
+    ) {
+      // A message queued without admission (sent before this check shipped, or EnableQuestMaster turned on
+      // after invoke) is admitted here; the quest id stays the same across redelivery.
+      if (!body.questMasterStartId || !body.questAdmittedAs) {
+        await this.admitQuestStart(this.user, body.questId);
+      } else if (body.questAdmittedAs === 'free') {
+        await this.admitQuestStart(this.user, body.questMasterStartId);
+      }
     }
 
     // Started now so its reads overlap context assembly instead of delaying the first token.
@@ -3914,7 +3937,7 @@ export class ChatCompletionProcess {
           edit_file: shadowSettings ? { model: runModel } : undefined,
           image_generation: imageToolConfig,
           edit_image: imageToolConfig,
-          audio_generation: audioConfig,
+          audio_generation: withAudioToolJobs(audioConfig, this.audioToolJobs),
           web_search: { imageUrlSigningSecret: this.telemetryHmacSecret },
           video_generation: videoToolConfig ?? undefined,
           music_generation: musicToolConfig ?? undefined,

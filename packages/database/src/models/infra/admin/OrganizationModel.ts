@@ -1,4 +1,6 @@
 import {
+  ACCOUNT_SEGMENTS,
+  type AccountSegment,
   getMemberCreditPeriodStart,
   IOrganizationDocument,
   IOrganizationRepository,
@@ -86,6 +88,8 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     },
     // Group-type keys this org may have (platform-admin writes only). Default empty = fail-closed.
     allowedGroupTypes: { type: [String], default: [] },
+    // See IOrganization.accountSegment. No default: absent reads as customer.
+    accountSegment: { type: String, required: false, enum: [...ACCOUNT_SEGMENTS] },
     // Org managers appointed by the billing owner / platform admin (not a Permission verb). Each also
     // holds a users[] row, which the authority checks require (isOrgOwnerOrCurrentAdmin).
     adminUserIds: { type: [String], default: [] },
@@ -735,6 +739,14 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
           },
         },
       }
+    );
+  }
+
+  /** Sets the account segment, or unsets the field for `null` (absent reads as customer). */
+  async setAccountSegment(organizationId: string, accountSegment: AccountSegment | null): Promise<void> {
+    await this.organizationModel.updateOne(
+      { _id: organizationId },
+      accountSegment ? { $set: { accountSegment } } : { $unset: { accountSegment: 1 } }
     );
   }
 

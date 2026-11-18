@@ -48,10 +48,20 @@ interface OrganizationUserCardProps {
   canManageManagers: boolean;
   /** The roster has a selection column; must match the header's `rosterGridColumns` argument. */
   selectable?: boolean;
+  /** The roster has an Email column; must match the header's `rosterGridColumns` argument. */
+  showEmails: boolean;
   selected?: boolean;
   /** Absent when this row cannot be bulk-removed: its selection cell stays empty. */
   onToggleSelect?: () => void;
 }
+
+/** Below the table breakpoint each cell stacks in its own row under the name; no empty email row. */
+const narrowGridAreas = ({ selectable, showEmails }: { selectable: boolean; showEmails: boolean }): string => {
+  const stacked = [...(showEmails ? ['email'] : []), 'role', 'credits', 'active'];
+  return selectable
+    ? ['"select name actions"', ...stacked.map(area => `". ${area} ${area}"`)].join(' ')
+    : ['"name actions"', ...stacked.map(area => `"${area} ${area}"`)].join(' ');
+};
 
 /** Rows are table rows inside MemberRoster's framed list: hairline between rows, no per-row card. */
 const rowSurface = {
@@ -91,6 +101,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   canManageCreditBudgets,
   canManageManagers,
   selectable = false,
+  showEmails,
   selected = false,
   onToggleSelect,
 }) => {
@@ -190,14 +201,6 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
       data-testid={`organization-user-card-${user.role}-chip`}
     >
       {t(`organization.roles.${user.role}`)}
-    </Chip>
-  );
-
-  // Not a role: update on the ACL row opens the Settings tab (canManageOrgSettings in
-  // routes/organizations/orgTabAccess.ts), so the owner needs to see who holds it.
-  const settingsAccessChip = user.role === 'member' && user.permissions.some(p => p === Permission.update) && (
-    <Chip size="sm" variant="outlined" data-testid="organization-user-card-settings-access-chip">
-      {t('organization.access.can_edit_settings')}
     </Chip>
   );
 
@@ -316,14 +319,13 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
               >
                 {user.name}
               </Box>
-              {user.email && (
+              {showEmails && user.email && (
                 <Typography level="body-xs" noWrap data-testid="organization-user-card-email">
                   {user.email}
                 </Typography>
               )}
               <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
                 {roleChip}
-                {settingsAccessChip}
                 {statusChips}
                 {creditUsageCell}
               </Stack>
@@ -346,12 +348,10 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         ...rowSurface,
         display: 'grid',
         gridTemplateColumns: `${selectable ? '32px ' : ''}minmax(0, 1fr) 48px`,
-        gridTemplateAreas: selectable
-          ? '"select name actions" ". email email" ". role role" ". credits credits" ". active active"'
-          : '"name actions" "email email" "role role" "credits credits" "active active"',
+        gridTemplateAreas: narrowGridAreas({ selectable, showEmails }),
         rowGap: 0.5,
         [ROSTER_TABLE_QUERY]: {
-          gridTemplateColumns: rosterGridColumns(selectable),
+          gridTemplateColumns: rosterGridColumns({ selectable, showEmails }),
           gridTemplateAreas: 'none',
           rowGap: 0,
         },
@@ -383,23 +383,25 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         </Box>
         {statusChips}
       </Stack>
-      <Typography
-        level="body-sm"
-        data-testid="organization-user-card-email"
-        title={user.email ?? undefined}
-        sx={{
-          gridArea: 'email',
-          overflowWrap: 'anywhere',
-          [ROSTER_TABLE_QUERY]: {
-            gridArea: 'auto',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          },
-        }}
-      >
-        {user.email}
-      </Typography>
+      {showEmails && (
+        <Typography
+          level="body-sm"
+          data-testid="organization-user-card-email"
+          title={user.email ?? undefined}
+          sx={{
+            gridArea: 'email',
+            overflowWrap: 'anywhere',
+            [ROSTER_TABLE_QUERY]: {
+              gridArea: 'auto',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            },
+          }}
+        >
+          {user.email}
+        </Typography>
+      )}
       <Stack
         direction="row"
         spacing={0.5}
@@ -408,7 +410,6 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         sx={{ gridArea: 'role', [ROSTER_TABLE_QUERY]: { gridArea: 'auto' } }}
       >
         {roleChip}
-        {settingsAccessChip}
       </Stack>
       <Box
         className="organization-user-card-credits"

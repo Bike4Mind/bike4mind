@@ -35,6 +35,19 @@ export class SpaceRepository extends BaseRepository<ISpaceDocument> implements I
     return this.model.countDocuments({ ownerUserId: userId, deletedAt: null });
   }
 
+  async listLiveByParentOrganization(organizationId: string) {
+    const docs = await this.model.find({ deletedAt: null, parentOrganizationId: organizationId });
+    return docs.map(doc => doc.toJSON());
+  }
+
+  async listDomainJoinedForUser(userId: string) {
+    const docs = await this.model.find({
+      deletedAt: null,
+      members: { $elemMatch: { userId, joinedVia: 'domain' } },
+    });
+    return docs.map(doc => doc.toJSON());
+  }
+
   async addMember(spaceId: string, member: ISpaceMember, { cap, clearRemoved }: AddSpaceMemberOptions) {
     if (!mongoose.isValidObjectId(spaceId)) return null;
     const filter: Record<string, unknown> = {

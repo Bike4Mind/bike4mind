@@ -61,10 +61,11 @@ const ConsumerOwner: React.FC<{ consumer: NamedPlatformConsumerUsage }> = ({ con
   );
 };
 
-const ConsumerTable: React.FC<{ consumers: NamedPlatformConsumerUsage[]; onRetry: () => void }> = ({
-  consumers,
-  onRetry,
-}) => (
+const ConsumerTable: React.FC<{
+  consumers: NamedPlatformConsumerUsage[];
+  pageResetKey: string;
+  onRetry: () => void;
+}> = ({ consumers, pageResetKey, onRetry }) => (
   <Box>
     <Typography level="title-sm" sx={{ mb: 1 }}>
       By API key consumer
@@ -78,7 +79,8 @@ const ConsumerTable: React.FC<{ consumers: NamedPlatformConsumerUsage[]; onRetry
       testId="platform-usage-consumer-table"
       rows={consumers}
       getRowId={row => row.apiKeyId}
-      pagination={false}
+      // Paged locally: one row per API key platform-wide is unbounded, and rendering them all blocks the main thread.
+      pageResetKey={pageResetKey}
       maxHeight="360px"
       onRetry={onRetry}
       empty={<EmptyState title="No API-key consumers in this window" action={null} />}
@@ -350,7 +352,11 @@ export const PlatformUsageDashboard: React.FC = () => {
               )}
             </Box>
 
-            <ConsumerTable consumers={data.byConsumer} onRetry={() => void refetch()} />
+            <ConsumerTable
+              consumers={data.byConsumer}
+              pageResetKey={`${source}-${ownerType}-${days}`}
+              onRetry={() => void refetch()}
+            />
 
             <BreakdownTable
               title="By feature"

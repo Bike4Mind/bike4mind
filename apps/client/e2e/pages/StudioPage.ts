@@ -14,7 +14,7 @@ const AUDIO_ENDPOINT: Record<AudioMode, RegExp> = {
   'sound-effects': /\/api\/ai\/sound-effects(?:\?|$)/,
 };
 
-/** Ledger type each endpoint settles with: deductTtsCredits.ts and pages/api/ai/sound-effects.ts. */
+/** Ledger type each job settles with (services audioJobs/speechJobHandler.ts, soundEffectJobHandler.ts). */
 export const AUDIO_USAGE_TRANSACTION_TYPE: Record<AudioMode, string> = {
   speech: 'text_to_speech_usage',
   'sound-effects': 'sound_effects_usage',

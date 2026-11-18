@@ -1,4 +1,5 @@
 import type { NewSessionDefaults } from './sessionDefaults';
+import type { StudioApi } from './studioIpc';
 import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
 import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopApproveRequest, LoopApproveResult, LoopRunnerSettings, LoopRunnerState } from './loopRunner';
@@ -15,6 +16,7 @@ import type {
   UpdateLocalTicketRequest,
 } from './localLoops';
 import type { LoopResult, LoopState } from './loop';
+import type { RunSpend } from './runSpend';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type { AttentionNotice, AttentionOpenEvent } from './attention';
 import type { AccountBilling, AccountCredits, AccountProfile, SubscribePlanResult } from './account';
@@ -56,6 +58,10 @@ import type {
   ChatArtifactPublishProgress,
   ChatArtifactPublishRequest,
   ChatAttachmentInput,
+  ChatFilePathAction,
+  ChatFilePathActionResult,
+  ChatFilePathOpenResult,
+  ChatFileView,
   ChatImageAction,
   ChatImageActionResult,
   ChatImageRef,
@@ -169,6 +175,15 @@ import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnaps
  * anything that needs a token is a main-process job.
  */
 export const IPC_CHANNELS = {
+  studioGet: 'studio:get',
+  studioPage: 'studio:page',
+  studioJobAction: 'studio:job-action',
+  studioPrepare: 'studio:prepare',
+  studioCreate: 'studio:create',
+  studioPickFiles: 'studio:pick-files',
+  studioUploadReference: 'studio:upload-reference',
+  studioAssetAction: 'studio:asset-action',
+  studioChanged: 'studio:changed',
   getAppInfo: 'app:get-info',
   setTheme: 'app:set-theme',
   authGetState: 'auth:get-state',
@@ -265,6 +280,7 @@ export const IPC_CHANNELS = {
   chatClearContext: 'chat:clear-context',
   chatCompactContext: 'chat:compact-context',
   chatSuggestNextPrompt: 'chat:suggest-next-prompt',
+  chatGetRunSpend: 'chat:get-run-spend',
   chatGetQueued: 'chat:get-queued',
   chatCancelQueued: 'chat:cancel-queued',
   chatGetHeldRelays: 'chat:get-held-relays',
@@ -284,6 +300,11 @@ export const IPC_CHANNELS = {
   chatDiscardDraftAttachments: 'chat:discard-draft-attachments',
   chatImageAction: 'chat:image-action',
   chatAttachImage: 'chat:attach-image',
+  chatCheckFilePaths: 'chat:check-file-paths',
+  chatOpenFilePath: 'chat:open-file-path',
+  chatReadFilePath: 'chat:read-file-path',
+  chatFilePathAction: 'chat:file-path-action',
+  chatAttachFilePath: 'chat:attach-file-path',
   chatListArtifacts: 'chat:list-artifacts',
   chatReadArtifact: 'chat:read-artifact',
   chatPublishArtifact: 'chat:publish-artifact',
@@ -772,6 +793,7 @@ export interface MiniTavernApi {
 }
 
 export interface DesktopApi {
+  studio: StudioApi;
   getAppInfo(): Promise<AppInfo>;
   setTheme(mode: 'light' | 'dark' | 'system', backgroundColor: string): Promise<void>;
   update: {
@@ -1053,6 +1075,8 @@ export interface DesktopApi {
      * `model` is the Settings pick; null or omitted is automatic.
      */
     suggestNextPrompt(sessionId: string, model?: string | null): Promise<string | null>;
+    /** The settled spend of the orchestration rooted at this session, for its job summary. */
+    getRunSpend(rootSessionId: string): Promise<RunSpend>;
     /**
      * Messages typed ahead for this conversation, waiting for the live turn to finish. Read on
      * open for the same reason as getSessionStatuses: the pushes below carry only CHANGES, and
@@ -1108,6 +1132,19 @@ export interface DesktopApi {
     imageAction(image: ChatImageRef, action: ChatImageAction): Promise<ChatImageActionResult>;
     /** Add a thread image to this session's draft, through the same intake as a paste. */
     attachImage(sessionId: string, image: ChatImageRef): Promise<AddAttachmentsResult>;
+    /**
+     * For each path a reply names, its absolute path when it exists inside this session's shared
+     * folders, else null. Same order as `paths`; an over-long or malformed list answers empty.
+     */
+    checkFilePaths(sessionId: string, paths: string[]): Promise<(string | null)[]>;
+    /** Open a path a reply names in its default app, or reveal it when it would run. Never rejects. */
+    openFilePath(sessionId: string, path: string): Promise<ChatFilePathOpenResult>;
+    /** Read a path a reply names for the Files pane, under the same checks as opening it. Never rejects. */
+    readFilePath(sessionId: string, path: string): Promise<ChatFileView>;
+    /** Copy or reveal a path a reply names, under the same checks as opening it. Never rejects. */
+    filePathAction(sessionId: string, path: string, action: ChatFilePathAction): Promise<ChatFilePathActionResult>;
+    /** Add a path a reply names to this session's draft, under the same checks as opening it. */
+    attachFilePath(sessionId: string, path: string): Promise<AddAttachmentsResult>;
     /**
      * Answer a tool call sitting at 'awaiting-approval'. Unknown or already-answered ids are
      * ignored, so a double click cannot approve a second, different command.

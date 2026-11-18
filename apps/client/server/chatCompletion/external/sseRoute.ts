@@ -75,6 +75,7 @@ import {
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitEvents';
 import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';
+import { recordPlatformEndUserSeen, resolvePlatformEndUser } from '@bike4mind/server-utils/auth/platformEndUser';
 
 /**
  * Public CLI/3rd-party completions endpoint (`/api/ai/v1/completions`), served by the always-on
@@ -348,6 +349,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         logger.info('[CLI_LLM] Authenticated via JWT', { userId });
         await checkRateLimit(userId, source, { client: resolveRequestClient(headers) });
       }
+      const platformEndUser = resolvePlatformEndUser(body.end_user_id, { userId, apiKeyInfo });
 
       // A desktop loop run tags its calls so their credits count toward its loop's budgets.
       const loopRunId = await resolveLoopRunTag(headers[LOOP_RUN_HEADER.toLowerCase()], userId, !!apiKeyInfo, logger);
@@ -389,11 +391,14 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         logger,
       });
 
+      // Tracked, not awaited: the drain waits for it, the stream does not.
+      if (platformEndUser) track(recordPlatformEndUserSeen(platformEndUser, logger));
+
       timing?.phase('completionStarted');
       await executeCompletion({
         getEntitlements: getUserEntitlements,
         getThinkingVisibility: resolveThinkingVisibility,
-        creditHolds: createCompletionCreditHolds(logger),
+        creditHolds: createCompletionCreditHolds(logger, apiKeyInfo?.keyId),
         userId,
         model: body.model,
         messages: body.messages as IMessage[],
@@ -422,6 +427,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         source,
         sessionId: body.sessionId,
         run,
+        providerEndUserId: platformEndUser?.providerEndUserId,
         logger,
         onReady,
         onSettled: outcome => {

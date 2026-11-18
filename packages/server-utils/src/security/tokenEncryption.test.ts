@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { encryptSecret, generateEncryptionKey } from './secretEncryption';
+import { configureSecretsAtRest, decryptAtRest } from '@bike4mind/utils/security';
 
 // Mock config before importing tokenEncryption
 const mockConfig: Record<string, string | undefined> = {};
@@ -81,6 +82,22 @@ describe('tokenEncryption', () => {
       mockConfig.SECRET_ENCRYPTION_KEY = key2;
 
       expect(() => decryptToken(encrypted)).toThrow('Token decryption failed');
+    });
+  });
+
+  // The core services (blog tools) cannot import encryptToken, so they read with decryptAtRest.
+  describe('writer/reader compatibility with decryptAtRest', () => {
+    afterEach(() => configureSecretsAtRest(undefined));
+
+    it('decryptAtRest reads what encryptToken stores', () => {
+      configureSecretsAtRest(key1);
+      expect(decryptAtRest(encryptToken('blog-key')!)).toBe('blog-key');
+    });
+
+    it('decryptAtRest reads a token written under the previous key after rotation', () => {
+      const stored = encryptToken('blog-key')!;
+      configureSecretsAtRest(key2, key1);
+      expect(decryptAtRest(stored)).toBe('blog-key');
     });
   });
 

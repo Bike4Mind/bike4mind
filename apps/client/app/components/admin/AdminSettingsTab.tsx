@@ -167,6 +167,11 @@ const STRING_LIST_SETTING_KEYS = new Set<string>([
   'freeTierAllowedModels',
 ]);
 
+// Display only: the stored category value stays as is, so settings, search and the API are unaffected.
+const CATEGORY_HEADINGS: Partial<Record<Category, string>> = { SecOps: 'Security' };
+
+export const categoryHeading = (category: string): string => CATEGORY_HEADINGS[category as Category] ?? category;
+
 const AdminSettingsTab: React.FC = () => {
   const { section, setSection, searchTerm, setSearchTerm } = useAdminSettingsSearchParams();
   const [allTabs, setAllTabs] = useState<boolean>(false);
@@ -267,7 +272,7 @@ const AdminSettingsTab: React.FC = () => {
           // Context Telemetry settings are managed in the Context Inspector tab
           'EnableContextTelemetry',
           'contextTelemetryAlerts',
-          // SecOps Triage config has its own dedicated SecOps Triage tab
+          // Issue filing settings are edited from the Security page's Scans view
           'secopsTriageConfig',
           // Overwatch rollup sync is an internal cron-lock document, not user-configurable
           'overwatchRollupSync',
@@ -540,8 +545,8 @@ const AdminSettingsTab: React.FC = () => {
       <Stack key={`category-${category}`} spacing={2}>
         <Stack direction="row" alignItems="center" spacing={1}>
           <CategoryIconComponent sx={{ '--Icon-fontSize': '24px', color: 'primary.500' }} />
-          <Typography level="h2" color="primary">
-            {category}
+          <Typography level="h2" color="primary" data-testid={`admin-settings-category-heading-${category}`}>
+            {categoryHeading(category)}
           </Typography>
         </Stack>
 

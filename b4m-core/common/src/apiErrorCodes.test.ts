@@ -89,6 +89,7 @@ describe('API_ERROR_CODES', () => {
     // RUN_NOT_FOUND_ERROR_CODE likewise; proven by apps/client/server/chatCompletion/external/sseRoute.test.ts.
     // ORG_MODEL_NOT_ALLOWED_ERROR_CODE likewise; proven by services/src/llm/modelAdmission.test.ts.
     // ORG_TOOL_NOT_ALLOWED_ERROR_CODE likewise; proven by the ChatCompletionInvoke org tool policy test.
+    // 'input_file_not_found' likewise; proven by services/src/sceneJobs/sceneJobHandler.test.ts.
     const emitted = new Set<string>([
       ...NARROWING_TUPLES.flat(),
       UNKNOWN_MODEL_ERROR_CODE,
@@ -108,6 +109,7 @@ describe('API_ERROR_CODES', () => {
       RUN_NOT_FOUND_ERROR_CODE,
       ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
       ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+      'input_file_not_found',
     ]);
     expect(API_ERROR_CODES.filter(code => !emitted.has(code))).toEqual([]);
   });

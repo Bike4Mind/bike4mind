@@ -107,6 +107,9 @@ vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({
   SubscriptionOwnerType: { Organization: 'organization' },
 }));
 
+const recordOrganizationRead = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@server/utils/orgReadAudit', () => ({ recordOrganizationRead }));
+
 import '@pages/api/organizations/[id]/index';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
@@ -137,6 +140,25 @@ describe('GET /api/organizations/[id] - safe serialization', () => {
     const body = res._getJSONData();
     expect(body.billingContact).toBe('billing@acme.com');
     expect('stripeCustomerId' in body).toBe(false);
+  });
+});
+
+describe('GET /api/organizations/[id] - staff read audit', () => {
+  beforeEach(() => recordOrganizationRead.mockClear());
+
+  it('records the organization as a detail read before responding', async () => {
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true });
+    await mockRefs.getHandler!(req, res);
+    expect(recordOrganizationRead).toHaveBeenCalledWith(req, [expect.objectContaining({ name: 'Acme' })], {
+      view: 'detail',
+    });
+  });
+
+  it('fails the read when the audit write fails', async () => {
+    recordOrganizationRead.mockRejectedValueOnce(new Error('audit down'));
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true });
+    await expect(mockRefs.getHandler!(req, res)).rejects.toThrow('audit down');
+    expect(res._isEndCalled()).toBe(false);
   });
 });
 

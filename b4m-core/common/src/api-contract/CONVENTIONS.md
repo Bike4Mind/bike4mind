@@ -159,6 +159,8 @@ re-deciding per endpoint:
 | A `tool_reference` (native tool search models only) or a `tool_addition` / `tool_removal` block (native tool changes models only) names a tool absent from the request's `tools`, or a `tool_reference` carries no string `tool_name` | `400` | `unknown_tool_reference` |
 | A `tool_addition` / `tool_removal` system message is sent for a model that cannot serve it on this route | `400` | `tool_changes_unsupported` |
 | A `tool_addition` / `tool_removal` message is malformed (not strictly typed `tool_reference` blocks only) or misplaced | `400` | `invalid_tool_change` |
+| `end_user_id` sent on a credential other than an API key holding `ai:end-user-id` (a well-formed value) | `400` | `end_user_id_not_allowed` |
+| `end_user_id` that is not 1-64 characters of letters, digits, `_`, `:` and `-` (checked before the credential) | `400` | `invalid_end_user_id` |
 | The model's provider is not configured on this deployment, or the self-hosted model server that lists it (Ollama, local image) is unreachable | `503` | `provider_not_configured` |
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
@@ -181,6 +183,7 @@ re-deciding per endpoint:
 | Malformed path/query resource id | `404` | - |
 | Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
 | Free-tier account calls a model that needs a paid plan (admin-set free-tier allowlist) | `403` | `model_requires_subscription` (upgrade, or choose a free-tier model from `GET /api/v1/models`) |
+| Free account already started its one QuestMaster quest | `403` | `free_quest_limit_reached` (subscribe to start another; deletion does not restore the allowance) |
 | Org-billed API key names a billing organization other than its own | `403` | `billing_organization_mismatch` |
 | The caller's organization policy does not allow the requested model | `403` | `org_model_not_allowed` (choose a model from `GET /api/v1/models`, which lists only allowed ones) |
 | The request names a built-in tool the caller's organization policy does not allow | `403` | `org_tool_not_allowed` (drop the tool from the request) |
