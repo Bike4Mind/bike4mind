@@ -25,8 +25,11 @@ export const DEFAULT_TASKS = ['typecheck:fast', 'test'];
 // A change to any of these can move every package's result, so they run the full graph.
 const FULL_RUN_FILES = ['turbo.json', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.json'];
 
-// Lint config: a change here can flip the verdict for files this branch never touched.
+// A change here can flip the verdict for files this branch never touched: the lint config, or a
+// root manifest/lockfile change that moves an eslint plugin or typescript-eslint version.
 const FULL_LINT_GLOBS = [
+  'package.json',
+  'pnpm-lock.yaml',
   'eslint.config.mjs',
   'eslint-suppressions.json',
   'eslint-rules/**',

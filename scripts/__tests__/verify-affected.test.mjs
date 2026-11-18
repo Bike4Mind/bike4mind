@@ -78,6 +78,15 @@ describe('planLint', () => {
     expect(planLint(['eslint-suppressions.json'], exists)).toEqual({ mode: 'full' });
   });
 
+  it('falls back to a full lint when the root manifest or lockfile changed', () => {
+    expect(planLint(['pnpm-lock.yaml'], exists)).toEqual({ mode: 'full' });
+    expect(planLint(['package.json'], exists)).toEqual({ mode: 'full' });
+    expect(planLint(['apps/client/package.json', 'apps/client/a.ts'], exists)).toEqual({
+      mode: 'files',
+      files: ['apps/client/a.ts'],
+    });
+  });
+
   it('skips when nothing lintable changed', () => {
     expect(planLint(['docs/a.md'], exists)).toEqual({ mode: 'skip' });
   });
