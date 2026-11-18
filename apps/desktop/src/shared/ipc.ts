@@ -503,6 +503,7 @@ export const IPC_CHANNELS = {
   /** Renderer -> main: kept builds of a conversation's model (main/chat/model3d/ModelVersionStore.ts). */
   modelListVersions: 'model:list-versions',
   modelRecordVersion: 'model:record-version',
+  modelWantsVersion: 'model:wants-version',
   modelRestoreVersion: 'model:restore-version',
   /** main -> renderer push: a conversation kept a new version. */
   modelVersions: 'model:versions',
@@ -1248,6 +1249,8 @@ export interface DesktopApi {
     /** Oldest first, with thumbnails. */
     listVersions(sessionId: string): Promise<ModelVersionEntry[]>;
     /** Keeps the good build of `generation`; null when nothing new was kept. */
+    /** Whether this window should render a thumbnail and keep `generation` (main may already have it). */
+    wantsVersion(sessionId: string, generation: number): Promise<boolean>;
     recordVersion(sessionId: string, request: ModelVersionRecordRequest): Promise<ModelVersion | null>;
     /** Writes the version back to its file and opens it; the rebuild is kept as a new version. */
     restoreVersion(sessionId: string, number: number): Promise<ModelVersion>;

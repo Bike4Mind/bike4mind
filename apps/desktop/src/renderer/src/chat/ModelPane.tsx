@@ -433,14 +433,23 @@ export function ModelPane({
     versionPreview.close();
     stageRef.current?.focus();
   };
+  // A preview only looks: joint and clip playback would pose the file's build behind it, and every
+  // pose change would rebuild the compare view's GL context.
+  const previewing = previewed !== null;
+  useEffect(() => {
+    if (!previewing) return;
+    setJointsPlaying(false);
+    setPlaying(null);
+  }, [previewing]);
+  // The current pose as the compare opened; the joints are hidden while previewing, so it holds.
   const compareSubjects = useMemo(() => {
     if (!previewed || !previewObject || !object) return null;
     const currentLabel = versions.current === null ? 'Now' : `${versionLabel(versions.current)} (current)`;
     return {
       first: { object: previewObject, angles: previewed.jointAngles, label: versionLabel(previewed.number) },
-      second: { object, angles: jointAngles, label: currentLabel },
+      second: { object, angles: jointAnglesRef.current, label: currentLabel },
     };
-  }, [previewed, previewObject, object, jointAngles, versions.current]);
+  }, [previewed, previewObject, object, versions.current]);
   const canExport = !!object && status !== 'building';
   // A failed build leaves the last good model on show, dimmed; a clip of it would pass for the current one.
   const canRecord = canExport && status !== 'error';
@@ -519,10 +528,10 @@ export function ModelPane({
     const preset = MODEL_VIEW_PRESETS.find(entry => entry.key === event.key);
     const big = event.shiftKey;
     const actions: Record<string, () => void> = {
-      ArrowLeft: () => nudgePickedJoint(-1, big) || handle?.orbit(-ORBIT_STEP, 0),
-      ArrowRight: () => nudgePickedJoint(1, big) || handle?.orbit(ORBIT_STEP, 0),
-      ArrowUp: () => nudgePickedJoint(1, big) || handle?.orbit(0, -ORBIT_STEP),
-      ArrowDown: () => nudgePickedJoint(-1, big) || handle?.orbit(0, ORBIT_STEP),
+      ArrowLeft: () => (!previewed && nudgePickedJoint(-1, big)) || handle?.orbit(-ORBIT_STEP, 0),
+      ArrowRight: () => (!previewed && nudgePickedJoint(1, big)) || handle?.orbit(ORBIT_STEP, 0),
+      ArrowUp: () => (!previewed && nudgePickedJoint(1, big)) || handle?.orbit(0, -ORBIT_STEP),
+      ArrowDown: () => (!previewed && nudgePickedJoint(-1, big)) || handle?.orbit(0, ORBIT_STEP),
       '+': () => handle?.zoom(ZOOM_STEP),
       '=': () => handle?.zoom(ZOOM_STEP),
       '-': () => handle?.zoom(1 / ZOOM_STEP),
@@ -537,7 +546,7 @@ export function ModelPane({
       Enter: () => editable && pickedNames.length > 0 && openPrompt(handle?.partPoint(pickedNames) ?? null),
       m: () => toggleTool('measure'),
       s: () => toggleTool('section'),
-      Escape: () => (tool ? setTool(null) : clearPick()),
+      Escape: () => (tool ? setTool(null) : previewed ? closeVersion() : clearPick()),
     };
     const action = preset
       ? () => handle?.setView(preset.view)
@@ -694,7 +703,7 @@ export function ModelPane({
               onJointDragStart={stopJointsPlaying}
               editing={editingNames}
               onEditSettled={onEditSettled}
-              clip={playingClip}
+              clip={previewed ? null : playingClip}
               onCroppedChange={setCropped}
               adjusting={adjusting}
               handleRef={viewportHandle}
@@ -1041,6 +1050,7 @@ export function ModelPane({
           current={versions.current}
           selected={previewed?.number ?? null}
           onSelect={versionPreview.select}
+          onClose={closeVersion}
         />
       )}
 
@@ -1082,14 +1092,14 @@ export function ModelPane({
         </Stack>
       )}
 
-      {clips.length > 0 && (
+      {clips.length > 0 && !previewed && (
         <ModelClips
           clips={clips}
           playing={playingClip}
           onPlay={clip => setPlaying(clip === null ? null : { path: state.path, clip })}
         />
       )}
-      {joints.length > 0 && (
+      {joints.length > 0 && !previewed && (
         <ModelJoints
           joints={joints}
           units={summary?.units ?? 'mm'}

@@ -395,6 +395,7 @@ const api: DesktopApi = {
       return () => ipcRenderer.removeListener(IPC_CHANNELS.modelCaptureRequest, handler);
     },
     listVersions: sessionId => ipcRenderer.invoke(IPC_CHANNELS.modelListVersions, sessionId),
+    wantsVersion: (sessionId, generation) => ipcRenderer.invoke(IPC_CHANNELS.modelWantsVersion, sessionId, generation),
     recordVersion: (sessionId, request) => ipcRenderer.invoke(IPC_CHANNELS.modelRecordVersion, sessionId, request),
     restoreVersion: (sessionId, number) => ipcRenderer.invoke(IPC_CHANNELS.modelRestoreVersion, sessionId, number),
     onVersions: listener => {

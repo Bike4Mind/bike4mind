@@ -449,6 +449,18 @@ describe('ModelLiveView versions', () => {
     expect(await view.versions()).toEqual([]);
   });
 
+  it('wants a version only for a current generation not asked for yet and not matching the newest', async () => {
+    await view.open(file);
+    const { generation } = view.current();
+    expect(await view.wantsVersion(generation - 1)).toBe(false);
+    expect(await view.wantsVersion(generation)).toBe(true);
+    await record();
+    expect(await view.wantsVersion(generation)).toBe(false);
+    // A reopen rebuilds the newest version's source under a new generation.
+    await view.refresh();
+    expect(await view.wantsVersion(view.current().generation)).toBe(false);
+  });
+
   it('notes a slider write on the version it produces', async () => {
     await view.open(file);
     await record();

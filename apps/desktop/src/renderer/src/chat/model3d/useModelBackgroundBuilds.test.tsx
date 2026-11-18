@@ -51,6 +51,7 @@ let model: {
   reportBuild: ReturnType<typeof vi.fn>;
   captureResult: ReturnType<typeof vi.fn>;
   getState: ReturnType<typeof vi.fn>;
+  wantsVersion: ReturnType<typeof vi.fn>;
   recordVersion: ReturnType<typeof vi.fn>;
 };
 
@@ -92,6 +93,7 @@ beforeEach(() => {
     reportBuild: vi.fn(async () => {}),
     captureResult: vi.fn(),
     getState: vi.fn(async (sessionId: string) => states[sessionId] ?? EMPTY_MODEL_STATE),
+    wantsVersion: vi.fn(async () => true),
     recordVersion: vi.fn(async () => null),
   };
   (window as unknown as { b4m: unknown }).b4m = {

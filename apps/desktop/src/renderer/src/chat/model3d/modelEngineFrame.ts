@@ -107,6 +107,12 @@ async function recordVersion(
   object: THREE.Group,
   { dark, jointAngles }: VersionLook
 ): Promise<void> {
+  // Every window builds each generation; only one needs to pay for a thumbnail's GL context.
+  try {
+    if (!(await window.b4m.model.wantsVersion(sessionId, generation))) return;
+  } catch (caught) {
+    console.warn(`Model version check failed: ${errorMessage(caught)}`);
+  }
   // A version without a picture is still worth keeping, so a failed render only loses the thumbnail.
   let thumbnail: Uint8Array | null = null;
   try {

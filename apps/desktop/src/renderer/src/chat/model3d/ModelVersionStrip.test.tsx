@@ -63,6 +63,7 @@ describe('ModelVersionStrip', () => {
         current={5}
         selected={null}
         onSelect={vi.fn()}
+        onClose={vi.fn()}
       />
     );
     const buttons = [...container.querySelectorAll<HTMLButtonElement>('[data-testid^="model-version-"]')];
@@ -79,14 +80,28 @@ describe('ModelVersionStrip', () => {
   });
 
   it('presses the selected version over the current one', () => {
-    show(<ModelVersionStrip versions={[version(1), version(2)]} current={2} selected={1} onSelect={vi.fn()} />);
+    show(
+      <ModelVersionStrip
+        versions={[version(1), version(2)]}
+        current={2}
+        selected={1}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
     expect(byTestId('model-version-1')?.getAttribute('aria-pressed')).toBe('true');
     expect(byTestId('model-version-2')?.getAttribute('aria-pressed')).toBe('false');
   });
 
   it('draws a version without a thumbnail as its label alone', () => {
     show(
-      <ModelVersionStrip versions={[version(1, { thumbnail: null })]} current={1} selected={null} onSelect={vi.fn()} />
+      <ModelVersionStrip
+        versions={[version(1, { thumbnail: null })]}
+        current={1}
+        selected={null}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />
     );
     expect(byTestId('model-version-1')?.querySelector('img')).toBeNull();
     expect(byTestId('model-version-1')?.textContent).toBe('v1');
@@ -94,7 +109,15 @@ describe('ModelVersionStrip', () => {
 
   it('selects a version on click', () => {
     const onSelect = vi.fn();
-    show(<ModelVersionStrip versions={[version(1), version(2)]} current={2} selected={null} onSelect={onSelect} />);
+    show(
+      <ModelVersionStrip
+        versions={[version(1), version(2)]}
+        current={2}
+        selected={null}
+        onSelect={onSelect}
+        onClose={vi.fn()}
+      />
+    );
     act(() => byTestId('model-version-1')?.click());
     expect(onSelect).toHaveBeenCalledExactlyOnceWith(1);
   });
@@ -106,6 +129,7 @@ describe('ModelVersionStrip', () => {
         current={3}
         selected={null}
         onSelect={vi.fn()}
+        onClose={vi.fn()}
       />
     );
     byTestId('model-version-2')?.focus();
@@ -119,8 +143,38 @@ describe('ModelVersionStrip', () => {
     expect(document.activeElement).toBe(byTestId('model-version-1'));
   });
 
+  it('goes back to the current build on Escape only while a version is selected', () => {
+    const onClose = vi.fn();
+    const press = () =>
+      act(() => {
+        byTestId('model-version-1')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      });
+    show(
+      <ModelVersionStrip
+        versions={[version(1), version(2)]}
+        current={2}
+        selected={null}
+        onSelect={vi.fn()}
+        onClose={onClose}
+      />
+    );
+    press();
+    expect(onClose).not.toHaveBeenCalled();
+    show(
+      <ModelVersionStrip
+        versions={[version(1), version(2)]}
+        current={2}
+        selected={1}
+        onSelect={vi.fn()}
+        onClose={onClose}
+      />
+    );
+    press();
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it('renders nothing with no versions', () => {
-    show(<ModelVersionStrip versions={[]} current={null} selected={null} onSelect={vi.fn()} />);
+    show(<ModelVersionStrip versions={[]} current={null} selected={null} onSelect={vi.fn()} onClose={vi.fn()} />);
     expect(byTestId('model-versions')).toBeNull();
   });
 

@@ -27,18 +27,28 @@ vi.mock('./model3d/modelScene', async importOriginal => ({
   renderPartCloseup: closeup,
 }));
 
-// The compare view draws with WebGL too; which mode is open is what the pane decides.
-vi.mock('./model3d/ModelVersionCompare', () => ({
-  ModelVersionCompare: ({
-    mode,
-    first,
-    second,
-  }: {
-    mode: string;
-    first: { label: string };
-    second: { label: string };
-  }) => <div data-testid={`model-version-compare-view-${mode}`} data-labels={`${first.label}|${second.label}`} />,
-}));
+// The compare view draws with WebGL too; which mode is open is what the pane decides. It rebuilds its
+// GL view whenever a subject changes identity, so the mock counts those changes.
+const compareView = vi.hoisted(() => ({ subjectChanges: 0 }));
+vi.mock('./model3d/ModelVersionCompare', async () => {
+  const { useEffect } = await import('react');
+  return {
+    ModelVersionCompare: ({
+      mode,
+      first,
+      second,
+    }: {
+      mode: string;
+      first: { label: string };
+      second: { label: string };
+    }) => {
+      useEffect(() => {
+        compareView.subjectChanges += 1;
+      }, [first, second]);
+      return <div data-testid={`model-version-compare-view-${mode}`} data-labels={`${first.label}|${second.label}`} />;
+    },
+  };
+});
 
 // jsdom has no WebGL; the viewport is covered by the live app, not here.
 vi.mock('./model3d/ModelViewport', () => ({
@@ -869,6 +879,41 @@ describe('ModelPane versions', () => {
     act(() => byTestId('model-version-compare-overlay')?.click());
     expect(byTestId('model-version-compare-view-overlay')).not.toBeNull();
     expect(byTestId('model-version-compare-view-side')).toBeNull();
+  });
+
+  it('hides the joints while previewing, so a pose change never rebuilds the compare view', async () => {
+    const joint = {
+      name: 'lid',
+      motion: 'turn' as const,
+      axis: [-1, 0, 0] as [number, number, number],
+      range: [0, 90] as [number, number],
+    };
+    const posed = { joints: [joint], jointAngles: { lid: 10 } };
+    const model = await renderWithVersions([version(1, 'a'), version(2, 'x')], posed);
+    expect(byTestId('model-pane-joints')).not.toBeNull();
+    await act(async () => byTestId('model-version-1')?.click());
+    act(() => byTestId('model-version-compare-side')?.click());
+    expect(byTestId('model-pane-joints')).toBeNull();
+    const changes = compareView.subjectChanges;
+    render({ ...model, jointAngles: { lid: 20 } });
+    expect(byTestId('model-version-compare-view-side')).not.toBeNull();
+    expect(compareView.subjectChanges).toBe(changes);
+    act(() => byTestId('model-version-close')?.click());
+    expect(byTestId('model-pane-joints')).not.toBeNull();
+  });
+
+  it('goes back to the current build on Escape in the 3D view or the strip', async () => {
+    await renderWithVersions([version(1, 'a'), version(2, 'x')]);
+    const escape = (id: string) =>
+      act(() => {
+        byTestId(id)?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      });
+    await act(async () => byTestId('model-version-1')?.click());
+    escape('model-pane-stage');
+    expect(byTestId('model-version-banner')).toBeNull();
+    await act(async () => byTestId('model-version-1')?.click());
+    escape('model-version-1');
+    expect(byTestId('model-version-banner')).toBeNull();
   });
 
   it('restores the previewed version and poses the pane as it was kept', async () => {

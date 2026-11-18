@@ -45,13 +45,15 @@ type StripProps = {
   /** The version shown in place of the current one, if any. */
   selected: number | null;
   onSelect: (number: number) => void;
+  /** Back to the current build (Esc while a version is selected). */
+  onClose: () => void;
 };
 
 /**
  * The kept builds of this conversation's model, newest on the right, under the 3D view. Clicking a
- * thumbnail previews it; clicking the current one goes back. Arrow keys move between them.
+ * thumbnail previews it; clicking the current one, or Esc, goes back. Arrow keys move between them.
  */
-export function ModelVersionStrip({ versions, current, selected, onSelect }: StripProps) {
+export function ModelVersionStrip({ versions, current, selected, onSelect, onClose }: StripProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
   const newest = versions.at(-1)?.number ?? null;
   const thumbnails = useMemo(
@@ -66,6 +68,11 @@ export function ModelVersionStrip({ versions, current, selected, onSelect }: Str
   }, [newest]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape' && selected !== null) {
+      event.preventDefault();
+      onClose();
+      return;
+    }
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     const buttons = [...(listRef.current?.querySelectorAll<HTMLButtonElement>('button') ?? [])];
     const at = buttons.indexOf(document.activeElement as HTMLButtonElement);

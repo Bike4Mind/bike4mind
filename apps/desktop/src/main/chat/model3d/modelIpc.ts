@@ -225,6 +225,11 @@ export function modelIpcHandlers(views: ModelLiveViews): void {
     return view.recordVersion(request);
   });
 
+  ipcMain.handle(IPC_CHANNELS.modelWantsVersion, async (_event, sessionId: unknown, generation: unknown) => {
+    if (typeof generation !== 'number' || !Number.isInteger(generation)) return false;
+    return (await views.find(requireSessionId(sessionId))?.wantsVersion(generation)) ?? false;
+  });
+
   ipcMain.handle(IPC_CHANNELS.modelRestoreVersion, async (_event, sessionId: unknown, number: unknown) => {
     if (typeof number !== 'number' || !Number.isInteger(number)) throw new Error('Name a version by its number.');
     return views.for(requireSessionId(sessionId)).restoreVersion(number);

@@ -315,6 +315,19 @@ export class ModelLiveView {
     return recorded;
   }
 
+  /**
+   * Whether a window should render a thumbnail and ask to keep `generation`: not when another
+   * window already asked, the generation is stale, or it rebuilt the newest version's source (a
+   * reopen). Advisory only; recordVersion applies the same rules.
+   */
+  async wantsVersion(generation: number): Promise<boolean> {
+    const { path, kind, source, generation: current, missing } = this.state;
+    if (!this.versionStore || kind !== 'model' || !path || source === null || missing) return false;
+    if (generation !== current || this.versionWrite?.generation === generation) return false;
+    const newest = (await this.versionStore.list()).at(-1);
+    return !(newest && newest.path === path && newest.source === source);
+  }
+
   private async recordVersionOnce(request: ModelVersionRecordRequest): Promise<ModelVersion | null> {
     const { path, kind, source, generation, missing } = this.state;
     if (!this.versionStore || kind !== 'model' || !path || source === null || missing) return null;
