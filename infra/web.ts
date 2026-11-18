@@ -542,7 +542,8 @@ export const web = new sst.aws.Nextjs(
       {
         // Admin DLQ "View logs": finds the Lambda consumers of a source queue. ListEventSourceMappings
         // has no resource-level permissions, so it cannot be scoped. GetFunctionConfiguration is
-        // granted per consumer by dlqConsumerLogsPolicy below.
+        // granted per consumer by dlqConsumerLogsPolicy below and per dead-letter rule target in
+        // infra/webDlqFunctionLogs.ts.
         actions: ['lambda:ListEventSourceMappings'],
         resources: ['*'],
       },
@@ -805,20 +806,5 @@ if (web.nodes.server) {
   new aws.iam.RolePolicyAttachment('WebDlqScheduleRulePolicyAttachment', {
     role: web.nodes.server.nodes.role.name,
     policyArn: dlqScheduleRulePolicy.arn,
-  });
-  // The schedule-target and EventBridge-target logs links read the function's LoggingConfig log group. SST's
-  // physicalName names a function with the same prefixes as a rule.
-  const stageFunctionArns = stageRulePrefixes.map(
-    prefix =>
-      $interpolate`arn:${aws.getPartitionOutput().partition}:lambda:${aws.getRegionOutput().name}:${aws.getCallerIdentityOutput().accountId}:function:${prefix}-*`
-  );
-  const dlqFunctionLogsPolicy = new aws.iam.Policy('WebDlqFunctionLogsPolicy', {
-    policy: aws.iam.getPolicyDocumentOutput({
-      statements: [{ actions: ['lambda:GetFunctionConfiguration'], resources: stageFunctionArns }],
-    }).json,
-  });
-  new aws.iam.RolePolicyAttachment('WebDlqFunctionLogsPolicyAttachment', {
-    role: web.nodes.server.nodes.role.name,
-    policyArn: dlqFunctionLogsPolicy.arn,
   });
 }

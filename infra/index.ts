@@ -48,5 +48,7 @@ export * from './emailMarketing';
 export * from './wafPolicy';
 export * from './waf';
 
+export * from './webDlqFunctionLogs';
+
 // logMonitor must be last
 export * from './logMonitor';
