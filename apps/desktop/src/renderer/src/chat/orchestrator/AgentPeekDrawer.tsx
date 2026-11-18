@@ -338,8 +338,8 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions, skin }: Agen
       </Box>
 
       {agent.decision && <TaskDecisionCard sessionId={agent.id} title={agent.title} decision={agent.decision} />}
-      <TaskDecisionPanel agent={agent} />
       {pending.length > 0 && <PendingRequests calls={pending} />}
+      <TaskDecisionPanel agent={agent} compact />
 
       {agent.activity && (
         <Typography level="body-sm" color="primary" data-testid="orchestrator-peek-activity">

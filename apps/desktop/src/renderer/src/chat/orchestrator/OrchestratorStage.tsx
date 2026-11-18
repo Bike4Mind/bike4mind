@@ -41,6 +41,8 @@ export interface OrchestratorViewProps {
   celebrating?: boolean;
   /** Drawn over the top of the scene by a view that has one (the Tavern); other views leave it to the stage. */
   sceneOverlay?: ReactNode;
+  /** Agent details, positioned relative to the artwork rather than its surrounding letterbox. */
+  agentDetailsOverlay?: ReactNode;
   /** Talking to the orchestrating conversation from the scene; the Tavern draws it as the Innkeeper's order slip. */
   desk?: InnkeeperDesk;
   /** The chrome has settled out (StageAmbient); the Tavern dims to last call and fills the pane. */
@@ -208,6 +210,33 @@ export function OrchestratorStage({
     />
   );
 
+  const detailsInScene = view === 'tavern' && renderView !== undefined && agents.length > 0 && !focused;
+  const detailsOverlay = selected && (
+    // Stay mounted while settled so waking restores the draft and selection.
+    <Box
+      data-testid="orchestrator-peek-drawer-region"
+      sx={{
+        position: 'absolute',
+        inset: 12,
+        zIndex: 400,
+        display: settled ? 'none' : 'flex',
+        justifyContent: 'flex-end',
+        alignItems: 'flex-start',
+        pointerEvents: 'none',
+        overflow: 'hidden',
+      }}
+    >
+      <AgentPeekDrawer
+        key={selected.id}
+        agent={selected}
+        persona={personas.get(selected.id)}
+        onClose={() => setSelectedId(null)}
+        actions={actions}
+        skin={detailsInScene ? ORCHESTRATOR_VIEW_INFO[view].detailsSkin : undefined}
+      />
+    </Box>
+  );
+
   const viewProps: OrchestratorViewProps = {
     agents,
     rootId,
@@ -219,6 +248,7 @@ export function OrchestratorStage({
     onInnkeeperSelect: onParentFocus,
     celebrating: finale.shown,
     sceneOverlay: bannerInScene ? banner : undefined,
+    agentDetailsOverlay: detailsInScene ? detailsOverlay : undefined,
     desk,
     settled: ambient?.settled === true,
   };
@@ -348,32 +378,7 @@ export function OrchestratorStage({
           )}
           {needsYouCard}
         </Box>
-        {selected && (
-          // Settles out with the rest of the chrome but stays mounted, selection and all, so waking
-          // brings it back where it was (ambient.ts gives focus back to it too).
-          <Box
-            data-testid="orchestrator-peek-drawer-region"
-            sx={{
-              position: 'absolute',
-              inset: 12,
-              zIndex: 400,
-              display: settled ? 'none' : 'flex',
-              justifyContent: 'flex-end',
-              alignItems: 'flex-start',
-              pointerEvents: 'none',
-              overflow: 'hidden',
-            }}
-          >
-            <AgentPeekDrawer
-              key={selected.id}
-              agent={selected}
-              persona={personas.get(selected.id)}
-              onClose={() => setSelectedId(null)}
-              actions={actions}
-              skin={focused ? undefined : ORCHESTRATOR_VIEW_INFO[view].detailsSkin}
-            />
-          </Box>
-        )}
+        {!detailsInScene && detailsOverlay}
       </Box>
     </Box>
   );

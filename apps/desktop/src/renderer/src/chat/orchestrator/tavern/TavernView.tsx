@@ -638,6 +638,7 @@ export function TavernView({
   onInnkeeperSelect,
   celebrating = false,
   sceneOverlay,
+  agentDetailsOverlay,
   desk,
   settled = false,
   pause,
@@ -904,6 +905,7 @@ export function TavernView({
           />
         ))}
         {sceneOverlay}
+        {agentDetailsOverlay}
       </Box>
     </Box>
   );

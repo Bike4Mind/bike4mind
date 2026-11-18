@@ -217,7 +217,12 @@ describe('OrchestratorStage', () => {
           onViewChange={onViewChange}
           actions={actions}
           introPlaying={false}
-          renderView={(_id, props) => <button data-testid="scene-select" onClick={() => props.onSelect('w1')} />}
+          renderView={(_id, props) => (
+            <div data-testid="scene-artwork" style={{ position: 'relative' }}>
+              <button data-testid="scene-select" onClick={() => props.onSelect('w1')} />
+              {props.agentDetailsOverlay}
+            </div>
+          )}
         />
       );
       const scene = el('scene-select');
@@ -225,6 +230,7 @@ describe('OrchestratorStage', () => {
       await act(async () => scene.click());
       const region = el('orchestrator-peek-drawer-region');
       expect(viewport.contains(region)).toBe(true);
+      expect(el('scene-artwork').contains(region)).toBe(view === 'tavern');
       expect(el('scene-select')).toBe(scene);
       expect(getComputedStyle(viewport).position).toBe('relative');
       expect(getComputedStyle(region).position).toBe('absolute');
@@ -236,6 +242,23 @@ describe('OrchestratorStage', () => {
       );
     }
   );
+
+  it('mounts Tavern details in the actual aspect-ratio artwork, not its frame or letterbox', async () => {
+    await themed.render(
+      <OrchestratorStage
+        agents={FIXTURE}
+        view="tavern"
+        onViewChange={onViewChange}
+        actions={actions}
+        introPlaying={false}
+        renderView={(_id, props) => <TavernView {...props} />}
+      />
+    );
+    const artwork = el('orchestrator-tavern');
+    await act(async () => el('orchestrator-needs-you-pill').click());
+    expect(el('orchestrator-peek-drawer-region').parentElement).toBe(artwork);
+    expect(el('orchestrator-tavern')).toBe(artwork);
+  });
 
   it('claims the Escape that closes the drawer, so the docked conversation stays open', async () => {
     await renderStage(FIXTURE);
