@@ -120,6 +120,17 @@ export function hasUnscopedAnonymizeFallback(holder: DataHolder, reference: User
   );
 }
 
+/** Why the registry entry disagrees with how Mongoose registered the model, or undefined when they agree. */
+export function discriminatorMismatch(modelName: string, holder: DataHolder | undefined): string | undefined {
+  const base = (mongoose.model(modelName) as { baseModelName?: string }).baseModelName;
+  if (holder?.kind === 'discriminator') {
+    return holder.base === base
+      ? undefined
+      : `is classified as a discriminator of "${holder.base}" but Mongoose has base "${base}"`;
+  }
+  return base === undefined ? undefined : `is a Mongoose discriminator of "${base}" and must be classified as one`;
+}
+
 /** Throws a message naming the model and the rule an entry breaks. */
 export function assertEntryStructure(modelName: string, registry: DataHolderRegistry): void {
   const fail = (rule: string): never => {
@@ -131,6 +142,8 @@ export function assertEntryStructure(modelName: string, registry: DataHolderRegi
     return fail('is not a registered Mongoose model; the module that classifies it must also import its model');
   }
   const { schema } = mongoose.model(modelName);
+  const mismatch = discriminatorMismatch(modelName, holder);
+  if (mismatch) return fail(mismatch);
 
   if (holder.kind === 'viaParent') {
     const chain = walkParentChain(modelName, registry);

@@ -27,6 +27,7 @@ const fixtureModels: Record<string, Record<string, unknown>> = {
   FixtureArrayNote: { ownerId: String, members: [String] },
   FixtureKindNote: { ownerId: String, kind: { type: String, enum: ['a', 'b'] }, label: String },
   FixtureOrgNote: { ownerId: String, organizationId: String },
+  FixtureDiscBase: { ownerId: String },
 };
 
 const loadRegistry = async (registries: unknown[]) => {
@@ -35,6 +36,9 @@ const loadRegistry = async (registries: unknown[]) => {
   const { mongoose } = await import('@bike4mind/database');
   for (const [name, definition] of Object.entries(fixtureModels)) {
     if (!mongoose.modelNames().includes(name)) mongoose.model(name, new mongoose.Schema(definition));
+  }
+  if (!mongoose.modelNames().includes('FixtureDiscChild')) {
+    mongoose.model('FixtureDiscBase').discriminator('FixtureDiscChild', new mongoose.Schema({ extra: String }));
   }
   return import('./index');
 };
@@ -69,6 +73,59 @@ const brokenEntries: [string, unknown[], RegExp][] = [
 ];
 
 describe('contributed data holder registry', () => {
+  describe('a malformed entry', () => {
+    it.each([
+      ['a null holder', null],
+      ['a primitive holder', 'holder'],
+      ['a holder containing a function', { ...fixture.FixtureOverlayNote, hook: () => {} }],
+      [
+        'a holder containing a mongoose Schema',
+        async () => {
+          const { mongoose } = await import('@bike4mind/database');
+          return { ...fixture.FixtureOverlayNote, schema: new mongoose.Schema({ a: String }) };
+        },
+      ],
+    ])('does not throw at load for %s, and throws naming the model on first use', async (_name, holder) => {
+      const entry = typeof holder === 'function' ? await holder() : holder;
+      const { assertContributedRegistryValid, DATA_HOLDER_REGISTRY } = await loadRegistry([
+        { FixtureOverlayNote: entry },
+      ]);
+      expect(DATA_HOLDER_REGISTRY).not.toHaveProperty('FixtureOverlayNote');
+      expect(() => assertContributedRegistryValid()).toThrow(/"FixtureOverlayNote"/);
+    });
+
+    it('collects a registry that is not an object instead of throwing', async () => {
+      const { assertContributedRegistryValid } = await loadRegistry([null, 'x', fixture]);
+      expect(() => assertContributedRegistryValid()).toThrow(/not an object/);
+    });
+
+    it('accepts a where value that is an ObjectId, and keeps it usable', async () => {
+      const { mongoose } = await import('@bike4mind/database');
+      const id = new mongoose.Types.ObjectId();
+      const entry = { kind: 'holder', references: [{ ...ownerRef, where: { kind: id } }] };
+      const { assertContributedRegistryValid, DATA_HOLDER_REGISTRY } = await loadRegistry([{ FixtureKindNote: entry }]);
+      const stored = (DATA_HOLDER_REGISTRY.FixtureKindNote as { references: { where: { kind: unknown } }[] })
+        .references[0].where.kind;
+      expect(String(stored)).toBe(id.toHexString());
+      expect(mongoose.isValidObjectId(stored)).toBe(true);
+      // Mongoose cannot declare an ObjectId enum, so the allowed value is added to the path by hand.
+      (mongoose.model('FixtureKindNote').schema.path('kind') as { enumValues: unknown[] }).enumValues.push(id);
+      expect(() => assertContributedRegistryValid()).not.toThrow();
+    });
+  });
+
+  describe('discriminator rule', () => {
+    it('rejects a contributed holder that Mongoose registers as a discriminator', async () => {
+      const { assertContributedRegistryValid } = await loadRegistry([{ FixtureDiscChild: parentHolder }]);
+      expect(() => assertContributedRegistryValid()).toThrow(/"FixtureDiscChild".*discriminator of "FixtureDiscBase"/);
+    });
+
+    it('accepts a contributed holder on a base model that has a discriminator', async () => {
+      const { assertContributedRegistryValid } = await loadRegistry([{ FixtureDiscBase: parentHolder }]);
+      expect(() => assertContributedRegistryValid()).not.toThrow();
+    });
+  });
+
   it('classifies a contributed model so the coverage assertion passes', async () => {
     const { findUnclassifiedModels } = await loadRegistry([fixture]);
     expect(findUnclassifiedModels(['FixtureOverlayNote'])).toEqual([]);

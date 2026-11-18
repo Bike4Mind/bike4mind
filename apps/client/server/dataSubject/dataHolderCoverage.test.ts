@@ -16,6 +16,7 @@ import { uniqueIndexPaths } from './placeholder';
 import {
   alsoRedactOf,
   declaredPathsOf,
+  discriminatorMismatch,
   hasMisplacedExportFields,
   hasUnscopedAnonymizeFallback,
   isArrayOrArrayKey,
@@ -57,10 +58,6 @@ function isExported(holder: DataHolder): boolean {
   return holder.kind === 'subject' || holder.kind === 'holder' || holder.kind === 'viaParent';
 }
 
-function baseModelNameOf(modelName: string): string | undefined {
-  return (mongoose.model(modelName) as { baseModelName?: string }).baseModelName;
-}
-
 describe('data holder registry', () => {
   it('sanity: the model barrels registered a realistic number of models', () => {
     // Guards the tests below against passing vacuously if the side-effect imports stop registering.
@@ -97,12 +94,7 @@ describe('data holder registry', () => {
   );
 
   it('classifies a model as a discriminator exactly when Mongoose registered it as one', () => {
-    const mismatched = registeredModels.filter(name => {
-      const holder = DATA_HOLDER_REGISTRY[name];
-      const base = baseModelNameOf(name);
-      if (holder?.kind === 'discriminator') return holder.base !== base;
-      return base !== undefined;
-    });
+    const mismatched = registeredModels.filter(name => discriminatorMismatch(name, DATA_HOLDER_REGISTRY[name]));
     expect(mismatched).toEqual([]);
   });
 

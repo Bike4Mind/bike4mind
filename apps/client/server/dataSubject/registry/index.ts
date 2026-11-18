@@ -36,8 +36,29 @@ export function mergeRegistries(registries: readonly DataHolderRegistry[]): Data
   return merged;
 }
 
+const isPlainObject = (value: object): boolean => {
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+};
+
+// structuredClone would strip an ObjectId to a plain object, so values are copied by hand: plain
+// objects and arrays recurse, BSON values are kept as they are, anything else cannot be a registry value.
+function cloneEntry(value: unknown): unknown {
+  if (value === null || typeof value !== 'object') {
+    if (typeof value === 'function' || typeof value === 'symbol') throw new TypeError(`cannot hold a ${typeof value}`);
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(cloneEntry);
+  if (ArrayBuffer.isView(value)) return structuredClone(value);
+  if (value instanceof Date) return new Date(value);
+  if ('_bsontype' in value) return value;
+  if (!isPlainObject(value)) throw new TypeError(`cannot hold a ${value.constructor?.name ?? 'non-plain'} value`);
+  return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, cloneEntry(child)]));
+}
+
+// Only plain objects and arrays are frozen; a buffer or typed array cannot be frozen with elements.
 function deepFreeze<T>(value: T): T {
-  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+  if (value && typeof value === 'object' && !Object.isFrozen(value) && (Array.isArray(value) || isPlainObject(value))) {
     Object.freeze(value);
     for (const child of Object.values(value)) deepFreeze(child);
   }
@@ -55,7 +76,7 @@ export type ContributedMerge = {
 /**
  * Merges the contributed registries into `core` without throwing. An entry a JS overlay got past
  * the types (a core-only kind, a hook name, a collision) is recorded and left out, so the core
- * entry or the first contribution wins. Accepted entries are deep copies, deep frozen.
+ * entry or the first contribution wins. Accepted entries are deep copies, deep frozen where plain.
  */
 export function mergeContributed(
   core: DataHolderRegistry,
@@ -64,18 +85,32 @@ export function mergeContributed(
   const registry: Record<string, DataHolderRegistry[string]> = { ...core };
   const accepted: string[] = [];
   const problems: string[] = [];
-  for (const source of contributed) {
+  const sources: unknown = contributed;
+  if (!Array.isArray(sources)) {
+    problems.push('Contributed data holder registries are not an array');
+    return { registry, accepted, problems };
+  }
+  for (const source of sources as unknown[]) {
+    if (source === null || typeof source !== 'object') {
+      problems.push('A contributed data holder registry is not an object');
+      continue;
+    }
     for (const [modelName, holder] of Object.entries(source)) {
-      const kind: string = holder.kind;
-      if (Object.hasOwn(registry, modelName)) {
-        problems.push(`Data holder "${modelName}" is classified twice`);
-      } else if (!(CONTRIBUTED_DATA_HOLDER_KINDS as readonly string[]).includes(kind)) {
-        problems.push(`Contributed data holder "${modelName}" has kind "${kind}", which an overlay may not use`);
-      } else if ('beforeErasure' in holder) {
-        problems.push(`Contributed data holder "${modelName}" may not declare beforeErasure`);
-      } else {
-        registry[modelName] = deepFreeze(structuredClone(holder));
-        accepted.push(modelName);
+      try {
+        const kind: string = (holder as { kind: string }).kind;
+        if (Object.hasOwn(registry, modelName)) {
+          problems.push(`Data holder "${modelName}" is classified twice`);
+        } else if (!(CONTRIBUTED_DATA_HOLDER_KINDS as readonly string[]).includes(kind)) {
+          problems.push(`Contributed data holder "${modelName}" has kind "${kind}", which an overlay may not use`);
+        } else if ('beforeErasure' in holder) {
+          problems.push(`Contributed data holder "${modelName}" may not declare beforeErasure`);
+        } else {
+          registry[modelName] = deepFreeze(cloneEntry(holder) as DataHolderRegistry[string]);
+          accepted.push(modelName);
+        }
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        problems.push(`Contributed data holder "${modelName}" is malformed: ${reason}`);
       }
     }
   }
