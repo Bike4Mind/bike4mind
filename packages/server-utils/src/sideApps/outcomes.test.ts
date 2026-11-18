@@ -12,8 +12,13 @@ import {
 describe('statusClassOf', () => {
   it.each([
     [0, 'other'],
+    [199, 'other'],
     [200, '2xx'],
+    [201, '2xx'],
+    [202, 'accepted'],
     [204, '2xx'],
+    [299, '2xx'],
+    [300, 'other'],
     [301, 'other'],
     [429, 'other'],
     [500, '5xx'],
@@ -65,6 +70,28 @@ describe('classifyRequestOutcome', () => {
       expect(classifyRequestOutcome({ endpoint, statusClass: '5xx' })).toBe('failed');
     }
   });
+
+  it.each(['/api/ai/tts', '/api/ai/sound-effects'])(
+    'counts inline results but leaves accepted jobs pending for %s',
+    endpoint => {
+      expect(classifyRequestOutcome({ endpoint, statusClass: statusClassOf(200) })).toBe('completed');
+      expect(classifyRequestOutcome({ endpoint, statusClass: statusClassOf(202) })).toBeNull();
+      expect(classifyRequestOutcome({ endpoint, statusClass: statusClassOf(502) })).toBe('failed');
+    }
+  );
+
+  it.each(['completed', 'failed', 'interrupted'] as const)(
+    'preserves an explicit %s completion observation on an accepted response',
+    completionOutcome => {
+      expect(
+        classifyRequestOutcome({
+          endpoint: '/api/ai/v1/completions',
+          statusClass: statusClassOf(202),
+          completionOutcome,
+        })
+      ).toBe(completionOutcome);
+    }
+  );
 
   it('leaves rejected, cap-stopped, in-flight and client-error requests uncounted', () => {
     const endpoint = '/api/ai/v1/completions';

@@ -218,6 +218,43 @@ describe('side apps board reads', () => {
       expect(appA?.outcomes.failureRate).toBeCloseTo(5 / 9);
     });
 
+    it('keeps accepted audio jobs out of completed outcomes and failure-rate denominators', async () => {
+      const clientId = 'audio-app';
+      await OAuthClientModel.collection.insertOne({ clientId, name: 'Audio App' });
+      await ApiKeyUsageLog.collection.insertMany([
+        request({ oauthClientId: clientId, endpoint: '/api/ai/tts', statusCode: 200 }),
+        request({ oauthClientId: clientId, endpoint: '/api/ai/tts', statusCode: 202 }),
+        request({ oauthClientId: clientId, endpoint: '/api/ai/sound-effects', statusCode: 200 }),
+        request({ oauthClientId: clientId, endpoint: '/api/ai/sound-effects', statusCode: 202 }),
+        request({ oauthClientId: clientId, endpoint: '/api/ai/sound-effects', statusCode: 502 }),
+      ]);
+
+      const app = (await readSideApps(30, now)).apps.find(row => row.clientId === clientId);
+      expect(app?.requests.total).toBe(5);
+      expect(app?.outcomes).toMatchObject({ completed: 2, failed: 1, interrupted: 0 });
+      expect(app?.outcomes.failureRate).toBeCloseTo(1 / 3);
+      const users = await readSideAppUsers(clientId, 30, now);
+      expect(users.users).toHaveLength(1);
+      expect(users.users[0]).toMatchObject({ userId: String(u1), requests: 5, failedRequests: 1 });
+    });
+
+    it('retains terminal completion observations even on accepted HTTP responses', async () => {
+      const clientId = 'observed-app';
+      await OAuthClientModel.collection.insertOne({ clientId, name: 'Observed App' });
+      await ApiKeyUsageLog.collection.insertMany(
+        ['completed', 'failed', 'interrupted'].map(outcome =>
+          request({ oauthClientId: clientId, statusCode: 202, ...completion(outcome) })
+        )
+      );
+
+      const app = (await readSideApps(30, now)).apps.find(row => row.clientId === clientId);
+      expect(app?.requests.total).toBe(3);
+      expect(app?.outcomes).toMatchObject({ completed: 1, failed: 1, interrupted: 1 });
+      expect(app?.outcomes.failureRate).toBeCloseTo(2 / 3);
+      const users = await readSideAppUsers(clientId, 30, now);
+      expect(users.users[0]).toMatchObject({ userId: String(u1), requests: 3, failedRequests: 2 });
+    });
+
     it('clamps the windows and caps requests at the log retention', async () => {
       const wide = await readSideApps(1000, now);
       expect(wide.spendWindowDays).toBe(365);

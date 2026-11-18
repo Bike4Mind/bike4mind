@@ -8,18 +8,20 @@ import {
 /** Success and failure for a connected app's traffic. Shared by the admin board and the health alerts. */
 export type SideAppOutcome = 'completed' | 'failed' | 'interrupted';
 
-export type StatusClass = '2xx' | '5xx' | 'other';
+/** Accepted work is not a terminal success; keep it distinct from other 2xx responses. */
+export type StatusClass = 'accepted' | '2xx' | '5xx' | 'other';
 
 export function statusClassOf(statusCode: number): StatusClass {
+  if (statusCode === 202) return 'accepted';
   if (statusCode >= 200 && statusCode < 300) return '2xx';
   if (statusCode >= 500 && statusCode < 600) return '5xx';
   return 'other';
 }
 
 /**
- * Exchange-reachable routes that do their work inside the request, so a 2xx means the app got its
- * result. Deliberately short: /api/chat is queued (its 2xx is only an acknowledgement) and
- * completions report through completionObservation instead.
+ * Exchange-reachable routes with inline results. A non-202 2xx means the app got its result;
+ * optional asynchronous audio jobs keep their distinct accepted class until a terminal observation.
+ * Deliberately short: /api/chat is queued and completions report through completionObservation.
  */
 export const SYNC_SUCCESS_ENDPOINTS: readonly string[] = [
   '/api/tools/web-search',

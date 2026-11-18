@@ -73,6 +73,7 @@ export const tierBucketExpression = {
 export const statusClassExpression = {
   $switch: {
     branches: [
+      { case: { $eq: ['$statusCode', 202] }, then: 'accepted' },
       { case: { $and: [{ $gte: ['$statusCode', 200] }, { $lt: ['$statusCode', 300] }] }, then: '2xx' },
       { case: { $and: [{ $gte: ['$statusCode', 500] }, { $lt: ['$statusCode', 600] }] }, then: '5xx' },
     ],

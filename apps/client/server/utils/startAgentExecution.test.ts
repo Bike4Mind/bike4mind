@@ -73,7 +73,7 @@ vi.mock('@server/utils/agentExecutorFunctionName', () => ({
 }));
 
 import { ApiKeyScope, CreditHolderType, DATA_LAKE_TOOL_NAMES } from '@bike4mind/common';
-import { startAgentExecution, sweepMemoSize } from './startAgentExecution';
+import { startAgentExecution, sweepMemoSize, type StartAgentExecutionInput } from './startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER } from './executionLimits';
 
@@ -88,7 +88,9 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } 
  */
 let currentUserId = 'u1';
 
-const input = (overrides: { userId: string } & Record<string, unknown>) => {
+const input = (
+  overrides: Partial<StartAgentExecutionInput> & Pick<StartAgentExecutionInput, 'userId'>
+): StartAgentExecutionInput => {
   currentUserId = overrides.userId;
   return {
     sessionId: 's1',
@@ -96,6 +98,7 @@ const input = (overrides: { userId: string } & Record<string, unknown>) => {
     query: 'optimize this',
     model: 'claude-opus-5',
     connectionId: HEADLESS_CONNECTION_ID,
+    apiKeyInfo: undefined,
     ...overrides,
   };
 };
@@ -162,7 +165,7 @@ describe('startAgentExecution', () => {
       scopes: [ApiKeyScope.AI_CHAT],
       ownerUntrusted: false,
       billingOwnerType: CreditHolderType.User,
-    };
+    } satisfies NonNullable<StartAgentExecutionInput['apiKeyInfo']>;
     await startAgentExecution(
       input({ userId: 'exchange-start', apiKeyInfo: { ...keyInfo, oauthExchangeClientId: 'app-a' } }),
       logger
@@ -317,7 +320,12 @@ describe('startAgentExecution', () => {
       input({
         userId: 'overrides-admin-narrow-key',
         confidenceOverrides: [0.1],
-        apiKeyInfo: { keyId: 'k1', scopes: [ApiKeyScope.AI_CHAT] },
+        apiKeyInfo: {
+          keyId: 'k1',
+          scopes: [ApiKeyScope.AI_CHAT],
+          ownerUntrusted: false,
+          billingOwnerType: CreditHolderType.User,
+        },
       }),
       logger
     );
@@ -332,7 +340,12 @@ describe('startAgentExecution', () => {
       input({
         userId: 'overrides-admin-admin-key',
         confidenceOverrides: [0.1],
-        apiKeyInfo: { keyId: 'k1', scopes: [ApiKeyScope.ADMIN, ApiKeyScope.AI_CHAT] },
+        apiKeyInfo: {
+          keyId: 'k1',
+          scopes: [ApiKeyScope.ADMIN, ApiKeyScope.AI_CHAT],
+          ownerUntrusted: false,
+          billingOwnerType: CreditHolderType.User,
+        },
       }),
       logger
     );
@@ -382,9 +395,10 @@ describe('startAgentExecution', () => {
     const orgKey = {
       keyId: 'k-org',
       scopes: [ApiKeyScope.AI_CHAT],
+      ownerUntrusted: false,
       billingOwnerType: CreditHolderType.Organization,
       organizationId: KEY_ORG,
-    };
+    } satisfies NonNullable<StartAgentExecutionInput['apiKeyInfo']>;
 
     beforeEach(() => {
       mockOrgFindById.mockResolvedValue({ id: KEY_ORG, userId: 'owner', users: [{ userId: 'holder' }] });
@@ -490,7 +504,12 @@ describe('startAgentExecution', () => {
 
     it('leaves a user-billed key on the named-org membership rules', async () => {
       mockOrgFindById.mockResolvedValue({ userId: 'owner', users: [{ userId: 'member' }] });
-      const userKey = { keyId: 'k-user', scopes: [ApiKeyScope.AI_CHAT], billingOwnerType: CreditHolderType.User };
+      const userKey = {
+        keyId: 'k-user',
+        scopes: [ApiKeyScope.AI_CHAT],
+        ownerUntrusted: false,
+        billingOwnerType: CreditHolderType.User,
+      } satisfies NonNullable<StartAgentExecutionInput['apiKeyInfo']>;
 
       const result = await startAgentExecution(
         input({ userId: 'member', apiKeyInfo: userKey, organizationId: 'org1' }),
@@ -669,11 +688,27 @@ describe('startAgentExecution', () => {
 
   it('derives the scope denials from the key and persists them so every invocation re-applies them', async () => {
     await startAgentExecution(
-      input({ userId: 'scoped-key', apiKeyInfo: { keyId: 'k1', scopes: [ApiKeyScope.AI_CHAT] } }),
+      input({
+        userId: 'scoped-key',
+        apiKeyInfo: {
+          keyId: 'k1',
+          scopes: [ApiKeyScope.AI_CHAT],
+          ownerUntrusted: false,
+          billingOwnerType: CreditHolderType.User,
+        },
+      }),
       logger
     );
     await startAgentExecution(
-      input({ userId: 'writer', apiKeyInfo: { keyId: 'k2', scopes: [ApiKeyScope.DATALAKE_WRITE] } }),
+      input({
+        userId: 'writer',
+        apiKeyInfo: {
+          keyId: 'k2',
+          scopes: [ApiKeyScope.DATALAKE_WRITE],
+          ownerUntrusted: false,
+          billingOwnerType: CreditHolderType.User,
+        },
+      }),
       logger
     );
     await startAgentExecution(input({ userId: 'session' }), logger);
@@ -688,7 +723,15 @@ describe('startAgentExecution', () => {
 
   it('persists the authenticating key so the executor can attribute lake writes to it', async () => {
     await startAgentExecution(
-      input({ userId: 'keyed', apiKeyInfo: { keyId: 'key-1', scopes: [ApiKeyScope.DATALAKE_WRITE] } }),
+      input({
+        userId: 'keyed',
+        apiKeyInfo: {
+          keyId: 'key-1',
+          scopes: [ApiKeyScope.DATALAKE_WRITE],
+          ownerUntrusted: false,
+          billingOwnerType: CreditHolderType.User,
+        },
+      }),
       logger
     );
     await startAgentExecution(input({ userId: 'session' }), logger);
@@ -699,7 +742,15 @@ describe('startAgentExecution', () => {
 
   it('persists how the run was authenticated, so its tools and child runs see it', async () => {
     await startAgentExecution(
-      input({ userId: 'keyed', apiKeyInfo: { keyId: 'key-1', scopes: [ApiKeyScope.DATALAKE_WRITE] } }),
+      input({
+        userId: 'keyed',
+        apiKeyInfo: {
+          keyId: 'key-1',
+          scopes: [ApiKeyScope.DATALAKE_WRITE],
+          ownerUntrusted: false,
+          billingOwnerType: CreditHolderType.User,
+        },
+      }),
       logger
     );
     await startAgentExecution(input({ userId: 'session', apiKeyInfo: undefined }), logger);
