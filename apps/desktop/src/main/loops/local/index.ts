@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { Notification, app, ipcMain, powerMonitor, powerSaveBlocker } from 'electron';
 import { z } from 'zod';
 import { BadRequestError, LOOP_DIRECTIVE_TRANSITIONS, startOfUtcDay } from '@bike4mind/common';
-import { UNSURE_PREFIX } from '@bike4mind/common/loops';
+import { ticketMovePatch, UNSURE_PREFIX } from '@bike4mind/common/loops';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { loopNeedsYouCount } from '@shared/needsYou';
 import {
@@ -329,12 +329,17 @@ export function registerLocalLoops(
       const ticket = event.ticketId ? store.ticket(event.ticketId) : null;
       // As the server's resolve route: only a ticket still parked on this question changes.
       if (ticket?.status !== 'blocked' || !ticket.statusReason?.startsWith(UNSURE_PREFIX)) return;
+      const loop = loopOf(event.loopId);
       store.putTicket(
         applyTicketPatch(
           ticket,
           outcome === 'answered'
             ? { status: 'open', statusReason: null }
-            : { statusReason: `Rejected by owner${note ? `: ${note.trim()}` : ''}`.slice(0, 1000) },
+            : // Closed as an owner close is; the scheduler's reconcile then frees its dependents.
+              {
+                ...ticketMovePatch(loop, ticket, { status: 'closed' }, 'owner'),
+                statusReason: `Rejected by owner${note ? `: ${note.trim()}` : ''}`.slice(0, 1000),
+              },
           at
         )
       );

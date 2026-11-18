@@ -6,6 +6,8 @@ import { IPC_CHANNELS } from '@shared/ipc';
 import type { LocalLoopsResult } from '@shared/localLoops';
 import type { LocalSchedulerDeps } from './LocalLoopScheduler';
 import { testLoop } from './testLoop';
+import { loopNeedsYouItems } from '@shared/needsYou';
+import type { LocalLoopDetail } from '@shared/localLoops';
 import { createTicket } from './ticketTools';
 
 const mocks = vi.hoisted(() => ({
@@ -97,6 +99,37 @@ describe('registerLocalLoops handlers', () => {
       ok: true,
       value: { status: 'closed' },
     });
+  });
+
+  it('closes a ticket when the owner rejects its question, keeping the note, and drops it from Needs you', async () => {
+    const { store } = register();
+    const loop = store.putLoop(testLoop());
+    const ticket = store.putTicket({
+      ...createTicket(store, loop, { title: 'Pick a name' }, 'owner'),
+      status: 'blocked',
+      statusReason: 'Unsure: Which name?',
+    });
+    store.putEvent({
+      id: 'e1',
+      loopId: loop.id,
+      kind: 'asked',
+      reason: 'Which name?',
+      ticketId: ticket.id,
+      createdAt: new Date().toISOString(),
+    });
+    const answered = await call<LocalLoopDetail>(IPC_CHANNELS.localLoopsAnswerEvent, {
+      id: 'e1',
+      outcome: 'rejected',
+      note: 'not needed',
+    });
+    expect(store.ticket(ticket.id)).toMatchObject({
+      status: 'closed',
+      stage: loop.stages.at(-1),
+      statusReason: 'Rejected by owner: not needed',
+      closedAt: expect.any(String),
+    });
+    if (!answered.ok) throw new Error(answered.error);
+    expect(loopNeedsYouItems(answered.value).map(item => item.ticketId)).not.toContain(ticket.id);
   });
 
   it('lifts a budget cap when the owner changes the budget, but not another cap', async () => {
