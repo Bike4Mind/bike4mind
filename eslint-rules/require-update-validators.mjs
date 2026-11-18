@@ -87,14 +87,38 @@ export default {
         }
         if (enabled === true) return;
 
+        let statement = outer;
+        while (statement.parent) {
+          const parent = statement.parent;
+          if (
+            (parent.type === 'AwaitExpression' && parent.argument === statement) ||
+            (parent.type === 'VariableDeclarator' && parent.init === statement) ||
+            (parent.type === 'VariableDeclaration' && parent.declarations.length === 1) ||
+            (parent.type === 'AssignmentExpression' && parent.right === statement) ||
+            (parent.type === 'ReturnStatement' && parent.argument === statement) ||
+            (parent.type === 'ExpressionStatement' && parent.expression === statement)
+          ) {
+            statement = parent;
+          } else {
+            break;
+          }
+        }
         const comments = [
           ...source.getCommentsInside(outer),
           ...source
-            .getCommentsBefore(node)
+            .getCommentsBefore(statement)
             .filter(
               comment =>
-                comment.loc.end.line >= node.loc.start.line - 1 &&
-                source.text.slice(comment.range[1], node.range[0]).trim() === ''
+                comment.loc.end.line >= statement.loc.start.line - 1 &&
+                source.text.slice(comment.range[1], statement.range[0]).trim() === '' &&
+                source.lines[comment.loc.start.line - 1].slice(0, comment.loc.start.column).trim() === ''
+            ),
+          ...source
+            .getCommentsAfter(statement)
+            .filter(
+              comment =>
+                comment.loc.start.line === statement.loc.end.line &&
+                source.text.slice(statement.range[1], comment.range[0]).trim() === ''
             ),
         ];
         if (comments.some(comment => OPT_OUT.test(comment.value))) return;

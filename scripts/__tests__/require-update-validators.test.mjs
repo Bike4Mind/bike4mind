@@ -29,6 +29,14 @@ for (const method of ['findOneAndUpdate', 'findByIdAndUpdate', 'updateOne', 'upd
       `Model.${method}({}, update, { /* update-validators-off: counter uses $inc */ runValidators: false });`,
       `Model.${method}({}, update /* update-validators-off: native driver has no schema */);`,
       `// update-validators-off: native driver has no schema\nModel.collection.${method}({}, update);`,
+      `// update-validators-off: native driver has no schema\nawait Model.${method}({}, update);`,
+      `// update-validators-off: native driver has no schema\nconst result = await Model.${method}({}, update);`,
+      `function update() {\n// update-validators-off: native driver has no schema\nreturn Model.${method}({}, update);\n}`,
+      `// update-validators-off: native driver has no schema\nresult = Model.${method}({}, update);`,
+      `// update-validators-off: native driver has no schema\nawait Model.${method}({}, update).exec();`,
+      `Model.${method}({}, update); // update-validators-off: native driver has no schema`,
+      `const result = await Model.${method}({}, update); // update-validators-off: native driver has no schema`,
+      `function update() {\nreturn Model.${method}({}, update); // update-validators-off: native driver has no schema\n}`,
       `const result = await Model.${method}(\n  // update-validators-off: pipeline is validated separately\n  {}, pipeline\n);`,
       `other.save({}, update);`,
     ],
@@ -51,6 +59,12 @@ for (const method of ['findOneAndUpdate', 'findByIdAndUpdate', 'updateOne', 'upd
       invalid(`Model.${method}({}, update); // update-validators-off:`),
       invalid(`// update-validators-off: \nModel.${method}({}, update);`),
       invalid(`// update-validators-off: unrelated call\nother();\nModel.${method}({}, update);`),
+      invalid(
+        `// update-validators-off: unrelated call\nawait other();\nconst result = await Model.${method}({}, update);`
+      ),
+      invalid(`other(); // update-validators-off: unrelated call\nawait Model.${method}({}, update);`),
+      invalid(`Model.${method}({}, update); other(); // update-validators-off: unrelated call`),
+      invalid(`// update-validators-off: unrelated call\n\nawait Model.${method}({}, update);`),
       invalid(`Model.${method}({}, update);\n// update-validators-off: unrelated next call\nother();`),
     ],
   });
