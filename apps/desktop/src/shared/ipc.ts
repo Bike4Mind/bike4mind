@@ -669,6 +669,8 @@ export interface BrowserTabSummary {
   title: string;
   url: string;
   loading: boolean;
+  /** When an agent tool last took this tab (ms since epoch); absent or 0 if it never has. */
+  agentUsedAt?: number;
 }
 
 export type BrowserPageStateEvent = BrowserPaneState & { sessionId: string };
@@ -689,8 +691,8 @@ export interface BrowserOpenArtifactRequest {
   sessionId: string;
   title: string;
   content: string;
-  /** The model's identifier for the artifact, so the tab reloads when a later reply updates it. */
-  identifier?: string;
+  /** Names the artifact, so a tab still showing it is switched to rather than opened again. */
+  artifactKey?: string;
 }
 
 /** The history controls, which take no url. */

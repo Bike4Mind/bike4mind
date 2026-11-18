@@ -1443,12 +1443,12 @@ export function registerChat(
     if (
       typeof request?.sessionId !== 'string' ||
       typeof request?.title !== 'string' ||
-      typeof request?.content !== 'string'
+      typeof request?.content !== 'string' ||
+      (request.artifactKey !== undefined && typeof request.artifactKey !== 'string')
     ) {
       throw new Error('A conversation, a title and the artifact content are required.');
     }
-    const identifier = typeof request.identifier === 'string' && request.identifier ? request.identifier : undefined;
-    return browser.openArtifact(request.sessionId, request.title, request.content, identifier);
+    return browser.openArtifact(request.sessionId, request.title, request.content, request.artifactKey);
   });
   ipcMain.handle(IPC_CHANNELS.browserGo, (_event, request: BrowserGoRequest): BrowserPaneState => {
     const actions: readonly BrowserGoAction[] = ['back', 'forward', 'reload'];

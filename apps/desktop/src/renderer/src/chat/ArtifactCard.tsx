@@ -216,7 +216,7 @@ export function openArtifactInSessionBrowser(
     sessionId,
     title: artifact.title,
     content: artifact.content,
-    ...(artifact.identifier ? { identifier: artifact.identifier } : {}),
+    ...(artifact.identifier ? { artifactKey: artifact.identifier } : {}),
   }).catch(() => undefined);
 }
 

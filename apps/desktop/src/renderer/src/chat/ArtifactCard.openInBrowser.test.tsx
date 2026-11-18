@@ -95,12 +95,12 @@ describe('openArtifactInSessionBrowser', () => {
     expect(open).toHaveBeenCalledWith({ sessionId: 's1', title: 'Chart', content: '<p>hi</p>' });
   });
 
-  it('passes the identifier along when the artifact has one', () => {
+  it('names the artifact by its identifier, so main can reload its tab when a reply updates it', () => {
     const open = vi.fn(() => Promise.resolve({} as Awaited<ReturnType<typeof window.b4m.browser.openArtifact>>));
 
     openArtifactInSessionBrowser({ title: 'Chart', content: '<p>hi</p>', identifier: 'chart' }, 's1', vi.fn(), open);
 
-    expect(open).toHaveBeenCalledWith({ sessionId: 's1', title: 'Chart', content: '<p>hi</p>', identifier: 'chart' });
+    expect(open).toHaveBeenCalledWith({ sessionId: 's1', title: 'Chart', content: '<p>hi</p>', artifactKey: 'chart' });
   });
 
   it('does nothing without a conversation, and swallows a refusal', async () => {

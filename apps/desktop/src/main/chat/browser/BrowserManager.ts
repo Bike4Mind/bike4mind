@@ -162,6 +162,8 @@ class ElectronPage implements BrowserPage {
   /** Agent steps running in this page right now; a popup opened during one is the agent's. */
   private acting = 0;
   private actedAt = 0;
+  /** When an agent tool last took this tab, so the strip can tell a tab the model is using. */
+  private agentUsedAt = 0;
   inflight = 0;
   lastNetworkAt = 0;
 
@@ -385,7 +387,12 @@ class ElectronPage implements BrowserPage {
       title: this.title(),
       url: hasContent(url) ? url : '',
       loading: !this.webContents.isDestroyed() && this.webContents.isLoading(),
+      agentUsedAt: this.agentUsedAt,
     };
+  }
+
+  markAgentUse(): void {
+    this.agentUsedAt = Date.now();
   }
 
   /** Load without waiting, for a tab opened from a popup: its failures arrive as state and events. */
@@ -711,8 +718,8 @@ export class BrowserManager implements BrowserProvider {
   /** Placement failures already logged, so a wedged page logs once rather than on every event. */
   private readonly warned = new Set<string>();
   private readonly artifactViews = new ArtifactViewRegistry();
-  /** The artifact identifier each tab was opened on, and the view url it was opened at. */
-  private readonly artifactTabIdentifiers = new WeakMap<ElectronPage, { identifier: string; url: string }>();
+  /** The artifact each tab was opened on, so asking for it again can switch back instead of duplicating it. */
+  private readonly artifactTabs = new WeakMap<ElectronPage, { key: string; content: string; url: string }>();
 
   /**
    * The user's own Chrome sessions, for sites they named. Public because the renderer drives it
@@ -733,17 +740,26 @@ export class BrowserManager implements BrowserProvider {
     sessionId: string,
     keepScreenshot: (bytes: Buffer, caption: string) => Promise<ChatMedia | undefined>
   ): BrowserContext {
+    // Every agent tool reaches a tab through here, so this is where a tab becomes one in use.
+    const used = (tab: ElectronPage): ElectronPage => {
+      tab.markAgentUse();
+      this.push(sessionId);
+      return tab;
+    };
     const named = (id: number): ElectronPage => {
       const tab = this.sessions.get(sessionId)?.list.find(candidate => candidate.id === id);
       if (!tab) throw new Error(`There is no tab ${id}. browser_tabs with action "list" shows the open ones.`);
       return tab;
     };
     return {
-      page: async () => this.activeTab(sessionId),
+      page: async () => used(this.activeTab(sessionId)),
       tabs: () => this.tabInfo(sessionId),
-      newTab: async () => this.openTab(sessionId, true) ?? null,
+      newTab: async () => {
+        const tab = this.openTab(sessionId, true);
+        return tab ? used(tab) : null;
+      },
       selectTab: async id => {
-        const tab = named(id);
+        const tab = used(named(id));
         this.activate(sessionId, tab);
         return this.infoOf(sessionId, tab);
       },
@@ -821,19 +837,21 @@ export class BrowserManager implements BrowserProvider {
    * http/https rule because main mints the url here, for content the renderer already shows in
    * its sandboxed frame; typed addresses and the agent's tools still refuse the scheme. Opens a
    * new tab when the active one is showing a page, so the agent's place is not lost.
+   *
+   * With a `key`, a tab still showing that same artifact is brought forward instead. A tab that
+   * has since navigated away, or was opened on different content, does not count.
    */
-  async openArtifact(
-    sessionId: string,
-    title: string,
-    content: string,
-    identifier?: string
-  ): Promise<BrowserPaneState> {
+  async openArtifact(sessionId: string, title: string, content: string, key?: string): Promise<BrowserPaneState> {
     this.session();
+    const open = key ? this.artifactTab(sessionId, key, content) : undefined;
+    if (open) {
+      this.activate(sessionId, open);
+      return this.stateOf(sessionId);
+    }
     const url = this.artifactViews.add(title, content);
     const current = this.sessions.get(sessionId)?.active;
     const page = current?.showable ? (this.openTab(sessionId, true) ?? current) : this.activeTab(sessionId);
-    if (identifier) this.artifactTabIdentifiers.set(page, { identifier, url });
-    else this.artifactTabIdentifiers.delete(page);
+    if (key) this.artifactTabs.set(page, { key, content, url });
     try {
       await page.navigate(url);
     } catch (err) {
@@ -848,18 +866,27 @@ export class BrowserManager implements BrowserProvider {
    * matched by the model's identifier. Each tab reloads where it is: none is opened, activated or
    * focused, and an artifact no tab is showing is left alone.
    *
-   * HTML only: that is the one type the card sends here as its raw content.
+   * HTML only: it is the one type a tab is opened on as the artifact's raw content.
    */
   refreshArtifacts(sessionId: string, artifacts: readonly ChatArtifact[]): void {
     const tabs = this.sessions.get(sessionId)?.list ?? [];
     for (const artifact of artifacts) {
       if (!artifact.identifier || artifact.type !== 'html') continue;
       for (const tab of tabs) {
-        const shown = this.artifactTabIdentifiers.get(tab);
-        if (shown?.identifier !== artifact.identifier || tab.currentUrl() !== shown.url) continue;
-        if (this.artifactViews.replace(shown.url, artifact.title, artifact.content)) tab.go('reload');
+        const opened = this.artifactTabs.get(tab);
+        if (opened?.key !== artifact.identifier || tab.currentUrl() !== opened.url) continue;
+        if (!this.artifactViews.replace(opened.url, artifact.title, artifact.content)) continue;
+        opened.content = artifact.content;
+        tab.go('reload');
       }
     }
+  }
+
+  private artifactTab(sessionId: string, key: string, content: string): ElectronPage | undefined {
+    return this.sessions.get(sessionId)?.list.find(tab => {
+      const opened = this.artifactTabs.get(tab);
+      return opened?.key === key && opened.content === content && tab.currentUrl() === opened.url;
+    });
   }
 
   /** Back, forward or reload. The resulting navigation arrives on its own as a state push. */
