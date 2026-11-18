@@ -115,7 +115,12 @@ describe('ChatService attachments', () => {
       type: 'image',
       source: { type: 'base64', media_type: 'image/png', data: Buffer.from([1, 2, 3]).toString('base64') },
     });
-    expect(content[1]).toEqual({ type: 'text', text: 'what is wrong here?' });
+    expect(content[1]).toMatchObject({
+      type: 'text',
+      text: expect.stringMatching(
+        /^<attached-image-file name="bug\.png" media-type="image\/png" path="[^"]+" \/>\n\nwhat is wrong here\?$/
+      ),
+    });
   });
 
   it('inlines a text file ahead of the prompt, tagged with its name', async () => {
