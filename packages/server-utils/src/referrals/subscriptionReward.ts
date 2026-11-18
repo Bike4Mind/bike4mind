@@ -221,7 +221,9 @@ export async function releaseDueSubscriptionRewards({
 
   for (const candidate of due) {
     try {
-      const expiresAt = new Date(candidate.createdAt.getTime() + creditService.REFERRAL_SUBSCRIPTION_REWARD_TTL_DAYS * DAY_MS);
+      const expiresAt = new Date(
+        candidate.createdAt.getTime() + creditService.REFERRAL_SUBSCRIPTION_REWARD_TTL_DAYS * DAY_MS
+      );
       if (expiresAt <= now) {
         if (await referralSubscriptionRewardRepository.cancelPending(candidate.id, 'expired', now)) result.cancelled++;
         continue;

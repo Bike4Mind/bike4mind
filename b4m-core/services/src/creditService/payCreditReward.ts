@@ -302,7 +302,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const rewardExpired = (reward: HeldCreditRewardRow, now: Date): boolean => {
   const expiresAt =
     reward.expiresAt ??
-    (reward.source === 'referral_subscription' ? new Date(reward.heldAt.getTime() + REFERRAL_SUBSCRIPTION_REWARD_TTL_DAYS * DAY_MS) : null);
+    (reward.source === 'referral_subscription'
+      ? new Date(reward.heldAt.getTime() + REFERRAL_SUBSCRIPTION_REWARD_TTL_DAYS * DAY_MS)
+      : null);
   return !!expiresAt && expiresAt.getTime() <= now.getTime();
 };
 
