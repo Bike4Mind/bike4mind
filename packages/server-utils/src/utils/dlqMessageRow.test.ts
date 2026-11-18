@@ -16,7 +16,13 @@ vi.mock('./dlqScheduleRule', async importOriginal => ({
   resolveScheduleRule,
 }));
 
-import { attributeFailure, resolveDlqScheduleFacts, toDlqMessageRow } from './dlqMessageRow';
+import {
+  attributeFailure,
+  DLQ_SIGNATURE_UNAVAILABLE,
+  dlqFailureSignature,
+  resolveDlqScheduleFacts,
+  toDlqMessageRow,
+} from './dlqMessageRow';
 
 const PARTITION = 'aws';
 
@@ -144,6 +150,49 @@ describe('toDlqMessageRow', () => {
 
   it('leaves the failure absent when there is neither', () => {
     expect(toDlqMessageRow(entry, { MessageId: 'm1' }, ctx).failure).toBeUndefined();
+  });
+});
+
+describe('dlqFailureSignature', () => {
+  const attributes = (errorMessage: string, errorCode = 'Function error') =>
+    ({ errorMessage, errorCode, category: 'unknown', source: 'attributes' }) as const;
+
+  it('groups failures that differ only in ids, digests and counts', () => {
+    const a = dlqFailureSignature(
+      attributes('Job 0f8fad5b-d9cb-469f-a165-70867728950e failed after 1200 ms for 64b7f0c2a1d3e4f5a6b7c8d9')
+    );
+    const b = dlqFailureSignature(
+      attributes('Job 7c9e6679-7425-40de-944b-e07fc1f90ae7 failed after 3000 ms for 65c8a1d2b3e4f5a6b7c8d9e0')
+    );
+    expect(a).toBe(b);
+    expect(a).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('separates different messages, codes, sources and categories', () => {
+    const base = dlqFailureSignature(attributes('Task timed out'));
+    expect(dlqFailureSignature(attributes('Unhandled rejection'))).not.toBe(base);
+    expect(dlqFailureSignature(attributes('Task timed out', 'HTTP 429'))).not.toBe(base);
+    expect(dlqFailureSignature({ errorMessage: 'Task timed out', category: 'timeout', source: 'recorded' })).not.toBe(
+      base
+    );
+  });
+
+  it('gives a message with no failure its own signature', () => {
+    expect(dlqFailureSignature(undefined)).toBe('none');
+  });
+
+  it('marks rows whose recorded failure could not be looked up as unavailable', () => {
+    const entry = { label: 'q1', describe: undefined, replay: 'safe' } as unknown as Parameters<
+      typeof toDlqMessageRow
+    >[0];
+    const ctx = { recorded: undefined, logs: null, replayAttempts: undefined };
+    const message = withAttrs({ ErrorMessage: str('boom') });
+    expect(toDlqMessageRow(entry, message, { ...ctx, lookupFailed: true }).failureSignature).toBe(
+      DLQ_SIGNATURE_UNAVAILABLE
+    );
+    expect(toDlqMessageRow(entry, message, { ...ctx, lookupFailed: false }).failureSignature).toBe(
+      dlqFailureSignature(attributes('boom', ''))
+    );
   });
 });
 

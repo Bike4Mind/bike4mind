@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Message, MessageAttributeValue } from '@aws-sdk/client-sqs';
 import type { DlqRecommendation } from '@bike4mind/common';
 import { CONSUMER_LOGS_BUDGET_MS, settleWithinBudget, type ConsumerLogs } from './dlqConsumerLogs';
@@ -87,6 +88,42 @@ export function attributeFailure(message: Message): DlqAttributedFailure | undef
   };
 }
 
+/** The failure a listing row shows: the recorded one, else the one the redrive attached as message attributes. */
+export function rowFailure(message: Message, recorded: DlqFailureRecord | undefined): DlqRowFailure | undefined {
+  if (recorded) return { errorMessage: recorded.errorMessage, category: recorded.category, source: 'recorded' };
+  const attributed = attributeFailure(message);
+  return attributed
+    ? {
+        errorMessage: attributed.errorMessage,
+        category: 'unknown',
+        source: 'attributes',
+        errorCode: attributed.errorCode,
+      }
+    : undefined;
+}
+
+/** The signature of a row whose recorded failure could not be looked up; it never joins or names a group. */
+export const DLQ_SIGNATURE_UNAVAILABLE = 'unavailable';
+const NO_FAILURE_SIGNATURE = 'none';
+// Ids, hex digests and counts vary between otherwise identical failures, so they do not split a group.
+const VARIABLE_TOKENS = [
+  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+  /\b[0-9a-f]{16,}\b/gi,
+  /\d{3,}/g,
+];
+
+/**
+ * Groups dead letters that failed the same way. The admin listing and the group discard route both derive it
+ * from rowFailure, so a group discard only ever matches messages the listing showed in that group.
+ */
+export function dlqFailureSignature(failure: DlqRowFailure | undefined): string {
+  if (!failure) return NO_FAILURE_SIGNATURE;
+  // A stored failure record is read as-is, so its errorMessage is not guaranteed.
+  const message = VARIABLE_TOKENS.reduce((text, token) => text.replace(token, '#'), failure.errorMessage ?? '');
+  const key = JSON.stringify([failure.source, failure.category, failure.errorCode ?? '', message]);
+  return createHash('sha256').update(key).digest('hex').slice(0, 16);
+}
+
 /** The entry's staleWhen when it covers this raw body; a body outside staleDetailTypes gets none. */
 export function staleWhenForMessage(entry: DlqStaleScope, rawBody: string | undefined): DlqStaleWhen | undefined {
   if (!entry.staleWhen || !entry.staleDetailTypes) return entry.staleWhen;
@@ -111,6 +148,8 @@ export type DlqMessageRow = {
   logsScope?: DlqLogsLink['scope'];
   failureLookupFailed?: true;
   failure?: DlqRowFailure;
+  /** See dlqFailureSignature; DLQ_SIGNATURE_UNAVAILABLE when the recorded failure lookup failed. */
+  failureSignature: string;
   recommendation: DlqRecommendation;
 };
 
@@ -180,17 +219,7 @@ export function toDlqMessageRow(
 ): DlqMessageRow {
   const { recorded } = ctx;
   const attributes = attributeFailure(message);
-  const attributed = recorded ? undefined : attributes;
-  const failure: DlqRowFailure | undefined = recorded
-    ? { errorMessage: recorded.errorMessage, category: recorded.category, source: 'recorded' }
-    : attributed
-      ? {
-          errorMessage: attributed.errorMessage,
-          category: 'unknown',
-          source: 'attributes',
-          errorCode: attributed.errorCode,
-        }
-      : undefined;
+  const failure = rowFailure(message, recorded);
   const logsLink = messageLogsUrl({
     logs: ctx.logs,
     sentTimestamp: message.Attributes?.SentTimestamp,
@@ -211,6 +240,7 @@ export function toDlqMessageRow(
     ...(logsLink ? { logsScope: logsLink.scope } : {}),
     ...(ctx.lookupFailed ? { failureLookupFailed: true as const } : {}),
     failure,
+    failureSignature: ctx.lookupFailed && !recorded ? DLQ_SIGNATURE_UNAVAILABLE : dlqFailureSignature(failure),
     recommendation: recommendForDlqMessage({
       failure: recorded,
       logs: ctx.logs,
