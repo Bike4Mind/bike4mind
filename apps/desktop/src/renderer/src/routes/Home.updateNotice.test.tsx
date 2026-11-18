@@ -121,6 +121,12 @@ async function mount() {
 
 const byTestId = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
 const notices = () => Array.from(document.querySelectorAll<HTMLElement>('[data-testid="update-notice"]'));
+const expectCornerAnchored = (el: HTMLElement) => {
+  const style = getComputedStyle(el);
+  expect(style.position).toBe('fixed');
+  expect(style.right).toBe('12px');
+  expect(style.bottom).toBe('12px');
+};
 
 describe('the update card in the signed-in window', () => {
   it('stays at the window bottom-right when the session panel opens and closes', async () => {
@@ -153,9 +159,7 @@ describe('the update card in the signed-in window', () => {
 
     await act(async () => byTestId('chat-toggle-session-panel-btn')?.click());
     expect(byTestId('session-panel')?.getAttribute('role')).toBe('complementary');
-    expect(getComputedStyle(notices()[0]).position).toBe('fixed');
-    expect(getComputedStyle(notices()[0]).right).toBe('12px');
-    expect(getComputedStyle(notices()[0]).bottom).toBe('12px');
+    expectCornerAnchored(notices()[0]);
 
     await act(async () => byTestId('chat-toggle-session-panel-btn')?.click());
     expect(byTestId('session-panel')).toBeNull();
@@ -215,17 +219,13 @@ describe('the update card in the signed-in window', () => {
     await mount();
     expect(byTestId('sidebar')).not.toBeNull();
     expect(notices()).toHaveLength(1);
-    expect(getComputedStyle(notices()[0]).position).toBe('fixed');
-    expect(getComputedStyle(notices()[0]).right).toBe('12px');
-    expect(getComputedStyle(notices()[0]).bottom).toBe('12px');
+    expectCornerAnchored(notices()[0]);
     expect(byTestId('sidebar')?.contains(notices()[0])).toBe(false);
 
     await act(async () => byTestId('sidebar-toggle-btn')?.click());
     expect(byTestId('sidebar-rail')).not.toBeNull();
     expect(notices()).toHaveLength(1);
-    expect(getComputedStyle(notices()[0]).position).toBe('fixed');
-    expect(getComputedStyle(notices()[0]).right).toBe('12px');
-    expect(getComputedStyle(notices()[0]).bottom).toBe('12px');
+    expectCornerAnchored(notices()[0]);
   });
 
   it('confirms in the card a restart the account label asked for while work is running', async () => {
