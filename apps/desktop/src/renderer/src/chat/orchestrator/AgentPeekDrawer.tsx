@@ -41,15 +41,16 @@ function errorText(error: unknown): string {
 
 /**
  * The session's messages, refetched whenever `refreshKey` changes. getSession includes the reply in
- * flight, so a call parked at the approval gate is in here with its `approvalId`.
+ * flight, so a call parked at the approval gate is in here with its `approvalId`. A null id loads nothing.
  */
 export function useSessionMessages(
-  agentId: string,
+  agentId: string | null,
   refreshKey: string
 ): { messages: ChatMessage[]; loadError: string | null } {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   useEffect(() => {
+    if (agentId === null) return;
     let stale = false;
     window.b4m.chat.getSession(agentId).then(
       session => {
@@ -244,7 +245,8 @@ function ReplyBox({ agentId }: { agentId: string }) {
 }
 
 export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekDrawerProps) {
-  const { messages, loadError } = useSessionMessages(agent.id, refreshKeyOf(agent));
+  const isSession = actions.isSession?.(agent.id) ?? true;
+  const { messages, loadError } = useSessionMessages(isSession ? agent.id : null, refreshKeyOf(agent));
   // The snapshot can trail the status push, so the state decides whether anything is still waiting.
   const pending = agent.state === 'needs-you' ? pendingCallsIn(messages) : [];
   const recent = messages
@@ -350,41 +352,49 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
         ))}
       </Box>
 
-      <ReplyBox agentId={agent.id} />
+      {!isSession && agent.lastSnippet && (
+        <Typography level="body-sm" data-testid="orchestrator-peek-snippet">
+          {agent.lastSnippet}
+        </Typography>
+      )}
 
-      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-        <Button
-          size="sm"
-          variant="outlined"
-          data-testid="orchestrator-peek-open-btn"
-          onClick={() => actions.open(agent.id)}
-        >
-          Open
-        </Button>
-        {canStop && (
+      {isSession && <ReplyBox agentId={agent.id} />}
+
+      {isSession && (
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
           <Button
             size="sm"
             variant="outlined"
-            color="danger"
-            data-testid="orchestrator-peek-stop-btn"
-            onClick={() => void actions.stop(agent.id)}
+            data-testid="orchestrator-peek-open-btn"
+            onClick={() => actions.open(agent.id)}
           >
-            Stop
+            Open
           </Button>
-        )}
-        <Button
-          size="sm"
-          variant="outlined"
-          color="neutral"
-          data-testid="orchestrator-peek-archive-btn"
-          onClick={() => {
-            actions.archive(agent.id);
-            onClose();
-          }}
-        >
-          Archive
-        </Button>
-      </Box>
+          {canStop && (
+            <Button
+              size="sm"
+              variant="outlined"
+              color="danger"
+              data-testid="orchestrator-peek-stop-btn"
+              onClick={() => void actions.stop(agent.id)}
+            >
+              Stop
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            data-testid="orchestrator-peek-archive-btn"
+            onClick={() => {
+              actions.archive(agent.id);
+              onClose();
+            }}
+          >
+            Archive
+          </Button>
+        </Box>
+      )}
     </Box>
   );
 }

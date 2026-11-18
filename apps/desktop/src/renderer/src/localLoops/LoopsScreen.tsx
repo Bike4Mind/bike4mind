@@ -305,6 +305,7 @@ function LoopPane({
       if (isLoopSessionId(id)) void window.b4m.chat.stopReply(id);
     },
     archive: () => undefined,
+    isSession: isLoopSessionId,
   };
 
   const runNow = async () => {

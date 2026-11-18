@@ -77,6 +77,25 @@ beforeEach(() => {
 afterEach(() => themed.unmount());
 
 describe('AgentPeekDrawer', () => {
+  it('shows a non-session roster entry without loading a session or offering session actions', async () => {
+    const lane = agentFixture('lane:loop-1:0', 'idle', { lastSnippet: 'Waiting for tickets' });
+    await act(async () =>
+      themed.render(
+        <AgentPeekDrawer
+          agent={lane}
+          persona={undefined}
+          onClose={onClose}
+          actions={{ ...actions, isSession: id => !id.startsWith('lane:') }}
+        />
+      )
+    );
+    expect(chat.getSession).not.toHaveBeenCalled();
+    expect(el('orchestrator-peek-snippet').textContent).toBe('Waiting for tickets');
+    for (const id of ['reply-input', 'send-btn', 'open-btn', 'stop-btn', 'archive-btn', 'load-error']) {
+      expect(query(`orchestrator-peek-${id}`)).toBeNull();
+    }
+  });
+
   it('keeps the task title as the heading and shows the persona beneath it', async () => {
     const agent = agentFixture('a1', 'working', { title: 'Fix the flaky login test' });
     await renderDrawer(agent);
