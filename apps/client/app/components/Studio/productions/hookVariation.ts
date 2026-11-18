@@ -25,7 +25,10 @@ const swapOpeningVideoFile = (timeline: StudioTimeline, fromFileId: string, toFi
     ...timeline,
     tracks: timeline.tracks.map(track =>
       track.kind === 'video'
-        ? { ...track, clips: track.clips.map(clip => (clip === opening ? { ...clip, fileId: toFileId } : clip)) }
+        ? {
+            ...track,
+            clips: track.clips.map(clip => (clip === opening ? { ...clip, fileId: toFileId, trimStartMs: 0 } : clip)),
+          }
         : track
     ),
   };

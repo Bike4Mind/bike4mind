@@ -60,6 +60,21 @@ describe('shot list edits', () => {
   });
 });
 
+describe('clip handling on take changes', () => {
+  const animated = shot('one', { fileIds: [FILE_A, FILE_B], chosenFileId: FILE_A, clipFileId: FILE_C });
+
+  it('drops the clip when a different take is chosen and keeps it when the chosen take is unchanged', () => {
+    expect(chooseTake([animated], 'one', FILE_B)[0]).not.toHaveProperty('clipFileId');
+    expect(chooseTake([animated], 'one', FILE_B)[0].chosenFileId).toBe(FILE_B);
+    expect(chooseTake([animated], 'one', FILE_A)[0].clipFileId).toBe(FILE_C);
+  });
+
+  it('drops the clip when the chosen take is removed and keeps it when another take is removed', () => {
+    expect(removeTake([animated], 'one', FILE_A)[0]).not.toHaveProperty('clipFileId');
+    expect(removeTake([animated], 'one', FILE_B)[0]).toMatchObject({ chosenFileId: FILE_A, clipFileId: FILE_C });
+  });
+});
+
 describe('sendShotsToTimeline', () => {
   it('lays four chosen takes end to end across a 15s ad on the first video track', () => {
     const timeline = defaultStudioTimeline('ad_campaign');

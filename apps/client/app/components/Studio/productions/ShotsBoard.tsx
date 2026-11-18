@@ -75,14 +75,19 @@ const ShotsBoard = ({ composition, timeline, onTimelineChange, onSendTake }: Sho
   // Loads (or reads the cached) file docs for the takes about to be sent, so a thumbnail still loading is not
   // mistaken for a non-visual take.
   const loadFiles = async (fileIds: string[]) => {
+    const failed = new Set<string>();
     const files = await Promise.all(
       fileIds.map(fileId =>
         queryClient
           .ensureQueryData({ queryKey: fabFileKeys.doc(fileId), queryFn: () => getFabFileByIdFromServer(fileId) })
-          .catch(() => undefined)
+          .catch(error => {
+            console.error('Could not load a shot take', error);
+            failed.add(fileId);
+            return undefined;
+          })
       )
     );
-    return new Map(files.flatMap(file => (file ? [[file.id, file] as const] : [])));
+    return { files: new Map(files.flatMap(file => (file ? [[file.id, file] as const] : []))), failed };
   };
   const isVisualFile = (file: IFabFileDocument | undefined) => {
     const kind = file ? studioFileMediaKind(file.mimeType) : undefined;
@@ -111,7 +116,7 @@ const ShotsBoard = ({ composition, timeline, onTimelineChange, onSendTake }: Sho
     });
 
   const sendAll = async () => {
-    const files = await loadFiles(shots.flatMap(shot => shotTimelineFileId(shot) ?? []));
+    const { files } = await loadFiles(shots.flatMap(shot => shotTimelineFileId(shot) ?? []));
     try {
       onTimelineChange(sendShotsToTimeline(timeline, shots, fileId => isVisualFile(files.get(fileId))));
       toast.success('Shots sent to the timeline');
@@ -122,7 +127,12 @@ const ShotsBoard = ({ composition, timeline, onTimelineChange, onSendTake }: Sho
 
   const sendOne = async (shot: StudioShot) => {
     const fileId = shotTimelineFileId(shot);
-    const file = fileId ? (await loadFiles([fileId])).get(fileId) : undefined;
+    const loaded = fileId ? await loadFiles([fileId]) : undefined;
+    const file = fileId ? loaded?.files.get(fileId) : undefined;
+    if (fileId && loaded?.failed.has(fileId)) {
+      toast.error('Could not load this take. Try again.');
+      return;
+    }
     if (!file || !isVisualFile(file)) {
       toast.error('Pick an image or video take for this shot first.');
       return;

@@ -87,6 +87,26 @@ describe('hookVariationBody', () => {
     expect(videoFiles).toEqual([FILE_B, FILE_C]);
   });
 
+  it('resets the trim of the swapped clip', () => {
+    const trimmed: StudioCompositionResponse = {
+      ...source,
+      timeline: {
+        ...source.timeline,
+        tracks: source.timeline.tracks.map(track =>
+          track.kind === 'video'
+            ? { ...track, clips: track.clips.map(clip => ({ ...clip, trimStartMs: 1500 })) }
+            : track
+        ),
+      },
+    };
+    const body = hookVariationBody(trimmed, { title: 'B', openingTakeFileId: FILE_B });
+    const clips = body.timeline?.tracks.flatMap(track => (track.kind === 'video' ? track.clips : [])) ?? [];
+    expect(clips.map(clip => [clip.fileId, clip.trimStartMs])).toEqual([
+      [FILE_B, 0],
+      [FILE_C, 1500],
+    ]);
+  });
+
   it('copies the production with a new opening line, prompt and take, swapping the take on the timeline', () => {
     const body = hookVariationBody(source, {
       title: ' Spring ad - B ',

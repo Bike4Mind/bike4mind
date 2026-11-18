@@ -69,16 +69,22 @@ export const addTakes = (shots: StudioShot[], shotId: string, fileIds: string[])
     return { ...shot, fileIds: takes, chosenFileId: shot.chosenFileId ?? takes[0] };
   });
 
+/** The clip was animated from the previous chosen take, so a different choice drops it. */
+const withChosenTake = (shot: StudioShot, chosenFileId: string | undefined): StudioShot => {
+  const { chosenFileId: previous, clipFileId, ...rest } = shot;
+  const keepClip = clipFileId !== undefined && chosenFileId === previous;
+  return { ...rest, ...(chosenFileId && { chosenFileId }), ...(keepClip && { clipFileId }) };
+};
+
 export const chooseTake = (shots: StudioShot[], shotId: string, fileId: string): StudioShot[] =>
-  mapShot(shots, shotId, shot => (shot.fileIds.includes(fileId) ? { ...shot, chosenFileId: fileId } : shot));
+  mapShot(shots, shotId, shot => (shot.fileIds.includes(fileId) ? withChosenTake(shot, fileId) : shot));
 
 /** Removing the chosen take falls back to the next remaining one. */
 export const removeTake = (shots: StudioShot[], shotId: string, fileId: string): StudioShot[] =>
   mapShot(shots, shotId, shot => {
     const takes = shot.fileIds.filter(id => id !== fileId);
-    const { chosenFileId: _dropped, ...rest } = shot;
     const chosenFileId = shot.chosenFileId === fileId ? takes[0] : shot.chosenFileId;
-    return { ...rest, fileIds: takes, ...(chosenFileId && { chosenFileId }) };
+    return { ...withChosenTake(shot, chosenFileId), fileIds: takes };
   });
 
 /** A take that can sit on a video track: an image or a video (an audio take has no picture). */

@@ -207,6 +207,14 @@ describe('ProductionEditor', () => {
     expect(h.blocker.options?.shouldBlockFn()).toBe(true);
   });
 
+  it('enables the unload guard for a field edit that has not saved yet', () => {
+    renderEditor(composition());
+    expect(h.blocker.options).toMatchObject({ enableBeforeUnload: false });
+
+    fireEvent.change(screen.getByTestId('production-brief-summary-input'), { target: { value: 'Cold brew' } });
+    expect(h.blocker.options).toMatchObject({ enableBeforeUnload: true });
+  });
+
   it('asks before discarding edits when navigation is blocked', () => {
     h.blocker.status = 'blocked';
     renderEditor(composition());

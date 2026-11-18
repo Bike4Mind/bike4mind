@@ -249,6 +249,27 @@ describe('updateComposition', () => {
     expect(kept.brief).toEqual({ productFileId: FILE_NEW, summary: 'Cold brew' });
   });
 
+  it('checks a new clip file sent in a shots-only edit', async () => {
+    const adapters = createFakeAdapters([FILE_NEW]);
+    const created = await create(adapters, { title: 'Launch' });
+
+    const codes = await issueCodes(
+      update(adapters, created.id, {
+        shots: [{ id: 'shot-1', title: 'Open', fileIds: [FILE_NEW], clipFileId: FILE_THEIRS }],
+      })
+    );
+    expect(codes.map(([code]) => code)).toContain('unknown_file');
+  });
+
+  it('checks a new logo sent in a brand-kit-only edit', async () => {
+    const adapters = createFakeAdapters([FILE_NEW]);
+    const created = await create(adapters, { title: 'Launch' });
+
+    expect(await issueCodes(update(adapters, created.id, { brandKit: { logoFileId: FILE_THEIRS } }))).toEqual([
+      ['unknown_file', 'brandKit.logoFileId'],
+    ]);
+  });
+
   it('skips the file lookup for a content-free edit', async () => {
     const adapters = createFakeAdapters();
     const created = await create(adapters, { title: 'Launch', timeline: videoTimeline(FILE_MINE) });
