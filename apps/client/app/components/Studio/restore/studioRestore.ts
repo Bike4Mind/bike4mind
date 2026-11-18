@@ -19,6 +19,11 @@ export type StudioRestoreRequest = {
    * Requests store input files by id only, and the forms show each input by name.
    */
   fileNames: Readonly<Record<string, string | null>>;
+  /**
+   * Set when another surface opens the form (chat's Edit) rather than a stored take being restored: the request then
+   * holds only what that surface knows, so a value it never had is not reported as missing.
+   */
+  handoff?: true;
 };
 
 export type StudioRestore = StudioRestoreRequest & { id: number };
@@ -91,6 +96,9 @@ const ROLE_NOUNS: Record<GeneratedAssetLineageRole, string> = {
   variation_of: 'source image',
   edit_source: 'edit source',
   mask: 'mask',
+  scene_video: 'Scene video',
+  scene_audio: 'soundtrack',
+  scene_cover: 'cover art',
 };
 
 export const roleNoun = (role: GeneratedAssetLineageRole): string => ROLE_NOUNS[role];

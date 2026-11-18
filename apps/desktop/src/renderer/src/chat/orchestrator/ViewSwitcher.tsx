@@ -7,7 +7,18 @@ import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import Typography from '@mui/joy/Typography';
 import { Fragment, useEffect, useRef, type ReactNode } from 'react';
-import { BoardIcon, CaretDownIcon, CheckIcon, TableIcon, TavernIcon } from '../icons';
+import {
+  AquariumIcon,
+  BoardIcon,
+  CaretDownIcon,
+  CheckIcon,
+  ConstellationIcon,
+  SwimlanesIcon,
+  TableIcon,
+  TavernIcon,
+  TileWallIcon,
+  TransitIcon,
+} from '../icons';
 import { isMac } from '../platform';
 import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs';
 import { AMBIENT_IDLE_MS } from './ambient';
@@ -32,6 +43,13 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     icon: <TavernIcon />,
     ambient: true,
   },
+  aquarium: {
+    label: 'Aquarium',
+    description: 'A quiet tank, one fish per agent',
+    group: 'scene',
+    icon: <AquariumIcon />,
+    ambient: true,
+  },
   board: {
     label: 'Board',
     description: 'Columns by state, like a kanban',
@@ -44,6 +62,34 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     description: 'Every agent in sortable rows',
     group: 'layout',
     icon: <TableIcon />,
+    ambient: false,
+  },
+  'tile-wall': {
+    label: 'Tile Wall',
+    description: 'A calm grid, one tile per agent',
+    group: 'layout',
+    icon: <TileWallIcon />,
+    ambient: false,
+  },
+  swimlanes: {
+    label: 'Swimlanes',
+    description: 'One lane per agent, nested under its parent',
+    group: 'layout',
+    icon: <SwimlanesIcon />,
+    ambient: false,
+  },
+  constellation: {
+    label: 'Constellation',
+    description: 'Agents as stars around the orchestrator',
+    group: 'layout',
+    icon: <ConstellationIcon />,
+    ambient: false,
+  },
+  transit: {
+    label: 'Transit',
+    description: 'A line of stops, agents placed by phase',
+    group: 'layout',
+    icon: <TransitIcon />,
     ambient: false,
   },
 };
@@ -72,8 +118,18 @@ export function isFocusToggle(event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey' |
   return mod && event.shiftKey && !event.altKey && event.code === 'KeyF';
 }
 
+/** Mod+Shift+Esc, matched by `code` like the others: the reserved way back to a known layout. */
+export function isViewReset(event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'code'>) {
+  const mod = isMac ? event.metaKey : event.ctrlKey;
+  return mod && event.shiftKey && !event.altKey && event.code === 'Escape';
+}
+
+/** What the reset lands on: the plain layout, so a skinned or broken view is always escapable. */
+export const RESET_VIEW: OrchestratorViewId = 'board';
+
 const SHORTCUT_HINT = isMac ? '\u2318\u21E7[ ]' : 'Ctrl+Shift+[ ]';
 const FOCUS_SHORTCUT = isMac ? '\u2318\u21E7F' : 'Ctrl+Shift+F';
+const RESET_SHORTCUT = isMac ? '\u2318\u21E7Esc' : 'Ctrl+Shift+Esc';
 
 interface Toggle {
   on: boolean;
@@ -98,6 +154,23 @@ export function ViewSwitcher({
   // On the window, as the sidebar's own shortcuts are: the user is usually typing in the composer.
   const latest = useRef({ view, onViewChange, focus });
   latest.current = { view, onViewChange, focus };
+  const resetView = () => {
+    const { onViewChange: changeView, focus: currentFocus } = latest.current;
+    changeView(RESET_VIEW);
+    if (currentFocus?.on) currentFocus.onToggle(false);
+  };
+  useEffect(() => {
+    // Capture phase and stopped: the composer's and peek drawer's Escape handlers would otherwise
+    // take the chord first (stopping a turn, closing the drawer) and the reset would never run.
+    const onResetKeyDown = (event: KeyboardEvent) => {
+      if (!isViewReset(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      resetView();
+    };
+    window.addEventListener('keydown', onResetKeyDown, true);
+    return () => window.removeEventListener('keydown', onResetKeyDown, true);
+  }, []);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
@@ -161,6 +234,15 @@ export function ViewSwitcher({
             })}
           </Fragment>
         ))}
+        <ListDivider />
+        <MenuItem onClick={resetView} data-testid="orchestrator-view-reset">
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography level="body-sm">Reset to Board</Typography>
+            <Typography level="body-xs" textColor="text.tertiary">
+              {`Back to the plain layout, Focus off (${RESET_SHORTCUT})`}
+            </Typography>
+          </Box>
+        </MenuItem>
         {focus && (
           <>
             <ListDivider />

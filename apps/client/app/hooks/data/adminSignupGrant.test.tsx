@@ -34,19 +34,25 @@ describe('useAdminSignupGrantPendingList', () => {
     const { Wrapper } = setup();
     const { result } = renderHook(
       () =>
-        useAdminSignupGrantPendingList({ status: 'held', heldReason: undefined, source: 'package', sort: 'remaining' }),
+        useAdminSignupGrantPendingList({
+          status: 'held',
+          heldReason: undefined,
+          source: 'package',
+          activeDays: '7',
+          sort: 'remaining',
+        }),
       { wrapper: Wrapper }
     );
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(apiGet).toHaveBeenNthCalledWith(1, '/api/admin/signup-grants/pending', {
-      params: { status: 'held', source: 'package', sort: 'remaining' },
+      params: { status: 'held', source: 'package', activeDays: '7', sort: 'remaining' },
     });
     expect(result.current.hasNextPage).toBe(true);
 
     await act(() => result.current.fetchNextPage());
     expect(apiGet).toHaveBeenNthCalledWith(2, '/api/admin/signup-grants/pending', {
-      params: { status: 'held', source: 'package', sort: 'remaining', cursor: 'cursor-2' },
+      params: { status: 'held', source: 'package', activeDays: '7', sort: 'remaining', cursor: 'cursor-2' },
     });
     await waitFor(() => expect(result.current.hasNextPage).toBe(false));
   });

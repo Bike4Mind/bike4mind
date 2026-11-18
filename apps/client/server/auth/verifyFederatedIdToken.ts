@@ -22,6 +22,7 @@
 import { JwtVerifier } from 'aws-jwt-verify';
 import { SimpleJwksCache } from 'aws-jwt-verify/jwk';
 import { SimpleFetcher } from 'aws-jwt-verify/https';
+import { FetchError, JwksValidationError } from 'aws-jwt-verify/error';
 import type { IOAuthClientFederatedIdp } from '@bike4mind/database/auth';
 
 /** The library's default JWKS fetcher sends no User-Agent; the public JWKS endpoint expects one. */
@@ -29,8 +30,15 @@ export const JWKS_USER_AGENT = 'Lumina5-JwksFetcher/1.0';
 
 /** Thrown for any verification/extraction failure. The route maps this to `invalid_grant`. */
 export class FederatedIdTokenError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
+  /** The JWKS could not be fetched (network, timeout), so the token was never judged. */
+  readonly jwksUnavailable: boolean;
+  /** The JWKS endpoint answered 200 with a document that is not a valid JWKS. */
+  readonly jwksInvalid: boolean;
+
+  constructor(message: string, options?: { cause?: unknown; jwksUnavailable?: boolean; jwksInvalid?: boolean }) {
+    super(message, options?.cause === undefined ? undefined : { cause: options.cause });
+    this.jwksUnavailable = options?.jwksUnavailable ?? false;
+    this.jwksInvalid = options?.jwksInvalid ?? false;
     this.name = 'FederatedIdTokenError';
   }
 }
@@ -143,7 +151,11 @@ export async function verifyFederatedIdToken(
   try {
     claims = (await getVerifier(idp).verify(idToken)) as Record<string, unknown>;
   } catch (cause) {
-    throw new FederatedIdTokenError('ID token failed signature/claim verification', { cause });
+    throw new FederatedIdTokenError('ID token failed signature/claim verification', {
+      cause,
+      jwksUnavailable: cause instanceof FetchError,
+      jwksInvalid: cause instanceof JwksValidationError,
+    });
   }
 
   if (idp.subjectSource === 'sub') {

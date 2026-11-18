@@ -9,23 +9,27 @@ import { ExampleQuestButtons } from './exampleQuests';
 import { questAgents, useFinale, type ParentReport } from './finale';
 import { FinaleBanner } from './FinaleBanner';
 import { FocusPanel } from './FocusPanel';
+import { useRunSpend } from './runSpend';
 import { NeedsYouCard } from './NeedsYouCard';
 import type { OrchestratorViewId } from './orchestratorPrefs';
 import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
 import { ViewSwitcher } from './ViewSwitcher';
-import { toViewSnapshot } from './viewSnapshot';
+import { useQuickApprovals } from './quickApprovals';
+import { runViewAction, toViewSnapshot } from './viewSnapshot';
 import { acceptViewAction, type ViewAction } from '@shared/viewSnapshot';
 
 export interface AgentActions {
   open(id: string): void;
-  stop(id: string): void;
+  stop(id: string): void | Promise<void>;
   archive(id: string): void;
 }
 
 export interface OrchestratorViewProps {
   agents: readonly AgentView[];
+  /** The orchestrating session, for a view built on the snapshot (snapshotView.tsx). */
+  rootId?: string;
   onSelect(id: string): void;
   selectedId: string | null;
   introPlaying: boolean;
@@ -184,6 +188,7 @@ export function OrchestratorStage({
 
   const quest = useMemo(() => questAgents(agents, report), [agents, report]);
   const finale = useFinale(rootId, quest, parent, report);
+  const spend = useRunSpend(rootId, finale.shown);
   useEffect(() => {
     if (finale.shown) playChime();
   }, [finale.shown]);
@@ -193,6 +198,7 @@ export function OrchestratorStage({
   const banner = finale.shown && report && (
     <FinaleBanner
       agents={quest}
+      spend={spend}
       placement={bannerInScene ? 'scene' : 'inline'}
       onRead={() => {
         finale.dismiss();
@@ -204,6 +210,7 @@ export function OrchestratorStage({
 
   const viewProps: OrchestratorViewProps = {
     agents,
+    rootId,
     onSelect: setSelectedId,
     selectedId,
     introPlaying,
@@ -216,16 +223,20 @@ export function OrchestratorStage({
     settled: ambient?.settled === true,
   };
 
+  const approvals = useQuickApprovals(focused, rootId, agents, parent);
   const snapshot = useMemo(
-    () => (focused && rootId !== undefined ? toViewSnapshot(rootId, agents, parent) : undefined),
-    [focused, rootId, agents, parent]
+    () => (focused && rootId !== undefined ? toViewSnapshot(rootId, agents, parent, approvals) : undefined),
+    [focused, rootId, agents, parent, approvals]
   );
   // Through the same gate a view that does not ship with the app will go through.
-  const runViewAction = (action: ViewAction) => {
+  const onViewAction = async (action: ViewAction) => {
     const accepted = snapshot && acceptViewAction(snapshot, action);
     if (!accepted) return;
-    if (accepted.kind === 'open-root') onParentFocus?.();
-    else setSelectedId(accepted.agentId);
+    await runViewAction(accepted, {
+      openAgent: setSelectedId,
+      openRoot: () => onParentFocus?.(),
+      stop: actions.stop,
+    });
   };
 
   // The parent first: it is the one whose answer everything else is waiting behind.
@@ -326,7 +337,7 @@ export function OrchestratorStage({
               onExampleQuest={onExampleQuest}
             />
           ) : snapshot ? (
-            <FocusPanel snapshot={snapshot} onAction={runViewAction} />
+            <FocusPanel snapshot={snapshot} onAction={onViewAction} />
           ) : renderView ? (
             renderView(view, viewProps)
           ) : (

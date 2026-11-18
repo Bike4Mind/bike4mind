@@ -9,18 +9,26 @@ import {
   dataLakeResearchRunRepository,
   fabFileRepository,
   organizationRepository,
+  spendFreezeRepository,
   usageEventRepository,
   userRepository,
 } from '@bike4mind/database';
-import { apiKeyService, dataLakeResearchService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
+import {
+  apiKeyService,
+  dataLakeResearchService,
+  dataLakeService,
+  recordOperationalUsage,
+  spendFreezeService,
+} from '@bike4mind/services';
 import { resolveWebSearchProviders, safeHostname, searchWithHedge } from '@bike4mind/services/llm';
 import { getAvailableModels, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { fetchAndParseURL, ssrfSafeDownload } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
-import { RESEARCH_FEED_MAX_BYTES, researchFeedFingerprint } from '@bike4mind/common';
+import { isSpendFrozenError, RESEARCH_FEED_MAX_BYTES, researchFeedFingerprint } from '@bike4mind/common';
 import type { ResearchFeedCursor, ResearchRunTotals, SettleResearchRunInput } from '@bike4mind/common';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { admitProposedSource } from '@bike4mind/server-utils/dataLakes/proposalAdmissionDeps';
 import { serializeLakeClaim } from '@bike4mind/server-utils/dataLakes/serializeLakeClaim';
@@ -219,6 +227,33 @@ export async function runLakeResearch(
     return { claimed: true };
   }
 
+  // A pause since the start was admitted stops the run before it spends. The subject is the holder
+  // `recordSpend` charges: the owner's org pool when that org resolves, the owner personally otherwise.
+  // A failed read settles failed and rethrows, like the reads above.
+  if (owner) {
+    const billedOrganization = owner.organizationId
+      ? await organizationRepository
+          .findById(owner.organizationId)
+          .catch(error => failAndRethrow(error, 0, claimed.totals))
+      : null;
+    try {
+      await spendFreezeService.assertSpendNotFrozen(
+        spendFreezeSubjectForRequest({ user: owner }, billedOrganization?.id ?? null),
+        { db: { spendFreezes: spendFreezeRepository } }
+      );
+    } catch (error) {
+      if (!isSpendFrozenError(error)) return failAndRethrow(error, 0, claimed.totals);
+      await settle({
+        status: 'failed',
+        completedAt: new Date(),
+        spentMicroUsd: 0,
+        totals: claimed.totals,
+        error: error.message,
+      });
+      return { claimed: true };
+    }
+  }
+
   // Mirrors what the loop last reported, so the `failed` settle below records the money actually
   // spent rather than zero. A run that dies after four judgments really did spend four judgments,
   // and reporting 0 would make the per-lake ceiling look untouched on the very run that proves it
@@ -377,6 +412,7 @@ export async function runLakeResearch(
     )) as ApiKeyTable;
     const models = await getAvailableModels(apiKeyTable);
     const judgeService = new dataLakeResearchService.RelevanceJudgeService(logger);
+    const itemRuleService = new dataLakeResearchService.ItemRuleService(logger);
     // Resolved once, against the live catalog: a config naming a model this deployment has since
     // retired or disabled falls back rather than failing the whole run. Disabled counts because the
     // picker drops disabled models, but a config saved before the model was disabled still names it.
@@ -397,7 +433,7 @@ export async function runLakeResearch(
 
     // Re-resolved on every admit: ownership can transfer mid-run, and the rule must act as whoever
     // owns the lake now. The live config's off switch and site lists can only narrow admits mid-run;
-    // enabling it or adding sites applies from the next run. Never throws: a failure leaves it pending.
+    // enabling it, adding sites or adding item rules applies from the next run. Never throws: a failure leaves it pending.
     const autoAdmit: dataLakeResearchService.ResearchRunPorts['autoAdmit'] = async (proposal, rule) => {
       try {
         const grants = await dataLakeService.loadActiveLakeGrants(lake, {
@@ -518,6 +554,25 @@ export async function runLakeResearch(
         judgeUsage.cacheWriteTokens += judgment.cacheCreationInputTokens ?? 0;
         return judgment;
       },
+      ...((claimed.levers.itemRules?.length ?? 0) > 0
+        ? {
+            evaluateItemRules: async (rules, item) => {
+              const result = await itemRuleService.evaluate({
+                apiKeyTable,
+                models,
+                model,
+                rules,
+                item,
+                endUserId: lake.createdByUserId,
+              });
+              judgeUsage.inputTokens += result.inputTokens;
+              judgeUsage.outputTokens += result.outputTokens;
+              judgeUsage.cachedInputTokens += result.cacheReadInputTokens;
+              judgeUsage.cacheWriteTokens += result.cacheCreationInputTokens;
+              return result;
+            },
+          }
+        : {}),
       fetchSource: url => fetchSourceForProposal(url, logger),
       propose: candidate =>
         dataLakeService.proposeDataLakeContent(lake, candidate, {

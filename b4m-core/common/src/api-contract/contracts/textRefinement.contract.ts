@@ -8,7 +8,12 @@ import {
   TextRefinementRequestSchema,
   TextRefinementResponseSchema,
 } from '../../schemas/textRefinement';
-import { ApiErrorSchema, InsufficientCreditsErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
+import {
+  ApiErrorSchema,
+  InsufficientCreditsErrorSchema,
+  MeteredForbiddenErrorSchema,
+  SPEND_FROZEN_FORBIDDEN_NOTE,
+} from '../../schemas/chat';
 
 const EXAMPLE_REQUEST = {
   text: 'a dog on a beach',
@@ -56,8 +61,9 @@ export const createTextRefinementContract = defineEndpoint({
     },
     403: {
       description:
-        'The API key does not hold `ai:generate`, or AI features are disabled on this account by an administrator.',
-      schema: ScopeForbiddenErrorSchema,
+        'The API key does not hold `ai:generate`, or AI features are disabled on this account by an administrator. ' +
+        SPEND_FROZEN_FORBIDDEN_NOTE,
+      schema: MeteredForbiddenErrorSchema,
     },
     422: {
       description:

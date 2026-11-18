@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isSpendFrozenError } from '@bike4mind/common';
 import { randomUUID } from 'crypto';
 import type { Logger } from '@bike4mind/observability';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
@@ -19,13 +20,18 @@ import { bridgeWakeToSession } from '@bike4mind/server-utils/deepAgent/missionSe
 import { createDeepAgentToolMaterializer } from '@bike4mind/server-utils/deepAgent/toolMaterializer';
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 import { isFreeTierDailyCapError } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
+import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
 import {
+  clearAccountStandingBlocker,
+  deferWakeForAccountStanding,
   deferWakeUntilCapReset,
   isInsufficientCredits,
   MISSION_MODEL_REFUSED_BLOCKER,
   MISSION_NEEDS_CREDITS_BLOCKER,
+  MISSION_SPEND_FROZEN_BLOCKER,
   MissionModelRefusedError,
   missionWakeMeter,
+  ownerAiAccessDenial,
   pauseMission,
 } from '@bike4mind/server-utils/deepAgent/wakeMetering';
 import type { CompletionMeter } from '@bike4mind/services';
@@ -112,7 +118,13 @@ export async function processWake(
   logger: Logger,
   overrides?: ProcessWakeOverrides
 ): Promise<void> {
-  const store = new MongoDeepAgentStore();
+  const store = overrides?.deps?.store ?? new MongoDeepAgentStore();
+  // Before any backend is built, so a restricted owner's wake makes no model call at all.
+  if (await ownerAiAccessDenial(store, payload.agentId)) {
+    await deferWakeForAccountStanding(store, payload.agentId, logger);
+    return;
+  }
+  await clearAccountStandingBlocker(store, payload.agentId);
   const deps =
     overrides?.deps ??
     (await buildDefaultWakeDeps(payload.modelId, logger, {
@@ -126,7 +138,16 @@ export async function processWake(
       await deferWakeUntilCapReset(payload.agentId, err, logger);
       return;
     }
-    // Neither clears on retry, so pause instead of letting the cron re-claim the wake forever.
+    // The owner was restricted mid-wake.
+    if (isAiAccessRefusal(err)) {
+      await deferWakeForAccountStanding(deps.store, payload.agentId, logger);
+      return;
+    }
+    if (isSpendFrozenError(err)) {
+      await deferWakeForAccountStanding(deps.store, payload.agentId, logger, MISSION_SPEND_FROZEN_BLOCKER);
+      return;
+    }
+    // None clears on retry, so pause instead of letting the cron re-claim the wake forever.
     const blocker = isInsufficientCredits(err)
       ? MISSION_NEEDS_CREDITS_BLOCKER
       : err instanceof MissionModelRefusedError

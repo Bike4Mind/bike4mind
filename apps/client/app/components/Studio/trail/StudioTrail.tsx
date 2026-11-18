@@ -28,14 +28,19 @@ export const LINEAGE_ROLE_LABELS: Record<GeneratedAssetLineageRole, string> = {
   variation_of: 'Variation of',
   edit_source: 'Edit source',
   mask: 'Mask',
+  scene_video: 'Scene video',
+  scene_audio: 'Soundtrack',
+  scene_cover: 'Cover art',
 };
 
-const GENERATOR_MEDIUM: Record<GeneratedAssetGenerator, StudioMedium> = {
+// null: no Studio form takes the generator's request back (a Scene is composed, not generated from a form).
+const GENERATOR_MEDIUM: Record<GeneratedAssetGenerator, StudioMedium | null> = {
   image: 'image',
   video: 'video',
   music: 'music',
   speech: 'speech',
   sound_effect: 'sound-effects',
+  scene: null,
 };
 
 export type StudioTrailRestore = (restore: StudioRestoreRequest) => void;

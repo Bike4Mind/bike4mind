@@ -26,7 +26,6 @@ import { billingLandingHref, parseBillingView } from '@client/app/utils/billingD
 import { enforceConsentRedirect } from '@client/app/utils/consentGuard';
 import { takeTicket } from './routes/partners/bedrocknewsClaimTicket';
 import { captureCodeFromFragment } from './routes/personas/personaRedeemCode';
-import { captureUnsubscribeToken } from './routes/email/unsubscribeToken';
 import { captureEmailLinkToken } from './utils/emailLinkToken';
 import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
@@ -131,6 +130,7 @@ const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
 const StudioPage = lazy(() => import('./routes/studio/$modality'));
 const StudioProductionsPage = lazy(() => import('./routes/studio/productions'));
+const StudioProductionEditorPage = lazy(() => import('./routes/studio/productions.$compositionId'));
 const StudioLibraryPage = lazy(() => import('./routes/studio/library'));
 
 // Shared coercion for the optional string search params nearly every route declares.
@@ -613,6 +613,20 @@ export const studioProductionsRoute = createRoute({
       <StudioProductionsPage />
     </Suspense>
   ),
+});
+
+// One production open in the timeline editor. Static prefix, so it never collides with /studio/$modality.
+export const studioProductionEditorRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/studio/productions/$compositionId',
+  component: function StudioProductionEditorRouteComponent() {
+    const { compositionId } = studioProductionEditorRoute.useParams();
+    return (
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <StudioProductionEditorPage compositionId={compositionId} />
+      </Suspense>
+    );
+  },
 });
 
 export const studioLibraryRoute = createRoute({
@@ -1336,6 +1350,8 @@ export const adminModelDiscoveryRunRoute = createRoute({
 });
 
 // Email unsubscribe route - public page for managing email preferences
+// The link's token is taken out of the address at module load (captureEmailLinkToken below), so the page
+// reads it from there, not from the search.
 const emailUnsubscribeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/email/unsubscribe',
@@ -1344,7 +1360,6 @@ const emailUnsubscribeRoute = createRoute({
       <EmailUnsubscribePage />
     </Suspense>
   ),
-  beforeLoad: () => captureUnsubscribeToken(),
 });
 
 // Desktop app download page - no layout, public, so it can be linked from anywhere.
@@ -1470,6 +1485,7 @@ const routeTree = rootRoute.addChildren([
     hearthRoute,
     studioRoute,
     studioProductionsRoute,
+    studioProductionEditorRoute,
     studioLibraryRoute,
     ...builtAppShellPremiumRoutes,
   ]),
@@ -1537,7 +1553,7 @@ if (captureUtmParams()) holdDiscoveryForCampaign(Date.now());
 captureGitHubLakeCallbackSearch();
 captureMcpOAuthCallbackSearch();
 
-// An email verification link's token leaves the address before anything sends a request (the visit
+// An email link's token (verification or unsubscribe) leaves the address before anything sends a request (the visit
 // beacon below carries the page URL as its Referer) and before the router builds its first location.
 captureEmailLinkToken();
 

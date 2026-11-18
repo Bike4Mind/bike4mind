@@ -10,7 +10,7 @@ import {
   MAX_EMBEDDING_REQUEST_TOKENS,
   MAX_EMBEDDING_RESPONSE_VALUES,
 } from '../../schemas/embeddingsApi';
-import { ApiErrorSchema } from '../../schemas/chat';
+import { ApiErrorSchema, MeteredForbiddenErrorSchema, SPEND_FROZEN_FORBIDDEN_NOTE } from '../../schemas/chat';
 
 const EXAMPLE_REQUEST = {
   model: 'text-embedding-3-small',
@@ -74,6 +74,12 @@ export const createEmbeddingsContract = defineEndpoint({
         'Missing/invalid credentials, or the embedding provider refused the configured key ' +
         '(`errorCode: "provider_rejected"`).',
       schema: EmbeddingsErrorSchema,
+    },
+    403: {
+      description:
+        'The API key lacks `ai:generate` (`required_scopes` names it), or the account is suspended ' +
+        `(\`errorCode: account_suspended\`). ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
+      schema: MeteredForbiddenErrorSchema,
     },
     422: {
       description:

@@ -23,6 +23,7 @@ import {
   FileEmbeddingWindowResetDialog,
   NewAccountSpendCapDialog,
   InternalAccountDialog,
+  PartnerAccountDialog,
   DeleteUserDialog,
   EmailVerificationDialog,
   LoginAsDialog,
@@ -93,6 +94,8 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
       return <FileEmbeddingWindowResetDialog {...props} />;
     case 'internalAccount':
       return <InternalAccountDialog {...props} />;
+    case 'partnerAccount':
+      return <PartnerAccountDialog {...props} />;
     case 'subscription':
       return <GrantSubscriptionModal user={props.user} open onClose={props.onClose} />;
     case 'loginAs':

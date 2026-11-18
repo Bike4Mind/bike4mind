@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { QUEST_GENERATION_JOB_KINDS } from '@bike4mind/common';
+import { AGENT_GENERATION_SLOT_KINDS } from '@bike4mind/common';
 import { createMongoServer } from '../../../__test__/createMongoServer';
 import { Quest, questRepository } from '../QuestModel';
 
@@ -9,7 +9,9 @@ const counterField = {
   video: 'agentVideoClipsClaimed',
   music: 'agentMusicTracksClaimed',
   image: 'agentImagesClaimed',
-} as const satisfies Record<(typeof QUEST_GENERATION_JOB_KINDS)[number], string>;
+  speech: 'agentSpeechClipsClaimed',
+  sound_effect: 'agentSoundEffectsClaimed',
+} as const satisfies Record<(typeof AGENT_GENERATION_SLOT_KINDS)[number], string>;
 
 // Real Mongo: the cap only holds if the conditional $inc is atomic and the counter path survives
 // Mongoose strict mode.
@@ -35,7 +37,7 @@ describe('QuestModel agent generation slots', () => {
       status: 'running',
     });
 
-  describe.each(QUEST_GENERATION_JOB_KINDS)('%s', kind => {
+  describe.each(AGENT_GENERATION_SLOT_KINDS)('%s', kind => {
     it('grants exactly `limit` slots, even to concurrent claimers', async () => {
       const quest = await createQuest();
       const results = await Promise.all(

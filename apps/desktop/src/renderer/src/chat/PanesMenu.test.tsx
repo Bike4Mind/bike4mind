@@ -61,7 +61,7 @@ const openMenu = () => act(async () => get('chat-panes-menu-btn').click());
 
 describe('PanesMenu', () => {
   it('lists the panes in fixed order with the terminal shortcut, and marks the open ones', async () => {
-    await mount([pane('model'), pane('browser', { open: true }), pane('terminal'), pane('simulator')]);
+    await mount([pane('studio'), pane('model'), pane('browser', { open: true }), pane('terminal'), pane('simulator')]);
     await openMenu();
     const items = [...get('chat-panes-menu').querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')];
     expect(items.map(item => item.dataset.testid)).toEqual([
@@ -69,11 +69,29 @@ describe('PanesMenu', () => {
       'chat-panes-menu-browser-item',
       'chat-panes-menu-simulator-item',
       'chat-panes-menu-model-item',
+      'chat-panes-menu-studio-item',
     ]);
-    expect(items.map(item => item.getAttribute('aria-checked'))).toEqual(['false', 'true', 'false', 'false']);
+    expect(items.map(item => item.getAttribute('aria-checked'))).toEqual(['false', 'true', 'false', 'false', 'false']);
     expect(items[0].textContent).toContain('Ctrl+`');
     // Only the terminal has a bound shortcut.
     expect(items.slice(1).some(item => item.textContent?.includes('Ctrl'))).toBe(false);
+  });
+
+  it('explicitly labels Studio and Browser and preserves disabled reasons separately', async () => {
+    await mount([
+      pane('terminal'),
+      pane('studio'),
+      pane('browser', { unavailableReason: 'Open a conversation first.' }),
+    ]);
+    await openMenu();
+    expect(get('chat-panes-menu-studio-item').getAttribute('aria-label')).toBe('Studio');
+    expect(get('chat-panes-menu-terminal-item').getAttribute('aria-label')).toBe('Terminal (Ctrl+`)');
+    const browser = get('chat-panes-menu-browser-item');
+    expect(browser.getAttribute('aria-label')).toBe('Browser');
+    const reasonId = browser.getAttribute('aria-describedby');
+    expect(reasonId).toBeTruthy();
+    expect(document.getElementById(reasonId!)?.textContent).toBe('Open a conversation first.');
+    expect(browser.getAttribute('aria-disabled')).toBe('true');
   });
 
   it('toggles a pane from its row', async () => {

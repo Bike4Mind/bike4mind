@@ -123,6 +123,18 @@ const writerAdapters = async (
 });
 
 /**
+ * The `{ actor, context }` pair recordAdminActionFromRequest stamps on an entry, for services that
+ * write the audit entry themselves (they take the pair as input).
+ */
+export const resolveAdminAuditFromRequest = async (
+  req: AuditRequest,
+  actorScope: AuditActor['scope'] = 'platform'
+): Promise<{ actor: AuditActor; context: StoredAuditContext }> => ({
+  actor: await resolveActor(req, actorScope),
+  context: buildContext(req),
+});
+
+/**
  * `options.creditGrantPolicy` lets a caller writing many entries (a bulk batch) read the AdminSettings
  * thresholds once instead of once per entry.
  */

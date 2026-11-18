@@ -23,6 +23,7 @@ const ALLOWLIST = new Set([
   'apps/client/server/transcribe/transcribe.ts',
   'apps/client/pages/api/slack/export/status/[jobId].ts',
   'b4m-core/services/src/speech/speechToTexService.ts',
+  'apps/workers/src/cron/providerUsagePoll.ts', // GET-only; fab-pipeline's index would pull Mongo into this no-database Lambda
   'packages/scripts/testEmailIngestLambda.ts',
   'packages/scripts/datalake/ingest-pdf-datalake.ts',
   'packages/scripts/src/uploadTavernIcons.ts',

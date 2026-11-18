@@ -228,6 +228,7 @@ describe('holdCredits with the new-account spend cap', () => {
       organizations: {} as CreditHoldAdapters['organizations'],
       creditTransactions: {} as CreditHoldAdapters['creditTransactions'],
       newAccountSpendCap: makeAdapters(samples).adapters,
+      spendFreezes: { findActiveForSubject: vi.fn(async () => null) },
     };
     return { adapters, incrementCredits };
   };

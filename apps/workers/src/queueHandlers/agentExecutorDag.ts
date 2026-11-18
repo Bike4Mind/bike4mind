@@ -62,6 +62,8 @@ export function makeDagDispatcher(args: {
     scopeDeniedTools?: string[];
     /** The parent's withheld admin role, inherited so a node cannot regain admin access the key lacks. */
     adminRoleWithheld?: boolean;
+    /** The parent's connected app, inherited so a node's run is counted under the same app. */
+    oauthClientId?: string;
     /**
      * The parent's permission lists, copied onto each node at creation: a node cannot pause for
      * approval, so `processSubagentDispatch` refuses any tool call these lists do not allow.
@@ -110,6 +112,7 @@ export function makeDagDispatcher(args: {
         ...(nodeDefaults.apiKeyId && { apiKeyId: nodeDefaults.apiKeyId }),
         ...(nodeDefaults.scopeDeniedTools?.length && { scopeDeniedTools: nodeDefaults.scopeDeniedTools }),
         ...(nodeDefaults.adminRoleWithheld && { adminRoleWithheld: true }),
+        ...(nodeDefaults.oauthClientId && { oauthClientId: nodeDefaults.oauthClientId }),
         model: resolveDeprecatedModelId(model, 'agentExecutorDag'),
         query: node.description,
         status: 'pending' as AgentExecutionStatus,

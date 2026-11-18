@@ -61,9 +61,7 @@ describe('SIDEBAR_SECTIONS', () => {
     const testidByTab = new Map(allItems.filter(i => i.testid).map(i => [i.tab, i.testid]));
     // Spot-check the testids referenced by existing E2E flows.
     expect(testidByTab.get(AdminTab.Users)).toBe('admin-users-tab-btn');
-    expect(testidByTab.get(AdminTab.RegistrationInvites)).toBe('admin-invite-center-tab-btn');
     expect(testidByTab.get(AdminTab.Waitlist)).toBe('admin-waitlist-tab-btn');
-    expect(testidByTab.get(AdminTab.SecOpsTriage)).toBe('admin-secops-triage-btn');
     expect(testidByTab.get(AdminTab.SecurityDashboard)).toBe('admin-security-dashboard-btn');
     expect(testidByTab.get(AdminTab.DlqReplay)).toBe('admin-dlq-replay-btn');
     expect(testidByTab.get(AdminTab.HelpAnalytics)).toBe('admin-help-analytics-btn');
@@ -75,6 +73,10 @@ describe('SIDEBAR_SECTIONS', () => {
     expect(gatedByTab.get(AdminTab.LiveOpsTriage)).toBe('liveOpsTriage');
     // Nothing else should be gated.
     expect(gatedByTab.size).toBe(2);
+  });
+
+  it('has no item for the retired issue filing page, which lives on the Security page', () => {
+    expect(allItems.some(i => i.tab === AdminTab.SecOpsTriage)).toBe(false);
   });
 
   it('labels the Waitlist item Invite Center', () => {

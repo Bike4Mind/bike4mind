@@ -254,6 +254,23 @@ describe('POST /api/admin/users/:userId/generate-api-key - scope allowlist guard
     );
   });
 
+  it('refuses ai:end-user-id on its own, since it opens no route without ai:chat or ai:generate', async () => {
+    const { req, res } = post({ name: 'key', scopes: ['ai:end-user-id'], reason: 'Serves end users' });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(BadRequestError);
+    expect(mockCreateKey).not.toHaveBeenCalled();
+  });
+
+  it('mints ai:end-user-id beside ai:chat for a full admin', async () => {
+    const { req, res } = post({ name: 'key', scopes: ['ai:chat', 'ai:end-user-id'], reason: 'Serves end users' });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockCreateKey).toHaveBeenCalledWith(
+      'target-user',
+      expect.objectContaining({ scopes: ['ai:chat', 'ai:end-user-id'] }),
+      expect.anything()
+    );
+  });
+
   it('allows release-notes:write for a platform-admin target', async () => {
     mockUserFind.mockResolvedValue({ id: 'target-user', username: 'targetUser', isAdmin: true });
     const { req, res } = post({ name: 'release video', scopes: ['release-notes:write'], reason: 'Internal service' });

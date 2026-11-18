@@ -71,9 +71,60 @@ describe('captureEmailLinkToken', () => {
   });
 
   it('leaves a token param on any other page alone', async () => {
-    const { getEmailLinkToken } = await land('/email/unsubscribe?token=keep-me');
+    const { getEmailLinkToken } = await land('/email/preferences?token=keep-me');
 
     expect(window.location.search).toBe('?token=keep-me');
     expect(getEmailLinkToken('/verify-email')).toBeUndefined();
+    expect(getEmailLinkToken('/email/unsubscribe')).toBeUndefined();
+  });
+
+  it('leaves the address alone and takes nothing when the link page has no token', async () => {
+    const { getEmailLinkToken } = await land('/email/unsubscribe?x=1#other=1');
+
+    expect(getEmailLinkToken('/email/unsubscribe')).toBeUndefined();
+    expect(window.location.search + window.location.hash).toBe('?x=1#other=1');
+  });
+});
+
+describe('captureEmailLinkToken on /email/unsubscribe', () => {
+  afterEach(() => {
+    vi.resetModules();
+    window.history.replaceState(null, '', '/');
+  });
+
+  it('takes the token from the fragment and clears it from the address', async () => {
+    const { getEmailLinkToken } = await land('/email/unsubscribe?x=1#token=unsub-frag');
+
+    expect(getEmailLinkToken('/email/unsubscribe')).toBe('unsub-frag');
+    expect(window.location.pathname + window.location.search + window.location.hash).toBe('/email/unsubscribe?x=1');
+  });
+
+  it('still accepts a ?token= link sent before the fragment form, dropping only the token', async () => {
+    const { getEmailLinkToken } = await land('/email/unsubscribe?token=unsub-query&x=1');
+
+    expect(getEmailLinkToken('/email/unsubscribe')).toBe('unsub-query');
+    expect(window.location.pathname + window.location.search).toBe('/email/unsubscribe?x=1');
+  });
+
+  it('prefers the fragment over the query and strips both', async () => {
+    const { getEmailLinkToken } = await land('/email/unsubscribe?token=unsub-old#token=unsub-new');
+
+    expect(getEmailLinkToken('/email/unsubscribe')).toBe('unsub-new');
+    expect(window.location.search + window.location.hash).toBe('');
+  });
+
+  it('matches a trailing slash and any case, as the route does', async () => {
+    const { getEmailLinkToken } = await land('/Email/Unsubscribe/#token=unsub-case');
+
+    expect(getEmailLinkToken('/email/unsubscribe')).toBe('unsub-case');
+    expect(window.location.hash).toBe('');
+  });
+
+  it('gives the token only to the unsubscribe page', async () => {
+    const { getEmailLinkToken } = await land('/email/unsubscribe#token=unsub-only');
+
+    expect(getEmailLinkToken('/verify-email')).toBeUndefined();
+    expect(getEmailLinkToken('/verify-change')).toBeUndefined();
+    expect(getEmailLinkToken('/email/unsubscribe')).toBe('unsub-only');
   });
 });

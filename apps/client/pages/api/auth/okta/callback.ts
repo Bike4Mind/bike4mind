@@ -12,6 +12,7 @@
  * @see https://datatracker.ietf.org/doc/rfc7636/
  */
 import { Request, Response } from 'express';
+import { ResponseBodyError } from 'openid-client';
 import { authFailLogRepository, User, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { IAuthProviders } from '@bike4mind/common';
@@ -579,15 +580,23 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     const redirectUrl = `/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}${signupFragment}`;
     return res.redirect(redirectUrl);
   } catch (error) {
-    Logger.error('[Okta Callback] Processing error:', error);
+    // invalid_grant is Okta rejecting the code itself (expired, replayed or never issued): caller
+    // input, so warn with the provider code only. Every other failure (network, our client config,
+    // DB) stays at error, the level the alert channel pages on.
+    const rejectedGrant = error instanceof ResponseBodyError && error.error === 'invalid_grant';
+    if (rejectedGrant) {
+      Logger.warn('[Okta Callback] Token exchange rejected by provider:', { error: error.error });
+    } else {
+      Logger.error('[Okta Callback] Processing error:', error);
+    }
     try {
       await authFailLogRepository.create({
         strategy: 'okta',
         ip,
         userAgent,
-        reason: error instanceof Error ? error.message : 'Callback processing error',
+        reason: rejectedGrant ? 'invalid_grant' : error instanceof Error ? error.message : 'Callback processing error',
         headers: { 'x-forwarded-for': req.headers['x-forwarded-for'] },
-        meta: { path: req.url, status: 500 },
+        meta: { path: req.url, status: rejectedGrant ? 400 : 500 },
       });
     } catch (logErr) {
       Logger.error('[Okta Callback] Failed to log auth failure:', logErr);
