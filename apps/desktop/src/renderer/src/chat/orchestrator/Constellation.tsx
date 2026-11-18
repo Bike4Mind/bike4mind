@@ -103,7 +103,7 @@ const halo = keyframes`
   50% { opacity: 0.35; }
 `;
 
-const truncate = (text: string, max = 16) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+const truncate = (text: string, max = 16) => (text.length > max ? `${text.slice(0, max - 1)}\u2026` : text);
 
 function activate(event: React.KeyboardEvent, action: () => void) {
   if (event.key !== 'Enter' && event.key !== ' ') return;

@@ -10,20 +10,24 @@ describe('transitPhase', () => {
     ['idle', 'waiting'],
   ] as const)('puts a %s agent at %s whatever its text says', (state, expected) => {
     expect(transitPhase(state)).toBe(expected);
-    expect(transitPhase(state, 'Edit src/a.ts')).toBe(expected);
+    expect(transitPhase(state, 'file_edit a.ts')).toBe(expected);
   });
 
   it.each([
     ['Thinking', 'planning'],
     ['Planning the change', 'planning'],
-    ['Edit src/app.ts', 'working'],
-    ['Bash pnpm build', 'working'],
-    ['Read README.md', 'working'],
+    ['file_edit app.ts', 'working'],
+    ['file_write app.ts', 'working'],
+    ['file_read README.md', 'working'],
+    ['bash_execute pnpm build', 'working'],
+    ['grep_search useState', 'working'],
     ['Writing a reply', 'working'],
-    ['Preparing Edit', 'working'],
-    ['Bash pnpm test', 'reviewing'],
-    ['Bash pnpm typecheck', 'reviewing'],
-    ['Reviewing the diff', 'reviewing'],
+    ['Preparing file_edit', 'working'],
+    ['bash_execute pnpm test', 'reviewing'],
+    ['bash_execute pnpm typecheck', 'reviewing'],
+    ['file_edit check.ts', 'working'],
+    ['file_read lint.config.ts', 'working'],
+    ['file_write test.ts', 'working'],
   ] as const)('reads a working agent doing "%s" as %s', (text, expected) => {
     expect(transitPhase('working', text)).toBe(expected);
   });

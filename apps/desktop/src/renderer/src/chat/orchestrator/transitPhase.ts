@@ -15,11 +15,13 @@ export const TRANSIT_STOP_LABEL: Record<TransitStop, string> = {
   done: 'Done',
 };
 
-// Checked in this order: "Bash pnpm test" is verification, not plain work.
-const REVIEWING = /\b(test|tests|vitest|jest|lint|typecheck|tsc|review|verify|verifying|diff|check|checking)\b/i;
-const PLANNING = /^(thinking|planning|plan|research|researching|todo|todowrite)\b|\bplan\b/i;
+// Activity text is "<tool> <detail>" (activityLabel), or a phase label such as "Thinking".
+const SHELL_TOOL = /^bash/;
+// Matched only against a shell command, never a file path: "file_edit check.ts" is editing, not verifying.
+const VERIFY_COMMAND = /\b(test|tests|vitest|jest|lint|typecheck|tsc|check|verify)\b/i;
+const PLANNING = /^(thinking|planning)\b/i;
 const WORKING =
-  /^(edit|multiedit|write|notebookedit|patch|apply|bash|shell|exec|run|read|grep|glob|ls|list|find|search|fetch|web|task|session_|preparing|writing a reply)/i;
+  /^(file_edit|file_write|file_read|bash|glob_files|grep_search|web_fetch|web_search|session_|preparing|writing a reply)/i;
 
 /**
  * The stop an agent belongs at, from its state and the one-line activity the snapshot carries (the
@@ -38,7 +40,8 @@ export function transitPhase(state: AgentState, activity?: string): TransitPhase
       return 'waiting';
     case 'working': {
       const text = activity?.trim() ?? '';
-      if (REVIEWING.test(text)) return 'reviewing';
+      const [tool = '', ...rest] = text.split(/\s+/);
+      if (SHELL_TOOL.test(tool) && VERIFY_COMMAND.test(rest.join(' '))) return 'reviewing';
       if (PLANNING.test(text)) return 'planning';
       if (WORKING.test(text)) return 'working';
       return 'waiting';

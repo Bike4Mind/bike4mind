@@ -26,8 +26,39 @@ interface Lane {
   action: ViewAction;
 }
 
+type SnapshotAgent = ViewSnapshot['agents'][number];
+
+/**
+ * The roster arrives sorted by urgency, not by ancestry, so indenting it as given would strand a child
+ * far from its parent. Depth-first from each agent whose parent is not in the roster, siblings in
+ * roster order; anything a parent cycle leaves unreached is appended so no agent disappears.
+ */
+function inTreeOrder(agents: readonly SnapshotAgent[]): SnapshotAgent[] {
+  const present = new Set(agents.map(agent => agent.id));
+  const children = new Map<string, SnapshotAgent[]>();
+  const tops: SnapshotAgent[] = [];
+  for (const agent of agents) {
+    if (!present.has(agent.parentId) || agent.parentId === agent.id) {
+      tops.push(agent);
+      continue;
+    }
+    children.set(agent.parentId, [...(children.get(agent.parentId) ?? []), agent]);
+  }
+  const ordered: SnapshotAgent[] = [];
+  const seen = new Set<string>();
+  const visit = (agent: SnapshotAgent) => {
+    if (seen.has(agent.id)) return;
+    seen.add(agent.id);
+    ordered.push(agent);
+    children.get(agent.id)?.forEach(visit);
+  };
+  tops.forEach(visit);
+  agents.forEach(visit);
+  return ordered;
+}
+
 function lanes(snapshot: ViewSnapshot): Lane[] {
-  const agentLanes = snapshot.agents.map((agent): Lane => ({
+  const agentLanes = inTreeOrder(snapshot.agents).map((agent): Lane => ({
     key: agent.id,
     state: agent.state,
     title: agent.title,
@@ -53,7 +84,7 @@ const pulse = keyframes`
 `;
 
 /**
- * Swimlanes: one lane per agent in the snapshot's order, nested agents indented by depth, each showing its
+ * Swimlanes: one lane per agent, each nested under its parent and indented by depth, each showing its
  * state and what it is doing now. Selecting a lane opens the agent in the peek drawer.
  */
 export function Swimlanes({ snapshot, onAction }: { snapshot: ViewSnapshot; onAction(action: ViewAction): void }) {

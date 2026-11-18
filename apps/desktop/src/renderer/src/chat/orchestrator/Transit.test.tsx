@@ -32,8 +32,8 @@ describe('Transit', () => {
       viewAgentFixture('ask', 'needs-you'),
       viewAgentFixture('idle', 'idle'),
       viewAgentFixture('plan', 'working', { now: 'Thinking' }),
-      viewAgentFixture('work', 'working', { now: 'Edit src/a.ts' }),
-      viewAgentFixture('rev', 'working', { now: 'Bash pnpm test' }),
+      viewAgentFixture('work', 'working', { now: 'file_edit a.ts' }),
+      viewAgentFixture('rev', 'working', { now: 'bash_execute pnpm test' }),
       viewAgentFixture('unknown', 'working', { now: 'Frobnicating' }),
       viewAgentFixture('fin', 'done'),
     ]);

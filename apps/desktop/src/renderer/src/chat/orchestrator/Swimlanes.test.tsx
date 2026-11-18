@@ -61,6 +61,22 @@ describe('Swimlanes', () => {
     expect(padding('grand')).toBeGreaterThan(padding('child'));
   });
 
+  it('nests each child under its parent when the roster arrives in urgency order', async () => {
+    // Real roster order: needs-you first, then working, then done; a child can precede its parent.
+    await themed.render(
+      <Swimlanes
+        snapshot={snapshotFixture([
+          viewAgentFixture('grand', 'needs-you', { parentId: 'child', depth: 3 }),
+          viewAgentFixture('other', 'working'),
+          viewAgentFixture('child', 'working', { parentId: 'top', depth: 2 }),
+          viewAgentFixture('top', 'done'),
+        ])}
+        onAction={onAction}
+      />
+    );
+    expect(laneIds()).toEqual(['other', 'top', 'child', 'grand']);
+  });
+
   it('shows the activity line, or the pending question for an agent that needs the user', async () => {
     await themed.render(
       <Swimlanes
