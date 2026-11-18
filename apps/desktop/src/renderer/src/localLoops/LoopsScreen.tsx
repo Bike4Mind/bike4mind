@@ -301,7 +301,9 @@ function LoopPane({
   const laneActions: AgentActions = {
     open: id => isLoopSessionId(id) && onOpenSession(id),
     // The scheduler sees the stop and ends the run as blocked ("Stopped on the desktop").
-    stop: id => isLoopSessionId(id) && void window.b4m.chat.stopReply(id),
+    stop: id => {
+      if (isLoopSessionId(id)) void window.b4m.chat.stopReply(id);
+    },
     archive: () => undefined,
   };
 
