@@ -3,8 +3,10 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { settingsMap } from '@bike4mind/common';
 
 let serverSettings: { settingName: string; settingValue: unknown }[] | undefined = [];
+let serverConfig: { hiddenAdminSettingKeys?: string[] } | undefined = { hiddenAdminSettingKeys: [] };
 const mocks = vi.hoisted(() => ({ mutateAsync: vi.fn(), refetch: vi.fn(), sendLimitsLive: false }));
 vi.mock('./scheduleSummary', async importOriginal => ({
   ...(await importOriginal<typeof import('./scheduleSummary')>()),
@@ -13,6 +15,7 @@ vi.mock('./scheduleSummary', async importOriginal => ({
   },
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({
+  useConfig: () => ({ data: serverConfig }),
   useSettingsFromServer: () => ({
     data: serverSettings,
     isLoading: false,
@@ -29,7 +32,7 @@ vi.mock('@tanstack/react-router', async () => ({
   useBlocker: () => ({ status: 'idle' }),
 }));
 
-import { FREE_TIER_LIMIT_KEYS, SIGNUP_SCHEDULE_KEYS } from '../../settingHomes';
+import { FREE_TIER_LIMIT_KEYS, SIGNUP_SCHEDULE_KEYS, SIGNUP_TIMING_KEYS } from '../../settingHomes';
 import { ScheduleSection } from './ScheduleSection';
 import { describeNewAccountGrant, readScheduleValues } from './scheduleSummary';
 
@@ -42,17 +45,45 @@ const seed = (rows: Record<string, unknown>) => {
 
 beforeEach(() => {
   serverSettings = [];
+  serverConfig = { hiddenAdminSettingKeys: [] };
   mocks.mutateAsync.mockReset().mockResolvedValue(undefined);
   mocks.sendLimitsLive = false;
 });
 
 describe('ScheduleSection', () => {
+  it.each([
+    ['signupGrantActivityMinActiveSeconds', 59, false],
+    ['signupGrantActivityMinActiveSeconds', 60, true],
+    ['signupGrantActivityMinActiveSeconds', 7201, false],
+    ['signupGrantActivityMinActiveSeconds', 60.5, false],
+    ['signupUnlockPaymentHoldHours', -1, false],
+    ['signupUnlockPaymentHoldHours', 0, true],
+    ['signupUnlockPaymentHoldHours', 720, true],
+    ['signupUnlockPaymentHoldHours', 721, false],
+    ['signupUnlockPaymentHoldHours', 1.5, false],
+  ] as const)('validates %s = %s: %s', (key, value, valid) => {
+    expect(settingsMap[key].schema.safeParse(value).success).toBe(valid);
+  });
+
   it('renders an editor for every schedule and free-tier limit key', () => {
     renderSection();
-    for (const key of [...SIGNUP_SCHEDULE_KEYS, ...FREE_TIER_LIMIT_KEYS]) {
-      expect(screen.getByTestId(`admin-setting-${key}-input`), key).toBeTruthy();
+    for (const key of [...SIGNUP_SCHEDULE_KEYS, ...SIGNUP_TIMING_KEYS, ...FREE_TIER_LIMIT_KEYS]) {
+      const control = key === 'signupGrantActivityPreviewTestMode' ? 'switch' : 'input';
+      expect(screen.getByTestId(`admin-setting-${key}-${control}`), key).toBeTruthy();
       expect(screen.getByTestId(`invite-center-schedule-current-${key}`), key).toBeTruthy();
     }
+  });
+
+  it.each([
+    ['hosted stage', { hiddenAdminSettingKeys: ['signupGrantActivityPreviewTestMode'] }],
+    ['unknown stage', undefined],
+    ['config without visibility', {}],
+  ])('hides preview timing for %s', (_label, config) => {
+    serverConfig = config;
+    renderSection();
+    expect(screen.queryByTestId('admin-setting-signupGrantActivityPreviewTestMode-switch')).toBeNull();
+    expect(screen.getByTestId('admin-setting-signupGrantActivityMinActiveSeconds-input')).toBeTruthy();
+    expect(screen.getByTestId('admin-setting-signupUnlockPaymentHoldHours-input')).toBeTruthy();
   });
 
   it('summarizes the saved schedule', () => {
@@ -108,9 +139,17 @@ describe('ScheduleSection', () => {
     fireEvent.change(screen.getByTestId('admin-setting-freeTierDay1SpendCapCredits-input'), {
       target: { value: '75' },
     });
+    fireEvent.change(screen.getByTestId('admin-setting-signupGrantActivityMinActiveSeconds-input'), {
+      target: { value: '120' },
+    });
+    fireEvent.change(screen.getByTestId('admin-setting-signupUnlockPaymentHoldHours-input'), {
+      target: { value: '48' },
+    });
     fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
     await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
     expect(mocks.mutateAsync).toHaveBeenCalledWith({ key: 'signupGrantDripCap', value: 4000 });
     expect(mocks.mutateAsync).toHaveBeenCalledWith({ key: 'freeTierDay1SpendCapCredits', value: 75 });
+    expect(mocks.mutateAsync).toHaveBeenCalledWith({ key: 'signupGrantActivityMinActiveSeconds', value: 120 });
+    expect(mocks.mutateAsync).toHaveBeenCalledWith({ key: 'signupUnlockPaymentHoldHours', value: 48 });
   });
 });

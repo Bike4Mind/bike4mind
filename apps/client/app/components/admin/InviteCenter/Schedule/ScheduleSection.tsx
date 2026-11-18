@@ -1,10 +1,11 @@
 import { useMemo } from 'react';
 import { Alert, Stack, Typography } from '@mui/joy';
 import WarningIcon from '@mui/icons-material/Warning';
-import { useSettingsFromServer } from '@client/app/hooks/data/settings';
+import { stageHiddenSettingKeys } from '@bike4mind/common';
+import { useConfig, useSettingsFromServer } from '@client/app/hooks/data/settings';
 import { SettingsDraftProvider } from '../../SettingsDraftProvider';
 import { ErrorState, LoadingState } from '../../shared';
-import { FREE_TIER_LIMIT_KEYS, SIGNUP_SCHEDULE_KEYS } from '../../settingHomes';
+import { FREE_TIER_LIMIT_KEYS, SIGNUP_SCHEDULE_KEYS, SIGNUP_TIMING_KEYS } from '../../settingHomes';
 import { SettingBlocks, type SettingBlock } from '../shared/SettingBlocks';
 import { useStoredByKey } from '../shared/useStoredByKey';
 import {
@@ -24,6 +25,13 @@ const BLOCKS: readonly SettingBlock[] = [
     keys: SIGNUP_SCHEDULE_KEYS,
   },
   {
+    id: 'timing',
+    title: 'Activity and payment unlock',
+    description:
+      'Qualifying active time for each drip and the settlement hold before a payment unlocks the remaining credits.',
+    keys: SIGNUP_TIMING_KEYS,
+  },
+  {
     id: 'free-tier',
     title: 'Free-tier limits',
     description: 'Daily spend caps for free accounts: the first day, days 2 to 7, and every day after.',
@@ -33,6 +41,12 @@ const BLOCKS: readonly SettingBlock[] = [
 
 export function ScheduleSection() {
   const { data, isLoading, isError, isFetching, refetch } = useSettingsFromServer();
+  const config = useConfig();
+  const blocks = useMemo(() => {
+    const hidden = config.data?.hiddenAdminSettingKeys;
+    const hiddenKeys = new Set<string>(Array.isArray(hidden) ? hidden : stageHiddenSettingKeys(true));
+    return BLOCKS.map(block => ({ ...block, keys: block.keys.filter(key => !hiddenKeys.has(key)) }));
+  }, [config.data]);
 
   const storedByKey = useStoredByKey(data);
 
@@ -77,7 +91,7 @@ export function ScheduleSection() {
         </Alert>
       )}
       <SettingsDraftProvider>
-        <SettingBlocks blocks={BLOCKS} storedByKey={storedByKey} testIdPrefix="invite-center-schedule" />
+        <SettingBlocks blocks={blocks} storedByKey={storedByKey} testIdPrefix="invite-center-schedule" />
       </SettingsDraftProvider>
     </Stack>
   );
