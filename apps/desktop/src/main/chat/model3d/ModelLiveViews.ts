@@ -1,5 +1,11 @@
 import { EMPTY_MODEL_STATE, type ModelViewState } from '@shared/model3d';
-import { type ModelCaptureRequest, ModelLiveView, type ModelLiveViewOptions } from './ModelLiveView';
+import {
+  type ModelCaptureRequest,
+  ModelLiveView,
+  type ModelLiveViewOptions,
+  type ModelVersionsBinding,
+} from './ModelLiveView';
+import type { ModelVersionStore } from './ModelVersionStore';
 
 export type ModelLiveViewsEvents = {
   state: (sessionId: string, state: ModelViewState) => void;
@@ -7,6 +13,8 @@ export type ModelLiveViewsEvents = {
   captureTarget: () => number | null;
   /** Ask that renderer to render one conversation's model; false when it is gone. */
   captureRequest: (target: number, request: { sessionId: string } & ModelCaptureRequest) => boolean;
+  /** A conversation kept a new version; panes showing it list them again. */
+  versionsChanged?: (sessionId: string) => void;
 };
 
 /**
@@ -21,8 +29,15 @@ export class ModelLiveViews {
 
   constructor(
     private readonly events: ModelLiveViewsEvents,
-    private readonly options: ModelLiveViewOptions = {}
+    private readonly options: ModelLiveViewOptions = {},
+    /** Where kept builds go; without one nothing is kept (ModelVersionStore.ts). */
+    private readonly versionStore: ModelVersionStore | null = null
   ) {}
+
+  /** Every conversation's kept builds, also for one whose view was never opened this run. */
+  get versions(): ModelVersionStore | null {
+    return this.versionStore;
+  }
 
   for(sessionId: string): ModelLiveView {
     const existing = this.views.get(sessionId);
@@ -33,10 +48,22 @@ export class ModelLiveViews {
         captureTarget: this.events.captureTarget,
         captureRequest: (target, request) => this.events.captureRequest(target, { sessionId, ...request }),
       },
-      this.options
+      this.options,
+      this.bindVersions(sessionId)
     );
     this.views.set(sessionId, view);
     return view;
+  }
+
+  private bindVersions(sessionId: string): ModelVersionsBinding | null {
+    const store = this.versionStore;
+    if (!store) return null;
+    return {
+      record: input => store.record(sessionId, input),
+      list: () => store.list(sessionId),
+      get: number => store.get(sessionId, number),
+      changed: () => this.events.versionsChanged?.(sessionId),
+    };
   }
 
   /** The conversation's view, without making one; for renderer requests about a model already open. */
@@ -53,10 +80,13 @@ export class ModelLiveViews {
     for (const view of this.views.values()) view.resolveCapture(id, result);
   }
 
-  /** Stops a deleted conversation's watcher and fails anything still waiting on it. */
+  /** Stops a deleted conversation's watcher, fails anything still waiting on it and drops its versions. */
   forget(sessionId: string): void {
     this.views.get(sessionId)?.dispose();
     this.views.delete(sessionId);
+    void this.versionStore
+      ?.remove(sessionId)
+      .catch(error => console.warn(`MODEL: could not remove a deleted conversation's versions: ${String(error)}`));
   }
 
   dispose(): void {

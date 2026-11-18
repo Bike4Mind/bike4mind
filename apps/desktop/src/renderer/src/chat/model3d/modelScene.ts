@@ -700,6 +700,46 @@ export async function renderContactSheet(
   }
 }
 
+/** A version thumbnail's edge in CSS pixels; rendered at twice that and drawn down like a tile. */
+export const THUMBNAIL_SIZE = 192;
+
+/**
+ * One unlabelled 3/4 view of `root` posed at `angles`, as a small PNG: what the pane's version
+ * strip shows for each kept build. Rendered off screen like renderContactSheet.
+ */
+export async function renderThumbnail(
+  root: THREE.Object3D,
+  dark: boolean,
+  angles: Record<string, number> = {}
+): Promise<Uint8Array> {
+  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
+  const stage = new ModelStage(scene, renderer);
+  const composer = new ModelComposer(renderer, scene, camera);
+  try {
+    renderer.setPixelRatio(TILE_SUPERSAMPLE);
+    renderer.setSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE, false);
+    composer.setSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE, TILE_SUPERSAMPLE);
+    const subject = root.clone(true);
+    poseJoints(subject, angles);
+    enableShadows(subject);
+    scene.add(subject);
+    stage.fit(subject, { dark, grid: false });
+    composer.fit(stage.bounds);
+    frameCamera(camera, subject, VIEW_DIRECTIONS.iso);
+    composer.render();
+    const blob = await new Promise<Blob | null>(resolve => renderer.domElement.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('The thumbnail could not be encoded.');
+    return new Uint8Array(await blob.arrayBuffer());
+  } finally {
+    composer.dispose();
+    stage.dispose();
+    renderer.dispose();
+    renderer.forceContextLoss();
+  }
+}
+
 /** How faint the parts around a close-up's subject are drawn. */
 const CLOSEUP_CONTEXT_OPACITY = 0.14;
 
