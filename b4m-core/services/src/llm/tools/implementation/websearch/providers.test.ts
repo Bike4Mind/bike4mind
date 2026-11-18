@@ -224,6 +224,25 @@ describe('createSerpApiProvider', () => {
       expect(results[0].displayHost).toBe('massive.com');
     });
 
+    it('reads unspaced ASCII breadcrumbs without a platform fallback and retains sibling URLs', async () => {
+      const direct = 'https://example.com/healthy?original=1';
+      mockGetSerperKey.mockResolvedValue('serp-key');
+      fetchMock.mockResolvedValue(
+        jsonRes({
+          organic_results: [
+            { title: 'Redirect', link: goto, displayed_link: 'https://site.com>section>page' },
+            { title: 'Healthy sibling', link: direct },
+          ],
+        })
+      );
+
+      const results = await createSerpApiProvider(adapters).search('q', 3);
+
+      expect(results.map(result => result.url)).toEqual([goto, direct]);
+      expect(results[0]).toMatchObject({ title: 'Redirect', displayHost: 'site.com' });
+      expect(results[1]).toMatchObject({ title: 'Healthy sibling', url: direct });
+    });
+
     it('strips markdown link characters from a platform name', async () => {
       const results = await searchWith({ link: goto, displayed_link: '5 likes', source: 'Foo](https://x.y) (Bar)' });
 

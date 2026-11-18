@@ -292,7 +292,7 @@ const GOOGLE_HOSTS: ReadonlySet<string> = new Set(['google.com', 'www.google.com
 function breadcrumbHost(displayedLink: unknown): string | undefined {
   if (typeof displayedLink !== 'string' || !displayedLink) return undefined;
   try {
-    const shown = new URL(displayedLink.trim().split(/[\s\u203a]/)[0]);
+    const shown = new URL(displayedLink.trim().split(/[\s\u203a>]/)[0]);
     const isWeb = shown.protocol === 'https:' || shown.protocol === 'http:';
     return isWeb && !GOOGLE_HOSTS.has(shown.hostname) ? shown.hostname : undefined;
   } catch {
