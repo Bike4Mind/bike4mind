@@ -55,8 +55,8 @@ export const DEAD_REPLAY_MESSAGE = 'failed: this exact request already failed th
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Polls until every job is terminal or the wait runs out, whichever is first. The agent loop has no abort signal
- * to honour, so the bound is what keeps one tool call from holding the run.
+ * Polls until every job is terminal or the wait runs out, whichever is first. It also stops when the signal aborts;
+ * the bound is what keeps one tool call from holding the run.
  */
 export async function waitForJobs(
   config: Pick<ProductionToolConfig, 'findJobs' | 'waitTimeoutMs' | 'pollIntervalMs'>,
@@ -115,7 +115,7 @@ const MODEL_REFUSALS = new Set(['model_unavailable', 'unsupported_by_model']);
 export async function submitShotImages(
   context: Context,
   config: ProductionToolConfig,
-  shot: { prompt: string; references: readonly string[]; aspectRatio: string },
+  shot: { prompt: string; references: readonly string[]; aspectRatio: string; compositionId: string; shotId: string },
   count: number
 ): Promise<Submitted> {
   const image = config.image;
@@ -134,7 +134,11 @@ export async function submitShotImages(
           source: 'agent',
           apiKeyId: context.apiKeyId,
           questId: context.questId,
-          idempotencyKey: attemptKey(context, { request, count }, attempt),
+          idempotencyKey: attemptKey(
+            context,
+            { request, count, compositionId: shot.compositionId, shotId: shot.shotId },
+            attempt
+          ),
         });
         const replayed = result;
         if (!replayed.ok || !replayed.jobs.every(job => isReplayOfDeadJob(replayed.created, job.state))) break;
