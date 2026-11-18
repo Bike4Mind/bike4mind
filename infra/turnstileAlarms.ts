@@ -38,7 +38,7 @@ if (isMonitoredStage) {
   // breach is a fresh ALARM transition and notifies again.
   const actions = [dlqAlarmTopic.arn];
 
-  const watchEvent = (event: string, resourceName: string, metricName: string, alarmDescription: string) => {
+  const countEvent = (event: string, resourceName: string, metricName: string) => {
     new aws.cloudwatch.LogMetricFilter(`${resourceName}Filter`, {
       name: `${$app.name}-${$app.stage}-${event}`,
       logGroupName: serverLogGroupName,
@@ -50,6 +50,10 @@ if (isMonitoredStage) {
         unit: 'Count',
       },
     });
+  };
+
+  const watchEvent = (event: string, resourceName: string, metricName: string, alarmDescription: string) => {
+    countEvent(event, resourceName, metricName);
 
     new aws.cloudwatch.MetricAlarm(resourceName, {
       name: `${$app.name}-${$app.stage}-${event}`,
@@ -84,17 +88,5 @@ if (isMonitoredStage) {
     'Turnstile rejected the server configuration in the last hour, so challenged sign-ins are failing'
   );
 
-  // Browser-reported challenge failures (apps/client/pages/api/turnstile/client-failure.ts).
-  // Counted only, no alarm.
-  new aws.cloudwatch.LogMetricFilter('turnstileClientFailureFilter', {
-    name: `${$app.name}-${$app.stage}-turnstile-client-failure`,
-    logGroupName: serverLogGroupName,
-    pattern: messageFilterPattern('turnstile-client-failure'),
-    metricTransformation: {
-      name: 'TurnstileClientFailures',
-      namespace: metricNamespace,
-      value: '1',
-      unit: 'Count',
-    },
-  });
+  countEvent('turnstile-client-failure', 'turnstileClientFailure', 'TurnstileClientFailures');
 }
