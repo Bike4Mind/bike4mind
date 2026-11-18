@@ -58,6 +58,9 @@ const SKINNED: Record<OrchestratorViewId, () => void> = {
     expect(rootVariable('--b4m-skin-aquarium-backdrop')).toBe('url("b4m-skin://nightglass/sprites/tank.png")');
     expect(styleOf('orchestrator-aquarium').backgroundImage).toContain('--b4m-skin-aquarium-backdrop');
   },
+  office: () => {
+    expect(el('orchestrator-office')).toBeDefined();
+  },
   board: () => {
     expect(stylesUnder('orchestrator-board-column-working')).toContain('--b4m-skin-card');
     // jsdom drops var() from border-color, so check the rule the muted chip emits.
