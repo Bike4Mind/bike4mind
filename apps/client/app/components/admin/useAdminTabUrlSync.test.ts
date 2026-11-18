@@ -121,6 +121,7 @@ describe('useAdminTabUrlSync', () => {
   it.each([
     ['registration-invites', 'invites'],
     ['partner-signup-rules', 'packages'],
+    ['held-signup-grants', 'pending'],
   ])('rewrites the retired %s link to the %s Invite Center section, once', (slug, section) => {
     routerMock.search = { tab: slug };
 

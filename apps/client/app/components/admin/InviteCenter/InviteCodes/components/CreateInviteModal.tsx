@@ -17,8 +17,8 @@ import {
 import { createPortal } from 'react-dom';
 import { PREDEFINED_USER_TAGS } from '@bike4mind/common';
 import { useGetUserTags } from '@client/app/hooks/data/user';
-import { getTagColor } from '../../InviteCenter/shared/tagColors';
-import GrantPackageSelect, { useSelectedGrantPackage } from '../../InviteCenter/shared/GrantPackageSelect';
+import { getTagColor } from '../../shared/tagColors';
+import GrantPackageSelect, { useSelectedGrantPackage } from '../../shared/GrantPackageSelect';
 import { useRegistrationInvitesStore } from '../store';
 import { CreateInviteFormData } from '../types';
 

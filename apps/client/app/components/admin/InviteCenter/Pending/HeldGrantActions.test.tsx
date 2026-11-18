@@ -3,7 +3,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
-import HeldSignupGrantsTab from './HeldSignupGrantsTab';
+import HeldGrantActions from './HeldGrantActions';
 
 const { getMock, postMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: getMock, post: postMock } }));
@@ -43,7 +43,7 @@ function renderTab() {
   render(
     <QueryClientProvider client={queryClient}>
       <CssVarsProvider theme={theme}>
-        <HeldSignupGrantsTab />
+        <HeldGrantActions />
       </CssVarsProvider>
     </QueryClientProvider>
   );
@@ -74,7 +74,7 @@ beforeEach(() => {
   postMock.mockReset();
 });
 
-describe('HeldSignupGrantsTab', () => {
+describe('HeldGrantActions', () => {
   it('lets a support:read delegate see the held list but not release it', async () => {
     user.currentUser = { isAdmin: false, adminPermissions: ['support:read'] };
     renderTab();

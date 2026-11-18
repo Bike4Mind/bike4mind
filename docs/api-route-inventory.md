@@ -284,9 +284,9 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/grant-packages` | GET, POST | jwt | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `utils/grantPackageAPICalls.ts` |
 | `/api/admin/grant-packages/[id]` | PATCH | jwt | `admin:*` | PATCH: `settings:manage` | no | - | 1: `utils/grantPackageAPICalls.ts` |
 | `/api/admin/grant-packages/[id]/links` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `utils/grantPackageAPICalls.ts` |
-| `/api/admin/held-signup-grants` | GET | jwt | - | GET: `credits:adjust` | no | - | 1: `components/admin/HeldSignupGrantsTab.tsx` |
-| `/api/admin/held-signup-grants/release` | POST | jwt | - | POST: `credits:adjust` | no | - | 2: `components/admin/HeldSignupGrantsTab.tsx`, `components/admin/InviteCenter/Pending/usePendingBulkActions.ts` |
-| `/api/admin/held-signup-grants/revoke` | POST | jwt | - | POST: `credits:adjust` | no | - | 2: `components/admin/HeldSignupGrantsTab.tsx`, `components/admin/InviteCenter/Pending/usePendingBulkActions.ts` |
+| `/api/admin/held-signup-grants` | GET | jwt | - | GET: `credits:adjust` | no | - | 1: `components/admin/InviteCenter/Pending/HeldGrantActions.tsx` |
+| `/api/admin/held-signup-grants/release` | POST | jwt | - | POST: `credits:adjust` | no | - | 2: `components/admin/InviteCenter/Pending/HeldGrantActions.tsx`, `components/admin/InviteCenter/Pending/usePendingBulkActions.ts` |
+| `/api/admin/held-signup-grants/revoke` | POST | jwt | - | POST: `credits:adjust` | no | - | 2: `components/admin/InviteCenter/Pending/HeldGrantActions.tsx`, `components/admin/InviteCenter/Pending/usePendingBulkActions.ts` |
 | `/api/admin/help-analytics` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/helpAnalytics.ts` |
 | `/api/admin/identity-providers` | GET, POST | jwt+key | `admin:*` | GET: `settings:manage`; POST: `settings:manage` | no | - | 1: `components/admin/IdentityProvidersTab.tsx` |
 | `/api/admin/identity-providers/[id]` | GET, PUT, DELETE | jwt+key | `admin:*` | GET: `settings:manage`; PUT: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `components/admin/IdentityProvidersTab.tsx` |

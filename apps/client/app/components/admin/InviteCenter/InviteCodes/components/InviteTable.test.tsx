@@ -7,7 +7,9 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { InviteTable } from './InviteTable';
 import type { RegInviteData } from '../types';
 
-vi.mock('../../../common/UsernameText', () => ({ default: ({ id }: { id: string }) => <span>{id}</span> }));
+vi.mock('@client/app/components/common/UsernameText', () => ({
+  default: ({ id }: { id: string }) => <span>{id}</span>,
+}));
 
 const theme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => <CssVarsProvider theme={theme}>{children}</CssVarsProvider>;

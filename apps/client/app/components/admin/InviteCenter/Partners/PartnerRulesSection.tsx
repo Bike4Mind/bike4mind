@@ -28,7 +28,7 @@ import {
 } from '@client/app/utils/partnerSignupRuleAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 import type { GrantPackageRow } from '@client/app/utils/grantPackageAPICalls';
-import { grantPackageUsage, useGrantPackageOptions } from './InviteCenter/shared/GrantPackageSelect';
+import { grantPackageUsage, useGrantPackageOptions } from '../shared/GrantPackageSelect';
 import {
   ADMIN_REASON_PRESETS,
   ActionDialog,
@@ -39,9 +39,9 @@ import {
   ErrorState,
   StatusChip,
   type DataColumn,
-} from './shared';
-import { ADMIN_REGION_GAP } from './shared/adminStyles';
-import PartnerSignupRuleFormDialog, { planLabelForPriceId } from './PartnerSignupRuleFormDialog';
+} from '../../shared';
+import { ADMIN_REGION_GAP } from '../../shared/adminStyles';
+import PartnerSignupRuleFormDialog, { planLabelForPriceId } from '../../PartnerSignupRuleFormDialog';
 
 const QUERY_KEY = 'partner-signup-rules';
 
@@ -58,7 +58,7 @@ const none = (
 
 const plural = (count: number) => (count === 1 ? '' : 's');
 
-export default function PartnerSignupRulesTab() {
+export default function PartnerRulesSection() {
   const queryClient = useQueryClient();
   // useDebounceValue owns the input state; `value` mirrors keystrokes, `debouncedValue` drives the query.
   const { value: searchInput, debouncedValue: search, setValue: setSearchInput } = useDebounceValue('');
@@ -280,6 +280,7 @@ export default function PartnerSignupRulesTab() {
   return (
     <Stack gap={ADMIN_REGION_GAP} data-testid="partner-signup-rules-tab">
       <AdminPageHeader
+        level="section"
         title="Partner signups"
         count={data?.meta.total}
         description="Grant entitlements, credits, a plan or an org to verified signups on a partner domain."
@@ -461,7 +462,7 @@ function PackageCell({ ruleId, pkg }: { ruleId: string; pkg: GrantPackageRow | u
   if (!pkg) return <Typography level="body-xs">package</Typography>;
   return (
     <Tooltip title={grantPackageUsage(pkg)}>
-      <Typography level="body-sm" data-testid={`partner-rule-package-${ruleId}`}>
+      <Typography component="div" level="body-sm" data-testid={`partner-rule-package-${ruleId}`}>
         {pkg.credits.toLocaleString()} ({pkg.name})
         {pkg.capHits > 0 && (
           <Box component="span" sx={{ ml: 0.5 }}>

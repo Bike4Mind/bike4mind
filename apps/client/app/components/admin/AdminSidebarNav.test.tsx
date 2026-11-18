@@ -46,8 +46,10 @@ describe('SidebarNav', () => {
         item.badge !== undefined && item.badge !== 'newSubscriptions'
     );
 
-    it('gives every counted queue a sidebar item', () => {
-      expect(countedItems.map(item => item.badge).sort()).toEqual([...ADMIN_ACTION_COUNT_KEYS].sort());
+    it('gives every standalone counted queue a sidebar item', () => {
+      expect(countedItems.map(item => item.badge).sort()).toEqual(
+        ADMIN_ACTION_COUNT_KEYS.filter(key => key !== 'heldSignupGrants').sort()
+      );
     });
 
     it.each(countedItems.map(item => [item.badge, item.tab] as const))(
@@ -90,9 +92,9 @@ describe('SidebarNav', () => {
     });
 
     it('keeps an item with work waiting out from under More', () => {
-      renderNav({ actionCounts: { heldSignupGrants: 2 } });
-      expect(screen.getByRole('link', { name: /Held signup grants/ })).toBeInTheDocument();
-      expect(screen.getByTestId('admin-sidebar-heldSignupGrants-badge')).toHaveTextContent('2');
+      renderNav({ actionCounts: { signupRiskReview: 2 } });
+      expect(screen.getByTestId('admin-signup-risk-review-btn')).toBeInTheDocument();
+      expect(screen.getByTestId('admin-sidebar-signupRiskReview-badge')).toHaveTextContent('2');
       expect(screen.queryByRole('link', { name: /Signup domain holds/ })).toBeNull();
     });
 

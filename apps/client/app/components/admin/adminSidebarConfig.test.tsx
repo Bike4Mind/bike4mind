@@ -83,6 +83,15 @@ describe('SIDEBAR_SECTIONS', () => {
     expect(allItems.find(i => i.tab === AdminTab.Waitlist)?.label).toBe('Invite Center');
   });
 
+  it.each([AdminTab.RegistrationInvites, AdminTab.PartnerSignupRules, AdminTab.HeldSignupGrants])(
+    'has no sidebar item for retired Invite Center tab %s',
+    tab => expect(allItems.some(item => item.tab === tab)).toBe(false)
+  );
+
+  it('preserves the retired numeric slots', () => {
+    expect([AdminTab.RegistrationInvites, AdminTab.PartnerSignupRules, AdminTab.HeldSignupGrants]).toEqual([5, 55, 70]);
+  });
+
   it('labels the secrets item with its page title', () => {
     expect(allItems.find(i => i.tab === AdminTab.SystemSecrets)?.label).toBe('System secrets');
   });
@@ -96,7 +105,9 @@ describe('SIDEBAR_SECTIONS', () => {
 
   it('badges each counted queue once, and Subscriptions with its dot', () => {
     const badges = allItems.flatMap(item => (item.badge ? [item.badge] : []));
-    expect(badges.sort()).toEqual([...ADMIN_ACTION_COUNT_KEYS, 'newSubscriptions'].sort());
+    expect(badges.sort()).toEqual(
+      [...ADMIN_ACTION_COUNT_KEYS.filter(key => key !== 'heldSignupGrants'), 'newSubscriptions'].sort()
+    );
     expect(allItems.find(item => item.badge === 'newSubscriptions')?.tab).toBe(AdminTab.Subscriptions);
   });
 });
@@ -201,6 +212,13 @@ describe('AdminPage tab wiring', () => {
   const adminPageSource = readFileSync(join(__dirname, 'AdminPage.tsx'), 'utf8');
 
   const panels = [...adminPageSource.matchAll(/<TabPanel\s+value=\{AdminTab\.(\w+)\}[^>]*>([\s\S]*?)<\/TabPanel>/g)];
+
+  it('does not mount retired Invite Center panels', () => {
+    const panelTabs = panels.map(([, tab]) => tab);
+    expect(panelTabs).not.toContain('RegistrationInvites');
+    expect(panelTabs).not.toContain('PartnerSignupRules');
+    expect(panelTabs).not.toContain('HeldSignupGrants');
+  });
 
   it('guards each panel body with the same tab the panel is keyed to', () => {
     const mismatches = panels.flatMap(([, panelTab, body]) =>

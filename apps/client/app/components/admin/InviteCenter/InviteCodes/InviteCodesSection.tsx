@@ -19,14 +19,14 @@ import {
 import { useRegistrationInvitesStore } from './store';
 import { RegInviteData, CreateInviteFormData } from './types';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
-import { BulkActionBar } from '../shared/BulkActionBar';
-import { EmptyState } from '../shared/EmptyState';
-import { ErrorState } from '../shared/ErrorState';
-import { LoadingState } from '../shared/LoadingState';
-import { ViewTabs } from '../shared/ViewTabs';
-import { ActionDialog } from '../shared/ActionDialog';
-import { ADMIN_REASON_PRESETS } from '../shared/adminReason';
-import { ADMIN_REGION_GAP } from '../shared/adminStyles';
+import { BulkActionBar } from '../../shared/BulkActionBar';
+import { EmptyState } from '../../shared/EmptyState';
+import { ErrorState } from '../../shared/ErrorState';
+import { LoadingState } from '../../shared/LoadingState';
+import { ViewTabs } from '../../shared/ViewTabs';
+import { ActionDialog } from '../../shared/ActionDialog';
+import { ADMIN_REASON_PRESETS } from '../../shared/adminReason';
+import { ADMIN_REGION_GAP } from '../../shared/adminStyles';
 import { InviteTable } from './components/InviteTable';
 import { CreateInviteModal } from './components/CreateInviteModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
@@ -108,7 +108,7 @@ const ActionControls: React.FC<{
   );
 };
 
-const RegistrationInvitesTab: React.FC = () => {
+const InviteCodesSection: React.FC = () => {
   const {
     copied,
     setCopied,
@@ -401,4 +401,4 @@ const RegistrationInvitesTab: React.FC = () => {
   );
 };
 
-export default RegistrationInvitesTab;
+export default InviteCodesSection;

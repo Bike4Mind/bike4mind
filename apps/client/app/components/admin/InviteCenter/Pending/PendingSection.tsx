@@ -27,6 +27,7 @@ import { StatusChip } from '../../shared/StatusChip';
 import { useAdminListUrlState } from '../../shared/useAdminListUrlState';
 import { PendingBulkDialog } from './PendingBulkDialog';
 import { MAX_PENDING_BULK, type PendingBulkKind } from './usePendingBulkActions';
+import HeldGrantActions from './HeldGrantActions';
 
 const CREDITS = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const credits = (value: number) => CREDITS.format(value);
@@ -76,7 +77,6 @@ const pick = <T extends string>(allowed: readonly T[], value: string): T | undef
 const NO_SELECTION: AdminSelection = { mode: 'explicit', ids: [] };
 
 const SECTION_LINKS = [
-  { label: 'Open Held signup grants', tab: AdminTab.HeldSignupGrants, testId: 'invite-center-open-held-grants-btn' },
   { label: 'Open Signup domain holds', tab: AdminTab.SignupDomainHolds, testId: 'pending-open-domain-holds-btn' },
   { label: 'Open Risk review queue', tab: AdminTab.SignupRiskReview, testId: 'pending-open-risk-review-btn' },
 ] as const;
@@ -154,6 +154,8 @@ const StateChips = ({ row }: { row: AdminSignupGrantPendingRow }) => (
 );
 
 export function PendingSection() {
+  const [heldActionsOpen, setHeldActionsOpen] = useState(false);
+  const [heldActionsMounted, setHeldActionsMounted] = useState(false);
   const setActiveTab = useAdminModal(state => state.setActiveTab);
   const navigate = useNavigate();
   const [listState, setListState] = useAdminListUrlState(PENDING_SEARCH_KEYS);
@@ -291,6 +293,19 @@ export function PendingSection() {
   return (
     <Stack gap={1.5} data-testid="pending-section">
       <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center">
+        <Button
+          variant="outlined"
+          color="neutral"
+          size="sm"
+          data-testid="invite-center-open-held-grants-btn"
+          aria-expanded={heldActionsOpen}
+          onClick={() => {
+            setHeldActionsMounted(true);
+            setHeldActionsOpen(open => !open);
+          }}
+        >
+          {heldActionsOpen ? 'Hide held grant actions' : 'Held grant actions'}
+        </Button>
         {SECTION_LINKS.map(({ label, tab, testId }) => (
           <Button
             key={tab}
@@ -304,6 +319,11 @@ export function PendingSection() {
           </Button>
         ))}
       </Stack>
+      {heldActionsMounted && (
+        <div hidden={!heldActionsOpen}>
+          <HeldGrantActions />
+        </div>
+      )}
       <PendingHeader />
       <FilterBar state={listState} filters={FILTERS} onChange={updateList} search={false} />
       {failed.length > 0 && (

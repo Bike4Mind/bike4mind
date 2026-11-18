@@ -28,7 +28,6 @@ import {
   GitBranch,
   GitPullRequest,
   Globe,
-  HandCoins,
   Handshake,
   Hash,
   ImageOff,
@@ -78,6 +77,7 @@ export enum AdminTab {
   Feedback = 2,
   Analytics = 3,
   // 4, 11, 16 and 17 were tabs that no longer exist; never reuse them.
+  /** Retired page; keep the persisted value and URL redirect. */
   RegistrationInvites = 5,
   Migrate = 6,
   Modals = 7,
@@ -125,6 +125,7 @@ export enum AdminTab {
   VoiceSettings = 52,
   AgentExecutions = 53,
   PublishedPages = 54,
+  /** Retired page; keep the persisted value and URL redirect. */
   PartnerSignupRules = 55,
   EmbedKeys = 57,
   /** Retired page: its slug aliases to the Models tab's Discovery section (adminTabSlugs.ts). */
@@ -140,6 +141,7 @@ export enum AdminTab {
   Dashboard = 67,
   SignupDomainHolds = 68,
   SignupRiskReview = 69,
+  /** Retired page; keep the persisted value and URL redirect. */
   HeldSignupGrants = 70,
   PreferenceArena = 71,
   Revenue = 72,
@@ -249,7 +251,6 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         testid: 'admin-stripe-disputes-btn',
         badge: 'stripeDisputes',
       },
-      { Icon: HandCoins, tab: AdminTab.HeldSignupGrants, label: 'Held signup grants', badge: 'heldSignupGrants' },
       { Icon: ArrowRightLeft, tab: AdminTab.Migrate, label: 'Migration', gate: 'userMigration' },
     ],
   },

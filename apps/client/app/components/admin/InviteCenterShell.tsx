@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import { Stack, Typography } from '@mui/joy';
 import { useNavigate, useSearch } from '@tanstack/react-router';
+import { useUser } from '@client/app/contexts/UserContext';
+import HeldGrantActions from './InviteCenter/Pending/HeldGrantActions';
 import type { AdminSearch } from './adminTabParams';
 import {
   DEFAULT_INVITE_CENTER_SECTION,
@@ -12,7 +14,7 @@ import {
 import { AdminPageHeader } from './shared/AdminPageHeader';
 import InviteCenter from './InviteCenter';
 import GrantPackagesTab from './InviteCenter/Packages/GrantPackagesTab';
-import PartnerSignupRulesTab from './PartnerSignupRulesTab';
+import PartnerRulesSection from './InviteCenter/Partners/PartnerRulesSection';
 import { PendingSection } from './InviteCenter/Pending/PendingSection';
 import { RewardsSection } from './InviteCenter/Rewards/RewardsSection';
 import { ScheduleSection } from './InviteCenter/Schedule/ScheduleSection';
@@ -45,6 +47,7 @@ const PackagesSection = () => (
 export function InviteCenterShell({ waitlist }: { waitlist: ReactNode }) {
   const search = useSearch({ strict: false }) as AdminSearch;
   const navigate = useNavigate();
+  const { currentUser } = useUser();
   const section = parseSection(search[INVITE_CENTER_SECTION_PARAM]) ?? DEFAULT_INVITE_CENTER_SECTION;
 
   // Not the admin tab store: the URL sync would treat it as a tab switch and drop this param.
@@ -59,6 +62,17 @@ export function InviteCenterShell({ waitlist }: { waitlist: ReactNode }) {
       replace: true,
     });
   };
+
+  if (!currentUser?.isAdmin) {
+    return (
+      <Stack gap={ADMIN_REGION_GAP}>
+        <AdminPageHeader title="Invite Center" />
+        <div data-testid="invite-center-section-pending">
+          <HeldGrantActions />
+        </div>
+      </Stack>
+    );
+  }
 
   return (
     <Stack gap={ADMIN_REGION_GAP}>
@@ -81,7 +95,7 @@ export function InviteCenterShell({ waitlist }: { waitlist: ReactNode }) {
         ) : section === 'packages' ? (
           <PackagesSection />
         ) : section === 'partners' ? (
-          <PartnerSignupRulesTab />
+          <PartnerRulesSection />
         ) : section === 'pending' ? (
           <PendingSection />
         ) : section === 'schedule' ? (

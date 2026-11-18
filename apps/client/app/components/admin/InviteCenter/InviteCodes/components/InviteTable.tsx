@@ -4,13 +4,13 @@ import AllInclusiveIcon from '@mui/icons-material/AllInclusive';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { RegInviteStatusType } from '@bike4mind/common';
 import type { ReactNode } from 'react';
-import UsernameText from '../../../common/UsernameText';
-import { getTagColor } from '../../InviteCenter/shared/tagColors';
-import { DataTable, type DataColumn } from '../../shared/DataTable';
-import { StatusChip } from '../../shared/StatusChip';
+import UsernameText from '@client/app/components/common/UsernameText';
+import { getTagColor } from '../../shared/tagColors';
+import { DataTable, type DataColumn } from '../../../shared/DataTable';
+import { StatusChip } from '../../../shared/StatusChip';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { InviteTableProps, RegInviteData } from '../types';
-import { RowActionsMenu } from '../../shared/RowActionsMenu';
+import { RowActionsMenu } from '../../../shared/RowActionsMenu';
 
 const STATUS_TONES: Record<string, AdminStatusTone> = {
   open: 'good',

@@ -16,6 +16,9 @@ export interface AdminTabVisibility {
 export function canRenderAdminTab(tab: AdminTab, visibility: AdminTabVisibility): boolean {
   // A retired tab id has no panel.
   if (AdminTab[tab] === undefined) return false;
+  if ([AdminTab.RegistrationInvites, AdminTab.PartnerSignupRules, AdminTab.HeldSignupGrants].includes(tab)) {
+    return false;
+  }
   // Model lifecycle moved into the Models tab; its member stays only so its slug and palette entry keep resolving.
   if (tab === AdminTab.ModelLifecycle) return false;
   // SecOps triage moved into the Security page's Scans view; its member stays only so its slug and palette entry redirect.

@@ -35,6 +35,10 @@ vi.mock('./PendingBulkDialog', () => ({
   ),
 }));
 
+vi.mock('./HeldGrantActions', () => ({
+  default: () => <div data-testid="held-grant-actions-stub" />,
+}));
+
 const theme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => <CssVarsProvider theme={theme}>{children}</CssVarsProvider>;
 
@@ -301,13 +305,26 @@ describe('PendingSection', () => {
   });
 
   it.each([
-    ['invite-center-open-held-grants-btn', AdminTab.HeldSignupGrants],
     ['pending-open-domain-holds-btn', AdminTab.SignupDomainHolds],
     ['pending-open-risk-review-btn', AdminTab.SignupRiskReview],
   ])('%s opens its admin tab', (testId, tab) => {
     render(<PendingSection />, { wrapper: Wrapper });
     fireEvent.click(screen.getByTestId(testId));
     expect(useAdminModal.getState().activeTab).toBe(tab);
+  });
+
+  it('toggles held grant actions without leaving Pending', () => {
+    render(<PendingSection />, { wrapper: Wrapper });
+    const activeTab = useAdminModal.getState().activeTab;
+    expect(screen.queryByTestId('held-grant-actions-stub')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('invite-center-open-held-grants-btn'));
+    expect(screen.getByTestId('held-grant-actions-stub')).toBeInTheDocument();
+    expect(useAdminModal.getState().activeTab).toBe(activeTab);
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('invite-center-open-held-grants-btn'));
+    expect(screen.getByTestId('held-grant-actions-stub')).not.toBeVisible();
+    fireEvent.click(screen.getByTestId('invite-center-open-held-grants-btn'));
+    expect(screen.getByTestId('held-grant-actions-stub')).toBeVisible();
   });
 
   it('opens the bulk dialog for the selected accounts', () => {

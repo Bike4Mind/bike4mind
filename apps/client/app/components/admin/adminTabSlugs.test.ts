@@ -11,7 +11,12 @@ import {
   adminTabToSlug,
 } from './adminTabSlugs';
 
-const RETIRED_TABS = [AdminTab.RegistrationInvites, AdminTab.PartnerSignupRules, AdminTab.SecOpsTriage];
+const RETIRED_TABS = [
+  AdminTab.RegistrationInvites,
+  AdminTab.PartnerSignupRules,
+  AdminTab.HeldSignupGrants,
+  AdminTab.SecOpsTriage,
+];
 const ALL_TABS = Object.values(AdminTab).filter(
   (value): value is AdminTab => typeof value === 'number' && !RETIRED_TABS.includes(value)
 );
@@ -55,6 +60,7 @@ describe('adminTabRedirectFromSlug', () => {
     ['subscribers', undefined],
     ['registration-invites', 'invites'],
     ['partner-signup-rules', 'packages'],
+    ['held-signup-grants', 'pending'],
   ])('sends %s to the waitlist tab with section %s', (slug, section) => {
     const redirect = adminTabRedirectFromSlug(slug);
     expect(redirect?.tab).toBe(AdminTab.Waitlist);
@@ -89,6 +95,7 @@ describe('adminTabLinkSearch', () => {
   it.each([
     [AdminTab.RegistrationInvites, 'invites'],
     [AdminTab.PartnerSignupRules, 'packages'],
+    [AdminTab.HeldSignupGrants, 'pending'],
   ])('links retired tab %s to its Invite Center section', (tab, section) => {
     expect(adminTabLinkSearch(tab)).toEqual({ tab: 'waitlist', inviteSection: section });
   });

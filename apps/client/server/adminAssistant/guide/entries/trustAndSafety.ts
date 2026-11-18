@@ -97,6 +97,7 @@ export const TRUST_AND_SAFETY_GUIDE: readonly AdminGuideEntry[] = [
     views: ['admin.held_signup_grants'],
     settings: ['signupGrantSignupPoolDaily', 'signupGrantTricklePoolDaily'],
     howTo: [
+      'Open Invite Center > Pending > Held grant actions.',
       'Tick the accounts to pay, then click Release selected. Use the reason select to narrow the list and Previous/Next to page.',
       "A release pays the original grant without drawing the daily budget. Grants held by the budget are also paid automatically when a new day's budget opens.",
       'After a release, a Revoke button appears on the result banner. It opens "Revoke this release?"; Revoke credits permanently debits the credits that release paid (balances already spent are skipped) and the account is not paid this grant again.',

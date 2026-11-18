@@ -25,10 +25,10 @@ import {
   type AdminSelection,
   type DataColumn,
   type DataTableRowShortcut,
-} from './shared';
-import { AdminPermissionAction, useMissingAdminPermission } from './shared/MissingPermission';
-import { ADMIN_REGION_GAP } from './shared/adminStyles';
-import { SignupAdvisoryCell, isAssessmentOpen } from './SignupAdvisoryCell';
+} from '../../shared';
+import { AdminPermissionAction, useMissingAdminPermission } from '../../shared/MissingPermission';
+import { ADMIN_REGION_GAP } from '../../shared/adminStyles';
+import { SignupAdvisoryCell, isAssessmentOpen } from '../../SignupAdvisoryCell';
 
 const QUERY_KEY = HELD_SIGNUP_GRANTS_QUERY_KEY;
 const ENDPOINT = '/api/admin/held-signup-grants';
@@ -57,7 +57,7 @@ const REASON_LABELS: Record<HeldReason, string> = {
   budget_exhausted: 'Daily budget spent',
 };
 
-export default function HeldSignupGrantsTab() {
+export default function HeldGrantActions() {
   const [reason, setReason] = useState<HeldReason | undefined>(undefined);
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
   const [selection, setSelection] = useState<AdminSelection>({ mode: 'explicit', ids: [] });
@@ -165,6 +165,7 @@ export default function HeldSignupGrantsTab() {
   return (
     <Stack gap={ADMIN_REGION_GAP} data-testid="held-signup-grants-tab">
       <AdminPageHeader
+        level="section"
         title="Held signup grants"
         description={
           <>

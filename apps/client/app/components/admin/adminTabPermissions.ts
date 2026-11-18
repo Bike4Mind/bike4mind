@@ -67,7 +67,7 @@ export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, 
   // Subscriptions: writes need credits:adjust and its GET routes declare the same CREDITS_PAGE_READ.
   [AdminTab.Subscriptions]: CREDITS_PAGE_READ,
   // Its list, release and revoke routes all declare credits:adjust.
-  [AdminTab.HeldSignupGrants]: 'credits:adjust',
+  [AdminTab.Waitlist]: 'credits:adjust',
   // Pages whose writes need users:moderate; their GET routes declare the same MODERATION_PAGE_READ.
   [AdminTab.EmailVerification]: MODERATION_PAGE_READ,
   [AdminTab.SignupDomainHolds]: MODERATION_PAGE_READ,
