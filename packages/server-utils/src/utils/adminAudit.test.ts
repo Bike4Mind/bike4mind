@@ -21,6 +21,7 @@ import {
   denySelfAdminAction,
   parseAdminActionReason,
   recordAdminActionFromRequest,
+  resolveAdminAuditFromRequest,
   systemAuditActor,
   userAuditTarget,
   type RecordAdminActionFromRequestInput,
@@ -292,5 +293,26 @@ describe('userAuditTarget', () => {
     expect((await userAuditTarget('u1')).displayName).toBe('a');
     h.findById.mockResolvedValueOnce(null);
     expect((await userAuditTarget('u1')).displayName).toBe('u1');
+  });
+});
+
+describe('resolveAdminAuditFromRequest', () => {
+  it('returns the same actor and context recordAdminActionFromRequest would stamp', async () => {
+    vi.clearAllMocks();
+    h.append.mockImplementation(async (entry: Record<string, unknown>) => ({ id: 'entry-1', ...entry }));
+    const req = buildRequest();
+
+    const resolved = await resolveAdminAuditFromRequest(req);
+    await recordAdminActionFromRequest(req, baseInput);
+
+    expect(resolved.actor).toEqual(appended().actor);
+    expect(resolved.context).toEqual(appended().context);
+    expect(resolved.context.route).toBe('/api/admin/users/u1/credits');
+  });
+
+  it('throws when the request is unauthenticated', async () => {
+    await expect(resolveAdminAuditFromRequest(buildRequest({ user: undefined }))).rejects.toThrow(
+      'requires an authenticated request'
+    );
   });
 });

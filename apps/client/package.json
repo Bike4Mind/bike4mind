@@ -26,7 +26,7 @@
     "format": "prettier --write './**/*.{ts,tsx}'",
     "typecheck": "NODE_OPTIONS='--max-old-space-size=8192' tsc --noEmit",
     "typecheck:native": "tsgo --noEmit",
-    "typecheck:fast": "tsgo --noEmit || NODE_OPTIONS='--max-old-space-size=8192' tsc --noEmit",
+    "typecheck:fast": "tsgo --noEmit",
     "test": "vitest run",
     "test:integration": "CLIENT_TEST_LANE=integration vitest run",
     "test:repo": "CLIENT_TEST_LANE=repo vitest run",

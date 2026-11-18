@@ -53,6 +53,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.credits.grant_unblocked': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.credits.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.subscription.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
+  'spend.freeze.applied': { category: 'credits', severity: 'critical', write: 'strict' },
+  'spend.freeze.lifted': { category: 'credits', severity: 'critical', write: 'strict' },
   'billing.comp.changed': { category: 'credits', severity: 'notice', write: 'strict' },
   'billing.subscription.synced': { category: 'credits', severity: 'notice', write: 'strict' },
   'billing.subscription.cancel_scheduled': { category: 'credits', severity: 'critical', write: 'strict' },
