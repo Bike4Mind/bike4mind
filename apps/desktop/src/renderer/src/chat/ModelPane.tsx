@@ -29,7 +29,7 @@ import {
   type RefObject,
 } from 'react';
 import type * as THREE from 'three';
-import type { ModelLighting, ModelUnits, ModelView } from '@shared/model3d';
+import { versionLabel, type ModelLighting, type ModelUnits, type ModelView } from '@shared/model3d';
 import {
   CaretDownIcon,
   CheckIcon,
@@ -73,6 +73,10 @@ import { TURNTABLE_SECONDS } from './model3d/turntable';
 import type { ModelTool } from './model3d/inspection';
 import { ModelToolPanel } from './model3d/ModelToolPanel';
 import { DEFAULT_SECTION, type SectionState } from './model3d/section';
+import { ModelVersionBanner, ModelVersionStrip } from './model3d/ModelVersionStrip';
+import { ModelVersionCompare } from './model3d/ModelVersionCompare';
+import { useModelVersions } from './model3d/useModelVersions';
+import { useVersionPreview } from './model3d/useVersionPreview';
 
 /** First-run prompts: game-asset shaped, since that is who this pane is for first. */
 export const MODEL_EXAMPLE_PROMPTS = [
@@ -222,6 +226,8 @@ function ViewToggle({
 function formatSize(size: [number, number, number], units: string): string {
   return `${size.map(value => Number(value.toFixed(value < 10 ? 2 : 1))).join(' x ')} ${units}`;
 }
+
+const ignorePick = () => undefined;
 
 export function ModelPane({
   engine,
@@ -414,6 +420,36 @@ export function ModelPane({
   const [note, setNote] = useState<Note>(null);
   const name = state.path ? (state.path.split(/[\\/]/).pop() ?? state.path) : null;
   const paramEntries = Object.entries(params);
+  const versions = useModelVersions(engine.sessionId, state);
+  const versionPreview = useVersionPreview(engine, versions);
+  const previewed = versionPreview.selected;
+  const previewObject = previewed ? versionPreview.object : null;
+  const restoreVersion = async () => {
+    const failed = await versionPreview.restore();
+    if (failed) setNote({ kind: 'error', text: failed });
+    stageRef.current?.focus();
+  };
+  const closeVersion = () => {
+    versionPreview.close();
+    stageRef.current?.focus();
+  };
+  // A preview only looks: joint and clip playback would pose the file's build behind it, and every
+  // pose change would rebuild the compare view's GL context.
+  const previewing = previewed !== null;
+  useEffect(() => {
+    if (!previewing) return;
+    setJointsPlaying(false);
+    setPlaying(null);
+  }, [previewing]);
+  // The current pose as the compare opened; the joints are hidden while previewing, so it holds.
+  const compareSubjects = useMemo(() => {
+    if (!previewed || !previewObject || !object) return null;
+    const currentLabel = versions.current === null ? 'Now' : `${versionLabel(versions.current)} (current)`;
+    return {
+      first: { object: previewObject, angles: previewed.jointAngles, label: versionLabel(previewed.number) },
+      second: { object, angles: jointAnglesRef.current, label: currentLabel },
+    };
+  }, [previewed, previewObject, object, versions.current]);
   const canExport = !!object && status !== 'building';
   // A failed build leaves the last good model on show, dimmed; a clip of it would pass for the current one.
   const canRecord = canExport && status !== 'error';
@@ -492,10 +528,10 @@ export function ModelPane({
     const preset = MODEL_VIEW_PRESETS.find(entry => entry.key === event.key);
     const big = event.shiftKey;
     const actions: Record<string, () => void> = {
-      ArrowLeft: () => nudgePickedJoint(-1, big) || handle?.orbit(-ORBIT_STEP, 0),
-      ArrowRight: () => nudgePickedJoint(1, big) || handle?.orbit(ORBIT_STEP, 0),
-      ArrowUp: () => nudgePickedJoint(1, big) || handle?.orbit(0, -ORBIT_STEP),
-      ArrowDown: () => nudgePickedJoint(-1, big) || handle?.orbit(0, ORBIT_STEP),
+      ArrowLeft: () => (!previewed && nudgePickedJoint(-1, big)) || handle?.orbit(-ORBIT_STEP, 0),
+      ArrowRight: () => (!previewed && nudgePickedJoint(1, big)) || handle?.orbit(ORBIT_STEP, 0),
+      ArrowUp: () => (!previewed && nudgePickedJoint(1, big)) || handle?.orbit(0, -ORBIT_STEP),
+      ArrowDown: () => (!previewed && nudgePickedJoint(-1, big)) || handle?.orbit(0, ORBIT_STEP),
       '+': () => handle?.zoom(ZOOM_STEP),
       '=': () => handle?.zoom(ZOOM_STEP),
       '-': () => handle?.zoom(1 / ZOOM_STEP),
@@ -510,7 +546,7 @@ export function ModelPane({
       Enter: () => editable && pickedNames.length > 0 && openPrompt(handle?.partPoint(pickedNames) ?? null),
       m: () => toggleTool('measure'),
       s: () => toggleTool('section'),
-      Escape: () => (tool ? setTool(null) : clearPick()),
+      Escape: () => (tool ? setTool(null) : previewed ? closeVersion() : clearPick()),
     };
     const action = preset
       ? () => handle?.setView(preset.view)
@@ -651,22 +687,23 @@ export function ModelPane({
         {name ? (
           <>
             <ModelViewport
-              object={object}
+              object={previewed ? previewObject : object}
               wireframe={wireframe}
               grid={grid}
               lighting={lighting}
               dark={dark}
-              dimmed={status === 'error'}
+              dimmed={!previewed && status === 'error'}
               frameKey={state.path}
-              pose={jointAngles}
+              pose={previewed ? previewed.jointAngles : jointAngles}
               exploded={exploded && explodable}
-              picked={pickedNames}
-              onPick={pickPart}
-              onPoseChange={setJointAngle}
+              picked={previewed ? NO_PARTS : pickedNames}
+              // A previewed version is only looked at: its parts are not the file's to edit or pose.
+              onPick={previewed ? ignorePick : pickPart}
+              onPoseChange={previewed ? undefined : setJointAngle}
               onJointDragStart={stopJointsPlaying}
               editing={editingNames}
               onEditSettled={onEditSettled}
-              clip={playingClip}
+              clip={previewed ? null : playingClip}
               onCroppedChange={setCropped}
               adjusting={adjusting}
               handleRef={viewportHandle}
@@ -688,7 +725,27 @@ export function ModelPane({
                 }}
               />
             )}
-            {promptOpen && (
+            {previewed && versionPreview.compare && compareSubjects && (
+              <ModelVersionCompare mode={versionPreview.compare} dark={dark} {...compareSubjects} />
+            )}
+            {previewed && (
+              <ModelVersionBanner
+                version={previewed}
+                current={versions.current}
+                compare={versionPreview.compare}
+                status={versionPreview.status}
+                restoring={versionPreview.restoring}
+                onCompareChange={versionPreview.setCompare}
+                onRestore={() => void restoreVersion()}
+                onClose={closeVersion}
+              />
+            )}
+            {previewed && versionPreview.status === 'building' && (
+              <Stack alignItems="center" justifyContent="center" sx={{ position: 'absolute', inset: 0 }}>
+                <CircularProgress size="sm" />
+              </Stack>
+            )}
+            {promptOpen && !previewed && (
               <PartEditPrompt
                 key={`${promptOpen.point.x},${promptOpen.point.y}`}
                 parts={pickedNames}
@@ -987,6 +1044,16 @@ export function ModelPane({
         )}
       </Box>
 
+      {state.kind === 'model' && (
+        <ModelVersionStrip
+          versions={versions.versions}
+          current={versions.current}
+          selected={previewed?.number ?? null}
+          onSelect={versionPreview.select}
+          onClose={closeVersion}
+        />
+      )}
+
       {paramEntries.length > 0 && (
         <Stack spacing={0.5} sx={{ px: 1.5, pt: 1, maxHeight: 220, overflowY: 'auto' }} data-testid="model-pane-params">
           {paramEntries.map(([key, param]) => (
@@ -1025,14 +1092,14 @@ export function ModelPane({
         </Stack>
       )}
 
-      {clips.length > 0 && (
+      {clips.length > 0 && !previewed && (
         <ModelClips
           clips={clips}
           playing={playingClip}
           onPlay={clip => setPlaying(clip === null ? null : { path: state.path, clip })}
         />
       )}
-      {joints.length > 0 && (
+      {joints.length > 0 && !previewed && (
         <ModelJoints
           joints={joints}
           units={summary?.units ?? 'mm'}
