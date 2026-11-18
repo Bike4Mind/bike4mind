@@ -159,7 +159,7 @@ private struct GenerationTile: View {
   private var cornerButton: some View {
     if generation.phase.isTerminal {
       button("xmark", label: "Dismiss", action: onDismiss)
-    } else if generation.handle.isCancellable {
+    } else if generation.handle.isCancellable, generation.handle.kind != .scene || generation.phase == .queued {
       button("stop.fill", label: "Cancel", action: onCancel)
     }
   }

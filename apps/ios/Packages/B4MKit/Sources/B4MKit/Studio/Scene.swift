@@ -21,8 +21,9 @@ public struct SceneRequest: Equatable, Sendable {
   public let videoFileID: String
   public let audioFileID: String
   public let fit: SceneAudioFit
-  public let fadeInSeconds: Double
-  public let fadeOutSeconds: Double
+  /// Nil leaves the fade to the server's default.
+  public let fadeInSeconds: Double?
+  public let fadeOutSeconds: Double?
   public let coverFileID: String?
   public let title: String?
   /// What the progress tile shows: the title, else the two parts it is made from.
@@ -30,8 +31,7 @@ public struct SceneRequest: Equatable, Sendable {
 
   public init(
     videoFileID: String, audioFileID: String, fit: SceneAudioFit = .trim,
-    fadeInSeconds: Double = SceneDraft.defaultFadeInSeconds,
-    fadeOutSeconds: Double = SceneDraft.defaultFadeOutSeconds, coverFileID: String? = nil, title: String? = nil,
+    fadeInSeconds: Double? = nil, fadeOutSeconds: Double? = nil, coverFileID: String? = nil, title: String? = nil,
     label: String = "Scene"
   ) {
     self.videoFileID = videoFileID
@@ -46,19 +46,16 @@ public struct SceneRequest: Equatable, Sendable {
 }
 
 /// The Scene sheet's choices. Pure, so the request it builds is testable without a view.
-/// Defaults match the server's (`SCENE_DEFAULT_*` in b4m-core/common/src/scene/index.ts): trimmed, no fade-in and a
-/// 1.5 s fade-out, so an untouched sheet sends what an omitted `audio` object would.
+/// An untouched sheet trims the music and sends no fade, so the server's own defaults apply.
 public struct SceneDraft: Equatable, Sendable {
-  public static let defaultFadeInSeconds: Double = 0
-  public static let defaultFadeOutSeconds: Double = 1.5
-  /// `SCENE_TITLE_MAX_LENGTH`.
+  /// `SCENE_TITLE_MAX_LENGTH`; the server counts UTF-16 code units, so the draft does too.
   public static let maximumTitleLength = 200
 
   public var video: MediaItem?
   public var audio: MediaItem?
   public var cover: MediaItem?
   public var fit: SceneAudioFit = .trim
-  /// Off sends no fade at all; on sends the default fade-out.
+  /// On leaves the fade to the server; off sends a zero fade-in and fade-out.
   public var fades = true
   public var title = ""
 
@@ -96,8 +93,8 @@ public struct SceneDraft: Equatable, Sendable {
   public var issue: String? {
     if video == nil { return "Pick a video for the picture." }
     if audio == nil { return "Pick a music track for the soundtrack." }
-    if trimmedTitle.count > Self.maximumTitleLength {
-      return "Keep the title under \(Self.maximumTitleLength) characters."
+    if trimmedTitle.utf16.count > Self.maximumTitleLength {
+      return "Keep the title to at most \(Self.maximumTitleLength) characters."
     }
     return nil
   }
@@ -109,7 +106,7 @@ public struct SceneDraft: Equatable, Sendable {
     let title = trimmedTitle.isEmpty ? nil : trimmedTitle
     return SceneRequest(
       videoFileID: video.id, audioFileID: audio.id, fit: fit,
-      fadeInSeconds: fades ? Self.defaultFadeInSeconds : 0, fadeOutSeconds: fades ? Self.defaultFadeOutSeconds : 0,
+      fadeInSeconds: fades ? nil : 0, fadeOutSeconds: fades ? nil : 0,
       coverFileID: cover?.id, title: title,
       label: title ?? "\(video.displayTitle) + \(audio.displayTitle)")
   }

@@ -40,8 +40,8 @@ final class SceneDraftTests: XCTestCase {
     XCTAssertEqual(request.videoFileID, "v1")
     XCTAssertEqual(request.audioFileID, "a1")
     XCTAssertEqual(request.fit, .trim)
-    XCTAssertEqual(request.fadeInSeconds, 0)
-    XCTAssertEqual(request.fadeOutSeconds, 1.5)
+    XCTAssertNil(request.fadeInSeconds)
+    XCTAssertNil(request.fadeOutSeconds)
     XCTAssertNil(request.coverFileID)
     XCTAssertNil(request.title)
     XCTAssertEqual(request.label, "waves + lofi")
@@ -104,8 +104,33 @@ final class SceneWireTests: XCTestCase {
     XCTAssertEqual(Set(sent.keys), ["video_file_id", "audio_file_id", "audio", "cover_file_id", "title"])
     let audio = try XCTUnwrap(sent["audio"] as? [String: Any])
     XCTAssertEqual(audio["fit"] as? String, "trim")
+    XCTAssertEqual(Set(audio.keys), ["fit"], "an untouched fade is left to the server's default")
+  }
+
+  func testFadesOffSendsZeroFades() async throws {
+    let transport = FakeTransport { _ in (202, Data(openAPIExampleJob.utf8)) }
+    let client = StudioClient(baseURL: base, tokens: FakeTokens(), transport: transport)
+    _ = try await client.composeScene(SceneRequest(videoFileID: "v1", audioFileID: "a1", fadeInSeconds: 0, fadeOutSeconds: 0))
+    let requests = await transport.requests
+    let audio = try XCTUnwrap(try body(try XCTUnwrap(requests.first))["audio"] as? [String: Any])
     XCTAssertEqual(audio["fade_in_seconds"] as? Double, 0)
-    XCTAssertEqual(audio["fade_out_seconds"] as? Double, 1.5)
+    XCTAssertEqual(audio["fade_out_seconds"] as? Double, 0)
+  }
+
+  func testAMissingInputFileKeepsItsReason() async {
+    let transport = FakeTransport { _ in
+      (404, Data(#"{"error":"Video not found.","errorCode":"input_file_not_found"}"#.utf8))
+    }
+    let client = StudioClient(baseURL: base, tokens: FakeTokens(), transport: transport)
+    do {
+      _ = try await client.composeScene(SceneRequest(videoFileID: "v1", audioFileID: "a1"))
+      XCTFail("expected a refusal")
+    } catch let error as StudioRequestError {
+      XCTAssertEqual(error.status, 404)
+      XCTAssertEqual(error.code, "input_file_not_found")
+    } catch {
+      XCTFail("unexpected \(error)")
+    }
   }
 
   func testOptionalKeysAreLeftOutNotNull() async throws {
@@ -177,7 +202,7 @@ final class SceneWireTests: XCTestCase {
       _ = try await client.generate(GenerationRequest(kind: .scene, prompt: "x", modelID: "m"))
       XCTFail("expected a refusal")
     } catch {
-      XCTAssertTrue(error is StudioRequestError)
+      XCTAssertEqual((error as? StudioRequestError)?.status, 422)
     }
     let requests = await transport.requests
     XCTAssertTrue(requests.isEmpty)
@@ -231,11 +256,16 @@ final class SceneTrackingTests: XCTestCase {
 private actor KindedMediaAPI: MediaAPI {
   private(set) var listed: [MediaKind?] = []
   let items: [MediaItem]
+  let failing: MediaKind?
 
-  init(_ items: [MediaItem]) { self.items = items }
+  init(_ items: [MediaItem], failing: MediaKind? = nil) {
+    self.items = items
+    self.failing = failing
+  }
 
   func listMedia(kind: MediaKind?, page: Int, limit: Int) async throws -> MediaPage {
     listed.append(kind)
+    if let failing, kind == failing { throw APIError.notFound }
     return MediaPage(items: items.filter { kind == nil || $0.kind == kind }, hasMore: false)
   }
 
@@ -273,6 +303,25 @@ final class SceneComposerViewModelTests: XCTestCase {
     XCTAssertEqual(sent.map(\.audioFileID), ["a1"])
     XCTAssertEqual(sent.first?.coverFileID, "i1")
     XCTAssertEqual(tracker.generations.first?.handle.kind, .scene)
+  }
+
+  func testAFailedPartnerListLeavesTheCoversLoaded() async throws {
+    let media = KindedMediaAPI([clip, song, art], failing: .audio)
+    let model = SceneComposerViewModel(
+      draft: try XCTUnwrap(SceneDraft.starting(from: clip)), api: FakeStudioAPI(), media: media,
+      tracker: makeTracker(FakeStudioAPI()))
+
+    await model.load()
+
+    XCTAssertEqual(model.partners, .failed)
+    XCTAssertEqual(model.covers, .loaded([art]))
+  }
+
+  func testATitleOverTheServersLimitIsHeldBackByUTF16Length() {
+    let emoji = String(repeating: "\u{1F3D6}", count: 150)
+    XCTAssertEqual(emoji.count, 150)
+    XCTAssertNotNil(SceneDraft(video: clip, audio: song, title: emoji).issue)
+    XCTAssertNil(SceneDraft(video: clip, audio: song, title: String(repeating: "a", count: 200)).issue)
   }
 
   func testARefusalStaysOnTheSheetWithItsReason() async {

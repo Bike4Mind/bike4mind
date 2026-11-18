@@ -154,8 +154,8 @@ enum StudioWire {
   struct SceneBody: Encodable {
     struct Audio: Encodable {
       let fit: String
-      let fadeInSeconds: Double
-      let fadeOutSeconds: Double
+      let fadeInSeconds: Double?
+      let fadeOutSeconds: Double?
 
       enum CodingKeys: String, CodingKey {
         case fit
@@ -436,14 +436,10 @@ enum StudioWire {
   }
 
   /// A refused create: the server's `errorCode` when it sent one, else the plain status mapping.
-  static func refusal(status: Int, body: Data) -> any Error {
-    switch status {
-    case 400, 402, 409, 422:
-      let envelope = try? JSONDecoder().decode(ErrorEnvelope.self, from: body)
-      return StudioRequestError(status: status, code: envelope?.errorCode, serverMessage: envelope?.error)
-    default:
-      return APIError(status: status)
-    }
+  static func refusal(status: Int, body: Data, alsoReadsEnvelopeOn extra: Set<Int> = []) -> any Error {
+    guard [400, 402, 409, 422].contains(status) || extra.contains(status) else { return APIError(status: status) }
+    let envelope = try? JSONDecoder().decode(ErrorEnvelope.self, from: body)
+    return StudioRequestError(status: status, code: envelope?.errorCode, serverMessage: envelope?.error)
   }
 
   // MARK: Status mapping
@@ -616,7 +612,7 @@ public struct StudioClient: StudioAPI {
     let startedAt = now()
     let response = try await requester.send(method: "POST", path: StudioWire.sceneCompositionsPath, jsonBody: body)
     guard response.status == 202 || response.status == 200 else {
-      throw StudioWire.refusal(status: response.status, body: response.body)
+      throw StudioWire.refusal(status: response.status, body: response.body, alsoReadsEnvelopeOn: [404])
     }
     let job = try StudioWire.decode(StudioWire.Job.self, from: response.body)
     return GenerationHandle(kind: .scene, id: job.id, prompt: request.label, startedAt: startedAt)

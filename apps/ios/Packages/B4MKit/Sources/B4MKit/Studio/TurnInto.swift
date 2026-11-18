@@ -105,9 +105,6 @@ public enum TurnIntoAction: Hashable, Sendable {
   public var targetKind: MediaKind {
     self == .grabFrame ? .image : .video
   }
-
-  /// Whether the action composes a Scene rather than seeding the create bar.
-  public var composesScene: Bool { self == .addMusic || self == .putOnVideo }
 }
 
 public enum TurnInto {
