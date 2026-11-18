@@ -1,3 +1,4 @@
+import { cloudSecurityScanDeadLetter } from './cloudScanDeadLetter';
 import {
   appFilesBucket,
   fabFileBucket,
@@ -228,6 +229,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     ...stageScopedQueueUrls({
       // Contributed entries go first so a core key always wins.
       ...Object.fromEntries(Object.values(contributedQueues).map(({ spec, dlq }) => [spec.label, dlq.url])),
+      'cloud-security-scan': cloudSecurityScanDeadLetter.queue.url,
       'fab-file-vectorize': fabFileVectorizeQueueDLQ.url,
       'fab-file-chunk': fabFileChunkQueueDLQ.url,
       'generation-callback': generationCallbackQueueDLQ.url,

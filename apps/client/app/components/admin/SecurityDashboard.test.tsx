@@ -14,6 +14,7 @@ vi.mock('@client/app/hooks/data/admin', () => {
   const query = mocks.query;
   const mutation = { mutate: vi.fn(), isPending: false };
   return {
+    SECURITY_DASHBOARD_CLOUD_QUERY_KEY: ['admin', 'security-dashboard', 'cloud'],
     SECURITY_DASHBOARD_PROWLER_QUERY_KEY: ['admin', 'security-dashboard', 'cloud-prowler'],
     useSecurityDashboardWeb: () => query,
     useRunWebSecurityScan: () => mutation,

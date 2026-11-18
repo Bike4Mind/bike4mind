@@ -873,6 +873,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     '7c55bfdeaea409d972ba757cc5e3c8d50a5a0d1e8fd8629afab3473284bbbd6e'
   ),
   broker(
+    'queue:infra/cloudScanDeadLetter.ts:cloudSecurityScanDlq',
+    'ebb4d665a7729e8eeb32f3e0230f05cdc2ed1a459808e761e14f28e85502fa83'
+  ),
+  broker(
     'queue:infra/apiProbeDetectorDeadLetter.ts:apiProbeDetectorDlq',
     'f353ac779308cb585b976a6bd5e80854661ced29c7569618b666faf1fb7e6d61'
   ),
@@ -932,7 +936,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/cron.ts:CloudSecurityScan',
-    '75ebb60c42949289eaa820ed09809f498c8859e5b8b0f7035e463913926d561d',
+    '4f2fd97b93060d4477a8e915dc58c8f4f98695c0fc12ee678afa94122657ef55',
     'Inspects the hosted cloud account or dispatches hosted CI; not applicable to a portable deployment.'
   ),
   gap(
