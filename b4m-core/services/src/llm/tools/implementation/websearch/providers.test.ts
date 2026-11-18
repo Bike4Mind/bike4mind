@@ -178,6 +178,53 @@ describe('createSerpApiProvider', () => {
       expect(results[0].displayHost).toBe('www.lambdafin.com');
     });
 
+    it('falls back to the platform name in source when the breadcrumb is not a URL', async () => {
+      const results = await searchWith({
+        link: goto,
+        displayed_link: '10+ comments',
+        source: 'Reddit \u00b7 r/investing',
+      });
+
+      expect(results[0]).toMatchObject({ url: goto, displayHost: 'Reddit' });
+    });
+
+    it('uses a source without a separator as the platform name', async () => {
+      const results = await searchWith({ link: goto, displayed_link: '5 likes', source: 'DataDrivenInvestor' });
+
+      expect(results[0].displayHost).toBe('DataDrivenInvestor');
+    });
+
+    it('prefers the breadcrumb host over source', async () => {
+      const results = await searchWith({
+        link: goto,
+        displayed_link: 'https://medium.datadriveninvestor.com \u203a best-stock-ma...',
+        source: 'DataDrivenInvestor',
+      });
+
+      expect(results[0].displayHost).toBe('medium.datadriveninvestor.com');
+    });
+
+    it.each([
+      ['a Google source', 'Google \u00b7 Search'],
+      ['an empty source', ''],
+      ['a source with no platform name', ' \u00b7 r/investing'],
+    ])('sets no displayHost for %s', async (_label, source) => {
+      const results = await searchWith({ link: goto, displayed_link: '10+ comments', source });
+
+      expect(results[0]).not.toHaveProperty('displayHost');
+    });
+
+    it('does not read source on a direct link', async () => {
+      const direct = 'https://www.reddit.com/r/investing/comments/1/best_apis/';
+      const results = await searchWith({
+        link: direct,
+        displayed_link: '10+ comments',
+        source: 'Reddit \u00b7 r/investing',
+      });
+
+      expect(results[0]).toEqual({ title: 'T', url: direct, snippet: 's' });
+    });
+
     it.each([
       ['a non-URL such as a video view count', '920+ views'],
       ['a breadcrumb that is itself a Google host', 'https://www.google.com \u203a search'],
