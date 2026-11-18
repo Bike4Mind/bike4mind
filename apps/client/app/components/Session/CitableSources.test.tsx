@@ -51,6 +51,32 @@ describe('CitableSources truncation badge', () => {
   });
 });
 
+describe('CitableSources host label', () => {
+  const redirectUrl = 'https://www.google.com/goto?url=CAESbQHEIkXX';
+
+  const renderRedirect = (metadata: CitableSource['metadata']) =>
+    render(
+      <TestWrapper>
+        <CitableSources citables={[{ ...baseCitable, id: redirectUrl, url: redirectUrl, metadata }]} />
+      </TestWrapper>
+    );
+
+  it('labels a redirect URL with the destination host from metadata.displayHost', () => {
+    renderRedirect({ sourceSystem: 'web_search', displayHost: 'www.massive.com' });
+    expect(screen.getByTestId('citable-source-host-label')).toHaveTextContent('massive.com');
+  });
+
+  it('falls back to the URL host when metadata.displayHost is absent', () => {
+    renderRedirect({ sourceSystem: 'web_search' });
+    expect(screen.getByTestId('citable-source-host-label')).toHaveTextContent('google.com');
+  });
+
+  it('ignores a displayHost that is not a string', () => {
+    renderRedirect({ sourceSystem: 'web_search', displayHost: 42 } as unknown as CitableSource['metadata']);
+    expect(screen.getByTestId('citable-source-host-label')).toHaveTextContent('google.com');
+  });
+});
+
 /**
  * The click is the seam that carries the anchor: nothing downstream can mark a passage the chip
  * never handed over, so the assertions are on the store write rather than on the viewer (#3038).
