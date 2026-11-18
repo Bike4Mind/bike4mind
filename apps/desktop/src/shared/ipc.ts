@@ -1,4 +1,5 @@
 import type { NewSessionDefaults } from './sessionDefaults';
+import type { StudioApi } from './studioIpc';
 import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
 import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopResult, LoopState } from './loop';
@@ -161,6 +162,15 @@ import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnaps
  * anything that needs a token is a main-process job.
  */
 export const IPC_CHANNELS = {
+  studioGet: 'studio:get',
+  studioPage: 'studio:page',
+  studioJobAction: 'studio:job-action',
+  studioPrepare: 'studio:prepare',
+  studioCreate: 'studio:create',
+  studioPickFiles: 'studio:pick-files',
+  studioUploadReference: 'studio:upload-reference',
+  studioAssetAction: 'studio:asset-action',
+  studioChanged: 'studio:changed',
   getAppInfo: 'app:get-info',
   setTheme: 'app:set-theme',
   authGetState: 'auth:get-state',
@@ -745,6 +755,7 @@ export interface MiniTavernApi {
 }
 
 export interface DesktopApi {
+  studio: StudioApi;
   getAppInfo(): Promise<AppInfo>;
   setTheme(mode: 'light' | 'dark' | 'system', backgroundColor: string): Promise<void>;
   update: {

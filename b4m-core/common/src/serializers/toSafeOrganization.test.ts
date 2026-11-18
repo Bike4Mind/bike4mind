@@ -170,10 +170,7 @@ describe('toSafeOrganization', () => {
 
   it("removes credit details from co-member rows but keeps the viewer's own row for a plain member", () => {
     const safe = toSafeOrganization(fullOrg, { userId: 'member2', isAdmin: false })!;
-    expect(safe.userDetails).toEqual([
-      { id: 'owner1', email: 'owner@acme.com', name: 'Owner' },
-      fullOrg.userDetails[1],
-    ]);
+    expect(safe.userDetails).toEqual([{ id: 'owner1', name: 'Owner' }, fullOrg.userDetails[1]]);
     expect(JSON.stringify(safe.userDetails![0])).not.toMatch(/usedCredits|maxCredits|lastCreditUsedAt|periodStart/);
     expect(fullOrg.userDetails[0].usedCredits).toBe(10);
   });
@@ -184,6 +181,36 @@ describe('toSafeOrganization', () => {
     ['platform admin', 'admin1', true],
   ])('keeps member credit details for the %s', (_role, userId, isAdmin) => {
     expect(toSafeOrganization(fullOrg, { userId, isAdmin })!.userDetails).toEqual(fullOrg.userDetails);
+  });
+
+  it.each([
+    ['plain member', 'member2'],
+    ['member who may edit the profile', 'editor3'],
+    ['stale manager without a users row', 'former-manager'],
+  ])("shows a %s colleagues' names but not their emails", (_role, userId) => {
+    const safe = toSafeOrganization(fullOrg, { userId, isAdmin: false })!;
+    const colleagues = (safe.userDetails as Array<Record<string, unknown>>).filter(row => row.id !== userId);
+    expect(colleagues.map(row => row.name)).toEqual(
+      ['Owner', 'Member'].filter((_, i) => fullOrg.userDetails[i].id !== userId)
+    );
+    for (const row of colleagues) expect('email' in row).toBe(false);
+  });
+
+  it('keeps a plain member their own email', () => {
+    const safe = toSafeOrganization(fullOrg, { userId: 'member2', isAdmin: false })!;
+    expect((safe.userDetails as Array<Record<string, unknown>>)[1].email).toBe('member@acme.com');
+  });
+
+  it.each([
+    ['owner', 'owner1', false],
+    ['current manager', 'manager1', false],
+    ['site admin', 'admin1', true],
+  ])('keeps every member email for the %s', (_role, userId, isAdmin) => {
+    const safe = toSafeOrganization(fullOrg, { userId, isAdmin })!;
+    expect((safe.userDetails as Array<Record<string, unknown>>).map(row => row.email)).toEqual([
+      'owner@acme.com',
+      'member@acme.com',
+    ]);
   });
 
   it('does not privilege a stale manager without a users row', () => {
