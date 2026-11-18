@@ -7,7 +7,18 @@ import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import Typography from '@mui/joy/Typography';
 import { Fragment, useEffect, useRef, type ReactNode } from 'react';
-import { AquariumIcon, BoardIcon, CaretDownIcon, CheckIcon, TableIcon, TavernIcon, TileWallIcon } from '../icons';
+import {
+  AquariumIcon,
+  BoardIcon,
+  CaretDownIcon,
+  CheckIcon,
+  ConstellationIcon,
+  SwimlanesIcon,
+  TableIcon,
+  TavernIcon,
+  TileWallIcon,
+  TransitIcon,
+} from '../icons';
 import { isMac } from '../platform';
 import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs';
 import { AMBIENT_IDLE_MS } from './ambient';
@@ -58,6 +69,27 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     description: 'A calm grid, one tile per agent',
     group: 'layout',
     icon: <TileWallIcon />,
+    ambient: false,
+  },
+  swimlanes: {
+    label: 'Swimlanes',
+    description: 'One lane per agent, nested under its parent',
+    group: 'layout',
+    icon: <SwimlanesIcon />,
+    ambient: false,
+  },
+  constellation: {
+    label: 'Constellation',
+    description: 'Agents as stars around the orchestrator',
+    group: 'layout',
+    icon: <ConstellationIcon />,
+    ambient: false,
+  },
+  transit: {
+    label: 'Transit',
+    description: 'A line of stops, agents placed by phase',
+    group: 'layout',
+    icon: <TransitIcon />,
     ambient: false,
   },
 };
