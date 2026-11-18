@@ -801,6 +801,8 @@ function childProject(project: ChatProject, worktree: { branch: string; base: st
 export type AutomaticTurnResult = { ok: true } | { ok: false; busy: boolean; error: string };
 
 export class ChatService {
+  studioDisposed?: () => void;
+  studioWithSessionDeletion?: <T>(sessionId: string, remove: () => Promise<T>) => Promise<T>;
   private readonly loopRequests = new Map<string, AbortController>();
   private readonly loops = new LoopScheduler(
     id => this.hasTurnInFlight(id) || this.queuedMessages(id).length > 0,
@@ -2765,10 +2767,15 @@ export class ChatService {
    * be left that could turn a forgotten dev server off.
    */
   async deleteImportedSession(sessionId: string, scopeKey: string): Promise<'removed' | 'forked' | 'missing'> {
-    const historyScope = this.deps.history?.scopeKey() ?? null;
-    const outcome = await this.deps.store.deleteImported(sessionId, scopeKey);
-    if (outcome === 'removed') await this.cleanupDeletedSession(sessionId, false, historyScope);
-    return outcome;
+    const expectedScope = this.deps.store.scopeKey();
+    const remove = async () => {
+      if (this.deps.store.scopeKey() !== expectedScope) throw new Error('Account changed.');
+      const historyScope = this.deps.history?.scopeKey() ?? null;
+      const outcome = await this.deps.store.deleteImported(sessionId, scopeKey);
+      if (outcome === 'removed') await this.cleanupDeletedSession(sessionId, false, historyScope, expectedScope);
+      return outcome;
+    };
+    return this.studioWithSessionDeletion ? this.studioWithSessionDeletion(sessionId, remove) : remove();
   }
 
   async inspectSessionWorktreeRemoval(sessionId: string) {
@@ -2858,34 +2865,50 @@ export class ChatService {
   }
 
   async deleteSession(sessionId: string, removeWorktree = false): Promise<void> {
-    if (!removeWorktree) {
-      await this.cleanupDeletedSession(sessionId, true);
-      return;
-    }
-    return this.withWorkspaceBindings(() => this.deleteSessionWithWorkspaceLease(sessionId));
+    const expectedScope = this.deps.store.scopeKey();
+    const remove = async () => {
+      if (this.deps.store.scopeKey() !== expectedScope) throw new Error('Account changed.');
+      if (!removeWorktree) {
+        await this.cleanupDeletedSession(sessionId, true, undefined, expectedScope);
+        return;
+      }
+      await this.withWorkspaceBindings(() => this.deleteSessionWithWorkspaceLease(sessionId, expectedScope));
+    };
+    return this.studioWithSessionDeletion ? this.studioWithSessionDeletion(sessionId, remove) : remove();
   }
 
-  private async deleteSessionWithWorkspaceLease(sessionId: string): Promise<void> {
+  private async deleteSessionWithWorkspaceLease(sessionId: string, expectedScope: string | null): Promise<void> {
+    const assertScope = () => {
+      if (this.deps.store.scopeKey() !== expectedScope) throw new Error('Account changed.');
+    };
+    assertScope();
     if (this.abandoning.has(sessionId)) throw new Error('This conversation is already being deleted');
     this.abandoning.add(sessionId);
     let releaseTerminals: (() => void) | undefined;
     try {
       if (this.hasTurnInFlight(sessionId)) throw new Error('Stop the conversation before removing its worktree');
       const session = await this.deps.store.get(sessionId);
+      assertScope();
       if (!session?.project) throw new Error('This conversation has no worktree');
       const inspection = await this.inspectSessionWorktreeRemoval(sessionId);
+      assertScope();
       if (!inspection?.safe) throw new Error(inspection?.reason ?? 'This is not an app-created worktree');
       await this.deps.background?.killSession(sessionId);
+      assertScope();
       releaseTerminals = await this.deps.releaseSessionTerminals?.(sessionId);
+      assertScope();
       this.deps.sessionClosed?.(sessionId);
       await this.deps.browser?.closeSession(sessionId);
+      assertScope();
       const owners = await this.deps.store.workspaceOwnersExcept(sessionId);
+      assertScope();
       await removeSessionWorktree(
         session.project,
         owners.map(owner => owner.project),
         { owners }
       );
-      await this.cleanupDeletedSession(sessionId, true);
+      assertScope();
+      await this.cleanupDeletedSession(sessionId, true, undefined, expectedScope);
     } finally {
       releaseTerminals?.();
       this.abandoning.delete(sessionId);
@@ -2895,11 +2918,13 @@ export class ChatService {
   private async cleanupDeletedSession(
     sessionId: string,
     deleteStoredSession: boolean,
-    historyScope = this.deps.history?.scopeKey() ?? null
+    historyScope = this.deps.history?.scopeKey() ?? null,
+    expectedScope = this.deps.store.scopeKey()
   ): Promise<void> {
+    if (this.deps.store.scopeKey() !== expectedScope) throw new Error('Account changed.');
     // Before the stop, so an open card is recorded as closed by the delete rather than by a stop.
     const scopeKey = this.deps.store.scopeKey() ?? 'local';
-    const decisionScope = this.deps.store.scopeKey();
+    const decisionScope = expectedScope;
     this.deps.approvals?.forgetSession(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
     // Ahead of stop(), so a spawn still preparing reads this as the delete it is.
@@ -2934,7 +2959,7 @@ export class ChatService {
     // Read before the delete: its parent's running turn drops this worktree from its roots (agentWorktrees).
     const parentId = (await this.deps.store.get(sessionId))?.origin?.parentSessionId;
     if (deleteStoredSession) {
-      await this.deps.store.delete(sessionId);
+      await this.deps.store.delete(sessionId, decisionScope);
       this.markTaskDecisionMutation(sessionId, decisionScope);
     }
     if (parentId) this.bumpScope(parentId);
@@ -2984,6 +3009,7 @@ export class ChatService {
   }
 
   dispose(): void {
+    this.studioDisposed?.();
     this.clearLoops();
     // Dropped BEFORE the aborts, so a promotion still in flight does not start a turn on the
     // way out: each abort settles a reply, and settleQueue would otherwise send it.
@@ -8133,6 +8159,47 @@ export class ChatService {
    * conversation has to move somewhere, and the model the user last chose is the likeliest one
    * they would pick for it themselves.
    */
+  async studioContextRoots(sessionId: string): Promise<readonly string[]> {
+    const scope = this.deps.store.scopeKey();
+    const session = await this.deps.store.get(sessionId);
+    if (!session) throw new Error('Session is unavailable.');
+    const roots = (await this.resolveToolScope(session)).roots;
+    if (scope !== this.deps.store.scopeKey()) throw new Error('Account changed.');
+    return roots;
+  }
+
+  async prepareStudioText(
+    sessionId: string,
+    system: string,
+    input: string,
+    signal: AbortSignal,
+    api: AuthenticatedApiClient | null
+  ): Promise<string> {
+    const scope = this.deps.store.scopeKey();
+    const session = await this.deps.store.get(sessionId);
+    if (!session || scope !== this.deps.store.scopeKey()) throw new Error('Session is unavailable.');
+    let output = '';
+    await this.streamAuxiliary(
+      api,
+      {
+        model: session.model,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: input },
+        ],
+        tools: [],
+        maxTokens: 4096,
+      },
+      event => {
+        if (event.type === 'content') output += event.text ?? '';
+      },
+      signal
+    );
+    signal.throwIfAborted();
+    if (scope !== this.deps.store.scopeKey()) throw new Error('Account changed.');
+    return output;
+  }
+
   private async pickModel(models: readonly ChatModelOption[]): Promise<string | null> {
     const remembered = await this.deps.modelMemory?.read();
     return resolveDefaultModel(models, [remembered, this.deps.preferredModel]);
