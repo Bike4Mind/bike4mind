@@ -190,7 +190,7 @@ function MermaidArtifact({
   );
 }
 
-type OpenableArtifact = Pick<ChatArtifact, 'title' | 'content'>;
+type OpenableArtifact = Pick<ChatArtifact, 'title' | 'content' | 'identifier'>;
 
 /**
  * Opens an HTML artifact full-size in the active conversation's browser pane. A context rather
@@ -212,7 +212,12 @@ export function openArtifactInSessionBrowser(
 ): void {
   if (!sessionId) return;
   showPane();
-  void open({ sessionId, title: artifact.title, content: artifact.content }).catch(() => undefined);
+  void open({
+    sessionId,
+    title: artifact.title,
+    content: artifact.content,
+    ...(artifact.identifier ? { identifier: artifact.identifier } : {}),
+  }).catch(() => undefined);
 }
 
 /** The drawing's share of a filled card: whatever the footer leaves. */
@@ -253,7 +258,8 @@ export function ArtifactCard({
   artifact,
   fill = false,
 }: {
-  artifact: ChatArtifactView;
+  /** A reply's artifact carries the model's identifier; a library row does not. */
+  artifact: ChatArtifactView & Pick<ChatArtifact, 'identifier'>;
   /**
    * Fill the box it is placed in, with the drawing taking every spare pixel: the library's opened
    * view, whose own header already names the artifact. A type drawn only as source shows it open.
@@ -305,7 +311,9 @@ export function ArtifactCard({
                 color="neutral"
                 aria-label="Open in browser"
                 sx={{ my: -0.75 }}
-                onClick={() => openInBrowser({ title: artifact.title, content: artifact.content })}
+                onClick={() =>
+                  openInBrowser({ title: artifact.title, content: artifact.content, identifier: artifact.identifier })
+                }
                 data-testid="artifact-open-in-browser-btn"
               >
                 <GlobeIcon />

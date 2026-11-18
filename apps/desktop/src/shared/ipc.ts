@@ -689,6 +689,8 @@ export interface BrowserOpenArtifactRequest {
   sessionId: string;
   title: string;
   content: string;
+  /** The model's identifier for the artifact, so the tab reloads when a later reply updates it. */
+  identifier?: string;
 }
 
 /** The history controls, which take no url. */

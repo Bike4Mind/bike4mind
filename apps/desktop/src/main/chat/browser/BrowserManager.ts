@@ -10,7 +10,7 @@ import {
 } from 'electron';
 import type { CookieImportState } from '@shared/browserCookies';
 import { browserSnapshotSchema, type BrowserSnapshot } from '@shared/browserPage';
-import type { ChatMedia } from '@shared/chat';
+import type { ChatArtifact, ChatMedia } from '@shared/chat';
 import { browserTabShortcut, MAX_BROWSER_TABS, type BrowserTabShortcut } from '@shared/browserTabs';
 import { normalizeUrl } from '@shared/browserUrl';
 import type {
@@ -711,6 +711,8 @@ export class BrowserManager implements BrowserProvider {
   /** Placement failures already logged, so a wedged page logs once rather than on every event. */
   private readonly warned = new Set<string>();
   private readonly artifactViews = new ArtifactViewRegistry();
+  /** The artifact identifier each tab was opened on, and the view url it was opened at. */
+  private readonly artifactTabIdentifiers = new WeakMap<ElectronPage, { identifier: string; url: string }>();
 
   /**
    * The user's own Chrome sessions, for sites they named. Public because the renderer drives it
@@ -820,11 +822,18 @@ export class BrowserManager implements BrowserProvider {
    * its sandboxed frame; typed addresses and the agent's tools still refuse the scheme. Opens a
    * new tab when the active one is showing a page, so the agent's place is not lost.
    */
-  async openArtifact(sessionId: string, title: string, content: string): Promise<BrowserPaneState> {
+  async openArtifact(
+    sessionId: string,
+    title: string,
+    content: string,
+    identifier?: string
+  ): Promise<BrowserPaneState> {
     this.session();
     const url = this.artifactViews.add(title, content);
     const current = this.sessions.get(sessionId)?.active;
     const page = current?.showable ? (this.openTab(sessionId, true) ?? current) : this.activeTab(sessionId);
+    if (identifier) this.artifactTabIdentifiers.set(page, { identifier, url });
+    else this.artifactTabIdentifiers.delete(page);
     try {
       await page.navigate(url);
     } catch (err) {
@@ -832,6 +841,25 @@ export class BrowserManager implements BrowserProvider {
     }
     this.apply();
     return this.stateOf(sessionId);
+  }
+
+  /**
+   * Show a reply's updated artifacts in the tabs of `sessionId` still on an older version of them,
+   * matched by the model's identifier. Each tab reloads where it is: none is opened, activated or
+   * focused, and an artifact no tab is showing is left alone.
+   *
+   * HTML only: that is the one type the card sends here as its raw content.
+   */
+  refreshArtifacts(sessionId: string, artifacts: readonly ChatArtifact[]): void {
+    const tabs = this.sessions.get(sessionId)?.list ?? [];
+    for (const artifact of artifacts) {
+      if (!artifact.identifier || artifact.type !== 'html') continue;
+      for (const tab of tabs) {
+        const shown = this.artifactTabIdentifiers.get(tab);
+        if (shown?.identifier !== artifact.identifier || tab.currentUrl() !== shown.url) continue;
+        if (this.artifactViews.replace(shown.url, artifact.title, artifact.content)) tab.go('reload');
+      }
+    }
   }
 
   /** Back, forward or reload. The resulting navigation arrives on its own as a state push. */

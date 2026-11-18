@@ -52,4 +52,26 @@ describe('artifact views', () => {
     expect(withTitle('<p>x</p>', '<b>&</b>')).toBe('<title>&lt;b&gt;&amp;&lt;/b&gt;</title><p>x</p>');
     expect(withTitle('<p>x</p>', '  ')).toBe('<title>Artifact</title><p>x</p>');
   });
+  it('serves new content behind a url it handed out, and refuses any other url', async () => {
+    const registry = new ArtifactViewRegistry();
+    const url = registry.add('Chart', '<p>v1</p>');
+
+    expect(registry.replace(url, 'Chart', '<p>v2</p>')).toBe(true);
+    await expect(serveArtifactView(registry, url).text()).resolves.toBe('<title>Chart</title><p>v2</p>');
+
+    expect(registry.replace('b4m-artifact://sandbox/', 'Chart', '<p>x</p>')).toBe(false);
+    expect(registry.replace('https://example.com/view/abc', 'Chart', '<p>x</p>')).toBe(false);
+    expect(registry.replace('not a url', 'Chart', '<p>x</p>')).toBe(false);
+  });
+
+  it('takes back an evicted url on replace, since a tab can still be on it', async () => {
+    const registry = new ArtifactViewRegistry();
+    const first = registry.add('First', '<p>1</p>');
+    for (let i = 0; i < MAX_ARTIFACT_VIEWS; i++) registry.add(`n${i}`, '<p>n</p>');
+    expect(serveArtifactView(registry, first).status).toBe(404);
+
+    registry.replace(first, 'First', '<p>2</p>');
+
+    expect(serveArtifactView(registry, first).status).toBe(200);
+  });
 });

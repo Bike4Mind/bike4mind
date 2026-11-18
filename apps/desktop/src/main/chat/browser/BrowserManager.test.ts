@@ -28,6 +28,8 @@ const contents = vi.hoisted(() => {
       destroy: () => void;
     }>,
     loads: [] as Array<{ id: number; url: string }>,
+    /** Ids of the contents reloaded, in order. */
+    reloads: [] as number[],
     load: (_url: string): Promise<void> => Promise.resolve(),
     script: (_code: string): Promise<unknown> => Promise.resolve(null),
     capture: (..._args: unknown[]): Promise<unknown> => Promise.resolve({ isEmpty: () => true }),
@@ -82,6 +84,7 @@ vi.mock('electron', () => {
         return contents.load(url);
       },
       focus: () => undefined,
+      reload: () => void contents.reloads.push(id),
       sendInputEvent: (input: unknown) => contents.inputEvents.push(input),
       executeJavaScript: (code: string) => contents.script(code),
       capturePage: (...args: unknown[]) => contents.capture(...args),
@@ -1296,6 +1299,7 @@ describe('BrowserManager opening an artifact', () => {
     contents.handlers.clear();
     contents.url = '';
     contents.loads = [];
+    contents.reloads = [];
     contents.protocols.clear();
     contents.load = url => {
       contents.url = url;
@@ -1339,6 +1343,63 @@ describe('BrowserManager opening an artifact', () => {
     manager.closeAll();
 
     expect(serve(url).status).toBe(404);
+  });
+
+  describe('when a reply updates it', () => {
+    const update = (content: string, identifier = 'chart', type = 'html') => ({
+      id: 'reply-artifact',
+      identifier,
+      type,
+      mimeType: 'text/html',
+      title: 'Chart v2',
+      content,
+    });
+    // The fake shares one current url between its contents, so a test sets the url every tab reports.
+    const tabUrl = () => contents.loads.at(-1)!.url;
+
+    it('reloads a background tab showing it in place, without switching to it', async () => {
+      await manager.openArtifact('s', 'Chart', '<p>v1</p>', 'chart');
+      const url = tabUrl();
+      await manager.openArtifact('s', 'Other', '<p>other</p>', 'other');
+      contents.url = url;
+      const loadsBefore = contents.loads.length;
+      const statesBefore = states.length;
+
+      manager.refreshArtifacts('s', [update('<p>v2</p>')]);
+
+      expect(contents.reloads).toEqual([contents.loads[0].id]);
+      expect(contents.loads).toHaveLength(loadsBefore);
+      expect(states.slice(statesBefore).every(state => state.activeTabId === 2)).toBe(true);
+      await expect(serve(url).text()).resolves.toBe('<title>Chart v2</title><p>v2</p>');
+    });
+
+    it('leaves alone an artifact no tab is showing, and opens nothing', async () => {
+      await manager.openArtifact('s', 'Chart', '<p>v1</p>', 'chart');
+
+      manager.refreshArtifacts('s', [update('<p>v2</p>', 'something-else')]);
+      manager.refreshArtifacts('other-session', [update('<p>v2</p>')]);
+
+      expect(contents.reloads).toEqual([]);
+      expect(lastState()).toMatchObject({ activeTabId: 1, tabs: [{ id: 1 }] });
+    });
+
+    it('leaves a tab that has since navigated away, or was opened without an identifier', async () => {
+      await manager.openArtifact('s', 'Chart', '<p>v1</p>', 'chart');
+      await manager.navigate('s', 'http://localhost:3080/');
+      await manager.openArtifact('s', 'Chart', '<p>v1</p>');
+
+      manager.refreshArtifacts('s', [update('<p>v2</p>')]);
+
+      expect(contents.reloads).toEqual([]);
+    });
+
+    it('only reloads for an HTML update, the one type a tab is opened on as raw content', async () => {
+      await manager.openArtifact('s', 'Chart', '<p>v1</p>', 'chart');
+
+      manager.refreshArtifacts('s', [update('<svg></svg>', 'chart', 'svg')]);
+
+      expect(contents.reloads).toEqual([]);
+    });
   });
 
   it('still refuses the scheme when it is typed into the url bar', async () => {

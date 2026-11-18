@@ -1447,7 +1447,8 @@ export function registerChat(
     ) {
       throw new Error('A conversation, a title and the artifact content are required.');
     }
-    return browser.openArtifact(request.sessionId, request.title, request.content);
+    const identifier = typeof request.identifier === 'string' && request.identifier ? request.identifier : undefined;
+    return browser.openArtifact(request.sessionId, request.title, request.content, identifier);
   });
   ipcMain.handle(IPC_CHANNELS.browserGo, (_event, request: BrowserGoRequest): BrowserPaneState => {
     const actions: readonly BrowserGoAction[] = ['back', 'forward', 'reload'];

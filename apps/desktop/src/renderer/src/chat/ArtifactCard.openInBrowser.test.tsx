@@ -62,6 +62,15 @@ describe('ArtifactCard open in browser', () => {
     expect(open).toHaveBeenCalledWith({ title: 'Chart', content: '<p>hi</p>' });
   });
 
+  it('hands the opener the model identifier of a reply artifact, so main can reload it on update', () => {
+    const open = vi.fn();
+    renderCard({ ...html, identifier: 'chart' } as ChatArtifactView, open);
+
+    act(() => button()!.click());
+
+    expect(open).toHaveBeenCalledWith({ title: 'Chart', content: '<p>hi</p>', identifier: 'chart' });
+  });
+
   it('offers no button for other types, or where nothing can open one', () => {
     renderCard(svg, vi.fn());
     expect(button()).toBeNull();
@@ -84,6 +93,14 @@ describe('openArtifactInSessionBrowser', () => {
 
     expect(calls).toEqual(['show', 'open']);
     expect(open).toHaveBeenCalledWith({ sessionId: 's1', title: 'Chart', content: '<p>hi</p>' });
+  });
+
+  it('passes the identifier along when the artifact has one', () => {
+    const open = vi.fn(() => Promise.resolve({} as Awaited<ReturnType<typeof window.b4m.browser.openArtifact>>));
+
+    openArtifactInSessionBrowser({ title: 'Chart', content: '<p>hi</p>', identifier: 'chart' }, 's1', vi.fn(), open);
+
+    expect(open).toHaveBeenCalledWith({ sessionId: 's1', title: 'Chart', content: '<p>hi</p>', identifier: 'chart' });
   });
 
   it('does nothing without a conversation, and swallows a refusal', async () => {
