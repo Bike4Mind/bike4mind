@@ -38,6 +38,8 @@ for (const method of ['findOneAndUpdate', 'findByIdAndUpdate', 'updateOne', 'upd
       `const result = await Model.${method}({}, update); // update-validators-off: native driver has no schema`,
       `function update() {\nreturn Model.${method}({}, update); // update-validators-off: native driver has no schema\n}`,
       `const result = await Model.${method}(\n  // update-validators-off: pipeline is validated separately\n  {}, pipeline\n);`,
+      `// update-validators-off: native driver has no schema\nexport const result = await Model.${method}({}, update);`,
+      `// update-validators-off: native driver has no schema\nconst run = () => Model.${method}({}, update);`,
       `other.save({}, update);`,
     ],
     invalid: [

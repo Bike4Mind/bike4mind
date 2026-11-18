@@ -96,6 +96,8 @@ export default {
             (parent.type === 'VariableDeclaration' && parent.declarations.length === 1) ||
             (parent.type === 'AssignmentExpression' && parent.right === statement) ||
             (parent.type === 'ReturnStatement' && parent.argument === statement) ||
+            (parent.type === 'ArrowFunctionExpression' && parent.body === statement) ||
+            (parent.type === 'ExportNamedDeclaration' && parent.declaration === statement) ||
             (parent.type === 'ExpressionStatement' && parent.expression === statement)
           ) {
             statement = parent;
