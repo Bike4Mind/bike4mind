@@ -56,14 +56,15 @@ const schema = z.object({
   replace: z
     .boolean()
     .optional()
-    .describe('Set true to replace shots that already have takes. Their takes stay in Files.'),
+    .describe('Set true to change the prompt of, or remove, shots that already have takes. Their takes stay in Files.'),
 });
 type StoryboardArgs = z.infer<typeof schema>;
 
 const description =
   'Write the storyboard of a Studio production: the shots in order, each with an image prompt, its length and its ' +
-  'voiceover line. Replaces the shot list. Plan about 4 shots for a 15 second ad (hook, product, benefit, call to ' +
-  'action). Then call production_generate_shot.';
+  'voiceover line. Replaces the shot list; a shot whose prompt is unchanged keeps its takes, and its clip unless the ' +
+  'shot gets longer. Plan about 4 shots for a 15 second ad (hook, product, benefit, call to action). Then call ' +
+  'production_generate_shot.';
 
 const toShot = (shot: StoryboardArgs['shots'][number], index: number): StudioShot => ({
   id: `shot-${index + 1}`,
@@ -74,6 +75,27 @@ const toShot = (shot: StoryboardArgs['shots'][number], index: number): StudioSho
   ...(shot.voiceLine && { voiceLine: shot.voiceLine }),
   fileIds: [],
 });
+
+/**
+ * A shot whose image prompt is unchanged keeps its takes, so a re-run that only retimes shots or rewrites their
+ * voice lines costs nothing. Its clip stays only while the shot is no longer than before: generate_shot already
+ * cut the shot to its clip's length, so a longer shot would play past the clip's end.
+ */
+function keepTakes(shot: StudioShot, previous: StudioShot | undefined): { shot: StudioShot; clipDropped: boolean } {
+  if (!previous || previous.fileIds.length === 0 || previous.prompt !== shot.prompt) {
+    return { shot, clipDropped: false };
+  }
+  const keepClip = previous.clipFileId !== undefined && (shot.durationMs ?? 0) <= (previous.durationMs ?? 0);
+  return {
+    shot: {
+      ...shot,
+      fileIds: previous.fileIds,
+      ...(previous.chosenFileId && { chosenFileId: previous.chosenFileId }),
+      ...(keepClip && { clipFileId: previous.clipFileId }),
+    },
+    clipDropped: previous.clipFileId !== undefined && !keepClip,
+  };
+}
 
 export const productionStoryboardTool: ToolDefinition = {
   name: 'production_storyboard',
@@ -88,14 +110,20 @@ export const productionStoryboardTool: ToolDefinition = {
             throw new ProductionToolError('the shots run longer than a production can.');
           }
           const current = await config.compositions.get(args.compositionId);
-          if (!args.replace && current.shots.some(shot => shot.fileIds.length > 0)) {
+          const kept = args.shots.map((shot, index) => keepTakes(toShot(shot, index), current.shots[index]));
+          const shots = kept.map(({ shot }) => shot);
+          const keptTakeIds = new Set(shots.flatMap(shot => shot.fileIds));
+          const lostTakes = current.shots.some(
+            shot => shot.fileIds.length > 0 && !shot.fileIds.every(fileId => keptTakeIds.has(fileId))
+          );
+          if (!args.replace && lostTakes) {
             throw new ProductionToolError(
-              'this production already has shots with takes. Ask the user before replacing them, then pass replace: true.'
+              'this storyboard changes or removes shots that already have takes. Keep their prompts to keep the ' +
+                'takes; otherwise ask the user before replacing them, then pass replace: true.'
             );
           }
           const products = current.brandKit.productFileIds;
           const product = args.productFileId?.toLowerCase();
-          const shots = args.shots.map(toShot);
           const directorIds = new Set<string>(Object.values(DIRECTOR_TRACK_IDS));
           // The old cut's picture, captions and audio were laid to the old shots, so a new storyboard clears them.
           const staleCut = current.timeline.tracks.some(track => directorIds.has(track.id) && track.clips.length > 0);
@@ -117,10 +145,19 @@ export const productionStoryboardTool: ToolDefinition = {
                 },
               }),
           });
+          const clipsDropped = kept.filter(({ clipDropped }) => clipDropped).map(({ shot }) => shot.id);
           return JSON.stringify({
-            shots: shots.map(shot => ({ id: shot.id, title: shot.title, durationMs: shot.durationMs })),
+            shots: shots.map(shot => ({
+              id: shot.id,
+              title: shot.title,
+              durationMs: shot.durationMs,
+              ...(shot.fileIds.length > 0 && { takesKept: true }),
+            })),
             totalSeconds: totalMs / 1000,
-            next: 'Call production_generate_shot to make the takes and clips.',
+            ...(clipsDropped.length > 0 && { clipsDropped }),
+            next:
+              'Call production_generate_shot to make the takes and clips; a shot that kept its takes is skipped ' +
+              'unless it needs a clip.',
           });
         } catch (error) {
           return describeProductionError(error);
