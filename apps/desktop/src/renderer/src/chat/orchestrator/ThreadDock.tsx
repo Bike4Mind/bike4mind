@@ -113,7 +113,7 @@ export function ThreadDock({
             position: 'absolute',
             positionAnchor: '--orchestrator-scene',
             top: 'calc(anchor(top) + 12px)',
-            left: 'calc(anchor(left) + 12px)',
+            right: 'calc(anchor(right) + 12px)',
             width: 'min(440px, calc(anchor-size(width) - 24px))',
             height: 'calc(anchor-size(height) - 24px)',
             minWidth: 0,

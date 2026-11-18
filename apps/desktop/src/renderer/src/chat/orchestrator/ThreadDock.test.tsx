@@ -73,6 +73,7 @@ describe('ThreadDock', () => {
     expect(rules).toMatch(/opacity:\s*1[;}]/);
     expect(rules).toContain('prefers-reduced-motion: reduce');
     expect(getComputedStyle(dock).getPropertyValue('position-anchor')).toBe('--orchestrator-scene');
+    expect(getComputedStyle(dock).right).toBe('calc(12px + anchor(right))');
     expect(getComputedStyle(dock).backgroundColor).toBe('rgb(231, 239, 240)');
     expect(query('orchestrator-dock-resize-handle')).toBeNull();
     await render('hidden');
