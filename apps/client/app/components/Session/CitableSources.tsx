@@ -218,7 +218,7 @@ const CitableSourceItem: FC<CitableSourceItemProps> = ({
           typeof source.metadata?.displayHost === 'string' && source.metadata.displayHost
             ? source.metadata.displayHost
             : undefined;
-        hostname = (displayHost ?? parsedUrl.hostname).replace('www.', '');
+        hostname = (displayHost ?? parsedUrl.hostname).replace(/^www\./, '');
         // A platform name such as "Reddit" has no host to look a favicon up by.
         faviconUrl = displayHost
           ? displayHost.includes('.')

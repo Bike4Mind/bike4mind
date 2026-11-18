@@ -77,6 +77,17 @@ describe('CitableSources host label', () => {
     expect(container.querySelector('img')).toBeNull();
   });
 
+  it('shows no favicon for a dotted platform name that is not a valid host', () => {
+    const { container } = renderRedirect({ sourceSystem: 'web_search', displayHost: 'Medium.com Blog' });
+    expect(screen.getByTestId('citable-source-host-label')).toHaveTextContent('Medium.com Blog');
+    expect(container.querySelector('img')).toBeNull();
+  });
+
+  it('only strips a leading www. from the label', () => {
+    renderRedirect({ sourceSystem: 'web_search', displayHost: 'Thewww.Blog' });
+    expect(screen.getByTestId('citable-source-host-label')).toHaveTextContent('Thewww.Blog');
+  });
+
   it('ignores a displayHost that is not a string', () => {
     renderRedirect({ sourceSystem: 'web_search', displayHost: 42 } as unknown as CitableSource['metadata']);
     expect(screen.getByTestId('citable-source-host-label')).toHaveTextContent('google.com');
