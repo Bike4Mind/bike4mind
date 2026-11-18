@@ -8,6 +8,7 @@ import { CAMPAIGN_WATCH_SEARCH_PARAM, SHADOW_DETECTION_TAB_PARAMS } from './shad
 import { STRIPE_DISPUTE_TAB_PARAMS } from './stripeDisputeSearch';
 import { ADMIN_RATE_LIMITS_TAB_SLUG, RATE_LIMITS_TAB_PARAMS } from './RateLimits/rateLimitsSearch';
 import { MODEL_METRICS_TAB_PARAMS } from './ModelMetrics/modelMetricsSearch';
+import { ADMIN_SPEND_EXPLORER_TAB_SLUG, SPEND_EXPLORER_TAB_PARAMS } from './SpendExplorer/spendExplorerSearch';
 import {
   ADMIN_INTEGRATION_HEALTH_TAB_SLUG,
   INTEGRATION_HEALTH_TAB_PARAMS,
@@ -106,6 +107,7 @@ export const ADMIN_GLOBAL_PARAMS = [EMERGENCY_ACCESS_PARAM, ADMIN_TAB_PARAM] as 
  * exactly that reason.
  */
 export const ADMIN_TAB_PARAMS = {
+  [ADMIN_SPEND_EXPLORER_TAB_SLUG]: SPEND_EXPLORER_TAB_PARAMS,
   'credit-analytics': ['creditView', 'economyFrom', 'economyTo', 'economyOwner', 'economyFlow'],
   [ADMIN_USERS_TAB_SLUG]: USERS_TAB_PARAMS,
   [ADMIN_FEEDBACK_TAB_SLUG]: FEEDBACK_TAB_PARAMS,

@@ -72,6 +72,7 @@ export const ORGANIZATION_MEMBER_VISIBLE_FIELDS = [
 /** Withheld from plain members; the websocket projection excludes these by name. */
 export const ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS = [
   'allowedGroupTypes',
+  'accountSegment',
   'systemPrompt',
   'storageLimit',
   'currentStorageSize',

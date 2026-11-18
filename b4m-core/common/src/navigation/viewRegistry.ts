@@ -845,6 +845,17 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.spend_explorer',
+    section: 'admin',
+    label: 'Spend explorer',
+    description:
+      'AI provider cost per day or hour with spikes against the rolling median, split by provider, model, feature or account type, and the accounts that drove any day',
+    navigationType: 'tab',
+    target: '82', // AdminTab.SpendExplorer
+    keywords: ['spend', 'ai cost', 'cost spike', 'provider cost', 'top spenders', 'cogs'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.approvals',
     section: 'admin',
     label: 'Approvals',

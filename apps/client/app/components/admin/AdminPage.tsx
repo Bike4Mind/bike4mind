@@ -61,6 +61,7 @@ const AdminLiveOpsTriageMultiConfigTab = dynamic(() => import('./AdminLiveOpsTri
 const WebhookAuditLogsTab = dynamic(() => import('./WebhookAuditLogs'), { ssr: false });
 const AuditLogTab = dynamic(() => import('./AuditLog'), { ssr: false });
 const AccessReviewTab = dynamic(() => import('./AccessReview'), { ssr: false });
+const SpendExplorerTab = dynamic(() => import('./SpendExplorer'), { ssr: false });
 const ApprovalsTab = dynamic(() => import('./Approvals'), { ssr: false });
 const RolesTab = dynamic(() => import('./Roles'), { ssr: false });
 
@@ -322,6 +323,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.AuditLog}>{activeTab === AdminTab.AuditLog && <AuditLogTab />}</TabPanel>
           <TabPanel value={AdminTab.AccessReview}>
             {activeTab === AdminTab.AccessReview && <AccessReviewTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.SpendExplorer}>
+            {activeTab === AdminTab.SpendExplorer && <SpendExplorerTab />}
           </TabPanel>
           <TabPanel value={AdminTab.Approvals}>{activeTab === AdminTab.Approvals && <ApprovalsTab />}</TabPanel>
           <TabPanel value={AdminTab.Roles}>{activeTab === AdminTab.Roles && <RolesTab />}</TabPanel>
