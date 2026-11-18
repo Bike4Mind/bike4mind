@@ -12,7 +12,7 @@ import {
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const { release } = vi.hoisted(() => ({ release: vi.fn() }));
-vi.mock('@server/auth/emailVerifiedGrants', () => ({
+vi.mock('../../auth/pendingFreeCredits', () => ({
   isEligibleForFreeCredits: async () => true,
   releaseVerifiedPendingFreeCredits: release,
 }));
