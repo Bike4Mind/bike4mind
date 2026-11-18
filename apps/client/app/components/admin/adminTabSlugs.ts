@@ -153,9 +153,8 @@ type AdminTabAlias = { tab: AdminTab; search?: Readonly<Record<string, string>> 
  * to the current slug plus the alias's search params. Model lifecycle became the Models tab's Discovery section, so
  * AdminTab.ModelLifecycle stays a member only to keep its slug (and the palette entry that targets it) working.
  */
-const ADMIN_TAB_ALIASES: ReadonlyMap<string, AdminTabAlias> = new Map<string, AdminTabAlias>([
+const ADMIN_TAB_ALIASES: ReadonlyMap<string, AdminTabAlias> = new Map([
   ['llm-dashboard', { tab: AdminTab.Models }],
-  [ADMIN_TAB_TO_SLUG[AdminTab.HeldSignupGrants], { tab: AdminTab.Waitlist, search: { inviteSection: 'pending' } }],
   [
     ADMIN_TAB_TO_SLUG[AdminTab.ModelLifecycle],
     { tab: AdminTab.Models, search: { [MODELS_SECTION_PARAM]: 'discovery' } },
