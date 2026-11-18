@@ -107,8 +107,9 @@ export interface CitableSource {
     relevanceScore?: number;
     fullContext?: string; // For text-based sources (RAG, web search)
     /**
-     * The destination's own hostname, set by web_search only when `url` is a search-engine redirect
-     * that hides it. Chips label the source with this instead of the redirect's host.
+     * The destination's own hostname, or the platform name ("Reddit") when the provider gives no URL,
+     * set by web_search only when `url` is a search-engine redirect that hides the destination. Chips
+     * label the source with this instead of the redirect's host.
      */
     displayHost?: string;
     /**
