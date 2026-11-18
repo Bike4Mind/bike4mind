@@ -17,6 +17,7 @@ const activeActivity = {
   periodEnd: new Date('2026-11-17T00:00:00Z'),
   runs: [{ id: 'r1', query: 'q', status: 'completed', finishedAt: undefined, errorMessage: undefined }],
   approvals: [{ questId: 'q1', sessionId: 's1', pendingActionTs: 5, tool: 'send_reply', summary: '{}' }],
+  emails: [],
 };
 
 function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {
@@ -53,6 +54,25 @@ describe('composeBrief', () => {
     expect(deps.push).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'u1', category: 'brief_ready', briefId: 'b1', body: '1 decision needs you.' })
     );
+  });
+
+  it('stores a triaged email decision with its draft reply and no approval reference', async () => {
+    const draftReply = { to: 'vendor@example.com', subject: 'Re: Renewal', body: 'Renewing at the quoted rate.' };
+    const deps = makeDeps({
+      loadActivity: vi.fn().mockResolvedValue({
+        ...activeActivity,
+        runs: [],
+        approvals: [],
+        emails: [{ emailId: 'e1', kind: 'decision', summary: 'Renewal needs an answer.', draftReply }],
+      }),
+    });
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1' });
+
+    const stored = deps.briefs.markReady.mock.calls[0][1];
+    expect(stored.decisions).toEqual([
+      { id: 'd1', text: 'Renewal needs an answer.', source: { kind: 'email', emailId: 'e1' }, draftReply },
+    ]);
+    expect(deps.push).toHaveBeenCalledWith(expect.objectContaining({ body: '1 decision needs you.' }));
   });
 
   it('settles an empty window without calling the model', async () => {

@@ -3,6 +3,7 @@ import { BriefEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   agentExecutionRepository,
   assistantBriefRepository,
+  emailTriageItemRepository,
   questRepository,
   userRepository,
   type IAssistantBrief,
@@ -29,8 +30,8 @@ import {
  * `brief.compose` consumer: composes one user's brief (POST /api/v1/briefs creates the `composing`
  * row and publishes the event), stores it and pushes `brief_ready`.
  *
- * Composition is one pass of the platform's operations model over the user's recent agent runs and the
- * approvals still waiting on them; there is no tool loop. Failures settle the row as `failed` so a
+ * Composition is one pass of the platform's operations model over the user's recent agent runs, the
+ * approvals still waiting on them and counts of their triaged email; there is no tool loop. Failures settle the row as `failed` so a
  * polling client stops waiting, and are never rethrown: a retry cannot fix a refused balance or a
  * malformed reply, and the user can simply compose again.
  */
@@ -38,6 +39,7 @@ import {
 const APPROVAL_TTL_MS = 15 * 60 * 1000; // Mirrors the pending-action lifecycle (pendingActions.contract.ts).
 const MAX_RUNS = 30;
 const MAX_APPROVALS = 12;
+const MAX_EMAIL_ITEMS = 24;
 const MODEL_MAX_TOKENS = 1500;
 const APPROVAL_SUMMARY_LIMIT = 600;
 
@@ -121,6 +123,15 @@ async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefAct
     now.getTime() - APPROVAL_TTL_MS,
     MAX_APPROVALS
   );
+  // Triage items are selected by creation time inside the brief's window rather than marked consumed: a
+  // failed brief leaves them for the next one, whose window starts where the last ready brief ended
+  // (apps/client/server/briefs/composeBrief.ts, bounded by its maximum lookback).
+  const emails = await emailTriageItemRepository.listForWindow(
+    brief.userId,
+    brief.periodStart,
+    brief.periodEnd,
+    MAX_EMAIL_ITEMS
+  );
 
   return {
     periodStart: brief.periodStart,
@@ -138,6 +149,14 @@ async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefAct
       pendingActionTs: action.ts,
       tool: action.tool,
       summary: JSON.stringify(action.params ?? {}).slice(0, APPROVAL_SUMMARY_LIMIT),
+    })),
+    emails: emails.map(item => ({
+      emailId: item.emailId,
+      kind: item.kind,
+      summary: item.summary,
+      ...(item.draftReply && {
+        draftReply: { to: item.draftReply.to, subject: item.draftReply.subject, body: item.draftReply.body },
+      }),
     })),
   };
 }
