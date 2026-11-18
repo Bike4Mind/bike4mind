@@ -6,7 +6,7 @@ import { readSignInOrigin } from '@server/auth/signInSecondFactor';
 import { completeMfaEnrollment } from '@server/auth/completeMfaEnrollment';
 import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { APP_ENROLLMENT_REFUSAL, refuseAppEnrollmentBeforeSecondFactor } from '@server/auth/appEnrollment';
-import { redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
+import { redactUserSecretsForSelf, selfUserResponseSchema, type IUser } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import * as z from 'zod';
 
@@ -62,9 +62,9 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
       // Before any write or the session mint, and outside the try: a lookup failure must leave no
       // session behind and must not be booked as a failed MFA attempt.
-      const { roleAdminPermissions = [] } = await resolveRoleAdminPermissions({
-        adminRoleIds: freshUser.adminRoleIds,
-      });
+      const { roleAdminPermissions = [] } = await resolveRoleAdminPermissions<
+        Pick<IUser, 'adminRoleIds' | 'roleAdminPermissions'>
+      >({ adminRoleIds: freshUser.adminRoleIds });
 
       // With no factor configured, any passkey still on file is an orphan of an earlier MFA that a
       // failed cleanup left behind. Purge them so a fresh enrollment never revives them. A
