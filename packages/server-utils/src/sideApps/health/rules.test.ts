@@ -10,6 +10,7 @@ import {
   PLATFORM_SCOPE,
   REMINDER_INTERVAL_MS,
   SILENCE_FLOOR_HOURS,
+  SILENCE_MIN_HISTORY_DAYS,
   desiredAlerts,
   emptyWindowCounts,
   evaluateClient,
@@ -18,6 +19,7 @@ import {
   longestClosedGapHours,
   reminderDue,
   topFailureReasons,
+  untrackedAlerts,
   type ClientHealthInput,
   type ClientVerdict,
   type HourlyBucket,
@@ -33,10 +35,10 @@ const success = (hoursBack: number, successes = 3): HourlyBucket => ({
   ourFaultFailures: 0,
 });
 
-/** A steady app: successes every `every` hours for 7 days, so it is armed. */
+/** A steady app: successes every `every` hours for 7 days and a bit, so it is armed and past the silence history gate. */
 const steadySeries = (every = 1, skip: (hoursBack: number) => boolean = () => false): HourlyBucket[] => {
   const series: HourlyBucket[] = [];
-  for (let back = 7 * 24 - 1; back >= 0; back -= every) {
+  for (let back = 7 * 24; back >= 0; back -= every) {
     if (!skip(back)) series.push(success(back));
   }
   return series;
@@ -202,9 +204,35 @@ describe('weekday-only apps', () => {
     }
   });
 
-  it('would go silent over the weekend on a 7-day baseline alone', () => {
+  it('does not judge silence on a 7-day baseline alone', () => {
     const hourly = within(weekdaySeries(sunday), sunday, 7);
-    expect(evaluateClient(client(hourly, lastHour()), sunday).rule).toBe('silent');
+    expect(evaluateClient(client(hourly, lastHour()), sunday).rule).toBeNull();
+  });
+
+  it('arms a new weekday app by Friday and keeps it quiet through its first weekend', () => {
+    const wednesday = Date.UTC(2026, 10, 11);
+    const hourly = weekdaySeries(Date.UTC(2026, 10, 14), 3).filter(bucket => bucket.hourStart >= wednesday);
+    expect(new Date(hourly[0].hourStart).getUTCDay()).toBe(3);
+    const friday = Date.UTC(2026, 10, 13, 18, 30);
+    expect(evaluateClient(client(hourly, lastHour()), friday).armed).toBe(true);
+    const sundayEarly = Date.UTC(2026, 10, 15, 1);
+    const verdict = evaluateClient(client(hourly, lastHour()), sundayEarly);
+    expect(verdict.armed).toBe(true);
+    expect(verdict.hoursSinceSuccess).toBeGreaterThan(verdict.silenceThresholdHours);
+    expect(verdict.rule).toBeNull();
+  });
+
+  it('goes silent once an app past the minimum history stops for longer than its closed gaps', () => {
+    const now = Date.UTC(2026, 10, 21, 23);
+    const hourly: HourlyBucket[] = [];
+    for (let hourStart = hourStartOf(now) - 10 * DAY_MS; hourStart < now - 2 * DAY_MS; hourStart += HOUR_MS) {
+      const hour = new Date(hourStart).getUTCHours();
+      if (hour >= 9 && hour < 18) hourly.push({ hourStart, successes: 3, failures: 0, ourFaultFailures: 0 });
+    }
+    expect(now - hourly[0].hourStart).toBeGreaterThan(SILENCE_MIN_HISTORY_DAYS * DAY_MS);
+    expect(evaluateClient(client(hourly, lastHour()), now).rule).toBe('silent');
+    const young = hourly.filter(bucket => bucket.hourStart >= now - 6 * DAY_MS);
+    expect(evaluateClient(client(young, lastHour()), now).rule).toBeNull();
   });
 
   it('still alerts when a daily app stops for longer than its closed gaps', () => {
@@ -256,8 +284,11 @@ describe('open alerts of unarmed clients', () => {
     expect(desiredAlerts([verdict({})], open)).toMatchObject([{ scope: 'app', rule: 'silent', muted: false }]);
   });
 
-  it('keeps it for a client that no longer appears in the data', () => {
-    expect(desiredAlerts([], open)).toMatchObject([{ scope: 'app', rule: 'silent' }]);
+  it('does not keep an alert for a client with no verdict, and reports it as untracked', () => {
+    expect(desiredAlerts([], open)).toEqual([]);
+    expect(untrackedAlerts([], open)).toEqual(open);
+    expect(untrackedAlerts([verdict({})], open)).toEqual([]);
+    expect(untrackedAlerts([], [{ scope: PLATFORM_SCOPE, rule: PLATFORM_RULE }])).toEqual([]);
   });
 
   it('drops it once the client has a success again', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { formatSideAppAlertMessage } from './message';
-import { PLATFORM_RULE, emptyWindowCounts, type ClientVerdict } from './rules';
+import { GAP_LOOKBACK_DAYS, PLATFORM_RULE, emptyWindowCounts, type ClientVerdict } from './rules';
 
 const verdict: ClientVerdict = {
   clientId: 'client-1',
@@ -66,5 +66,13 @@ describe('formatSideAppAlertMessage', () => {
     expect(text).toContain('recovered');
     expect(text).toContain('open for 3h');
     expect(text).not.toContain('Top failure reasons');
+  });
+
+  it('says an untracked alert closed for lack of traffic, without calling it recovered', () => {
+    const message = formatSideAppAlertMessage({ phase: 'untracked', rule: 'silent', appName: 'Notes' });
+    const text = bodyOf(message);
+    expect(message.text).toBe(`Connected app alert closed: Notes, no traffic for ${GAP_LOOKBACK_DAYS} days`);
+    expect(text).toContain('closed without a recovery');
+    expect(text).not.toContain('recovered');
   });
 });

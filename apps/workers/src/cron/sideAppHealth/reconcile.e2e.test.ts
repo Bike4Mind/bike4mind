@@ -180,6 +180,42 @@ describe('side app health state and delivery', () => {
     expect(await SideAppAlertState.countDocuments({ open: true, rule: 'failing' })).toBe(0);
   });
 
+  it('closes an alert for an app with no traffic with one untracked message', async () => {
+    await reconcileAlerts([silent('a')], ctxAt(t0));
+    post.mockClear();
+    const untracked = [{ scope: 'a', rule: 'silent' }];
+    const next = await reconcileAlerts([], ctxAt(new Date(t0.getTime() + 1000)), untracked);
+    expect(next).toMatchObject({ resolved: 1 });
+    expect(texts()).toHaveLength(1);
+    expect(texts()[0]).toContain('no traffic for 14 days');
+    expect(texts()[0]).not.toContain('recovered');
+    expect(await SideAppAlertState.countDocuments({ open: true })).toBe(0);
+  });
+
+  it('keeps an untracked alert open and retries when its post fails', async () => {
+    await reconcileAlerts([silent('a')], ctxAt(t0));
+    post.mockClear();
+    post.mockResolvedValueOnce(false);
+    const untracked = [{ scope: 'a', rule: 'silent' }];
+    expect(await reconcileAlerts([], ctxAt(new Date(t0.getTime() + 1000)), untracked)).toMatchObject({
+      resolved: 0,
+      postFailures: 1,
+    });
+    expect(await SideAppAlertState.countDocuments({ open: true })).toBe(1);
+    expect(await reconcileAlerts([], ctxAt(new Date(t0.getTime() + 2000)), untracked)).toMatchObject({ resolved: 1 });
+    expect(await SideAppAlertState.countDocuments({ open: true })).toBe(0);
+  });
+
+  it('closes a never-notified untracked alert without a post', async () => {
+    post.mockResolvedValueOnce(false);
+    await reconcileAlerts([silent('a')], ctxAt(t0));
+    post.mockClear();
+    const untracked = [{ scope: 'a', rule: 'silent' }];
+    expect(await reconcileAlerts([], ctxAt(new Date(t0.getTime() + 1000)), untracked)).toMatchObject({ resolved: 0 });
+    expect(post).not.toHaveBeenCalled();
+    expect(await SideAppAlertState.countDocuments({ open: true })).toBe(0);
+  });
+
   it('retries a failed recovery post on the next run and sends it once', async () => {
     await reconcileAlerts([failing('a')], ctxAt(t0));
     post.mockClear();

@@ -6,6 +6,7 @@ import {
   PLATFORM_SCOPE,
   reminderDue,
   type DesiredAlert,
+  type OpenAlertKey,
   type SideAppAlertRule,
 } from '@bike4mind/server-utils/sideApps/health/rules';
 
@@ -73,11 +74,16 @@ async function safePost(ctx: ReconcileContext, message: { text: string; blocks: 
  * concurrent run gets a duplicate-key error and stays quiet. A muted alert is stored unannounced and
  * sent as a new alert once nothing mutes it. Recovery is posted before the alert is closed, under
  * the same claim as reminders, so a failed post leaves it open for the next run and two runs never
- * both post. An alert replaced by a different rule for the same app closes without a recovery
+ * both post. An untracked alert (its app has no traffic left to judge) closes the same way with its
+ * own message. An alert replaced by a different rule for the same app closes without a recovery
  * message. A failed post gives its claim back and never stops the remaining alerts. Database errors
  * propagate.
  */
-export async function reconcileAlerts(desired: DesiredAlert[], ctx: ReconcileContext): Promise<ReconcileResult> {
+export async function reconcileAlerts(
+  desired: DesiredAlert[],
+  ctx: ReconcileContext,
+  untracked: OpenAlertKey[] = []
+): Promise<ReconcileResult> {
   const result: ReconcileResult = { opened: 0, reminded: 0, resolved: 0, postFailures: 0 };
   const repo = sideAppAlertStateRepository;
   const open = await repo.listOpen();
@@ -120,6 +126,7 @@ export async function reconcileAlerts(desired: DesiredAlert[], ctx: ReconcileCon
 
   const keep = new Set(desired.map(alert => keyOf(alert.scope, alert.rule)));
   const desiredScopes = new Set(desired.map(alert => alert.scope));
+  const untrackedKeys = new Set(untracked.map(alert => keyOf(alert.scope, alert.rule)));
   for (const ref of open) {
     if (keep.has(keyOf(ref.scope, ref.rule))) continue;
     // Nothing to retract when the alert never got out, or when another rule now covers the app.
@@ -128,7 +135,8 @@ export async function reconcileAlerts(desired: DesiredAlert[], ctx: ReconcileCon
       continue;
     }
     if (!(await repo.claimNotification(ref.id, ref.lastNotifiedAt, ctx.now))) continue;
-    const resolvedMessage = messageFor('resolved', { scope: ref.scope, rule: ref.rule }, ctx, names, ref.openedAt);
+    const phase: AlertPhase = untrackedKeys.has(keyOf(ref.scope, ref.rule)) ? 'untracked' : 'resolved';
+    const resolvedMessage = messageFor(phase, { scope: ref.scope, rule: ref.rule }, ctx, names, ref.openedAt);
     if (await safePost(ctx, resolvedMessage, `${ref.scope}:${ref.rule}`)) {
       await repo.resolve(ref.id, ctx.now);
       result.resolved += 1;

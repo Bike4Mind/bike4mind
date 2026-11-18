@@ -1,6 +1,8 @@
 export const HOUR_MS = 60 * 60 * 1000;
 export const DAY_MS = 24 * HOUR_MS;
 export const BASELINE_DAYS = 7;
+/** Silence needs a baseline this long: a younger app has not yet shown its weekend. */
+export const SILENCE_MIN_HISTORY_DAYS = BASELINE_DAYS;
 /** Hourly history the silence baseline sees. Two weeks, so a weekday-only app's previous weekend counts as a closed gap. */
 export const GAP_LOOKBACK_DAYS = 14;
 
@@ -109,6 +111,14 @@ export function hoursSinceLastSuccess(hourly: HourlyBucket[], now: number): numb
   return latest === null ? null : Math.max(0, (now - (latest + HOUR_MS)) / HOUR_MS);
 }
 
+function hasHistoryOf(hourly: HourlyBucket[], now: number, days: number): boolean {
+  let earliest: number | null = null;
+  for (const bucket of hourly) {
+    if (bucket.successes > 0 && (earliest === null || bucket.hourStart < earliest)) earliest = bucket.hourStart;
+  }
+  return earliest !== null && now - earliest > days * DAY_MS;
+}
+
 export function isFailingNow({ successes, failures, ourFaultFailures }: WindowCounts): boolean {
   const attempts = successes + failures;
   if (attempts < FAIL_MIN_ATTEMPTS) return false;
@@ -131,10 +141,11 @@ export function evaluateClient(input: ClientHealthInput, now: number, openRule?:
   const armed = isArmed(input.hourly, now);
   const threshold = silenceThresholdHours(longestClosedGapHours(input.hourly));
   const sinceSuccess = hoursSinceLastSuccess(input.hourly, now);
+  const hasSilenceHistory = hasHistoryOf(input.hourly, now, SILENCE_MIN_HISTORY_DAYS);
   let rule: SideAppAlertRule | null = null;
   if (armed) {
     if (isFailingNow(input.lastHour)) rule = 'failing';
-    else if (sinceSuccess !== null && sinceSuccess > threshold) rule = 'silent';
+    else if (hasSilenceHistory && sinceSuccess !== null && sinceSuccess > threshold) rule = 'silent';
     else if (openRule === 'failing' && input.lastHour.successes === 0) rule = 'failing';
   }
   return {
@@ -176,6 +187,7 @@ export interface OpenAlertKey {
 /**
  * Every alert that should be open after this run. An open alert for a client that is no longer
  * armed stays desired until the client has a success again: losing arming is not recovery.
+ * An open alert for a client with no verdict at all is not desired; see `untrackedAlerts`.
  */
 export function desiredAlerts(verdicts: ClientVerdict[], open: OpenAlertKey[] = []): DesiredAlert[] {
   const { platformDown } = evaluatePlatform(verdicts);
@@ -186,13 +198,19 @@ export function desiredAlerts(verdicts: ClientVerdict[], open: OpenAlertKey[] = 
   for (const { scope, rule } of open) {
     if (scope === PLATFORM_SCOPE) continue;
     const verdict = byClient.get(scope);
-    if (verdict?.armed) continue;
-    if (verdict && verdict.hoursSinceSuccess !== null && verdict.hoursSinceSuccess < 1) continue;
+    if (!verdict || verdict.armed) continue;
+    if (verdict.hoursSinceSuccess !== null && verdict.hoursSinceSuccess < 1) continue;
     if (alerts.some(alert => alert.scope === scope && alert.rule === rule)) continue;
     alerts.push({ scope, rule, muted: platformDown, verdict });
   }
   if (platformDown) alerts.push({ scope: PLATFORM_SCOPE, rule: PLATFORM_RULE, muted: false });
   return alerts;
+}
+
+/** Open client alerts whose client has no hourly rows left in the lookback, so nothing can recover or sustain them. */
+export function untrackedAlerts(verdicts: ClientVerdict[], open: OpenAlertKey[]): OpenAlertKey[] {
+  const tracked = new Set(verdicts.map(verdict => verdict.clientId));
+  return open.filter(({ scope }) => scope !== PLATFORM_SCOPE && !tracked.has(scope));
 }
 
 export function reminderDue(lastNotifiedAt: Date | undefined, now: number): boolean {

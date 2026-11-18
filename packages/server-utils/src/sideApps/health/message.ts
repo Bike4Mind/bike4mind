@@ -1,6 +1,6 @@
-import { PLATFORM_RULE, type ClientVerdict, type SideAppAlertRule } from './rules';
+import { GAP_LOOKBACK_DAYS, PLATFORM_RULE, type ClientVerdict, type SideAppAlertRule } from './rules';
 
-export type AlertPhase = 'open' | 'reminder' | 'resolved';
+export type AlertPhase = 'open' | 'reminder' | 'resolved' | 'untracked';
 
 const escapeMrkdwn = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -14,6 +14,7 @@ const PHASE_PREFIX: Record<AlertPhase, string> = {
   open: 'Connected app alert',
   reminder: 'Connected app alert, still open',
   resolved: 'Connected app recovered',
+  untracked: 'Connected app alert closed',
 };
 
 export interface SideAppAlertMessageInput {
@@ -36,10 +37,13 @@ export function formatSideAppAlertMessage(input: SideAppAlertMessageInput): { te
   const { phase, rule, verdict } = input;
   const subject = rule === PLATFORM_RULE ? 'Side apps' : escapeMrkdwn(input.appName ?? 'Unknown app');
   const stage = input.stageLabel ? ` [${escapeMrkdwn(input.stageLabel)}]` : '';
-  const headline = `${PHASE_PREFIX[phase]}${stage}: ${subject}, ${RULE_TEXT[rule]}`;
+  const what = phase === 'untracked' ? `no traffic for ${GAP_LOOKBACK_DAYS} days` : RULE_TEXT[rule];
+  const headline = `${PHASE_PREFIX[phase]}${stage}: ${subject}, ${what}`;
   const lines: string[] = [`*${headline}*`];
 
-  if (phase !== 'resolved') {
+  if (phase === 'untracked') {
+    lines.push(`The app has had no traffic for ${GAP_LOOKBACK_DAYS} days. The alert is closed without a recovery.`);
+  } else if (phase !== 'resolved') {
     if (rule === PLATFORM_RULE) {
       const names = (input.armedAppNames ?? []).map(escapeMrkdwn);
       lines.push(`Every armed app is failing or silent: ${names.join(', ') || 'none listed'}.`);
