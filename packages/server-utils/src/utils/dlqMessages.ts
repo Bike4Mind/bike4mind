@@ -1,14 +1,17 @@
 import type { Message } from '@aws-sdk/client-sqs';
-import { recommendDlqAction, type DlqRecommendation } from '@bike4mind/common';
+import { recommendDlqAction, type DlqRecommendation, type DlqRecommendationFacts } from '@bike4mind/common';
 import { dlqFailureRepository, dlqReplayLogRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { buildLogsInsightsUrl, messageLogWindow, type ConsumerLogs } from './dlqConsumerLogs';
 import { getSourceQueueUrl, type SourceQueueName } from './dlqRegistry';
+import { ARN_PARTITION } from './dlqScheduleRule';
 import { changeMessageVisibility, receiveFromQueue } from './sqs';
 
 const SQS_MAX_BATCH = 10;
 // Two receives in a row that surface nothing new mean the visible messages are exhausted.
 const STALE_RECEIVES_BEFORE_STOP = 2;
+// Lambda async and EventBridge record why a delivery failed as message attributes, not in the body.
+export const DLQ_BROWSE_MESSAGE_ATTRIBUTES = ['All'];
 
 export const approximateReceiveCount = (message: Message): number =>
   parseInt(message.Attributes?.ApproximateReceiveCount ?? '0', 10) || 0;
@@ -39,7 +42,7 @@ export async function browseDlqMessages(
   let collected: Message[] = [];
   let staleReceives = 0;
   for (let i = 0; i < options.maxReceives && collected.length < options.limit; i++) {
-    const batch = await receiveFromQueue(dlqUrl, SQS_MAX_BATCH, 0);
+    const batch = await receiveFromQueue(dlqUrl, SQS_MAX_BATCH, 0, 0, DLQ_BROWSE_MESSAGE_ATTRIBUTES);
     if (batch.length === 0) break;
     const before = collected.length;
     collected = latestCopies([...collected, ...batch]);
@@ -97,10 +100,67 @@ export async function acquireDlqMessagesById(
   return { found: [...found.values()], notFound: messageIds.filter(id => !found.has(id)) };
 }
 
-export function messageLogsUrl(logs: ConsumerLogs | null, sentTimestamp: string | undefined): string | null {
-  if (!logs || !sentTimestamp) return null;
-  const window = messageLogWindow(parseInt(sentTimestamp, 10), logs.retryWindowMs);
-  return window ? buildLogsInsightsUrl({ region: logs.region, logGroups: logs.logGroups, ...window }) : null;
+// Lambda retries an async invocation for up to 6 hours, EventBridge a target delivery for up to 24.
+const LAMBDA_ASYNC_MAX_AGE_MS = 6 * 60 * 60_000;
+const EVENTBRIDGE_MAX_AGE_MS = 24 * 60 * 60_000;
+const AFTER_SEND_MARGIN_MS = 5 * 60_000;
+const LAMBDA_FUNCTION_ARN = new RegExp(
+  String.raw`^arn:${ARN_PARTITION}:lambda:([a-z0-9-]+):\d{12}:function:([\w-]{1,64})(?::[\w$-]+)?$`
+);
+
+export type DlqLogsLink = { url: string; scope: 'request' | 'window' };
+
+export type DlqLogsLinkFacts = {
+  logs: ConsumerLogs | null;
+  sentTimestamp: string | undefined;
+  /** Format-checked by attributeFailure. */
+  requestId?: string;
+  targetArn?: string;
+  /** Scheduled Event time and the rule's Lambda target, from resolveDlqScheduleFacts. */
+  scheduledAt?: string;
+  scheduleTarget?: { functionName: string; region: string };
+};
+
+/**
+ * Logs Insights link for one DLQ message: the source queue's consumer logs, else the Lambda an EventBridge
+ * TARGET_ARN or the schedule rule names. A RequestID narrows the query to that invocation. Log groups
+ * outside the deploy region are dropped: a forged TARGET_ARN or rule cannot point the link elsewhere.
+ */
+export function messageLogsUrl(facts: DlqLogsLinkFacts): DlqLogsLink | null {
+  const sentMs = facts.sentTimestamp ? parseInt(facts.sentTimestamp, 10) : NaN;
+  if (!Number.isFinite(sentMs)) return null;
+  const deployRegion = process.env.AWS_REGION;
+  const target = facts.targetArn?.match(LAMBDA_FUNCTION_ARN);
+  const source = facts.logs
+    ? { region: facts.logs.region, logGroups: facts.logs.logGroups }
+    : target && target[1] === deployRegion
+      ? { region: target[1], logGroups: [`/aws/lambda/${target[2]}`] }
+      : facts.scheduleTarget && facts.scheduleTarget.region === deployRegion
+        ? { region: facts.scheduleTarget.region, logGroups: [`/aws/lambda/${facts.scheduleTarget.functionName}`] }
+        : null;
+  if (!source) return null;
+
+  const scope = facts.requestId ? 'request' : 'window';
+  let window: { start: number; end: number } | null;
+  if (facts.logs && !facts.requestId) {
+    window = messageLogWindow(sentMs, facts.logs.retryWindowMs);
+  } else {
+    const eventMs = facts.scheduledAt ? Date.parse(facts.scheduledAt) : NaN;
+    const maxAgeMs = facts.requestId ? LAMBDA_ASYNC_MAX_AGE_MS : EVENTBRIDGE_MAX_AGE_MS;
+    const end = Math.min(Date.now(), sentMs + AFTER_SEND_MARGIN_MS);
+    // The body's time is untrusted: no real failure reaches the DLQ later than the retry window allows.
+    const start = Number.isFinite(eventMs) ? Math.max(eventMs, sentMs - maxAgeMs) : sentMs - maxAgeMs;
+    window = { start: Math.min(start, end), end };
+  }
+  if (!window) return null;
+  const query = facts.requestId
+    ? 'fields @timestamp, @message, @logStream\n' +
+      `| filter @requestId = "${facts.requestId}"\n` +
+      '| sort @timestamp asc\n' +
+      '| limit 200'
+    : undefined;
+  const url = buildLogsInsightsUrl({ ...source, ...window, query });
+  return url ? { url, scope } : null;
 }
 
 /** Recorded failure details for DLQ messages; `lookupFailed` lets the UI say details are unavailable. */
@@ -124,7 +184,7 @@ export async function findDlqFailures(
   }
 }
 
-type DlqFailureRecord = Awaited<ReturnType<typeof dlqFailureRepository.findForMessages>>[number];
+export type DlqFailureRecord = Awaited<ReturnType<typeof dlqFailureRepository.findForMessages>>[number];
 
 /** Recorded replay attempts per message ID in one query; null when the lookup fails. */
 export async function countDlqReplayAttempts(
@@ -148,6 +208,9 @@ export function recommendForDlqMessage(facts: {
   logs: ConsumerLogs | null;
   replayAttempts: number | undefined;
   replaySafety: string | undefined;
+  staleWhen?: DlqRecommendationFacts['staleWhen'];
+  scheduledAt?: string;
+  nextRunDueAt?: string;
 }): DlqRecommendation {
   return recommendDlqAction({
     category: facts.failure?.category,
@@ -156,5 +219,8 @@ export function recommendForDlqMessage(facts: {
     consumerDeployedAt: facts.logs?.consumerDeployedAt,
     replayAttempts: facts.replayAttempts,
     replaySafety: facts.replaySafety,
+    staleWhen: facts.staleWhen,
+    scheduledAt: facts.scheduledAt,
+    nextRunDueAt: facts.nextRunDueAt,
   });
 }

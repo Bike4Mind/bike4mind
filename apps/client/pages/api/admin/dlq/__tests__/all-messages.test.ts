@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   findFailures: vi.fn(),
   countAttempts: vi.fn(),
   recommend: vi.fn(),
+  scheduleFacts: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/adminApi', () => ({
@@ -64,6 +65,10 @@ vi.mock('@bike4mind/server-utils/utils/dlqConsumerLogs', () => ({
   resolveConsumerLogsForSourceQueue: async () => null,
   settleWithinBudget: async (lookups: Promise<unknown>[]) => Promise.all(lookups),
 }));
+vi.mock('@bike4mind/server-utils/utils/dlqMessageRow', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/dlqMessageRow')>()),
+  resolveDlqScheduleFacts: h.scheduleFacts,
+}));
 vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), warn: vi.fn() } }));
 
 import '../all-messages';
@@ -94,6 +99,7 @@ beforeEach(() => {
     if (messages instanceof Error) throw messages;
     return messages ?? [];
   });
+  h.scheduleFacts.mockResolvedValue(new Map());
   h.findFailures.mockResolvedValue({ failures: [], lookupFailed: false });
   h.countAttempts.mockResolvedValue(null);
   h.recommend.mockImplementation((facts: { replayAttempts?: number }) => ({
@@ -142,6 +148,15 @@ describe('GET /api/admin/dlq/all-messages', () => {
     expect(h.browse).not.toHaveBeenCalledWith(expect.stringContaining('offstage'), expect.anything());
   });
 
+  it('passes each queue its depth, so schedule facts can tell a partial listing', async () => {
+    h.counts.files = new Error('throttled');
+    await call();
+    const depthByQueue = Object.fromEntries(
+      h.scheduleFacts.mock.calls.map(([entry, messages, depth]) => [entry.label, [messages.length, depth]])
+    );
+    expect(depthByQueue).toEqual({ billing: [2, 2], files: [1, -1] });
+  });
+
   it('still browses a queue whose count could not be read', async () => {
     h.counts.files = new Error('throttled');
     const { queues, messages } = await call();
@@ -151,6 +166,27 @@ describe('GET /api/admin/dlq/all-messages', () => {
       listed: 1,
     });
     expect(messages).toHaveLength(3);
+  });
+
+  it('attributes a failure from EventBridge message attributes when none was recorded', async () => {
+    h.messages.files = [
+      {
+        ...sqsMessage('f-mid', 200),
+        MessageAttributes: {
+          ERROR_CODE: { DataType: 'String', StringValue: 'SDK_CLIENT_ERROR' },
+          ERROR_MESSAGE: { DataType: 'String', StringValue: 'Lambda throttled' },
+        },
+      },
+    ];
+    const { messages } = await call();
+    const row = messages.find((m: { messageId: string }) => m.messageId === 'f-mid');
+    expect(row.failure).toEqual({
+      errorMessage: 'Lambda throttled',
+      category: 'unknown',
+      source: 'attributes',
+      errorCode: 'SDK_CLIENT_ERROR',
+    });
+    expect(messages.find((m: { messageId: string }) => m.messageId === 'b-new').failure).toBeUndefined();
   });
 
   it('attaches recorded failures and flags a failed lookup', async () => {
@@ -164,7 +200,7 @@ describe('GET /api/admin/dlq/all-messages', () => {
     );
     const { messages } = await call();
     const byId = (id: string) => messages.find((m: { messageId: string }) => m.messageId === id);
-    expect(byId('b-new').failure).toEqual({ errorMessage: 'card declined', category: 'refused' });
+    expect(byId('b-new').failure).toEqual({ errorMessage: 'card declined', category: 'refused', source: 'recorded' });
     expect(byId('b-old').failureLookupFailed).toBeUndefined();
     expect(byId('f-mid').failureLookupFailed).toBe(true);
   });
