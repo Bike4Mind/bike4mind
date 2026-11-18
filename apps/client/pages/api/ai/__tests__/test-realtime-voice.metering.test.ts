@@ -257,4 +257,20 @@ describe('POST /api/ai/test-realtime-voice metering', () => {
       expect(m.userIncrement).not.toHaveBeenCalled();
     }
   );
+
+  it('reports the model admission refusal, not the freeze, when both apply', async () => {
+    const refusal = new Error('paid plan required');
+    vi.mocked(createModelAdmission).mockReturnValueOnce({
+      assert: async () => {
+        throw refusal;
+      },
+      admits: async () => false,
+    });
+    m.activeFreeze.mockResolvedValue({ scopeType: 'apiKey', frozenAt: new Date('2026-11-18T00:00:00Z') });
+
+    const error = await call({ apiKeyInfo: { keyId: 'k1', billingOwnerType: 'User' } }).catch((err: unknown) => err);
+
+    expect(error).toBe(refusal);
+    expect(isSpendFrozenError(error)).toBe(false);
+  });
 });

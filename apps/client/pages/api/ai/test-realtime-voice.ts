@@ -65,13 +65,13 @@ const handler = baseApi().post(async (req, res) => {
   // tts.ts the charge is skipped when enforceCredits is off, so a credits-off deployment moves no balance.
   const userId = req.user?.id;
   const billingOrganizationId = await resolveAudioBillingOrgId(req, undefined, 'user');
+  await (
+    await createModelAdmission(req.user!, undefined, false, { organizationId: billingOrganizationId })
+  ).assert(TTS_MODEL, { orgModelBackend: resolveAudioVendorBackend('openai') });
   // The hold below runs only when credits are enforced; the freeze applies either way.
   await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, billingOrganizationId ?? null), {
     db: { spendFreezes: spendFreezeRepository },
   });
-  await (
-    await createModelAdmission(req.user!, undefined, false, { organizationId: billingOrganizationId })
-  ).assert(TTS_MODEL, { orgModelBackend: resolveAudioVendorBackend('openai') });
   let hold: PreflightCreditHold | undefined;
   if (userId && req.user && (await isCreditsEnforced())) {
     try {
