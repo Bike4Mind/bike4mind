@@ -1407,7 +1407,8 @@ describe('runLoopSchedulerTick - stage config', () => {
     };
 
     it('starts no cloud run for its desktop tickets on any tick or dispatch, and waits for its next interval', async () => {
-      const loop = await createLoop(DESKTOP_ONLY);
+      // A daily budget makes admission price the run, so the assertion below catches one admitted.
+      const loop = await createLoop({ ...DESKTOP_ONLY, budgetCreditsPerDay: 1000 });
       const desktop = await createTicket(loop.id, { stage: 'review' });
 
       await runLoopSchedulerTick(NOW, logger);
@@ -1418,6 +1419,8 @@ describe('runLoopSchedulerTick - stage config', () => {
       await runLoopSchedulerTick(parked.nextRunAt, logger);
       await dispatchLoopNow(loop.id, parked.nextRunAt, logger);
 
+      // Parked before admission: no run is priced against the budget its desktop claims need.
+      expect(h.nextIterationCredits).not.toHaveBeenCalled();
       expect(h.startAgentExecution).not.toHaveBeenCalled();
       expect(await ticketOf(desktop.id)).toMatchObject({ status: 'open' });
       expect((await reload(loop.id)).nextRunAt.getTime()).toBeGreaterThan(parked.nextRunAt.getTime());

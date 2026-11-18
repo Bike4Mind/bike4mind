@@ -329,7 +329,6 @@ export function registerLocalLoops(
       const ticket = event.ticketId ? store.ticket(event.ticketId) : null;
       // As the server's resolve route: only a ticket still parked on this question changes.
       if (ticket?.status !== 'blocked' || !ticket.statusReason?.startsWith(UNSURE_PREFIX)) return;
-      const loop = loopOf(event.loopId);
       store.putTicket(
         applyTicketPatch(
           ticket,
@@ -337,7 +336,7 @@ export function registerLocalLoops(
             ? { status: 'open', statusReason: null }
             : // Closed as an owner close is; the scheduler's reconcile then frees its dependents.
               {
-                ...ticketMovePatch(loop, ticket, { status: 'closed' }, 'owner'),
+                ...ticketMovePatch(loopOf(event.loopId), ticket, { status: 'closed' }, 'owner'),
                 statusReason: `Rejected by owner${note ? `: ${note.trim()}` : ''}`.slice(0, 1000),
               },
           at
