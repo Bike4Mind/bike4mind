@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { ApiKeyScope, ApiKeyStatus, sortAdminPermissions } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyStatus, adminPermissionSources, type AdminRole } from '@bike4mind/common';
 import {
   AdminAuditLogModel,
   AuthSessionModel,
@@ -21,6 +21,8 @@ import {
   type AccessReviewAdmin,
   type AccessReviewCounts,
   type AccessReviewDelegation,
+  type AccessReviewRole,
+  type AccessReviewRoleMember,
   type AccessReviewSnapshot,
 } from './accessReview';
 import { Logger } from '@bike4mind/observability';
@@ -140,18 +142,51 @@ export const ACCESS_REVIEW_ADMIN_FILTER = {
   $or: [{ isAdmin: true }, { 'adminPermissions.0': { $exists: true } }, { 'adminRoleIds.0': { $exists: true } }],
 };
 
-/** Each admin's effective permissions: direct grants plus every role they hold that still exists. */
-async function effectivePermissionsOf(docs: AdminDoc[]): Promise<Map<AdminDoc, string[]>> {
-  const roleIds = [...new Set(docs.flatMap(doc => (doc.adminRoleIds ?? []).map(String)))].filter(id =>
-    OBJECT_ID_RE.test(id)
-  );
-  const roles = new Map((await adminRoleRepository.findByIds(roleIds)).map(role => [role.id, role.permissions]));
-  return new Map(
-    docs.map(doc => {
-      const fromRoles = (doc.adminRoleIds ?? []).flatMap(id => roles.get(String(id)) ?? []);
-      return [doc, sortAdminPermissions([...(doc.adminPermissions ?? []), ...fromRoles])];
-    })
-  );
+type AdminRoleAccess = Pick<AccessReviewAdmin, 'permissions' | 'roles' | 'permissionSources'>;
+
+/**
+ * Each admin's held roles and effective permissions with their provenance (direct grants plus every
+ * role they hold that still exists), and the role catalog with its members. Every role holder
+ * matches ACCESS_REVIEW_ADMIN_FILTER, so the members come from `docs` with no further query.
+ */
+async function roleAccessOf(
+  docs: AdminDoc[],
+  adminIds: string[]
+): Promise<{ byDoc: Map<AdminDoc, AdminRoleAccess>; roles: AccessReviewRole[] }> {
+  const catalog = await adminRoleRepository.list();
+  const rolesById = new Map<string, AdminRole>(catalog.map(role => [role.id, role]));
+  const members = new Map<string, AccessReviewRoleMember[]>(catalog.map(role => [role.id, []]));
+  const roleOf = (id: string): AdminRole | undefined => (OBJECT_ID_RE.test(id) ? rolesById.get(id) : undefined);
+  const byDoc = new Map<AdminDoc, AdminRoleAccess>();
+  docs.forEach((doc, index) => {
+    const heldIds = [...new Set((doc.adminRoleIds ?? []).map(String))];
+    const held = heldIds.flatMap(id => roleOf(id) ?? []);
+    for (const role of held) {
+      members.get(role.id)?.push({
+        userId: adminIds[index],
+        email: doc.email ?? null,
+        username: doc.username ?? null,
+        status: accountStatus(doc),
+      });
+    }
+    const permissionSources = adminPermissionSources(doc.adminPermissions ?? [], held);
+    byDoc.set(doc, {
+      permissions: permissionSources.map(source => source.permission),
+      permissionSources,
+      roles: heldIds.map(id => {
+        const role = roleOf(id);
+        return role ? { id, name: role.name, deleted: false } : { id, name: null, deleted: true };
+      }),
+    });
+  });
+  const roles = catalog.map(role => ({
+    id: role.id,
+    name: role.name,
+    description: role.description,
+    permissions: [...role.permissions],
+    members: members.get(role.id) ?? [],
+  }));
+  return { byDoc, roles };
 }
 
 const collections = () => ({
@@ -310,7 +345,7 @@ export async function collectAccessReview(options: CollectAccessReviewOptions = 
     .read('secondaryPreferred')
     .lean<AdminDoc[]>();
   const adminIds = adminDocs.map(doc => String(doc._id));
-  const permissionsByDoc = await effectivePermissionsOf(adminDocs);
+  const roleAccess = await roleAccessOf(adminDocs, adminIds);
 
   const [
     sessions,
@@ -351,9 +386,11 @@ export async function collectAccessReview(options: CollectAccessReviewOptions = 
       email: doc.email ?? null,
       username: doc.username ?? null,
       fullAdmin: doc.isAdmin === true,
-      permissions: permissionsByDoc.get(doc) ?? [],
+      permissions: roleAccess.byDoc.get(doc)?.permissions ?? [],
+      permissionSources: roleAccess.byDoc.get(doc)?.permissionSources ?? [],
       directPermissions: [...(doc.adminPermissions ?? [])],
       adminRoleIds: (doc.adminRoleIds ?? []).map(String),
+      roles: roleAccess.byDoc.get(doc)?.roles ?? [],
       status: accountStatus(doc),
       lastActiveAt: iso(doc.lastActiveAt),
       lastAdminActionAt: iso(lastAdminAction.get(id)),
@@ -444,6 +481,7 @@ export async function collectAccessReview(options: CollectAccessReviewOptions = 
     allApiKeysListed: allApiKeys,
     counts,
     admins,
+    roles: roleAccess.roles,
     apiKeys: keyDocs.map(doc => ({
       id: String(doc._id),
       name: doc.name,

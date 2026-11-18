@@ -109,3 +109,37 @@ export const ADMIN_ROLE_TEMPLATES = [
 ] as const satisfies readonly AdminRoleTemplate[];
 
 export type AdminRoleTemplateId = (typeof ADMIN_ROLE_TEMPLATES)[number]['id'];
+
+/** Where one effective permission comes from: a direct grant, one or more roles, or both. */
+export type AdminPermissionSource = {
+  permission: AdminPermissionId;
+  direct: boolean;
+  roles: { id: string; name: string }[];
+};
+
+/**
+ * Effective permissions (direct UNION every role's, the union hasAdminPermission applies) with the
+ * grant behind each one, in ADMIN_PERMISSIONS order. Ids no longer in the list are dropped.
+ */
+export function adminPermissionSources(
+  direct: readonly string[],
+  roles: readonly Pick<AdminRole, 'id' | 'name' | 'permissions'>[]
+): AdminPermissionSource[] {
+  const permissions = sortAdminPermissions([...direct, ...roles.flatMap(role => role.permissions)]);
+  return permissions.map(permission => {
+    const grantingRoles = new Map<string, string>();
+    for (const role of roles) if (role.permissions.includes(permission)) grantingRoles.set(role.id, role.name);
+    return {
+      permission,
+      direct: direct.includes(permission),
+      roles: [...grantingRoles]
+        .map(([id, name]) => ({ id, name }))
+        .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
+    };
+  });
+}
+
+/** "direct", "Support agent", or "direct + Billing + Support agent". */
+export function formatAdminPermissionSource(source: Pick<AdminPermissionSource, 'direct' | 'roles'>): string {
+  return [...(source.direct ? ['direct'] : []), ...source.roles.map(role => role.name)].join(' + ');
+}

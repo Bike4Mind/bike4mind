@@ -3,6 +3,7 @@ import { Logger } from '@bike4mind/observability';
 import mongoose from 'mongoose';
 import {
   AdminAuditLogModel,
+  AdminRoleModel,
   AuthSessionModel,
   CcBridgeDevice,
   OAuthGrantModel,
@@ -156,6 +157,7 @@ afterAll(async () => {
 const noAuditTrail = {
   directPermissions: [],
   adminRoleIds: [],
+  roles: [],
   lastAdminActionAt: null,
   lastSignInAt: null,
   mfaEnabled: false,
@@ -195,6 +197,7 @@ describe('collectAccessReview', () => {
         username: 'root',
         fullAdmin: true,
         permissions: [],
+        permissionSources: [],
         ...noAuditTrail,
         status: 'active',
         lastActiveAt: past.toISOString(),
@@ -211,6 +214,7 @@ describe('collectAccessReview', () => {
         username: null,
         fullAdmin: false,
         permissions: ['support:read'],
+        permissionSources: [{ permission: 'support:read', direct: true, roles: [] }],
         ...noAuditTrail,
         directPermissions: ['support:read'],
         status: 'banned',
@@ -224,6 +228,7 @@ describe('collectAccessReview', () => {
       },
       expect.objectContaining({ userId: deletedId, status: 'deleted', fullAdmin: true, permissions: [] }),
     ]);
+    expect(snapshot.roles).toEqual([]);
 
     expect(snapshot.apiKeys).toEqual([
       expect.objectContaining({
@@ -502,5 +507,89 @@ describe('sendAccessReviewReminder', () => {
     const posted = `${JSON.stringify(log.mock.calls[0])}${post.mock.calls[0][0]}`;
     for (const detail of ['@example.org', 'root', fullId, 'ops key']) expect(posted).not.toContain(detail);
     log.mockRestore();
+  });
+});
+
+describe('collectAccessReview admin roles', () => {
+  it('reports held roles, per-permission provenance and the role catalog with members', async () => {
+    const support = id();
+    const billing = id();
+    const unused = id();
+    const deadRole = id();
+    const roleHolder = id();
+    const rootWithRole = id();
+    const deadOnly = id();
+    await AdminRoleModel.collection.insertMany([
+      {
+        _id: support,
+        name: 'Support agent',
+        description: 'Front line',
+        permissions: ['support:read', 'users:moderate'],
+      },
+      { _id: billing, name: 'Billing', description: '', permissions: ['support:read', 'credits:adjust'] },
+      { _id: unused, name: 'Unused', description: '', permissions: ['models:curate'] },
+    ]);
+    await User.collection.insertMany([
+      {
+        _id: roleHolder,
+        username: 'agent',
+        email: 'agent@example.org',
+        isAdmin: false,
+        adminPermissions: ['support:read'],
+        adminRoleIds: [support, billing, deadRole, 'not-an-id'],
+      },
+      { _id: rootWithRole, username: 'root2', isAdmin: true, adminPermissions: [], adminRoleIds: [billing] },
+      { _id: deadOnly, username: 'dead-only', isAdmin: false, adminPermissions: [], adminRoleIds: [deadRole] },
+    ]);
+    try {
+      const snapshot = await collectAccessReview({ now });
+      const admin = (userId: mongoose.Types.ObjectId) => snapshot.admins.find(row => row.userId === String(userId));
+      const supportRef = { id: String(support), name: 'Support agent' };
+      const billingRef = { id: String(billing), name: 'Billing' };
+
+      expect(admin(roleHolder)).toMatchObject({
+        permissions: ['support:read', 'credits:adjust', 'users:moderate'],
+        directPermissions: ['support:read'],
+        roles: [
+          { ...supportRef, deleted: false },
+          { ...billingRef, deleted: false },
+          { id: String(deadRole), name: null, deleted: true },
+          { id: 'not-an-id', name: null, deleted: true },
+        ],
+        permissionSources: [
+          { permission: 'support:read', direct: true, roles: [billingRef, supportRef] },
+          { permission: 'credits:adjust', direct: false, roles: [billingRef] },
+          { permission: 'users:moderate', direct: false, roles: [supportRef] },
+        ],
+      });
+      expect(admin(rootWithRole)).toMatchObject({ fullAdmin: true, roles: [{ ...billingRef, deleted: false }] });
+      expect(admin(deadOnly)).toMatchObject({
+        permissions: [],
+        permissionSources: [],
+        roles: [{ id: String(deadRole), name: null, deleted: true }],
+      });
+
+      expect(snapshot.roles).toEqual([
+        {
+          ...billingRef,
+          description: '',
+          permissions: ['support:read', 'credits:adjust'],
+          members: [
+            { userId: String(roleHolder), email: 'agent@example.org', username: 'agent', status: 'active' },
+            { userId: String(rootWithRole), email: null, username: 'root2', status: 'active' },
+          ],
+        },
+        {
+          ...supportRef,
+          description: 'Front line',
+          permissions: ['support:read', 'users:moderate'],
+          members: [{ userId: String(roleHolder), email: 'agent@example.org', username: 'agent', status: 'active' }],
+        },
+        { id: String(unused), name: 'Unused', description: '', permissions: ['models:curate'], members: [] },
+      ]);
+    } finally {
+      await User.collection.deleteMany({ _id: { $in: [roleHolder, rootWithRole, deadOnly] } });
+      await AdminRoleModel.collection.deleteMany({});
+    }
   });
 });

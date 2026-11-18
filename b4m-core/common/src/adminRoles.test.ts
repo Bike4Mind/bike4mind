@@ -7,7 +7,14 @@ import {
   hasAdminPermission,
   meetsAdminPermissionRequirement,
 } from './adminPermissions';
-import { ADMIN_ROLE_TEMPLATES, AdminRoleCreateSchema, AdminRoleUpdateSchema } from './adminRoles';
+import {
+  ADMIN_ROLE_TEMPLATES,
+  AdminRoleCreateSchema,
+  AdminRoleUpdateSchema,
+  adminPermissionSources,
+  formatAdminPermissionSource,
+} from './adminRoles';
+import { sortAdminPermissions } from './adminPermissions';
 
 const ROLE_ID = 'a'.repeat(24);
 
@@ -119,5 +126,47 @@ describe('AdminUserPermissionsChangeSchema role fields', () => {
     const roles = (adminRoleIds: string[]) => ({ ...base, beforeAdminRoleIds: [], adminRoleIds });
     expect(AdminUserPermissionsChangeSchema.safeParse(roles(['nope'])).success).toBe(false);
     expect(AdminUserPermissionsChangeSchema.safeParse(roles([ROLE_ID, ROLE_ID.toUpperCase()])).success).toBe(false);
+  });
+});
+
+describe('adminPermissionSources', () => {
+  const support = {
+    id: 'b'.repeat(24),
+    name: 'Support agent',
+    permissions: ['support:read', 'users:moderate'] as const,
+  };
+  const billing = { id: 'c'.repeat(24), name: 'Billing', permissions: ['support:read', 'credits:adjust'] as const };
+  const roles = [
+    { ...support, permissions: [...support.permissions] },
+    { ...billing, permissions: [...billing.permissions] },
+  ];
+
+  it('lists each effective permission once with its direct grant and granting roles', () => {
+    const sources = adminPermissionSources(['support:read', 'keys:revoke'], roles);
+    expect(sources.map(source => [source.permission, formatAdminPermissionSource(source)])).toEqual([
+      ['support:read', 'direct + Billing + Support agent'],
+      ['credits:adjust', 'Billing'],
+      ['users:moderate', 'Support agent'],
+      ['keys:revoke', 'direct'],
+    ]);
+  });
+
+  it('matches the union hasAdminPermission applies to direct and role permissions', () => {
+    const direct = ['keys:revoke', 'support:read'];
+    const roleAdminPermissions = roles.flatMap(role => role.permissions);
+    const effective = adminPermissionSources(direct, roles).map(source => source.permission);
+    expect(effective).toEqual(sortAdminPermissions([...direct, ...roleAdminPermissions]));
+    for (const permission of ADMIN_PERMISSIONS) {
+      expect(effective.includes(permission)).toBe(
+        hasAdminPermission({ adminPermissions: direct, roleAdminPermissions }, permission)
+      );
+    }
+  });
+
+  it('drops ids that are no longer admin permissions and handles no roles', () => {
+    expect(adminPermissionSources(['retired:perm', 'support:read'], [])).toEqual([
+      { permission: 'support:read', direct: true, roles: [] },
+    ]);
+    expect(adminPermissionSources([], [])).toEqual([]);
   });
 });
