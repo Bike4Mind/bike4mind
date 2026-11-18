@@ -75,6 +75,17 @@ function SkinOption({ skin, active }: { skin: SkinSummary; active: boolean }) {
             {skin.description}
           </Typography>
         )}
+        {skin.warnings?.map(warning => (
+          <Typography
+            key={warning}
+            level="body-xs"
+            textColor="warning.plainColor"
+            data-testid={`orchestrator-skin-warning-${skin.id}`}
+            sx={{ overflowWrap: 'anywhere', whiteSpace: 'normal' }}
+          >
+            {warning}
+          </Typography>
+        ))}
       </Box>
       {active && <CheckIcon />}
     </MenuItem>

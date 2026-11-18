@@ -119,5 +119,7 @@ export type SkinSummary =
       author?: string;
       description?: string;
       tokens: SkinTokens;
+      /** Loaded, but parts of it are ignored (needsYouColor.ts); the picker shows these. */
+      warnings?: string[];
     }
   | { status: 'broken'; id: string; name?: string; error: string };

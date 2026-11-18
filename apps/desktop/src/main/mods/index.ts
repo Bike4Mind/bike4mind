@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { app, ipcMain } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { skinAssetUrl, type SkinSummary, type SkinTokens } from '@shared/mods';
+import { needsYouLookalikeKeys } from '@shared/needsYouColor';
 import { appWindows } from '../windows';
 import { loadSkins, type LoadedSkin, type SkinLoadResult } from './skinFolder';
 import { registerSkinProtocol } from './skinProtocol';
@@ -34,6 +35,9 @@ export function registerSkins(): void {
     }
     for (const result of results) {
       if (!result.ok) console.warn(`SKINS: ${result.id} rejected: ${result.error}`);
+      else
+        for (const key of needsYouLookalikeKeys(result.skin.tokens))
+          console.warn(`SKINS: ${result.skin.manifest.id}: ignoring ${key}, too close to the needs-you colour`);
     }
     return latest;
   };
@@ -79,6 +83,9 @@ export function toSummary(result: SkinLoadResult): SkinSummary {
     return { status: 'broken', id: result.id, ...(result.name ? { name: result.name } : {}), error: result.error };
   }
   const { manifest, tokens } = result.skin;
+  const warnings = needsYouLookalikeKeys(tokens).map(
+    key => `${key} is too close to the needs-you colour, so the default is used`
+  );
   return {
     status: 'ok',
     id: manifest.id,
@@ -87,6 +94,7 @@ export function toSummary(result: SkinLoadResult): SkinSummary {
     ...(manifest.author ? { author: manifest.author } : {}),
     ...(manifest.description ? { description: manifest.description } : {}),
     tokens: withAssetUrls(manifest.id, tokens),
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
 

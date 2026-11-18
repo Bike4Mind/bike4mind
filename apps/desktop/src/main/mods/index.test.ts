@@ -41,3 +41,22 @@ describe('registerSkins scan ordering', () => {
     expect(await older).toMatchObject([{ id: 'newer' }]);
   });
 });
+
+describe('toSummary', () => {
+  it('reports a colour too close to the needs-you amber as a warning naming its key', async () => {
+    const { toSummary } = await import('./index');
+    const summary = toSummary({
+      ok: true,
+      skin: {
+        manifest: { manifest: 1, id: 'gold', name: 'Gold', version: '1.0.0', kind: 'skin', contract: 1 },
+        tokens: { states: { working: '#f0c050', done: '#3cc8ff' } },
+        assets: new Map(),
+      },
+    });
+
+    expect(summary).toMatchObject({
+      status: 'ok',
+      warnings: ['states.working is too close to the needs-you colour, so the default is used'],
+    });
+  });
+});

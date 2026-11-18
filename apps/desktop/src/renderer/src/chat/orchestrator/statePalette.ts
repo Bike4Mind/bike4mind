@@ -1,6 +1,7 @@
 import type { ColorPaletteProp } from '@mui/joy/styles';
 import type { AgentState } from '@shared/agentState';
 import type { SkinSummary, SkinTokens } from '@shared/mods';
+import { NEEDS_YOU_AMBER, looksLikeNeedsYou } from '@shared/needsYouColor';
 
 /**
  * The one place an agent state gets its colour. `joy` drives chips and tiles; `lamp` is the raw hex for
@@ -13,7 +14,7 @@ export interface StateColor {
 }
 
 export const STATE_PALETTE: Readonly<Record<AgentState, StateColor>> = {
-  'needs-you': { joy: 'warning', lamp: '#f5c542' },
+  'needs-you': { joy: 'warning', lamp: NEEDS_YOU_AMBER },
   working: { joy: 'primary', lamp: '#ff9d3c' },
   done: { joy: 'success', lamp: '#7ed07a' },
   failed: { joy: 'danger', lamp: '#e5534b' },
@@ -80,7 +81,8 @@ export const DEFAULT_SKIN_THEME: SkinTheme = { id: null, states: {}, surfaces: {
 
 /**
  * A skin's tokens over the shared palette. This is where the lock lives: whatever a skin says for
- * `needs-you` (colour or sound) is dropped here, so no view or picker can apply it. A broken or
+ * `needs-you` (colour or sound) is dropped here, and so is any other state or surface colour that
+ * looks like the needs-you amber (needsYouColor.ts), so no view or picker can apply it. A broken or
  * missing skin is the default.
  */
 export function mergeSkinTheme(skin: SkinSummary | undefined): SkinTheme {
@@ -88,12 +90,15 @@ export function mergeSkinTheme(skin: SkinSummary | undefined): SkinTheme {
   const { states = {}, surfaces = {}, type = {}, sprites = {}, sounds = {} } = skin.tokens;
   const skinnedStates: SkinTheme['states'] = {};
   for (const [state, color] of Object.entries(states) as [AgentState, string | undefined][]) {
-    if (color !== undefined && isSkinnable(state)) skinnedStates[state] = color;
+    if (color !== undefined && isSkinnable(state) && !looksLikeNeedsYou(color)) skinnedStates[state] = color;
   }
+  const skinnedSurfaces = Object.fromEntries(
+    Object.entries(surfaces).filter(([, color]) => color !== undefined && !looksLikeNeedsYou(color))
+  ) as SkinTheme['surfaces'];
   return {
     id: skin.id,
     states: skinnedStates,
-    surfaces: { ...surfaces },
+    surfaces: skinnedSurfaces,
     ...(type.family ? { fontFamily: FONT_STACKS[type.family] } : {}),
     sprites: { ...sprites },
     sounds: sounds.finale ? { finale: sounds.finale } : {},

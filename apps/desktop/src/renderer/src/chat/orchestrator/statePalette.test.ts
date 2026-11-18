@@ -36,6 +36,23 @@ describe('STATE_PALETTE', () => {
 });
 
 describe('mergeSkinTheme', () => {
+  it('drops any state or surface colour that looks like the needs-you amber, keeping the rest', () => {
+    const skin = sampleSkinSummary();
+    if (skin.status !== 'ok') throw new Error('sample skin is broken');
+    const theme = mergeSkinTheme({
+      ...skin,
+      tokens: {
+        ...skin.tokens,
+        states: { working: STATE_PALETTE['needs-you'].lamp, done: '#f0c050', failed: '#3cc8ff' },
+        surfaces: { stage: '#ffcc00', card: '#16263a' },
+      },
+    });
+
+    expect(theme.states).toEqual({ failed: '#3cc8ff' });
+    expect(theme.surfaces).toEqual({ card: '#16263a' });
+    expect(Object.values(skinCssVariables(theme))).not.toContain(STATE_PALETTE['needs-you'].lamp);
+  });
+
   it('applies a skin over the palette', () => {
     const theme = mergeSkinTheme(sampleSkinSummary());
     expect(theme.id).toBe('nightglass');
