@@ -77,7 +77,7 @@ export async function deleteUserAsAdmin(
   });
 
   // The stamp has committed; everything below is best-effort and never fails the request.
-  const canceledEntry = subscriptionCancellationAudit(subscriptions, 'deletion_requested');
+  const canceledEntry = subscriptionCancellationAudit(subscriptions, 'account_deleted');
   if (canceledEntry) {
     await recordAdminActionFromRequest(req, {
       ...canceledEntry,
