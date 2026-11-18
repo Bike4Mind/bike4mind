@@ -135,3 +135,209 @@ final class InstructionsViewModelTests: XCTestCase {
     XCTAssertEqual(model.state, .failed(.api(.offline)))
   }
 }
+
+private actor SuspendedInstructionAPI: InstructionAPI {
+  enum Call: Hashable { case list(Int), add, remove }
+  private var listCount = 0
+  private var lists: [Int: CheckedContinuation<[AssistantInstruction], any Error>] = [:]
+  private var addition: CheckedContinuation<AssistantInstruction, any Error>?
+  private var removal: CheckedContinuation<Void, any Error>?
+  private var started: Set<Call> = []
+  private var observers: [Call: [CheckedContinuation<Void, Never>]] = [:]
+  private(set) var added: [String] = []
+
+  func waitFor(_ call: Call) async {
+    if started.contains(call) { return }
+    await withCheckedContinuation { observers[call, default: []].append($0) }
+  }
+
+  private func markStarted(_ call: Call) {
+    started.insert(call)
+    observers.removeValue(forKey: call)?.forEach { $0.resume() }
+  }
+
+  func list() async throws -> [AssistantInstruction] {
+    listCount += 1
+    let call = listCount
+    return try await withCheckedThrowingContinuation {
+      lists[call] = $0
+      markStarted(.list(call))
+    }
+  }
+
+  func add(text: String) async throws -> AssistantInstruction {
+    added.append(text)
+    return try await withCheckedThrowingContinuation {
+      addition = $0
+      markStarted(.add)
+    }
+  }
+
+  func remove(id: String) async throws {
+    try await withCheckedThrowingContinuation {
+      removal = $0
+      markStarted(.remove)
+    }
+  }
+
+  func finishList(_ call: Int, _ result: Result<[AssistantInstruction], InstructionError>) {
+    guard let continuation = lists.removeValue(forKey: call) else { preconditionFailure("No held list") }
+    continuation.resume(with: result.mapError { $0 as any Error })
+  }
+
+  func finishAdd(_ instruction: AssistantInstruction) {
+    guard let continuation = addition else { preconditionFailure("No held add") }
+    addition = nil
+    continuation.resume(returning: instruction)
+  }
+
+  func failAdd(_ error: InstructionError) {
+    guard let continuation = addition else { preconditionFailure("No held add") }
+    addition = nil
+    continuation.resume(throwing: error)
+  }
+
+  func finishRemove(_ result: Result<Void, InstructionError>) {
+    guard let continuation = removal else { preconditionFailure("No held remove") }
+    removal = nil
+    continuation.resume(with: result.mapError { $0 as any Error })
+  }
+}
+
+@MainActor
+extension InstructionsViewModelTests {
+  private func prime(
+    _ model: InstructionsViewModel, _ api: SuspendedInstructionAPI, _ rows: [AssistantInstruction]
+  ) async {
+    let loading = Task { await model.load() }
+    await api.waitFor(.list(1))
+    await api.finishList(1, .success(rows))
+    await loading.value
+  }
+
+  func testSavingKeepsANewDraftAndDoesNotSubmitTwice() async {
+    let api = SuspendedInstructionAPI()
+    let model = InstructionsViewModel(api: api)
+    model.draft = "Submitted"
+    let saving = Task { await model.add() }
+    await api.waitFor(.add)
+    model.draft = "Next draft"
+    await model.add()
+    await api.finishAdd(makeInstruction(id: "saved", text: "Submitted"))
+    await saving.value
+    XCTAssertEqual(model.draft, "Next draft")
+    XCTAssertEqual(model.instructions.map(\.id), ["saved"])
+    let added = await api.added
+    XCTAssertEqual(added, ["Submitted"])
+  }
+
+  func testSavingKeepsADraftEditedAwayAndBackToTheSubmittedText() async {
+    let api = SuspendedInstructionAPI()
+    let model = InstructionsViewModel(api: api)
+    model.draft = "Submitted"
+    let saving = Task { await model.add() }
+    await api.waitFor(.add)
+    model.draft = "Another draft"
+    model.draft = "Submitted"
+    await api.finishAdd(makeInstruction(id: "saved"))
+    await saving.value
+    XCTAssertEqual(model.draft, "Submitted")
+  }
+
+  func testARefreshStartedBeforeAnAddCannotEraseTheSavedInstruction() async {
+    let api = SuspendedInstructionAPI()
+    let model = InstructionsViewModel(api: api)
+    await prime(model, api, [])
+    let refresh = Task { await model.load() }
+    await api.waitFor(.list(2))
+    model.draft = "New instruction"
+    let saving = Task { await model.add() }
+    await api.waitFor(.add)
+    await api.finishAdd(makeInstruction(id: "saved"))
+    await saving.value
+    await api.finishList(2, .success([]))
+    await refresh.value
+    XCTAssertEqual(model.instructions.map(\.id), ["saved"])
+    XCTAssertEqual(model.state, .loaded)
+  }
+
+  func testARefreshStartedBeforeARemoveCannotResurrectTheDeletedInstruction() async {
+    let api = SuspendedInstructionAPI()
+    let model = InstructionsViewModel(api: api)
+    let row = makeInstruction(id: "a")
+    await prime(model, api, [row])
+    let refresh = Task { await model.load() }
+    await api.waitFor(.list(2))
+    let deleting = Task { await model.remove(id: "a") }
+    await api.waitFor(.remove)
+    await api.finishRemove(.success(()))
+    await deleting.value
+    await api.finishList(2, .success([row]))
+    await refresh.value
+    XCTAssertTrue(model.instructions.isEmpty)
+  }
+
+  func testARefreshDuringAFailedRemoveCannotDuplicateTheRollback() async {
+    let api = SuspendedInstructionAPI()
+    let model = InstructionsViewModel(api: api)
+    let rows = [makeInstruction(id: "a"), makeInstruction(id: "b")]
+    await prime(model, api, rows)
+    let refresh = Task { await model.load() }
+    await api.waitFor(.list(2))
+    let deleting = Task { await model.remove(id: "a") }
+    await api.waitFor(.remove)
+    await api.finishList(2, .success(rows))
+    await refresh.value
+    await api.finishRemove(.failure(.api(.offline)))
+    await deleting.value
+    XCTAssertEqual(model.instructions.map(\.id), ["a", "b"])
+    XCTAssertEqual(model.errorMessage, InstructionsViewModel.message(for: .api(.offline)))
+  }
+
+  func testOnlyTheNewestRefreshMayApply() async {
+    let api = SuspendedInstructionAPI()
+    let model = InstructionsViewModel(api: api)
+    let older = Task { await model.load() }
+    await api.waitFor(.list(1))
+    let newer = Task { await model.load() }
+    await api.waitFor(.list(2))
+    await api.finishList(2, .success([makeInstruction(id: "new")]))
+    await newer.value
+    await api.finishList(1, .failure(.api(.offline)))
+    await older.value
+    XCTAssertEqual(model.instructions.map(\.id), ["new"])
+    XCTAssertEqual(model.state, .loaded)
+  }
+
+  func testAFailedAddDuringTheInitialLoadSettlesAndAllowsAFreshRetry() async {
+    for listFinishesFirst in [false, true] {
+      let api = SuspendedInstructionAPI()
+      let model = InstructionsViewModel(api: api)
+      let loading = Task { await model.load() }
+      await api.waitFor(.list(1))
+      model.draft = "Submitted"
+      let saving = Task { await model.add() }
+      await api.waitFor(.add)
+      if listFinishesFirst {
+        await api.finishList(1, .success([]))
+        await loading.value
+      }
+      await api.failAdd(.api(.offline))
+      await saving.value
+      if !listFinishesFirst {
+        await api.finishList(1, .success([]))
+        await loading.value
+      }
+      XCTAssertEqual(model.state, .failed(.api(.offline)))
+      XCTAssertEqual(model.draft, "Submitted")
+      XCTAssertFalse(model.isSaving)
+      let retry = Task { await model.load() }
+      await api.waitFor(.list(2))
+      await api.finishList(2, .success([makeInstruction(id: "known")]))
+      await retry.value
+      XCTAssertEqual(model.state, .loaded)
+      XCTAssertEqual(model.instructions.map(\.id), ["known"])
+    }
+  }
+
+}

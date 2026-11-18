@@ -5357,6 +5357,17 @@ export interface components {
       /** @description ISO 8601 timestamp. */
       createdAt: string;
     };
+    createAssistantInstructionResponse400: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'instruction_limit_reached';
+    };
     /**
      * @example {
      *       "text": "Always lead with anything about invoices."
@@ -16448,7 +16459,7 @@ export interface operations {
           'application/json': components['schemas']['createAssistantInstructionResponse201'];
         };
       };
-      /** @description You already keep as many instructions as allowed (`errorCode: instruction_limit_reached`), or the body is not valid JSON. Nothing is saved. */
+      /** @description You already keep as many instructions as allowed (`errorCode: instruction_limit_reached`), or the body is not valid JSON or the account is unavailable. Nothing is saved. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -16456,7 +16467,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['createAssistantInstructionResponse400'];
         };
       };
       /** @description Missing or invalid JWT. */

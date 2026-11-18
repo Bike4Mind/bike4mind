@@ -1,5 +1,7 @@
 import mongoose, { Schema } from 'mongoose';
-import { ASSISTANT_INSTRUCTION_LIMITS } from '@bike4mind/common';
+import { ASSISTANT_INSTRUCTION_LIMITS, BadRequestError } from '@bike4mind/common';
+import { withTransaction } from '@bike4mind/db-core';
+import { lockRetentionCreator } from '../../utils/organizationRetention';
 
 /**
  * A standing instruction a user keeps for their assistant, read by the brief composer
@@ -27,10 +29,6 @@ export const AssistantInstructionModel =
   (mongoose.models.AssistantInstruction as mongoose.Model<IAssistantInstruction> | undefined) ??
   mongoose.model<IAssistantInstruction>('AssistantInstruction', schema);
 
-// Bounds how long a save ranked within the cap waits for racing saves ranked past it to back off.
-const CAP_SETTLE_ATTEMPTS = 10;
-const CAP_SETTLE_DELAY_MS = 25;
-
 /** Every method is scoped to the owner, so another user's instruction reads as missing. */
 export const assistantInstructionRepository = {
   /** Unlimited on purpose: `createWithinCap` bounds the set, and every counted row must stay visible and deletable. */
@@ -43,29 +41,16 @@ export const assistantInstructionRepository = {
     return created.toObject();
   },
 
-  /**
-   * Saves unless the user already holds `cap` instructions; null when refused. A save keeps its row only after
-   * a post-insert recount sees at most `cap`, so racing saves never leave more. When a race overshoots, the rows
-   * ranked past `cap` back off at once and the rest wait for that, so a race for the last slot still has a winner.
-   */
+  /** Serialize cap admission with other creates and permanent account deletion. Null means the cap is full. */
   async createWithinCap(input: { userId: string; text: string }, cap: number): Promise<IAssistantInstruction | null> {
-    const owned = { userId: input.userId };
-    if ((await AssistantInstructionModel.countDocuments(owned)) >= cap) return null;
-    const created = await AssistantInstructionModel.create(input);
-    for (let attempt = 0; ; attempt++) {
-      if ((await AssistantInstructionModel.countDocuments(owned)) <= cap) return created.toObject();
-      const keepers = await AssistantInstructionModel.find(owned)
-        .sort({ createdAt: 1, _id: 1 })
-        .limit(cap)
-        .select('_id')
-        .lean();
-      const ranked = keepers.some(row => row._id.equals(created._id));
-      if (!ranked || attempt >= CAP_SETTLE_ATTEMPTS) {
-        await AssistantInstructionModel.deleteOne({ _id: created._id });
-        return null;
-      }
-      await new Promise(resolve => setTimeout(resolve, CAP_SETTLE_DELAY_MS));
-    }
+    return withTransaction(async session => {
+      if (!(await lockRetentionCreator(input.userId, session))) throw new BadRequestError('Account unavailable');
+      const userId = input.userId.toLowerCase();
+      if ((await AssistantInstructionModel.countDocuments({ userId }).session(session)) >= cap) return null;
+      const [created] = await AssistantInstructionModel.create([{ ...input, userId }], { session });
+      if (!created) throw new Error('Instruction insert returned no document');
+      return created.toObject();
+    });
   },
 
   /** False when the id is malformed, missing, or belongs to someone else. */

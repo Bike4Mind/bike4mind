@@ -1,3 +1,5 @@
+import { z } from 'zod';
+import { INSTRUCTION_LIMIT_REACHED_ERROR_CODE } from '../../apiErrorCodes';
 import { defineEndpoint } from '../defineEndpoint';
 import {
   AssistantInstructionIdParamSchema,
@@ -6,6 +8,10 @@ import {
   CreateAssistantInstructionRequestSchema,
 } from '../../schemas/assistantInstruction';
 import { ApiErrorSchema } from '../../schemas/chat';
+
+const createInstructionErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal(INSTRUCTION_LIMIT_REACHED_ERROR_CODE).optional(),
+});
 
 const JWT_ONLY_NOTE =
   'Authenticate with a JWT access token of the signed-in user. Instructions are visible only to the user ' +
@@ -54,8 +60,8 @@ export const createAssistantInstructionContract = defineEndpoint({
     400: {
       description:
         'You already keep as many instructions as allowed (`errorCode: instruction_limit_reached`), or the ' +
-        'body is not valid JSON. Nothing is saved.',
-      schema: ApiErrorSchema,
+        'body is not valid JSON or the account is unavailable. Nothing is saved.',
+      schema: createInstructionErrorSchema,
     },
     401: { description: 'Missing or invalid JWT.', schema: ApiErrorSchema },
     422: { description: 'The text is empty, whitespace only, or longer than 280 characters.', schema: ApiErrorSchema },

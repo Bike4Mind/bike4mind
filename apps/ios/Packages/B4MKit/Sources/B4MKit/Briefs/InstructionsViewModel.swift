@@ -13,7 +13,13 @@ public final class InstructionsViewModel {
 
   public private(set) var state: State = .loading
   public private(set) var instructions: [AssistantInstruction] = []
-  public var draft = ""
+  public var draft = "" {
+    didSet { draftRevision &+= 1 }
+  }
+  private var draftRevision = 0
+  private var mutationRevision = 0
+  private var loadRevision = 0
+  private var removingIds: Set<String> = []
   public private(set) var isSaving = false
   /// The last add or remove that failed, for an alert; cleared by the next attempt.
   public var errorMessage: String?
@@ -35,12 +41,20 @@ public final class InstructionsViewModel {
   }
 
   public func load() async {
+    // A pre-write snapshot must never replace an optimistic or committed edit.
+    guard !isSaving, removingIds.isEmpty else { return }
+    loadRevision &+= 1
+    let requestRevision = loadRevision
+    let startingMutationRevision = mutationRevision
     if instructions.isEmpty { state = .loading }
     do {
-      instructions = try await api.list()
+      let loaded = try await api.list()
+      guard requestRevision == loadRevision, startingMutationRevision == mutationRevision else { return }
+      instructions = loaded
       serverSaidFull = false
       state = .loaded
     } catch {
+      guard requestRevision == loadRevision, startingMutationRevision == mutationRevision else { return }
       state = .failed(Self.instructionError(error))
     }
   }
@@ -48,15 +62,22 @@ public final class InstructionsViewModel {
   /// Saves the draft and clears it on success. Invalid or over-cap text never reaches the server.
   public func add() async {
     guard canAdd, let text = AssistantInstruction.validated(draft) else { return }
+    let submittedDraftRevision = draftRevision
     isSaving = true
+    mutationRevision &+= 1
     errorMessage = nil
-    defer { isSaving = false }
+    defer {
+      isSaving = false
+      mutationRevision &+= 1
+    }
     do {
       instructions.append(try await api.add(text: text))
-      draft = ""
+      state = .loaded
+      if draftRevision == submittedDraftRevision { draft = "" }
     } catch {
       let failure = Self.instructionError(error)
       if failure == .limitReached { serverSaidFull = true }
+      if state == .loading, instructions.isEmpty { state = .failed(failure) }
       errorMessage = Self.message(for: failure)
     }
   }
@@ -65,12 +86,20 @@ public final class InstructionsViewModel {
   public func remove(id: String) async {
     guard let index = instructions.firstIndex(where: { $0.id == id }) else { return }
     let removed = instructions.remove(at: index)
+    removingIds.insert(id)
+    mutationRevision &+= 1
+    defer {
+      removingIds.remove(id)
+      mutationRevision &+= 1
+    }
     errorMessage = nil
     do {
       try await api.remove(id: id)
       serverSaidFull = false
     } catch {
-      instructions.insert(removed, at: min(index, instructions.count))
+      if !instructions.contains(where: { $0.id == removed.id }) {
+        instructions.insert(removed, at: min(index, instructions.count))
+      }
       errorMessage = Self.message(for: Self.instructionError(error))
     }
   }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CreateAssistantInstructionRequestSchema } from './assistantInstruction';
+import { createAssistantInstructionContract } from '../api-contract/contracts/assistantInstructions.contract';
 
 describe('CreateAssistantInstructionRequestSchema', () => {
   it('trims the text', () => {
@@ -20,5 +21,14 @@ describe('CreateAssistantInstructionRequestSchema', () => {
     ['missing text', {}],
   ])('rejects %s', (_label, body) => {
     expect(CreateAssistantInstructionRequestSchema.safeParse(body).success).toBe(false);
+  });
+});
+
+describe('createAssistantInstruction error contract', () => {
+  it('retains the cap classifier and accepts a generic bad request without one', () => {
+    const schema = createAssistantInstructionContract.responses[400].schema;
+    const capped = { error: 'Full', errorCode: 'instruction_limit_reached' };
+    expect(schema.parse(capped)).toEqual(capped);
+    expect(schema.parse({ error: 'Account unavailable' })).toEqual({ error: 'Account unavailable' });
   });
 });
