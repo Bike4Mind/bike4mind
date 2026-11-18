@@ -163,7 +163,7 @@ export default function HeldGrantActions() {
   };
 
   return (
-    <Stack gap={ADMIN_REGION_GAP} data-testid="held-signup-grants-tab">
+    <Stack gap={ADMIN_REGION_GAP} data-testid="held-grant-actions">
       <AdminPageHeader
         level="section"
         title="Held signup grants"
@@ -287,7 +287,7 @@ export default function HeldGrantActions() {
         getRowId={row => row.id}
         label="Held signup grants"
         minWidth="40rem"
-        testId="held-signup-grants-table"
+        testId="held-grant-actionsle"
         loading={query.isPending}
         error={query.error ? getErrorMessage(query.error) : undefined}
         onRetry={() => {
