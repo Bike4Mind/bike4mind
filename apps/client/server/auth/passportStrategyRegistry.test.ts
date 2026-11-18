@@ -11,6 +11,13 @@ describe('isPassportStrategyRegistered', () => {
     expect(isPassportStrategyRegistered(authenticator, 'apple')).toBe(false);
   });
 
+  it('does not report names inherited from Object.prototype', () => {
+    const authenticator = new passport.Authenticator();
+
+    expect(isPassportStrategyRegistered(authenticator, 'constructor')).toBe(false);
+    expect(isPassportStrategyRegistered(authenticator, 'toString')).toBe(false);
+  });
+
   it('throws when the authenticator exposes no strategy lookup', () => {
     const bare = {};
 

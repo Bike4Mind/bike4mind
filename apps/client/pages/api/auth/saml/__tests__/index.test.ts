@@ -73,6 +73,17 @@ describe('GET /api/auth/saml', () => {
     expect(errorSpy).not.toHaveBeenCalled();
   });
 
+  it('logs a failed IdP lookup at error and redirects to the login page', async () => {
+    h.findByIdWithSecrets.mockRejectedValue(new Error('db down'));
+
+    const { done, res } = run({ idp: 'idp-1' });
+    await done;
+
+    expect(errorSpy).toHaveBeenCalledWith('SAML identity provider lookup failed:', expect.any(Error));
+    expect(res._getRedirectUrl()).toBe('/login?error=saml_setup_failed');
+    expect(h.authenticate).not.toHaveBeenCalled();
+  });
+
   it('starts the SAML flow for an active SAML IdP', async () => {
     h.findByIdWithSecrets.mockResolvedValue({ id: 'idp-1', isActive: true, type: 'saml', samlConfig: {} });
 

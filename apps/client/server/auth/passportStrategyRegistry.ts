@@ -23,5 +23,7 @@ export function isPassportStrategyRegistered(authenticator: unknown, name: strin
   if (!hasStrategyLookup(authenticator)) {
     throw new Error('passport authenticator exposes no strategy lookup');
   }
-  return authenticator._strategy(name) !== undefined;
+  // passport keeps strategies in a plain object, so an inherited key like 'constructor' is not a strategy.
+  const strategy = authenticator._strategy(name) as { authenticate?: unknown } | undefined;
+  return typeof strategy?.authenticate === 'function';
 }
