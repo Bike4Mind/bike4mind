@@ -86,16 +86,24 @@ fun BriefScreen(graph: AppGraph, briefId: String?, onBack: () -> Unit, onOpenSes
                     tag = "brief-empty",
                     actionTag = "brief-compose-btn",
                 )
-                else -> BriefContent(brief, state, onCompose = controller::compose, onOpenSession = onOpenSession)
+                else -> BriefContent(brief, state, onCompose = controller::compose, onLoad = controller::load, onOpenSession = onOpenSession)
             }
         }
     }
 }
 
 @Composable
-private fun BriefContent(brief: Brief, state: BriefState, onCompose: () -> Unit, onOpenSession: (String) -> Unit) {
+private fun BriefContent(brief: Brief, state: BriefState, onCompose: () -> Unit, onLoad: () -> Unit, onOpenSession: (String) -> Unit) {
     when (brief.status) {
-        BriefStatus.COMPOSING -> if (state.composeTimedOut) {
+        BriefStatus.COMPOSING -> if (state.error != null) {
+            Message(
+                title = "Couldn't load the brief",
+                body = state.error,
+                action = "Try again" to onLoad,
+                tag = "brief-error",
+                actionTag = "brief-retry-btn",
+            )
+        } else if (state.composeTimedOut) {
             Message(
                 title = "Still working on it",
                 body = "This is taking longer than usual. Refresh to check again.",

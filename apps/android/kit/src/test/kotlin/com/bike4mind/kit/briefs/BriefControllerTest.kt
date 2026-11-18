@@ -6,6 +6,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -18,6 +22,9 @@ class BriefControllerTest {
         var composed: Brief? = null
         var failure: Exception? = null
         var composeCalls = 0
+        var responseDelayMillis = 0L
+        var neverRespond = false
+        var cancelledReads = 0
         val fetchedIds = mutableListOf<String>()
 
         override suspend fun compose(): Brief {
@@ -33,9 +40,16 @@ class BriefControllerTest {
 
         override suspend fun brief(id: String): Brief {
             fetchedIds += id
-            failure?.let { throw it }
-            val queue = byId.getValue(id)
-            return if (queue.size > 1) queue.removeFirst() else queue.first()
+            return try {
+                delay(responseDelayMillis)
+                if (neverRespond) awaitCancellation()
+                failure?.let { throw it }
+                val queue = byId.getValue(id)
+                if (queue.size > 1) queue.removeFirst() else queue.first()
+            } catch (cancelled: CancellationException) {
+                cancelledReads++
+                throw cancelled
+            }
         }
     }
 
@@ -111,12 +125,12 @@ class BriefControllerTest {
         val controller = controller(api)
 
         controller.compose()
-        // Five polls of 2s fit the 10s window; backgroundScope work only moves with explicit time.
+        // Four polls finish before the 10s deadline; no request starts at the deadline.
         advanceTimeBy(10_001)
 
         assertTrue(controller.state.value.composeTimedOut)
         assertFalse(controller.state.value.composing)
-        assertEquals(5, api.fetchedIds.size)
+        assertEquals(4, api.fetchedIds.size)
     }
 
     @Test
@@ -161,4 +175,103 @@ class BriefControllerTest {
         assertNull(controller.state.value.brief)
         assertEquals("This brief is no longer available.", controller.state.value.error)
     }
+    @Test
+    fun aSlowPollCannotExtendTheWholePollingDeadline() = runTest {
+        val api = FakeApi().apply {
+            composed = brief("b2", BriefStatus.COMPOSING)
+            byId["b2"] = ArrayDeque(listOf(brief("b2", BriefStatus.COMPOSING)))
+            responseDelayMillis = 3_000
+        }
+        val controller = controller(api)
+        controller.compose()
+        advanceTimeBy(10_001)
+
+        assertTrue(controller.state.value.composeTimedOut)
+        assertFalse(controller.state.value.composing)
+        assertEquals(2, api.fetchedIds.size)
+        assertEquals(1, api.cancelledReads)
+    }
+
+    @Test
+    fun aHungPollIsCancelledAtTheWholePollingDeadline() = runTest {
+        val api = FakeApi().apply {
+            composed = brief("b2", BriefStatus.COMPOSING)
+            neverRespond = true
+        }
+        val controller = controller(api)
+        controller.compose()
+        advanceTimeBy(10_001)
+
+        assertTrue(controller.state.value.composeTimedOut)
+        assertFalse(controller.state.value.composing)
+        assertEquals(listOf("b2"), api.fetchedIds)
+        assertEquals(1, api.cancelledReads)
+    }
+
+    @Test
+    fun leavingTheScreenCancelsTheReadWithoutClaimingADeadlineFailure() = runTest {
+        val api = FakeApi().apply {
+            composed = brief("b2", BriefStatus.COMPOSING)
+            neverRespond = true
+        }
+        val controller = controller(api)
+        controller.compose()
+        advanceTimeBy(2_001)
+        backgroundScope.cancel()
+        runCurrent()
+        advanceTimeBy(10_000)
+
+        assertEquals(1, api.cancelledReads)
+        assertFalse(controller.state.value.composeTimedOut)
+    }
+
+    @Test
+    fun aFailedComposingPollCanReloadTheExistingBriefWithoutComposingAgain() = runTest {
+        val api = FakeApi().apply { byId["b1"] = ArrayDeque(listOf(brief("b1", BriefStatus.COMPOSING))) }
+        val controller = controller(api, briefId = "b1")
+        controller.load()
+        runCurrent()
+        api.failure = ApiException(500)
+        advanceTimeBy(2_001)
+
+        assertEquals(BriefStatus.COMPOSING, controller.state.value.brief?.status)
+        assertEquals("The server could not load the brief (HTTP 500).", controller.state.value.error)
+        assertFalse(controller.state.value.composing)
+        api.failure = null
+        api.byId["b1"] = ArrayDeque(listOf(brief("b1", BriefStatus.READY)))
+        controller.load()
+        runCurrent()
+
+        assertEquals(BriefStatus.READY, controller.state.value.brief?.status)
+        assertNull(controller.state.value.error)
+        assertEquals(0, api.composeCalls)
+    }
+
+    @Test
+    fun retryingAManuallyComposedBriefDoesNotSwitchToAnOlderReadyBrief() = runTest {
+        val api = FakeApi().apply {
+            composed = brief("b2", BriefStatus.COMPOSING)
+            listed = listOf(brief("b2", BriefStatus.COMPOSING), brief("b1", BriefStatus.READY))
+            byId["b2"] = ArrayDeque(listOf(brief("b2", BriefStatus.COMPOSING)))
+        }
+        val controller = controller(api)
+        controller.compose()
+        runCurrent()
+        api.failure = ApiException(500)
+        advanceTimeBy(2_001)
+        assertEquals("b2", controller.state.value.brief?.id)
+        assertTrue(controller.state.value.error != null)
+
+        api.failure = null
+        api.byId["b2"] = ArrayDeque(listOf(brief("b2", BriefStatus.READY)))
+        controller.load()
+        runCurrent()
+
+        assertEquals("b2", controller.state.value.brief?.id)
+        assertEquals(BriefStatus.READY, controller.state.value.brief?.status)
+        assertNull(controller.state.value.error)
+        assertEquals(listOf("b2", "b2"), api.fetchedIds)
+        assertEquals(1, api.composeCalls)
+    }
+
 }

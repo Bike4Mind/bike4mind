@@ -75,6 +75,12 @@ Needs a server with the briefs API (`/api/v1/briefs`) and a user with some recen
 - [ ] "Brief" on the chats list opens the latest brief, or "No brief yet" with "Compose a brief".
 - [ ] "Compose a brief" shows "Putting your brief together", then the brief (usually under a minute); "Refresh" after
       "Still working on it" picks it up once it is ready.
+- [ ] A slow or hung polling request stops at the 90-second polling deadline, including time spent waiting for HTTP;
+      leaving the screen cancels the request without showing a timeout on another screen.
+- [ ] After composing a new brief while an older ready one exists, fail a polling GET: the error offers "Try again".
+      Restoring connectivity and retrying fetches the new brief by ID, without another compose POST or showing the older one.
+- [ ] Tap a brief push while signed out, then rotate/recreate the Activity before completing sign-in: the pending brief
+      opens afterward. Rotate again after consuming it: returning to chats must not replay the old launch intent.
 - [ ] A ready brief lists "What needs you" first, then "Handled" and "What happened"; empty sections are hidden.
 - [ ] A decision with "Open approval" opens that chat, where the existing approval card answers it.
 - [ ] Tapping a `brief_ready` push opens that brief: from the system tray with the app backgrounded, from a cold start,

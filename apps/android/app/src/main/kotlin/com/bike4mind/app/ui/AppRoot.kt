@@ -13,6 +13,7 @@ import com.bike4mind.app.AppGraph
 import com.bike4mind.app.B4MApplication
 import com.bike4mind.kit.push.NotificationRoute
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Which screen is up. The upgrade screen covers everything while the server refuses this build; the session
@@ -22,7 +23,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 fun AppRoot(
     app: B4MApplication,
     signInError: MutableStateFlow<String?>,
-    pushRoute: MutableStateFlow<NotificationRoute?>,
+    pushRoute: StateFlow<NotificationRoute?>,
+    onPushRouteConsumed: (NotificationRoute) -> Unit,
     onSignedIn: () -> Unit = {},
 ) {
     val graph = app.graph.collectAsStateWithLifecycle().value ?: return
@@ -51,16 +53,16 @@ fun AppRoot(
     }
 
     // A tapped push waits here through sign-in, then replaces whatever screen was up.
-    LaunchedEffect(graph, signedIn, pendingRoute) {
+    LaunchedEffect(graph, restored, signedIn, pendingRoute) {
         val route = pendingRoute ?: return@LaunchedEffect
-        if (!signedIn) return@LaunchedEffect
+        if (!restored || !signedIn) return@LaunchedEffect
         when (route) {
             is NotificationRoute.Brief -> {
                 openChat = null
                 openBrief = route.briefId
             }
         }
-        pushRoute.value = null
+        onPushRouteConsumed(route)
     }
 
     // The upgrade screen leaves the current screen's view models alone, so the user returns to them intact.

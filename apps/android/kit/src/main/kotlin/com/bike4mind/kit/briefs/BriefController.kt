@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class BriefState(
     /** True until the first load settles. */
@@ -35,12 +36,16 @@ class BriefController(
     private val briefId: String?,
     private val scope: CoroutineScope,
     private val pollIntervalMillis: Long = 2_000,
-    pollWindowMillis: Long = 90_000,
+    private val pollWindowMillis: Long = 90_000,
 ) {
     private val mutableState = MutableStateFlow(BriefState())
     val state: StateFlow<BriefState> = mutableState.asStateFlow()
 
-    private val maxPolls = (pollWindowMillis / pollIntervalMillis).toInt().coerceAtLeast(1)
+    init {
+        require(pollIntervalMillis > 0) { "pollIntervalMillis must be positive" }
+        require(pollWindowMillis > 0) { "pollWindowMillis must be positive" }
+    }
+
     private var job: Job? = null
 
     fun load() = launchExclusive {
@@ -65,9 +70,11 @@ class BriefController(
     }
 
     private suspend fun fetch() {
+        // A retry/refresh keeps the in-progress brief, even if an older ready one is listed.
+        val requestedId = briefId ?: state.value.brief?.takeIf { it.status == BriefStatus.COMPOSING }?.id
         val brief = attempt {
-            if (briefId != null) {
-                api.brief(briefId)
+            if (requestedId != null) {
+                api.brief(requestedId)
             } else {
                 val briefs = api.list()
                 briefs.firstOrNull { it.status == BriefStatus.READY } ?: briefs.firstOrNull() ?: NONE
@@ -82,17 +89,16 @@ class BriefController(
             return
         }
         mutableState.update { it.copy(composing = true, composeTimedOut = false) }
-        repeat(maxPolls) {
-            delay(pollIntervalMillis)
-            val id = state.value.brief?.id ?: return
-            val current = attempt { api.brief(id) } ?: return
-            mutableState.update { it.copy(brief = current) }
-            if (current.status != BriefStatus.COMPOSING) {
-                mutableState.update { it.copy(composing = false) }
-                return
+        // One deadline includes both the intervals and every suspended HTTP read.
+        val completed = withTimeoutOrNull(pollWindowMillis) {
+            while (state.value.brief?.status == BriefStatus.COMPOSING) {
+                delay(pollIntervalMillis)
+                val id = state.value.brief?.id ?: return@withTimeoutOrNull
+                val current = attempt { api.brief(id) } ?: return@withTimeoutOrNull
+                mutableState.update { it.copy(brief = current) }
             }
         }
-        mutableState.update { it.copy(composing = false, composeTimedOut = true) }
+        mutableState.update { it.copy(composing = false, composeTimedOut = completed == null) }
     }
 
     /** Runs [call]; on failure records the error, ends any compose in flight and returns null. */
