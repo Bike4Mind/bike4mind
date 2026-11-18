@@ -52,6 +52,7 @@ describe('artifact views', () => {
     expect(withTitle('<p>x</p>', '<b>&</b>')).toBe('<title>&lt;b&gt;&amp;&lt;/b&gt;</title><p>x</p>');
     expect(withTitle('<p>x</p>', '  ')).toBe('<title>Artifact</title><p>x</p>');
   });
+
   it('serves new content behind a url it handed out, and refuses any other url', async () => {
     const registry = new ArtifactViewRegistry();
     const url = registry.add('Chart', '<p>v1</p>');

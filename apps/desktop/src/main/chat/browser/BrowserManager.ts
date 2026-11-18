@@ -866,7 +866,8 @@ export class BrowserManager implements BrowserProvider {
    * matched by the model's identifier. Each tab reloads where it is: none is opened, activated or
    * focused, and an artifact no tab is showing is left alone.
    *
-   * HTML only: it is the one type a tab is opened on as the artifact's raw content.
+   * HTML only: every other type reaches a tab wrapped by the renderer's paneDocument, which main
+   * does not rebuild, so a tab opened on one from the Artifacts menu keeps its version.
    */
   refreshArtifacts(sessionId: string, artifacts: readonly ChatArtifact[]): void {
     const tabs = this.sessions.get(sessionId)?.list ?? [];
