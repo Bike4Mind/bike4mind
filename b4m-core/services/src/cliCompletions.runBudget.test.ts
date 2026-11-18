@@ -6,7 +6,7 @@ import {
 } from '@bike4mind/common';
 
 // A run budget is enforced through the creditHolds adapter: each completion claims what its first round
-// can cost, is capped to that claim, and settles inside it. The adapter double below claims from one
+// can cost and is capped to that claim; a cost past it (an estimate miss) is still charged and committed. The adapter double below claims from one
 // shared in-memory run synchronously, the way CompletionRunRepository.claimBudget's compare-and-set does.
 vi.mock('./llm/modelAdmission', async importOriginal => ({
   ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
@@ -67,6 +67,7 @@ function budgetedRun(budgetCredits: number | undefined) {
   const claims: number[] = [];
   const topUps: number[] = [];
   const settlements: number[] = [];
+  const overruns: number[] = [];
   const holds = (): Required<CompletionCreditHolds> => {
     let claim: number | undefined;
     return {
@@ -91,7 +92,10 @@ function budgetedRun(budgetCredits: number | undefined) {
       async settle(_chargedCredits, settle) {
         const recordedCredits = await settle();
         settlements.push(recordedCredits);
-        if (claim !== undefined) run.committedCredits += recordedCredits - claim;
+        if (claim !== undefined) {
+          run.committedCredits += recordedCredits - claim;
+          overruns.push(Math.max(0, recordedCredits - claim));
+        }
         return true;
       },
       async topUpRunClaim({ wantedCredits, minimumCredits }) {
@@ -105,7 +109,7 @@ function budgetedRun(budgetCredits: number | undefined) {
       },
     };
   };
-  return { run, claims, topUps, settlements, holds };
+  return { run, claims, topUps, settlements, overruns, holds };
 }
 
 function buildDb() {
@@ -173,8 +177,9 @@ describe('executeCompletion - shared run budget', () => {
   /**
    * The documented exposure scenario: a root and four workers start at once against a budget that
    * covers two and a half full answers, and every provider call overruns its estimates. Admission hands
-   * out claims that never sum past the budget, each completion is capped to its claim, and settlement
-   * never charges past it, so the run's final spend is at most its budget: the in-flight overrun bound is zero.
+   * out claims that never sum past the budget and each completion is capped to its claim. An estimate miss
+   * is charged rather than dropped, so the run can end past its budget by at most each admitted completion's
+   * own miss.
    */
   it('keeps the final spend of concurrent root and worker completions within the budget', async () => {
     const probe = budgetedRun(1_000_000);
@@ -200,23 +205,39 @@ describe('executeCompletion - shared run budget', () => {
 
     const claimed = wallet.claims.reduce((sum, credits) => sum + credits, 0);
     const charged = wallet.settlements.reduce((sum, credits) => sum + credits, 0);
+    const overrun = wallet.overruns.reduce((sum, credits) => sum + credits, 0);
     expect(claimed).toBeLessThanOrEqual(budgetCredits);
-    expect(charged).toBeLessThanOrEqual(budgetCredits);
+    expect(charged).toBeLessThanOrEqual(budgetCredits + overrun);
     // Every claim was released into exactly what settled: no reservation is left behind.
     expect(wallet.run.committedCredits).toBe(charged);
   });
 
-  it('caps each completion to its claim, so an overrun past the estimate is charged at most the claim', async () => {
+  it('charges a cost past the claim to the balance and commits it to the run', async () => {
     const wallet = budgetedRun(10_000);
-    const { db } = buildDb();
+    const { db, user } = buildDb();
 
     await send(db, wallet.holds(), attribution('root'));
 
     const [claim] = wallet.claims;
     const [charged] = wallet.settlements;
-    expect(charged).toBeGreaterThan(0);
-    expect(charged).toBeLessThanOrEqual(claim);
+    expect(charged).toBeGreaterThan(claim);
+    expect(BALANCE - user.currentCredits).toBe(charged);
     expect(wallet.run.committedCredits).toBe(charged);
+  });
+
+  it('refuses the next completion once an overrun has used up the run budget', async () => {
+    const probe = budgetedRun(1_000_000);
+    await send(buildDb().db, probe.holds(), attribution('root'));
+    const wallet = budgetedRun(probe.claims[0]);
+    const { db } = buildDb();
+
+    await send(db, wallet.holds(), attribution('root'));
+    expect(wallet.run.committedCredits).toBeGreaterThan(probe.claims[0]);
+
+    await expect(send(db, wallet.holds(), attribution('worker', 'late'))).rejects.toMatchObject({
+      additionalInfo: { errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE },
+    });
+    expect(complete).toHaveBeenCalledTimes(2);
   });
 
   it('admits a smaller answer from what is left instead of refusing outright', async () => {
@@ -229,7 +250,7 @@ describe('executeCompletion - shared run budget', () => {
 
     expect(tight.claims[0]).toBe(Math.floor(fullClaim / 2));
     expect(complete.mock.calls[1][2].outputTokenCeiling).toBeLessThan(complete.mock.calls[0][2].outputTokenCeiling);
-    expect(tight.settlements[0]).toBeLessThanOrEqual(tight.claims[0]);
+    expect(tight.run.committedCredits).toBe(tight.settlements[0]);
   });
 
   it('refuses before any debit or provider call when the run cannot cover a short answer', async () => {

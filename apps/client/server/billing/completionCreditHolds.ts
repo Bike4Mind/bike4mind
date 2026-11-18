@@ -28,7 +28,8 @@ export function runBudgetExhaustedMessage(budgetCredits: number, committedCredit
 /**
  * One instance per completion; inference always runs outside the billing transactions. A completion
  * attributed to a budgeted run claims its run budget in the same transaction as its balance hold, tops
- * that claim up before each tool round, and every terminal outcome of the hold (settle, refund, expired-hold sweep) releases that claim with it.
+ * that claim up before each tool round, and every terminal outcome of the hold (settle, refund,
+ * expired-hold sweep) releases that claim with it.
  */
 export function createCompletionCreditHolds(logger: Logger, apiKeyId?: string): CompletionCreditHolds {
   let pending: PendingCreditHold | undefined;
@@ -83,11 +84,13 @@ export function createCompletionCreditHolds(logger: Logger, apiKeyId?: string): 
       for (let attempt = 1; attempt <= SETTLEMENT_ATTEMPTS; attempt++) {
         try {
           const settled = await withTransaction(async () => {
-            if (!(await pendingCreditHoldRepository.markSettled(holdId, chargedCredits))) {
+            const settledHold = await pendingCreditHoldRepository.markSettledAndRead(holdId, chargedCredits);
+            if (!settledHold) {
               return (await pendingCreditHoldRepository.findSettlement(holdId)) !== null;
             }
             const recordedCredits = await settle();
-            if (pending?.runClaim) await completionRunRepository.releaseClaim(pending.runClaim, recordedCredits);
+            // The stored claim, not `pending`: a top-up can commit even when its acknowledgement was lost.
+            if (settledHold.runClaim) await completionRunRepository.releaseClaim(settledHold.runClaim, recordedCredits);
             return true;
           });
           if (!settled) {

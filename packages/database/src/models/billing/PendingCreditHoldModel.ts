@@ -98,6 +98,21 @@ export class PendingCreditHoldRepository {
     return result.modifiedCount === 1;
   }
 
+  /**
+   * markSettled that also resolves to the hold as stored, or null once it has settled or been released.
+   * Its `runClaim` counts every committed top-up, even one whose acknowledgement the caller never saw.
+   */
+  async markSettledAndRead(id: string, settledCredits: number): Promise<PendingCreditHold | null> {
+    const doc = await this.model
+      .findOneAndUpdate(
+        { _id: id, settledAt: { $exists: false } },
+        { $set: { settledAt: new Date(), settledCredits } },
+        { new: true }
+      )
+      .lean<PendingCreditHoldDocument>();
+    return doc ? toPendingCreditHold(doc) : null;
+  }
+
   /** Grows an outstanding hold's run claim; false once the hold has settled or been released. */
   async addRunClaimCredits(id: string, credits: number): Promise<boolean> {
     const result = await this.model.updateOne(

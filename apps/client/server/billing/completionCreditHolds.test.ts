@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   record,
   claim,
-  markSettled,
+  markSettledAndRead,
   findSettlement,
   transaction,
   findUser,
@@ -23,12 +23,12 @@ const {
   assertSpendCap: vi.fn(),
   record: vi.fn(),
   claim: vi.fn(),
-  markSettled: vi.fn(),
+  markSettledAndRead: vi.fn(),
   findSettlement: vi.fn(),
   transaction: vi.fn(async <T>(callback: () => Promise<T>): Promise<T> => callback()),
 }));
 vi.mock('@bike4mind/database', () => ({
-  pendingCreditHoldRepository: { record, claim, markSettled, findSettlement, addRunClaimCredits },
+  pendingCreditHoldRepository: { record, claim, markSettledAndRead, findSettlement, addRunClaimCredits },
   completionRunRepository: { claimBudget, releaseClaim },
   withTransaction: transaction,
   userRepository: { findById: findUser },
@@ -47,12 +47,23 @@ const hold = {
   reservedCredits: 30,
 };
 
+// The hold as the repository stores it: what record() wrote, grown by every top-up it accepted.
+const storedHold = async () => {
+  const recorded = await record.mock.results.at(-1)?.value;
+  if (!recorded?.runClaim) return recorded ?? null;
+  let added = 0;
+  for (const [index, [, credits]] of addRunClaimCredits.mock.calls.entries()) {
+    if (await addRunClaimCredits.mock.results[index]?.value) added += credits;
+  }
+  return { ...recorded, runClaim: { ...recorded.runClaim, credits: recorded.runClaim.credits + added } };
+};
+
 beforeEach(() => {
   vi.resetAllMocks();
   vi.spyOn(console, 'info').mockImplementation(() => {});
   transaction.mockImplementation(async callback => callback());
   record.mockResolvedValue({ ...hold, id: 'pending', balanceAfterHold: 70 });
-  markSettled.mockResolvedValue(true);
+  markSettledAndRead.mockImplementation(storedHold);
   findSettlement.mockResolvedValue(null);
   findUser.mockResolvedValue({ id: 'user' });
   assertSpendCap.mockResolvedValue(undefined);
@@ -122,13 +133,13 @@ describe('completion settlement commit recovery', () => {
     const settle = vi.fn(async () => 10);
     expect(await lifecycle.settle(chargedCredits, settle)).toBe(true);
     expect(settle).toHaveBeenCalledTimes(1);
-    expect(markSettled).toHaveBeenCalledTimes(1);
+    expect(markSettledAndRead).toHaveBeenCalledTimes(1);
   });
 
   it('does not rerun settlement when a receipt already exists', async () => {
     const lifecycle = createCompletionCreditHolds(new Logger({ metadata: { test: 'hold receipt' } }));
     await lifecycle.reserve(hold, async () => ({ id: 'user', currentCredits: 70 }));
-    markSettled.mockResolvedValue(false);
+    markSettledAndRead.mockResolvedValue(null);
     findSettlement.mockResolvedValue(10);
     const settle = vi.fn(async () => 10);
     expect(await lifecycle.settle(10, settle)).toBe(true);
@@ -144,7 +155,7 @@ describe('completion settlement commit recovery', () => {
   it('counts a missing-hold settlement once, outside transaction retries', async () => {
     const lifecycle = createCompletionCreditHolds(new Logger());
     await lifecycle.reserve(hold, async () => ({ id: 'user', currentCredits: 70 }));
-    markSettled.mockResolvedValue(false);
+    markSettledAndRead.mockResolvedValue(null);
     transaction.mockImplementationOnce(async callback => {
       await callback();
       return callback();
@@ -237,7 +248,7 @@ describe('run budget claims', () => {
     record.mockResolvedValue(pendingWithClaim(90));
     const lifecycle = createCompletionCreditHolds(logger);
     await lifecycle.reserve(hold, async () => ({ id: 'user', currentCredits: 70 }), runClaim);
-    markSettled.mockResolvedValue(false);
+    markSettledAndRead.mockResolvedValue(null);
     findSettlement.mockResolvedValue(35);
 
     expect(await lifecycle.settle(35, vi.fn())).toBe(true);
@@ -275,6 +286,23 @@ describe('run budget claims', () => {
       expect(claimBudget).toHaveBeenLastCalledWith('run-1', 60, 10);
       expect(addRunClaimCredits).toHaveBeenCalledExactlyOnceWith('pending', 40);
 
+      await lifecycle.settle(
+        100,
+        vi.fn(async () => 100)
+      );
+      expect(releaseClaim).toHaveBeenCalledExactlyOnceWith({ runId: 'run-1', credits: 130 }, 100);
+    });
+
+    it('releases the stored claim when a top-up committed but its acknowledgement was lost', async () => {
+      const lifecycle = await reserveWithClaim();
+      claimBudget.mockResolvedValue({ kind: 'claimed', credits: 40 });
+      addRunClaimCredits.mockResolvedValue(true);
+      transaction.mockImplementationOnce(async callback => {
+        await callback();
+        throw new Error('commit acknowledgement lost');
+      });
+
+      expect(await lifecycle.topUpRunClaim!({ wantedCredits: 60, minimumCredits: 10 })).toBe(0);
       await lifecycle.settle(
         100,
         vi.fn(async () => 100)

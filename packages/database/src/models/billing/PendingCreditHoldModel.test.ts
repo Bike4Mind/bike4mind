@@ -70,6 +70,21 @@ describe('PendingCreditHoldModel', () => {
     });
   });
 
+  it('settles a hold once and hands back its stored run claim, top-ups included', async () => {
+    const { id } = await pendingCreditHoldRepository.record(hold, 'platform-key completion', minutes(60), {
+      runId: 'run-1',
+      credits: 40,
+    });
+    await pendingCreditHoldRepository.addRunClaimCredits(id, 25);
+
+    await expect(pendingCreditHoldRepository.markSettledAndRead(id, 30)).resolves.toMatchObject({
+      runClaim: { runId: 'run-1', credits: 65 },
+      settledCredits: 30,
+    });
+    expect(await pendingCreditHoldRepository.markSettledAndRead(id, 30)).toBeNull();
+    expect(await pendingCreditHoldRepository.findSettlement(id)).toBe(30);
+  });
+
   it('lets exactly one caller claim a hold', async () => {
     const { id } = await pendingCreditHoldRepository.record(hold, 'embeddings', minutes(60));
 

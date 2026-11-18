@@ -1176,7 +1176,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // The hold above is a realistic estimate, not a bound: an answer may run to maxTokens (or past
     // it, where an adapter raises the budget for thinking). Cap the round at what this holder can
     // actually pay - its remaining balance plus its own hold - and, in a budgeted run, at its run
-    // claim, so settlement can neither overdraw nor charge the run past what it admitted.
+    // claim, so settlement does not overdraw and a run overruns its budget only by an estimate miss.
     roundBudgetFor = (roundMessages, availableCredits) => {
       const toolTokens = estimateToolTokens(completionOptions.tools ?? [], toolSearch);
       const inputTokens = estimateInputTokens(roundMessages) + toolTokens;
@@ -1591,11 +1591,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         const balance = (await fetchHolder())?.currentCredits ?? 0;
         chargedCredits = Math.min(finalCredits, reservedCredits + Math.max(0, balance));
       }
-      // A budgeted run is never charged past what it admitted. Every round was capped at the claim, so
-      // a cost past it is an estimate miss; unlike the floor above it goes uncollected even when the
-      // balance could pay, because collecting it would let the run settle past its budget.
-      const runCeiling = runCredits ?? Number.POSITIVE_INFINITY;
-      chargedCredits = Math.min(chargedCredits, runCeiling);
+      // A budgeted run's claim does not cap the charge. Every round was capped at the claim, so a cost
+      // past it is an estimate miss; it is charged to the balance like any other, and settlement commits
+      // it to the run, which then refuses later claims. A run overruns by at most one miss per completion.
 
       let ledgerWritten = false;
       // settle() can be retried, so each attempt starts from the cap rather than a previous attempt's charge.
@@ -1721,18 +1719,18 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         ? await params.creditHolds.settle(chargedCredits, settle)
         : (await settle(), true);
       settlementCommitted = settled && ledgerWritten;
-      if (finalCredits > runCeiling) {
-        logger?.warn?.('[CLI_CREDITS] Completion cost more than its run budget claim - charged the claim', {
+      if (runCredits !== undefined && chargedCredits > runCredits) {
+        logger?.warn?.('[CLI_CREDITS] Completion cost more than its run budget claim - charged past the run budget', {
           userId,
           holderId,
           model,
           runId: runLineage?.runId,
-          claimed: runCeiling,
-          actual: finalCredits,
-          uncollectedCredits: finalCredits - runCeiling,
+          claimed: runCredits,
+          charged: chargedCredits,
+          overrunCredits: chargedCredits - runCredits,
         });
       }
-      if (chargedCredits < Math.min(finalCredits, runCeiling)) {
+      if (chargedCredits < finalCredits) {
         // Message text is matched by the overdraft metric filter in infra/llmSpend.ts.
         logger?.error?.('[CLI_CREDITS] ALERT: Completion cost more than the balance could pay - charged down to zero', {
           userId,

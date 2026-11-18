@@ -142,8 +142,8 @@ export class CompletionRunRepository {
   }
 
   /**
-   * Moves `committedCredits` by `deltaCredits`, the unused part of a claim being released (never positive
-   * in practice, since settlement caps a charge at its claim). Never refused.
+   * Moves `committedCredits` by `deltaCredits`: negative for the unused part of a claim being released,
+   * positive when a completion's charge overran its claim (an estimate miss). Never refused.
    */
   async adjustCommitted(runId: string, deltaCredits: number): Promise<void> {
     if (deltaCredits === 0) return;
