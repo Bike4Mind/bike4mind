@@ -63,7 +63,11 @@ export function createThemedMount(mode: 'light' | 'dark' = 'light') {
         root = createRoot(host);
       }
       await act(async () => {
-        root?.render(<CssVarsProvider theme={desktopTheme} defaultMode={mode}>{node}</CssVarsProvider>);
+        root?.render(
+          <CssVarsProvider theme={desktopTheme} defaultMode={mode}>
+            {node}
+          </CssVarsProvider>
+        );
       });
     },
     unmount() {

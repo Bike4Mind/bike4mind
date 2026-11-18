@@ -15,7 +15,12 @@ const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 export const modManifestSchema = z
   .strictObject({
     manifest: z.literal(1),
-    id: z.string().regex(MOD_ID_PATTERN, 'must be 2-63 lowercase letters, digits or dashes, contain a letter and not start with 0x'),
+    id: z
+      .string()
+      .regex(
+        MOD_ID_PATTERN,
+        'must be 2-63 lowercase letters, digits or dashes, contain a letter and not start with 0x'
+      ),
     name: z.string().min(1).max(60),
     version: z.string().regex(SEMVER, 'must be a semantic version like 1.0.0'),
     kind: z.enum(['skin', 'layout', 'view']),

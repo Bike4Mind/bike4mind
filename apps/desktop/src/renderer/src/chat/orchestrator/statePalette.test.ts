@@ -92,8 +92,14 @@ describe('mergeSkinTheme', () => {
 
     expect(skinCssVariables(dark, 'light')).not.toHaveProperty('--b4m-skin-stage');
     expect(skinCssVariables(dark, 'light')).not.toHaveProperty('--b4m-skin-card');
-    expect(skinCssVariables(dark, 'dark')).toMatchObject({ '--b4m-skin-stage': '#0f1a24', '--b4m-skin-card': '#16263a' });
-    expect(skinCssVariables(light, 'light')).toMatchObject({ '--b4m-skin-stage': '#f4efe6', '--b4m-skin-card': '#fbf8f2' });
+    expect(skinCssVariables(dark, 'dark')).toMatchObject({
+      '--b4m-skin-stage': '#0f1a24',
+      '--b4m-skin-card': '#16263a',
+    });
+    expect(skinCssVariables(light, 'light')).toMatchObject({
+      '--b4m-skin-stage': '#f4efe6',
+      '--b4m-skin-card': '#fbf8f2',
+    });
     expect(skinCssVariables(light, 'dark')).not.toHaveProperty('--b4m-skin-stage');
   });
 
