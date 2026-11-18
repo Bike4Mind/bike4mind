@@ -140,6 +140,12 @@ export type CompletionCreditHolds = {
    * floored debit found a concurrent spend had drained the balance. A run claim is released against it.
    */
   settle(chargedCredits: number, settle: () => Promise<number>): Promise<boolean>;
+  /**
+   * Grows this completion's run claim before a tool round, by up to `wantedCredits` and at least
+   * `minimumCredits`. Resolves to the credits added: 0 when the run cannot spare them or the hold made
+   * no run claim. Never throws on exhaustion; the round gate then ends the loop.
+   */
+  topUpRunClaim?(claim: { wantedCredits: number; minimumCredits: number }): Promise<number>;
 };
 
 /** How a completion's credit settlement ended, reported once through `onSettled`. */
@@ -1026,6 +1032,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   let runCredits: number | undefined;
   const withinRunClaim = (availableCredits: number, spentCredits: number) =>
     runCredits === undefined ? availableCredits : Math.min(availableCredits, runCredits - spentCredits);
+  // Grows the run claim to what a tool round can cost; set only in a budgeted run whose holds can top up.
+  let topUpRunClaim: ((roundMessages: IMessage[], spentCredits: number) => Promise<void>) | null = null;
   const refundReservation = async () => {
     const refund = async () => {
       await holderMethods.incrementCredits(holderId, reservedCredits);
@@ -1097,19 +1105,21 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
     const minimumOutputTokens = Math.min(MIN_AFFORDABLE_OUTPUT_TOKENS, maxTokens);
     const toolSearch = completionsSupportsToolSearch(modelInfo);
-    // A run budget claim is the most the first round can cost, priced like the cap below, so a run's
-    // concurrent completions can never together be admitted past its budget.
-    const runClaim: CompletionRunBudgetClaim | undefined = runLineage && {
-      runId: runLineage.runId,
-      ...toRunClaimCredits(
+    const roundClaimCredits = (inputTokens: number) =>
+      toRunClaimCredits(
         roundCreditRange({
           modelInfo: chargedModelInfo!,
-          inputUsd: conservativeRoundInputUsd(chargedModelInfo!, estimatedInputTokens, cacheTtl),
-          inputTokens: estimatedInputTokens,
+          inputUsd: conservativeRoundInputUsd(chargedModelInfo!, inputTokens, cacheTtl),
+          inputTokens,
           minimumOutputTokens,
           maximumOutputTokens: maxTokens,
         })
-      ),
+      );
+    // A run budget claim is the most the first round can cost, priced like the cap below, so a run's
+    // concurrent completions can never together be admitted past its budget. Tool rounds top it up.
+    const runClaim: CompletionRunBudgetClaim | undefined = runLineage && {
+      runId: runLineage.runId,
+      ...roundClaimCredits(estimatedInputTokens),
     };
 
     let balanceAfterHold = 0;
@@ -1145,6 +1155,22 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       );
     } else {
       await debit();
+    }
+    const creditHolds = params.creditHolds;
+    if (runCredits !== undefined && creditHolds?.topUpRunClaim) {
+      // A tool round re-sends the whole conversation, so the claim left over from earlier rounds rarely covers it.
+      topUpRunClaim = async (roundMessages, spentCredits) => {
+        const range = roundClaimCredits(estimateInputTokens(roundMessages) + estimatedToolTokens);
+        const claimedCredits = runCredits ?? 0;
+        const headroom = claimedCredits - spentCredits;
+        const wantedCredits = Math.max(0, range.wantedCredits - headroom);
+        if (wantedCredits === 0) return;
+        const addedCredits = await creditHolds.topUpRunClaim!({
+          wantedCredits,
+          minimumCredits: Math.max(0, range.minimumCredits - headroom),
+        });
+        runCredits = claimedCredits + addedCredits;
+      };
     }
 
     // The hold above is a realistic estimate, not a bound: an answer may run to maxTokens (or past
@@ -1331,6 +1357,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           if (round === 0) return roundOptions;
           adoptAccumulatedUsage(roundOptions._internal);
           const spentCredits = usdToCredits(settledUsdCost(chargedModelInfo!));
+          await topUpRunClaim?.(roundMessages, spentCredits);
           const balance = (await fetchHolder())?.currentCredits ?? 0;
           const budget = roundBudget(
             roundMessages,

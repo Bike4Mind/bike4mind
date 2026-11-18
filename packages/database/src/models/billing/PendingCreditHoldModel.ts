@@ -98,6 +98,15 @@ export class PendingCreditHoldRepository {
     return result.modifiedCount === 1;
   }
 
+  /** Grows an outstanding hold's run claim; false once the hold has settled or been released. */
+  async addRunClaimCredits(id: string, credits: number): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, settledAt: { $exists: false }, runClaim: { $exists: true } },
+      { $inc: { 'runClaim.credits': credits } }
+    );
+    return result.modifiedCount === 1;
+  }
+
   /** Reconciles a committed settlement whose transaction acknowledgement was lost. */
   async findSettlement(id: string): Promise<number | null> {
     const doc = await this.model.findById(id).lean<PendingCreditHoldDocument>();

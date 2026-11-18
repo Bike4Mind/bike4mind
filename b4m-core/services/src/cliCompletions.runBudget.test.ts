@@ -48,6 +48,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   };
 });
 
+import type { ICompletionOptions } from '@bike4mind/llm-adapters';
 import { executeCompletion, type CompletionCreditHolds } from './cliCompletions';
 
 const RUN_ID = '0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80';
@@ -64,8 +65,9 @@ const attribution = (role: CompletionRunAttribution['role'], taskId?: string): C
 function budgetedRun(budgetCredits: number | undefined) {
   const run = { budgetCredits, committedCredits: 0 };
   const claims: number[] = [];
+  const topUps: number[] = [];
   const settlements: number[] = [];
-  const holds = (): CompletionCreditHolds => {
+  const holds = (): Required<CompletionCreditHolds> => {
     let claim: number | undefined;
     return {
       async reserve(_hold, debit, runClaim) {
@@ -92,9 +94,18 @@ function budgetedRun(budgetCredits: number | undefined) {
         if (claim !== undefined) run.committedCredits += recordedCredits - claim;
         return true;
       },
+      async topUpRunClaim({ wantedCredits, minimumCredits }) {
+        if (claim === undefined || run.budgetCredits === undefined) return 0;
+        const credits = Math.min(wantedCredits, run.budgetCredits - run.committedCredits);
+        if (credits < Math.max(1, minimumCredits)) return 0;
+        run.committedCredits += credits;
+        claim += credits;
+        topUps.push(credits);
+        return credits;
+      },
     };
   };
-  return { run, claims, settlements, holds };
+  return { run, claims, topUps, settlements, holds };
 }
 
 function buildDb() {
@@ -250,5 +261,103 @@ describe('executeCompletion - shared run budget', () => {
 
     expect(wallet.claims).toHaveLength(0);
     expect(complete.mock.calls[0][2].outputTokenCeiling).toBeGreaterThanOrEqual(MAX_TOKENS);
+  });
+});
+
+describe('executeCompletion - run budget across server-tool rounds', () => {
+  const serverTools = [
+    {
+      toolSchema: { name: 'lookup', description: 'Look something up', parameters: { type: 'object', properties: {} } },
+      toolFn: vi.fn(async () => 'result'),
+    },
+  ] as never;
+
+  // Mirrors the adapters: each round answers to its full output budget, carries usage forward in
+  // `_internal.accum*` and recurses through this.complete with the whole conversation plus a tool result.
+  function loopingProvider(rounds: number) {
+    let round = 0;
+    complete.mockImplementation(async function (
+      this: { complete: (...args: unknown[]) => Promise<void> },
+      model: string,
+      messages: Array<{ role: string; content: string }>,
+      options: Partial<ICompletionOptions>,
+      onChunk: (text: string[], info?: object) => Promise<void>
+    ) {
+      round++;
+      const turnUsage = [
+        ...(options._internal?.accumTurnUsage ?? []),
+        {
+          inputTokens: Math.ceil(JSON.stringify(messages).length / 2.5),
+          outputTokens: options.outputTokenCeiling ?? options.maxTokens ?? MAX_TOKENS,
+        },
+      ];
+      const inputTokens = turnUsage.reduce((sum, turn) => sum + turn.inputTokens, 0);
+      const outputTokens = turnUsage.reduce((sum, turn) => sum + turn.outputTokens, 0);
+      if (round === rounds) {
+        await onChunk(['answer'], { inputTokens, outputTokens, turnUsage });
+        return;
+      }
+      await onChunk(['\n\n'], { toolsUsed: [] });
+      await this.complete(
+        model,
+        [...messages, { role: 'user', content: 'tool result' }],
+        {
+          ...options,
+          _internal: {
+            ...options._internal,
+            accumInputTokens: inputTokens,
+            accumOutputTokens: outputTokens,
+            accumTurnUsage: turnUsage,
+          },
+        },
+        onChunk
+      );
+    });
+  }
+
+  beforeEach(() => vi.clearAllMocks());
+
+  const send = (creditHolds: CompletionCreditHolds, onChunk = vi.fn().mockResolvedValue(undefined)) =>
+    executeCompletion({
+      userId: 'user1',
+      model: 'test-model',
+      messages: [{ role: 'user', content: PROMPT }],
+      options: { maxTokens: MAX_TOKENS },
+      db: buildDb().db,
+      run: attribution('root'),
+      creditHolds,
+      serverTools,
+      source: 'desktop',
+      onChunk,
+    });
+
+  it('tops the claim up so a later tool round runs, and still settles inside what was claimed', async () => {
+    const wallet = budgetedRun(1_000_000);
+    loopingProvider(2);
+
+    await send(wallet.holds());
+
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(wallet.topUps).toHaveLength(1);
+    const claimed = wallet.claims[0] + wallet.topUps[0];
+    expect(wallet.settlements[0]).toBeLessThanOrEqual(claimed);
+    expect(wallet.run.committedCredits).toBe(wallet.settlements[0]);
+  });
+
+  it('ends the loop with max_tokens when the run has nothing left to top up with', async () => {
+    const probe = budgetedRun(1_000_000);
+    loopingProvider(1);
+    await send(probe.holds());
+    const wallet = budgetedRun(probe.claims[0]);
+    complete.mockClear();
+    loopingProvider(3);
+    const onChunk = vi.fn().mockResolvedValue(undefined);
+
+    await send(wallet.holds(), onChunk);
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(wallet.topUps).toHaveLength(0);
+    expect(onChunk).toHaveBeenLastCalledWith([], expect.objectContaining({ stopReason: 'max_tokens' }));
+    expect(wallet.settlements[0]).toBeLessThanOrEqual(wallet.claims[0]);
   });
 });

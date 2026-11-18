@@ -27,8 +27,8 @@ export function runBudgetExhaustedMessage(budgetCredits: number, committedCredit
 
 /**
  * One instance per completion; inference always runs outside the billing transactions. A completion
- * attributed to a budgeted run claims its run budget in the same transaction as its balance hold, and
- * every terminal outcome of the hold (settle, refund, expired-hold sweep) releases that claim with it.
+ * attributed to a budgeted run claims its run budget in the same transaction as its balance hold, tops
+ * that claim up before each tool round, and every terminal outcome of the hold (settle, refund, expired-hold sweep) releases that claim with it.
  */
 export function createCompletionCreditHolds(logger: Logger, apiKeyId?: string): CompletionCreditHolds {
   let pending: PendingCreditHold | undefined;
@@ -111,6 +111,32 @@ export function createCompletionCreditHolds(logger: Logger, apiKeyId?: string): 
         }
       }
       return false;
+    },
+    async topUpRunClaim(claim) {
+      const runClaim = pending?.runClaim;
+      if (!pending || !runClaim) return 0;
+      const holdId = pending.id;
+      try {
+        const added = await withTransaction(async () => {
+          const outcome = await completionRunRepository.claimBudget(
+            runClaim.runId,
+            claim.wantedCredits,
+            claim.minimumCredits
+          );
+          if (outcome.kind !== 'claimed') return 0;
+          // A hold already settled, refunded or swept has released its claim, so a top-up must not outlive it.
+          if (!(await pendingCreditHoldRepository.addRunClaimCredits(holdId, outcome.credits))) {
+            await completionRunRepository.releaseClaim({ runId: runClaim.runId, credits: outcome.credits }, 0);
+            return 0;
+          }
+          return outcome.credits;
+        });
+        pending = { ...pending, runClaim: { ...runClaim, credits: runClaim.credits + added } };
+        return added;
+      } catch (error) {
+        logger.error('Completion run claim top-up failed', { holdId, error });
+        return 0;
+      }
     },
   };
 }

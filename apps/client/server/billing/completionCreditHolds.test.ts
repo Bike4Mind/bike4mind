@@ -12,8 +12,10 @@ const {
   assertSpendCap,
   claimBudget,
   releaseClaim,
+  addRunClaimCredits,
   warm,
 } = vi.hoisted(() => ({
+  addRunClaimCredits: vi.fn(),
   warm: vi.fn(),
   claimBudget: vi.fn(),
   releaseClaim: vi.fn(),
@@ -26,7 +28,7 @@ const {
   transaction: vi.fn(async <T>(callback: () => Promise<T>): Promise<T> => callback()),
 }));
 vi.mock('@bike4mind/database', () => ({
-  pendingCreditHoldRepository: { record, claim, markSettled, findSettlement },
+  pendingCreditHoldRepository: { record, claim, markSettled, findSettlement, addRunClaimCredits },
   completionRunRepository: { claimBudget, releaseClaim },
   withTransaction: transaction,
   userRepository: { findById: findUser },
@@ -253,5 +255,64 @@ describe('run budget claims', () => {
     expect(await lifecycle.refund(vi.fn(async () => {}))).toBe(false);
 
     expect(releaseClaim).toHaveBeenCalledExactlyOnceWith({ runId: 'run-1', credits: 90 }, 0);
+  });
+
+  describe('topUpRunClaim', () => {
+    const reserveWithClaim = async () => {
+      claimBudget.mockResolvedValue({ kind: 'claimed', credits: 90 });
+      record.mockResolvedValue(pendingWithClaim(90));
+      const lifecycle = createCompletionCreditHolds(logger);
+      await lifecycle.reserve(hold, async () => ({ id: 'user', currentCredits: 70 }), runClaim);
+      return lifecycle;
+    };
+
+    it('adds the claimed credits to the stored hold, and settlement releases the grown claim', async () => {
+      const lifecycle = await reserveWithClaim();
+      claimBudget.mockResolvedValue({ kind: 'claimed', credits: 40 });
+      addRunClaimCredits.mockResolvedValue(true);
+
+      expect(await lifecycle.topUpRunClaim!({ wantedCredits: 60, minimumCredits: 10 })).toBe(40);
+      expect(claimBudget).toHaveBeenLastCalledWith('run-1', 60, 10);
+      expect(addRunClaimCredits).toHaveBeenCalledExactlyOnceWith('pending', 40);
+
+      await lifecycle.settle(
+        100,
+        vi.fn(async () => 100)
+      );
+      expect(releaseClaim).toHaveBeenCalledExactlyOnceWith({ runId: 'run-1', credits: 130 }, 100);
+    });
+
+    it('returns 0 without touching the hold when the run has no headroom', async () => {
+      const lifecycle = await reserveWithClaim();
+      claimBudget.mockResolvedValue({ kind: 'exhausted', budgetCredits: 500, committedCredits: 500 });
+
+      expect(await lifecycle.topUpRunClaim!({ wantedCredits: 60, minimumCredits: 10 })).toBe(0);
+      expect(addRunClaimCredits).not.toHaveBeenCalled();
+    });
+
+    it('gives the credits back when the hold was already settled or swept', async () => {
+      const lifecycle = await reserveWithClaim();
+      claimBudget.mockResolvedValue({ kind: 'claimed', credits: 40 });
+      addRunClaimCredits.mockResolvedValue(false);
+
+      expect(await lifecycle.topUpRunClaim!({ wantedCredits: 60, minimumCredits: 10 })).toBe(0);
+      expect(releaseClaim).toHaveBeenCalledExactlyOnceWith({ runId: 'run-1', credits: 40 }, 0);
+    });
+
+    it('does nothing for a hold without a run claim', async () => {
+      const lifecycle = createCompletionCreditHolds(logger);
+      await lifecycle.reserve(hold, async () => ({ id: 'user', currentCredits: 70 }));
+      claimBudget.mockClear();
+
+      expect(await lifecycle.topUpRunClaim!({ wantedCredits: 60, minimumCredits: 10 })).toBe(0);
+      expect(claimBudget).not.toHaveBeenCalled();
+    });
+
+    it('returns 0 instead of throwing when the top-up transaction fails', async () => {
+      const lifecycle = await reserveWithClaim();
+      transaction.mockRejectedValueOnce(new Error('write conflict'));
+
+      expect(await lifecycle.topUpRunClaim!({ wantedCredits: 60, minimumCredits: 10 })).toBe(0);
+    });
   });
 });

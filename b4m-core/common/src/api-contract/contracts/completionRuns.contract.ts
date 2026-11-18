@@ -29,7 +29,9 @@ export const createCompletionRunContract = defineEndpoint({
     'With `budgetCredits`, the run also caps what its completions may charge together. Before calling the ' +
     'model, each completion claims what its first round can cost at its full output budget (less, down to ' +
     'what a short answer costs, when the run has less left) and is capped to that claim, so concurrent ' +
-    'completions can never together be admitted or charged past the budget. A completion the budget cannot ' +
+    'completions can never together be admitted or charged past the budget. A completion that runs ' +
+    'server-side tools claims more the same way before each further round, and ends with ' +
+    '`stopReason: "max_tokens"` when the run cannot cover one. A completion the budget cannot ' +
     'cover is refused with `422` (`errorCode: "run_budget_exhausted"`) before anything is charged. Claims ' +
     'return to the run when their completion settles, fails or is abandoned. The account balance and any ' +
     'organization member caps still apply on their own, and buying credits does not raise a run budget. ' +
