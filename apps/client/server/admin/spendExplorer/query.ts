@@ -30,6 +30,12 @@ const isDate = (value: unknown): value is Date => value instanceof Date;
 // Object-level refinements still run when a field already failed, so guard the parsed types.
 const orderedRange = (q: { from: unknown; to: unknown }) => isDate(q.from) && isDate(q.to) && q.from < q.to;
 
+const autoBucket = (from: Date, to: Date): SpendBucketSize =>
+  (to.getTime() - from.getTime()) / DAY_MS <= HOURLY_AUTO_MAX_DAYS ? 'hour' : 'day';
+
+const withinWidth = (from: unknown, to: unknown, maxDays: number) =>
+  !isDate(from) || !isDate(to) || to.getTime() - from.getTime() <= maxDays * DAY_MS;
+
 export const TimelineQuerySchema = z
   .object({
     from: isoDate,
@@ -41,15 +47,17 @@ export const TimelineQuerySchema = z
     recache,
   })
   .refine(orderedRange, { message: 'from must be before to', path: ['from'] })
+  // Checked on the requested range, before snapping widens it to whole buckets.
+  .refine(
+    q =>
+      !orderedRange(q) ||
+      withinWidth(q.from, q.to, SPEND_EXPLORER_MAX_RANGE_DAYS[q.bucket ?? autoBucket(q.from as Date, q.to as Date)]),
+    { message: 'range too wide for this bucket size', path: ['to'] }
+  )
   .transform(q => {
-    const days = (q.to.getTime() - q.from.getTime()) / DAY_MS;
-    const bucket: SpendBucketSize = q.bucket ?? (days <= HOURLY_AUTO_MAX_DAYS ? 'hour' : 'day');
+    const bucket: SpendBucketSize = q.bucket ?? autoBucket(q.from, q.to);
     // Snap to whole UTC buckets so every bucket is complete and keys line up with the aggregation.
     return { ...q, bucket, from: floorToBucket(q.from, bucket), to: ceilToBucket(q.to, bucket) };
-  })
-  .refine(q => q.to.getTime() - q.from.getTime() <= SPEND_EXPLORER_MAX_RANGE_DAYS[q.bucket] * DAY_MS, {
-    message: 'range too wide for this bucket size',
-    path: ['to'],
   });
 
 export const AccountsQuerySchema = z
@@ -62,7 +70,7 @@ export const AccountsQuerySchema = z
     recache,
   })
   .refine(orderedRange, { message: 'from must be before to', path: ['from'] })
-  .refine(q => !orderedRange(q) || q.to.getTime() - q.from.getTime() <= SPEND_EXPLORER_MAX_RANGE_DAYS.day * DAY_MS, {
+  .refine(q => !orderedRange(q) || withinWidth(q.from, q.to, SPEND_EXPLORER_MAX_RANGE_DAYS.day), {
     message: 'range too wide',
     path: ['to'],
   })
@@ -73,6 +81,10 @@ export const AccountsQuerySchema = z
   .refine(q => !isDate(q.compareFrom) || !isDate(q.compareTo) || q.compareFrom < q.compareTo, {
     message: 'compareFrom must be before compareTo',
     path: ['compareFrom'],
+  })
+  .refine(q => withinWidth(q.compareFrom, q.compareTo, SPEND_EXPLORER_MAX_RANGE_DAYS.day), {
+    message: 'comparison range too wide',
+    path: ['compareTo'],
   });
 
 /**

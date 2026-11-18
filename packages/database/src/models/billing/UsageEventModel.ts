@@ -47,7 +47,7 @@ import {
   type SpendTimelineParams,
   type SpendTimelineRow,
 } from '@bike4mind/common';
-import { spendBreakdownPipeline, spendTimelinePipeline } from './spendExplorerPipelines';
+import { EXECUTED_MODEL_GROUP_KEY, spendBreakdownPipeline, spendTimelinePipeline } from './spendExplorerPipelines';
 import { loadCreditHolderFundingSnapshot, type LoadCreditHolderFundingSnapshot } from './creditHolderFundingSnapshot';
 
 export type IUsageEventDocument = IUsageEvent & IMongoDocument;
@@ -61,11 +61,9 @@ const SPEND_ACCOUNT_LIMIT = 50;
 // model pair; without it a large catalog would ship every one.
 const SPEND_MODEL_LIMIT = 100;
 
-// Old rows lack executed*, so always coalesce to the requested provider/model.
-const EXECUTED_MODEL_GROUP_KEY = {
-  executedProvider: { $ifNull: ['$executedProvider', '$provider'] },
-  executedModel: { $ifNull: ['$executedModel', '$model'] },
-} as const;
+// Spend explorer scans can span a year of events; stop a runaway one instead of holding a connection.
+const SPEND_EXPLORER_MAX_TIME_MS = 20_000;
+
 const EXECUTED_MODEL_FIELDS = {
   executedProvider: '$_id.executedProvider',
   executedModel: '$_id.executedModel',
@@ -701,7 +699,9 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
   }
 
   async spendTimeline(params: SpendTimelineParams): Promise<SpendTimelineRow[]> {
-    return this.model.aggregate<SpendTimelineRow>(spendTimelinePipeline(params));
+    return this.model
+      .aggregate<SpendTimelineRow>(spendTimelinePipeline(params))
+      .option({ maxTimeMS: SPEND_EXPLORER_MAX_TIME_MS });
   }
 
   async spendBreakdown(params: SpendBreakdownParams): Promise<SpendBreakdown> {
@@ -710,7 +710,8 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       byProvider: SpendBreakdown['byProvider'];
       bySegment: SpendBreakdown['bySegment'];
       topActors: SpendBreakdown['topActors'];
-    }>(spendBreakdownPipeline(params));
+    }>(spendBreakdownPipeline(params))
+      .option({ maxTimeMS: SPEND_EXPLORER_MAX_TIME_MS });
     return {
       totalCostUsd: result?.totals?.[0]?.costUsd ?? 0,
       byProvider: result?.byProvider ?? [],
