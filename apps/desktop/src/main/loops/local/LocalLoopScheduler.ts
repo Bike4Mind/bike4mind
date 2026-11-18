@@ -889,8 +889,13 @@ export class LocalLoopScheduler {
   async releaseAll(quitting = false): Promise<void> {
     this.quitting = quitting;
     this.stop();
+    const reason = 'The app quit';
     await Promise.all(
-      [...this.lanes.values()].map(lane => this.finish(lane, { stopReason: 'requeued', reason: 'The app quit' }))
+      [...this.lanes.values()].map(lane => {
+        const loop = this.deps.store.loop(lane.run.loopId);
+        if (loop) this.raise(loop, { kind: 'requeued', reason, ticketId: lane.run.ticketId, runId: lane.run.id });
+        return this.finish(lane, { stopReason: 'requeued', reason });
+      })
     );
   }
 

@@ -503,6 +503,18 @@ describe('LocalLoopScheduler', () => {
     expect(scheduler.busy).toBe(0);
   });
 
+  it('records a requeued event for each run a quit stops', async () => {
+    make();
+    const t = ticket('a');
+    scheduler.start();
+    await settle();
+    const [run] = store.openRuns();
+    await scheduler.releaseAll(true);
+    expect(store.events('loop-1')).toContainEqual(
+      expect.objectContaining({ kind: 'requeued', reason: 'The app quit', ticketId: t.id, runId: run.id })
+    );
+  });
+
   it('does not spin on a stale pacing time once its loop is paused', async () => {
     let changes = 0;
     const paced = new LocalLoopScheduler({ ...schedulerDeps(), onChange: () => changes++ });
