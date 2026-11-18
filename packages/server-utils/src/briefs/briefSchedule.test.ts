@@ -134,4 +134,13 @@ describe('zone formatter cache', () => {
     }
     expect(cachedFormatterCount()).toBe(size);
   });
+
+  it('rejects a non-ASCII look-alike of a cached zone instead of reusing its entry', () => {
+    const after = new Date('2026-11-18T12:00:00Z');
+    computeNextBriefAt(schedule({ timeZone: 'Asia/Kolkata' }), after);
+    const size = cachedFormatterCount();
+
+    expect(() => computeNextBriefAt(schedule({ timeZone: 'Asia/\u212Aolkata' }), after)).toThrow(RangeError);
+    expect(cachedFormatterCount()).toBe(size);
+  });
 });

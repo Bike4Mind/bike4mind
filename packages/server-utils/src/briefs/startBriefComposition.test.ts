@@ -17,6 +17,7 @@ const makeDeps = (over: { inFlight?: IAssistantBrief | null; latest?: IAssistant
     findActiveComposing: vi.fn().mockResolvedValue(over.inFlight ?? null),
     findLatestReady: vi.fn().mockResolvedValue(over.latest ?? null),
     createComposing: vi.fn().mockImplementation(async input => stored(input)),
+    discardComposing: vi.fn().mockResolvedValue(true),
   },
   publishCompose: vi.fn().mockResolvedValue(undefined),
   now: () => now,
@@ -37,6 +38,13 @@ describe('startBriefComposition', () => {
     await startBriefComposition('u1', deps);
     expect(deps.briefs.createComposing).toHaveBeenCalledWith({ userId: 'u1', periodStart: lastEnd, periodEnd: now });
     expect(deps.publishCompose).toHaveBeenCalledWith({ briefId: 'b1', userId: 'u1' });
+  });
+
+  it('drops the created row and rethrows when the compose event cannot be published', async () => {
+    const deps = makeDeps();
+    deps.publishCompose.mockRejectedValue(new Error('PutEvents failed'));
+    await expect(startBriefComposition('u1', deps)).rejects.toThrow('PutEvents failed');
+    expect(deps.briefs.discardComposing).toHaveBeenCalledWith('b1');
   });
 
   it('defaults to the last day with no prior brief and caps a stale one at a week', async () => {
