@@ -12,6 +12,7 @@ import {
   OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   UNKNOWN_MODEL_ERROR_CODE,
   RUN_NOT_FOUND_ERROR_CODE,
+  SPEND_FROZEN_ERROR_CODE,
   END_USER_ID_NOT_ALLOWED_ERROR_CODE,
   INVALID_END_USER_ID_ERROR_CODE,
   type ApiErrorCode,
@@ -478,6 +479,26 @@ export const ScopeForbiddenErrorSchema = ApiErrorSchema.extend({
     .describe('API key scopes this route also requires. Every one must be held, on top of `required_scopes`.'),
 });
 
+/** The `spend_frozen` 403 body fields; values match spendFrozenError in ../insufficientCredits.ts. */
+const SpendFrozenDetailShape = {
+  frozenScope: z
+    .enum(['user', 'organization', 'api_key'])
+    .optional()
+    .describe('With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.'),
+  frozenAt: z.string().optional().describe('With `errorCode: spend_frozen`: when spending was paused (ISO 8601).'),
+};
+
+/** Sentence appended to a metered route's 403 description; see CONVENTIONS.md for the status table. */
+export const SPEND_FROZEN_FORBIDDEN_NOTE =
+  `Also \`403\` (\`errorCode: ${SPEND_FROZEN_ERROR_CODE}\`, with \`frozenScope\` and \`frozenAt\`) when spending is ` +
+  'paused for the account, its organization or the API key; not retryable until the pause is lifted.';
+
+/** 403 on a metered route: the scope or suspension refusal above, or a spend freeze. */
+export const MeteredForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
+  errorCode: z.enum([ACCOUNT_SUSPENDED_ERROR_CODE, SPEND_FROZEN_ERROR_CODE]).optional(),
+  ...SpendFrozenDetailShape,
+});
+
 /**
  * 403 on the v1 media create routes and POST /api/v1/agent-executions: the scope refusal above, an
  * organization-billed API key sent with another billing organization
@@ -496,17 +517,22 @@ export const BillingOrganizationForbiddenErrorSchema = ScopeForbiddenErrorSchema
 });
 
 /**
- * 403 on the completions route: the scope refusal above, a model outside the free-tier allowlist, or a
- * model the organization policy does not allow.
+ * 403 on the completions route: the scope refusal above, a model outside the free-tier allowlist, a
+ * model the organization policy does not allow, or a spend freeze.
  */
-export const ModelPolicyForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
+export const ModelPolicyForbiddenErrorSchema = MeteredForbiddenErrorSchema.extend({
   errorCode: z
-    .enum([ACCOUNT_SUSPENDED_ERROR_CODE, MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE, ORG_MODEL_NOT_ALLOWED_ERROR_CODE])
+    .enum([
+      ACCOUNT_SUSPENDED_ERROR_CODE,
+      MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+      ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+      SPEND_FROZEN_ERROR_CODE,
+    ])
     .optional(),
 });
 
 /** 403 on POST /api/chat: the completions refusals, or a built-in tool the organization policy does not allow. */
-export const ChatForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
+export const ChatForbiddenErrorSchema = MeteredForbiddenErrorSchema.extend({
   errorCode: z
     .enum([
       ACCOUNT_SUSPENDED_ERROR_CODE,
@@ -514,6 +540,21 @@ export const ChatForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
       FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
       ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
       ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+      SPEND_FROZEN_ERROR_CODE,
     ])
     .optional(),
+});
+
+/** BillingOrganizationForbiddenErrorSchema on a route that also refuses a spend freeze before answering. */
+export const MeteredBillingOrganizationForbiddenErrorSchema = BillingOrganizationForbiddenErrorSchema.extend({
+  errorCode: z
+    .enum([
+      ACCOUNT_SUSPENDED_ERROR_CODE,
+      BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
+      ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+      ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+      SPEND_FROZEN_ERROR_CODE,
+    ])
+    .optional(),
+  ...SpendFrozenDetailShape,
 });

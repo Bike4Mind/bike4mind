@@ -188,6 +188,7 @@ describe('ChatCompletionProcess failed attempt logging', () => {
       creditTransactions: {},
       agents: {},
       projects: { findById: vi.fn() },
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
     };
     const tokenizer = {
       countTokens: vi.fn().mockResolvedValue(100),

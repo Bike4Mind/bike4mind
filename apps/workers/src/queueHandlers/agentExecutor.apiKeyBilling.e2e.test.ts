@@ -305,6 +305,8 @@ describe('agent run billing, end to end', () => {
     const { agentExecutionRepository, User, Session } = await import('@bike4mind/database');
     const userId = new mongoose.Types.ObjectId();
     const sessionId = new mongoose.Types.ObjectId();
+    // A real ObjectId string: the freeze check reads the key record by id.
+    const apiKeyId = new mongoose.Types.ObjectId().toString();
     await User.collection.insertOne({ _id: userId, username: 'key-run', email: 'key@e2e.test', currentCredits: 1e6 });
     await Session.collection.insertOne({ _id: sessionId, userId: userId.toString(), name: 'Key run' });
     const execution = await agentExecutionRepository.create({
@@ -315,7 +317,7 @@ describe('agent run billing, end to end', () => {
       model: 'test-model',
       status: 'pending',
       connectionId: 'conn-1',
-      apiKeyId: 'key-run-1',
+      apiKeyId,
       approvedTools: [],
       deniedTools: [],
       iterationBilling: [],
@@ -339,7 +341,7 @@ describe('agent run billing, end to end', () => {
 
     expect((await agentExecutionRepository.findById(execution.id))?.status).toBe('completed');
     expect(h.deductCredits).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'text_generation_usage', model: 'test-model', apiKeyId: 'key-run-1' }),
+      expect.objectContaining({ type: 'text_generation_usage', model: 'test-model', apiKeyId: apiKeyId }),
       expect.anything()
     );
   });

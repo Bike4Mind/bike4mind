@@ -2,7 +2,7 @@ import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
-import { useEffect, useMemo, type ReactNode, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, type ReactNode, useState } from 'react';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
 import { playChime } from './chime';
 import { ExampleQuestButtons } from './exampleQuests';
@@ -16,6 +16,8 @@ import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
 import { ORCHESTRATOR_VIEW_INFO, ViewSwitcher } from './ViewSwitcher';
+import { useApplySkin, useSkinTheme } from './skins';
+import { SKIN_STAGE_VARIABLE } from './statePalette';
 import { useQuickApprovals } from './quickApprovals';
 import { runViewAction, toViewSnapshot } from './viewSnapshot';
 import { acceptViewAction, type ViewAction } from '@shared/viewSnapshot';
@@ -207,8 +209,13 @@ export function OrchestratorStage({
   const quest = useMemo(() => questAgents(agents, report), [agents, report]);
   const finale = useFinale(rootId, quest, parent, report);
   const spend = useRunSpend(rootId, finale.shown);
+  const skin = useSkinTheme();
+  useApplySkin(skin);
+  // Read when the finale shows, so switching skins mid-finale does not replay it.
+  const finaleSound = useRef(skin.sounds.finale);
+  finaleSound.current = skin.sounds.finale;
   useEffect(() => {
-    if (finale.shown) playChime();
+    if (finale.shown) playChime(finaleSound.current);
   }, [finale.shown]);
 
   // The Tavern seats the banner on its scene rather than in the letterbox above it.
@@ -313,7 +320,19 @@ export function OrchestratorStage({
         if (event.target.closest('[data-agent-details-panel]')) return;
         setSelectedId(null);
       }}
-      sx={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}
+      data-skin={skin.id ?? 'default'}
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minWidth: 0,
+        minHeight: 0,
+        bgcolor: `var(${SKIN_STAGE_VARIABLE}, transparent)`,
+        // Joy's type scale reads these, so every Typography under the stage picks the skin's family up.
+        ...(skin.fontFamily
+          ? { '--joy-fontFamily-body': skin.fontFamily, '--joy-fontFamily-display': skin.fontFamily }
+          : {}),
+      }}
     >
       {settled ? (
         <Typography

@@ -54,6 +54,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     res.status(405).json({ error: 'Method not allowed' }),
 }));
 vi.mock('@bike4mind/database', () => ({
+  spendFreezeRepository: { findActiveForSubject: async () => null },
   adminSettingsRepository: {},
   apiKeyRepository: {},
   creditTransactionRepository: {},

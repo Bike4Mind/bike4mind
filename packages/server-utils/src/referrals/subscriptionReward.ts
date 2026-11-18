@@ -221,6 +221,13 @@ export async function releaseDueSubscriptionRewards({
 
   for (const candidate of due) {
     try {
+      const expiresAt = new Date(
+        candidate.releaseAt.getTime() + creditService.REFERRAL_SUBSCRIPTION_REWARD_TTL_DAYS * DAY_MS
+      );
+      if (expiresAt <= now) {
+        if (await referralSubscriptionRewardRepository.cancelPending(candidate.id, 'expired', now)) result.cancelled++;
+        continue;
+      }
       const [inviter, payer] = await Promise.all([
         User.findById(candidate.inviterId).select(INVITER_FIELDS).lean<RewardParty>(),
         User.findById(candidate.payerId).select(PARTY_FIELDS).lean<RewardParty>(),
@@ -262,13 +269,15 @@ export async function releaseDueSubscriptionRewards({
                 reason: REFERRAL_REWARD_REASON,
                 description: 'Referral reward: subscription payment from an invited friend',
                 lotRef: ref,
+                expiresAt,
                 metadata: {
                   step: claimed.step,
                   [REFERRED_USER_ID_METADATA_KEY]: claimed.payerId,
                   invoiceId: claimed.invoiceId,
                 },
               },
-              buildCreditRewardAdapters({ inTransaction: true, duplicateTransactionId: 'throw' })
+              buildCreditRewardAdapters({ inTransaction: true, duplicateTransactionId: 'throw' }),
+              { now }
             );
             if (paid.outcome === 'blocked') throw new InviterRefusedError();
             return paid.outcome === 'paid' ? paid.creditTransactionId : '';
