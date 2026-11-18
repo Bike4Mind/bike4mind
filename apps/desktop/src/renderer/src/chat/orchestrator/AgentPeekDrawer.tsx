@@ -6,6 +6,7 @@ import IconButton from '@mui/joy/IconButton';
 import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
 import { snippetOf } from '@shared/agentOutcome';
+import { isStoppableState } from '@shared/agentState';
 import type { ChatApprovalAnswer, ChatMessage, ChatQueuedMessage, ChatToolCall } from '@shared/chat';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ToolCallList } from '../ToolCallList';
@@ -252,7 +253,7 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
       return line === null ? [] : [{ id: message.id, role: message.role, line }];
     })
     .slice(-RECENT_MESSAGES);
-  const canStop = agent.state === 'working' || agent.state === 'needs-you';
+  const canStop = isStoppableState(agent.state);
 
   const drawerRef = useRef<HTMLDivElement>(null);
   // Focus moves in on open and back to the opener on close; a drawer swapped to another agent keeps its place.
@@ -366,7 +367,7 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
             variant="outlined"
             color="danger"
             data-testid="orchestrator-peek-stop-btn"
-            onClick={() => actions.stop(agent.id)}
+            onClick={() => void actions.stop(agent.id)}
           >
             Stop
           </Button>

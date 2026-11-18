@@ -957,7 +957,7 @@ export function ChatShell({
   const agentActions = useMemo<AgentActions>(
     () => ({
       open: selectSession,
-      stop: sessionId => void window.b4m.chat.stopReply(sessionId),
+      stop: sessionId => window.b4m.chat.stopReply(sessionId),
       archive: sessionId => {
         const session = sessions.find(candidate => candidate.id === sessionId);
         if (session) void toggleArchived(session);
