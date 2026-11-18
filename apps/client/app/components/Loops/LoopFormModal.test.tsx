@@ -41,6 +41,8 @@ vi.mock('@client/app/hooks/useComposerMcpConnections', () => {
         { name: 'read_wiki_contents', enabled: true, state: 'active' },
         { name: 'needs_review', enabled: true, state: 'pending_review' },
         { name: 'switched_off', enabled: false, state: 'active' },
+        // The executor never pre-approves an always_ask tool, so picking it would not help an unattended run.
+        { name: 'always_asks', enabled: true, state: 'active', approval: 'always_ask' },
         // deepwiki__ + 60 chars is over 64, so the executor hashes it.
         { name: 'x'.repeat(60), enabled: true, state: 'active' },
       ],
@@ -589,7 +591,7 @@ describe('LoopFormModal stage settings', () => {
     fireEvent.click(screen.getByRole('combobox', { name: /tools/i }));
     let listbox = within(screen.getByRole('listbox'));
     expect(listbox.getByRole('option', { name: 'DeepWiki: ask_wiki_question' })).toBeInTheDocument();
-    expect(listbox.queryByRole('option', { name: /needs_review|switched_off|xxxx/ })).toBeNull();
+    expect(listbox.queryByRole('option', { name: /needs_review|switched_off|always_asks|xxxx/ })).toBeNull();
     expect(listbox.queryByTestId('loop-form-tools-server-all-longnames')).toBeNull();
     fireEvent.click(listbox.getByTestId('loop-form-tools-server-all-deepwiki'));
     fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' });
