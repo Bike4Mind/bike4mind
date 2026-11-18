@@ -30,6 +30,9 @@ vi.mock('@tanstack/react-router', async importOriginal => ({
 vi.mock('@client/app/hooks/data/studioCompositions', () => ({
   compositionErrorMessage: () => 'failed',
   compositionErrorIssues: () => [],
+  studioCompositionKeys: { detail: (id: string) => ['studioCompositions', 'detail', id] },
+  useStudioCompositions: () => ({ data: [] }),
+  useCreateStudioComposition: () => ({ mutate: vi.fn(), isPending: false }),
   useUpdateStudioComposition: () => ({
     mutate: h.updateMutate,
     mutateAsync: h.updateMutate,
@@ -53,7 +56,11 @@ vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
 }));
 vi.mock('@client/app/components/Files/EmbeddedFileBrowser', () => ({
   default: forwardRef(function PickerStub(
-    { onAdd, lockedFilters }: { onAdd: (files: unknown[]) => void; lockedFilters: { type: string } },
+    {
+      onAdd,
+      lockedFilters,
+      initialFilters,
+    }: { onAdd: (files: unknown[]) => void; lockedFilters?: { type: string }; initialFilters?: { type: string } },
     ref
   ) {
     const [open, setOpen] = useState(false);
@@ -63,7 +70,7 @@ vi.mock('@client/app/components/Files/EmbeddedFileBrowser', () => ({
       <button
         type="button"
         data-testid="picker-stub-add"
-        data-filter={lockedFilters.type}
+        data-filter={lockedFilters?.type ?? initialFilters?.type}
         onClick={() => {
           setOpen(false);
           onAdd(h.pickedFiles);
@@ -169,7 +176,9 @@ describe('ProductionEditor', () => {
 
     await waitFor(() => expect(h.updateMutate).toHaveBeenCalledTimes(1), { timeout: 2_000 });
     const [body] = h.updateMutate.mock.calls[0];
-    expect(body.timeline.tracks[0]).toMatchObject({ kind: 'captions', clips: [{ text: 'New caption' }] });
+    expect(body.timeline.tracks.find((track: { kind: string }) => track.kind === 'captions')).toMatchObject({
+      clips: [{ text: 'New caption' }],
+    });
   });
 
   it('holds the save and lists the issue while two clips overlap', async () => {
@@ -201,6 +210,14 @@ describe('ProductionEditor', () => {
     expect(h.blocker.options?.shouldBlockFn()).toBe(true);
   });
 
+  it('enables the unload guard for a field edit that has not saved yet', () => {
+    renderEditor(composition());
+    expect(h.blocker.options).toMatchObject({ enableBeforeUnload: false });
+
+    fireEvent.change(screen.getByTestId('production-brief-summary-input'), { target: { value: 'Cold brew' } });
+    expect(h.blocker.options).toMatchObject({ enableBeforeUnload: true });
+  });
+
   it('asks before discarding edits when navigation is blocked', () => {
     h.blocker.status = 'blocked';
     renderEditor(composition());
@@ -208,6 +225,55 @@ describe('ProductionEditor', () => {
     expect(h.blocker.proceed).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByTestId('production-leave-cancel-btn'));
     expect(h.blocker.reset).toHaveBeenCalledTimes(1);
+  });
+
+  it('builds a shot from Library takes and sends the board to the video track', async () => {
+    const takes = ['1', '2'].map(digit => ({
+      id: digit.repeat(24),
+      fileName: `take-${digit}.mp4`,
+      mimeType: 'video/mp4',
+      fileUrl: `https://files.test/take-${digit}.mp4`,
+    }));
+    h.pickedFiles = takes;
+    renderEditor({
+      ...composition(),
+      shots: [
+        { id: 'shot-1', title: 'Hook', intent: 'hook', fileIds: [] },
+        { id: 'shot-2', title: 'Product', fileIds: [] },
+      ],
+    });
+    expect(screen.getByTestId('production-shots-send-all-btn')).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId('production-shot-0-add-takes-btn'));
+    fireEvent.click(screen.getByTestId('picker-stub-add'));
+    const second = `production-shot-0-take-${takes[1].id}`;
+    fireEvent.click(await screen.findByTestId(`${second}-select-btn`));
+    expect(screen.getByTestId(second)).toHaveAttribute('data-selected', 'true');
+
+    fireEvent.click(screen.getByTestId('production-shot-1-down-btn'));
+    fireEvent.click(screen.getByTestId('production-shot-0-up-btn'));
+    expect(screen.getByTestId('production-shot-0')).toHaveAttribute('data-shot-id', 'shot-1');
+
+    // The take's media kind comes from its Library record, which the thumbnails load.
+    await waitFor(() => expect(screen.getByTestId(second)).toHaveAttribute('title', 'hero.mp4'));
+    fireEvent.click(screen.getByTestId('production-shots-send-all-btn'));
+    await waitFor(() => expect(clipsIn('video')).toHaveLength(1));
+
+    await waitFor(() =>
+      expect(h.updateMutate).toHaveBeenCalledWith({
+        shots: [expect.objectContaining({ id: 'shot-1', chosenFileId: takes[1].id }), expect.anything()],
+      })
+    );
+  });
+
+  it('saves the brief as it is typed', async () => {
+    renderEditor(composition());
+    fireEvent.change(screen.getByTestId('production-brief-summary-input'), {
+      target: { value: 'Cold brew, hot summer' },
+    });
+    await waitFor(() => expect(h.updateMutate).toHaveBeenCalledWith({ brief: { summary: 'Cold brew, hot summer' } }));
+    fireEvent.change(screen.getByTestId('production-brief-summary-input'), { target: { value: '' } });
+    await waitFor(() => expect(h.updateMutate).toHaveBeenLastCalledWith({ brief: {} }));
   });
 
   it('removes the selected clip from the inspector', () => {

@@ -15,6 +15,8 @@ export interface AttachmentDraft {
   pick: () => Promise<void>;
   /** An image already in the thread, read back by main from its own store. */
   attachImage: (image: ChatImageRef) => Promise<void>;
+  /** A file a reply named, read by main only after it checks the path against the session's folders. */
+  attachFilePath: (path: string) => Promise<void>;
   remove: (attachmentId: string) => void;
   /** Called once the turn is sent - the attachments now belong to the message, not the draft. */
   clear: () => void;
@@ -93,6 +95,14 @@ export function useAttachmentDraft(sessionId: string | null): AttachmentDraft {
     [sessionId, intake]
   );
 
+  const attachFilePath = useCallback(
+    async (path: string) => {
+      if (!sessionId) return;
+      await intake(() => window.b4m.chat.attachFilePath(sessionId, path));
+    },
+    [sessionId, intake]
+  );
+
   const remove = useCallback(
     (attachmentId: string) => {
       setAttachments(current => current.filter(attachment => attachment.id !== attachmentId));
@@ -111,7 +121,7 @@ export function useAttachmentDraft(sessionId: string | null): AttachmentDraft {
 
   const dismissRejected = useCallback(() => setRejected([]), []);
 
-  return { attachments, busy, rejected, dismissRejected, add, pick, attachImage, remove, clear };
+  return { attachments, busy, rejected, dismissRejected, add, pick, attachImage, attachFilePath, remove, clear };
 }
 
 /**

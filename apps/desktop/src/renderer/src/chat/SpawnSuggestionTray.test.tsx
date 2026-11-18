@@ -43,6 +43,7 @@ const draft: AttachmentDraft = {
   add: async () => {},
   pick: async () => {},
   attachImage: async () => {},
+  attachFilePath: async () => {},
   remove: () => {},
   clear: () => {},
 };

@@ -150,7 +150,7 @@ export const directorClips = (timeline: StudioTimeline, kind: DirectorTrackKind)
  * picture track and are never changed; the timeline runs to the cut's `durationMs` or to the end of the user's last
  * clip, whichever is later. Director clips running past `durationMs` are cut there, and ones that would start at or
  * after it are dropped, so a shorter cut never leaves a director clip out of bounds. An empty director track is
- * dropped.
+ * dropped, and so is an empty lane of a kind the director lays (a template's starter lane).
  */
 export function withDirectorTracks(
   timeline: StudioTimeline,
@@ -158,10 +158,14 @@ export function withDirectorTracks(
   durationMs: number
 ): StudioTimeline {
   const directorIds = new Set<string>(Object.values(DIRECTOR_TRACK_IDS));
-  const userTracks = timeline.tracks.filter(track => !directorIds.has(track.id));
   const director = Object.fromEntries(
     DIRECTOR_TRACK_ORDER.map(kind => [kind, replacements[kind] ?? directorClips(timeline, kind)])
   ) as Record<DirectorTrackKind, StudioTimelineTrack['clips']>;
+  // defaultStudioTimeline seeds an empty lane per template kind.
+  const laid = (kind: string) => kind in director && director[kind as DirectorTrackKind].length > 0;
+  const userTracks = timeline.tracks.filter(
+    track => !directorIds.has(track.id) && !(track.clips.length === 0 && laid(track.kind))
+  );
   const build = (kind: DirectorTrackKind) =>
     ({ ...directorTrack(kind, director[kind]), clips: fitClips(director[kind], durationMs) }) as StudioTimelineTrack;
   const tracks = [

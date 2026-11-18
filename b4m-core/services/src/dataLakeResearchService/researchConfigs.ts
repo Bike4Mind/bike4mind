@@ -134,8 +134,8 @@ const assertFeedSource = (draft: ResearchLeversDraft): void => {
 };
 
 /**
- * Limits on the raw draft, counted after trim, empty-drop and dedupe so a duplicate alone is not an
- * error. Refused rather than truncated (a cut condition means something else), and checked here
+ * Limits on the raw draft, counted after cleaning (invisible characters stripped, whitespace collapsed), empty-drop and
+ * dedupe so a duplicate alone is not an error. Refused rather than truncated (a cut condition means something else), and checked here
  * because the normalizer clamps, which would hide the problem.
  */
 const assertItemRulesWithinLimits = (draft: ResearchLeversDraft): void => {

@@ -237,6 +237,16 @@ describe('withDirectorTracks', () => {
     expect(trackIds(result)).toEqual(['mine']);
   });
 
+  it('drops an empty template lane of a kind the director lays, keeping lanes with clips and other kinds', () => {
+    const existing = timelineWith([
+      track('track-music-1', 'music', []),
+      track('track-voice-2', 'voice', []),
+      track('track-music-3', 'music', [audioClip('u1', 0, 500)]),
+    ]);
+    const result = withDirectorTracks(existing, { music: [audioClip('bed', 0, 1000)] as never }, 1000);
+    expect(trackIds(result)).toEqual(['track-voice-2', 'track-music-3', DIRECTOR_TRACK_IDS.music]);
+  });
+
   it('orders director tracks bottom to top after the user tracks', () => {
     const result = withDirectorTracks(
       timelineWith([userTrack]),

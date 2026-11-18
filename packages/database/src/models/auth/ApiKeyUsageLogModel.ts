@@ -10,6 +10,8 @@ import {
   IEndpointUsageDay,
   IMongoDocument,
   IPlatformEndpointUsage,
+  PAYER_STANDINGS,
+  type PayerStanding,
 } from '@bike4mind/common';
 import mongoose, { Model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
@@ -31,6 +33,10 @@ export interface IApiKeyUsageLogDocument extends IMongoDocument {
   source?: ApiKeyCompletionSource;
   /** The key's billing owner when the request was made (same rule as reserveRequestCredits). */
   ownerType?: ApiKeyBillingOwnerType;
+  /** Connected app of a federated exchange key; absent for every other key. */
+  oauthClientId?: string;
+  /** The exchange key owner's paid standing at mint; absent when unread. */
+  payerStanding?: PayerStanding;
   completionObservation?: ApiCompletionObservation;
   createdAt: Date;
   updatedAt: Date;
@@ -60,6 +66,8 @@ const ApiKeyUsageLogSchema = new mongoose.Schema<IApiKeyUsageLogDocument>(
     },
     source: { type: String, enum: API_KEY_COMPLETION_SOURCES },
     ownerType: { type: String, enum: [CreditHolderType.User, CreditHolderType.Organization] },
+    oauthClientId: { type: String },
+    payerStanding: { type: String, enum: [...PAYER_STANDINGS] },
   },
   { timestamps: true }
 );
@@ -72,6 +80,13 @@ ApiKeyUsageLogSchema.index({ ipAddress: 1, timestamp: -1 }, { name: 'api_usage_i
 // Platform endpoint rollup filtered by source and/or ownerType (platformEndpointUsage).
 // An ownerType-only filter has no source prefix, so it range-scans the timestamp TTL index instead.
 ApiKeyUsageLogSchema.index({ source: 1, ownerType: 1, timestamp: -1 });
+
+// Per-app request rollups. Partial, so the high-volume personal-key rows stay out of it.
+// Built by the 20261115120000 ensure migration.
+ApiKeyUsageLogSchema.index(
+  { oauthClientId: 1, timestamp: -1 },
+  { name: 'api_usage_oauth_client', partialFilterExpression: { oauthClientId: { $exists: true } } }
+);
 
 // TTL index to auto-delete logs older than 90 days
 ApiKeyUsageLogSchema.index({ timestamp: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 });
@@ -88,7 +103,16 @@ export class ApiKeyUsageLogRepository extends BaseRepository<IApiKeyUsageLogDocu
   async beginCompletionObservation(
     input: Pick<
       IApiKeyUsageLogDocument,
-      'keyId' | 'userId' | 'ipAddress' | 'endpoint' | 'method' | 'source' | 'ownerType' | 'completionObservation'
+      | 'keyId'
+      | 'userId'
+      | 'ipAddress'
+      | 'endpoint'
+      | 'method'
+      | 'source'
+      | 'ownerType'
+      | 'completionObservation'
+      | 'oauthClientId'
+      | 'payerStanding'
     >
   ): Promise<string | null> {
     const available = () =>
