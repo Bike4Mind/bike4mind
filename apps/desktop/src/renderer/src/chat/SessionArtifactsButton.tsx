@@ -55,7 +55,7 @@ export function SessionArtifactsButton({
           Artifacts in this session
         </Typography>
         {artifacts.map(entry => {
-          const avatar = avatarColors(entry.artifact.id, mode);
+          const avatar = avatarColors(entry.key, mode);
           const updated = updatedLabel(entry.updatedAt);
           return (
             <MenuItem
