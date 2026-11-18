@@ -430,6 +430,8 @@ export interface IClientUsageEntry {
 
 export interface IUser extends ICreditHolder {
   id: string;
+  /** Durable admission id; deleting a QuestMaster plan never restores the allowance. */
+  freeQuestStartId?: string;
   username: string;
   name: string;
   email: string | null;

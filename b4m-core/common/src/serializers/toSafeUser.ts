@@ -58,6 +58,7 @@ export const USER_SECRET_FIELDS = [
   'riskReviewAutoCheckedAt',
   'riskEvidence',
   'freeCreditClaimEmail',
+  'freeQuestStartId',
   'grantPackageId',
   'signupGrantAssessment',
   'userNotes',
