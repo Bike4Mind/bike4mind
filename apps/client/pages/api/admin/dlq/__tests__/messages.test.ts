@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   replaySafety: 'unsafe',
   staleWhen: undefined as string | undefined,
   ebSend: vi.fn(),
+  lambdaSend: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/adminApi', () => ({
@@ -55,9 +56,18 @@ vi.mock('@aws-sdk/client-eventbridge', () => ({
     return { kind: 'targets', input };
   }),
 }));
+vi.mock('@aws-sdk/client-lambda', () => ({
+  LambdaClient: vi.fn().mockImplementation(function () {
+    return { send: h.lambdaSend };
+  }),
+  GetFunctionConfigurationCommand: vi.fn().mockImplementation(function (input) {
+    return { input };
+  }),
+  ListEventSourceMappingsCommand: vi.fn(),
+}));
 vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), warn: vi.fn() } }));
 
-import { CONSUMER_LOGS_BUDGET_MS } from '@bike4mind/server-utils/utils/dlqConsumerLogs';
+import { CONSUMER_LOGS_BUDGET_MS, resetConsumerLogsCacheForTests } from '@bike4mind/server-utils/utils/dlqConsumerLogs';
 import { resetScheduleRuleCacheForTests } from '@bike4mind/server-utils/utils/dlqScheduleRule';
 import '../messages';
 
@@ -105,7 +115,12 @@ describe('GET /api/admin/dlq/messages', () => {
     h.sourceQueue = 'webhookDeliveryQueue';
     h.staleWhen = undefined;
     h.ebSend.mockReset();
+    h.lambdaSend.mockReset().mockImplementation(async ({ input }: { input: { FunctionName: string } }) => ({
+      FunctionName: input.FunctionName.split(':').pop(),
+      LoggingConfig: { LogGroup: `/sst/app/stage/${input.FunctionName.split(':').pop()}-LogGroup` },
+    }));
     resetScheduleRuleCacheForTests();
+    resetConsumerLogsCacheForTests();
     vi.stubEnv('AWS_REGION', 'us-east-2');
   });
 
@@ -182,8 +197,41 @@ describe('GET /api/admin/dlq/messages', () => {
     expect(row.logsScope).toBe('request');
     const detail = decodeConsoleUrl(row.logsUrl!);
     expect(detail).toContain(`filter @requestId = "${REQUEST_ID}"`);
-    expect(detail).toContain("'/aws/lambda/app-stage-Nightly");
+    expect(detail).toContain("source~(~'/sst/app/stage/app-stage-Nightly-LogGroup)");
+    expect(h.lambdaSend).toHaveBeenCalledWith({ input: { FunctionName: 'app-stage-Nightly' } });
     expect(row.logsUrl).not.toMatch(/\d{12}/);
+  });
+
+  it('links a schedule target without a LoggingConfig to its default log group', async () => {
+    h.sourceQueue = null;
+    h.resolveConsumerLogsForSourceQueue.mockResolvedValue(null);
+    h.lambdaSend.mockResolvedValue({ FunctionName: 'app-stage-Nightly' });
+    h.receiveFromQueue.mockResolvedValue([
+      scheduledRun('2026-01-02T03:00:00Z', {
+        ErrorCode: { DataType: 'Number', StringValue: '200' },
+        RequestID: { DataType: 'String', StringValue: REQUEST_ID },
+      }),
+    ]);
+    ruleResponses({ State: 'ENABLED', ScheduleExpression: 'rate(1 day)' });
+
+    const row = (await peek(['support:read'])).messages[0];
+
+    expect(decodeConsoleUrl(row.logsUrl!)).toContain("source~(~'/aws/lambda/app-stage-Nightly)");
+  });
+
+  it('omits the schedule target link when its function lookup fails', async () => {
+    h.sourceQueue = null;
+    h.resolveConsumerLogsForSourceQueue.mockResolvedValue(null);
+    h.lambdaSend.mockRejectedValue(Object.assign(new Error('denied'), { name: 'AccessDeniedException' }));
+    h.receiveFromQueue.mockResolvedValue([
+      scheduledRun('2026-01-02T03:00:00Z', {
+        ErrorCode: { DataType: 'Number', StringValue: '200' },
+        RequestID: { DataType: 'String', StringValue: REQUEST_ID },
+      }),
+    ]);
+    ruleResponses({ State: 'ENABLED', ScheduleExpression: 'rate(1 day)' });
+
+    expect((await peek(['support:read'])).messages[0].logsUrl).toBeNull();
   });
 
   it('links an EventBridge target failure on a queue with no source queue', async () => {
@@ -206,8 +254,58 @@ describe('GET /api/admin/dlq/messages', () => {
     const row = (await peek(['support:read'])).messages[0];
 
     expect(row.logsScope).toBe('window');
-    expect(decodeConsoleUrl(row.logsUrl!)).toContain("'/aws/lambda/app-stage-Consumer");
+    expect(decodeConsoleUrl(row.logsUrl!)).toContain("source~(~'/sst/app/stage/app-stage-Consumer-LogGroup)");
+    expect(h.lambdaSend).toHaveBeenCalledWith({
+      input: { FunctionName: `arn:${PARTITION}:lambda:us-east-2:000000000000:function:app-stage-Consumer` },
+    });
     expect(h.ebSend).not.toHaveBeenCalled();
+  });
+
+  it('links an EventBridge target without a LoggingConfig to its default log group', async () => {
+    h.sourceQueue = null;
+    h.resolveConsumerLogsForSourceQueue.mockResolvedValue(null);
+    h.lambdaSend.mockResolvedValue({ FunctionName: 'app-stage-Consumer' });
+    h.receiveFromQueue.mockResolvedValue([
+      {
+        ...message,
+        Attributes: { SentTimestamp: String(Date.UTC(2026, 0, 2)) },
+        MessageAttributes: {
+          ERROR_CODE: { DataType: 'String', StringValue: 'SDK_CLIENT_ERROR' },
+          TARGET_ARN: {
+            DataType: 'String',
+            StringValue: `arn:${PARTITION}:lambda:us-east-2:000000000000:function:app-stage-Consumer:live`,
+          },
+        },
+      },
+    ]);
+
+    const row = (await peek(['support:read'])).messages[0];
+
+    expect(decodeConsoleUrl(row.logsUrl!)).toContain("source~(~'/aws/lambda/app-stage-Consumer)");
+    expect(h.lambdaSend).toHaveBeenCalledWith({
+      input: { FunctionName: `arn:${PARTITION}:lambda:us-east-2:000000000000:function:app-stage-Consumer` },
+    });
+  });
+
+  it('omits the EventBridge target link when its function lookup fails', async () => {
+    h.sourceQueue = null;
+    h.resolveConsumerLogsForSourceQueue.mockResolvedValue(null);
+    h.lambdaSend.mockRejectedValue(Object.assign(new Error('denied'), { name: 'AccessDeniedException' }));
+    h.receiveFromQueue.mockResolvedValue([
+      {
+        ...message,
+        Attributes: { SentTimestamp: String(Date.UTC(2026, 0, 2)) },
+        MessageAttributes: {
+          ERROR_CODE: { DataType: 'String', StringValue: 'SDK_CLIENT_ERROR' },
+          TARGET_ARN: {
+            DataType: 'String',
+            StringValue: `arn:${PARTITION}:lambda:us-east-2:000000000000:function:app-stage-Consumer`,
+          },
+        },
+      },
+    ]);
+
+    expect((await peek(['support:read'])).messages[0].logsUrl).toBeNull();
   });
 
   it('keeps an unsafe queue inspectable, visible and without receipt handles for a settings:manage caller', async () => {

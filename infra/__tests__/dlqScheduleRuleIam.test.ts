@@ -35,4 +35,15 @@ describe('web function DLQ schedule rule permissions', () => {
     expect(source).toMatch(/\$app\.stage,\s*\.\.\.Array\.from\(\{ length: \$app\.name\.length \+ 1 \}/);
     expect(source).toContain('`${$app.name.slice(0, n)}-${$app.stage}`');
   });
+
+  it('grants GetFunctionConfiguration for the schedule and EventBridge target log links, scoped to this stage', () => {
+    const at = source.lastIndexOf("'lambda:GetFunctionConfiguration'");
+    const statement = source.slice(source.lastIndexOf('{', at), source.indexOf('}', at) + 1);
+    expect(statement).toMatch(/resources:\s*stageFunctionArns\s*\}/);
+    expect(statement).not.toMatch(/'\*'/);
+    expect(source).toMatch(/const stageFunctionArns = stageRulePrefixes\.map\(/);
+    expect(source).toMatch(/:function:\$\{prefix\}-\*`/);
+    expect(source).not.toMatch(/:function:\*/);
+    expect(source).toMatch(/policyArn:\s*dlqFunctionLogsPolicy\.arn/);
+  });
 });

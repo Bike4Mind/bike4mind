@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
@@ -15,6 +15,8 @@ const h = vi.hoisted(() => ({
   countAttempts: vi.fn(),
   recommend: vi.fn(),
   scheduleFacts: vi.fn(),
+  logsUrl: vi.fn(),
+  functionLogGroup: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/adminApi', () => ({
@@ -62,11 +64,12 @@ vi.mock('@bike4mind/server-utils/utils/dlqMessages', () => ({
   findDlqFailures: h.findFailures,
   countDlqReplayAttempts: h.countAttempts,
   recommendForDlqMessage: h.recommend,
-  messageLogsUrl: () => null,
+  messageLogsUrl: h.logsUrl,
 }));
 vi.mock('@bike4mind/server-utils/utils/dlqConsumerLogs', () => ({
   CONSUMER_LOGS_BUDGET_MS: 10,
   resolveConsumerLogsForSourceQueue: async () => null,
+  resolveFunctionLogGroup: h.functionLogGroup,
   settleWithinBudget: async (lookups: Promise<unknown>[]) => Promise.all(lookups),
 }));
 vi.mock('@bike4mind/server-utils/utils/dlqMessageRow', async importOriginal => ({
@@ -105,6 +108,9 @@ beforeEach(() => {
     return messages ?? [];
   });
   h.scheduleFacts.mockResolvedValue(new Map());
+  h.logsUrl.mockReturnValue(null);
+  h.functionLogGroup.mockImplementation(async (_region: string, fn: string) => `/sst/app/stage/${fn.split(':').pop()}`);
+  vi.stubEnv('AWS_REGION', 'us-east-2');
   h.findFailures.mockResolvedValue({ failures: [], lookupFailed: false });
   h.countAttempts.mockResolvedValue(null);
   h.recommend.mockImplementation((facts: { replayAttempts?: number }) => ({
@@ -113,6 +119,8 @@ beforeEach(() => {
     basis: `attempts=${facts.replayAttempts ?? 'unknown'}`,
   }));
 });
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe('GET /api/admin/dlq/all-messages', () => {
   it('is readable with support:read, by a signed-in admin only', () => {
@@ -232,5 +240,61 @@ describe('GET /api/admin/dlq/all-messages', () => {
     );
     expect(byId('b-new').recommendation).toMatchObject({ basis: 'attempts=2' });
     expect(byId('f-mid').recommendation).toMatchObject({ basis: 'attempts=unknown' });
+  });
+
+  it('passes a schedule target log group to the logs link', async () => {
+    h.messages = { billing: [sqsMessage('b-new', 300)] };
+    h.scheduleFacts.mockResolvedValue(
+      new Map([
+        [
+          'b-new',
+          { scheduledAt: '2026-01-02T03:00:00.000Z', logTarget: { region: 'us-east-2', logGroup: '/sst/app/Nightly' } },
+        ],
+      ])
+    );
+    await call();
+    expect(h.logsUrl).toHaveBeenCalledWith(
+      expect.objectContaining({ scheduleLogs: { region: 'us-east-2', logGroup: '/sst/app/Nightly' } })
+    );
+  });
+
+  it('resolves an EventBridge TARGET_ARN to its function log group for the logs link', async () => {
+    const targetArn = ['arn', 'aws', 'lambda', 'us-east-2', '0'.repeat(12), 'function', 'app-stage-Consumer'].join(':');
+    h.messages = {
+      billing: [
+        {
+          ...sqsMessage('b-new', 300),
+          MessageAttributes: {
+            ERROR_CODE: { DataType: 'String', StringValue: 'SDK_CLIENT_ERROR' },
+            TARGET_ARN: { DataType: 'String', StringValue: targetArn },
+          },
+        },
+      ],
+    };
+    await call();
+    expect(h.functionLogGroup).toHaveBeenCalledWith('us-east-2', targetArn);
+    expect(h.logsUrl).toHaveBeenCalledWith(
+      expect.objectContaining({ targetLogs: { region: 'us-east-2', logGroup: '/sst/app/stage/app-stage-Consumer' } })
+    );
+  });
+
+  it('leaves out the TARGET_ARN log group when its lookup fails', async () => {
+    h.functionLogGroup.mockResolvedValue(null);
+    h.messages = {
+      billing: [
+        {
+          ...sqsMessage('b-new', 300),
+          MessageAttributes: {
+            ERROR_CODE: { DataType: 'String', StringValue: 'SDK_CLIENT_ERROR' },
+            TARGET_ARN: {
+              DataType: 'String',
+              StringValue: ['arn', 'aws', 'lambda', 'us-east-2', '0'.repeat(12), 'function', 'fn'].join(':'),
+            },
+          },
+        },
+      ],
+    };
+    await call();
+    expect(h.logsUrl).toHaveBeenCalledWith(expect.objectContaining({ targetLogs: undefined }));
   });
 });

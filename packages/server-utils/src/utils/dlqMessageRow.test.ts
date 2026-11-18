@@ -1,5 +1,5 @@
 import type { Message, MessageAttributeValue } from '@aws-sdk/client-sqs';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./dlqRegistry', () => ({
   getSourceQueueUrl: () => 'https://sqs.example/source',
@@ -15,8 +15,14 @@ vi.mock('./dlqScheduleRule', async importOriginal => ({
   ...(await importOriginal<typeof import('./dlqScheduleRule')>()),
   resolveScheduleRule,
 }));
+const resolveFunctionLogGroup = vi.hoisted(() => vi.fn());
+vi.mock('./dlqConsumerLogs', async importOriginal => ({
+  ...(await importOriginal<typeof import('./dlqConsumerLogs')>()),
+  resolveFunctionLogGroup,
+}));
 
-import { attributeFailure, resolveDlqScheduleFacts, toDlqMessageRow } from './dlqMessageRow';
+import { CONSUMER_LOGS_BUDGET_MS } from './dlqConsumerLogs';
+import { attributeFailure, resolveDlqScheduleFacts, resolveDlqTargetLogs, toDlqMessageRow } from './dlqMessageRow';
 
 const PARTITION = 'aws';
 
@@ -161,17 +167,52 @@ describe('resolveDlqScheduleFacts', () => {
 
   it('looks up the rule target for a request-id message on an unflagged queue, once per rule', async () => {
     resolveScheduleRule.mockReset().mockResolvedValue({ state: 'ENABLED', targetFunctionName: 'app-stage-Nightly' });
+    resolveFunctionLogGroup.mockReset().mockResolvedValue('/sst/app/stage/Nightly-LogGroup');
     const facts = await resolveDlqScheduleFacts({ staleWhen: undefined }, [
       scheduled('a', { RequestID: str(REQUEST_ID), ErrorCode: num('200') }),
       scheduled('b', { RequestID: str(REQUEST_ID), ErrorCode: num('200') }),
       scheduled('c'),
     ]);
     expect(resolveScheduleRule).toHaveBeenCalledTimes(1);
+    expect(resolveFunctionLogGroup).toHaveBeenCalledTimes(1);
+    expect(resolveFunctionLogGroup).toHaveBeenCalledWith('us-east-2', 'app-stage-Nightly');
     expect(facts.get('a')).toEqual({
       scheduledAt: '2026-01-02T03:00:00.000Z',
-      logTarget: { functionName: 'app-stage-Nightly', region: 'us-east-2' },
+      logTarget: { region: 'us-east-2', logGroup: '/sst/app/stage/Nightly-LogGroup' },
     });
     expect(facts.get('a')).not.toHaveProperty('nextRunDueAt');
+  });
+
+  it('leaves the log target unset when the function lookup fails', async () => {
+    resolveScheduleRule.mockReset().mockResolvedValue({ state: 'ENABLED', targetFunctionName: 'app-stage-Nightly' });
+    resolveFunctionLogGroup.mockReset().mockResolvedValue(null);
+    const facts = await resolveDlqScheduleFacts({ staleWhen: undefined }, [
+      scheduled('a', { RequestID: str(REQUEST_ID), ErrorCode: num('200') }),
+    ]);
+    expect(facts.get('a')).toEqual({ scheduledAt: '2026-01-02T03:00:00.000Z' });
+  });
+
+  it('keeps the rule facts when only the function lookup outlasts the budget', async () => {
+    vi.useFakeTimers();
+    try {
+      resolveScheduleRule
+        .mockReset()
+        .mockResolvedValue({ state: 'ENABLED', scheduleExpression: 'rate(1 hour)', targetFunctionName: 'f' });
+      resolveFunctionLogGroup.mockReset().mockReturnValue(new Promise(() => {}));
+      const pending = resolveDlqScheduleFacts(
+        { staleWhen: 'superseded-schedule' },
+        [scheduled('a', { RequestID: str(REQUEST_ID), ErrorCode: num('200') })],
+        1
+      );
+      await vi.advanceTimersByTimeAsync(CONSUMER_LOGS_BUDGET_MS);
+      const facts = await pending;
+      expect(facts.get('a')).toEqual({
+        scheduledAt: '2026-01-02T03:00:00.000Z',
+        nextRunDueAt: '2026-01-02T04:00:00.000Z',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('skips the lookup when no message needs it', async () => {
@@ -278,5 +319,42 @@ describe('resolveDlqScheduleFacts on a superseded-schedule queue', () => {
       1
     );
     expect(facts.get('a')).not.toHaveProperty('nextRunDueAt');
+  });
+});
+
+describe('resolveDlqTargetLogs', () => {
+  const target = (id: string, arn: string): Message => ({
+    MessageId: id,
+    Body: '{}',
+    MessageAttributes: { ERROR_CODE: str('SDK_CLIENT_ERROR'), TARGET_ARN: str(arn) },
+  });
+
+  beforeEach(() => {
+    vi.stubEnv('AWS_REGION', 'us-east-2');
+    resolveFunctionLogGroup.mockReset().mockResolvedValue('/sst/app/stage/Consumer-LogGroup');
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('resolves each target function once, by its unqualified ARN', async () => {
+    const logs = await resolveDlqTargetLogs([target('a', `${LAMBDA_ARN}:live`), target('b', LAMBDA_ARN)]);
+    expect(resolveFunctionLogGroup).toHaveBeenCalledTimes(1);
+    expect(resolveFunctionLogGroup).toHaveBeenCalledWith('us-east-2', LAMBDA_ARN);
+    expect(logs.get('a')).toEqual({ region: 'us-east-2', logGroup: '/sst/app/stage/Consumer-LogGroup' });
+    expect(logs.get('b')).toEqual({ region: 'us-east-2', logGroup: '/sst/app/stage/Consumer-LogGroup' });
+  });
+
+  it('accepts a target in another AWS partition', async () => {
+    const govArn = `arn:${PARTITION}-us-gov:lambda:us-east-2:000000000000:function:app-stage-Consumer`;
+    const logs = await resolveDlqTargetLogs([target('a', govArn)]);
+    expect(resolveFunctionLogGroup).toHaveBeenCalledWith('us-east-2', govArn);
+    expect(logs.has('a')).toBe(true);
+  });
+
+  it('skips targets outside the deploy region, non-function targets, and failed lookups', async () => {
+    const otherRegion = `arn:${PARTITION}:lambda:eu-west-1:000000000000:function:other`;
+    expect((await resolveDlqTargetLogs([target('a', otherRegion), target('b', RULE_ARN)])).size).toBe(0);
+    expect(resolveFunctionLogGroup).not.toHaveBeenCalled();
+    resolveFunctionLogGroup.mockResolvedValue(null);
+    expect((await resolveDlqTargetLogs([target('c', LAMBDA_ARN)])).size).toBe(0);
   });
 });

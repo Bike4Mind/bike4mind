@@ -1,6 +1,7 @@
 import {
   GetFunctionConfigurationCommand,
   LambdaClient,
+  type GetFunctionConfigurationCommandOutput,
   ListEventSourceMappingsCommand,
   type EventSourceMappingConfiguration,
 } from '@aws-sdk/client-lambda';
@@ -37,7 +38,7 @@ const THROTTLE_ERROR_NAMES = new Set([
 // A hung AWS call would otherwise hold its slot for the life of the instance and stall every later lookup.
 const LOOKUP_TIMEOUT_MS = 10_000;
 
-type LookupResult = { logs: ConsumerLogs | null; retryable: boolean };
+type Lookup<T> = { value: T | null; retryable: boolean };
 
 export const DEFAULT_LOGS_QUERY =
   'fields @timestamp, @message, @logStream\n' +
@@ -49,7 +50,10 @@ export const DEFAULT_LOGS_QUERY =
 // logs links instead of failing the admin request.
 export const CONSUMER_LOGS_BUDGET_MS = 15_000;
 
-const cache = new Map<string, { promise: Promise<ConsumerLogs | null>; expiresAt: number }>();
+type CacheEntry<T> = { promise: Promise<T | null>; expiresAt: number };
+
+const cache = new Map<string, CacheEntry<ConsumerLogs>>();
+const functionLogGroupCache = new Map<string, CacheEntry<string>>();
 let sqsClient: SQSClient | undefined;
 const lambdaClients = new Map<string, LambdaClient>();
 let activeLookups = 0;
@@ -57,19 +61,58 @@ const waitingLookups: Array<() => void> = [];
 
 export function resetConsumerLogsCacheForTests(): void {
   cache.clear();
+  functionLogGroupCache.clear();
 }
 
-function withLookupTimeout(sourceQueueUrl: string, lookup: Promise<LookupResult>): Promise<LookupResult> {
+function withLookupTimeout<T>(lookup: Promise<Lookup<T>>, logContext: Record<string, string>): Promise<Lookup<T>> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<LookupResult>(resolve => {
+  const timeout = new Promise<Lookup<T>>(resolve => {
     timer = setTimeout(() => {
-      Logger.warn('[dlqConsumerLogs] consumer log group lookup timed out', {
-        queue: sourceQueueUrl.slice(sourceQueueUrl.lastIndexOf('/') + 1),
-      });
-      resolve({ logs: null, retryable: true });
+      Logger.warn('[dlqConsumerLogs] log group lookup timed out', logContext);
+      resolve({ value: null, retryable: true });
     }, LOOKUP_TIMEOUT_MS);
   });
   return Promise.race([lookup, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** Cached 10 minutes, a null result 1 minute; a retryable (throttled or timed-out) result is not cached. */
+function cachedLookup<T>(
+  store: Map<string, CacheEntry<T>>,
+  key: string,
+  run: () => Promise<Lookup<T>>,
+  logContext: Record<string, string>
+): Promise<T | null> {
+  const now = Date.now();
+  const hit = store.get(key);
+  if (hit && hit.expiresAt > now) return hit.promise;
+
+  const entry: CacheEntry<T> = {
+    promise: withLookupSlot(() => withLookupTimeout(run(), logContext)).then(({ value, retryable }) => {
+      if (retryable) {
+        if (store.get(key) === entry) store.delete(key);
+      } else if (value === null) {
+        entry.expiresAt = Date.now() + NULL_CACHE_TTL_MS;
+      }
+      return value;
+    }),
+    expiresAt: now + CACHE_TTL_MS,
+  };
+  store.set(key, entry);
+  return entry.promise;
+}
+
+function lambdaClientFor(region: string): LambdaClient {
+  let lambda = lambdaClients.get(region);
+  if (!lambda) {
+    lambda = new LambdaClient({ region });
+    lambdaClients.set(region, lambda);
+  }
+  return lambda;
+}
+
+// SST gives a function's log group its own generated name, so /aws/lambda/<name> is only the AWS default.
+function functionLogGroup(config: GetFunctionConfigurationCommandOutput, functionName: string): string {
+  return config.LoggingConfig?.LogGroup ?? `/aws/lambda/${config.FunctionName ?? functionName}`;
 }
 
 async function withLookupSlot<T>(run: () => Promise<T>): Promise<T> {
@@ -101,30 +144,41 @@ export function resolveConsumerLogsForSourceQueue(sourceQueue: SourceQueueName |
  * event source mappings. Never throws: any AWS error resolves to null so callers can drop the link.
  */
 export function resolveConsumerLogs(sourceQueueUrl: string): Promise<ConsumerLogs | null> {
-  const now = Date.now();
-  const hit = cache.get(sourceQueueUrl);
-  if (hit && hit.expiresAt > now) return hit.promise;
+  return cachedLookup(cache, sourceQueueUrl, () => lookupConsumerLogs(sourceQueueUrl), {
+    queue: sourceQueueUrl.slice(sourceQueueUrl.lastIndexOf('/') + 1),
+  });
+}
 
-  const entry: { promise: Promise<ConsumerLogs | null>; expiresAt: number } = {
-    promise: withLookupSlot(() => withLookupTimeout(sourceQueueUrl, lookupConsumerLogs(sourceQueueUrl))).then(
-      ({ logs, retryable }) => {
-        if (retryable) {
-          if (cache.get(sourceQueueUrl) === entry) cache.delete(sourceQueueUrl);
-        } else if (logs === null) {
-          entry.expiresAt = Date.now() + NULL_CACHE_TTL_MS;
-        }
-        return logs;
+/**
+ * The log group of one Lambda function (a name, or an unqualified function ARN) in `region`, from its
+ * LoggingConfig. Never throws: any AWS error resolves to null so callers can drop the link.
+ */
+export function resolveFunctionLogGroup(region: string, functionId: string): Promise<string | null> {
+  if (!REGION_RE.test(region)) return Promise.resolve(null);
+  const functionName = functionId.split(':')[6] ?? functionId;
+  return cachedLookup(
+    functionLogGroupCache,
+    `${region}/${functionId}`,
+    async () => {
+      try {
+        // Never retain the response's environment variables.
+        const config = await lambdaClientFor(region).send(
+          new GetFunctionConfigurationCommand({ FunctionName: functionId })
+        );
+        return { value: functionLogGroup(config, functionName), retryable: false };
+      } catch (error) {
+        const errorName = error instanceof Error ? error.name : String(error);
+        Logger.warn('[dlqConsumerLogs] function log group lookup failed', { functionName, error: errorName });
+        return { value: null, retryable: THROTTLE_ERROR_NAMES.has(errorName) };
       }
-    ),
-    expiresAt: now + CACHE_TTL_MS,
-  };
-  cache.set(sourceQueueUrl, entry);
-  return entry.promise;
+    },
+    { functionName }
+  );
 }
 
 /** `retryable` marks a throttled or timed-out lookup, which is not cached so the next request tries again. */
-async function lookupConsumerLogs(sourceQueueUrl: string): Promise<LookupResult> {
-  const none: LookupResult = { logs: null, retryable: false };
+async function lookupConsumerLogs(sourceQueueUrl: string): Promise<Lookup<ConsumerLogs>> {
+  const none: Lookup<ConsumerLogs> = { value: null, retryable: false };
   try {
     const { Attributes: attrs = {} } = await (sqsClient ??= new SQSClient({})).send(
       new GetQueueAttributesCommand({
@@ -137,11 +191,7 @@ async function lookupConsumerLogs(sourceQueueUrl: string): Promise<LookupResult>
     const [, partition, , region] = queueArn.split(':');
     if (partition !== 'aws' || !region || !REGION_RE.test(region)) return none;
 
-    let lambda = lambdaClients.get(region);
-    if (!lambda) {
-      lambda = new LambdaClient({ region });
-      lambdaClients.set(region, lambda);
-    }
+    const lambda = lambdaClientFor(region);
     const functionArns = new Set<string>();
     let hasQualifiedConsumer = false;
     let marker: string | undefined;
@@ -174,13 +224,12 @@ async function lookupConsumerLogs(sourceQueueUrl: string): Promise<LookupResult>
         consumerDeployedAt = new Date(config.LastModified).toISOString();
         consumerVersion = config.Version;
       }
-      const functionName = config.FunctionName ?? functionArn.split(':')[6];
-      logGroups.add(config.LoggingConfig?.LogGroup ?? `/aws/lambda/${functionName}`);
+      logGroups.add(functionLogGroup(config, functionArn.split(':')[6]));
     }
     if (logGroups.size === 0) return none;
 
     return {
-      logs: {
+      value: {
         region,
         logGroups: [...logGroups].sort(),
         retryWindowMs: retryWindow(attrs.VisibilityTimeout, attrs.RedrivePolicy),
@@ -195,7 +244,7 @@ async function lookupConsumerLogs(sourceQueueUrl: string): Promise<LookupResult>
       queue: sourceQueueUrl.slice(sourceQueueUrl.lastIndexOf('/') + 1),
       error: errorName,
     });
-    return { logs: null, retryable: THROTTLE_ERROR_NAMES.has(errorName) };
+    return { value: null, retryable: THROTTLE_ERROR_NAMES.has(errorName) };
   }
 }
 

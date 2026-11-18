@@ -1,7 +1,18 @@
 import type { Message, MessageAttributeValue } from '@aws-sdk/client-sqs';
 import type { DlqRecommendation } from '@bike4mind/common';
-import { CONSUMER_LOGS_BUDGET_MS, settleWithinBudget, type ConsumerLogs } from './dlqConsumerLogs';
-import { messageLogsUrl, recommendForDlqMessage, type DlqFailureRecord, type DlqLogsLink } from './dlqMessages';
+import {
+  CONSUMER_LOGS_BUDGET_MS,
+  resolveFunctionLogGroup,
+  settleWithinBudget,
+  type ConsumerLogs,
+} from './dlqConsumerLogs';
+import {
+  messageLogsUrl,
+  recommendForDlqMessage,
+  type DlqFailureRecord,
+  type DlqFunctionLogs,
+  type DlqLogsLink,
+} from './dlqMessages';
 import {
   describeDlqMessage,
   type DlqMessageEntity,
@@ -9,7 +20,13 @@ import {
   type DlqStaleWhen,
   type RegisteredDlqDescriptor,
 } from './dlqRegistry';
-import { ARN_PARTITION, nextRunDueAt, parseScheduledEvent, resolveScheduleRule } from './dlqScheduleRule';
+import {
+  ARN_PARTITION,
+  LAMBDA_FUNCTION_ARN,
+  nextRunDueAt,
+  parseScheduledEvent,
+  resolveScheduleRule,
+} from './dlqScheduleRule';
 
 const MAX_ERROR_MESSAGE_CHARS = 500;
 const MAX_ERROR_CODE_CHARS = 100;
@@ -117,7 +134,7 @@ export type DlqMessageRow = {
 export type DlqScheduleFacts = {
   scheduledAt: string;
   nextRunDueAt?: string;
-  logTarget?: { functionName: string; region: string };
+  logTarget?: DlqFunctionLogs;
 };
 
 /**
@@ -125,8 +142,8 @@ export type DlqScheduleFacts = {
  * superseded-schedule (for nextRunDueAt) or the message carries a Lambda RequestID (for the logs link
  * target). nextRunDueAt is set only when `messages` holds the whole queue (`queueDepth` known and reached;
  * it must count in-flight messages too, since a hidden copy may be the next run) and the next run of the
- * same rule is not among them. Each rule is looked up once, within the consumer-logs budget; a failed or
- * slow lookup leaves only the rule-derived fields unset.
+ * same rule is not among them. Each rule and its target's log group is looked up once, within the
+ * consumer-logs budget; a failed or slow lookup leaves only the fields derived from it unset.
  */
 export async function resolveDlqScheduleFacts(
   entry: Pick<RegisteredDlqDescriptor, 'staleWhen'>,
@@ -142,8 +159,18 @@ export async function resolveDlqScheduleFacts(
     return [{ messageId: message.MessageId!, needsRule, ...event }];
   });
   const ruleArns = [...new Set(events.filter(event => event.needsRule).map(event => event.ruleArn))];
-  const rules = await settleWithinBudget(ruleArns.map(resolveScheduleRule), CONSUMER_LOGS_BUDGET_MS);
+  const ruleLookups = ruleArns.map(resolveScheduleRule);
+  const logGroupLookups = ruleArns.map((arn, index) =>
+    ruleLookups[index].then(rule =>
+      rule?.targetFunctionName ? resolveFunctionLogGroup(arn.split(':')[3], rule.targetFunctionName) : null
+    )
+  );
+  const [rules, logGroups] = await Promise.all([
+    settleWithinBudget(ruleLookups, CONSUMER_LOGS_BUDGET_MS),
+    settleWithinBudget(logGroupLookups, CONSUMER_LOGS_BUDGET_MS),
+  ]);
   const ruleByArn = new Map(ruleArns.map((arn, index) => [arn, rules[index] ?? null]));
+  const logGroupByArn = new Map(ruleArns.map((arn, index) => [arn, logGroups[index] ?? null]));
   // A partial listing cannot show that the next run is absent from the queue.
   const wholeQueue = queueDepth !== undefined && queueDepth >= 0 && messages.length >= queueDepth;
   for (const event of events) {
@@ -151,14 +178,40 @@ export async function resolveDlqScheduleFacts(
     const due = superseded && wholeQueue ? nextRunDueAt(event.time, rule) : undefined;
     const runTimes = events.filter(other => other.ruleArn === event.ruleArn).map(other => Date.parse(other.time));
     const nextRunFailed = due !== undefined && nextRunIn(runTimes, Date.parse(event.time), Date.parse(due));
-    const region = event.ruleArn.split(':')[3];
+    const logGroup = logGroupByArn.get(event.ruleArn);
     facts.set(event.messageId, {
       scheduledAt: event.time,
       ...(due && !nextRunFailed ? { nextRunDueAt: due } : {}),
-      ...(rule?.targetFunctionName ? { logTarget: { functionName: rule.targetFunctionName, region } } : {}),
+      ...(logGroup ? { logTarget: { region: event.ruleArn.split(':')[3], logGroup } } : {}),
     });
   }
   return facts;
+}
+
+/**
+ * Log group per message ID of the Lambda an EventBridge TARGET_ARN names, for targets in the deploy region.
+ * Each function is looked up once, within the consumer-logs budget; a failed or slow lookup leaves it out.
+ */
+export async function resolveDlqTargetLogs(messages: readonly Message[]): Promise<Map<string, DlqFunctionLogs>> {
+  const targets = messages.flatMap(message => {
+    const match = attributeFailure(message)?.targetArn?.match(LAMBDA_FUNCTION_ARN);
+    if (!message.MessageId || !match || match[1] !== process.env.AWS_REGION) return [];
+    // The unqualified ARN, so a target in another account is not resolved as a same-named local function.
+    const functionArn = match[0].split(':').slice(0, 7).join(':');
+    return [{ messageId: message.MessageId, region: match[1], functionArn }];
+  });
+  const functionArns = [...new Set(targets.map(target => target.functionArn))];
+  const logGroups = await settleWithinBudget(
+    functionArns.map(functionArn => resolveFunctionLogGroup(functionArn.split(':')[3], functionArn)),
+    CONSUMER_LOGS_BUDGET_MS
+  );
+  const logGroupByArn = new Map(functionArns.map((arn, index) => [arn, logGroups[index] ?? null]));
+  const result = new Map<string, DlqFunctionLogs>();
+  for (const target of targets) {
+    const logGroup = logGroupByArn.get(target.functionArn);
+    if (logGroup) result.set(target.messageId, { region: target.region, logGroup });
+  }
+  return result;
 }
 
 // A run's time can drift from the exact interval (rate() rules), so the next run is matched within half an interval.
@@ -177,6 +230,7 @@ export function toDlqMessageRow(
     logs: ConsumerLogs | null;
     replayAttempts: number | undefined;
     schedule?: DlqScheduleFacts;
+    targetLogs?: DlqFunctionLogs;
   }
 ): DlqMessageRow {
   const { recorded } = ctx;
@@ -196,9 +250,9 @@ export function toDlqMessageRow(
     logs: ctx.logs,
     sentTimestamp: message.Attributes?.SentTimestamp,
     requestId: attributes?.requestId,
-    targetArn: attributes?.targetArn,
+    targetLogs: ctx.targetLogs,
     scheduledAt: ctx.schedule?.scheduledAt,
-    scheduleTarget: ctx.schedule?.logTarget,
+    scheduleLogs: ctx.schedule?.logTarget,
   });
   return {
     queueLabel: entry.label,

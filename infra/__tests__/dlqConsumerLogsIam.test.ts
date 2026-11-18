@@ -60,8 +60,8 @@ describe('web function DLQ consumer log permissions', () => {
     expect(expected.filter(name => !listed.has(name))).toEqual([]);
   });
 
-  it('grants GetFunctionConfiguration nowhere else', () => {
-    expect(source.match(/lambda:GetFunctionConfiguration/g)).toHaveLength(1);
+  it('grants GetFunctionConfiguration only to the consumers and the stage-scoped function logs policy', () => {
+    expect(source.match(/lambda:GetFunctionConfiguration/g)).toHaveLength(2);
   });
 
   it('hardcodes no account id', () => {
