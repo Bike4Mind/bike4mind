@@ -329,7 +329,9 @@ describe('PUT /api/admin/users/:userId/permissions', () => {
         expect.anything(),
         expect.objectContaining({
           details: expect.objectContaining({
-            removedRolePermissions: [{ roleId: SUPPORT_ROLE, permissions: ['support:read', 'users:moderate'] }],
+            removedRolePermissions: [
+              { roleId: SUPPORT_ROLE, permissions: ['support:read', 'users:moderate'], roleName: 'Support' },
+            ],
           }),
         })
       );

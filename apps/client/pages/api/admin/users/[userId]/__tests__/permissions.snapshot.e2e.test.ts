@@ -139,7 +139,9 @@ describe('permission-removal snapshot transaction', () => {
     await removal;
     expect(await User.findById(TARGET).select('adminRoleIds').lean()).toMatchObject({ adminRoleIds: [] });
     const audit = await AdminAuditLogModel.findOne({ action: 'user.permissions.updated' }).lean();
-    expect(audit?.details?.removedRolePermissions).toEqual([{ roleId: role.id, permissions: ['users:moderate'] }]);
+    expect(audit?.details?.removedRolePermissions).toEqual([
+      { roleId: role.id, permissions: ['users:moderate'], roleName: 'Reviewer role' },
+    ]);
     if (!editedSnapshot) throw new Error('Edited role snapshot was not captured');
     const finalRole = await AdminRoleModel.findById(role.id).lean<{ __v: number; updatedAt: Date }>();
     expect(finalRole?.__v).toBe(editedSnapshot.__v + 1);

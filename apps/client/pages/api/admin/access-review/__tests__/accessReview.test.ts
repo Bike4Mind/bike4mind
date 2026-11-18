@@ -88,6 +88,8 @@ const admin = (userId: string, fields: Record<string, unknown> = {}) => ({
   permissions: ['support:read'],
   directPermissions: ['support:read'],
   adminRoleIds: [],
+  roles: [],
+  permissionSources: [{ permission: 'support:read', direct: true, roles: [] }],
   status: 'active',
   lastActiveAt: null,
   lastAdminActionAt: NOW.toISOString(),
@@ -287,6 +289,24 @@ describe('POST decisions', () => {
     }
   );
 
+  it('confirms a current admin with a snapshot of their access and roles', async () => {
+    const roleId = '660000000000000000000001';
+    target({ isAdmin: false, adminPermissions: ['support:read'], adminRoleIds: [roleId] });
+    mocks.findRoles.mockResolvedValue([
+      { id: roleId, name: 'Billing', permissions: ['support:read', 'credits:adjust'] },
+    ]);
+    await call(decisions, 'POST', { body: { userId: OTHER, decision: 'confirmed' } });
+    expect(mocks.recordDecision).toHaveBeenCalledWith(
+      QUARTER,
+      90,
+      expect.anything(),
+      expect.objectContaining({
+        permissions: ['support:read', 'credits:adjust'],
+        roles: [{ id: roleId, name: 'Billing' }],
+      })
+    );
+  });
+
   it('confirms a current admin with a snapshot of their access and an audit entry', async () => {
     const res = await call(decisions, 'POST', { body: { userId: OTHER, decision: 'confirmed' } });
     expect(res._getStatusCode()).toBe(200);
@@ -411,10 +431,10 @@ describe('POST decisions', () => {
           { field: 'adminPermissions', before: ['support:read'], after: [] },
           { field: 'adminRoleIds', before: [roleId], after: [] },
         ]),
-        details: { removedRolePermissions: [{ roleId, permissions: ['credits:adjust'] }] },
+        details: { removedRolePermissions: [{ roleId, permissions: ['credits:adjust'], roleName: 'Billing' }] },
       },
     ]);
-    mocks.findRoles.mockResolvedValue([{ id: roleId, name: 'Billing', permissions: ['credits:adjust'] }]);
+    mocks.findRoles.mockResolvedValue([{ id: roleId, name: 'Renamed', permissions: ['credits:adjust'] }]);
     await call(decisions, 'POST', { body: { userId: OTHER, decision: 'revoked' } });
     expect(mocks.findRoles).not.toHaveBeenCalled();
     expect(mocks.recordDecision).toHaveBeenCalledWith(
@@ -424,7 +444,35 @@ describe('POST decisions', () => {
       expect.objectContaining({
         fullAdmin: false,
         permissions: expect.arrayContaining(['support:read', 'credits:adjust']),
+        roles: [{ id: roleId, name: 'Billing' }],
       })
+    );
+  });
+
+  it.each([
+    [
+      'its current name',
+      [{ id: '660000000000000000000001', name: 'Billing', permissions: ['users:moderate'] }],
+      'Billing',
+    ],
+    ['its id once the role is gone', [], '660000000000000000000001'],
+  ])('names a removed role from an audit without a role name by %s', async (_case, current, name) => {
+    const roleId = '660000000000000000000001';
+    target({ isAdmin: false, adminPermissions: [], adminRoleIds: [] });
+    auditRows([
+      {
+        ...permissionsChange('audit-legacy', [{ field: 'adminRoleIds', before: [roleId], after: [] }]),
+        details: { removedRolePermissions: [{ roleId, permissions: ['credits:adjust'] }] },
+      },
+    ]);
+    mocks.findRoles.mockResolvedValue(current);
+    await call(decisions, 'POST', { body: { userId: OTHER, decision: 'revoked' } });
+    expect(mocks.findRoles).toHaveBeenCalledWith([roleId]);
+    expect(mocks.recordDecision).toHaveBeenCalledWith(
+      QUARTER,
+      90,
+      expect.anything(),
+      expect.objectContaining({ permissions: ['credits:adjust'], roles: [{ id: roleId, name }] })
     );
   });
 
@@ -437,7 +485,7 @@ describe('POST decisions', () => {
     auditRows([
       {
         ...permissionsChange('audit-snapshot', [{ field: 'adminRoleIds', before: [roleId], after: [] }]),
-        details: { removedRolePermissions: [{ roleId, permissions: ['credits:adjust'] }] },
+        details: { removedRolePermissions: [{ roleId, permissions: ['credits:adjust'], roleName: 'Billing' }] },
       },
     ]);
     mocks.findRoles.mockResolvedValue(
@@ -546,7 +594,35 @@ describe('GET export', () => {
           totpSecret: 'SEEDED-TOTP-SECRET',
           backupCodes: ['SEEDED-BACKUP-CODE'],
           mfa: { totpSecret: 'SEEDED-TOTP-SECRET' },
+          adminRoleIds: ['660000000000000000000001', '660000000000000000000002'],
+          roles: [
+            { id: '660000000000000000000001', name: '=Support, "ops"', deleted: false },
+            { id: '660000000000000000000002', name: null, deleted: true },
+          ],
+          permissionSources: [
+            {
+              permission: 'support:read',
+              direct: true,
+              roles: [{ id: '660000000000000000000001', name: '=Support, "ops"' }],
+            },
+          ],
         }),
+      ],
+      roles: [
+        {
+          id: '660000000000000000000001',
+          name: '=Support, "ops"',
+          description: '',
+          permissions: ['support:read'],
+          members: [{ userId: OTHER, email: null, username: 'agent', status: 'active' }],
+        },
+        {
+          id: '660000000000000000000003',
+          name: 'Unused',
+          description: '',
+          permissions: ['models:curate'],
+          members: [],
+        },
       ],
       apiKeys: [{ id: 'k1', name: 'sk-SEEDED-API-KEY-SECRET', keyHash: 'SEEDED-HASH' }],
       supportAccess: [],
@@ -560,6 +636,7 @@ describe('GET export', () => {
             email: 'gone@example.com',
             fullAdmin: false,
             permissions: ['credits:adjust'],
+            roles: [{ id: '660000000000000000000004', name: 'Billing' }],
             decision: 'revoked',
             reviewer: { userId: REVIEWER, name: 'Rev' },
             decidedAt: NOW,
@@ -572,11 +649,19 @@ describe('GET export', () => {
     const body = res._getData() as string;
     const [header, ...rows] = body.split('\n');
     expect(header).toBe(
-      '"quarter","userId","email","username","fullAdmin","permissions","grantedBy","grantedAt","lastAdminActionAt","lastSignInAt","mfaEnabled","dormant","decision","reviewerName","reviewerUserId","decidedAt","reviewCompletedAt"'
+      '"quarter","userId","email","username","fullAdmin","permissions","grantedBy","grantedAt","lastAdminActionAt","lastSignInAt","mfaEnabled","dormant","decision","reviewerName","reviewerUserId","decidedAt","reviewCompletedAt","directPermissions","roles","permissionSources"'
     );
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(6);
     expect(rows[0]).toContain(`"'=HYPERLINK(""http://evil.example"")"`);
+    expect(rows[0]).toMatch(
+      /,"support:read","'=Support, ""ops"";deleted-role:660000000000000000000002","support:read=direct \+ =Support, ""ops"""$/
+    );
     expect(rows[1]).toContain('"revoked"');
+    expect(rows[1]).toMatch(/,"","Billing",""$/);
+    expect(rows[2]).toBe('');
+    expect(rows[3]).toBe('"roleId","role","permissions","members"');
+    expect(rows[4]).toBe(`"660000000000000000000001","'=Support, ""ops""","support:read","agent"`);
+    expect(rows[5]).toBe('"660000000000000000000003","Unused","models:curate",""');
     expect(body).not.toMatch(/SEEDED|totp|backup|keyHash/i);
     expect(res.getHeader('Content-Type')).toBe('text/csv; charset=utf-8');
     expect(mocks.audit).toHaveBeenCalledWith(
@@ -594,7 +679,8 @@ describe('GET export', () => {
       statusCode: 404,
     });
     mocks.findByQuarter.mockResolvedValue(record({ quarter: '2000-Q1' }));
-    await call(exportRoute, 'GET', { query: { quarter: '2000-Q1' } });
+    const res = await call(exportRoute, 'GET', { query: { quarter: '2000-Q1' } });
     expect(mocks.collect).not.toHaveBeenCalled();
+    expect(res._getData()).not.toContain('"roleId"');
   });
 });

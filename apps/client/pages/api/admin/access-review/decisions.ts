@@ -5,6 +5,7 @@ import {
   ConflictError,
   ForbiddenError,
   NotFoundError,
+  adminPermissionSources,
   sortAdminPermissions,
   type AccessReviewDecision,
   type AccessReviewReviewer,
@@ -49,7 +50,9 @@ type AccessChangeEntry = {
 };
 
 const RemovedRolePermissionsSchema = z.object({
-  removedRolePermissions: z.array(z.object({ roleId: z.string().min(1), permissions: z.array(z.string()) })),
+  removedRolePermissions: z.array(
+    z.object({ roleId: z.string().min(1), permissions: z.array(z.string()), roleName: z.string().optional() })
+  ),
 });
 
 type Removal = { entry: AccessChangeEntry; fullAdmin: boolean; permissions: string[]; roleIds: string[] };
@@ -129,10 +132,8 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'settings:
           userId,
           email: target.email ?? null,
           fullAdmin: target.isAdmin === true,
-          permissions: sortAdminPermissions([
-            ...(target.adminPermissions ?? []),
-            ...roles.flatMap(role => role.permissions),
-          ]),
+          permissions: adminPermissionSources(target.adminPermissions ?? [], roles).map(source => source.permission),
+          roles: roles.map(role => ({ id: role.id, name: role.name })),
           decision,
           reviewer,
           decidedAt: now,
@@ -163,7 +164,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'settings:
         if (removals.length === 0) {
           throw new ConflictError('No admin access removal for this account is on the audit log this quarter.');
         }
-        const removedRolePermissions = removals.flatMap(removal => {
+        const removedRoles = removals.flatMap(removal => {
           if (removal.roleIds.length === 0) return [];
           const snapshot = RemovedRolePermissionsSchema.safeParse(removal.entry.details);
           if (
@@ -174,18 +175,28 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'settings:
               'The removal audit has no verified role-permission snapshot. Historical role access cannot be confirmed.'
             );
           }
-          return snapshot.data.removedRolePermissions
-            .filter(role => removal.roleIds.includes(role.roleId))
-            .flatMap(role => role.permissions);
+          return snapshot.data.removedRolePermissions.filter(role => removal.roleIds.includes(role.roleId));
         });
+        const unnamed = removedRoles.filter(role => !role.roleName).map(role => role.roleId);
+        // Audits written before the snapshot carried names fall back to the role's current name, then its id.
+        const currentNames = new Map(
+          unnamed.length > 0 ? (await adminRoleRepository.findByIds(unnamed)).map(role => [role.id, role.name]) : []
+        );
+        const roleRefs = new Map(
+          removedRoles.map(role => [
+            role.roleId,
+            { id: role.roleId, name: role.roleName ?? currentNames.get(role.roleId) ?? role.roleId },
+          ])
+        );
         entry = {
           userId,
           email: target.email ?? null,
           fullAdmin: removals.some(removal => removal.fullAdmin),
           permissions: sortAdminPermissions([
             ...removals.flatMap(removal => removal.permissions),
-            ...removedRolePermissions,
+            ...removedRoles.flatMap(role => role.permissions),
           ]),
+          roles: [...roleRefs.values()],
           decision,
           reviewer,
           decidedAt: now,

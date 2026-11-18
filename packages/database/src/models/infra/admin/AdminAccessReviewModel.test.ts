@@ -73,6 +73,23 @@ describe('AdminAccessReviewRepository', () => {
     ]);
   });
 
+  it('round-trips the decision role snapshot and leaves it absent on a decision without one', async () => {
+    const withRoles = new Types.ObjectId().toHexString();
+    const without = new Types.ObjectId().toHexString();
+    const roles = [{ id: new Types.ObjectId().toHexString(), name: 'Support agent' }];
+    await adminAccessReviewRepository.recordDecision('2027-Q3', 90, ADA, {
+      ...decisionFor(withRoles, 'confirmed'),
+      roles,
+    });
+    await adminAccessReviewRepository.recordDecision('2027-Q3', 90, ADA, decisionFor(without, 'confirmed'));
+
+    const record = await adminAccessReviewRepository.findByQuarter('2027-Q3');
+    expect(record?.decisions.find(decision => decision.userId === withRoles)?.roles).toEqual(roles);
+    expect(record?.decisions.find(decision => decision.userId === without)).not.toHaveProperty('roles');
+    const raw = await AdminAccessReviewModel.findOne({ quarter: '2027-Q3' }).lean();
+    expect(raw?.decisions.find(decision => decision.userId === without)).not.toHaveProperty('roles');
+  });
+
   it('treats a repeated decision as a no-op', async () => {
     const target = new Types.ObjectId().toHexString();
     await adminAccessReviewRepository.recordDecision('2027-Q2', 90, ADA, decisionFor(target, 'confirmed'));
