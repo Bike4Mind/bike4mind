@@ -13,6 +13,12 @@ export interface WebSearchProviderResult {
   title: string;
   url: string;
   snippet: string;
+  /**
+   * The destination's own hostname, set only when `url` is a search-engine redirect that hides it
+   * (SerpAPI can return `google.com/goto?url=<opaque token>`). `url` stays the redirect, which opens
+   * the right page; this is what a label should show instead of the redirect's host.
+   */
+  displayHost?: string;
   /** Provider-supplied image for this hit, absent when the provider gave none. Same as `images[0]`. */
   thumbnail?: string;
   /** Every image the provider supplied for this hit, deduped and capped. */
@@ -287,33 +293,22 @@ const GOOGLE_HOSTS: ReadonlySet<string> = new Set(['google.com', 'www.google.com
 
 /**
  * SerpAPI can return Google's own redirect (`google.com/goto?url=<opaque token>`) as `link`, with
- * the real page only in the breadcrumb-style `displayed_link` ("https://host > a > b"). Rebuilds the
- * URL from that breadcrumb: the host is right and the path is as displayed, but Google drops the
- * query string from the breadcrumb, so the result can be the parent of the exact page. Any other
- * link, and a breadcrumb that is truncated or not a plain URL (a video hit shows "920+ views"),
- * passes `link` through unchanged.
+ * the destination only in the breadcrumb-style `displayed_link` ("https://host > a > b"). Returns
+ * that destination's hostname, or undefined for any other link or a breadcrumb that does not start
+ * with a URL (a video hit shows "920+ views"). Only the host is read: the breadcrumb path follows
+ * the site's own breadcrumb names, not its URL path, and is cut short with an ellipsis when long,
+ * while the host always comes first and survives both.
  */
-function resolveSerpApiLink(link: string, displayedLink: string | undefined): string {
-  let parsed: URL;
+function googleRedirectDisplayHost(link: string, displayedLink: string | undefined): string | undefined {
   try {
-    parsed = new URL(link);
+    const parsed = new URL(link);
+    if (!GOOGLE_HOSTS.has(parsed.hostname) || !/^\/(goto|url)$/.test(parsed.pathname)) return undefined;
+    if (!displayedLink) return undefined;
+    const shown = new URL(displayedLink.trim().split(/\s/)[0]);
+    const isWeb = shown.protocol === 'https:' || shown.protocol === 'http:';
+    return isWeb && !GOOGLE_HOSTS.has(shown.hostname) ? shown.hostname : undefined;
   } catch {
-    return link;
-  }
-  if (!GOOGLE_HOSTS.has(parsed.hostname) || !/^\/(goto|url)$/.test(parsed.pathname)) return link;
-  if (!displayedLink || displayedLink.includes('\u2026') || displayedLink.includes('...')) return link;
-
-  try {
-    const rebuilt = new URL(
-      displayedLink
-        .trim()
-        .split(/\s+\u203a\s+/)
-        .join('/')
-    );
-    const isWeb = rebuilt.protocol === 'https:' || rebuilt.protocol === 'http:';
-    return isWeb && !GOOGLE_HOSTS.has(rebuilt.hostname) ? rebuilt.toString() : link;
-  } catch {
-    return link;
+    return undefined;
   }
 }
 
@@ -762,11 +757,12 @@ export function createSerpApiProvider(adapters: GetEffectiveApiKeyAdapters): Web
           // `organic_results[].thumbnail` is a ~92px preview. Order the big ones first so the card's
           // hero tile - the one scaled up the most - is not the most pixelated image available.
           const images = dedupeImages([...(extraImages.get(r.link!) ?? []), safeImageUrl(r.thumbnail)]);
-          const url = resolveSerpApiLink(r.link!, r.displayed_link);
+          const displayHost = googleRedirectDisplayHost(r.link!, r.displayed_link);
           return {
-            title: r.title ?? url,
-            url,
+            title: r.title ?? r.link!,
+            url: r.link!,
             snippet: r.snippet ?? '',
+            ...(displayHost ? { displayHost } : {}),
             ...(images.length > 0 ? { thumbnail: images[0], images } : {}),
           };
         });
