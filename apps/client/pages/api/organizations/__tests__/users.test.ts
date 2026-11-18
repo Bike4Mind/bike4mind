@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 /**
  * GET /api/organizations/users names individual members and their login/export/download
@@ -40,6 +41,9 @@ vi.mock('@bike4mind/database', () => ({
   convertPipelineForDocumentDB: (pipeline: unknown) => pipeline,
   mongoose: { Types: { ObjectId: class {} } },
 }));
+
+const recordOrganizationRead = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@server/utils/orgReadAudit', () => ({ recordOrganizationRead }));
 
 import '@pages/api/organizations/users';
 
@@ -87,6 +91,35 @@ describe('GET /api/organizations/users - verifyOrgPermission gate', () => {
     expect(verifyOrgPermission).toHaveBeenCalledWith(req.user, 'org1', 'manageMembers');
   });
 
+  it('records the organization returned by the gate as a member-activity read', async () => {
+    recordOrganizationRead.mockClear();
+    verifyOrgPermission.mockResolvedValueOnce({ id: 'org2', name: 'Globex' });
+    findById.mockImplementation(() => chainable(null));
+
+    const { req, res } = mocks(
+      { id: 'admin1', isAdmin: true, organizationId: 'org1' },
+      {
+        filters: { orgId: '507f1f77bcf86cd799439022' },
+      }
+    );
+    await expect(mockRefs.getHandler!(req, res)).rejects.toMatchObject({ statusCode: 404 });
+
+    expect(recordOrganizationRead).toHaveBeenCalledWith(req, [{ id: 'org2', name: 'Globex' }], {
+      view: 'member_activity',
+    });
+  });
+
+  it('stops before reading member activity when the audit write fails', async () => {
+    recordOrganizationRead.mockRejectedValueOnce(new Error('audit down'));
+    verifyOrgPermission.mockResolvedValueOnce({ id: 'org2', name: 'Globex' });
+
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true, organizationId: 'org1' });
+    await mockRefs.getHandler!(req, res);
+
+    expect(findById).not.toHaveBeenCalled();
+    expect(res._getStatusCode()).toBe(500);
+  });
+
   it('never reaches Organization.findById when verifyOrgPermission rejects', async () => {
     verifyOrgPermission.mockRejectedValueOnce(new NotFoundError('Organization not found'));
 
@@ -122,5 +155,19 @@ describe('GET /api/organizations/users - verifyOrgPermission gate', () => {
     await expect(mockRefs.getHandler!(req, res)).resolves.toBeUndefined();
 
     expect(res._getStatusCode()).toBe(500);
+  });
+
+  it('ignores filters.orgId for an admin calling with an API key that lacks the admin scope', async () => {
+    verifyOrgPermission.mockImplementation(async (_user: unknown, orgId: string) => ({ id: orgId }));
+    findById.mockImplementation(() => chainable(null));
+    const otherOrgId = '0123456789abcdef01234567';
+
+    // API key auth applies withholdAdminRole to a key without ApiKeyScope.ADMIN.
+    const keyUser = withholdAdminRole({ id: 'admin1', isAdmin: true, organizationId: 'org1' });
+    const { req, res } = mocks(keyUser, { 'filters[orgId]': otherOrgId });
+    await expect(mockRefs.getHandler!(req, res)).rejects.toMatchObject({ statusCode: 404 });
+
+    expect(verifyOrgPermission).toHaveBeenCalledWith(req.user, 'org1', 'manageMembers');
+    expect(verifyOrgPermission).not.toHaveBeenCalledWith(expect.anything(), otherOrgId, expect.anything());
   });
 });

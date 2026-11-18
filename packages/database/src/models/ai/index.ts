@@ -39,6 +39,7 @@ export * from './ModelCatalogModel';
 export * from './ModelDiscoveryRunModel';
 export * from './ModelDiscoveryStateModel';
 export * from './NotebookCurationJobModel';
+export * from './PlatformEndUserModel';
 export * from './RapidReplyAuditLogModel';
 export * from './RapidReplyMappingModel';
 export * from './RapidReplyPromptModel';

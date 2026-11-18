@@ -2,6 +2,21 @@ import type { AdminGuideEntry } from '../types';
 
 export const USERS_AND_BILLING_GUIDE: readonly AdminGuideEntry[] = [
   {
+    id: 'admin-roles',
+    title: 'Roles',
+    summary:
+      'The Roles page lists the admin roles, each a named set of admin permissions with its permission and member counts. A role grants its permissions to everyone who holds it.',
+    views: ['admin.roles'],
+    settings: [],
+    howTo: [
+      'Full admins click "Create role" and can start from a template (Support (read-only), Support agent, Billing, Trust & Safety, Platform settings). A template pre-fills the name and permissions, and the result is an ordinary role you can edit.',
+      'Click a role to edit its name, description and permissions. Changing permissions shows how many users it affects and asks for a reason. Adding delete, impersonate or export user data asks for one more confirmation.',
+      'A role can only be deleted once nobody holds it. Remove it from its members first.',
+      'Delegated admins with support:read see the list read-only. Only full admins can create, edit or delete roles.',
+    ],
+    keywords: ['admin roles', 'permissions', 'role templates', 'delegated admin', 'support role', 'create role'],
+  },
+  {
     id: 'users-find-and-filter',
     title: 'Users list: search and filters',
     summary:
@@ -159,7 +174,7 @@ export const USERS_AND_BILLING_GUIDE: readonly AdminGuideEntry[] = [
     id: 'credit-analytics-overview',
     title: 'Credit Analytics',
     summary:
-      'Credit Analytics groups the credit tools in tabs: Economy, User Credits, Model Pricing, Margins, Org Usage, API Usage, Ledger and Adjustments.',
+      'Credit Analytics groups the credit tools in tabs: Economy, User Credits, Margins, Org Usage, API Usage, Ledger and Adjustments. Model prices are in the Prices section of the Models page.',
     views: ['admin.credit_analytics'],
     settings: [],
     howTo: [
@@ -173,15 +188,15 @@ export const USERS_AND_BILLING_GUIDE: readonly AdminGuideEntry[] = [
   },
   {
     id: 'model-pricing-catalog',
-    title: 'Model Pricing catalog',
+    title: 'Model prices',
     summary:
-      'The Model Pricing tab holds the versioned provider cost per model (token rates shown per 1M). These are provider costs in USD, not what users are charged.',
-    views: ['admin.credit_analytics'],
+      'The Prices section of the Models page holds the versioned provider cost per model (token rates shown per 1M). These are provider costs in USD, not what users are charged.',
+    views: ['admin.llm_dashboard'],
     settings: [],
     howTo: [
-      'Use "Filter by model id" to find a model; each row shows input, output and audio rates, the date effective and the source.',
-      'Click Reprice on a row to add a new price taking effect now, with a note saying where it came from.',
-      'Click History to see every past price for the model; click "Revert to seed pricing" to return an operator-priced row to the automatic rates.',
+      'Open Models, then Prices. Use the filter box to find a model id; each row shows input, output and audio rates, the date effective and the source.',
+      'Click Reprice on a row to add a new price taking effect now, with a note saying where it came from. Add price adds the first price for a model that has none.',
+      'Click History to see every past price for the model; Revert returns a row set by an admin or by discovery to the built-in rates.',
     ],
     keywords: ['model prices', 'reprice', 'token rates', 'provider cost', 'price history', 'seed pricing'],
   },
@@ -395,7 +410,7 @@ export const USERS_AND_BILLING_GUIDE: readonly AdminGuideEntry[] = [
       'Sections: "Signup and starter credits", "Referral rewards for inviters", "Credits and pricing", "Preference arena" and "Team plan".',
       'Each field shows its current value; change fields, then save with the page save bar.',
       'For a referral reward, an amount of 0 turns that reward off.',
-      '"Related settings" links to the model pricing catalog and to the tier rate limits in Admin Settings, which are edited there.',
+      '"Related settings" links to model prices in Models > Prices and to the tier rate limits in Admin Settings, which are edited there.',
     ],
     keywords: [
       'pricing',
@@ -537,5 +552,21 @@ export const USERS_AND_BILLING_GUIDE: readonly AdminGuideEntry[] = [
       'import pairs',
       'promotional credits',
     ],
+  },
+  {
+    id: 'spend-explorer',
+    title: 'Spend explorer',
+    summary:
+      'Recorded AI provider cost per request over any date range, split by provider, account type, model, feature, source or funding, with spikes marked against a rolling median and a drill-down to the accounts behind any day or hour.',
+    views: ['admin.spend_explorer'],
+    settings: [],
+    howTo: [
+      'Pick a range (7d, 14d, 30d, 90d or Custom); ranges of 3 days or less are shown per hour. All times are UTC.',
+      'Use "Split by" to restack the bars, and tick "Previous period" to compare with the window before.',
+      'Click a bar to list the accounts that drove it; each row is the user who ran the calls, with who paid (the user or their org) under "Billed to".',
+      'Click an account row for its spend by model; "Copy summary for Slack" copies a one-line summary of the range.',
+      'Tag an organization as internal, partner or customer in its Account segment card, or mark a user as partner from their profile, to split spend by account type.',
+    ],
+    keywords: ['spend', 'ai cost', 'cost spike', 'provider cost', 'top spenders', 'cogs', 'account type', 'partner'],
   },
 ];

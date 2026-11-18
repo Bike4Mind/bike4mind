@@ -7,6 +7,8 @@ import {
   VERIFIED_SLACK_IDENTITY_FILTER,
   canonicalizeEmail,
   DEFAULT_STORAGE_LIMIT_MB,
+  USER_ACCOUNT_SEGMENTS,
+  type UserAccountSegment,
 } from '@bike4mind/common';
 import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import {
@@ -398,15 +400,42 @@ const heldReviewTrancheFilter = {
   $expr: { $lt: ['$signupGrant.creditsReleased', '$signupGrant.signupCredits'] },
 };
 
+/** `$type` repeats the partial index's filter, without which the planner cannot use it. */
+export const overdueDeletionRequestFilter = (requestedBefore: Date) => ({
+  'deletion.scheduledFor': { $type: 'date' as const },
+  'deletion.requestedAt': { $lte: requestedBefore },
+});
+
 export class UserRepository extends BaseRepository<IUserDocument> implements IUserRepository {
   constructor(model: IUserModel) {
     super(model);
+  }
+
+  async claimFreeQuestStart(userId: string, startId: string): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, $or: [{ freeQuestStartId: null }, { freeQuestStartId: startId }] },
+      { $set: { freeQuestStartId: startId } }
+    );
+    return result.matchedCount === 1;
+  }
+
+  /** Clears the free start only while it still holds `startId`, so a later claim is never undone. */
+  async releaseFreeQuestStart(userId: string, startId: string): Promise<void> {
+    await this.model.updateOne({ _id: userId, freeQuestStartId: startId }, { $unset: { freeQuestStartId: 1 } });
   }
 
   /** Remove the given group ids from EVERY user that has them (group-type revoke/delete). */
   async removeGroupsFromAllUsers(groupIds: string[]): Promise<void> {
     if (groupIds.length === 0) return;
     await this.model.updateMany({ groups: { $in: groupIds } }, { $pull: { groups: { $in: groupIds } } });
+  }
+
+  /** Sets the partner mark, or unsets the field for `null` (absent reads as customer). */
+  async setAccountSegment(userId: string, accountSegment: UserAccountSegment | null): Promise<void> {
+    await this.model.updateOne(
+      { _id: userId },
+      accountSegment ? { $set: { accountSegment } } : { $unset: { accountSegment: 1 } }
+    );
   }
 
   /** Null the active-org pointer of every user on the org (org delete). */
@@ -888,7 +917,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     if (validIds.length === 0) return [];
     const docs = await this.model
       .find({ _id: { $in: convertIds(validIds) } })
-      .select('email username isAdmin adminPermissions')
+      .select('email username isAdmin adminPermissions adminRoleIds')
       .lean();
     return docs.map(d => ({
       id: String(d._id),
@@ -896,6 +925,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       username: d.username ?? undefined,
       isAdmin: d.isAdmin ?? undefined,
       adminPermissions: d.adminPermissions ? [...d.adminPermissions] : undefined,
+      adminRoleIds: d.adminRoleIds?.map(String),
     }));
   }
 
@@ -923,6 +953,11 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .limit(limit)
       .lean();
     return docs.map(d => String(d._id));
+  }
+
+  /** Deletion requests made at or before `requestedBefore` whose row still exists, i.e. not yet erased or cancelled. */
+  async countOverdueDeletionRequests(requestedBefore: Date): Promise<number> {
+    return this.model.countDocuments(overdueDeletionRequestFilter(requestedBefore));
   }
 
   /** Stamps IUser.signupLanding once; a later call never overwrites it. */
@@ -954,10 +989,13 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     }));
   }
 
-  /** Other accounts that signed up from this exact IP, newest first; served by user_signupMeta_ip. */
-  async findIdsBySignupIp(ip: string, excludeId: string, limit: number): Promise<string[]> {
+  /**
+   * Accounts that signed up from this exact IP, newest first, leaving out excludeId when given;
+   * served by user_signupMeta_ip.
+   */
+  async findIdsBySignupIp(ip: string, excludeId: string | undefined, limit: number): Promise<string[]> {
     const docs = await this.model
-      .find({ 'signupMeta.ip': ip, _id: { $ne: convertIds([excludeId])[0] } })
+      .find({ 'signupMeta.ip': ip, ...(excludeId ? { _id: { $ne: convertIds([excludeId])[0] } } : {}) })
       .select('_id')
       .sort({ _id: -1 })
       .limit(limit)
@@ -1703,6 +1741,7 @@ const RiskEvidenceSchema = new Schema(
 
 export const UserSchema = new Schema<IUserDocument, IUserModel>(
   {
+    freeQuestStartId: { type: String },
     username: { type: String, required: true, unique: true },
     name: { type: String, required: true },
     email: { type: String }, // uniqueness enforced via the partial index below (allows multiple emailless accounts)
@@ -1722,6 +1761,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     groups: { type: [String], default: [] },
     isAdmin: { type: Boolean, default: false },
     adminPermissions: { type: [String], enum: ADMIN_PERMISSIONS, default: [] },
+    // Assigned through the admin permissions endpoint. Resolved into the `roleAdminPermissions` virtual per request.
+    adminRoleIds: { type: [Schema.Types.ObjectId], ref: 'AdminRole', default: [] },
     storageLimit: { type: Number, default: 1000 }, // Decimal MB
     storageLimitOverride: { type: Number },
     planStorageLimit: { type: Number },
@@ -1802,6 +1843,23 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     riskSignals: { type: [UserRiskSignalSchema], required: false, default: undefined },
     disputePending: { type: Boolean, required: false, default: false },
     deletion: { type: UserDeletionSchema, required: false, default: undefined },
+    accountFilePurge: {
+      type: new Schema(
+        {
+          startedAt: Date,
+          leaseId: String,
+          leaseExpiresAt: Date,
+          initialized: Boolean,
+          throughAuditId: String,
+          afterAuditId: String,
+          complete: Boolean,
+        },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
+      select: false,
+    },
     accountDataExportLease: {
       type: new Schema(
         {
@@ -2110,9 +2168,13 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     isSynthetic: { type: Boolean, required: false },
     // See IUser.isInternal. No default, like isSynthetic: absent reads as "not marked".
     isInternal: { type: Boolean, required: false },
+    // See IUser.accountSegment. No default: absent reads as customer.
+    accountSegment: { type: String, required: false, enum: [...USER_ACCOUNT_SEGMENTS] },
     // See IUser.isPersona. Written only by the persona mint route.
     isPersona: { type: Boolean, required: false },
     personaExpiresAt: { type: Date, required: false },
+    // See IUser.mfaEnforcement. Written only by the e2e create-user route.
+    mfaEnforcement: { type: String, enum: ['force'], required: false },
     personaName: { type: String, required: false },
     personaOwnerId: { type: String, required: false },
     personaLoginCodeHash: { type: String, required: false },
@@ -2129,6 +2191,13 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     },
   }
 );
+
+// The permissions the user's admin roles carry, resolved per request into $locals by
+// packages/server-utils/src/auth/adminRoles.ts. A virtual so toJSON() carries it to the self view
+// while save() never persists it; undefined when roles were not resolved for this read.
+UserSchema.virtual('roleAdminPermissions').get(function () {
+  return this.$locals.roleAdminPermissions;
+});
 
 // Dedupe key for an authProviders entry: strategy and id joined by a U+0000 delimiter, a
 // byte no legitimate strategy or id contains - nothing schema-level enforces this (the
@@ -2245,6 +2314,9 @@ UserSchema.index({ createdAt: 1, 'signupMeta.ja4': 1 }, { name: 'user_signup_fin
 // full users collection. Explicit name so the migration and autoIndex (mongo.ts) agree - see the
 // authProviders_strategy_id note above.
 UserSchema.index({ organizationId: 1 }, { name: 'user_organizationId' });
+// Members of a role: the member count refused on delete and reported on edit, and access review.
+// Explicit name so migration 20261114140117 and autoIndex agree.
+UserSchema.index({ adminRoleIds: 1 }, { name: 'user_adminRoleIds' });
 // Serves the per-organization lookup of accounts an org invite unlocked.
 // Sparse: only those accounts carry the field. Explicit name so the migration
 // 20260921235968 and autoIndex (mongo.ts) agree.

@@ -18,6 +18,7 @@ export type ProfileAction =
   | 'newAccountSpendCap'
   | 'fileEmbeddingWindowReset'
   | 'internalAccount'
+  | 'partnerAccount'
   | 'subscription'
   | 'loginAs'
   | 'message'

@@ -2,6 +2,10 @@ package com.bike4mind.app
 
 import android.content.Context
 import android.os.Build
+import android.util.Log
+import androidx.core.app.NotificationManagerCompat
+import com.bike4mind.app.push.FcmClient
+import com.bike4mind.app.push.SharedPreferencesPushTokenMemory
 import com.bike4mind.app.storage.KeystoreTokenStore
 import com.bike4mind.client.apis.AIApi
 import com.bike4mind.client.apis.AccountApi
@@ -21,6 +25,8 @@ import com.bike4mind.kit.networking.ClientIdentity
 import com.bike4mind.kit.networking.ClientUpgradeSignal
 import com.bike4mind.kit.networking.UpgradeRequiredException
 import com.bike4mind.kit.networking.requireBody
+import com.bike4mind.kit.push.PushRegistrationCoordinator
+import com.bike4mind.kit.push.PushTokenWire
 import com.bike4mind.kit.realtime.RealtimeConnection
 import com.bike4mind.kit.sessions.SessionsRepository
 import io.ktor.client.HttpClient
@@ -33,6 +39,7 @@ import kotlinx.coroutines.CoroutineScope
  * what they need from here and never build HTTP clients of their own.
  */
 class AppGraph(context: Context, val environment: ServerEnvironment) {
+    private val appContext = context.applicationContext
     private val identity = ClientIdentity.android(BuildConfig.VERSION_NAME)
     val upgradeSignal = ClientUpgradeSignal()
 
@@ -58,6 +65,13 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
     )
     private val chatBackend = LiveChatBackend(sessions, ChatSendWire(environment, http), RealtimeConnection(environment, http))
 
+    /** Registers this install's FCM token with the server while signed in and notifications are allowed. */
+    val push = PushRegistrationCoordinator(
+        PushTokenWire(environment, http),
+        SharedPreferencesPushTokenMemory(context),
+        BuildConfig.VERSION_NAME,
+    ) { message, failure -> Log.w("B4MPush", message, failure) }
+
     val oauth = OAuthConfiguration.forEnvironment(environment)
     private val pendingSignIn = PendingSignInStore(context)
 
@@ -79,6 +93,13 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
             return
         }
         upgradeSignal.clear()
+    }
+
+    /** Call when a session becomes active. A build without FCM config never gets a token and registers nothing. */
+    suspend fun startPush() {
+        push.onNotificationsAllowed(NotificationManagerCompat.from(appContext).areNotificationsEnabled())
+        push.sessionDidStart()
+        FcmClient.currentToken(appContext)?.let { push.onDeviceToken(it) }
     }
 
     fun beginSignIn(): String {

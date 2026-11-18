@@ -1,7 +1,7 @@
 // eslint-disable-next-line no-restricted-imports -- notFound() is a server-only App Router API, not a client routing hook
 import { notFound } from 'next/navigation';
-import { TanStackRouterProvider } from '@client/app/components/TanStackRouterProvider';
 import { isStaticAssetPath } from './isStaticAssetPath';
+import { SpaShell } from './SpaShell';
 
 interface PageProps {
   params: Promise<{ slug?: string[] }>;
@@ -13,7 +13,7 @@ interface PageProps {
 export default async function Page({ params }: PageProps) {
   const { slug } = await params;
   if (isStaticAssetPath(slug)) notFound();
-  return <TanStackRouterProvider />;
+  return <SpaShell />;
 }
 
 export const dynamic = 'force-static';

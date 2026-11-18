@@ -65,7 +65,9 @@ export class ProfilePage extends BasePage {
     await this.gotoApiKeys();
     await this.page.getByTestId('api-keys-docs-tab').click();
     await this.page.getByTestId('api-keys-docs-scopes-tab').click();
-    await expect(this.page.getByTestId('api-keys-scopes-open-endpoints')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(this.page.locator('[data-testid^="api-keys-scope-endpoints-"]').first()).toBeVisible({
+      timeout: TIMEOUTS.VISIBLE,
+    });
   }
 
   /** Creates a key through the New Key dialog with its default read-only scopes; returns the POST response. */

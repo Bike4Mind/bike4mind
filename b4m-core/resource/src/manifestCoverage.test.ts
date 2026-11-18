@@ -156,7 +156,6 @@ const PENDING_SCOPE_DECISION: Record<string, string> = {
   // ever evaluated.
   whatsNewGenerationQueue:
     'release-notes pipeline and admin highlights route; self-host needs a content-generation consumer',
-  whatsNewHighlightsQueue: 'legacy drain only; no producer remains after highlights moved to whatsNewGenerationQueue',
   secopsTriageQueue: 'admin security-dashboard ingest; needs Prowler and AWS findings',
   sreJobQueue: 'admin SRE rerun/retry routes; handler needs Bedrock and CloudWatch',
 

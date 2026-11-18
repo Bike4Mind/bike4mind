@@ -13,29 +13,19 @@ import { MemberRole } from './memberRosterView';
 
 const setOverride = vi.fn();
 const setRole = vi.fn();
-const resend = vi.fn();
 const viewer = vi.hoisted(() => ({ id: 'viewer', isAdmin: false }));
 const hooks = vi.hoisted(() => ({
   confirm: vi.fn(),
   removeMember: vi.fn(),
   leave: vi.fn(),
-  cancelInvite: vi.fn(),
   navigate: vi.fn(),
   isMobile: false,
-  cancelOptions: undefined as { onSuccess: () => void; onError: (err: Error) => void } | undefined,
 }));
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useRemoveMemberFromOrganization: () => ({ mutateAsync: hooks.removeMember }),
   useLeaveOrganization: () => ({ mutateAsync: hooks.leave }),
   useSetMemberCreditOverride: () => ({ mutateAsync: setOverride, isPending: false }),
   useSetOrganizationMemberRole: () => ({ mutate: setRole, isPending: false }),
-  useResendOrganizationInvite: () => ({ mutate: resend, isPending: false }),
-}));
-vi.mock('@client/app/hooks/data/invites', () => ({
-  useCancelInvite: (options: { onSuccess: () => void; onError: (err: Error) => void }) => {
-    hooks.cancelOptions = options;
-    return { mutateAsync: hooks.cancelInvite };
-  },
 }));
 vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => hooks.confirm }));
 vi.mock('@client/app/contexts/UserContext', () => ({
@@ -44,8 +34,6 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => hooks.isMobile }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => hooks.navigate }));
 vi.mock('@client/app/utils/s3', () => ({ getAppFileUrl: ({ key }: { key: string }) => `https://files.test/${key}` }));
-const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
-vi.mock('sonner', () => ({ toast: toasts }));
 vi.mock('./OffboardMemberDialog', () => ({
   default: ({ member }: { member: { id: string } | null }) =>
     member ? <div data-testid="offboard-dialog" data-member-id={member.id} /> : null,
@@ -68,23 +56,17 @@ const org = {
 
 const defaultRole = (id: string): MemberRole => (id === 'owner1' ? 'owner' : id === 'mgr' ? 'manager' : 'member');
 
-const member = (
-  id: string,
-  creditUsage: MemberCreditUsage | null,
-  status: 'accepted' | 'pending' = 'accepted',
-  role: MemberRole = defaultRole(id)
-) =>
+const member = (id: string, creditUsage: MemberCreditUsage | null, role: MemberRole = defaultRole(id)) =>
   ({
     id,
     name: `User ${id}`,
     email: `${id}@example.test`,
-    status,
     role,
     permissions: [Permission.read],
     creditUsage,
   }) as unknown as OrganizationRosterRow;
 
-type Roster = { invite: boolean; revoke: boolean };
+type Roster = { revoke: boolean };
 const renderCard = (
   user: ReturnType<typeof member>,
   canManageCreditBudgets: boolean,
@@ -94,7 +76,9 @@ const renderCard = (
     selectable = false,
     selected = false,
     onToggleSelect,
+    showEmails = true,
   }: {
+    showEmails?: boolean;
     organization?: IOrganizationDocument;
     selectable?: boolean;
     selected?: boolean;
@@ -110,12 +94,12 @@ const renderCard = (
       <OrganizationUserCard
         organization={organization}
         user={user}
-        canInviteMembers={typeof roster === 'boolean' ? roster : roster.invite}
         canRevokeMembers={typeof roster === 'boolean' ? roster : roster.revoke}
         canManageCreditBudgets={canManageCreditBudgets}
         selectable={selectable}
         selected={selected}
         onToggleSelect={onToggleSelect}
+        showEmails={showEmails}
       />
     )
   );
@@ -133,14 +117,6 @@ describe('OrganizationUserCard credit usage', () => {
   it('shows usage against the cap and marks a per-member override', () => {
     renderCard(member('a', { tracked: true, used: 120, cap: 50, isOverride: true }), false);
     expect(screen.getByTestId('organization-user-card-credit-usage').textContent).toBe('120 / 50(own limit)');
-  });
-
-  it('explains the dash for a pending invite and offers no limit control', () => {
-    renderCard(member('a', null, 'pending'), true);
-    expect(screen.getByTestId('organization-user-card-credit-usage').textContent).toBe(
-      '-No usage yet: this invite is still pending'
-    );
-    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
   });
 
   it('explains the dash for an active member whose usage the viewer may not see', async () => {
@@ -174,7 +150,6 @@ describe('OrganizationUserCard monthly limit control', () => {
     openMenu();
     expect(await screen.findByText('Set monthly limit')).toBeTruthy();
     expect(screen.queryByTestId('organization-user-card-remove-member')).toBeNull();
-    expect(screen.queryByTestId('organization-user-card-cancel-invite')).toBeNull();
     fireEvent.click(screen.getByTestId('organization-user-card-set-limit'));
     expect(screen.getByTestId('credit-limit-modal')).toBeTruthy();
   });
@@ -217,7 +192,6 @@ describe('OrganizationUserCard monthly limit control', () => {
   });
 });
 
-// Remove member and Cancel invite hit endpoints with different server gates, so each follows its own flag.
 describe('OrganizationUserCard roster actions', () => {
   beforeEach(() => {
     viewer.id = 'viewer';
@@ -226,48 +200,21 @@ describe('OrganizationUserCard roster actions', () => {
   const accepted = () => member('a', { tracked: true, used: 0, cap: 500, isOverride: false });
 
   it('offers Remove member on the revoke flag alone', async () => {
-    renderCard(accepted(), false, { invite: false, revoke: true });
+    renderCard(accepted(), false, { revoke: true });
     openMenu();
     expect(await screen.findByTestId('organization-user-card-remove-member')).toBeTruthy();
   });
 
   it('opens the offboarding dialog for that member instead of a plain confirm', async () => {
-    renderCard(accepted(), false, { invite: false, revoke: true });
+    renderCard(accepted(), false, { revoke: true });
     expect(screen.queryByTestId('offboard-dialog')).toBeNull();
     openMenu();
     fireEvent.click(await screen.findByTestId('organization-user-card-remove-member'));
     expect(screen.getByTestId('offboard-dialog').getAttribute('data-member-id')).toBe('a');
   });
 
-  it('withholds Remove member from a viewer who may only invite', () => {
-    renderCard(accepted(), false, { invite: true, revoke: false });
-    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
-  });
-
-  it('offers Cancel Invite on the invite flag alone', async () => {
-    renderCard(member('p', null, 'pending'), false, { invite: true, revoke: false });
-    openMenu();
-    expect(await screen.findByTestId('organization-user-card-cancel-invite')).toBeTruthy();
-  });
-
-  it('resends a pending invite by user id', async () => {
-    renderCard(member('p', null, 'pending'), false, { invite: true, revoke: false });
-    openMenu();
-    const resendAction = await screen.findByTestId('organization-user-card-resend-invite');
-    expect(resendAction.getAttribute('aria-label')).toContain('Resend invitation to ');
-    fireEvent.click(resendAction);
-    expect(resend).toHaveBeenCalledWith({ userId: 'p' });
-  });
-
-  it('withholds Cancel Invite from a viewer who may only revoke', () => {
-    renderCard(member('p', null, 'pending'), false, { invite: false, revoke: true });
-    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
-  });
-
-  it('shows no menu when both invite and revoke are withheld', () => {
-    renderCard(accepted(), false, { invite: false, revoke: false });
-    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
-    renderCard(member('p', null, 'pending'), false, { invite: false, revoke: false });
+  it('shows no menu when revoke is withheld', () => {
+    renderCard(accepted(), false, { revoke: false });
     expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
   });
 });
@@ -314,25 +261,6 @@ describe('OrganizationUserCard team role', () => {
     );
     expect(screen.getByTestId('organization-user-card-member-chip').textContent).toBe('Member');
     for (const aclLabel of ['Admin', 'Editor', 'Viewer']) expect(screen.queryByText(aclLabel)).toBeNull();
-  });
-
-  it('flags a member whose update permission opens team settings', () => {
-    renderCard({ ...member('a', usage), permissions: [Permission.read, Permission.update] }, false, false, {
-      organization: managedOrg,
-    });
-    expect(screen.getByTestId('organization-user-card-settings-access-chip').textContent).toBe('Can edit settings');
-  });
-
-  it('does not flag a share-only member', () => {
-    renderCard({ ...member('a', usage), permissions: [Permission.read, Permission.share] }, false, false, {
-      organization: managedOrg,
-    });
-    expect(screen.queryByTestId('organization-user-card-settings-access-chip')).toBeNull();
-  });
-
-  it('does not flag a read-only member', () => {
-    renderCard(member('a', usage), false, false, { organization: managedOrg });
-    expect(screen.queryByTestId('organization-user-card-settings-access-chip')).toBeNull();
   });
 
   it('shows the Owner chip, not Manager, on the owner row', () => {
@@ -383,10 +311,8 @@ describe('OrganizationUserCard team role', () => {
     expect(screen.queryByTestId('organization-user-card-role-select')).toBeNull();
   });
 
-  it('offers no selector on the owner row or a pending invite', () => {
+  it('offers no selector on the owner row', () => {
     renderCard(member('owner1', usage), true, false, { organization: managedOrg });
-    expect(screen.queryByTestId('organization-user-card-role-select')).toBeNull();
-    renderCard(member('p', null, 'pending'), false, false, { organization: managedOrg });
     expect(screen.queryByTestId('organization-user-card-role-select')).toBeNull();
   });
 
@@ -421,13 +347,12 @@ describe('OrganizationUserCard confirmations', () => {
     viewer.id = 'viewer';
     hooks.confirm.mockReset();
     hooks.removeMember.mockReset().mockResolvedValue(undefined);
-    hooks.cancelInvite.mockReset().mockResolvedValue(undefined);
     hooks.leave.mockReset().mockResolvedValue(undefined);
     hooks.navigate.mockReset();
   });
 
   it('routes removal through offboarding without an immediate destructive call', async () => {
-    renderCard(member('a', usage), false, { invite: false, revoke: true });
+    renderCard(member('a', usage), false, { revoke: true });
     openMenu();
     const item = await screen.findByTestId('organization-user-card-remove-member');
     expect(item).toHaveTextContent('Remove member');
@@ -435,28 +360,6 @@ describe('OrganizationUserCard confirmations', () => {
     expect(screen.getByTestId('offboard-dialog')).toHaveAttribute('data-member-id', 'a');
     expect(hooks.confirm).not.toHaveBeenCalled();
     expect(hooks.removeMember).not.toHaveBeenCalled();
-  });
-
-  it('keeps Cancel invite neutral and names the invitee', async () => {
-    renderCard(member('p', null, 'pending'), false, { invite: true, revoke: false });
-    openMenu();
-    const item = await screen.findByTestId('organization-user-card-cancel-invite');
-    expect(item.className).not.toMatch(/danger/i);
-    fireEvent.click(item);
-    const args = lastConfirm();
-    expect(args.type).toBeUndefined();
-    expect(args.description).toContain('Cancel the invite to User p?');
-    expect(args.cancelLabel).toBe('Keep invite');
-    await args.onOk();
-    expect(hooks.cancelInvite).toHaveBeenCalledWith({ id: 'org1', type: 'Organization', userId: 'p' });
-  });
-
-  it('reports the cancel outcome', () => {
-    renderCard(member('p', null, 'pending'), false, { invite: true, revoke: false });
-    hooks.cancelOptions?.onSuccess();
-    expect(toasts.success).toHaveBeenCalledWith('Invite cancelled successfully');
-    hooks.cancelOptions?.onError(new Error('nope'));
-    expect(toasts.error).toHaveBeenCalledWith('nope');
   });
 
   it('offers Leave team only on your own row, behind a divider, and never Remove member there', async () => {
@@ -489,12 +392,6 @@ describe('OrganizationUserCard confirmations', () => {
     expect(await screen.findByTestId('organization-user-card-remove-member')).toBeTruthy();
     expect(screen.queryByTestId('organization-user-card-leave')).toBeNull();
   });
-
-  it('offers no Leave team on your own pending row', () => {
-    viewer.id = 'p';
-    renderCard(member('p', null, 'pending'), false, false);
-    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
-  });
 });
 
 describe('OrganizationUserCard row content', () => {
@@ -511,14 +408,20 @@ describe('OrganizationUserCard row content', () => {
   });
 
   it('shows email and role columns', () => {
-    renderCard(member('a', usage, 'accepted', 'member'), false);
+    renderCard(member('a', usage, 'member'), false);
     expect(screen.getByTestId('organization-user-card-email')).toHaveTextContent('a@example.test');
     expect(screen.getByTestId('organization-user-card-member-chip')).toHaveTextContent('Member');
   });
 
-  it('shows Pending and Deactivated chips and the avatar photo', () => {
-    renderCard({ ...member('p', null, 'pending'), isBanned: true, photoUrl: 'me.png' }, false);
-    expect(screen.getByTestId('organization-user-card-pending-chip')).toBeTruthy();
+  it('renders no email cell in a names-only roster, even if a row carries one', () => {
+    renderCard(member('a', usage, 'member'), false, false, { showEmails: false });
+    expect(screen.queryByTestId('organization-user-card-email')).toBeNull();
+    expect(screen.queryByText('a@example.test')).toBeNull();
+    expect(screen.getByTestId('organization-user-card-name')).toHaveTextContent('User a');
+  });
+
+  it('shows a Deactivated chip and the avatar photo', () => {
+    renderCard({ ...member('p', null), isBanned: true, photoUrl: 'me.png' }, false);
     expect(screen.getByText('Deactivated')).toBeTruthy();
     expect(document.querySelector('img')).toHaveAttribute('src', 'https://files.test/me.png');
   });
@@ -573,9 +476,28 @@ describe('OrganizationUserCard row content', () => {
       expect(screen.getByTestId('org-user-card-menu-btn')).toBeTruthy();
     });
 
+    it('omits the email line in a names-only roster', () => {
+      renderCard(member('a', usage), false, false, { showEmails: false });
+      expect(screen.queryByTestId('organization-user-card-email')).toBeNull();
+    });
+
     it('omits the email line when there is none', () => {
       renderCard({ ...member('a', usage), email: null } as unknown as OrganizationRosterRow, false);
       expect(screen.queryByTestId('organization-user-card-email')).toBeNull();
     });
+  });
+});
+
+describe('OrganizationUserCard accessible names', () => {
+  it('uses a readable email name when a member has no display name', () => {
+    renderCard({ ...member('a', null), name: '' }, true);
+    expect(screen.getByRole('button', { name: 'Actions for a@example.test' })).toBeTruthy();
+  });
+
+  it('names the kebab menu after the member it acts on', () => {
+    renderCard(member('a', null), true);
+    expect(screen.getByRole('button', { name: 'Actions for User a' })).toBe(
+      screen.getByTestId('org-user-card-menu-btn')
+    );
   });
 });

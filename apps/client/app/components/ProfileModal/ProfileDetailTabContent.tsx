@@ -20,7 +20,7 @@ import { useTranslation } from 'react-i18next';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 import AdminPanelSettings from '@mui/icons-material/AdminPanelSettings';
 import Storage from '@mui/icons-material/Storage';
-import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
+import { useGetSeatPlan, useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
 import { SUBSCRIPTION_PLANS } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useOpenUserStripePortal } from '@client/app/components/subscription/useOpenUserStripePortal';
@@ -193,6 +193,10 @@ const SubscriptionCard = () => {
   const subscription = pickDisplayedSubscription(userSubscriptions);
   const subscriptionPlan = SUBSCRIPTION_PLANS.find(plan => plan.priceId === subscription?.priceId);
   const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
+  // A personal plan stays the one shown and managed here; a seat plan only fills in for none.
+  const seatPlanQuery = useGetSeatPlan();
+  const seatPlan = seatPlanQuery.data;
+  const showSeatPlan = !subscription && !!seatPlan;
   const plans = useGetSubscriptionPlans();
   const priceMap = useMemo(() => {
     return plans.data?.reduce(
@@ -220,7 +224,7 @@ const SubscriptionCard = () => {
           <AdminPanelSettings sx={{ fontSize: '48px', color: theme.palette.fileBrowser.fileSizeColor }} />
         </Box>
 
-        {subscriptions.isPending || plans.isPending ? (
+        {subscriptions.isPending || plans.isPending || seatPlanQuery.isLoading ? (
           <CircularProgress />
         ) : (
           <Box display="flex" flexDirection="column" justifyContent="space-between">
@@ -230,8 +234,16 @@ const SubscriptionCard = () => {
               </Typography>
               <Box className="profile-detail-tab-subscription-value">
                 <Typography sx={{ fontWeight: '500', fontSize: '20px', lineHeight: '20px' }}>
-                  {subscriptionPlan?.name || 'None'}
+                  {subscriptionPlan?.name || (showSeatPlan ? seatPlan.planName : 'None')}
                 </Typography>
+                {showSeatPlan && (
+                  <Typography
+                    data-testid="profile-seat-plan-detail"
+                    sx={{ marginTop: '15px', fontSize: '14px', lineHeight: '14px', color: 'neutral.500' }}
+                  >
+                    {t('profile.seat_plan_via', { organization: seatPlan.organizationName })}
+                  </Typography>
+                )}
                 {subscription && (
                   <Typography
                     className="profile-detail-tab-subscription-price"
@@ -242,7 +254,7 @@ const SubscriptionCard = () => {
                 )}
               </Box>
             </Box>
-            {!subscription && (
+            {!subscription && !showSeatPlan && (
               <Button
                 className="profile-detail-tab-subscription-upgrade-button"
                 data-testid="subscription-upgrade-btn"
@@ -277,33 +289,39 @@ const SubscriptionCard = () => {
           </Box>
         )}
 
-        <Tooltip title={t(subscription ? 'profile.manage_subscription' : 'profile.upgrade')} placement="top">
-          <IconButton
-            className="profile-detail-tab-subscription-button"
-            data-testid="subscription-corner-btn"
-            aria-label={t(subscription ? 'profile.manage_subscription' : 'profile.upgrade')}
-            size="sm"
-            variant={subscription ? 'outlined' : 'solid'}
-            color={subscription ? 'neutral' : 'primary'}
-            sx={{
-              position: 'absolute',
-              top: '10px',
-              right: '10px',
-            }}
-            onClick={() => {
-              // If user has an active subscription, open the stripe portal
-              if (subscription && stripePortal.isAvailable) {
-                stripePortal.open();
-                return;
-              }
+        {!showSeatPlan && (
+          <Tooltip title={t(subscription ? 'profile.manage_subscription' : 'profile.upgrade')} placement="top">
+            <IconButton
+              className="profile-detail-tab-subscription-button"
+              data-testid="subscription-corner-btn"
+              aria-label={t(subscription ? 'profile.manage_subscription' : 'profile.upgrade')}
+              size="sm"
+              variant={subscription ? 'outlined' : 'solid'}
+              color={subscription ? 'neutral' : 'primary'}
+              sx={{
+                position: 'absolute',
+                top: '10px',
+                right: '10px',
+              }}
+              onClick={() => {
+                // If user has an active subscription, open the stripe portal
+                if (subscription && stripePortal.isAvailable) {
+                  stripePortal.open();
+                  return;
+                }
 
-              // Otherwise, open the subscription modal
-              setSubscriptionModalOpen(true);
-            }}
-          >
-            {subscription ? <SettingsOutlinedIcon sx={{ fontSize: 18 }} /> : <AutoAwesomeIcon sx={{ fontSize: 18 }} />}
-          </IconButton>
-        </Tooltip>
+                // Otherwise, open the subscription modal
+                setSubscriptionModalOpen(true);
+              }}
+            >
+              {subscription ? (
+                <SettingsOutlinedIcon sx={{ fontSize: 18 }} />
+              ) : (
+                <AutoAwesomeIcon sx={{ fontSize: 18 }} />
+              )}
+            </IconButton>
+          </Tooltip>
+        )}
       </Box>
 
       {/* Subscription Modal */}

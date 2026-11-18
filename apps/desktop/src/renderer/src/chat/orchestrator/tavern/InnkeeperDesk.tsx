@@ -4,6 +4,7 @@ import IconButton from '@mui/joy/IconButton';
 import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { QUEST_BOARD } from './scene';
 
 export const INNKEEPER_GREETING = "What'll it be?";
 
@@ -288,6 +289,8 @@ export function ReplyBubble({
         right: '42%',
         zIndex: 250,
         width: 'clamp(180px, 34%, 320px)',
+        // On a narrow scene the 180px floor would reach back over the quest board; shrink instead.
+        maxWidth: `calc(58% - ${QUEST_BOARD.left + QUEST_BOARD.width}%)`,
         px: '0.75em',
         py: '0.5em',
         boxShadow: pixelFrame(2),

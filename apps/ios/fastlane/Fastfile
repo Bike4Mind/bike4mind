@@ -20,15 +20,16 @@ platform :ios do
     sh("make -C #{IOS_ROOT} build")
   end
 
-  # NOT RUNNABLE UNTIL signing is configured (IOS_TEAM_ID, an App Store Connect app record and API key).
-  # The lane refuses to start until every variable below is present, so it cannot half-run.
-  # When signing exists: enable automatic signing for the team, create an App Store Connect API key
-  # (App Manager role), and export the variables in CI secrets. No certificate or key lives in the repo.
+  # Runs from .github/workflows/ios-testflight.yml once signing is configured (IOS_TEAM_ID, an App Store Connect
+  # app record and API key). The lane refuses to start until every variable below is present, so it cannot half-run.
+  # Signing is automatic for the team with an App Store Connect API key (App Manager role) held in CI secrets.
+  # No certificate or key lives in the repo.
   desc "Archive and upload to TestFlight (needs signing; see comments)"
   lane :beta do
-    required = %w[IOS_TEAM_ID ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_CONTENT_BASE64]
+    # B4M_MARKETING_VERSION and B4M_BUILD_NUMBER come from the train's plan step (docs/mobile-release-train.md).
+    required = %w[IOS_TEAM_ID ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_CONTENT_BASE64 B4M_MARKETING_VERSION B4M_BUILD_NUMBER]
     missing = required.select { |name| ENV[name].to_s.empty? }
-    UI.user_error!("beta needs signing: missing #{missing.join(', ')}. See the fastlane section of apps/ios/README.md.") unless missing.empty?
+    UI.user_error!("beta needs signing and a planned version: missing #{missing.join(', ')}. See the fastlane section of apps/ios/README.md.") unless missing.empty?
 
     # xcodebuild needs the same key as a file to provision on CI; it lives only in a temp dir for this run.
     key_dir = Dir.mktmpdir("asc-key")
@@ -42,16 +43,15 @@ platform :ios do
       is_key_content_base64: true
     )
 
-    # TestFlight rejects a duplicate build number, so CI's monotonically increasing run number is the build.
-    build_number = ENV["GITHUB_RUN_NUMBER"].to_s
     xcargs = [
       "DEVELOPMENT_TEAM=#{ENV['IOS_TEAM_ID']}",
       "-allowProvisioningUpdates",
       "-authenticationKeyPath #{key_path}",
       "-authenticationKeyID #{ENV['ASC_KEY_ID']}",
-      "-authenticationKeyIssuerID #{ENV['ASC_ISSUER_ID']}"
+      "-authenticationKeyIssuerID #{ENV['ASC_ISSUER_ID']}",
+      "MARKETING_VERSION=#{ENV['B4M_MARKETING_VERSION']}",
+      "CURRENT_PROJECT_VERSION=#{ENV['B4M_BUILD_NUMBER']}"
     ]
-    xcargs << "CURRENT_PROJECT_VERSION=#{build_number}" unless build_number.empty?
 
     begin
       build_app(

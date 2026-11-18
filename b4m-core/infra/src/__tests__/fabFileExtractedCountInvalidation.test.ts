@@ -41,12 +41,18 @@ const UPLOAD_PATTERN = new RegExp(`${UPLOAD_CALL.source}|PutObjectCommand|putObj
 const NOT_A_REWRITE = new Set([
   // First write of a new object; the key is hashed from user, tag, name and slot.
   'packages/server-utils/src/tutorials/sheet.ts',
+  // Overwrites the model price snapshot in its own bucket; no FabFile row exists.
+  'apps/workers/src/cron/modelPriceSnapshotWriter.ts',
   'b4m-core/services/src/fabFileService/create.ts',
   'b4m-core/services/src/fabFileService/createByUrl.ts',
   // Stages an admin audit-log CSV under exports/ (no FabFile row); nothing to invalidate.
   'apps/client/server/utils/adminAuditExportStorage.ts',
   // Uploads the account data export zip under exports/ (no FabFile row); nothing to invalidate.
   'apps/workers/src/queueHandlers/accountDataExport.ts',
+  // Shared ZIP upload fence for account and metadata-only organization exports; no FabFile rewrite.
+  'apps/workers/src/queueHandlers/accountExportLease.ts',
+  // Creates an organization metadata ZIP under exports/ without a FabFile row or content rewrite.
+  'apps/workers/src/queueHandlers/organizationDataExport.ts',
   // Only uploads while the row is still `pending` (a first write); the S3 event charges it.
   'apps/client/pages/api/files/[id]/upload.ts',
   // Each creates a NEW row (or presigns the first write for one); the S3 event charges it.

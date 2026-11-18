@@ -39,6 +39,10 @@ const Config = {
   // stage has always had them linked with a default, so callers assume `string` and
   // are out of scope for the premium-overlay eager-read fix below - left untouched.
   SLACK_WEBHOOK_URL: Resource.SLACK_WEBHOOK_URL.value,
+  SLACK_FEEDBACK_DESTINATIONS: readOptionalSecret(
+    'SLACK_FEEDBACK_DESTINATIONS',
+    () => Resource.SLACK_FEEDBACK_DESTINATIONS.value
+  ),
   SLACK_ERROR_REPORTING_WEBHOOK_URL: Resource.SLACK_ERROR_REPORTING_WEBHOOK_URL.value,
   GOOGLE_CLIENT_ID: Resource.GOOGLE_CLIENT_ID.value,
   GOOGLE_CLIENT_SECRET: Resource.GOOGLE_CLIENT_SECRET.value,
@@ -73,6 +77,8 @@ const Config = {
   APNS_TEAM_ID: readOptionalSecret('APNS_TEAM_ID', () => Resource.APNS_TEAM_ID.value),
   APNS_KEY: readOptionalSecret('APNS_KEY', () => Resource.APNS_KEY.value),
   APNS_TOPIC: readOptionalSecret('APNS_TOPIC', () => Resource.APNS_TOPIC.value),
+  // FCM (Android push) service account JSON; resolved by readFcmConfig in ./pushDelivery.
+  FCM_SERVICE_ACCOUNT: readOptionalSecret('FCM_SERVICE_ACCOUNT', () => Resource.FCM_SERVICE_ACCOUNT.value),
   STRIPE_WEBHOOK_SECRET: Resource.STRIPE_WEBHOOK_SECRET.value,
   STRIPE_SECRET_KEY: Resource.STRIPE_SECRET_KEY.value,
   STRIPE_PUBLISHABLE_KEY: Resource.STRIPE_PUBLISHABLE_KEY.value,

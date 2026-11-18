@@ -194,6 +194,20 @@ describe('adminService.loginAs - delegated users:impersonate', () => {
     expect(mockVerifyMFA).not.toHaveBeenCalled();
   });
 
+  it('counts a role-held permission on the fresh record through resolveAdminRoles', async () => {
+    vi.clearAllMocks();
+    mockVerifyMFA.mockResolvedValue({ verified: true });
+    const roleJwt = { ...delegateJwt, adminPermissions: [], roleAdminPermissions: ['users:impersonate'] };
+    const stored = { ...freshDelegate(), adminPermissions: [], adminRoleIds: ['a'.repeat(24)] };
+    const { adapters } = makeAdapters(stored as unknown as IUserDocument);
+    const resolveAdminRoles = vi.fn(async (user: object) => ({ ...user, roleAdminPermissions: ['users:impersonate'] }));
+
+    await expect(run(roleJwt as unknown as IUserDocument, { ...adapters, resolveAdminRoles })).resolves.toBe(
+      targetUser
+    );
+    expect(resolveAdminRoles).toHaveBeenCalledWith(stored);
+  });
+
   it('refuses when the fresh record no longer holds the permission', async () => {
     vi.clearAllMocks();
     const stale = { ...freshDelegate(), adminPermissions: [] } as unknown as IUserDocument;

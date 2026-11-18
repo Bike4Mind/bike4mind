@@ -1,4 +1,6 @@
 import {
+  ACCOUNT_SEGMENTS,
+  type AccountSegment,
   type AssignableOrgRole,
   getMemberCreditPeriodStart,
   IOrganizationDocument,
@@ -87,6 +89,8 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     },
     // Group-type keys this org may have (platform-admin writes only). Default empty = fail-closed.
     allowedGroupTypes: { type: [String], default: [] },
+    // See IOrganization.accountSegment. No default: absent reads as customer.
+    accountSegment: { type: String, required: false, enum: [...ACCOUNT_SEGMENTS] },
     // Org managers appointed by the billing owner / platform admin (not a Permission verb). Each also
     // holds a users[] row, which the authority checks require (hasOrgPermission, orgRoles.ts).
     adminUserIds: { type: [String], default: [] },
@@ -170,6 +174,9 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     maxCreditsPerMember: { type: Number, required: false },
     serviceAccountUserId: { type: String, required: false },
     redactPushContent: { type: Boolean, default: false },
+    // Preserve raw shapes: [String] casting could repair a corrupt restriction before fail-closed validation.
+    // Writes use OrgModelPolicySchema; every reader must use readOrgModelPolicy.
+    modelPolicy: { type: Schema.Types.Mixed, required: false, default: undefined },
     budgetAlerts: {
       type: new Schema(
         {
@@ -632,10 +639,9 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   async findIdsWithAdminRights(userId: string): Promise<string[]> {
-    // Billing owner OR a manager (adminUserIds). Broader than findIdsAdministeredBy, which also
-    // requires the manager's users[] row - see the interface doc for why this is a separate method.
+    // Same set as findIdsAdministeredBy; kept as a separate name for its data-lake callers.
     const orgs = await this.organizationModel
-      .find({ $or: [{ userId }, { adminUserIds: userId }] })
+      .find({ $or: [{ userId }, { adminUserIds: userId, 'users.userId': userId }] })
       .select('_id')
       .lean();
     return orgs.map(org => org._id.toString());
@@ -728,6 +734,14 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
           },
         },
       }
+    );
+  }
+
+  /** Sets the account segment, or unsets the field for `null` (absent reads as customer). */
+  async setAccountSegment(organizationId: string, accountSegment: AccountSegment | null): Promise<void> {
+    await this.organizationModel.updateOne(
+      { _id: organizationId },
+      accountSegment ? { $set: { accountSegment } } : { $unset: { accountSegment: 1 } }
     );
   }
 

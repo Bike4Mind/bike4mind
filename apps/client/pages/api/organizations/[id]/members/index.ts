@@ -9,8 +9,10 @@ import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigA
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { reportAndNotifyKeptPersonalLakeShares } from '@server/utils/keptPersonalLakeSharesNotifier';
+import { refreshSeatEntitlements } from '@server/organizations/refreshSeatEntitlements';
 import {
   OrganizationEvents,
+  organizationRosterScope,
   toSafeUser,
   toSafeUsers,
   toSafeOrganization,
@@ -40,13 +42,13 @@ const handler = baseApi()
   .get(async (req, res) => {
     const { id: organizationId } = req.query;
 
-    const users = await organizationService.getUsers(
+    const { organization, users } = await organizationService.getRoster(
       req.user,
       { id: organizationId as string },
       { db: { organizations: organizationRepository, users: userRepository } }
     );
 
-    return respond(res, safeUsersResponseSchema, toSafeUsers(users, 'same-org'));
+    return respond(res, safeUsersResponseSchema, toSafeUsers(users, organizationRosterScope(req.user, organization)));
   })
   .post(
     outboundActionGate(),
@@ -133,6 +135,7 @@ const handler = baseApi()
 
     // After the commit, as on the removal route. The leaver gets no count back: they already know
     // what they were shared.
+    await refreshSeatEntitlements(req.user.id);
     await reportAndNotifyKeptPersonalLakeShares(req.user.id, organization, req.logger);
 
     await logEvent(

@@ -84,9 +84,21 @@ export type ImageField = FieldBase & {
   kind: 'image';
   fileName: string | null;
   onPick: () => void;
+  // Shows the chosen file as a thumbnail beside its name.
+  previewFileId?: string;
+  // Overrides the "Choose image" / "Change image" button text.
+  pickLabel?: string;
+  // Offers a Remove button while a file is chosen.
+  onClear?: () => void;
+  // Small print under the control, e.g. what the image is used for.
+  hint?: string;
 };
 
-export type ReferenceFile = { fileId: string; fileName: string };
+/** A background removal of a reference: the cutout (a transparent PNG in Files) is what gets sent once ready. */
+export type ReferenceCutout =
+  { status: 'pending' } | { status: 'ready'; fileId: string } | { status: 'failed'; message: string };
+
+export type ReferenceFile = { fileId: string; fileName: string; cutout?: ReferenceCutout };
 
 /** Up to `max` library images that guide the look; the modality owns the picker and opens it from onAdd. */
 export type ReferencesField = FieldBase & {
@@ -95,6 +107,8 @@ export type ReferencesField = FieldBase & {
   max: number;
   onAdd: () => void;
   onRemove: (fileId: string) => void;
+  // Offers "Remove background" on each chip when set; `on` false goes back to the original.
+  onToggleCutout?: (fileId: string, on: boolean) => void;
 };
 
 /** A gradient a chip shows beside its label, e.g. a scene preset's swatch. Colors are CSS hex values. */

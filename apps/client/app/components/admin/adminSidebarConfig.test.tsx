@@ -61,9 +61,7 @@ describe('SIDEBAR_SECTIONS', () => {
     const testidByTab = new Map(allItems.filter(i => i.testid).map(i => [i.tab, i.testid]));
     // Spot-check the testids referenced by existing E2E flows.
     expect(testidByTab.get(AdminTab.Users)).toBe('admin-users-tab-btn');
-    expect(testidByTab.get(AdminTab.RegistrationInvites)).toBe('admin-invite-center-tab-btn');
     expect(testidByTab.get(AdminTab.Waitlist)).toBe('admin-waitlist-tab-btn');
-    expect(testidByTab.get(AdminTab.SecOpsTriage)).toBe('admin-secops-triage-btn');
     expect(testidByTab.get(AdminTab.SecurityDashboard)).toBe('admin-security-dashboard-btn');
     expect(testidByTab.get(AdminTab.DlqReplay)).toBe('admin-dlq-replay-btn');
     expect(testidByTab.get(AdminTab.HelpAnalytics)).toBe('admin-help-analytics-btn');
@@ -77,13 +75,16 @@ describe('SIDEBAR_SECTIONS', () => {
     expect(gatedByTab.size).toBe(2);
   });
 
+  it('has no item for the retired issue filing page, which lives on the Security page', () => {
+    expect(allItems.some(i => i.tab === AdminTab.SecOpsTriage)).toBe(false);
+  });
+
   it('labels the Waitlist item Invite Center', () => {
     expect(allItems.find(i => i.tab === AdminTab.Waitlist)?.label).toBe('Invite Center');
   });
 
-  it('labels the secrets items with their page titles', () => {
+  it('labels the secrets item with its page title', () => {
     expect(allItems.find(i => i.tab === AdminTab.SystemSecrets)?.label).toBe('System secrets');
-    expect(allItems.find(i => i.tab === AdminTab.SecretsRotation)?.label).toBe('Secrets rotation');
   });
 
   it('names the event, Slack and help metrics items like their page titles', () => {
@@ -107,8 +108,8 @@ describe('findSectionKeyForTab', () => {
     expect(findSectionKeyForTab(AdminTab.Waitlist)).toBe('people');
     expect(findSectionKeyForTab(AdminTab.EmailMarketing)).toBe('people');
     expect(findSectionKeyForTab(AdminTab.CreditAnalytics)).toBe('money');
-    expect(findSectionKeyForTab(AdminTab.SecretsRotation)).toBe('trust');
-    expect(findSectionKeyForTab(AdminTab.LLMDashboard)).toBe('ai');
+    expect(findSectionKeyForTab(AdminTab.SystemSecrets)).toBe('trust');
+    expect(findSectionKeyForTab(AdminTab.Models)).toBe('ai');
     expect(findSectionKeyForTab(AdminTab.SreAgent)).toBe('platform');
     expect(findSectionKeyForTab(AdminTab.AdminSettings)).toBe('settings');
   });

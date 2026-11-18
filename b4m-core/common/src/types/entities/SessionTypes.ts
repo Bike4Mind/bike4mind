@@ -109,6 +109,7 @@ export type SessionProps = {
 export const QUEST_ERROR_CODES = [
   'insufficient_credits',
   'spend_cap_exceeded',
+  'free_quest_limit_reached',
 ] as const satisfies readonly ApiErrorCode[];
 export type QuestErrorCode = (typeof QUEST_ERROR_CODES)[number];
 
@@ -266,7 +267,7 @@ export interface IChatHistoryItem {
   /** Legacy: video jobs started before `generationJobs`; read through questGenerationJobs, never written. */
   videoJobIds?: string[];
 
-  /** Generation jobs (video, music) this quest started, one live card each. Read through questGenerationJobs. */
+  /** Generation jobs (video, music, image) this quest started, one live card each. Read through questGenerationJobs. */
   generationJobs?: GenerationJobRef[];
 
   /** Agent-mode video clips this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
@@ -274,6 +275,15 @@ export interface IChatHistoryItem {
 
   /** Agent-mode songs this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
   agentMusicTracksClaimed?: number;
+
+  /** Agent-mode images this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentImagesClaimed?: number;
+
+  /** Agent-mode speech clips this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentSpeechClipsClaimed?: number;
+
+  /** Agent-mode sound effects this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentSoundEffectsClaimed?: number;
 
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;
@@ -296,6 +306,11 @@ export interface IChatHistoryItem {
    * part of any client or poll payload: it names the caller's endpoint and signing key.
    */
   callback?: IQuestCallback;
+
+  /** Set with `oauthClientId` when a federated exchange key created the quest; absent for every other caller. */
+  apiKeyId?: string;
+  /** Connected app of the exchange key that created the quest. */
+  oauthClientId?: string;
 
   /**
    * The ID of the QuestMaster plan that was created from this chat history item

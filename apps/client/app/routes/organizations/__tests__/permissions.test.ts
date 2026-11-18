@@ -4,7 +4,6 @@ import {
   canManageOrgConnectors,
   canManageOrgDomains,
   canManageOrgIntegrations,
-  canEditOrgProfile,
   canManageOrgSettings,
   IntegrationSections,
   LEGACY_INTEGRATION_TABS,
@@ -125,7 +124,8 @@ describe('Organization Permissions', () => {
     // not the owner would get a Billing Portal button that rejects them. Admin -> Organizations is
     // where a platform admin acts on an org's billing.
     it('denies a platform admin who is not the owner', () => {
-      expect(canViewOrgBilling({ id: 'someoneelse', isAdmin: true }, org)).toBe(false);
+      const platformAdmin = { id: 'someoneelse', isAdmin: true };
+      expect(canViewOrgBilling(platformAdmin, org)).toBe(false);
     });
 
     it('denies a stranger', () => {
@@ -408,55 +408,34 @@ describe('LEGACY_INTEGRATION_TABS', () => {
 });
 
 describe('canManageOrgSettings', () => {
-  // Mirrors organizationService.update: platform admin, owner, a users[] row holding update, or a
-  // current manager (sharing policy only).
+  // Mirrors organizationService.update: owner, current manager or platform admin. A sharing-ACL
+  // row never opens it.
   const org = {
     userId: 'owner1',
+    adminUserIds: ['manager1', 'gone1'],
     users: [
-      { userId: 'editor1', permissions: [Permission.read, Permission.update] },
-      { userId: 'sharer1', permissions: [Permission.read, Permission.share] },
+      { userId: 'manager1', permissions: [Permission.read] },
+      { userId: 'editor1', permissions: [Permission.read, Permission.update, Permission.share] },
       { userId: 'reader1', permissions: [Permission.read] },
     ],
   };
 
-  it('admits the owner, a platform admin and a member holding update', () => {
+  it('admits the owner, a current manager and a platform admin', () => {
     expect(canManageOrgSettings({ id: 'owner1' }, org)).toBe(true);
+    expect(canManageOrgSettings({ id: 'manager1' }, org)).toBe(true);
     expect(canManageOrgSettings({ id: 'admin9', isAdmin: true }, org)).toBe(true);
-    expect(canManageOrgSettings({ id: 'editor1' }, org)).toBe(true);
   });
 
-  // The server's update finder has no share arm, so share alone would offer a Save that 404s.
-  it('refuses a member holding share without update', () => {
-    expect(canManageOrgSettings({ id: 'sharer1' }, org)).toBe(false);
+  it('refuses a member holding update or share on the ACL row', () => {
+    expect(canManageOrgSettings({ id: 'editor1' }, org)).toBe(false);
   });
 
-  it('refuses a read-only member, a stranger, and a caller while loading', () => {
+  it('refuses a read-only member, a stale manager, a stranger, and a caller while loading', () => {
     expect(canManageOrgSettings({ id: 'reader1' }, org)).toBe(false);
+    expect(canManageOrgSettings({ id: 'gone1' }, org)).toBe(false);
     expect(canManageOrgSettings({ id: 'stranger' }, org)).toBe(false);
     expect(canManageOrgSettings(null, org)).toBe(false);
     expect(canManageOrgSettings({ id: 'owner1' }, undefined)).toBe(false);
-  });
-
-  // A current manager may save the sharing policy, so the tab opens for them; the profile save
-  // still needs update, so canEditOrgProfile keeps the system prompt read-only.
-  it('opens the tab to a current manager without letting them edit the profile', () => {
-    const managed = {
-      ...org,
-      adminUserIds: ['reader1', 'gone1'],
-    };
-    expect(canManageOrgSettings({ id: 'reader1' }, managed)).toBe(true);
-    expect(canEditOrgProfile({ id: 'reader1' }, managed)).toBe(false);
-  });
-
-  it('refuses a stale manager who is no longer on the roster', () => {
-    expect(canManageOrgSettings({ id: 'gone1' }, { ...org, adminUserIds: ['gone1'] })).toBe(false);
-  });
-
-  it('gates the profile on the same rule as the server update finder', () => {
-    expect(canEditOrgProfile({ id: 'owner1' }, org)).toBe(true);
-    expect(canEditOrgProfile({ id: 'admin9', isAdmin: true }, org)).toBe(true);
-    expect(canEditOrgProfile({ id: 'editor1' }, org)).toBe(true);
-    expect(canEditOrgProfile({ id: 'sharer1' }, org)).toBe(false);
   });
 });
 
@@ -501,6 +480,7 @@ describe('canManageOrgDomains', () => {
       canManageGroups: false,
       canViewBilling: false,
       canManageConnectors: false,
+      canManageDomains: false,
     };
     expect(resolveAccessibleTab(OrganizationTabs.Domains, access)).toBe(OrganizationTabs.Overview);
     expect(resolveAccessibleTab(OrganizationTabs.Domains, { ...access, canManageDomains: true })).toBe(

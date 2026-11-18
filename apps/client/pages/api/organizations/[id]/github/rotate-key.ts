@@ -18,6 +18,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
 import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, InternalServerError, NotFoundError } from '@bike4mind/utils';
 import { validatePrivateKeyFormat } from '@bike4mind/server-utils/utils/validators';
@@ -45,7 +46,7 @@ const handler = baseApi()
     const orgId = req.query.id as string;
     const user = req.user!;
 
-    await verifyOrgPermission(user, orgId, 'manageIntegrations');
+    const org = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
     const parseResult = RotateKeySchema.safeParse(req.body);
     if (!parseResult.success) {
@@ -90,6 +91,13 @@ const handler = baseApi()
       organizationId: orgId,
       actorUserId: user.id,
       connectionType: 'github_app',
+    });
+    await recordAdminActionFromRequest(req, {
+      action: 'org.github_connection.key_rotated',
+      actorScope: 'organization',
+      target: { kind: 'organization', id: org.id, displayName: org.name },
+      summary: 'rotated the GitHub App private key',
+      details: { connectionId: connection.id },
     });
 
     logger.info('[Org] Rotated GitHub App private key', {

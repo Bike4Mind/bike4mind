@@ -366,5 +366,173 @@
     "size": "2048x1648",
     "background": "transparent",
     "note": "sliced from raw/sheet-cast-2.png row 4 column 5"
+  },
+  "aquarium/backdrop.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "16-bit pixel art game background, SNES-era style, crisp hard-edged pixels, limited calm palette of muted teal, deep blue and soft sand tones, low contrast, gentle and restful. The inside of a quiet freshwater aquarium tank seen straight on from the front, wide 16:9 composition. The water fills the whole image with soft light rays falling from the surface at the top. BOTTOM fifth: a flat, even bed of pale sand with a few smooth pebbles, wide open and flat across the whole width so small fish can rest on it. LEFT edge and RIGHT edge: tall swaying water plants and a couple of mossy rocks, kept to the outer sixth on each side. CENTER: wide open, empty water with only a few faint drifting specks, so fish can swim there. TOP: the calm water surface as a thin lighter band. Empty tank: absolutely no fish, no animals, no creatures, no people, no text, no letters, no logos, no UI, no frame or border around the image.",
+    "date": "2026-11-16T15:42:35.593Z",
+    "size": "2048x1152",
+    "background": "opaque",
+    "note": "raw backdrop.png (aquarium raw folder), downscaled to 1280x720"
+  },
+  "aquarium/fish-1-swim.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 1 column 1"
+  },
+  "aquarium/fish-1-front.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 1 column 2"
+  },
+  "aquarium/fish-1-rest.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 1 column 3"
+  },
+  "aquarium/fish-1-sleep.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 1 column 4"
+  },
+  "aquarium/fish-1-pale.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 1 column 5"
+  },
+  "aquarium/fish-2-swim.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 2 column 1"
+  },
+  "aquarium/fish-2-front.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 2 column 2"
+  },
+  "aquarium/fish-2-rest.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 2 column 3"
+  },
+  "aquarium/fish-2-sleep.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 2 column 4"
+  },
+  "aquarium/fish-2-pale.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 2 column 5"
+  },
+  "aquarium/fish-3-swim.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 3 column 1"
+  },
+  "aquarium/fish-3-front.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 3 column 2"
+  },
+  "aquarium/fish-3-rest.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 3 column 3"
+  },
+  "aquarium/fish-3-sleep.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 3 column 4"
+  },
+  "aquarium/fish-3-pale.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 3 column 5"
+  },
+  "aquarium/fish-4-swim.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 4 column 1"
+  },
+  "aquarium/fish-4-front.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 4 column 2"
+  },
+  "aquarium/fish-4-rest.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 4 column 3"
+  },
+  "aquarium/fish-4-sleep.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 4 column 4"
+  },
+  "aquarium/fish-4-pale.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.\nRow 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.\nRow 2: a tall teal fish with long trailing top and bottom fins.\nRow 3: a small plump yellow fish with blue spots and big eyes.\nRow 4: a slender lavender fish with a long flowing veil tail.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.\nColumn 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.\nColumn 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.\nColumn 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.\nColumn 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.",
+    "date": "2026-11-16T15:43:52.908Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/fish-sheet.png (aquarium raw folder) row 4 column 5"
   }
 }

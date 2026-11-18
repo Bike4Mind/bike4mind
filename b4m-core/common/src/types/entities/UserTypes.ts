@@ -16,6 +16,7 @@ import type { RiskEvidenceRecord, RiskEvidenceSummary, RiskEvidenceTrigger } fro
 import type { SignupGrant, SignupGrantAssessment } from '../../signupGrant';
 import type { ClientSurface } from '../analytics';
 import type { AdminPermissionId } from '../../adminPermissions';
+import type { UserAccountSegment } from './SpendExplorerTypes';
 
 export enum CollectionType {
   NOTEBOOK = 'notebook',
@@ -359,6 +360,12 @@ export type AccountDeletionSource = (typeof ACCOUNT_DELETION_SOURCES)[number];
 /** Days between a deletion request and the purge; the user can cancel until then. */
 export const ACCOUNT_DELETION_GRACE_DAYS = 14;
 
+/**
+ * Days after a deletion request at which one still not completed raises the deadline alarm, leaving
+ * five days of margin inside the one-month erasure window.
+ */
+export const ACCOUNT_DELETION_DEADLINE_ALERT_DAYS = 25;
+
 export interface AccountDeletionRetainedRecord {
   category: string;
   reason: string;
@@ -430,6 +437,8 @@ export interface IClientUsageEntry {
 
 export interface IUser extends ICreditHolder {
   id: string;
+  /** Durable admission id; deleting a QuestMaster plan never restores the allowance. */
+  freeQuestStartId?: string;
   username: string;
   name: string;
   email: string | null;
@@ -447,6 +456,13 @@ export interface IUser extends ICreditHolder {
   groups: Array<string> | null;
   isAdmin: boolean;
   adminPermissions?: AdminPermissionId[];
+  /** Admin roles held (b4m-core/common adminRoles.ts). Assigned through the admin permissions endpoint. */
+  adminRoleIds?: string[];
+  /**
+   * The permissions those roles carry, resolved per request by the auth step. A virtual, never
+   * stored: absent when roles were not resolved for this read.
+   */
+  roleAdminPermissions?: AdminPermissionId[];
   storageLimit: number /** Effective storage limit in decimal MB */;
   /** Manual or custom signup allocation; null means use plan/default. */
   storageLimitOverride?: number | null;
@@ -508,6 +524,16 @@ export interface IUser extends ICreditHolder {
   disputePending?: boolean;
   /** Set while a requested deletion is in its grace period (see IUserDeletion). */
   deletion?: IUserDeletion | null;
+  /** Private erasure retry state, including restored accounts with no deletion schedule. */
+  accountFilePurge?: {
+    startedAt?: Date;
+    leaseId?: string;
+    leaseExpiresAt?: Date;
+    initialized?: boolean;
+    throughAuditId?: string;
+    afterAuditId?: string;
+    complete?: boolean;
+  };
   /** Server-side lease preventing a data export from racing permanent account cleanup. */
   /** `jobId` names the export job holding it; leases taken before it was recorded have none. */
   accountDataExportLease?: { id: string; jobId?: string; expiresAt: Date };
@@ -949,10 +975,25 @@ export interface IUser extends ICreditHolder {
   isInternal?: boolean;
 
   /**
+   * Set by an admin through the user's partner toggle. Only `partner` is ever stored from the user
+   * route; absent reads as `customer`. Internal stays `isInternal`, the only source of that for a user.
+   * Spend explorer splits cost by it. Never an authorization source.
+   */
+  accountSegment?: UserAccountSegment;
+
+  /**
    * Minted through POST /api/v1/personas, never through signup. Only these accounts can be deleted
    * through the persona routes, and the expiry sweep disables them at `personaExpiresAt`.
    */
   isPersona?: boolean;
+
+  /**
+   * `'force'` makes this one account owe MFA enrollment as if the admin enforced MFA, with the
+   * stage-wide `enforceMFA` setting untouched, so e2e can drive the real enforcement path. Set only
+   * by POST /api/test/create-user; no signup, profile or admin update path writes it. Every reader
+   * goes through isMfaForcedForUser (common mfaEnforcement.ts).
+   */
+  mfaEnforcement?: 'force' | null;
 
   /** When the persona expiry sweep disables this persona account; set only on persona accounts. */
   personaExpiresAt?: Date | null;
@@ -1147,10 +1188,15 @@ export interface IUserRepository
    * email or username an audit entry shows. Ids that are not ObjectId-shaped are dropped. Never return this
    * to a client: it carries admin permissions.
    */
-  findAdminTargetsByIds?: (
-    ids: string[]
-  ) => Promise<
-    Array<{ id: string; email?: string; username?: string; isAdmin?: boolean; adminPermissions?: string[] }>
+  findAdminTargetsByIds?: (ids: string[]) => Promise<
+    Array<{
+      id: string;
+      email?: string;
+      username?: string;
+      isAdmin?: boolean;
+      adminPermissions?: string[];
+      adminRoleIds?: string[];
+    }>
   >;
   /** Active (non-soft-deleted), emailed users among `ids` - for a notification addressee resolver. */
   findActiveEmailsByIds: (ids: string[]) => Promise<Array<{ id: string; email: string }>>;

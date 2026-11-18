@@ -840,10 +840,9 @@ const accountErasureQueueSubscription = accountErasureQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
-// Account Data Export Queue
-// "Download all my data": builds a zip of the user's data under the fabFileBucket exports/ prefix
-// (expired by its lifecycle rule). Self-serve exports email a link to the app download page; admin
-// data subject exports (with the registry records) are fetched from the admin user profile instead.
+// Account and organization exports share a consumer and retry policy, with a payload discriminator.
+// All write under the expiring exports/ prefix. Self-serve and organization exports email an
+// authenticated app link; admin data subject exports are fetched from the admin user profile.
 const accountDataExportQueueDLQ = new sst.aws.Queue('accountDataExportQueueDLQ', {});
 const accountDataExportQueue = new sst.aws.Queue('accountDataExportQueue', {
   visibilityTimeout: '16 minutes',
@@ -1199,63 +1198,6 @@ const generatedMediaPurgeQueueSubscription = generatedMediaPurgeQueue.subscribe(
   }
 );
 
-// Legacy What's New highlights queue, retained with its consumer until in-flight messages drain.
-// The admin generate-highlights route now sends to whatsNewGenerationQueue; there is no scheduled trigger.
-const whatsNewHighlightsQueueDLQ = new sst.aws.Queue('whatsNewHighlightsQueueDLQ', {
-  transform: {
-    queue: {
-      kmsMasterKeyId: 'alias/aws/sqs', // Enable SQS encryption
-      messageRetentionSeconds: 1209600, // 14 days for debugging
-    },
-  },
-});
-const whatsNewHighlightsQueue = new sst.aws.Queue('whatsNewHighlightsQueue', {
-  visibilityTimeout: '8 minutes', // 3-minute safety margin over Lambda 5-min timeout
-  dlq: {
-    queue: whatsNewHighlightsQueueDLQ.arn,
-    retry: 3,
-  },
-  transform: {
-    queue: {
-      kmsMasterKeyId: 'alias/aws/sqs', // Enable SQS encryption
-    },
-  },
-});
-const whatsNewHighlightsQueueSubscription = whatsNewHighlightsQueue.subscribe(
-  {
-    handler: 'apps/workers/src/queueHandlers/whatsNewHighlights.dispatch',
-    timeout: '5 minutes',
-    vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    permissions: [
-      {
-        actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-        resources: [
-          'arn:aws:bedrock:*:*:foundation-model/anthropic.claude-*',
-          'arn:aws:bedrock:*:*:foundation-model/amazon.*',
-          'arn:aws:bedrock:*:*:inference-profile/anthropic.claude-*',
-          'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-*',
-          'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-*',
-        ],
-      },
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
-      },
-    ],
-    copyFiles: [
-      {
-        from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
-        to: 'tiktoken_bg.wasm',
-      },
-    ],
-  },
-  SINGLE_RECORD_BATCH
-);
-
 // Generation Job Queue
 // One engine step per message (submit, poll or store) for the generic GenerationJob engine; a step that
 // needs another turn re-enqueues itself with a delay. The subscription timeout, queue visibility timeout
@@ -1278,6 +1220,15 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     memory: '2048 MB',
+    // Scene (compose) jobs download up to 200 MB of inputs and write the rendered MP4 under /tmp.
+    storage: '2 GB',
+    nodejs: {
+      // ffmpeg-static resolves its binary relative to its own package dir, so it cannot be bundled; install runs
+      // npm for the Lambda's linux platform, so its postinstall downloads the matching static ffmpeg into the zip.
+      // Registered by apps/workers/src/queueHandlers/generationJob.ts, never imported by server-utils.
+      install: ['ffmpeg-static'],
+      esbuild: { external: ['ffmpeg-static'] },
+    },
     vpc: lambdaVpc,
     link: [
       ...allSecrets,
@@ -1846,7 +1797,6 @@ export {
   generationJobQueue,
   researchEngineQueue,
   whatsNewGenerationQueue,
-  whatsNewHighlightsQueue,
   notebookCurationQueue,
   agentProactiveMessageQueue,
   slackExportQueue,
@@ -1887,7 +1837,6 @@ export {
   generationJobDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
-  whatsNewHighlightsQueueDLQ,
   notebookCurationQueueDLQ,
   agentProactiveMessageQueueDLQ,
   slackExportQueueDLQ,
@@ -1930,7 +1879,6 @@ export {
   fabFileBucketNotification,
   researchEngineQueueSubscription,
   whatsNewGenerationQueueSubscription,
-  whatsNewHighlightsQueueSubscription,
   notebookCurationQueueSubscription,
   agentProactiveMessageQueueSubscription,
   slackExportQueueSubscription,

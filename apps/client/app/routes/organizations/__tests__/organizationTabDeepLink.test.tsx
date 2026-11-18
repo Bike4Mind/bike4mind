@@ -33,6 +33,13 @@ const orgQuery = vi.hoisted(() => ({
 const searchParams = vi.hoisted(() => ({ current: {} as { tab?: string; section?: string } }));
 const user = vi.hoisted(() => ({ current: { id: 'owner1' } as { id: string; isAdmin?: boolean } | null }));
 const navigateSpy = vi.hoisted(() => vi.fn());
+const libraryRender = vi.hoisted(() => vi.fn());
+vi.mock('@client/app/components/organizations/OrganizationLibrarySection', () => ({
+  default: () => {
+    libraryRender();
+    return <div data-testid="library-contents" />;
+  },
+}));
 
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useGetSubscriptionsByOwner: () => ({ data: [] }),
@@ -40,7 +47,7 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
 
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useGetOrganization: () => orgQuery.current,
-  useOrganizationSeats: () => ({ currentSeats: 1, maxSeats: 5, pendingSeats: 0, availableSeats: 4 }),
+  useOrganizationSeats: () => ({ currentSeats: 1, maxSeats: 5, pendingSeats: 0, activeSeats: 1, availableSeats: 4 }),
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.current }) }));
@@ -60,6 +67,9 @@ vi.mock('@client/app/components/organizations/Member', () => ({ default: () => n
 vi.mock('@client/app/components/organizations/OrganizationGroups', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationBillingSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationSettingsSection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrgModelPolicySection', () => ({
+  default: () => <div data-testid="model-policy-editor" />,
+}));
 vi.mock('@client/app/components/organizations/OrganizationRetentionSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationUsageSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationAnalysisSection', () => ({ default: () => null }));
@@ -70,7 +80,6 @@ vi.mock('@client/app/components/organizations/OrgCustomMcpPolicySection', () => 
 vi.mock('@client/app/components/organizations/OrgApiKeysSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgMemberApiKeysSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationAuditSection', () => ({ default: () => null }));
-vi.mock('@client/app/components/organizations/OrganizationLibrarySection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgDomainsTab', () => ({ default: () => null }));
 
 // A real i18next over en.json, so assertions pin the wording, plurals and interpolation users get.
@@ -94,8 +103,7 @@ const ORG = {
   storageLimit: 0,
   users: [
     { userId: 'owner1' },
-    // Holds manage permissions but is neither owner nor manager: the one caller for whom the two
-    // gates disagree, so a deep link must be honoured for Settings and refused for Usage.
+    // Holds update on the sharing ACL but is neither owner nor manager, so no admin tab opens.
     { userId: 'manager2', permissions: [Permission.read, Permission.update] },
   ],
 } as unknown as IOrganizationDocument;
@@ -154,6 +162,7 @@ describe('organization detail page - ?tab= deep link', () => {
     render(wrapper(<OrganizationPage />));
     expect(selectedTabName()).toContain('Settings');
     expect(screen.getAllByTestId('organization-audit-tab')).toHaveLength(1);
+    expect(screen.getByTestId('model-policy-editor')).toBeTruthy();
   });
 
   it.each([404, 403, 500])('shows a way back instead of spinning after HTTP %s', status => {
@@ -204,6 +213,20 @@ describe('organization detail page - ?tab= deep link', () => {
     renderThroughLoad();
 
     expect(selectedTabName()).toBe('Settings');
+    expect(screen.getByTestId('model-policy-editor')).toBeTruthy();
+  });
+
+  it('keeps the Library tab ARIA target mounted while loading its contents only when selected', () => {
+    libraryRender.mockClear();
+    orgQuery.current = { data: ORG, isLoading: false, isError: false, error: undefined };
+    const view = render(wrapper(<OrganizationPage />));
+    const target = screen.getByTestId('organization-library-tab').getAttribute('aria-controls');
+    expect(target).toBeTruthy();
+    expect(document.getElementById(target!)).toBeTruthy();
+    expect(libraryRender).not.toHaveBeenCalled();
+    searchParams.current = { tab: OrganizationTabs.Library };
+    view.rerender(wrapper(<OrganizationPage />));
+    expect(screen.getByTestId('library-contents')).toBeTruthy();
   });
 
   it('still falls back to Overview for a member who may not see Usage', () => {
@@ -234,15 +257,22 @@ describe('organization detail page - ?tab= deep link', () => {
     expect(screen.queryByRole('tab', { name: 'Domains' })).toBeNull();
   });
 
-  // The same caller, the same load, opposite answers: honouring a deep link is per-gate, not a
-  // blanket "trust the URL once the org lands".
-  it('honours Settings but not Usage for a member who may manage the org', () => {
+  it('refuses Settings to a member whose only claim is update on the sharing ACL', () => {
     searchParams.current = { tab: 'settings' };
     user.current = { id: 'manager2' };
 
     renderThroughLoad();
 
-    expect(selectedTabName()).toBe('Settings');
+    expect(selectedTabName()).toBe('Overview');
+    expect(screen.queryByRole('tab', { name: 'Settings' })).toBeNull();
+    expect(screen.queryByTestId('model-policy-editor')).toBeNull();
+  });
+
+  it('shows the policy editor to a platform administrator without requiring an organization ACL row', () => {
+    searchParams.current = { tab: 'settings' };
+    user.current = { id: 'platform-admin', isAdmin: true };
+    renderThroughLoad();
+    expect(screen.getByTestId('model-policy-editor')).toBeTruthy();
   });
 
   it('opens the Billing tab for the owner, the only caller its actions accept', () => {
@@ -253,10 +283,8 @@ describe('organization detail page - ?tab= deep link', () => {
     expect(selectedTabName()).toBe('Billing');
   });
 
-  // Same caller, same manage permissions, opposite answer to the Settings case above: Billing
-  // rides its own owner-only gate because Subscribe, Manage Seats and Billing Portal all reject a
-  // non-owner. Before the split this member got the whole tab and an error from every control.
-  it('refuses Billing for a member who may manage the org', () => {
+  // Billing rides its own owner-only gate: Subscribe, Manage Seats and Billing Portal all reject a non-owner.
+  it('refuses Billing for a member who is not the owner', () => {
     searchParams.current = { tab: 'billing' };
     user.current = { id: 'manager2' };
 
@@ -264,7 +292,6 @@ describe('organization detail page - ?tab= deep link', () => {
 
     expect(selectedTabName()).toBe('Overview');
     expect(screen.queryByRole('tab', { name: 'Billing' })).toBeNull();
-    expect(screen.getByRole('tab', { name: 'Settings' })).toBeTruthy();
   });
 
   it('falls back to Overview for a non-member', () => {
@@ -422,9 +449,9 @@ describe('organization detail page - Integrations tab', () => {
     const renderAsManager = () => {
       searchParams.current = { tab };
       user.current = { id: 'mgr3' };
-      orgQuery.current = { data: undefined, isLoading: true };
+      orgQuery.current = { data: undefined, isLoading: true, isError: false, error: undefined };
       const { rerender } = render(wrapper(<OrganizationPage />));
-      orgQuery.current = { data: MANAGER_ORG, isLoading: false };
+      orgQuery.current = { data: MANAGER_ORG, isLoading: false, isError: false, error: undefined };
       rerender(wrapper(<OrganizationPage />));
       return rerender;
     };
@@ -456,7 +483,7 @@ describe('organization detail page - Integrations tab', () => {
 
   it('does not rewrite before the user and organization have loaded', () => {
     searchParams.current = { tab: 'integrations', section: 'github' };
-    orgQuery.current = { data: undefined, isLoading: true };
+    orgQuery.current = { data: undefined, isLoading: true, isError: false, error: undefined };
 
     render(wrapper(<OrganizationPage />));
 

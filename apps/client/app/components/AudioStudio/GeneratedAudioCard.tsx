@@ -1,4 +1,6 @@
 import { Box, Button, Card, Stack, Typography } from '@mui/joy';
+import StudioTrailButton from '@client/app/components/Studio/trail/StudioTrailButton';
+import type { StudioTrailRestore } from '@client/app/components/Studio/trail/StudioTrail';
 import { toast } from 'sonner';
 import {
   isStoredPromptPossiblyTruncated,
@@ -33,10 +35,12 @@ const settingsSummary = (generation: GeneratedAssetMetadata, voiceName: string |
 type GeneratedAudioCardProps = {
   mode: AudioGenMode;
   file: IFabFileDocument;
+  // Create v2 only: adds the take's trail.
+  onRestore?: StudioTrailRestore;
 };
 
 /** One saved speech or sound-effect file in a Studio audio gallery. */
-const GeneratedAudioCard = ({ mode, file }: GeneratedAudioCardProps) => {
+const GeneratedAudioCard = ({ mode, file, onRestore }: GeneratedAudioCardProps) => {
   const openFiles = useFileBrowser(state => state.setOpen);
   const applySettings = useAudioGenSettings(state => state.applySettings);
   const setText = useAudioStudioDraft(state => state.setText);
@@ -115,6 +119,9 @@ const GeneratedAudioCard = ({ mode, file }: GeneratedAudioCardProps) => {
         >
           Open in Files
         </Button>
+        {onRestore && (
+          <StudioTrailButton fileId={file.id} testId="generated-audio-card-trail-btn" onRestore={onRestore} />
+        )}
       </Stack>
     </Card>
   );

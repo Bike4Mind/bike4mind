@@ -314,6 +314,28 @@ export function TableIcon() {
   );
 }
 
+/** The Tile Wall view: an even grid of tiles. */
+export function TileWallIcon() {
+  return (
+    <Glyph>
+      <rect x="2" y="2.5" width="5" height="5" rx="1" />
+      <rect x="9" y="2.5" width="5" height="5" rx="1" />
+      <rect x="2" y="8.5" width="5" height="5" rx="1" />
+      <rect x="9" y="8.5" width="5" height="5" rx="1" />
+    </Glyph>
+  );
+}
+
+/** The Aquarium view: a fish. */
+export function AquariumIcon() {
+  return (
+    <Glyph>
+      <path d="M2.5 8c2-3 6-3.5 8.5 0-2.5 3.5-6.5 3-8.5 0z" />
+      <path d="M11 8l2.5-2v4z" />
+    </Glyph>
+  );
+}
+
 /**
  * The header's way to the agents stage: a grid of agent cards. Kept apart from AgentsIcon, which is
  * the composer's Orchestrate behaviour, so the view switch never reads as a second copy of it.
@@ -681,6 +703,26 @@ export function WireframeIcon() {
       <path d="M8 1.75 13.75 5v6L8 14.25 2.25 11V5z" />
       <path d="M2.25 5 8 8.25 13.75 5M8 8.25v6" />
       <path d="M8 1.75v6.5M2.25 11 8 8.25l5.75 2.75" strokeDasharray="1.5 1.5" strokeWidth="1" />
+    </Glyph>
+  );
+}
+
+/** The model pane's measure tool: a ruler laid across, with ticks. */
+export function MeasureIcon() {
+  return (
+    <Glyph>
+      <path d="M1.75 10.25 10.25 1.75l4 4-8.5 8.5z" />
+      <path d="M4.5 7.5l1.5 1.5M6.75 5.25l1.5 1.5M9 3l1.5 1.5" strokeWidth="1" />
+    </Glyph>
+  );
+}
+
+/** The model pane's section tool: a cube with a plane cutting through it. */
+export function SectionIcon() {
+  return (
+    <Glyph>
+      <path d="M8 1.75 13.75 5v6L8 14.25 2.25 11V5z" />
+      <path d="M1 8.75 8 5l7 3.75L8 12.5z" strokeWidth="1" />
     </Glyph>
   );
 }

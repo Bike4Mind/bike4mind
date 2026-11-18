@@ -19,6 +19,7 @@
  */
 
 import { secrets } from './secrets';
+import { lambdaVpc } from './vpc';
 import { dlqAlarmHandlerDlq } from './dlqAlarmHandlerDeadLetter';
 import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { llmSpendLogSources } from './llmSpendLogGroups';
@@ -33,7 +34,6 @@ import {
   generationCallbackQueueDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
-  whatsNewHighlightsQueueDLQ,
   notebookCurationQueueDLQ,
   agentProactiveMessageQueueDLQ,
   githubWebhookQueueDLQ,
@@ -95,6 +95,9 @@ import { organizationRetentionDeadLetter } from './organizationRetention';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
+import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
+import { dlqTriagePermissions } from './dlqTriagePermissions';
+import { refusedRequestRuleName, type RefusedRequestRuleKind } from './refusedRequestRules';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -149,13 +152,28 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
     const arn = aws.cloudwatch.getLogGroupOutput({ name: logGroupName }).arn;
     return [arn, $interpolate`${arn}:*`];
   });
+  // The refused-request burst alarm names its top IPs and paths from the rules it is built on
+  // (apps/workers/src/events/refusedRequestBurstDetail.ts, infra/refusedRequestAlarms.ts).
+  const refusedRequestRules: Record<RefusedRequestRuleKind, string> = {
+    'by-ip': refusedRequestRuleName($app.name, $app.stage, 'by-ip'),
+    'by-ip-path': refusedRequestRuleName($app.name, $app.stage, 'by-ip-path'),
+  };
+  const refusedRequestRuleArns = $util
+    .all([aws.getPartitionOutput().partition, aws.getRegionOutput().name, aws.getCallerIdentityOutput().accountId])
+    .apply(([partition, region, accountId]) =>
+      Object.values(refusedRequestRules).map(
+        name => `arn:${partition}:cloudwatch:${region}:${accountId}:insight-rule/${name}`
+      )
+    );
   dlqAlarmTopic!.subscribe(
     {
+      vpc: lambdaVpc,
       handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
       link: [
         secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL,
         secrets.SLACK_ALARMS_WEBHOOK_URL,
         secrets.SLACK_COST_ALARMS_WEBHOOK_URL,
+        secrets.MONGODB_URI,
       ],
       // Room for the Logs Insights query (25 s budget) ahead of the Slack post.
       timeout: '60 seconds',
@@ -163,11 +181,16 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
         ...DEFAULT_LAMBDA_ENVIRONMENT,
         ...mentionArgs.environment,
         LLM_SPEND_LOG_GROUPS: $util.all(spendLogGroupNames).apply(names => names.join(',')),
+        REFUSED_REQUEST_IP_RULE: refusedRequestRules['by-ip'],
+        REFUSED_REQUEST_IP_PATH_RULE: refusedRequestRules['by-ip-path'],
       },
       permissions: [
         ...mentionArgs.permissions,
+        { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
+        dlqTriagePermissions(),
         { actions: ['logs:StartQuery'], resources: spendLogGroupArns },
         { actions: ['logs:GetQueryResults', 'logs:StopQuery'], resources: ['*'] },
+        { actions: ['cloudwatch:GetInsightRuleReport'], resources: refusedRequestRuleArns },
       ],
     },
     {
@@ -310,13 +333,6 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'ReleaseNotes',
     sourceQueue: 'whatsNewGenerationQueue',
     queue: whatsNewGenerationQueueDLQ,
-  },
-  {
-    label: 'whats-new-highlights',
-    displayName: "What's New Highlights",
-    application: 'WhatsNewGeneration',
-    sourceQueue: 'whatsNewHighlightsQueue',
-    queue: whatsNewHighlightsQueueDLQ,
   },
   {
     label: 'notebook-curation',
@@ -618,6 +634,14 @@ function createDlqAlarms(dlq: Omit<InfraDlqDescriptor, 'sourceQueue'>) {
 }
 
 if (isMonitoredStage) {
+  if (dlqTriageSweepDeadLetter) {
+    createDlqAlarms({
+      label: 'dlq-triage-sweep',
+      displayName: 'DLQ Triage Sweep',
+      application: 'LiveOps',
+      queue: dlqTriageSweepDeadLetter.queue,
+    });
+  }
   for (const dlq of ALARMED_DLQS) {
     createDlqAlarms(dlq);
   }

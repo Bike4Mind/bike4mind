@@ -11,6 +11,7 @@ import {
   ChatWaitUnprocessableErrorSchema,
   ChatWaitUpstreamErrorSchema,
   ApiErrorSchema,
+  ChatForbiddenErrorSchema,
 } from '../../schemas/chat';
 
 /**
@@ -38,14 +39,20 @@ export const chatContract = defineEndpoint({
     'session, a user-cancelled turn) is ALSO a failure even without `type: "error"` - it carries ' +
     'an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure ' +
     'signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); ' +
-    '`errorCode` is an optional refinement present only when the failure is a classified billing ' +
+    '`errorCode` is an optional refinement present only when the failure has a classified ' +
     'reason. A recovered stuck quest is NOT in that list: one that still has renderable content ' +
-    'resolves as a success by design. `QUEST_ERROR_CODES` has two members, but only ' +
-    '`insufficient_credits` is raised as a quest errorCode by any current throw site on this ' +
-    "endpoint - `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which " +
+    'resolves as a success by design. `QUEST_ERROR_CODES` has three members: ' +
+    '`insufficient_credits`, `spend_cap_exceeded`, and `free_quest_limit_reached`. A new exhausted ' +
+    'QuestMaster start is refused synchronously with 403 before a quest exists; an older queued ' +
+    'start can instead settle as an error quest with `free_quest_limit_reached`. ' +
+    "`spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which " +
     'fires outside the process try/catch that would classify it onto a quest. A ' +
     'caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when ' +
     '`errorCode` is absent, and must not read `reply` as an answer without checking those first. ' +
+    'Organization-policy preflight refusals use 403 with `errorCode: "org_model_not_allowed"` ' +
+    'or `"org_tool_not_allowed"`. An explicit-model JWT request can instead be accepted and ' +
+    'refused during quest execution: that refusal appears on the 200 `wait: true` body or polled ' +
+    'quest as `type: "error"`, without a policy `errorCode`. Check the quest outcome as described above. ' +
     'Authenticate with an API key (`b4m_live_`) or a JWT. ' +
     'Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller ' +
     'that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, ' +
@@ -80,8 +87,10 @@ export const chatContract = defineEndpoint({
         'content resolves as a success (`status: "done"`, no error) by design, to avoid destroying ' +
         'content to report a failure. The one exception is output-budget exhaustion: a `wait: true` ' +
         'request answers it with the 422 or 502 error envelope (plus `quest_id`) instead of this body. ' +
-        '`errorCode` then names the failure reason, but only for the billing failures that have one - ' +
-        '`"insufficient_credits"` today; it is absent on every other `type: "error"` turn, so never use ' +
+        '`errorCode` names a classified failure: `insufficient_credits`, or ' +
+        '`free_quest_limit_reached` when an older queued QuestMaster start is refused during processing. ' +
+        'A new exhausted start is refused synchronously with 403 before a quest exists. Other ' +
+        '`type: "error"` turns may have no classifier, so never use ' +
         'its absence to infer success. On a real answer `errorCode` is absent from the `wait: true` ' +
         'body. The body also carries `sessionId`, the notebook the turn was recorded in - for an ' +
         'API-key caller that sent none (or any caller sending `newConversation: true`), that is the ' +
@@ -97,10 +106,12 @@ export const chatContract = defineEndpoint({
           '`reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check ' +
           '`type` first, and also treat a terminal `status: "stopped"` (a missing session, a ' +
           'user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an ' +
-          'optional refinement of `type: "error"`, present only for a classified billing failure; ' +
+          'optional refinement of `type: "error"`, present only for a classified failure; ' +
           'credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the ' +
           'synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use. ' +
-          '`QUEST_ERROR_CODES` publishes a second member, `spend_cap_exceeded`, but no current ' +
+          'An older queued QuestMaster start can instead settle with `free_quest_limit_reached`; new ' +
+          'exhausted starts are refused synchronously with 403 before a quest exists. ' +
+          '`QUEST_ERROR_CODES` has three members; its other code is `spend_cap_exceeded`, but no current ' +
           'throw site on this endpoint raises it as a quest errorCode: its only one, the embed ' +
           "chat route's pre-flight 422, fires outside the process try/catch that would classify " +
           'it onto the quest. Most `type: "error"` turns - an abort, a provider timeout or ' +
@@ -127,6 +138,15 @@ export const chatContract = defineEndpoint({
         'The request was rejected before a turn was created: a supplied `model` is unknown, disabled ' +
         'or not a chat model; or no usable default chat model is configured and none was supplied.',
       schema: ApiErrorSchema,
+    },
+    403: {
+      description:
+        'The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), ' +
+        'a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), ' +
+        'a free account already started its QuestMaster quest (`errorCode: "free_quest_limit_reached"`), ' +
+        'organization-policy preflight refuses the model (`errorCode: "org_model_not_allowed"`), or an API-key ' +
+        'caller named a built-in tool the organization does not allow (`errorCode: "org_tool_not_allowed"`).',
+      schema: ChatForbiddenErrorSchema,
     },
     404: { description: 'No notebook/session exists to attach the message to.', schema: ApiErrorSchema },
     422: {

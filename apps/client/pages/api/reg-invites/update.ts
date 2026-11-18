@@ -23,10 +23,19 @@ const UpdateRegisterInviteSchema = z
     'Nothing to update'
   );
 
-type StoredInvite = Pick<IRegInviteDocument, 'unlimitedUse' | 'expiresAt'>;
+type StoredInvite = Pick<IRegInviteDocument, 'unlimitedUse' | 'expiresAt' | 'status' | 'used'>;
+type InviteUpdates = { status?: RegInviteStatusType; unlimitedUse?: boolean; expiresAt?: Date | null };
 
-/** Unlimited use, or a later or removed expiry, lets a package-linked code hand out more of its package. */
-const widensRedemption = (stored: StoredInvite, updates: { unlimitedUse?: boolean; expiresAt?: Date | null }) =>
+const reopens = (status: RegInviteStatusType | undefined) =>
+  status !== undefined && status !== RegInviteStatusType.used;
+
+// formatRegInvites clears `used` on any non-used status, so this also re-arms a redeemed single-use code.
+const isClosed = (stored: StoredInvite) =>
+  stored.status === RegInviteStatusType.used || (stored.used != null && !stored.unlimitedUse);
+
+/** Reopening a closed code, unlimited use, or a later or removed expiry widens a package-linked code. */
+const widensRedemption = (stored: StoredInvite, updates: InviteUpdates) =>
+  (reopens(updates.status) && isClosed(stored)) ||
   (updates.unlimitedUse === true && !stored.unlimitedUse) ||
   (updates.expiresAt !== undefined &&
     stored.expiresAt != null &&
@@ -38,19 +47,19 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post
 
     const { ids, ...updates } = parseOrBadRequest(UpdateRegisterInviteSchema, req.body);
 
-    // Same rule as a package edit that widens a grant: the admin states why.
-    const packageLinked =
-      updates.unlimitedUse === true || updates.expiresAt !== undefined
-        ? ((await registrationInviteRepository.find({
-            _id: { $in: ids },
-            grantPackageId: { $nin: [null, ''] },
-          })) as StoredInvite[])
-        : [];
-    const reason = packageLinked.some(stored => widensRedemption(stored, updates))
-      ? parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason)
-      : undefined;
-
     const updatedInvites = await withTransaction(async () => {
+      // Read inside the transaction so a racing redemption cannot bypass the required reason.
+      const packageLinked =
+        reopens(updates.status) || updates.unlimitedUse === true || updates.expiresAt !== undefined
+          ? ((await registrationInviteRepository.find({
+              _id: { $in: ids },
+              grantPackageId: { $nin: [null, ''] },
+            })) as StoredInvite[])
+          : [];
+      const reason = packageLinked.some(stored => widensRedemption(stored, updates))
+        ? parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason)
+        : undefined;
+
       const invites = await registrationInviteRepository.formatRegInvites(updates as Partial<IRegInviteDocument>, ids);
       if (invites.length === 0) return invites;
       await recordAdminActionFromRequest(req, {

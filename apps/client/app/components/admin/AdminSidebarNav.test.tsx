@@ -169,7 +169,7 @@ describe('SidebarNav', () => {
       renderNav();
 
       expect(screen.getByTestId('admin-users-tab-btn')).toBeInTheDocument();
-      expect(screen.queryByRole('link', { name: 'Partner signups' })).toBeNull();
+      expect(screen.queryByRole('link', { name: 'Signup domain holds' })).toBeNull();
       const more = screen.getByTestId('admin-sidebar-more-people-btn');
       expect(more).toHaveAttribute('aria-expanded', 'false');
       expect(more).toHaveTextContent('More');
@@ -182,17 +182,17 @@ describe('SidebarNav', () => {
       fireEvent.click(more);
       expect(more).toHaveAttribute('aria-expanded', 'true');
       expect(more).toHaveTextContent('Less');
-      expect(screen.getByRole('link', { name: 'Partner signups' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Signup domain holds' })).toBeInTheDocument();
 
       fireEvent.click(more);
       expect(more).toHaveAttribute('aria-expanded', 'false');
-      expect(screen.queryByRole('link', { name: 'Partner signups' })).toBeNull();
+      expect(screen.queryByRole('link', { name: 'Signup domain holds' })).toBeNull();
     });
 
     it('keeps an active item past the cut visible', () => {
-      renderNav({ activeTab: AdminTab.PartnerSignupRules });
+      renderNav({ activeTab: AdminTab.SignupDomainHolds });
 
-      expect(screen.getByRole('link', { name: 'Partner signups' })).toHaveAttribute('aria-current', 'page');
+      expect(screen.getByRole('link', { name: 'Signup domain holds' })).toHaveAttribute('aria-current', 'page');
       expect(screen.queryByRole('link', { name: 'Feedback' })).toBeNull();
     });
 
@@ -279,7 +279,7 @@ describe('SidebarNav', () => {
 
       fireEvent.change(filterInput(), { target: { value: 'people' } });
 
-      expect(screen.getByRole('link', { name: 'Partner signups' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Signup domain holds' })).toBeInTheDocument();
       expect(screen.queryByTestId('admin-sidebar-more-people-btn')).toBeNull();
     });
 
@@ -291,6 +291,15 @@ describe('SidebarNav', () => {
 
       expect(onTabSelect).toHaveBeenCalledExactlyOnceWith(AdminTab.RateLimits);
       expect(filterInput()).toHaveValue('');
+    });
+
+    it('lists Dependencies first for "dep"', () => {
+      const { onTabSelect } = renderNav();
+
+      fireEvent.change(filterInput(), { target: { value: 'dep' } });
+      fireEvent.keyDown(filterInput(), { key: 'Enter' });
+
+      expect(onTabSelect).toHaveBeenCalledExactlyOnceWith(AdminTab.Dependencies);
     });
 
     it('does nothing on Enter when nothing matches', () => {
@@ -466,7 +475,7 @@ describe('SidebarNav', () => {
 
       fireEvent.click(screen.getByTestId('admin-sidebar-rail-people-btn'));
 
-      expect(screen.getByRole('menuitem', { name: 'Partner signups' })).toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: 'Signup domain holds' })).toBeInTheDocument();
     });
   });
 });
@@ -499,5 +508,30 @@ describe('filterSidebarSections', () => {
   it('matches an item by a former name', () => {
     const items = filterSidebarSections(SIDEBAR_SECTIONS, allOpen, 'waitlist').flatMap(section => section.items);
     expect(items.map(item => item.label)).toEqual(['Invite Center']);
+  });
+
+  it('finds Models by the names of the pages folded into it', () => {
+    for (const query of [
+      'llm dashboard',
+      'model lifecycle',
+      'lifecycle',
+      'model pricing',
+      'model prices',
+      'discovery',
+    ]) {
+      const tabs = filterSidebarSections(SIDEBAR_SECTIONS, allOpen, query).flatMap(section =>
+        section.items.map(item => item.tab)
+      );
+      expect(tabs, query).toContain(AdminTab.Models);
+    }
+  });
+
+  it('keeps the Models aliases from outranking the pages that own a common query', () => {
+    const first = (query: string) =>
+      filterSidebarSections(SIDEBAR_SECTIONS, allOpen, query).flatMap(section => section.items)[0]?.tab;
+    expect(first('pricing')).toBe(AdminTab.GrowthPricing);
+    const settings = filterSidebarSections(SIDEBAR_SECTIONS, allOpen, 'settings').flatMap(section => section.items);
+    expect(settings.map(item => item.tab)).toContain(AdminTab.AdminSettings);
+    expect(settings.map(item => item.tab)).not.toContain(AdminTab.Models);
   });
 });

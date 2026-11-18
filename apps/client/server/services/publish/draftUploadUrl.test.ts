@@ -114,7 +114,7 @@ describe('mintDraftUploadUrl', () => {
     const params = new URLSearchParams(url.split('?')[1]);
     expect(params.get('draftId')).toBe('d1');
     expect(params.get('path')).toBe('assets/app.js');
-    expect(params.get('token')).toBe(headers?.[DRAFT_UPLOAD_TOKEN_HEADER]);
+    expect(params.has('token')).toBe(false);
     // The declared size rides in the signed claims, so the proxy can hold the body to it.
     expect(verifyDraftUploadToken(headers?.[DRAFT_UPLOAD_TOKEN_HEADER] ?? '')).toEqual({
       draftId: 'd1',

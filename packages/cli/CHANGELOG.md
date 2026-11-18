@@ -1,5 +1,41 @@
 # @bike4mind/cli
 
+## 4.8.0
+
+### Minor Changes
+
+- [#7811](https://github.com/Bike4Mind/bike4mind/pull/7811) [`b97dca6`](https://github.com/Bike4Mind/bike4mind/commit/b97dca6d9d94ac731253ebbeefd802c1d24c1d54) Thanks [@vinchi777](https://github.com/vinchi777)! - add session Studio generation and asset workspaces
+
+## 4.7.0
+
+### Minor Changes
+
+- [#7604](https://github.com/Bike4Mind/bike4mind/pull/7604) [`92b4837`](https://github.com/Bike4Mind/bike4mind/commit/92b483768e5c33d0c2027c8f707a290b8bca490f) Thanks [@angelolao](https://github.com/angelolao)! - add local peer session messaging
+
+### Patch Changes
+
+- [#7506](https://github.com/Bike4Mind/bike4mind/pull/7506) [`9292bd0`](https://github.com/Bike4Mind/bike4mind/commit/9292bd03611f9abbb1e70523fb1ac0883b5558cf) Thanks [@onoya](https://github.com/onoya)! - move the CLI default off Sonnet 4.5 and alert only on a sustained deprecated-model rate
+
+- [#7667](https://github.com/Bike4Mind/bike4mind/pull/7667) [`2e57e2e`](https://github.com/Bike4Mind/bike4mind/commit/2e57e2ee13d2ece2b33e8977ff3cbf33ead633ea) Thanks [@onoya](https://github.com/onoya)! - make browser file uploads create-only
+
+- [#7818](https://github.com/Bike4Mind/bike4mind/pull/7818) [`946319d`](https://github.com/Bike4Mind/bike4mind/commit/946319db9c6ddcf5c3a9018ab4a881eacd3c5d74) Thanks [@poysama](https://github.com/poysama)! - publish the services package as @bike4mind/services-core
+
+## 4.6.0
+
+### Minor Changes
+
+- [#7479](https://github.com/Bike4Mind/bike4mind/pull/7479) [`7159763`](https://github.com/Bike4Mind/bike4mind/commit/7159763ebef29dc8fd6987fdbefae6dc0245555c) Thanks [@onoya](https://github.com/onoya)! - add an api-keys:manage scope for the user API key routes
+
+- [#7493](https://github.com/Bike4Mind/bike4mind/pull/7493) [`26b8b3c`](https://github.com/Bike4Mind/bike4mind/commit/26b8b3c644315d0928ee7e085fc171c62c9c4fd6) Thanks [@vinchi777](https://github.com/vinchi777)! - pull-based notebook mirror feed and b4m mirror command
+
+### Patch Changes
+
+- [#7281](https://github.com/Bike4Mind/bike4mind/pull/7281) [`75b38d8`](https://github.com/Bike4Mind/bike4mind/commit/75b38d872011560872cca26cd71f7bd0e5e1882c) Thanks [@ken-b4m](https://github.com/ken-b4m)! - require skills:write for API keys on the skill routes
+
+- [#7373](https://github.com/Bike4Mind/bike4mind/pull/7373) [`e78ee5e`](https://github.com/Bike4Mind/bike4mind/commit/e78ee5e321a9a3a27351bc8d266c0c0bee302b1c) Thanks [@poysama](https://github.com/poysama)! - map the direct Sonnet 4.5 id to Sonnet 5.5 before its retirement
+
+- [#7392](https://github.com/Bike4Mind/bike4mind/pull/7392) [`c01cde3`](https://github.com/Bike4Mind/bike4mind/commit/c01cde3f4b9a59e2eb92efd0e25b771ebf297276) Thanks [@onoya](https://github.com/onoya)! - remove the dead WebSocket completion path
+
 ## 4.5.0
 
 ### Minor Changes

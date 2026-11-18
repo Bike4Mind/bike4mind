@@ -5,7 +5,6 @@ describe('morning brief links', () => {
   it.each([
     ['2', 'feedback'],
     ['12', 'waitlist'],
-    ['16', 'secrets-rotation'],
     ['26', 'security-dashboard'],
     ['42', 'dlq-replay'],
     ['44', 'sre-agent'],

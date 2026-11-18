@@ -134,6 +134,32 @@ describe('questProcessor getMusicToolConfigResolver', () => {
   }, 120_000);
 });
 
+vi.mock('@bike4mind/services/imageJobs', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/services/imageJobs')>()),
+  createImageJobs: vi.fn(async () => ({ ok: true, groupId: 'g1', jobs: [], created: true })),
+}));
+
+vi.mock('@bike4mind/server-utils/generationJobs/wiring', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/generationJobs/wiring')>()),
+  getCreateImageJobsDeps: vi.fn(() => ({ marker: 'image-deps' })),
+}));
+
+describe('questProcessor getImageJobsResolver', () => {
+  it('keeps an API-key turn on the in-process image tools', async () => {
+    const { getImageJobsResolver } = await import('./questProcessor');
+    expect(getImageJobsResolver('key-1')).toBeUndefined();
+  }, 120_000);
+
+  it('gives a session turn a createJobs bound to the image job deps', async () => {
+    const { getImageJobsResolver } = await import('./questProcessor');
+    const { createImageJobs } = await import('@bike4mind/services/imageJobs');
+    const createJobs = await getImageJobsResolver(undefined)?.();
+    const input = { user: { id: 'u1', organizationId: null }, request: {}, count: 1, source: 'agent' as const };
+    await createJobs?.(input);
+    expect(createImageJobs).toHaveBeenCalledWith(input, { marker: 'image-deps' });
+  }, 120_000);
+});
+
 describe('questProcessor getStaticOptions', () => {
   it('wires the shared operational billing adapter into tool execution', async () => {
     const { getStaticOptions } = await import('./questProcessor');
@@ -422,5 +448,26 @@ describe('processQuest', () => {
       await expect(run()).rejects.toThrow('model down');
       expect(mockLiveActivityEnd.mock.calls).toEqual([['failed']]);
     }, 120_000);
+
+    it('settles a typed quest allowance refusal without retrying', async () => {
+      const { ForbiddenError } = await import('@bike4mind/common');
+      const { questRepository } = await import('@bike4mind/database');
+      const settle = vi.spyOn(questRepository, 'settleIfUnfinished').mockResolvedValue(true);
+      mockProcess.mockRejectedValueOnce(
+        new ForbiddenError('Free quest already started', {
+          errorCode: 'free_quest_limit_reached',
+        })
+      );
+      await expect(run()).resolves.toBeUndefined();
+      expect(settle).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          status: 'done',
+          type: 'error',
+          errorCode: 'free_quest_limit_reached',
+        })
+      );
+      settle.mockRestore();
+    });
   });
 });

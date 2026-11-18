@@ -3,7 +3,7 @@ import { Box, Chip, Stack, Typography } from '@mui/joy';
 import {
   USER_TIMELINE_CATEGORIES,
   isFullAdmin,
-  sortAdminPermissions,
+  sortAdminRoleIds,
   resolveUserStorageLimit,
   storageLimitToBytes,
   type AuditEntry,
@@ -19,6 +19,8 @@ import { typesOfCategories } from '../activitySearch';
 import { CATEGORY_OPTIONS } from './ActivityTab';
 import type { ProfileAction } from '../actions/profileActions';
 import { RiskEvidenceCard } from '../RiskEvidenceCard';
+import { useAdminRoleList } from '../../useAdminRoleList';
+import { describeProvenance, permissionProvenance } from '../adminAccessModel';
 import { SignupClassificationCard } from '../SignupClassificationCard';
 import { DetectionLinkedAccountsCard } from '../DetectionLinkedAccountsCard';
 import { UserNotesCard } from './UserNotesCard';
@@ -45,8 +47,9 @@ const formatBytes = (bytes: number): string => {
 };
 
 /** As analytics counts it (server-utils analytics/lane.ts): an admin is internal whatever the flag says. */
-const analyticsMark = (user: Pick<AdminUserProfile, 'isAdmin' | 'isInternal'>): string => {
+const analyticsMark = (user: Pick<AdminUserProfile, 'isAdmin' | 'isInternal' | 'accountSegment'>): string => {
   if (user.isInternal) return 'Internal account';
+  if (user.accountSegment === 'partner' && !user.isAdmin) return 'Partner account';
   return user.isAdmin ? 'Internal account (admin)' : 'Customer';
 };
 
@@ -133,6 +136,9 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
           <RowAction onClick={() => onAction('internalAccount')} data-testid="user-profile-internal-btn">
             Change
           </RowAction>
+          <RowAction onClick={() => onAction('partnerAccount')} data-testid="user-profile-partner-btn">
+            {user.accountSegment === 'partner' ? 'Unmark partner' : 'Mark partner'}
+          </RowAction>
         </Stack>
       </Fact>
       <Fact label="Storage">
@@ -150,7 +156,12 @@ const AccessCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileA
   const held = access.data?.entitlements.filter(row => row.held) ?? [];
   const customTags = (user.tags ?? []).filter(tag => !isManagedTag(tag));
   const { currentUser } = useUser();
-  const adminPermissions = sortAdminPermissions(user.adminPermissions ?? []);
+  const roles = useAdminRoleList();
+  const roleIds = sortAdminRoleIds(user.adminRoleIds ?? []);
+  const roleListAvailable = roles.data !== undefined && !roles.isError;
+  const knownRoles = roleListAvailable ? roles.data : [];
+  const heldRoles = knownRoles.filter(role => roleIds.includes(role.id.toLowerCase()));
+  const effective = permissionProvenance(user.adminPermissions ?? [], roleIds, knownRoles);
   // The endpoint is full-admin only and never edits a Super Admin or the viewer's own account.
   const canEditPermissions = isFullAdmin(currentUser) && !user.isAdmin && currentUser?.id !== user.id;
 
@@ -167,15 +178,43 @@ const AccessCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileA
       <Fact label="Role" data-testid="user-profile-fact-role">
         {USER_ROLE_LABELS[userRole(user)]}
       </Fact>
+      {!user.isAdmin && roleIds.length > 0 && (
+        <Fact label="Admin roles" data-testid="user-profile-fact-admin-roles">
+          <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+            {roles.isLoading
+              ? '...'
+              : !roleListAvailable
+                ? // No role list to name them from (a read error); the count is still known.
+                  `${roleIds.length} ${roleIds.length === 1 ? 'role' : 'roles'}`
+                : heldRoles.length === 0
+                  ? 'None'
+                  : heldRoles.map(role => <StatusChip key={role.id} tone="neutral" label={role.name} />)}
+          </Stack>
+        </Fact>
+      )}
       <Fact label="Admin permissions" data-testid="user-profile-fact-admin-permissions">
         <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
-          {user.isAdmin
-            ? 'All (Super Admin)'
-            : adminPermissions.length === 0
-              ? 'None'
-              : adminPermissions.map(id => (
-                  <StatusChip key={id} tone="neutral" label={ADMIN_PERMISSION_LABELS[id].label} />
-                ))}
+          {user.isAdmin ? (
+            'All (Super Admin)'
+          ) : (
+            <>
+              {effective.map(entry => (
+                <StatusChip
+                  key={entry.id}
+                  tone="neutral"
+                  label={`${ADMIN_PERMISSION_LABELS[entry.id].label} (${describeProvenance(entry)})`}
+                  data-testid={`user-profile-admin-permission-${entry.id.replace(':', '-')}`}
+                />
+              ))}
+              {roleIds.length > 0 && !roleListAvailable
+                ? roles.isLoading
+                  ? 'Loading role permissions...'
+                  : 'Role permissions unavailable'
+                : effective.length === 0
+                  ? 'None'
+                  : null}
+            </>
+          )}
           {canEditPermissions && (
             <RowAction onClick={() => onAction('permissions')} data-testid="user-profile-admin-permissions-btn">
               Edit

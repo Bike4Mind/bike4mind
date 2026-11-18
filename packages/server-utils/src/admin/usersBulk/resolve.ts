@@ -19,6 +19,8 @@ export type BulkUser = {
   username: string | null;
   isAdmin: boolean;
   adminPermissions?: readonly string[];
+  /** Role membership counts as admin access (canAccessAdmin), so role-only admins stay excluded. */
+  adminRoleIds?: readonly string[];
   isBanned: boolean;
   isModerated: boolean;
   tags: string[];

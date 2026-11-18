@@ -1,15 +1,6 @@
 import Chip from '@mui/joy/Chip';
-import type { ColorPaletteProp } from '@mui/joy/styles';
 import { AGENT_STATE_LABEL, type AgentState } from './roster';
-
-const STATE_COLOR: Record<AgentState, ColorPaletteProp> = {
-  'needs-you': 'warning',
-  working: 'primary',
-  done: 'success',
-  failed: 'danger',
-  stopped: 'neutral',
-  idle: 'neutral',
-};
+import { stateJoyColor } from './statePalette';
 
 export function AgentStateChip({
   state,
@@ -25,14 +16,19 @@ export function AgentStateChip({
 }) {
   if (deciding) {
     return (
-      <Chip size="sm" color={STATE_COLOR['needs-you']} variant="solid" data-testid="orchestrator-state-chip-decision">
+      <Chip size="sm" color={stateJoyColor('needs-you')} variant="solid" data-testid="orchestrator-state-chip-decision">
         Needs your decision
       </Chip>
     );
   }
   if (state === 'working' && preparing) {
     return (
-      <Chip size="sm" color={STATE_COLOR.working} variant="outlined" data-testid="orchestrator-state-chip-preparing">
+      <Chip
+        size="sm"
+        color={stateJoyColor('working')}
+        variant="outlined"
+        data-testid="orchestrator-state-chip-preparing"
+      >
         Preparing
       </Chip>
     );
@@ -40,7 +36,7 @@ export function AgentStateChip({
   return (
     <Chip
       size="sm"
-      color={STATE_COLOR[state]}
+      color={stateJoyColor(state)}
       variant={muted ? 'outlined' : state === 'needs-you' ? 'solid' : 'soft'}
       data-testid={`orchestrator-state-chip-${state}`}
     >

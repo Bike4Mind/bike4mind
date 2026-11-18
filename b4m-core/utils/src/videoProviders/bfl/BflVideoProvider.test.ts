@@ -124,6 +124,42 @@ describe('BflVideoProvider specifics', () => {
     expect(new BflVideoProvider().cancel).toBeUndefined();
   });
 
+  it('sends timestamped owned-image bytes and the boolean draft flag over HTTP', async () => {
+    let sent: unknown;
+    server.use(
+      http.post(SUBMIT_URL, async ({ request: r }) => {
+        sent = await r.json();
+        return reply(exchange(FIXTURES.succeeds, 'submit'));
+      })
+    );
+    await new BflVideoProvider().submit(
+      request({
+        mode: 'image_to_video',
+        draft: true,
+        keyframes: [
+          { fileId: 'f1', timeSeconds: 0 },
+          { fileId: 'f2', timeSeconds: 5 },
+        ],
+      }),
+      {
+        images: [
+          { role: 'reference', bytes: Buffer.from('first'), mimeType: 'image/png' },
+          { role: 'reference', bytes: Buffer.from('last'), mimeType: 'image/jpeg' },
+        ],
+      },
+      ctx()
+    );
+    expect(sent).toMatchObject({
+      mode: 'i2v',
+      draft: true,
+      resolution: 'hd',
+      keyframes: [
+        [0, `data:image/png;base64,${Buffer.from('first').toString('base64')}`],
+        [5, `data:image/jpeg;base64,${Buffer.from('last').toString('base64')}`],
+      ],
+    });
+  });
+
   it('sends the x-key header on submit', async () => {
     let auth: string | null = null;
     server.use(

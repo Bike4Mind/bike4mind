@@ -11,6 +11,7 @@ import {
   organizationRepository,
   orgSlackWorkspaceRepository,
   slackChannelConfigRepository,
+  SlackFeedbackChannel,
 } from '@bike4mind/database/infra';
 import { NotFoundError } from '@bike4mind/utils';
 import { IOrgSlackWorkspaceDocument, IOrgSlackWorkspaceResponse } from '@bike4mind/common';
@@ -65,6 +66,8 @@ const handler = baseApi()
       if (!workspace) {
         throw new NotFoundError('No Slack workspace connected');
       }
+
+      await SlackFeedbackChannel.updateMany({ workspaceId: workspace.id }, { $set: { enabled: false } });
 
       // API posting opt-ins belong to this connection; they end with it, before the workspace goes.
       const clearedChannelIds = await slackChannelConfigRepository.clearApiPostingBySlackTeamId(workspace.slackTeamId);

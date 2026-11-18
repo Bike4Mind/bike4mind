@@ -61,11 +61,14 @@ export function CreditEconomy() {
     setPaging(previous => ({ ...previous, page: 1 }));
     update({ view: 'economy', filters: { ...state.filters, from, to, ...filters } });
   };
+  // Keyed on the filter values, not the filters object: that is rebuilt every render, and while the
+  // URL write is still pending each re-run would start a fresh navigation and never let one land.
+  const { from: urlFrom, to: urlTo, owner, flow } = state.filters;
   useEffect(() => {
-    if (!state.filters.from || !state.filters.to) {
-      update({ view: 'economy', filters: { ...state.filters, from, to } });
+    if (!urlFrom || !urlTo) {
+      update({ view: 'economy', filters: { owner, flow, from, to } });
     }
-  }, [from, to, state.filters, update]);
+  }, [urlFrom, urlTo, owner, flow, from, to, update]);
   return (
     <Stack gap={3} data-testid="credit-economy">
       <AdminPageHeader

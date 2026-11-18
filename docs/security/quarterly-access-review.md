@@ -8,13 +8,14 @@ This page covers the app database part of the review. Other systems in scope (th
 
 The review runs in the first week of January, April, July and October. The daily `secretRotationNotifier` cron (09:00 UTC) posts the reminder to the LiveOps Slack channel on the first Monday of each of those months, in production only. The message names the quarter, lists the current counts and links back here. The same run logs the counts as one JSON line (`"report":"access-review"`) in the function's CloudWatch logs, so the quarter's starting point is on record even before anyone acts on it.
 
-The reminder needs the LiveOps Slack webhook admin setting. Without it the cron logs that the webhook is not configured and posts nothing. If the counts cannot be read or Slack does not accept the reminder, the cron logs the error and still posts any secrets due for rotation; start the review from the report below instead.
+The reminder needs the LiveOps Slack webhook admin setting. Without it the cron logs that the webhook is not configured and posts nothing. If the counts cannot be read or Slack does not accept the reminder, the cron logs the error; start the review from the report below instead.
 
 ## What the report covers
 
 `report:access-review` reads the app database without writing to it. It never reads API key secrets, hashes, digests or prefixes.
 
-- **Admin accounts:** every user with the full admin flag or any delegated admin permission, with account status (active, banned, deleted), last activity, and per-account counts of active sign-in sessions, trusted devices, passkeys, OAuth refresh tokens, paired bridge devices and active API keys.
+- **Admin accounts:** every user with the full admin flag, any direct delegated admin permission or any admin role (including a role that has since been deleted), with account status (active, banned, deleted), the admin roles they hold, where each permission comes from (a direct grant, one or more roles, or both), last activity, and per-account counts of active sign-in sessions, trusted devices, passkeys, OAuth refresh tokens, paired bridge devices and active API keys.
+- **Admin roles:** every admin role defined, with its permissions and the admin accounts holding it, including roles with no members. A role an account still lists after the role was deleted shows as a deleted role and grants nothing.
 - **Privileged API keys:** active, unexpired keys owned by an admin account or carrying the `admin:*` scope, with owner, scopes, created, last used and expiry. Pass `--all-keys` to list every active key.
 - **Support access and impersonation:** live support access grants and live impersonation sessions, with the session ID, the admin and the target account.
 - **Counts:** admin accounts, active API keys (with admin-scoped, admin-owned, no-expiry and unused-for-90-days subsets), sign-in sessions, impersonation sessions, support access grants, trusted devices, passkeys, OAuth app grants, OAuth refresh tokens and paired bridge devices, across all users.
@@ -33,7 +34,7 @@ Run from the repo root with production credentials. The output names real accoun
 
 2. **Decide.** In `before.md`, fill in Reviewer, then for every row set Decision to `keep` or `revoke` and Decided by to the person who made the call. Anything nobody can vouch for is a revoke.
 
-3. **Revoke.** Act on each revoke from the user's page in the admin Users list: remove the admin flag or delegated permissions, revoke the API keys, and sign out the sessions. Support access and impersonation end with their session, so sign that session out from the target user's sessions list. Log each one in the Revocations table at the bottom of the report.
+3. **Revoke.** Act on each revoke from the user's page in the admin Users list: remove the admin flag, delegated permissions and admin roles (roles are removed in the same editor as delegated permissions), revoke the API keys, and sign out the sessions. Support access and impersonation end with their session, so sign that session out from the target user's sessions list. Log each one in the Revocations table at the bottom of the report.
 
 4. **Record the after counts.** Re-run against the before snapshot:
 

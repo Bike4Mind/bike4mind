@@ -106,12 +106,12 @@ describe('withRankedMusicDefaultFirst', () => {
   });
 
   it('opens on a model that also ranks first against its own defaults, whatever the server order', () => {
-    // At test-music's 5s, ElevenLabs v2.5 ranks first; at v2.5's own 60s, Lyria does. The row must agree with the panel.
+    // The row must agree with the panel: the pick ranks first at test-music's 5s and again at its own defaults.
     const shortTest = model({ id: 'test-music', duration: { control: 'exact', min: 1, max: 30, default: 5 } });
     const v25 = model({ id: 'music_v2_5' });
     const lyria = model({ id: 'lyria-3.5', display_name: 'Lyria' });
-    const [first] = withRankedMusicDefaultFirst([shortTest, v25, lyria]);
-    expect(first.id).toBe('lyria-3.5');
-    expect(musicModelCards([shortTest, v25, lyria], initialFormFor(first))[0].id).toBe('lyria-3.5');
+    const [first] = withRankedMusicDefaultFirst([shortTest, lyria, v25]);
+    expect(first.id).toBe('music_v2_5');
+    expect(musicModelCards([shortTest, v25, lyria], initialFormFor(first))[0].id).toBe('music_v2_5');
   });
 });

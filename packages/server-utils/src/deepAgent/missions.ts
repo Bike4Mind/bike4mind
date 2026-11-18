@@ -105,7 +105,7 @@ export async function listMissionsForAgent(b4mAgentId: string, limit = 50): Prom
       semanticMemoryCount: charter.semanticMemory.length,
       blockers: charter.blockers,
       updatedAt: charter.updatedAt,
-      ...(handoff
+      ...(handoff && handoff.wakeCount > 0
         ? {
             wakeCount: handoff.wakeCount,
             lastWakeAt: handoff.lastWakeAt,

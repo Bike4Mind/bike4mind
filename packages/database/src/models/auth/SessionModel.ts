@@ -748,6 +748,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
           voiceConnectedAt: 1,
           voiceLastActivityAt: 1,
           voiceBilledCredits: 1,
+          voiceHoldApiKeyId: 1,
         }
       )
       .sort({ voiceSessionStartedAt: 1 })
@@ -760,6 +761,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       voiceSessionStartedAt: s.voiceSessionStartedAt as Date,
       voiceConnectedAt: s.voiceConnectedAt ?? null,
       voiceLastActivityAt: s.voiceLastActivityAt ?? null,
+      voiceHoldApiKeyId: s.voiceHoldApiKeyId ?? null,
       realtime: s.voiceBilledCredits != null,
     }));
   }

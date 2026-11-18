@@ -2,9 +2,11 @@ import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
+import type { ObjectId } from 'mongodb';
 import { ApiKey, McpServer, SlackDevWorkspace, User, SecretRotation } from '@bike4mind/database';
 import {
   apiKeySecretContext,
+  ciphertextPatternSource,
   decryptAtRest,
   encryptAtRest,
   isContextBound,
@@ -50,6 +52,19 @@ function reportFailures(failures: BackfillFailure[]): void {
   throw new Error(
     `Stored credentials remain pending in ${failures.length} value(s); migration is incomplete:\n${rows}`
   );
+}
+
+/**
+ * Encrypts one legacy plaintext TOTP seed in the runtime's format (no AAD, so the model readers can
+ * decrypt it). Writes only the `mfa.totpSecret` path: a whole-`mfa` write would drop the backup codes.
+ * Conditioned on the plaintext that was read, so a seed replaced since then is left alone.
+ */
+export async function encryptLegacyTotpSecret(id: ObjectId, value: string): Promise<boolean> {
+  const result = await User.collection.updateOne(
+    { _id: id, 'mfa.totpSecret': value },
+    { $set: { 'mfa.totpSecret': encryptAtRest(value) } }
+  );
+  return result.modifiedCount === 1;
 }
 
 export async function protectStoredCredentials(): Promise<void> {
@@ -121,6 +136,16 @@ export async function protectStoredCredentials(): Promise<void> {
       { $set: { securityQuestions } }
     );
   }
+  let totpEncrypted = 0;
+  const legacyTotp = {
+    'mfa.totpSecret': { $type: 'string', $ne: '', $not: new RegExp(ciphertextPatternSource, 'i') },
+  };
+  for await (const row of User.collection.find(legacyTotp, { projection: { 'mfa.totpSecret': 1 } })) {
+    const value = row.mfa?.totpSecret;
+    if (typeof value !== 'string' || !value || isEncrypted(value)) continue;
+    if (await encryptLegacyTotpSecret(row._id, value)) totpEncrypted++;
+  }
+  console.info(`TOTP seeds encrypted: ${totpEncrypted}`);
   for await (const row of SecretRotation.collection.find({ previousKey: { $exists: true } })) {
     if (!row.previousKey) continue;
     const plaintext = decryptStored(row.previousKey, failures, {

@@ -136,13 +136,14 @@ describe('empty sidebar card', () => {
     expect(query('sidebar-empty-sync-web-btn')).toBeNull();
   });
 
-  it('is gone for good once closed, making way for a source hint', async () => {
+  it('is gone for good once closed without revealing another prompt', async () => {
     await mount(stateWith(), true);
     await click('sidebar-empty-sync-card-close-btn');
     expect(dismissHint).toHaveBeenCalledWith('sidebar-empty');
     expect(query('sidebar-empty-sync-card')).toBeNull();
     expect(query('chat-sessions-empty')).not.toBeNull();
-    expect(query('sync-hint-claude-code')).not.toBeNull();
+    expect(query('sync-hint-claude-code')).toBeNull();
+    expect(query('sync-hint-web')).toBeNull();
   });
 
   it('is not shown while signed out', async () => {
@@ -152,110 +153,35 @@ describe('empty sidebar card', () => {
   });
 });
 
-describe('Claude Code hint', () => {
-  it('shows the session count when sync is off', async () => {
-    await mount(stateWith(), false);
-    expect(query('sync-hint-claude-code')?.textContent).toContain('Found 12 Claude Code sessions');
-    expect(query('sync-hint-web')).toBeNull();
-  });
-
-  it('turns sync on and does not come back', async () => {
-    await mount(stateWith(), false);
-    await click('sync-hint-claude-code-enable-btn');
-    expect(setCodeSettings).toHaveBeenCalledWith({ enabled: true });
-    expect(dismissHint).toHaveBeenCalledWith('claude-code');
+describe('single sidebar prompt', () => {
+  it.each([
+    ['both sources', {}],
+    ['Claude Code only', { webNotebooks: 0 }],
+    ['web only', { codeSessions: 0 }],
+  ])('does not prompt in a populated sidebar with %s', async (_label, options) => {
+    await mount(stateWith(options), false);
+    expect(query('sidebar-empty-sync-card')).toBeNull();
     expect(query('sync-hint-claude-code')).toBeNull();
-  });
-
-  it('keeps the hint and says so when turning sync on fails', async () => {
-    setCodeSettings.mockRejectedValueOnce(new Error('write failed'));
-    await mount(stateWith(), false);
-    await click('sync-hint-claude-code-enable-btn');
-    expect(dismissHint).not.toHaveBeenCalled();
-    expect(query('sync-hint-claude-code')).not.toBeNull();
-    expect(query('sync-hint-claude-code-error')).not.toBeNull();
-  });
-
-  it('does not report a failed "Not now" as a failure to turn sync on', async () => {
-    await mount(stateWith({ webNotebooks: 0 }), false);
-    dismissHint.mockRejectedValueOnce(new Error('write failed'));
-    await click('sync-hint-claude-code-dismiss-btn');
-    expect(query('sync-hint-claude-code')).not.toBeNull();
-    expect(query('sync-hint-claude-code-error')).toBeNull();
-  });
-
-  it('"Not now" hides it for good', async () => {
-    await mount(stateWith({ webNotebooks: 0 }), false);
-    await click('sync-hint-claude-code-dismiss-btn');
-    expect(dismissHint).toHaveBeenCalledWith('claude-code');
+    expect(query('sync-hint-web')).toBeNull();
     expect(setCodeSettings).not.toHaveBeenCalled();
+    expect(setWebSettings).not.toHaveBeenCalled();
+  });
+
+  it('does not replace a previously dismissed card with source prompts', async () => {
+    await mount(stateWith({ dismissed: ['sidebar-empty'] }), true);
+    expect(query('sidebar-empty-sync-card')).toBeNull();
     expect(query('sync-hint-claude-code')).toBeNull();
-  });
-
-  it.each([
-    ['sync is on', { code: true }],
-    ['no history was found', { codeSessions: 0 }],
-    ['the folder was not looked at', { codeSessions: null }],
-    ['it was dismissed', { dismissed: ['claude-code'] as SyncHintId[] }],
-    ['signed out', { signedIn: false }],
-  ])('is hidden when %s', async (_label, options) => {
-    await mount(stateWith({ ...options, webNotebooks: 0 }), false);
-    expect(query('sync-hint-claude-code')).toBeNull();
-  });
-});
-
-describe('web hint', () => {
-  it('keeps compact single-line buttons and wraps the actions instead of their labels', async () => {
-    host.style.width = '220px';
-    await mount(stateWith({ codeSessions: 0 }), false);
-    const enable = query('sync-hint-web-enable-btn')!;
-    const dismiss = query('sync-hint-web-dismiss-btn')!;
-    for (const button of [enable, dismiss]) {
-      const style = getComputedStyle(button);
-      expect(style.whiteSpace).toBe('nowrap');
-      expect(style.flexShrink).toBe('0');
-      expect(style.minHeight).toBe('24px');
-      expect(style.fontSize).toBe('12px');
-    }
-    const actions = getComputedStyle(enable.parentElement!);
-    expect(actions.flexWrap).toBe('wrap');
-    expect(actions.alignItems).toBe('flex-start');
-  });
-
-  it('shows when the Claude Code hint does not apply, and turns web sync on', async () => {
-    await mount(stateWith({ codeSessions: 0 }), false);
-    expect(query('sync-hint-web')?.textContent).toContain('You have 30 chats on Bike4Mind web');
-    await click('sync-hint-web-enable-btn');
-    expect(setWebSettings).toHaveBeenCalledWith({ enabled: true });
-    expect(dismissHint).toHaveBeenCalledWith('web');
     expect(query('sync-hint-web')).toBeNull();
-  });
-
-  it('waits behind the Claude Code hint, one hint at a time', async () => {
-    await mount(stateWith(), false);
-    expect(query('sync-hint-claude-code')).not.toBeNull();
-    expect(query('sync-hint-web')).toBeNull();
-    await click('sync-hint-claude-code-dismiss-btn');
-    expect(query('sync-hint-web')).not.toBeNull();
-  });
-
-  it.each([
-    ['sync is on', { web: true }],
-    ['the account has no notebooks', { webNotebooks: 0 }],
-    ['it was dismissed', { dismissed: ['web'] as SyncHintId[] }],
-    ['signed out', { signedIn: false }],
-  ])('is hidden when %s', async (_label, options) => {
-    await mount(stateWith({ ...options, codeSessions: 0 }), false);
-    expect(query('sync-hint-web')).toBeNull();
+    expect(query('chat-sessions-empty')).not.toBeNull();
   });
 });
 
 describe('hint card accessibility', () => {
   it('labels the card as a region by its heading', async () => {
-    await mount(stateWith(), false);
-    const card = query('sync-hint-claude-code');
+    await mount(stateWith(), true);
+    const card = query('sidebar-empty-sync-card');
     expect(card?.getAttribute('role')).toBe('region');
     const heading = document.getElementById(card?.getAttribute('aria-labelledby') ?? '');
-    expect(heading?.textContent).toContain('Claude Code session');
+    expect(heading?.textContent).toContain('Bring your chats along');
   });
 });

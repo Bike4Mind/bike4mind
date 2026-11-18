@@ -9,6 +9,7 @@ import { appFileCdnPath, invalidateRouterPaths } from '@bike4mind/server-utils/s
 import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';
@@ -78,6 +79,14 @@ const handler = baseApi().post(
       // invalidate whenever the delete ran, committed or not.
       const retiredCdnPath = retiredLogoDeleted && organization.logo ? appFileCdnPath(organization.logo.path) : null;
       if (retiredCdnPath) await invalidateRouterPaths([retiredCdnPath], { label: 'org-logo', logger: req.logger });
+    });
+
+    await recordAdminActionFromRequest(req, {
+      action: 'org.logo.updated',
+      actorScope: 'organization',
+      target: { kind: 'organization', id: organization.id, displayName: organization.name },
+      summary: 'replaced the team logo',
+      changes: [{ field: 'logoFileId', before: organization.logo?.id ?? null, after: result.fileId }],
     });
 
     return res.json(result);

@@ -9,6 +9,16 @@ plugins {
 // Release builds always use production (ServerEnvironment.Production).
 val debugServerUrl = providers.gradleProperty("b4m.serverUrl").orElse("https://app.staging.bike4mind.com")
 
+// FCM client config (the values in the Firebase console's google-services.json), supplied as Gradle properties so
+// no project-specific file is committed: pass -Pb4m.fcm.projectId=... or set them in ~/.gradle/gradle.properties.
+// Any one missing and the build still works, with push turned off (see push/FcmClient.kt). The google-services
+// plugin is deliberately not used: it fails the build without the committed-by-nobody JSON.
+fun fcmProperty(name: String) = providers.gradleProperty("b4m.fcm.$name").orElse("").get()
+
+// The Play lane (.github/workflows/android-play-internal.yml) passes the train version and build number and
+// decodes its upload keystore to ANDROID_KEYSTORE_PATH. Without them, release builds stay unsigned at 0.1.0 (1).
+val releaseKeystore = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull
+
 android {
     namespace = "com.bike4mind.app"
     compileSdk = 37
@@ -17,9 +27,25 @@ android {
         applicationId = "com.bike4mind.app"
         minSdk = 28
         targetSdk = 37
-        versionCode = 1
+        versionCode = providers.gradleProperty("b4m.versionCode").map(String::toInt).orElse(1).get()
         // Sent as X-Client-Version; keep it one to three integers (ClientIdentity.semanticVersion), no suffix.
-        versionName = "0.1.0"
+        versionName = providers.gradleProperty("b4m.versionName").orElse("0.1.0").get()
+
+        buildConfigField("String", "FCM_APPLICATION_ID", "\"${fcmProperty("applicationId")}\"")
+        buildConfigField("String", "FCM_API_KEY", "\"${fcmProperty("apiKey")}\"")
+        buildConfigField("String", "FCM_PROJECT_ID", "\"${fcmProperty("projectId")}\"")
+        buildConfigField("String", "FCM_SENDER_ID", "\"${fcmProperty("senderId")}\"")
+    }
+
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").get()
+                keyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").get()
+                keyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").get()
+            }
+        }
     }
 
     buildTypes {
@@ -29,6 +55,7 @@ android {
         release {
             buildConfigField("String", "SERVER_URL", "\"\"")
             isMinifyEnabled = false
+            if (releaseKeystore != null) signingConfig = signingConfigs.getByName("release")
         }
     }
 
@@ -69,4 +96,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.browser)
     implementation(libs.androidx.core.ktx)
+
+    // Firebase pulls an old fragment; the activity-result permission launcher needs 1.3.0 or later (lint-enforced).
+    implementation(libs.androidx.fragment)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
 }

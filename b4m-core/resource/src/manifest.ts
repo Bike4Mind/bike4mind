@@ -13,6 +13,8 @@ export const DEFAULT_MANIFEST = {
   APNS_KEY_ID: { kind: 'secret', optional: true },
   APNS_TEAM_ID: { kind: 'secret', optional: true },
   APNS_TOPIC: { kind: 'secret', optional: true },
+  // FCM (Android push) service account JSON; unset disables Android push.
+  FCM_SERVICE_ACCOUNT: { kind: 'secret', optional: true },
   B4M_ANALYTICS_ENABLED: { kind: 'secret', optional: true },
   // Shared-secret bearer for the frontend -> ChatCompletion /process dispatch. Required:
   // chat dispatch fails closed (401) without it. Distinct from SECRET_ENCRYPTION_KEY.
@@ -77,6 +79,7 @@ export const DEFAULT_MANIFEST = {
   SLACK_COST_ALARMS_WEBHOOK_URL: { kind: 'secret', optional: true },
   SLACK_ERROR_REPORTING_WEBHOOK_URL: { kind: 'secret', optional: true },
   SLACK_WEBHOOK_URL: { kind: 'secret', optional: true },
+  SLACK_FEEDBACK_DESTINATIONS: { kind: 'secret', optional: true },
   STRIPE_PUBLISHABLE_KEY: { kind: 'secret', optional: true },
   STRIPE_SECRET_KEY: { kind: 'secret', optional: true },
   STRIPE_WEBHOOK_SECRET: { kind: 'secret', optional: true },

@@ -40,6 +40,27 @@ describe('QuestStartBodySchema.disableUserIntegrations', () => {
   });
 });
 
+describe('QuestStartBodySchema quest admission', () => {
+  it('preserves the subscriber admission across queue serialization', () => {
+    const sent = JSON.parse(
+      JSON.stringify({
+        ...body,
+        enableQuestMaster: true,
+        questMasterStartId: 'paid-start',
+        questAdmittedAs: 'subscriber',
+      })
+    );
+    expect(QuestStartBodySchema.parse(sent)).toMatchObject({
+      questMasterStartId: 'paid-start',
+      questAdmittedAs: 'subscriber',
+    });
+  });
+
+  it('rejects an unknown admission classification', () => {
+    expect(() => QuestStartBodySchema.parse({ ...body, questAdmittedAs: 'unknown' })).toThrow();
+  });
+});
+
 // The worker's /process route re-parses the dispatched body: a stripped id would leave first_value
 // naming no visit, on the first attempt and on every redelivery of the same body.
 describe('QuestStartBodySchema.visitId', () => {

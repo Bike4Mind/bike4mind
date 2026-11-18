@@ -27,6 +27,7 @@ import {
   userAuditTarget,
 } from '@bike4mind/server-utils/utils/adminAudit';
 import { reportAndNotifyKeptPersonalLakeShares } from '@server/utils/keptPersonalLakeSharesNotifier';
+import { refreshSeatEntitlements } from '@server/organizations/refreshSeatEntitlements';
 import { assertFullAdminForMembership } from '@server/organizations/adminMembership';
 
 const RoleSchema = z.object({ role: z.enum(ASSIGNABLE_ORG_ROLES) });
@@ -92,6 +93,7 @@ const handler = adminApi({
     });
 
     // After the commit, as on the org's own removal route, so a retried transaction cannot mail twice.
+    await refreshSeatEntitlements(userId);
     const personalLakeSharesKept = await reportAndNotifyKeptPersonalLakeShares(userId, organization, req.logger);
     await logEventSafe(
       { userId: req.user.id, type: OrganizationEvents.REMOVE_ORG_MEMBER, metadata: { organizationId, userId } },

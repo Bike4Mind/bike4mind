@@ -1,8 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Context } from 'aws-lambda';
+import { Readable } from 'node:stream';
 
 const mocks = vi.hoisted(() => ({
   send: vi.fn(async (_command: unknown) => undefined),
+  s3Send: vi.fn(
+    async (
+      _command: unknown,
+      _options?: { abortSignal?: AbortSignal }
+    ): Promise<{ Body?: { transformToString: () => Promise<string> } }> => ({})
+  ),
+  secretSend: vi.fn(async (_command: unknown): Promise<{ SecretString?: string; CreatedDate?: Date }> => ({})),
   fetchAnthropicHourlyUsage: vi.fn(),
   fetchOpenAIHourlyUsage: vi.fn(),
   priceProviderUsage: vi.fn(),
@@ -20,6 +28,22 @@ vi.mock('@aws-sdk/client-cloudwatch', () => ({
     send = mocks.send;
   },
   PutMetricDataCommand: class {
+    constructor(public readonly input: unknown) {}
+  },
+}));
+vi.mock('@aws-sdk/client-s3', () => ({
+  S3Client: class {
+    send = mocks.s3Send;
+  },
+  GetObjectCommand: class {
+    constructor(public readonly input: unknown) {}
+  },
+}));
+vi.mock('@aws-sdk/client-secrets-manager', () => ({
+  SecretsManagerClient: class {
+    send = mocks.secretSend;
+  },
+  GetSecretValueCommand: class {
     constructor(public readonly input: unknown) {}
   },
 }));
@@ -66,7 +90,21 @@ const published = (): PutInput => {
   return command.input;
 };
 
+const snapshotBody = (overrides: Record<string, unknown> = {}) => ({
+  Body: {
+    transformToString: async () =>
+      JSON.stringify({
+        version: 1,
+        generatedAt: '2026-10-31T09:00:00.000Z',
+        rows: [{ modelId: 'gpt-6-astra', pricing: { '272000': { input: 1e-6, output: 4e-6 } } }],
+        ...overrides,
+      }),
+  },
+});
+
 beforeEach(() => {
+  vi.stubEnv('MODEL_PRICE_SNAPSHOT_BUCKET', 'snapshot-bucket');
+  mocks.s3Send.mockResolvedValue(snapshotBody());
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   mocks.config.ANTHROPIC_ADMIN_API_KEY = 'anthropic-admin-key';
@@ -82,6 +120,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   vi.clearAllMocks();
 });
 
@@ -108,8 +147,18 @@ describe('providerUsagePoll handler', () => {
       START.getTime() / 1000,
       END.getTime() / 1000
     );
-    expect(mocks.priceProviderUsage).toHaveBeenCalledWith('anthropic', expect.any(Array));
-    expect(mocks.priceProviderUsage).toHaveBeenCalledWith('openai', [usageRow('gpt-5.5')]);
+    expect(mocks.priceProviderUsage).toHaveBeenCalledWith(
+      'anthropic',
+      expect.any(Array),
+      undefined,
+      expect.objectContaining({ version: 1 })
+    );
+    expect(mocks.priceProviderUsage).toHaveBeenCalledWith(
+      'openai',
+      [usageRow('gpt-5.5')],
+      undefined,
+      expect.objectContaining({ version: 1 })
+    );
   });
 
   it('publishes USD, output tokens and unpriced tokens per provider, stamped at run time', async () => {
@@ -139,8 +188,8 @@ describe('providerUsagePoll handler', () => {
 
   it('logs one info line per provider and one warn line for unpriced models', async () => {
     await handler({}, context);
-    expect(mocks.info).toHaveBeenCalledTimes(2);
-    expect(mocks.info.mock.calls[0][0]).toBe(
+    expect(mocks.info).toHaveBeenCalledTimes(3);
+    expect(mocks.info.mock.calls[1][0]).toBe(
       '[ProviderUsagePoll] anthropic 2026-10-31T13:00:00.000Z..2026-10-31T14:00:00.000Z: usd=$42.50 outputTokens=40 models=2'
     );
     expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
@@ -183,6 +232,11 @@ describe('providerUsagePoll handler', () => {
     });
   });
 
+  it('publishes no key age datum for keys read from Config', async () => {
+    await handler({}, context);
+    expect(published().MetricData.some(d => d.MetricName === 'ProviderAdminKeyAgeDays')).toBe(false);
+  });
+
   it('publishes no skipped datum when every provider is configured', async () => {
     await handler({}, context);
     expect(published().MetricData.some(d => d.MetricName === 'ProviderUsagePollSkipped')).toBe(false);
@@ -196,5 +250,297 @@ describe('providerUsagePoll handler', () => {
     const metrics = published().MetricData;
     expect(metrics).toHaveLength(3);
     expect(metrics.every(d => (d.Dimensions as Array<{ Value: string }>)[0].Value === 'openai')).toBe(true);
+  });
+
+  describe('with the admin key secret store', () => {
+    const storedKeys: Record<string, string | Error> = {};
+    const createdDates: Record<string, Date | undefined> = {};
+    const secretIds = { anthropic: 'anthropic-secret-arn', openai: 'openai-secret-arn' };
+
+    beforeEach(() => {
+      vi.stubEnv('PROVIDER_ADMIN_KEY_SECRET_ANTHROPIC', secretIds.anthropic);
+      vi.stubEnv('PROVIDER_ADMIN_KEY_SECRET_OPENAI', secretIds.openai);
+      storedKeys[secretIds.anthropic] = 'stored-anthropic-key';
+      storedKeys[secretIds.openai] = 'stored-openai-key';
+      createdDates[secretIds.anthropic] = undefined;
+      createdDates[secretIds.openai] = undefined;
+      mocks.secretSend.mockImplementation(async command => {
+        const secretId = (command as { input: { SecretId: string } }).input.SecretId;
+        const value = storedKeys[secretId];
+        if (value instanceof Error) throw value;
+        return { SecretString: value, CreatedDate: createdDates[secretId] };
+      });
+    });
+
+    const DAY_MS = 86_400_000;
+    const daysBefore = (days: number) => new Date(NOW.getTime() - days * DAY_MS);
+    const ageData = () => published().MetricData.filter(d => d.MetricName === 'ProviderAdminKeyAgeDays');
+    const ageDatum = (provider: string, Value: number) => ({
+      MetricName: 'ProviderAdminKeyAgeDays',
+      Value,
+      Unit: 'None',
+      Dimensions: [{ Name: 'Provider', Value: provider }],
+      Timestamp: NOW,
+    });
+
+    it('publishes the age in days of each key version, in the same namespace as the spend metrics', async () => {
+      createdDates[secretIds.anthropic] = daysBefore(50);
+      createdDates[secretIds.openai] = daysBefore(80.5);
+
+      expect(await handler({}, context)).toEqual({ published: 2, skipped: 0 });
+
+      expect(mocks.send).toHaveBeenCalledTimes(1);
+      expect(published().Namespace).toBe('test-app/production/LLMSpend');
+      expect(ageData()).toEqual([ageDatum('anthropic', 50), ageDatum('openai', 80.5)]);
+      expect(published().MetricData).toHaveLength(8);
+    });
+
+    it('publishes an age of zero for a version dated after the run started', async () => {
+      createdDates[secretIds.anthropic] = new Date(NOW.getTime() + 5_000);
+
+      await handler({}, context);
+
+      expect(ageData()).toEqual([ageDatum('anthropic', 0)]);
+    });
+
+    it('publishes no age datum when the store reports no creation date', async () => {
+      await handler({}, context);
+      expect(ageData()).toEqual([]);
+    });
+
+    it.each([
+      ['has no value yet', Object.assign(new Error('no current value'), { name: 'ResourceNotFoundException' })],
+      ['holds the placeholder', 'not-configured'],
+    ])('publishes no age datum for a skipped provider whose secret %s', async (_label, stored) => {
+      createdDates[secretIds.anthropic] = daysBefore(50);
+      createdDates[secretIds.openai] = daysBefore(80);
+      storedKeys[secretIds.openai] = stored;
+
+      expect(await handler({}, context)).toEqual({ published: 1, skipped: 1 });
+
+      expect(ageData()).toEqual([ageDatum('anthropic', 50)]);
+    });
+
+    it('publishes no age datum for a provider whose key lookup failed', async () => {
+      createdDates[secretIds.anthropic] = daysBefore(50);
+      createdDates[secretIds.openai] = daysBefore(80);
+      storedKeys[secretIds.anthropic] = Object.assign(new Error('not authorized'), { name: 'AccessDeniedException' });
+
+      await expect(handler({}, context)).rejects.toThrow('usage report failed for anthropic');
+
+      expect(ageData()).toEqual([ageDatum('openai', 80)]);
+    });
+
+    it('still publishes the age when the usage report for that key fails', async () => {
+      createdDates[secretIds.anthropic] = daysBefore(50);
+      mocks.fetchAnthropicHourlyUsage.mockRejectedValue(new Error('Anthropic API 401: bad key'));
+
+      await expect(handler({}, context)).rejects.toThrow('usage report failed for anthropic');
+
+      expect(ageData()).toEqual([ageDatum('anthropic', 50)]);
+    });
+
+    it('reads each key from its secret and never from Config', async () => {
+      await handler({}, context);
+
+      expect(mocks.fetchAnthropicHourlyUsage).toHaveBeenCalledWith(
+        'stored-anthropic-key',
+        expect.any(String),
+        expect.any(String)
+      );
+      expect(mocks.fetchOpenAIHourlyUsage).toHaveBeenCalledWith(
+        'stored-openai-key',
+        expect.any(Number),
+        expect.any(Number)
+      );
+    });
+
+    it('skips a provider whose secret has no value yet, with the usual skipped datum', async () => {
+      storedKeys[secretIds.openai] = Object.assign(new Error('no current value'), {
+        name: 'ResourceNotFoundException',
+      });
+
+      expect(await handler({}, context)).toEqual({ published: 1, skipped: 1 });
+      expect(mocks.warn).toHaveBeenCalledWith('[ProviderUsagePoll] openai: admin key not configured, skipping');
+      expect(published().MetricData.filter(d => d.MetricName === 'ProviderUsagePollSkipped')).toEqual([
+        skippedDatum('openai'),
+      ]);
+    });
+
+    it('counts a failed key lookup as a failed provider and still publishes the other one', async () => {
+      storedKeys[secretIds.anthropic] = Object.assign(new Error('not authorized'), { name: 'AccessDeniedException' });
+
+      await expect(handler({}, context)).rejects.toThrow('usage report failed for anthropic');
+
+      expect(mocks.fetchAnthropicHourlyUsage).not.toHaveBeenCalled();
+      expect(mocks.error).toHaveBeenCalledTimes(1);
+      expect(mocks.warn).not.toHaveBeenCalledWith('[ProviderUsagePoll] anthropic: admin key not configured, skipping');
+      const metrics = published().MetricData;
+      expect(metrics).toHaveLength(3);
+      expect(metrics.every(d => (d.Dimensions as Array<{ Value: string }>)[0].Value === 'openai')).toBe(true);
+    });
+  });
+});
+
+describe('providerUsagePoll model price snapshot', () => {
+  const snapshotArg = () => mocks.priceProviderUsage.mock.calls[0][3];
+  const staticPricing = () => {
+    expect(mocks.priceProviderUsage).toHaveBeenCalledTimes(2);
+    for (const call of mocks.priceProviderUsage.mock.calls) expect(call[3]).toBeUndefined();
+  };
+
+  it('loads the snapshot once before the provider loop and logs its age and size', async () => {
+    await handler({}, context);
+    expect(mocks.s3Send).toHaveBeenCalledOnce();
+    expect((mocks.s3Send.mock.calls[0][0] as { input: unknown }).input).toEqual({
+      Bucket: 'snapshot-bucket',
+      Key: 'model-prices/per-token.json',
+    });
+    expect(snapshotArg()).toMatchObject({ rows: [{ modelId: 'gpt-6-astra' }] });
+    expect(mocks.info).toHaveBeenCalledWith(expect.stringContaining('generatedAt=2026-10-31T09:00:00.000Z rows=1'));
+    expect(mocks.warn).not.toHaveBeenCalledWith(expect.stringContaining('snapshot'), expect.anything());
+    expect(mocks.warn).not.toHaveBeenCalledWith(expect.stringContaining('snapshot'));
+  });
+
+  it('warns when the snapshot is older than 24h but still uses it', async () => {
+    mocks.s3Send.mockResolvedValue(snapshotBody({ generatedAt: '2026-10-30T13:00:00.000Z' }));
+    await handler({}, context);
+    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining('stale or implausible'));
+    expect(snapshotArg()).toBeDefined();
+  });
+
+  it('warns when the snapshot is dated in the future but still uses it', async () => {
+    mocks.s3Send.mockResolvedValue(snapshotBody({ generatedAt: '2026-11-03T00:00:00.000Z' }));
+    await handler({}, context);
+    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining('stale or implausible'));
+    expect(snapshotArg()).toBeDefined();
+  });
+
+  it('prices from the static tables with one warning when the bucket is not configured', async () => {
+    vi.stubEnv('MODEL_PRICE_SNAPSHOT_BUCKET', '');
+    await handler({}, context);
+    expect(mocks.s3Send).not.toHaveBeenCalled();
+    staticPricing();
+    expect(mocks.warn).toHaveBeenCalledTimes(2);
+    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining('snapshot bucket not configured'));
+  });
+
+  it('prices from the static tables when the object is missing', async () => {
+    mocks.s3Send.mockRejectedValue(Object.assign(new Error('no such key'), { name: 'NoSuchKey' }));
+    await expect(handler({}, context)).resolves.toEqual({ published: 2, skipped: 0 });
+    staticPricing();
+    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining('snapshot unavailable'), expect.any(Error));
+  });
+
+  it.each([
+    ['not JSON', async () => 'nope'],
+    ['the wrong shape', async () => JSON.stringify({ version: 2, rows: [] })],
+  ])('prices from the static tables when the snapshot is %s', async (_label, transformToString) => {
+    mocks.s3Send.mockResolvedValue({ Body: { transformToString } });
+    await expect(handler({}, context)).resolves.toEqual({ published: 2, skipped: 0 });
+    staticPricing();
+    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining('snapshot unavailable'), expect.anything());
+  });
+});
+
+function deferredSnapshot<T>() {
+  let resolve: (value: T) => void = () => {
+    throw new Error('Deferred snapshot was not initialized');
+  };
+  let reject: (reason: unknown) => void = () => {
+    throw new Error('Deferred snapshot was not initialized');
+  };
+  const promise = new Promise<T>((accept, fail) => {
+    resolve = accept;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
+function observePoll(promise: ReturnType<typeof handler>) {
+  const state: { settled: boolean; value: unknown; error: unknown } = {
+    settled: false,
+    value: undefined,
+    error: undefined,
+  };
+  const completed = (async () => {
+    try {
+      state.value = await promise;
+    } catch (error) {
+      state.error = error;
+    } finally {
+      state.settled = true;
+    }
+  })();
+  return { state, completed };
+}
+
+describe('optional model price snapshot budget', () => {
+  const assertFallback = () => {
+    expect(mocks.priceProviderUsage).toHaveBeenCalledTimes(2);
+    for (const call of mocks.priceProviderUsage.mock.calls) expect(call[3]).toBeUndefined();
+    expect(
+      mocks.warn.mock.calls.filter(call => typeof call[0] === 'string' && call[0].includes('snapshot unavailable'))
+    ).toHaveLength(1);
+  };
+
+  it('bounds pending headers, aborts the SDK and disposes a response arriving after fallback', async () => {
+    const headers = deferredSnapshot<{ Body?: { transformToString: () => Promise<string> } }>();
+    mocks.s3Send.mockReturnValueOnce(headers.promise);
+    const transform = vi.fn(async () => '{}');
+    const body = Object.assign(new Readable({ read() {} }), { transformToString: transform });
+    const observed = observePoll(handler({}, context));
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const signal = mocks.s3Send.mock.calls[0][1]?.abortSignal;
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(observed.state.settled).toBe(true);
+      expect(observed.state.value).toEqual({ published: 2, skipped: 0 });
+      expect(signal?.aborted).toBe(true);
+      assertFallback();
+    } finally {
+      headers.resolve({ Body: body });
+      await observed.completed;
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(transform).not.toHaveBeenCalled();
+    expect(body.destroyed).toBe(true);
+  });
+
+  it('uses one budget for headers and a pending body, destroying the body on expiry', async () => {
+    const headers = deferredSnapshot<{ Body?: { transformToString: () => Promise<string> } }>();
+    const text = deferredSnapshot<string>();
+    const transform = vi.fn(() => text.promise);
+    const body = Object.assign(new Readable({ read() {} }), { transformToString: transform });
+    mocks.s3Send.mockReturnValueOnce(headers.promise);
+    const observed = observePoll(handler({}, context));
+    try {
+      await vi.advanceTimersByTimeAsync(4_000);
+      headers.resolve({ Body: body });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(transform).toHaveBeenCalledOnce();
+      expect(mocks.priceProviderUsage).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(observed.state.settled).toBe(true);
+      expect(body.destroyed).toBe(true);
+      assertFallback();
+      text.reject(new Error('late body failure'));
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      headers.resolve({ Body: body });
+      text.resolve('{}');
+      await observed.completed;
+      await vi.advanceTimersByTimeAsync(0);
+    }
+  });
+
+  it('leaves primary work headroom without admitting an optional read', async () => {
+    await expect(handler({}, { ...context, getRemainingTimeInMillis: () => 30_000 })).resolves.toEqual({
+      published: 2,
+      skipped: 0,
+    });
+    expect(mocks.s3Send).not.toHaveBeenCalled();
+    assertFallback();
   });
 });

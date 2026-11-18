@@ -11,6 +11,7 @@ import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
 import CastleOutlinedIcon from '@mui/icons-material/CastleOutlined';
 import Diversity3OutlinedIcon from '@mui/icons-material/Diversity3Outlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
+import WidgetsOutlinedIcon from '@mui/icons-material/WidgetsOutlined';
 import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import PermMediaOutlinedIcon from '@mui/icons-material/PermMediaOutlined';
@@ -348,6 +349,22 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           },
         ]
       : []),
+    {
+      // Everything the user saved as an artifact (notebook, project or API), published or not.
+      key: 'artifacts',
+      priority: 4,
+      label: t('sidenav.artifacts', 'Artifacts'),
+      icon: (
+        <NavIcon>
+          <WidgetsOutlinedIcon sx={{ fontSize: '18px' }} />
+        </NavIcon>
+      ),
+      isActive: location.pathname === '/artifacts' || location.pathname.startsWith('/artifacts/'),
+      onClick: () => {
+        closeOnMobile();
+        navigate({ to: '/artifacts' });
+      },
+    },
     {
       // Live Artifacts (published shares) are the product's lead-gen surface -
       // a first-class destination instead of Profile -> Live Artifacts (3 clicks deep).

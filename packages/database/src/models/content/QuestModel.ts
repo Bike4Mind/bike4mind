@@ -12,7 +12,7 @@ import {
   QuestCallbackStateSchema,
   ChatToolModeSchema,
   type GenerationJobRef,
-  type QuestGenerationJobKind,
+  type AgentGenerationSlotKind,
   QUEST_GENERATION_JOB_KINDS,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
@@ -647,6 +647,9 @@ export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schem
     // Agent-mode jobs claimed by this run, one per-run cap counter per kind (see claimAgentGenerationSlot).
     agentVideoClipsClaimed: { type: Number, required: false },
     agentMusicTracksClaimed: { type: Number, required: false },
+    agentImagesClaimed: { type: Number, required: false },
+    agentSpeechClipsClaimed: { type: Number, required: false },
+    agentSoundEffectsClaimed: { type: Number, required: false },
     oob: { type: String, required: false },
     promptMeta: { type: PromptMetaSchema, required: false },
     status: { type: String, required: false },
@@ -654,6 +657,9 @@ export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schem
     // set server-side so the client can render a targeted error state. Declared so Mongoose
     // strict mode persists it (otherwise the error UI would not survive a reload).
     errorCode: { type: String, required: false },
+    // Set only for a quest created by a federated exchange key, so per-app outcomes can be counted.
+    apiKeyId: { type: String, required: false, select: false },
+    oauthClientId: { type: String, required: false, select: false },
     // Completion callback for an API-key generation job (see IQuestCallback). select: false keeps
     // the caller's endpoint and key id out of every quest payload and out of the whole-doc
     // update() writes the generation services make, so a stale in-memory quest can never
@@ -964,7 +970,10 @@ export function sessionKeysetFilter(sessionId: string, after?: { timestamp: Date
 const AGENT_GENERATION_SLOT_FIELDS = {
   video: 'agentVideoClipsClaimed',
   music: 'agentMusicTracksClaimed',
-} as const satisfies Record<QuestGenerationJobKind, keyof IChatHistoryItem>;
+  image: 'agentImagesClaimed',
+  speech: 'agentSpeechClipsClaimed',
+  sound_effect: 'agentSoundEffectsClaimed',
+} as const satisfies Record<AgentGenerationSlotKind, keyof IChatHistoryItem>;
 
 class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implements IChatHistoryItemRepository {
   ctx: mongoose.mongo.ClientSession | null;
@@ -1148,8 +1157,10 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       // Include pinned: IChatHistoryItemDocument types it, so omitting it hands every caller undefined.
       // Include status so history can skip a prompt stopped before any reply (see isStoppedBeforeReply
       // in @bike4mind/utils).
+      // Include generationJobs so the recent-images note can see job-made images (recentImageJobs in
+      // @bike4mind/utils).
       .select(
-        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob suggestedChoices pinned status _id'
+        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob suggestedChoices pinned status generationJobs _id'
       )
       .sort({ timestamp: -1 })
       .limit(limit)
@@ -1289,7 +1300,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    */
   async settleIfUnfinished(
     id: string,
-    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply' | 'replies' | 'fallbackInfo'>> & {
+    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply' | 'replies' | 'fallbackInfo' | 'errorCode'>> & {
       finishReason?: string;
     }
   ): Promise<boolean> {
@@ -1384,7 +1395,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    * checkpoint continuations share this Quest and can claim concurrently, so the check and the increment must be one atomic update.
    * Returns false when the cap is reached or no Quest matches.
    */
-  async claimAgentGenerationSlot(questId: string, kind: QuestGenerationJobKind, limit: number): Promise<boolean> {
+  async claimAgentGenerationSlot(questId: string, kind: AgentGenerationSlotKind, limit: number): Promise<boolean> {
     if (limit <= 0) return false;
     const field = AGENT_GENERATION_SLOT_FIELDS[kind];
     const result = await this.model.updateOne(
@@ -1409,7 +1420,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /** Give back a slot from claimAgentGenerationSlot whose call started no new job. */
-  async releaseAgentGenerationSlot(questId: string, kind: QuestGenerationJobKind): Promise<void> {
+  async releaseAgentGenerationSlot(questId: string, kind: AgentGenerationSlotKind): Promise<void> {
     const field = AGENT_GENERATION_SLOT_FIELDS[kind];
     await this.model.updateOne({ _id: convertId(questId), [field]: { $gt: 0 } }, { $inc: { [field]: -1 } });
   }
@@ -1899,6 +1910,13 @@ function initializeQuestModel() {
     ChatHistoryItemSchema.index(
       { 'promptMeta.contextTelemetry.anonymousSessionId.hash': 1 },
       { name: 'contextTelemetry_anonymousSessionHash', sparse: true }
+    );
+
+    // Serves per-app quest outcome counts. Partial, so it holds only exchange-key quests.
+    // Pre-built by 20261115120000_ensure-side-app-attribution-indexes.
+    ChatHistoryItemSchema.index(
+      { oauthClientId: 1, timestamp: -1 },
+      { name: 'oauthClient_timestamp', partialFilterExpression: { oauthClientId: { $exists: true } } }
     );
   } catch (error) {
     // Plugin already applied, ignore error

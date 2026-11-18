@@ -29,6 +29,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/music-generations/{id}/cancel',
   },
+  cancelSceneComposition: {
+    method: 'POST',
+    path: '/api/v1/scene-compositions/{id}/cancel',
+  },
   cancelVideoGeneration: {
     method: 'POST',
     path: '/api/v1/video-generations/{id}/cancel',
@@ -88,6 +92,10 @@ export const operations = {
   createProjectInvite: {
     method: 'POST',
     path: '/api/v1/projects/{id}/invites',
+  },
+  createSceneComposition: {
+    method: 'POST',
+    path: '/api/v1/scene-compositions',
   },
   createSession: {
     method: 'POST',
@@ -165,6 +173,10 @@ export const operations = {
     method: 'POST',
     path: '/api/ai/v1/tools',
   },
+  fetchWebPage: {
+    method: 'POST',
+    path: '/api/v1/tools/web-fetch',
+  },
   generateAgentAvatar: {
     method: 'POST',
     path: '/api/v1/agents/{id}/generate-avatar',
@@ -221,9 +233,17 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/client-config',
   },
+  getCompletionRunUsage: {
+    method: 'GET',
+    path: '/api/v1/completion-runs/{runId}/usage',
+  },
   getCreditBalance: {
     method: 'GET',
     path: '/api/v1/credits',
+  },
+  getCurrentWeather: {
+    method: 'POST',
+    path: '/api/v1/tools/weather',
   },
   getDataLake: {
     method: 'GET',
@@ -257,9 +277,17 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/projects/{id}',
   },
+  getPublicClientConfig: {
+    method: 'GET',
+    path: '/api/v1/client-config/public',
+  },
   getQuest: {
     method: 'GET',
     path: '/api/v1/quests/{id}',
+  },
+  getSceneComposition: {
+    method: 'GET',
+    path: '/api/v1/scene-compositions/{id}',
   },
   getSession: {
     method: 'GET',
@@ -325,6 +353,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/files',
   },
+  listImageModels: {
+    method: 'GET',
+    path: '/api/v1/image-models',
+  },
   listModels: {
     method: 'GET',
     path: '/api/v1/models',
@@ -364,6 +396,10 @@ export const operations = {
   listQuestFiles: {
     method: 'GET',
     path: '/api/v1/quests/{id}/files',
+  },
+  listSceneCompositions: {
+    method: 'GET',
+    path: '/api/v1/scene-compositions',
   },
   listSessionFiles: {
     method: 'GET',
@@ -460,6 +496,10 @@ export const operations = {
   searchSessions: {
     method: 'POST',
     path: '/api/v1/sessions/semantic-search',
+  },
+  searchWeb: {
+    method: 'POST',
+    path: '/api/v1/tools/web-search',
   },
   sendChatMessage: {
     method: 'POST',

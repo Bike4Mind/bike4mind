@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { logOAuthError } from './oauthErrorLog';
+const recordSideAppRefusal = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/auth/sideAppRefusal', () => ({ recordSideAppRefusal }));
+
+import { logAndRecordSideAppMintRefusal, logOAuthError } from './oauthErrorLog';
 
 const lineFor = (clientId: unknown) => {
   const warn = vi.fn();
@@ -38,5 +41,28 @@ describe('logOAuthError', () => {
         args
       )
     ).not.toThrow();
+  });
+});
+
+describe('logAndRecordSideAppMintRefusal', () => {
+  const base = { route: 'oauth/ai-token', error: 'invalid_client', status: 401 };
+
+  it('logs the line and records a mint refusal with the verification flag it was given', () => {
+    const warn = vi.fn();
+    logAndRecordSideAppMintRefusal({ warn }, { ...base, clientId: 'client-1', verified: false });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(recordSideAppRefusal).toHaveBeenCalledWith({
+      verified: false,
+      clientId: 'client-1',
+      stage: 'mint',
+      reason: 'invalid_client',
+      status: 401,
+      userId: undefined,
+    });
+  });
+
+  it('passes no client id when the claim is not a string', () => {
+    logAndRecordSideAppMintRefusal(undefined, { ...base, clientId: { id: 1 }, verified: false });
+    expect(recordSideAppRefusal).toHaveBeenLastCalledWith(expect.objectContaining({ clientId: undefined }));
   });
 });

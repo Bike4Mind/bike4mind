@@ -147,6 +147,8 @@ class ElectronPage implements BrowserPage {
   private lastError = '';
   /** Main-frame navigations committed so far; tells a load that showed nothing from one that showed a page. */
   private commits = 0;
+  /** Any frame navigation invalidates a capture, even if that frame detaches before capture resolves. */
+  private frameGeneration = 0;
   /** Set by close(), so the host's own 'closed' does not run the teardown a second time. */
   private closing = false;
   /** In the app window but hidden for a moment; see hold(). */
@@ -160,6 +162,8 @@ class ElectronPage implements BrowserPage {
   /** Agent steps running in this page right now; a popup opened during one is the agent's. */
   private acting = 0;
   private actedAt = 0;
+  /** When an agent tool last took this tab, so the strip can tell a tab the model is using. */
+  private agentUsedAt = 0;
   inflight = 0;
   lastNetworkAt = 0;
 
@@ -220,6 +224,12 @@ class ElectronPage implements BrowserPage {
       if (!shortcut) return;
       event.preventDefault();
       this.hooks.onShortcut(shortcut);
+    });
+    contents.on('did-start-navigation', () => {
+      this.frameGeneration += 1;
+    });
+    contents.on('did-frame-navigate', () => {
+      this.frameGeneration += 1;
     });
     contents.on('did-navigate', (_event, url, status) => {
       this.commits += 1;
@@ -377,7 +387,12 @@ class ElectronPage implements BrowserPage {
       title: this.title(),
       url: hasContent(url) ? url : '',
       loading: !this.webContents.isDestroyed() && this.webContents.isLoading(),
+      agentUsedAt: this.agentUsedAt,
     };
+  }
+
+  markAgentUse(): void {
+    this.agentUsedAt = Date.now();
   }
 
   /** Load without waiting, for a tab opened from a popup: its failures arrive as state and events. */
@@ -462,7 +477,10 @@ class ElectronPage implements BrowserPage {
 
   private async runScript<T>(code: string, what: string, userGesture: boolean, timeoutMs: number): Promise<T> {
     const contents = this.contents;
-    const run = contents.executeJavaScript(code, userGesture) as Promise<T>;
+    // Chromium may defer execution until a navigation finishes; bind the code to this call's origin.
+    const origin = new URL(contents.getURL()).origin;
+    const guarded = `(() => { if (location.origin !== ${JSON.stringify(origin)}) throw new Error("The page changed origin before this step could run. Read the new page before retrying."); return (${code}); })()`;
+    const run = contents.executeJavaScript(guarded, userGesture) as Promise<T>;
     const first = await within(run, timeoutMs);
     if (first !== TIMED_OUT) return first;
     if (!contents.isDestroyed() && contents.isLoadingMainFrame()) {
@@ -511,6 +529,7 @@ class ElectronPage implements BrowserPage {
 
   async press(key: string): Promise<void> {
     const contents = this.contents;
+    const origin = new URL(contents.getURL()).origin;
     // A parked page holds no OS focus, so Enter would not reach a form: submit it directly.
     if (key === 'Enter') {
       const submitted = await this.script<boolean>(
@@ -518,6 +537,9 @@ class ElectronPage implements BrowserPage {
         'Pressing Enter'
       );
       if (submitted) return;
+    }
+    if (new URL(contents.getURL()).origin !== origin) {
+      throw new Error('The page changed origin before this key could be sent. Read the new page before retrying.');
     }
     await this.asAgent(async () => {
       contents.focus();
@@ -529,11 +551,17 @@ class ElectronPage implements BrowserPage {
 
   async screenshot(): Promise<Buffer> {
     const controller = new AbortController();
+    const frameGeneration = this.frameGeneration;
     try {
       const image = await within(this.capture(controller.signal), CAPTURE_TIMEOUT_MS);
       if (image === TIMED_OUT) {
         throw new Error(
           `The page did not paint a frame to capture within ${seconds(CAPTURE_TIMEOUT_MS)}; it is not responding.`
+        );
+      }
+      if (frameGeneration !== this.frameGeneration) {
+        throw new Error(
+          'A frame changed while the screenshot was being captured. Read the settled page before retrying.'
         );
       }
       if (image.isEmpty()) throw new Error('The page rendered nothing to capture yet. Try again once it has loaded.');
@@ -690,6 +718,8 @@ export class BrowserManager implements BrowserProvider {
   /** Placement failures already logged, so a wedged page logs once rather than on every event. */
   private readonly warned = new Set<string>();
   private readonly artifactViews = new ArtifactViewRegistry();
+  /** The artifact each tab was opened on, so asking for it again can switch back instead of duplicating it. */
+  private readonly artifactTabs = new WeakMap<ElectronPage, { key: string; content: string; url: string }>();
 
   /**
    * The user's own Chrome sessions, for sites they named. Public because the renderer drives it
@@ -710,17 +740,26 @@ export class BrowserManager implements BrowserProvider {
     sessionId: string,
     keepScreenshot: (bytes: Buffer, caption: string) => Promise<ChatMedia | undefined>
   ): BrowserContext {
+    // Every agent tool reaches a tab through here, so this is where a tab becomes one in use.
+    const used = (tab: ElectronPage): ElectronPage => {
+      tab.markAgentUse();
+      this.push(sessionId);
+      return tab;
+    };
     const named = (id: number): ElectronPage => {
       const tab = this.sessions.get(sessionId)?.list.find(candidate => candidate.id === id);
       if (!tab) throw new Error(`There is no tab ${id}. browser_tabs with action "list" shows the open ones.`);
       return tab;
     };
     return {
-      page: async () => this.activeTab(sessionId),
+      page: async () => used(this.activeTab(sessionId)),
       tabs: () => this.tabInfo(sessionId),
-      newTab: async () => this.openTab(sessionId, true) ?? null,
+      newTab: async () => {
+        const tab = this.openTab(sessionId, true);
+        return tab ? used(tab) : null;
+      },
       selectTab: async id => {
-        const tab = named(id);
+        const tab = used(named(id));
         this.activate(sessionId, tab);
         return this.infoOf(sessionId, tab);
       },
@@ -798,12 +837,21 @@ export class BrowserManager implements BrowserProvider {
    * http/https rule because main mints the url here, for content the renderer already shows in
    * its sandboxed frame; typed addresses and the agent's tools still refuse the scheme. Opens a
    * new tab when the active one is showing a page, so the agent's place is not lost.
+   *
+   * With a `key`, a tab still showing that same artifact is brought forward instead. A tab that
+   * has since navigated away, or was opened on different content, does not count.
    */
-  async openArtifact(sessionId: string, title: string, content: string): Promise<BrowserPaneState> {
+  async openArtifact(sessionId: string, title: string, content: string, key?: string): Promise<BrowserPaneState> {
     this.session();
+    const open = key ? this.artifactTab(sessionId, key, content) : undefined;
+    if (open) {
+      this.activate(sessionId, open);
+      return this.stateOf(sessionId);
+    }
     const url = this.artifactViews.add(title, content);
     const current = this.sessions.get(sessionId)?.active;
     const page = current?.showable ? (this.openTab(sessionId, true) ?? current) : this.activeTab(sessionId);
+    if (key) this.artifactTabs.set(page, { key, content, url });
     try {
       await page.navigate(url);
     } catch (err) {
@@ -811,6 +859,13 @@ export class BrowserManager implements BrowserProvider {
     }
     this.apply();
     return this.stateOf(sessionId);
+  }
+
+  private artifactTab(sessionId: string, key: string, content: string): ElectronPage | undefined {
+    return this.sessions.get(sessionId)?.list.find(tab => {
+      const opened = this.artifactTabs.get(tab);
+      return opened?.key === key && opened.content === content && tab.currentUrl() === opened.url;
+    });
   }
 
   /** Back, forward or reload. The resulting navigation arrives on its own as a state push. */

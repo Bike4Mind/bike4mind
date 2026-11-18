@@ -59,10 +59,11 @@ import { createChatLiveActivity, publishChatCompletedPush } from './questProcess
 import { recordFirstChatValue } from '@server/analytics/funnel';
 import { summarizeSession, contextSummarizeSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
+import { admitQuestStart, releaseQuestStart } from '@bike4mind/server-utils/entitlements/questStartAllowance';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { operationalBillingAdapters } from '@bike4mind/server-utils/billing/operationalBilling';
 import { accessibleBy } from '@casl/mongoose';
-import { IUserDocument, Permission } from '@bike4mind/common';
+import { FREE_QUEST_LIMIT_REACHED_ERROR_CODE, getQuestErrorCode, IUserDocument, Permission } from '@bike4mind/common';
 import { LLMEvents, SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   getSharedTokenizer,
@@ -75,12 +76,16 @@ import { slackToolDefinitions, createPendingActionToolDefs } from '@bike4mind/sl
 import { cancelPendingActionOnQuest } from '@bike4mind/server-utils/utils/pendingActionExecutor';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
 import { buildMusicToolConfig } from '@bike4mind/server-utils/musicGenerations/buildMusicToolConfig';
+import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
 import {
+  getCreateImageJobsDeps,
   getCreateMusicJobDeps,
   getCreateVideoJobDeps,
   getMusicJobDeps,
   getVideoJobDeps,
 } from '@bike4mind/server-utils/generationJobs/wiring';
+import { createImageJobs } from '@bike4mind/services/imageJobs';
+import { resolveImageJobFiles } from '@server/generations/resolveImageJobFiles';
 import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
 import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
@@ -189,6 +194,8 @@ export const getStaticOptions = () => {
     // (e.g. a tag-less, entitlement-only subscriber). Pure function ref - safe to cache; the
     // per-request, per-user resolution happens inside ChatCompletionProcess.resolveEntitlementKeys.
     getEntitlements: getUserEntitlements,
+    admitQuestStart,
+    releaseQuestStart,
     getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
     invokeCreateMemento: async (
@@ -263,6 +270,15 @@ export const getMusicToolConfigResolver = (apiKeyId: string | undefined, userId:
   apiKeyId
     ? undefined
     : () => buildMusicToolConfig(userId, { availability: getMusicJobDeps(), createDeps: getCreateMusicJobDeps() });
+
+/**
+ * Session turns start image jobs (one card per image). An API-key turn keeps the in-process render: a job it
+ * started would bypass the image-generations contract's scope check and rate limit, as for video.
+ */
+export const getImageJobsResolver = (apiKeyId: string | undefined) =>
+  apiKeyId
+    ? undefined
+    : async () => (input: Parameters<typeof createImageJobs>[0]) => createImageJobs(input, getCreateImageJobsDeps());
 
 /**
  * Quest Processor - shared processing core.
@@ -387,6 +403,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
       tokenizer: getSharedTokenizer(logger),
       sessionId: params.sessionId,
       user,
+      audioToolJobs: buildAudioToolJobs(),
       onStatusUpdate: liveActivity.onStatusUpdate,
       createCompletionMeter: ({ organizationId, featureLabel }) =>
         createCompletionMeter(user, logger, featureLabel, {
@@ -439,9 +456,22 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
       externalTools,
       videoToolConfigResolver: getVideoToolConfigResolver(params.apiKeyId, user.id),
       musicToolConfigResolver: getMusicToolConfigResolver(params.apiKeyId, user.id),
+      imageJobsResolver: getImageJobsResolver(params.apiKeyId),
+      imageJobFilesResolver: resolveImageJobFiles,
     });
   } catch (error) {
     await liveActivity.end('failed');
+    if (getQuestErrorCode(error) === FREE_QUEST_LIMIT_REACHED_ERROR_CODE) {
+      const message = (error as Error).message;
+      await questRepository.settleIfUnfinished(params.questId, {
+        status: 'done',
+        type: 'error',
+        errorCode: FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
+        reply: message,
+        replies: [message],
+      });
+      return;
+    }
     throw error;
   }
   await liveActivity.end();

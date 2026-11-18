@@ -11,6 +11,7 @@ export type TeamTab =
   | 'Usage'
   | 'Analysis'
   | 'Integrations'
+  | 'Domains'
   | 'Billing'
   | 'API keys'
   | 'Audit'
@@ -24,6 +25,7 @@ export const ALL_TEAM_TABS: TeamTab[] = [
   'Usage',
   'Analysis',
   'Integrations',
+  'Domains',
   'Billing',
   'API keys',
   'Audit',
@@ -91,7 +93,12 @@ export class TeamsPage extends BasePage {
     return this.page.getByTestId('organization-user-card');
   }
 
-  /** "X of N seats used" from the Seat Management card, as numbers. */
+  /** A row of the Pending invitations table (PendingInvitationsTable), by the invitee's label. */
+  pendingInviteRow(label: string): Locator {
+    return this.page.getByTestId('organization-pending-invite-row').filter({ hasText: label });
+  }
+
+  /** "X of N seats used" from the Members tab seat summary (OrgSeatSummary), as numbers. */
   async seatsUsed(): Promise<{ used: number; max: number }> {
     const text = await this.page.getByTestId('organization-members-seats-count').innerText();
     const match = text.match(/(\d+) of (\d+) seats used/);
@@ -108,6 +115,18 @@ export class TeamsPage extends BasePage {
     await expect(confirmBtn).toBeVisible({ timeout: TIMEOUTS.MODAL });
     await confirmBtn.click();
     await expect(this.page.getByTestId('confirmation-modal')).toBeHidden({ timeout: TIMEOUTS.MODAL });
+  }
+
+  deleteTeamDialog(): Locator {
+    return this.page.getByTestId('delete-organization-modal');
+  }
+
+  deleteTeamNameInput(): Locator {
+    return this.deleteTeamDialog().getByTestId('delete-organization-name-input');
+  }
+
+  deleteTeamConfirm(): Locator {
+    return this.deleteTeamDialog().getByTestId('delete-organization-confirm-btn');
   }
 
   /**

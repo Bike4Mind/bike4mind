@@ -35,6 +35,7 @@ import { pendingOrgInviteRecipients } from './orgSeatReservations';
 import { resolveRedeemableInvite } from './resolveRedeemableInvite';
 import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import { assertContentInvitePolicy } from './organizationPolicy';
+import { grantCap } from '../projectService/addFiles';
 
 const acceptInviteSchema = z.object({
   id: z.string(),
@@ -498,6 +499,10 @@ const acceptProject = async (
     throw new NotFoundError('Project not found');
   }
 
+  // An invite minted before the inviter was recorded has nobody to cap its grants against, so it is
+  // refused with the expired-invite message the client already explains, and has to be re-sent.
+  if (!invite.inviterId) throw new UnprocessableEntityError('Invite has expired');
+
   const permissions = permissionsInviterCanStillGrant(project, invite, invite.permissions, inviter);
   await assertContentInvitePolicy(project, [user], db.organization);
 
@@ -509,9 +514,21 @@ const acceptProject = async (
   ]);
   const sessions = await db.sessions.findAllByIds(project.sessionIds);
 
-  const grant = { add: [{ userId: user.id, permissions, projectId }] };
-  for (const file of files) await db.fabFiles.shareable.updateUserShares(file.id, grant);
-  for (const session of sessions) await db.sessions.shareable.updateUserShares(session.id, grant);
+  // Whoever minted the invite passes each attached item on, so the item grant is capped at what they
+  // hold on that item: the rule projectService/addFiles.ts applies to whoever attaches one.
+  const grantOn = (item: IShareableDocument & { userId: string }) => {
+    const granted = inviter ? grantCap(item as ShareableAccessShape, inviter)(permissions) : [];
+    return granted.length > 0 ? { add: [{ userId: user.id, permissions: granted, projectId }] } : null;
+  };
+
+  for (const file of files) {
+    const grant = grantOn(file);
+    if (grant) await db.fabFiles.shareable.updateUserShares(file.id, grant);
+  }
+  for (const session of sessions) {
+    const grant = grantOn(session);
+    if (grant) await db.sessions.shareable.updateUserShares(session.id, grant);
+  }
 };
 
 /**

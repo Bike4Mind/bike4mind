@@ -11,7 +11,9 @@
  * without it, go to SLACK_ALARMS_WEBHOOK_URL when set, otherwise the error-reporting channel.
  * Production page-level alarms carry the mention token from the per-stage SSM parameter.
  * Alarms whose catalog entry asks for a detail get it loaded first (young-account spend lists
- * the accounts behind the breach); a failed load posts the alarm with a note instead.
+ * the accounts behind the breach; provider spend breaks the window down by account age, source,
+ * model and account; a refused-request burst names its top IPs, paths and signup accounts); a
+ * failed load posts the alarm with a note instead.
  */
 
 import type { SNSEvent } from 'aws-lambda';
@@ -28,8 +30,12 @@ import {
   type FormatOptions,
 } from './alarmSlackMessage';
 import { readAlarmMention } from './alarmSlackMention';
+import { providerSpendSection } from './providerSpendDetail';
+import { refusedRequestBurstSection } from './refusedRequestBurstDetail';
 import { youngAccountSpendSection } from './youngAccountSpendDetail';
 import type { CloudWatchAlarmPayload } from './cloudwatchAlarmTypes';
+import { collectDlqTriage, finishDlqTriageDelivery, canNotifyDlqTriage } from './dlqTriage';
+import { Logger } from '@bike4mind/observability';
 
 async function loadDetails(
   alarm: CloudWatchAlarmPayload,
@@ -39,6 +45,8 @@ async function loadDetails(
   if (alarm.NewStateValue !== 'ALARM') return [];
   const detail = alarmCatalogEntry(alarm, stage)?.detail;
   if (detail === 'young-account-spend') return [await youngAccountSpendSection(alarm, { appUrl })];
+  if (detail === 'provider-spend') return [await providerSpendSection(alarm, { appUrl })];
+  if (detail === 'refused-request-burst') return [await refusedRequestBurstSection(alarm, { appUrl })];
   return [];
 }
 
@@ -60,9 +68,25 @@ export const handler = async (event: SNSEvent): Promise<void> => {
     const bare = formatAlarmSlackMessage(payload, stage, options);
     if (!bare) continue;
     const details = await loadDetails(payload, stage, options.appUrl);
+    let triage =
+      payload.NewStateValue === 'ALARM'
+        ? await collectDlqTriage(payload.AlarmName, options.appUrl).catch(() => {
+            Logger.warn('[DLQ Triage] Recommendation unavailable; forwarding base alarm');
+            return null;
+          })
+        : null;
+    if (triage && !(await canNotifyDlqTriage(triage))) triage = null;
+    if (triage) details.push(triage.section);
     const message =
       details.length > 0 ? (formatAlarmSlackMessage(payload, stage, { ...options, details }) ?? bare) : bare;
 
-    await postAlarmToSlack(resolveAlarmWebhookUrl(Resource, alarmCategory(payload, stage)), message);
+    const delivery = await postAlarmToSlack(resolveAlarmWebhookUrl(Resource, alarmCategory(payload, stage)), message, {
+      atMostOnce: !!triage,
+    });
+    if (triage) await finishDlqTriageDelivery(triage, delivery.state === 'delivered');
+    if (delivery.state !== 'delivered') {
+      Logger.warn('[DLQ Triage] Slack delivery unconfirmed; retrying the base alarm without recommendations');
+      throw new Error('Alarm Slack delivery was not confirmed');
+    }
   }
 };

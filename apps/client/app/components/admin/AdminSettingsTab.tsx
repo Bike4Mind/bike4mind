@@ -1,8 +1,6 @@
 import { useConfig, useSettingsFromServer } from '@client/app/hooks/data/settings';
 import {
-  FULL_ADMIN_SETTING_KEYS,
   isBlankSettingValue,
-  isFullAdmin,
   allSettingDefinitions,
   resolveSettingDefinition,
   settingsMap,
@@ -38,10 +36,14 @@ import AdminSchemaSettingField from './AdminSchemaSettingField';
 import { getStructuredSetting } from './schemaSettingForm';
 import AdminSettingInputField from './AdminSettingInputField';
 import AdminStringListSettingField from './AdminStringListSettingField';
-import { AdminOperationsModelSetting } from './AdminOperationsModelSetting';
 import { AdminTurnstileStatusNotice } from './AdminTurnstileStatusNotice';
-import { AdminGenerationModelsSetting } from './AdminGenerationModelsSetting';
-import { AdminRecommendedModelsSetting } from './AdminRecommendedModelsSetting';
+import { useModelsNavigation } from './Models/modelsNavigation';
+import {
+  MODEL_SETTINGS_CATEGORY_POINTERS,
+  MODEL_SETTINGS_FALLBACK_POINTER,
+  MODEL_SETTINGS_MOVED_CATEGORIES,
+  MODEL_SETTINGS_ONLY_KEYS,
+} from './Models/Settings/modelSettingsKeys';
 import { ScopedOverridesByScope } from './ScopedOverridesByScope';
 import { HOME_BY_KEY, SETTING_HOMES } from './settingHomes';
 import { useOpenSettingHome } from './useOpenSettingHome';
@@ -49,6 +51,7 @@ import { useOpenSettingHome } from './useOpenSettingHome';
 import AdminLogoUpload from './AdminLogoUpload';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useUser } from '@client/app/contexts/UserContext';
+import { fullAdminOnlySettingNote } from './adminSettingLock';
 import { SettingsDraftProvider } from './SettingsDraftProvider';
 import { AdminPageHeader, EmptyState, ErrorState, LoadingState, SettingsSection } from './shared';
 import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP, adminTabStrip } from './shared/adminStyles';
@@ -153,22 +156,30 @@ type SettingConfig = SettingDefinition<string>;
 // runtime shape, and the update route accepts its key once registered.
 type CoreSettingConfig = (typeof settingsMap)[keyof typeof settingsMap];
 
+const MODEL_SETTINGS_LINK_TEXT =
+  'Model discovery, default, recommended, operations, free-tier and video and music models are edited in';
+
 // Settings whose value is a list of plain strings get the one-entry-per-line editor.
 const STRING_LIST_SETTING_KEYS = new Set<string>([
   'ImageModerationReviewerEmails',
+  'ImageModerationEscalationEmails',
   'blockedEmailDomains',
   'freeTierAllowedModels',
 ]);
+
+// Display only: the stored category value stays as is, so settings, search and the API are unaffected.
+const CATEGORY_HEADINGS: Partial<Record<Category, string>> = { SecOps: 'Security' };
+
+export const categoryHeading = (category: string): string => CATEGORY_HEADINGS[category as Category] ?? category;
 
 const AdminSettingsTab: React.FC = () => {
   const { section, setSection, searchTerm, setSearchTerm } = useAdminSettingsSearchParams();
   const [allTabs, setAllTabs] = useState<boolean>(false);
   const settingsFromServer = useSettingsFromServer();
   const openSettingHome = useOpenSettingHome();
+  const { openSection } = useModelsNavigation();
   const serverConfig = useConfig();
   const { currentUser } = useUser();
-  // The server refuses these keys to a delegate (settings/update.ts), so lock them up front.
-  const fullAdminOnlyNote = isFullAdmin(currentUser) ? undefined : 'Only full administrators can change this setting.';
 
   // Until the server reports this stage's list, hide every stage-gated setting rather than flash it.
   const hiddenSettingKeys = useMemo(() => {
@@ -222,6 +233,11 @@ const AdminSettingsTab: React.FC = () => {
     [searchTerm, matchesSearch]
   );
 
+  const modelSettingsMatchSearch = useMemo(
+    () => !!searchTerm && [...MODEL_SETTINGS_ONLY_KEYS].some(key => matchesSearch(settingsMap[key], searchTerm)),
+    [searchTerm, matchesSearch]
+  );
+
   // Keys with a home page have no editor here, so a search for one points to its home instead.
   const matchedHomes = useMemo(
     () =>
@@ -241,15 +257,12 @@ const AdminSettingsTab: React.FC = () => {
 
       if (HOME_BY_KEY.has(settingConfig.key)) return false;
 
+      if ((MODEL_SETTINGS_ONLY_KEYS as ReadonlySet<string>).has(settingConfig.key)) return false;
+
       // Hide settings that have dedicated custom UI in other admin tabs
       if (
         [
           'logoSettings',
-          // Per-model video and music toggles are rendered by <AdminGenerationModelsSetting />
-          'videoGeneration',
-          'musicGeneration',
-          // Ordered model list is rendered by <AdminRecommendedModelsSetting />
-          'recommendedModelIds',
           'RapidReplySettings',
           'SystemFiles',
           // Release notes config is edited in the Release notes tab
@@ -259,7 +272,7 @@ const AdminSettingsTab: React.FC = () => {
           // Context Telemetry settings are managed in the Context Inspector tab
           'EnableContextTelemetry',
           'contextTelemetryAlerts',
-          // SecOps Triage config has its own dedicated SecOps Triage tab
+          // Issue filing settings are edited from the Security page's Scans view
           'secopsTriageConfig',
           // Overwatch rollup sync is an internal cron-lock document, not user-configurable
           'overwatchRollupSync',
@@ -492,7 +505,7 @@ const AdminSettingsTab: React.FC = () => {
                       : (settingValueByName.get(setting.key) ?? setting.defaultValue)
                   }
                   subSettings={subSettings as ComponentProps<typeof AdminSettingInputField>['subSettings']}
-                  lockedNote={FULL_ADMIN_SETTING_KEYS.has(setting.key) ? fullAdminOnlyNote : undefined}
+                  lockedNote={fullAdminOnlySettingNote(currentUser, setting.key)}
                 />
               );
             })}
@@ -504,10 +517,11 @@ const AdminSettingsTab: React.FC = () => {
 
           {groupId === API_SERVICE_GROUPS.CREDITS.id &&
             SETTING_HOMES.map(home => (
-              <Typography key={home.id} level="body-sm" sx={{ color: 'text.secondary', mt: 1 }}>
+              <Typography key={home.id} level="body-sm" sx={{ color: 'admin.inkMuted', mt: 1 }}>
                 {home.summary}{' '}
                 <Link
                   component="button"
+                  type="button"
                   onClick={() => openSettingHome(home)}
                   data-testid={`admin-settings-credits-${home.id}-link`}
                 >
@@ -531,17 +545,25 @@ const AdminSettingsTab: React.FC = () => {
       <Stack key={`category-${category}`} spacing={2}>
         <Stack direction="row" alignItems="center" spacing={1}>
           <CategoryIconComponent sx={{ '--Icon-fontSize': '24px', color: 'primary.500' }} />
-          <Typography level="h2" color="primary">
-            {category}
+          <Typography level="h2" color="primary" data-testid={`admin-settings-category-heading-${category}`}>
+            {categoryHeading(category)}
           </Typography>
         </Stack>
 
-        {/* Operations Model component for the AI category */}
-        {category === 'AI' && <AdminOperationsModelSetting />}
-
-        {category === 'AI' && <AdminRecommendedModelsSetting />}
-
-        {category === 'AI' && <AdminGenerationModelsSetting />}
+        {MODEL_SETTINGS_MOVED_CATEGORIES.has(category) && (
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+            {MODEL_SETTINGS_CATEGORY_POINTERS[category] ?? MODEL_SETTINGS_FALLBACK_POINTER}{' '}
+            <Link
+              component="button"
+              type="button"
+              onClick={() => void openSection('settings')}
+              data-testid={`admin-settings-models-link-${category}`}
+            >
+              Models settings
+            </Link>
+            .
+          </Typography>
+        )}
 
         {category === 'Users' && (
           <AdminTurnstileStatusNotice enabled={String(settingValueByName.get('turnstileEnabled')) === 'true'} />
@@ -631,11 +653,27 @@ const AdminSettingsTab: React.FC = () => {
             </FormControl>
           </Stack>
 
+          {modelSettingsMatchSearch && (
+            <Typography level="body-sm" sx={{ px: '1rem', pt: 1 }} data-testid="admin-settings-search-models-hint">
+              {MODEL_SETTINGS_LINK_TEXT}{' '}
+              <Link
+                component="button"
+                type="button"
+                onClick={() => void openSection('settings')}
+                data-testid="admin-settings-search-models-link"
+              >
+                Models settings
+              </Link>
+              .
+            </Typography>
+          )}
+
           {matchedHomes.map(home => (
             <Typography key={home.id} level="body-sm" data-testid={`admin-settings-search-${home.id}-hint`}>
               {home.summary}{' '}
               <Link
                 component="button"
+                type="button"
                 onClick={() => openSettingHome(home)}
                 data-testid={`admin-settings-search-${home.id}-link`}
               >

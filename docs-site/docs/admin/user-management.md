@@ -55,7 +55,34 @@ Use **Watch campaign** for follow-up. If your review supports stopping additiona
 
 ## Search
 
-The search box at the top of the Users tab finds users by name, username, email, or user ID. Search is debounced to avoid excessive API calls while typing, and it returns to page 1. Press `/` anywhere in the admin panel to focus it.
+The search box at the top of the Users tab finds users by name, username, email, user ID, or LLM provider identifier (see [Tracing an LLM provider safety notice to an account](#tracing-an-llm-provider-safety-notice-to-an-account)). Search is debounced to avoid excessive API calls while typing, and it returns to page 1. Press `/` anywhere in the admin panel to focus it.
+
+### Resolving a provider safety notice
+
+AI providers receive a 64-character lowercase hex identifier for each end user instead of the user's ID or email (OpenAI `safety_identifier`, Anthropic `metadata.user_id`, and the `user` field on image-generation requests). When a provider sends a safety or abuse notice that names one of these identifiers, you can resolve it to an account:
+
+1. Open the **Users** tab in the admin panel.
+2. Paste the full 64-character value into the search box. Upper or lower case both work.
+3. The matching account appears in the list. Open it to review the profile and activity.
+
+The same lookup is available as `GET /api/admin/users/by-provider-id?id=<64 hex>`. For an account's own identifier it returns `kind: "user"` with the account's ID, name, username, and email. The Users tab needs full admin access; the API also accepts a delegate holding `support:read` (see [Delegated permissions](./delegated-permissions.md)). It responds with 400 if the value is not 64 hex characters and 404 if no account matches.
+
+### End users of a platform key
+
+A key granted the `ai:end-user-id` scope serves the end users of another product and names each one with `end_user_id` (see [End users of your product](../api/completions/reference.md#end-users-of-your-product)). The provider then receives a separate identifier for each of those end users. Bike4Mind records each one the first time it is used, so you can resolve it the same way:
+
+- In the Users tab search, the value finds the account that owns the key.
+- The API returns `kind: "platformEndUser"` with `account` (the key owner's ID, name, username, and email), `endUserId` (the product's own identifier for its end user), `apiKeyId` (the key most recently used for that end user), `firstSeenAt`, and `lastSeenAt`. Ask the account owner about the end user it names; Bike4Mind holds no other details about that person.
+- `end_user_id` on text-to-speech requests is validated but not sent to any provider, so an end user who only uses text-to-speech has no lookup record and the lookup returns not found for them.
+
+### Granting the platform scope
+
+A full administrator grants `ai:end-user-id` in one of two ways:
+
+- When generating a key for a user, tick **AI: Platform End Users** under **Platform key**, alongside the AI scopes the key needs.
+- On an existing key, call `POST /api/admin/user-api-keys/<key id>/end-user-id` with `{ "enabled": true, "reason": "..." }`. Send `"enabled": false` to withdraw it. The change is recorded in the audit log. A key holding a dedicated-flow scope (embed, ingest) cannot take it.
+
+If nothing matches, the account may have been deleted, or the identifier may come from a different deployment. Check that you pasted the whole value without extra characters.
 
 ## Views
 
@@ -376,6 +403,16 @@ The export includes all matching users, not just the current page, up to 15,000 
 2. Click the **User Level** button to cycle through levels (DemoUser, PaidUser, VIPUser, ManagerUser, AdminUser).
 3. Alternatively, add specific permission tags for fine-grained access control.
 4. Click **Update** to save changes.
+
+### Tracing an LLM provider safety notice to an account
+
+Requests to Anthropic and OpenAI carry an opaque per-user identifier: a 64-character hex SHA-256 of the user ID, sent as Anthropic `metadata.user_id` and OpenAI `safety_identifier`. When a provider sends a safety notice that quotes this identifier:
+
+1. Press Cmd/Ctrl+K on the admin page to open **Admin commands**. Full admins only.
+2. Paste the 64-character identifier. The matching account is listed with its masked email and account status: `active`, `throttled`, `suspend_pending` (the suspension threshold was reached and is waiting for an admin to confirm), `suspended` (also shown for an account suspended from its profile) or `deleted`.
+3. Select it to open the user profile, where you see the full email and can act on the account.
+
+Each lookup in **Admin commands** is recorded in the admin audit log without the identifier itself. You can also paste the identifier into the Users tab search. No result means the identifier does not belong to a user on this deployment.
 
 ### Handling Support Requests
 

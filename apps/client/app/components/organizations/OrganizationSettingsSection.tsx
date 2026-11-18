@@ -6,10 +6,11 @@ import { useGetOrganizationUsers } from '@client/app/hooks/data/user';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useNavigate } from '@tanstack/react-router';
 import TransferOwnershipModal, { TransferCandidate } from './TransferOwnershipModal';
+import OrganizationExportSection from './OrganizationExportSection';
 import OrgFormSaveBar from './OrgFormSaveBar';
 import DeleteOrganizationDialog from './DeleteOrganizationDialog';
 import OrganizationGeneralSection from './OrganizationGeneralSection';
-import { canEditOrgProfile, canViewOrgBilling } from '@client/app/routes/organizations/orgTabAccess';
+import { canManageOrgSettings, canViewOrgBilling } from '@client/app/routes/organizations/orgTabAccess';
 import { OrganizationSharingSettings } from './OrganizationSharingSettings';
 
 const MAX_SYSTEM_PROMPT_LENGTH = 10000; // ~2500 tokens
@@ -21,8 +22,7 @@ const OrganizationSettingsSection: FC<{ organization: WithId<IOrganizationDocume
   const { currentUser } = useUser();
 
   // Mirrors the server gate in organizationService/delete.ts: billing owner or platform admin only.
-  // The rest of this tab is open to org update holders and current managers, so the Danger Zone needs its own
-  // narrower predicate - otherwise a member with update sees a Delete button whose call would 403.
+  // The rest of this tab is open to current managers too, so the Danger Zone needs its own narrower predicate.
   const canDeleteOrg = useMemo(() => {
     if (!currentUser) return false;
     return currentUser.isAdmin === true || currentUser.id === organization.userId;
@@ -31,7 +31,7 @@ const OrganizationSettingsSection: FC<{ organization: WithId<IOrganizationDocume
   // The owner tier of organizationService.transferOwnership (a platform admin reaches it only if the
   // Settings tab is open to them); a personal org has no successor.
   const canTransferOwnership = canDeleteOrg && !organization.personal;
-  const canEditProfile = canEditOrgProfile(currentUser, organization);
+  const canEditProfile = canManageOrgSettings(currentUser, organization);
   const [transferOpen, setTransferOpen] = useState(false);
   const transferOwnership = useTransferOrganizationOwnership();
   const { data: members, isSuccess: membersLoaded } = useGetOrganizationUsers(
@@ -142,6 +142,9 @@ const OrganizationSettingsSection: FC<{ organization: WithId<IOrganizationDocume
       </Card>
 
       {/* Danger Zone */}
+      {currentUser?.id === organization.userId && (
+        <OrganizationExportSection key={organization.id} organizationId={organization.id} />
+      )}
       {canDeleteOrg && (
         <Card variant="outlined">
           <Typography level="title-sm" sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>

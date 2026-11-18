@@ -88,6 +88,40 @@ export function buildContextOverflowMessage(params: ContextOverflowMessageParams
     `Your request is too large for ${modelName} ` +
     `(${inputTokens.toLocaleString()} tokens used, ${maxSafeInputTokens.toLocaleString()} max).\n\n` +
     `Token breakdown:\n${breakdownText}\n\n` +
-    `💡 ${remediation}`
+    `💡 ${remediation}\n` +
+    `You can also switch to a model with a larger context window.`
   );
+}
+
+/** Structured, content-free facts about a refused request; safe to log. */
+export interface ContextOverflowDetails {
+  modelId: string;
+  inputTokens: number;
+  maxSafeInputTokens: number;
+  contextLimit: number;
+  reservedOutputTokens: number;
+  tokenBreakdown: Partial<Record<TokenSource, number>> | null;
+  messageCount: number;
+  mementoCount: number;
+}
+
+/**
+ * Thrown by the pre-flight context check in ChatCompletionProcess when a request does not fit the
+ * selected model. An expected, user-caused refusal: the message is the user-facing reply (from
+ * buildContextOverflowMessage) and the catch logs it once at warn. A provider rejecting a request
+ * the pre-flight let through is a different error and keeps its error severity.
+ */
+export class ContextOverflowError extends Error {
+  override readonly name = 'ContextOverflowError';
+
+  constructor(
+    message: string,
+    readonly details: ContextOverflowDetails
+  ) {
+    super(message);
+  }
+}
+
+export function isContextOverflowError(error: unknown): error is ContextOverflowError {
+  return error instanceof ContextOverflowError;
 }

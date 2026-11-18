@@ -22,6 +22,7 @@ import {
   buildDiagnosticianUserPrompt,
   buildRevisionUserPrompt,
   escapeCodeFences,
+  frameContextData,
 } from './prompts';
 import { executeTool, RATE_LIMITED_SENTINEL, SreToolContext } from './tools';
 import { sanitizeJsonString, sanitizeJsonStringWithMeta } from '../llm/tools/utils/jsonSanitize';
@@ -333,7 +334,7 @@ export class SreAgentService {
 
           const emergencySystemPrompt =
             'You are a code diagnosis engine. Output ONLY a valid JSON object. No markdown, no code blocks, no preamble. The confidence field is a 0–100 score; if unsure, use a value under 20 and an empty affectedFiles array.';
-          const emergencyUserPrompt = `Error: ${escapeCodeFences(payload.errorMessage)}\nStack: ${escapeCodeFences((payload.stackTrace ?? '').slice(0, 500))}\n\nInvestigation findings:\n${escapeCodeFences(toolSummary)}\n\nOutput JSON (all fields required):\n{"rootCause":"...","proposedFix":"...","confidence":<0-100>,"riskAssessment":"...","affectedFiles":[]}`;
+          const emergencyUserPrompt = `Error:\n${frameContextData(payload.errorMessage)}\nStack:\n${frameContextData((payload.stackTrace ?? '').slice(0, 500))}\n\nInvestigation findings:\n${escapeCodeFences(toolSummary)}\n\nOutput JSON (all fields required):\n{"rootCause":"...","proposedFix":"...","confidence":<0-100>,"riskAssessment":"...","affectedFiles":[]}`;
 
           let emergencyResponse = '';
           await llm.complete(

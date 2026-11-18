@@ -25,6 +25,7 @@ import {
   hasAdminPermission,
   assertCanActOnAdminTarget,
   NotFoundError,
+  type ResolveAdminRoles,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, secureParameters } from '@bike4mind/utils';
 import { sendFriendRequest } from '../friendshipService/sendFriendRequest';
@@ -124,6 +125,8 @@ export interface AdminUpdateUserAdapters {
     // so no admin adjustment can land without a CreditTransaction row.
     creditTransactions: ICreditTransactionRepository;
   };
+  /** Resolves the acting admin's role permissions on the re-read below. */
+  resolveAdminRoles?: ResolveAdminRoles;
 }
 
 /** The balance change an admin update applied; signed, after the non-negative floor. */
@@ -173,10 +176,11 @@ async function sendFriendRequestsToOrgMembers(
 export async function adminUpdateUser(
   userId: string,
   parameters: AdminUpdateUserParameters,
-  { db }: AdminUpdateUserAdapters
+  { db, resolveAdminRoles }: AdminUpdateUserAdapters
 ): Promise<AdminUpdateUserResult> {
   const params = secureParameters(parameters, adminUpdateUserSchema);
-  const admin = await db.users.findById(userId);
+  const stored = await db.users.findById(userId);
+  const admin = stored && resolveAdminRoles ? await resolveAdminRoles(stored) : stored;
   const moderates = !!admin && hasAdminPermission(admin, 'users:moderate') && writesOnlyModerationFields(params);
   if (!admin || !(admin.isAdmin || moderates)) {
     throw new ForbiddenError('Unauthorized');

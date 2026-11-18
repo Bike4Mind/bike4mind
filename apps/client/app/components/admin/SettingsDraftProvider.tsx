@@ -1,4 +1,13 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode, type SetStateAction } from 'react';
+import {
+  createContext,
+  type ComponentProps,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type SetStateAction,
+} from 'react';
 import { SaveBar } from './shared/SaveBar';
 import { SettingsWarningDialog, UnsavedChangesGuard } from './shared/UnsavedChangesGuard';
 import { getErrorMessage } from '@client/app/utils/error';
@@ -20,7 +29,14 @@ type DraftContext = {
 };
 const Context = createContext<DraftContext | null>(null);
 
-export function SettingsDraftProvider({ children }: { children: ReactNode }) {
+export function SettingsDraftProvider({
+  children,
+  isLeaving = leavesAdminSettingsPage,
+}: {
+  children: ReactNode;
+  /** Which navigations discard staged drafts; a page whose sections share one tab widens it. */
+  isLeaving?: ComponentProps<typeof UnsavedChangesGuard>['isLeaving'];
+}) {
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [pending, setPending] = useState(false);
   const saving = useRef(false);
@@ -94,7 +110,7 @@ export function SettingsDraftProvider({ children }: { children: ReactNode }) {
           } else void save();
         }}
       />
-      <UnsavedChangesGuard dirty={dirty} pending={pending} isLeaving={leavesAdminSettingsPage} />
+      <UnsavedChangesGuard dirty={dirty} pending={pending} isLeaving={isLeaving} />
       <SettingsWarningDialog
         open={confirming}
         warnings={confirmWarnings}

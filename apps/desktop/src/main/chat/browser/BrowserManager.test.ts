@@ -1,3 +1,4 @@
+import { runInNewContext } from 'node:vm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserPaneState } from '@shared/ipc';
 
@@ -15,6 +16,7 @@ const contents = vi.hoisted(() => {
     /** Urls of the frames below the top one. */
     subframes: [] as string[],
     stops: 0,
+    inputEvents: [] as unknown[],
     nextId: 0,
     /** Every contents made, in order, so a test can reach a tab's own handlers. */
     made: [] as Array<{
@@ -27,7 +29,7 @@ const contents = vi.hoisted(() => {
     }>,
     loads: [] as Array<{ id: number; url: string }>,
     load: (_url: string): Promise<void> => Promise.resolve(),
-    script: (): Promise<unknown> => Promise.resolve(null),
+    script: (_code: string): Promise<unknown> => Promise.resolve(null),
     capture: (..._args: unknown[]): Promise<unknown> => Promise.resolve({ isEmpty: () => true }),
     /** The DevTools protocol, shared by every contents: what a command answers, and who attached. */
     cdp: (_method: string, _params?: unknown): Promise<unknown> => Promise.reject(new Error('no DevTools')),
@@ -79,7 +81,9 @@ vi.mock('electron', () => {
         contents.loads.push({ id, url });
         return contents.load(url);
       },
-      executeJavaScript: () => contents.script(),
+      focus: () => undefined,
+      sendInputEvent: (input: unknown) => contents.inputEvents.push(input),
+      executeJavaScript: (code: string) => contents.script(code),
       capturePage: (...args: unknown[]) => contents.capture(...args),
       debugger: {
         isAttached: () => contents.debuggerAttached,
@@ -221,6 +225,46 @@ describe('BrowserManager page deadlines', () => {
         () => resolve(value),
       ]);
     });
+
+  it('refuses deferred execution in an origin adopted after the call was made', async () => {
+    const page = await openPage();
+    const probe = vi.fn(() => 'private result');
+    contents.script = async code => {
+      contents.url = 'https://mail.example.com/inbox';
+      return runInNewContext(code, { location: { origin: 'https://mail.example.com' }, probe });
+    };
+
+    await expect(page.evaluate('probe()')).rejects.toThrow(/changed origin before/);
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('refuses a fallback key after origin changes during an Enter form probe', async () => {
+    const page = await openPage();
+    contents.inputEvents = [];
+    contents.script = async () => {
+      contents.url = 'https://mail.example.com/inbox';
+      return false;
+    };
+
+    await expect(page.press('Enter')).rejects.toThrow(/changed origin before/);
+    expect(contents.inputEvents).toEqual([]);
+  });
+
+  it.each(['probe()', 'const value = probe(); return value;'])(
+    'executes same-origin expressions or statements through the origin guard: %s',
+    async expression => {
+      const page = await openPage();
+      const probe = vi.fn(() => 'permitted result');
+      contents.script = async code =>
+        runInNewContext(code, {
+          location: { origin: new URL(contents.url).origin },
+          probe,
+        });
+
+      await expect(page.evaluate(expression)).resolves.toBe('permitted result');
+      expect(probe).toHaveBeenCalledOnce();
+    }
+  );
 
   it('stops a load that never answers and says so, rather than reporting the old page as loaded', async () => {
     const page = await openPage();
@@ -489,6 +533,20 @@ describe('BrowserManager tabs', () => {
     await context().closeTab(3);
     expect(lastState().activeTabId).toBe(1);
     expect(internals(manager).byContents.size).toBe(1);
+  });
+
+  it('stamps a tab the agent takes and pushes it, and leaves one the user opened unstamped', async () => {
+    await manager.tab('s', 'new');
+    expect(lastState().tabs[0].agentUsedAt).toBe(0);
+
+    const before = Date.now();
+    await context().page();
+    expect(lastState().tabs[0].agentUsedAt).toBeGreaterThanOrEqual(before);
+
+    await manager.tab('s', 'new');
+    expect(lastState().tabs.map(tab => (tab.agentUsedAt ?? 0) > 0)).toEqual([true, false]);
+    await context().selectTab(2);
+    expect(lastState().tabs.map(tab => (tab.agentUsedAt ?? 0) > 0)).toEqual([true, true]);
   });
 
   it('never reuses an id within the conversation, even after every tab closed', async () => {
@@ -956,6 +1014,23 @@ describe('BrowserManager screenshots', () => {
     expect(contents.debuggerAttached).toBe(false);
   });
 
+  it.each(['did-start-navigation', 'did-frame-navigate'] as const)(
+    'discards a screenshot after a transient frame navigation recorded by %s',
+    async event => {
+      const tab = await page();
+      manager.setPane(window, 's', bounds);
+      const capture = Promise.withResolvers<typeof frame>();
+      contents.capture = () => capture.promise;
+      const result = expect(tab.screenshot()).rejects.toThrow(/changed while the screenshot/);
+      contents.subframes = ['https://mail.example.com/inbox'];
+      contents.emit(event, 'https://mail.example.com/inbox', false, false);
+      contents.subframes = [];
+      capture.resolve(frame);
+
+      await result;
+    }
+  );
+
   it('captures a page on screen in the pane as before, without the debugger', async () => {
     const tab = await page();
     manager.setPane(window, 's', bounds);
@@ -1269,6 +1344,35 @@ describe('BrowserManager opening an artifact', () => {
       'http://localhost:3080/',
       expect.stringMatching(/^b4m-artifact:\/\/view\//),
     ]);
+  });
+
+  it('switches to the tab already showing a keyed artifact instead of opening it again', async () => {
+    await manager.navigate('s', 'http://localhost:3080/');
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>', 'chart');
+    await manager.tab('s', 'select', 1);
+
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>', 'chart');
+
+    expect(lastState()).toMatchObject({ activeTabId: 2, tabs: [{ id: 1 }, { id: 2 }] });
+    expect(contents.loads).toHaveLength(2);
+  });
+
+  it('opens a keyed artifact again once its tab has left it or its content changed', async () => {
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>', 'chart');
+    await manager.navigate('s', 'http://localhost:3080/');
+
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>', 'chart');
+    expect(lastState()).toMatchObject({ activeTabId: 2, tabs: [{ id: 1 }, { id: 2 }] });
+
+    await manager.openArtifact('s', 'Chart', '<p>v2</p>', 'chart');
+    expect(lastState()).toMatchObject({ activeTabId: 3 });
+  });
+
+  it('keeps opening a new tab for an artifact sent without a key', async () => {
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>');
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>');
+
+    expect(lastState()).toMatchObject({ activeTabId: 2, tabs: [{ id: 1 }, { id: 2 }] });
   });
 
   it('forgets every artifact when all browsers close', async () => {

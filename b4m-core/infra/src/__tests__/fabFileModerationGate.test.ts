@@ -159,6 +159,8 @@ const ALLOWLIST: Record<string, string> = {
     'signs a server-rendered admin audit-log CSV it just staged under exports/ for a platform admin - not user-uploaded FabFile bytes, so there is no moderationStatus to gate on',
   'apps/client/pages/api/users/me/data-export/[jobId].ts':
     "signs the caller's own account data export zip under exports/ - not a FabFile row; the worker that built it already left out files that are not isImageServeable",
+  'packages/server-utils/src/utils/organizationDataExport.ts':
+    'signs only the organization metadata and CSV ZIP under the subject-addressable or validated historical exports/ key after owner authorization; the archive contains no uploaded file bytes or images and has no FabFile row',
   'apps/client/pages/api/admin/users/[userId]/data-export/[jobId].ts':
     'signs a data subject export zip under exports/ for an admin - not a FabFile row; the same worker as the self-serve export built it and left out files that are not isImageServeable',
 
@@ -227,6 +229,8 @@ const ALLOWLIST: Record<string, string> = {
   // --- Generated output: delivery and the saveGeneratedAsset passthrough. ---
   'apps/client/server/utils/generatedAudioDelivery.ts':
     'audio-only - signs a GET for oversized generated audio it just uploaded under generated-audio-offload/ (no FabFile row, audio/* only); a saved copy is served by the fileUrl the already-gated createFabFile minted, so isImageServeable is inapplicable',
+  'packages/server-utils/src/generationJobs/audioJobWiring.ts':
+    'audio-only - readAudioJobOutput reads back the clip a speech or sound-effect job just stored (audio/* only, never an image) so the sync audio route can deliver it to the user who requested it; isImageServeable is inapplicable',
   'packages/server-utils/src/utils/saveGeneratedAssetToFiles.ts':
     'DI passthrough to saveGeneratedAsset -> the already-gated fabFileService.createFabFile, which withholds fileUrl for images; the adapter only forwards the mode createFabFile asks for',
 
