@@ -1609,7 +1609,8 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     );
   }
 
-  async findModerationReviewQueue(limit: number): Promise<ModerationReviewUser[]> {
+  /** The review list's membership: an escalated status, or a severe hit newer than the last admin decision. */
+  private moderationReviewFilter() {
     const severe = [...MODERATION_SEVERE_CATEGORIES];
     // The newest retained severe hit is after the last status change, so no admin has acted on it yet.
     const latestSevereHitAt = {
@@ -1628,16 +1629,25 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       },
     };
     const lastStatusChange = { $ifNull: ['$moderation.statusChangedAt', new Date(0)] };
+    return {
+      $or: [
+        { 'moderation.status': { $in: [...MODERATION_REVIEW_STATUSES] } },
+        {
+          'moderation.hits.categories': { $in: severe },
+          $expr: { $gt: [latestSevereHitAt, lastStatusChange] },
+        },
+      ],
+    };
+  }
+
+  async countModerationReviewQueue(options: { limit?: number } = {}): Promise<number> {
+    return this.model.countDocuments(this.moderationReviewFilter(), { limit: options.limit }).maxTimeMS(5000).exec();
+  }
+
+  async findModerationReviewQueue(limit: number): Promise<ModerationReviewUser[]> {
+    const severe = [...MODERATION_SEVERE_CATEGORIES];
     const docs = await this.model
-      .find({
-        $or: [
-          { 'moderation.status': { $in: [...MODERATION_REVIEW_STATUSES] } },
-          {
-            'moderation.hits.categories': { $in: severe },
-            $expr: { $gt: [latestSevereHitAt, lastStatusChange] },
-          },
-        ],
-      })
+      .find(this.moderationReviewFilter())
       .select('name email createdAt moderation')
       .sort({ 'moderation.lastHitAt': -1, _id: -1 })
       .limit(limit)

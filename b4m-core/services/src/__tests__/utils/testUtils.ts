@@ -334,6 +334,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     findOrCreateByEmail: vi.fn(),
     recordModerationHit: vi.fn(),
     findModerationReviewQueue: vi.fn(),
+    countModerationReviewQueue: vi.fn(),
     pullSystemFilesForUsers: vi.fn(),
     setModerationStatus: vi.fn(),
     recordModerationAppeal: vi.fn(),
