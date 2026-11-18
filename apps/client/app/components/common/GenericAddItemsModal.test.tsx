@@ -42,6 +42,12 @@ describe('GenericAddItemsModal disabled items', () => {
     submitted.mockClear();
   });
 
+  it('gives the close button an accessible name', () => {
+    render(<Picker />, { wrapper: Wrapper });
+    fireEvent.click(screen.getByTestId('picker-open'));
+    expect(screen.getByRole('button', { name: 'common.close' })).toBeTruthy();
+  });
+
   it('ignores disabled row clicks while allowing an available row to be selected', () => {
     render(<Picker />, { wrapper: Wrapper });
     fireEvent.click(screen.getByTestId('picker-open'));

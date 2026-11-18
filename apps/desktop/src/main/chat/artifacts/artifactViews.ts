@@ -49,13 +49,20 @@ export class ArtifactViewRegistry {
   /** Keep `content` and return the url that serves it. */
   add(title: string, content: string): string {
     const token = randomUUID();
-    this.views.set(token, withTitle(content, title));
-    while (this.views.size > MAX_ARTIFACT_VIEWS) {
-      const oldest = this.views.keys().next().value;
-      if (oldest === undefined) break;
-      this.views.delete(oldest);
-    }
+    this.store(token, title, content);
     return `${ARTIFACT_SCHEME}://${VIEW_HOST}/${token}`;
+  }
+
+  /**
+   * Put new content behind a url {@link add} returned, so reloading a page on it shows the update.
+   * False for any other url. A token already evicted is taken back: a tab can still be on it.
+   */
+  replace(viewUrl: string, title: string, content: string): boolean {
+    const token = tokenOf(viewUrl);
+    if (!token) return false;
+    this.views.delete(token);
+    this.store(token, title, content);
+    return true;
   }
 
   get(token: string): string | undefined {
@@ -64,6 +71,27 @@ export class ArtifactViewRegistry {
 
   clear(): void {
     this.views.clear();
+  }
+
+  /** Newest last, so the oldest is the first one dropped past the cap. */
+  private store(token: string, title: string, content: string): void {
+    this.views.set(token, withTitle(content, title));
+    while (this.views.size > MAX_ARTIFACT_VIEWS) {
+      const oldest = this.views.keys().next().value;
+      if (oldest === undefined) break;
+      this.views.delete(oldest);
+    }
+  }
+}
+
+/** The token in a `view/<token>` url, or undefined for any other url. */
+function tokenOf(viewUrl: string): string | undefined {
+  try {
+    const url = new URL(viewUrl);
+    if (url.protocol !== `${ARTIFACT_SCHEME}:` || url.host !== VIEW_HOST) return undefined;
+    return url.pathname.replace(/^\//, '') || undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -75,15 +103,8 @@ export class ArtifactViewRegistry {
  * app's default session for the renderer's frame (sandboxProtocol.ts) and has no use here.
  */
 export function serveArtifactView(registry: ArtifactViewRegistry, requestUrl: string): Response {
-  let content: string | undefined;
-  try {
-    const url = new URL(requestUrl);
-    if (url.protocol === `${ARTIFACT_SCHEME}:` && url.host === VIEW_HOST) {
-      content = registry.get(url.pathname.replace(/^\//, ''));
-    }
-  } catch {
-    content = undefined;
-  }
+  const token = tokenOf(requestUrl);
+  const content = token === undefined ? undefined : registry.get(token);
   return new Response(content ?? NOT_FOUND_HTML, {
     status: content === undefined ? 404 : 200,
     headers: {
