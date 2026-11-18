@@ -532,8 +532,8 @@ export class GitHubService {
       // message is one of a bounded set of sanitized strings (crypto internals are stripped
       // in createOctokitFor{App,PAT} before it is thrown); for any other error we log only
       // the class name, never its message, which could carry decryption internals.
-      // Throw rather than return null: init failures are transient (network) or config
-      // errors that callers should retry/escalate, not silently discard.
+      // Init failures here are configuration faults (the Octokit and auth constructors are lazy
+      // and make no network calls), which is why they map to 'misconfigured'.
       logger.error('[GitHubService] Failed to initialize authentication', {
         connectionId: connection.id,
         connectionType: connection.connectionType,
