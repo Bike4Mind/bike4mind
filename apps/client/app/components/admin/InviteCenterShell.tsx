@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Stack, Typography } from '@mui/joy';
 import { useNavigate, useSearch } from '@tanstack/react-router';
+import { isFullAdmin } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import HeldGrantActions from './InviteCenter/Pending/HeldGrantActions';
 import type { AdminSearch } from './adminTabParams';
@@ -63,7 +64,7 @@ export function InviteCenterShell({ waitlist }: { waitlist: ReactNode }) {
     });
   };
 
-  if (!currentUser?.isAdmin) {
+  if (!isFullAdmin(currentUser)) {
     return (
       <Stack gap={ADMIN_REGION_GAP}>
         <AdminPageHeader title="Invite Center" />
