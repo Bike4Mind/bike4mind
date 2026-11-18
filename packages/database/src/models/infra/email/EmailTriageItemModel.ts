@@ -49,7 +49,6 @@ const schema = new Schema<IEmailTriageItem>(
   { timestamps: true, versionKey: false, collection: 'EmailTriageItem' }
 );
 
-schema.index({ userId: 1, createdAt: -1 });
 schema.index({ userId: 1, briefedAt: 1, createdAt: 1 });
 
 export const EmailTriageItemModel =

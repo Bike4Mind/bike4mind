@@ -93,11 +93,11 @@ function parseTemperature(value: unknown, logger: Logger): number {
   return 0.3;
 }
 
+const TRIAGE_MAX_TOKENS = 1200;
+
 /**
  * Main dispatch function with logger integration
  */
-const TRIAGE_MAX_TOKENS = 1200;
-
 export const dispatch: SQSHandler = dispatchWithLogger(async (event: SQSEvent, context, logger: Logger) => {
   const body = event.Records[0].body;
   const payload = EmailAnalysisPayload.parse(JSON.parse(body));
