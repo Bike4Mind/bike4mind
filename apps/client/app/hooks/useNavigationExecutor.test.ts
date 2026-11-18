@@ -130,7 +130,7 @@ describe('useNavigationExecutor', () => {
       ReturnType<typeof useNavigationExecutor>
     >[0]);
 
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'waitlist', inviteSection: 'packages' } });
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'waitlist', inviteSection: 'partners' } });
   });
 
   // A tab intent whose target is not an index still opens the console; it just has no tab to name.
