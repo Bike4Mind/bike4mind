@@ -277,11 +277,11 @@ void app.whenReady().then(async () => {
     quitState = 'ready';
   };
 
+  registerSkins();
+
   // Everything a quit would throw away, counted fresh each time it is asked for. The updater
   // puts this to the user rather than acting on it: a streaming reply and a dev server are both
   // things only they can say are expendable.
-  registerSkins();
-
   const updates = registerUpdates({
     busy: busyReport,
     prepareQuit,
