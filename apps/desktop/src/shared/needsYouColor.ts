@@ -12,13 +12,18 @@ export const NEEDS_YOU_MIN_DELTA_E = 20;
 
 type Lab = readonly [number, number, number];
 
-/** sRGB `#rrggbb` to CIE Lab under D65. */
-function toLab(hex: string): Lab {
+/** sRGB `#rrggbb` to linear-light [r, g, b]. */
+function toLinear(hex: string): [number, number, number] {
   const linear = [1, 3, 5].map(offset => {
     const channel = Number.parseInt(hex.slice(offset, offset + 2), 16) / 255;
     return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
   });
-  const [r, g, b] = linear as [number, number, number];
+  return linear as [number, number, number];
+}
+
+/** sRGB `#rrggbb` to CIE Lab under D65. */
+function toLab(hex: string): Lab {
+  const [r, g, b] = toLinear(hex);
   const x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047;
   const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
   const z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883;
@@ -31,6 +36,16 @@ export function deltaE(a: string, b: string): number {
   const [l1, a1, b1] = toLab(a);
   const [l2, a2, b2] = toLab(b);
   return Math.hypot(l1 - l2, a1 - a2, b1 - b2);
+}
+
+/** WCAG 2.x contrast ratio between two `#rrggbb` colours, 1 to 21. */
+export function contrastRatio(a: string, b: string): number {
+  const luminance = (hex: string) => {
+    const [r, g, bl] = toLinear(hex);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [light, dark] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
+  return (light + 0.05) / (dark + 0.05);
 }
 
 export const looksLikeNeedsYou = (color: string): boolean => deltaE(color, NEEDS_YOU_AMBER) < NEEDS_YOU_MIN_DELTA_E;

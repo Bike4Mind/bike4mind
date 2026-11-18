@@ -1,7 +1,7 @@
 import type { ColorPaletteProp } from '@mui/joy/styles';
 import type { AgentState } from '@shared/agentState';
 import type { SkinSummary, SkinTokens } from '@shared/mods';
-import { NEEDS_YOU_AMBER, looksLikeNeedsYou } from '@shared/needsYouColor';
+import { NEEDS_YOU_AMBER, contrastRatio, looksLikeNeedsYou } from '@shared/needsYouColor';
 
 /**
  * The one place an agent state gets its colour. `joy` drives chips and tiles; `lamp` is the raw hex for
@@ -105,15 +105,23 @@ export function mergeSkinTheme(skin: SkinSummary | undefined): SkinTheme {
   };
 }
 
-/** The custom properties a theme sets on the document root; empty for the default. */
-export function skinCssVariables(theme: SkinTheme): Record<string, string> {
+// Approximates Joy's text.primary per mode; text colour follows the mode, not the skin.
+const MODE_TEXT: Record<'light' | 'dark', string> = { light: '#171a1c', dark: '#f0f4f8' };
+const MIN_TEXT_CONTRAST = 4.5;
+
+/**
+ * The custom properties a theme sets on the document root; empty for the default. A surface the
+ * mode's text could not be read on (WCAG AA) is left out, so the built-in surface stays.
+ */
+export function skinCssVariables(theme: SkinTheme, mode: 'light' | 'dark'): Record<string, string> {
+  const readable = (surface: string) => contrastRatio(surface, MODE_TEXT[mode]) >= MIN_TEXT_CONTRAST;
   const variables: Record<string, string> = {};
   for (const [state, color] of Object.entries(theme.states) as [SkinnableState, string][]) {
     variables[stateVariable(state)] = color;
     variables[softVariable(state)] = `color-mix(in srgb, ${color} 22%, transparent)`;
   }
-  if (theme.surfaces.stage) variables[SKIN_STAGE_VARIABLE] = theme.surfaces.stage;
-  if (theme.surfaces.card) variables[SKIN_CARD_VARIABLE] = theme.surfaces.card;
+  if (theme.surfaces.stage && readable(theme.surfaces.stage)) variables[SKIN_STAGE_VARIABLE] = theme.surfaces.stage;
+  if (theme.surfaces.card && readable(theme.surfaces.card)) variables[SKIN_CARD_VARIABLE] = theme.surfaces.card;
   if (theme.sprites.aquariumBackdrop) {
     variables[SKIN_AQUARIUM_BACKDROP_VARIABLE] = `url(${JSON.stringify(theme.sprites.aquariumBackdrop)})`;
   }

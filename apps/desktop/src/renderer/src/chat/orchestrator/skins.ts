@@ -1,4 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react';
+import { useTheme } from '@mui/joy/styles';
 import type { DesktopApi } from '@shared/ipc';
 import type { SkinSummary } from '@shared/mods';
 import { readSkin, writeSkin } from './orchestratorPrefs';
@@ -80,15 +81,16 @@ export function useSkinTheme(): SkinTheme {
  * read them; on the root rather than the stage so drawers and menus portalled out of it match.
  */
 export function useApplySkin(theme: SkinTheme): void {
+  const mode = useTheme().palette.mode;
   useEffect(() => {
     if (theme === DEFAULT_SKIN_THEME) return;
     const root = document.documentElement;
-    const variables = Object.entries(skinCssVariables(theme));
+    const variables = Object.entries(skinCssVariables(theme, mode));
     for (const [name, value] of variables) root.style.setProperty(name, value);
     return () => {
       for (const [name] of variables) root.style.removeProperty(name);
     };
-  }, [theme]);
+  }, [theme, mode]);
 }
 
 /** Test seam: forget the module state between tests. */

@@ -50,7 +50,7 @@ describe('mergeSkinTheme', () => {
 
     expect(theme.states).toEqual({ failed: '#3cc8ff' });
     expect(theme.surfaces).toEqual({ card: '#16263a' });
-    expect(Object.values(skinCssVariables(theme))).not.toContain(STATE_PALETTE['needs-you'].lamp);
+    expect(Object.values(skinCssVariables(theme, 'dark'))).not.toContain(STATE_PALETTE['needs-you'].lamp);
   });
 
   it('applies a skin over the palette', () => {
@@ -70,7 +70,7 @@ describe('mergeSkinTheme', () => {
     expect(skin.tokens.sounds?.['needs-you']).toBeDefined();
 
     const theme = mergeSkinTheme(skin);
-    const variables = skinCssVariables(theme);
+    const variables = skinCssVariables(theme, 'dark');
 
     expect(theme.states).not.toHaveProperty('needs-you');
     expect(theme.sounds).toEqual({ finale: 'b4m-skin://nightglass/sounds/finale.ogg' });
@@ -83,7 +83,23 @@ describe('mergeSkinTheme', () => {
   it('is the default for no skin or a broken one', () => {
     expect(mergeSkinTheme(undefined)).toBe(DEFAULT_SKIN_THEME);
     expect(mergeSkinTheme({ status: 'broken', id: 'x', error: 'bad' })).toBe(DEFAULT_SKIN_THEME);
-    expect(skinCssVariables(DEFAULT_SKIN_THEME)).toEqual({});
+    expect(skinCssVariables(DEFAULT_SKIN_THEME, 'light')).toEqual({});
+  });
+
+  it('drops surfaces its mode text could not be read on', () => {
+    const dark = mergeSkinTheme(sampleSkinSummary());
+    const light = { ...dark, surfaces: { stage: '#f4efe6', card: '#fbf8f2' } };
+
+    expect(skinCssVariables(dark, 'light')).not.toHaveProperty('--b4m-skin-stage');
+    expect(skinCssVariables(dark, 'light')).not.toHaveProperty('--b4m-skin-card');
+    expect(skinCssVariables(dark, 'dark')).toMatchObject({ '--b4m-skin-stage': '#0f1a24', '--b4m-skin-card': '#16263a' });
+    expect(skinCssVariables(light, 'light')).toMatchObject({ '--b4m-skin-stage': '#f4efe6', '--b4m-skin-card': '#fbf8f2' });
+    expect(skinCssVariables(light, 'dark')).not.toHaveProperty('--b4m-skin-stage');
+  });
+
+  it('still applies state colours whatever the mode', () => {
+    const theme = mergeSkinTheme(sampleSkinSummary());
+    expect(skinCssVariables(theme, 'light')).toHaveProperty('--b4m-skin-state-working', '#3cc8ff');
   });
 
   it('reads a skinnable state through its variable, falling back to the palette', () => {

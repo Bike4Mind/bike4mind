@@ -10,7 +10,7 @@ import { sampleSkinSummary } from './sampleSkin';
 import { agentFixture, createThemedMount, el } from './testUtils';
 import { renderOrchestratorView } from './viewRegistry';
 
-const themed = createThemedMount();
+const themed = createThemedMount('dark');
 const agents: AgentView[] = [
   agentFixture('w', 'working'),
   agentFixture('d', 'done'),

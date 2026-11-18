@@ -52,7 +52,7 @@ export const snapshotFixture = (
 ): ViewSnapshot => ({ contract: VIEW_SNAPSHOT_CONTRACT, root: { id: 'root', state: rootState }, agents });
 
 /** One themed mount per test; call `unmount` in afterEach. `render` again to re-render in place. */
-export function createThemedMount() {
+export function createThemedMount(mode: 'light' | 'dark' = 'light') {
   let root: Root | null = null;
   let host: HTMLElement | null = null;
   return {
@@ -63,7 +63,7 @@ export function createThemedMount() {
         root = createRoot(host);
       }
       await act(async () => {
-        root?.render(<CssVarsProvider theme={desktopTheme}>{node}</CssVarsProvider>);
+        root?.render(<CssVarsProvider theme={desktopTheme} defaultMode={mode}>{node}</CssVarsProvider>);
       });
     },
     unmount() {
