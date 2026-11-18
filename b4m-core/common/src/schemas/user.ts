@@ -244,6 +244,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   apiKeyTrustApproved: true,
   newAccountSpendCapLifted: true,
   deletion: true,
+  nextBriefAt: true,
   suspensionReasonCategory: true,
 } as const satisfies Record<SelfViewPassthroughField, true>;
 

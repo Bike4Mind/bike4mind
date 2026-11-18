@@ -9,6 +9,7 @@ import {
   DEFAULT_STORAGE_LIMIT_MB,
   USER_ACCOUNT_SEGMENTS,
   type UserAccountSegment,
+  type BriefSchedule,
 } from '@bike4mind/common';
 import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import {
@@ -204,6 +205,18 @@ const UserPreferencesSchema = new Schema(
           agent_message: { type: Boolean },
           session_handoff: { type: Boolean },
           brief_ready: { type: Boolean },
+        },
+        { _id: false }
+      ),
+    },
+    // Validated by BriefScheduleSchema (@bike4mind/common) at the only writer, userRepository.setBriefSchedule.
+    briefSchedule: {
+      type: new Schema(
+        {
+          enabled: { type: Boolean },
+          timeOfDay: { type: String },
+          days: { type: [Number], default: undefined },
+          timeZone: { type: String },
         },
         { _id: false }
       ),
@@ -1645,6 +1658,33 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   /**
+   * Replaces the brief schedule and its due time together, so `nextBriefAt` never describes a schedule the
+   * user no longer has. A null `nextBriefAt` (schedule off) removes the field and drops the user from the
+   * reconciler's index.
+   */
+  async setBriefSchedule(userId: string, schedule: BriefSchedule, nextBriefAt: Date | null): Promise<void> {
+    await this.ensurePreferencesObject(userId);
+    await this.model.updateOne(
+      { _id: userId },
+      nextBriefAt
+        ? { $set: { 'preferences.briefSchedule': schedule, nextBriefAt } }
+        : { $set: { 'preferences.briefSchedule': schedule }, $unset: { nextBriefAt: 1 } }
+    );
+  }
+
+  /** A dotted `$set` under `preferences` fails while the field is null (its schema default). */
+  private async ensurePreferencesObject(userId: string): Promise<void> {
+    await this.model.updateOne({ _id: userId, preferences: null }, { $set: { preferences: {} } });
+  }
+
+  async getBriefSchedule(userId: string): Promise<{ schedule: BriefSchedule | null; nextBriefAt: Date | null }> {
+    const user = await this.model
+      .findById(userId, { 'preferences.briefSchedule': 1, nextBriefAt: 1 })
+      .lean<Pick<IUserDocument, 'preferences' | 'nextBriefAt'>>();
+    return { schedule: user?.preferences?.briefSchedule ?? null, nextBriefAt: user?.nextBriefAt ?? null };
+  }
+
+  /**
    * Find a user by their Slack user ID
    * Used for OAuth user linking to prevent duplicate Slack ID associations
    */
@@ -1845,6 +1885,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     riskSignals: { type: [UserRiskSignalSchema], required: false, default: undefined },
     disputePending: { type: Boolean, required: false, default: false },
     deletion: { type: UserDeletionSchema, required: false, default: undefined },
+    nextBriefAt: { type: Date },
     accountFilePurge: {
       type: new Schema(
         {
@@ -2386,6 +2427,11 @@ UserSchema.index({ referredByUserId: 1 }, { name: 'user_referredByUserId' });
 UserSchema.index(
   { 'deletion.scheduledFor': 1 },
   { partialFilterExpression: { 'deletion.scheduledFor': { $type: 'date' } }, name: 'user_deletion_scheduledFor' }
+);
+// Serves the brief-schedule reconciler's due scan; only users with a schedule on carry the field.
+UserSchema.index(
+  { nextBriefAt: 1 },
+  { partialFilterExpression: { nextBriefAt: { $type: 'date' } }, name: 'user_nextBriefAt' }
 );
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 
