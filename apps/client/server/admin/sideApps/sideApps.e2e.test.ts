@@ -162,6 +162,23 @@ describe('side apps board reads', () => {
     await seed();
   });
 
+  describe('rows stamped and carrying an exchange key', () => {
+    it('counts a charge with both oauthClientId and apiKeyId once on the list and users reads', async () => {
+      const listBefore = (await readSideApps(30, now)).apps.find(app => app.clientId === 'app-a');
+      const usersBefore = await readSideAppUsers('app-a', 30, now);
+      const userOneBefore = usersBefore.users.find(row => row.userId === String(u1))?.credits ?? 0;
+
+      await CreditTransaction.collection.insertOne(
+        charge({ oauthClientId: 'app-a', apiKeyId: String(exchangeKey), payerStanding: 'paid', credits: -13 })
+      );
+
+      const listAfter = (await readSideApps(30, now)).apps.find(app => app.clientId === 'app-a');
+      const usersAfter = await readSideAppUsers('app-a', 30, now);
+      expect(listAfter?.spend.credits).toBe((listBefore?.spend.credits ?? 0) + 13);
+      expect(usersAfter.users.find(row => row.userId === String(u1))?.credits).toBe(userOneBefore + 13);
+    });
+  });
+
   describe('readSideApps', () => {
     it('splits spend into paid, unpaid, org and unrecorded and counts charges only', async () => {
       const result = await readSideApps(30, now);

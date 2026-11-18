@@ -29,6 +29,9 @@ export const SYNC_SUCCESS_ENDPOINTS: readonly string[] = [
   '/api/v1/tools/web-fetch',
   '/api/v1/tools/weather',
   '/api/ai/transcribe',
+  '/api/ai/music',
+  '/api/ai/tts',
+  '/api/ai/sound-effects',
 ];
 
 export interface RequestOutcomeInput {

@@ -26,6 +26,7 @@ import {
   resolveWindows,
   statusClassExpression,
   tierBucketExpression,
+  unstampedKeyMatch,
 } from './shared';
 
 export const SIDE_APP_USERS_LIMIT = 200;
@@ -92,10 +93,7 @@ export async function readSideAppUsers(
   const stampedMatch = { oauthClientId: clientId, ...chargeMatch(windows.spendFrom) };
   const ledgerMatch = legacyKeyIds.length
     ? {
-        $or: [
-          stampedMatch,
-          { oauthClientId: { $exists: false }, apiKeyId: { $in: legacyKeyIds }, ...chargeMatch(windows.legacyFrom) },
-        ],
+        $or: [stampedMatch, unstampedKeyMatch(windows.legacyFrom, legacyKeyIds)],
       }
     : stampedMatch;
   const ledger = (stages: PipelineStage[]) =>

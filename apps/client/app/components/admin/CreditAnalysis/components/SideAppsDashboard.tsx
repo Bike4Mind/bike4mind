@@ -209,7 +209,7 @@ export const SideAppsDashboard: React.FC = () => {
           <Alert color="neutral" size="sm" data-testid="side-apps-note">
             Spend covers {data.spendWindowDays} days. Requests, outcomes and refusals cover at most 90 days (currently{' '}
             {data.requestWindowDays}). Payer tiers are recorded from {formatDate(data.attributionStartedAt)}; older
-            spend within 90 days is attributed through its key and shown as unrecorded.
+            spend within 90 days is attributed through its key; user-paid older spend is shown as unrecorded.
           </Alert>
 
           <StatStrip aria-label="Side apps key numbers">

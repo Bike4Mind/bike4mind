@@ -58,6 +58,14 @@ describe('classifyRequestOutcome', () => {
     }
   });
 
+  it('counts a 2xx on each synchronous generation route as completed and a 5xx as failed', () => {
+    for (const endpoint of ['/api/ai/music', '/api/ai/tts', '/api/ai/sound-effects']) {
+      expect(SYNC_SUCCESS_ENDPOINTS).toContain(endpoint);
+      expect(classifyRequestOutcome({ endpoint, statusClass: '2xx' })).toBe('completed');
+      expect(classifyRequestOutcome({ endpoint, statusClass: '5xx' })).toBe('failed');
+    }
+  });
+
   it('leaves rejected, cap-stopped, in-flight and client-error requests uncounted', () => {
     const endpoint = '/api/ai/v1/completions';
     expect(classifyRequestOutcome({ endpoint, statusClass: 'other', completionOutcome: 'rejected' })).toBeNull();

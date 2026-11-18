@@ -1,5 +1,5 @@
 import type { PipelineStage } from 'mongoose';
-import { AI_USAGE_TRANSACTION_TYPES } from '@bike4mind/common';
+import { AI_USAGE_TRANSACTION_TYPES, CreditHolderType } from '@bike4mind/common';
 import { CreditTransaction, UserApiKey } from '@bike4mind/database';
 import { classifySideAppRefusal } from '@bike4mind/server-utils/auth/sideAppRefusal';
 import {
@@ -138,10 +138,15 @@ export async function aggregateSpend(
   };
 }
 
-/** Charge rows written before the app was stamped, which only their paying key can attribute. */
-export const unstampedKeyMatch = (legacyFrom: Date) => ({
+/**
+ * Charge rows written before the app was stamped, which only their paying key can attribute. The
+ * ownerType clause is always true (the field is required) and lets the { ownerType, createdAt, type }
+ * index serve the read; `apiKeyIds` narrows to specific keys.
+ */
+export const unstampedKeyMatch = (legacyFrom: Date, apiKeyIds?: string[]) => ({
   oauthClientId: { $exists: false },
-  apiKeyId: { $exists: true, $ne: null },
+  apiKeyId: apiKeyIds ? { $in: apiKeyIds } : { $exists: true, $ne: null },
+  ownerType: { $in: Object.values(CreditHolderType) },
   ...chargeMatch(legacyFrom),
 });
 
@@ -168,6 +173,7 @@ export async function findAttributionStartedAt(): Promise<string | null> {
   const first = await CreditTransaction.findOne({ oauthClientId: { $exists: true } })
     .sort({ createdAt: 1 })
     .select('createdAt')
+    .maxTimeMS(MAX_TIME_MS)
     .lean<{ createdAt?: Date } | null>();
   return first?.createdAt ? new Date(first.createdAt).toISOString() : null;
 }

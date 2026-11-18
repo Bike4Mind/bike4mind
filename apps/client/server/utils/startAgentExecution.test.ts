@@ -156,6 +156,23 @@ describe('startAgentExecution', () => {
     }
   );
 
+  it('stamps the connected app on an exchange-key start and not on a personal-key start', async () => {
+    const keyInfo = {
+      keyId: 'k1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      ownerUntrusted: false,
+      billingOwnerType: CreditHolderType.User,
+    };
+    await startAgentExecution(
+      input({ userId: 'exchange-start', apiKeyInfo: { ...keyInfo, oauthExchangeClientId: 'app-a' } }),
+      logger
+    );
+    expect(mockCreateExecution).toHaveBeenLastCalledWith(expect.objectContaining({ oauthClientId: 'app-a' }));
+
+    await startAgentExecution(input({ userId: 'personal-start', apiKeyInfo: keyInfo }), logger);
+    expect(mockCreateExecution.mock.calls.at(-1)?.[0]).not.toHaveProperty('oauthClientId');
+  });
+
   it('leaves signed-in starts outside the API-key quota', async () => {
     await startAgentExecution(input({ userId: 'signed-in-quota' }), logger);
     expect(mockAdmitApiKeyCompletion).not.toHaveBeenCalled();

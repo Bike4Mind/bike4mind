@@ -33,6 +33,7 @@ import {
   sortRefusalReasons,
   statusClassExpression,
   summarizeOutcomes,
+  unstampedKeyMatch,
   type SpendCell,
   type SpendUser,
 } from './shared';
@@ -78,14 +79,7 @@ export async function readSideApps(days: number, now: Date = new Date()): Promis
     await Promise.all([
       aggregateSpend({ oauthClientId: { $exists: true }, ...chargeMatch(windows.spendFrom) }, 'oauthClientId'),
       unstampedKeyIds.length
-        ? aggregateSpend(
-            {
-              oauthClientId: { $exists: false },
-              apiKeyId: { $in: unstampedKeyIds },
-              ...chargeMatch(windows.legacyFrom),
-            },
-            'apiKeyId'
-          )
+        ? aggregateSpend(unstampedKeyMatch(windows.legacyFrom, unstampedKeyIds), 'apiKeyId')
         : Promise.resolve({ cells: [] as SpendCell[], users: [] as SpendUser[] }),
       ApiKeyUsageLog.aggregate<
         GroupedCount<{
