@@ -3,6 +3,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+import { encodeHelpEmbeddings } from '@bike4mind/scripts/help/embeddingsCodec';
+
 import { loadHelpContent, searchHelpContext } from './retrieval';
 
 /**
@@ -149,6 +151,33 @@ describe('searchHelpContext keyword fallback', () => {
   });
 });
 
+describe('searchHelpContext currentHelpSlug', () => {
+  // currentHelpSlug is caller-supplied (pages/api/help/chat.ts) and was looked up against the
+  // UNFILTERED index, so a non-admin could name an admin slug and get its metadata back even
+  // though findRelevantHelpEntries had correctly excluded it. No body or media leaks - the admin
+  // root is not in helpContentRoots(false) - but that is exactly why the metadata did: with a
+  // null body, buildKeywordContext emits the title and falls back to the description.
+  const viewing = (question: string, isAdmin: boolean) =>
+    searchHelpContext({ question, currentHelpSlug: 'admin/runbook', isAdmin, apiKeys: null, logger });
+
+  it('withholds an admin title and description from a non-admin naming the slug', async () => {
+    // A question that matches the PUBLIC article, so the keyword path demonstrably ran and the
+    // absence below is exclusion rather than an empty context.
+    const result = await viewing('how do I configure the widget', false);
+    expect(result.context).toContain('PUBLIC_BODY_MARKER');
+    expect(result.context).not.toContain('Widget Runbook');
+    expect(result.context).not.toContain('Admin widget runbook');
+    expect(result.relevantArticles.map(a => a.slug)).not.toContain('admin/runbook');
+  });
+
+  it('still prioritises the viewed article for an admin', async () => {
+    // A question matching NOTHING, so currentHelpSlug is the only thing that can surface the
+    // entry - which is what keeps the access check from being a silent feature removal.
+    const result = await viewing('zzz nonmatching interrogative zzz', true);
+    expect(result.relevantArticles.map(a => a.slug)).toContain('admin/runbook');
+  });
+});
+
 describe('searchHelpContext embeddings artifacts', () => {
   afterEach(() => {
     fs.rmSync(path.join(generatedDir(), 'help-embeddings.json'), { force: true });
@@ -182,34 +211,34 @@ describe('searchHelpContext embeddings artifacts', () => {
       logger,
     });
 
-    expect(result.method).toBe('keyword');
+    expect(result.context).toContain('PUBLIC_BODY_MARKER');
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('embeddings unavailable'), expect.any(Error));
   });
-});
 
-describe('searchHelpContext currentHelpSlug', () => {
-  // currentHelpSlug is caller-supplied (pages/api/help/chat.ts) and was looked up against the
-  // UNFILTERED index, so a non-admin could name an admin slug and get its metadata back even
-  // though findRelevantHelpEntries had correctly excluded it. No body or media leaks - the admin
-  // root is not in helpContentRoots(false) - but that is exactly why the metadata did: with a
-  // null body, buildKeywordContext emits the title and falls back to the description.
-  const viewing = (question: string, isAdmin: boolean) =>
-    searchHelpContext({ question, currentHelpSlug: 'admin/runbook', isAdmin, apiKeys: null, logger });
+  // Module-level cache: a successful load sticks for the process, so this stays the last test.
+  it('loads a valid metadata + binary pair and takes the vector path', async () => {
+    const { metadataJson, vectors } = encodeHelpEmbeddings({
+      chunks: [
+        {
+          slug: 'guides/widget',
+          title: 'Widget Guide',
+          sectionPath: 'Intro',
+          vector: [1, 0, 0, 0],
+          tokenCount: 5,
+          accessLevel: 'public',
+        },
+      ],
+      model: 'text-embedding-3-small',
+      dimensions: 4,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      sourceArticleCount: 1,
+    });
+    writeFile(path.join(generatedDir(), 'help-embeddings.json'), metadataJson);
+    fs.writeFileSync(path.join(generatedDir(), 'help-embeddings.bin'), vectors);
 
-  it('withholds an admin title and description from a non-admin naming the slug', async () => {
-    // A question that matches the PUBLIC article, so the keyword path demonstrably ran and the
-    // absence below is exclusion rather than an empty context.
-    const result = await viewing('how do I configure the widget', false);
-    expect(result.context).toContain('PUBLIC_BODY_MARKER');
-    expect(result.context).not.toContain('Widget Runbook');
-    expect(result.context).not.toContain('Admin widget runbook');
-    expect(result.relevantArticles.map(a => a.slug)).not.toContain('admin/runbook');
-  });
+    await searchHelpContext({ question: 'how do I configure the widget', isAdmin: false, apiKeys: null, logger });
 
-  it('still prioritises the viewed article for an admin', async () => {
-    // A question matching NOTHING, so currentHelpSlug is the only thing that can surface the
-    // entry - which is what keeps the access check from being a silent feature removal.
-    const result = await viewing('zzz nonmatching interrogative zzz', true);
-    expect(result.relevantArticles.map(a => a.slug)).toContain('admin/runbook');
+    expect(logger.info).toHaveBeenCalledWith('[HelpRetrieval] Loaded 1 embedding chunks');
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('embeddings unavailable'), expect.anything());
   });
 });

@@ -8,7 +8,7 @@ import path from 'node:path';
  * concerns: the help content roots, the generated help search artifacts (see ARTIFACT_ROUTES
  * below) and the isolated-vm sandbox prebuild. Most of what it declares fails SILENTLY when lost.
  * The two exceptions are the public content root and help-index.json, both of which the container
- * build's check-standalone-tree.mjs requires; the admin root, help-embeddings.json and the
+ * build's check-standalone-tree.mjs requires; the admin root, help-embeddings.json/.bin and the
  * prebuild have no guard at all.
  *
  * The content roots are the reason this file exists. Both of their server readers
@@ -52,7 +52,7 @@ const HELP_ROUTES = ['/api/help/content', '/api/help/chat'];
  * these DO trace themselves: every read site is a path.join(process.cwd(), '<literal>'), which
  * the tracer folds to a concrete file. The declaration is what stops that being load-bearing -
  * it is a tracer implementation detail, not a documented contract, so an upgrade that stopped
- * folding it would take help-embeddings.json silently (nothing guards it) and help-index.json
+ * folding it would take help-embeddings.json/.bin silently (nothing guards it) and help-index.json
  * only as far as the container build's check-standalone-tree.mjs.
  */
 const ARTIFACT_ROUTES: ReadonlyArray<[route: string, entries: string[]]> = [

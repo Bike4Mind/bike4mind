@@ -57,7 +57,7 @@ const missing = [...ALLOWED].filter((entry) => !entrySet.has(entry));
 // `app/generated` is allowlisted as a DIRECTORY, so every check here passes on an empty one -
 // which is what a build whose prebuild did not run leaves behind. Neither artifact is committed
 // any more, so nothing upstream of the build guarantees they exist. help-index.json is produced
-// by prebuild on every build and cannot false-positive. help-embeddings.json is deliberately NOT
+// by prebuild on every build and cannot false-positive. help-embeddings.json/.bin are deliberately NOT
 // required: it needs an embedding credential, and degrading to keyword search without one is the
 // documented self-host default rather than a broken build.
 for (const relative of ['app/generated/help-index.json']) {

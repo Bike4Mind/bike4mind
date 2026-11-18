@@ -79,9 +79,27 @@ describe('help embeddings codec', () => {
     );
   });
 
-  it('rejects stale metadata from the older all-in-JSON format paired with no usable binary', () => {
-    const legacyJson = JSON.stringify(buildIndex());
+  it('rejects an oversized binary, as left by a build with more chunks', () => {
+    const { metadataJson, vectors } = encodeHelpEmbeddings(buildIndex());
 
+    expect(() => decodeHelpEmbeddings(metadataJson, Buffer.concat([vectors, Buffer.alloc(4)]))).toThrow(
+      /bytes, expected/
+    );
+  });
+
+  it('rejects a binary of the right size that belongs to a different build', () => {
+    const { metadataJson } = encodeHelpEmbeddings(buildIndex());
+    const other = buildIndex();
+    other.chunks[0].vector = [0.9, 0.9, 0.9, 0.9];
+
+    expect(() => decodeHelpEmbeddings(metadataJson, encodeHelpEmbeddings(other).vectors)).toThrow(/checksum/);
+  });
+
+  it('rejects stale metadata from the older all-in-JSON format', () => {
+    const legacyJson = JSON.stringify(buildIndex());
+    const { vectors } = encodeHelpEmbeddings(buildIndex());
+
+    expect(() => decodeHelpEmbeddings(legacyJson, vectors)).toThrow(/checksum/);
     expect(() => decodeHelpEmbeddings(legacyJson, Buffer.alloc(0))).toThrow(/bytes, expected/);
   });
 });

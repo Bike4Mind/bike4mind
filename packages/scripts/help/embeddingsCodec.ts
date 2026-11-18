@@ -8,6 +8,7 @@
  * through this module so the layout lives in one place.
  */
 
+import { createHash } from 'crypto';
 import type { HelpEmbeddingChunk, HelpEmbeddingsIndex } from './types.js';
 
 export const HELP_EMBEDDINGS_META_FILE = 'help-embeddings.json';
@@ -17,7 +18,11 @@ const BYTES_PER_FLOAT32 = 4;
 
 export type HelpEmbeddingsMetadata = Omit<HelpEmbeddingsIndex, 'chunks'> & {
   chunks: Array<Omit<HelpEmbeddingChunk, 'vector'>>;
+  /** Ties this file to its binary: the two are written separately, so a stale pair must not decode. */
+  vectorsSha256: string;
 };
+
+const sha256Hex = (data: Buffer): string => createHash('sha256').update(data).digest('hex');
 
 export type EncodedHelpEmbeddings = {
   metadataJson: string;
@@ -42,14 +47,15 @@ export function encodeHelpEmbeddings(index: HelpEmbeddingsIndex): EncodedHelpEmb
   const metadata: HelpEmbeddingsMetadata = {
     ...index,
     chunks: index.chunks.map(({ vector: _vector, ...rest }) => rest),
+    vectorsSha256: sha256Hex(vectors),
   };
   return { metadataJson: JSON.stringify(metadata), vectors };
 }
 
 /**
- * Throws when the two files do not describe the same index (a truncated binary, or a stale
- * metadata file left over from the older all-in-JSON format), so a caller can fall back to
- * keyword search instead of scoring against garbage.
+ * Throws when the two files do not describe the same index (a truncated or oversized binary, a
+ * binary from another build, or a stale metadata file from the older all-in-JSON format), so a
+ * caller can fall back to keyword search instead of scoring against garbage.
  */
 export function decodeHelpEmbeddings(metadataJson: string, vectors: Buffer): HelpEmbeddingsIndex {
   const metadata = JSON.parse(metadataJson) as HelpEmbeddingsMetadata;
@@ -63,8 +69,13 @@ export function decodeHelpEmbeddings(metadataJson: string, vectors: Buffer): Hel
     );
   }
 
+  if (metadata.vectorsSha256 !== sha256Hex(vectors)) {
+    throw new Error('help embeddings binary does not belong to this metadata file (checksum mismatch)');
+  }
+
+  const { vectorsSha256: _vectorsSha256, ...index } = metadata;
   return {
-    ...metadata,
+    ...index,
     chunks: chunks.map((chunk, chunkIndex) => {
       const vector = new Array<number>(dimensions);
       for (let valueIndex = 0; valueIndex < dimensions; valueIndex++) {
