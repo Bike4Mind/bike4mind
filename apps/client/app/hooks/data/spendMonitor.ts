@@ -37,6 +37,8 @@ export function useActiveSpendFreezes() {
     queryKey: ACTIVE_SPEND_FREEZES_QUERY_KEY,
     queryFn: async () =>
       (await api.get<ActiveSpendFreezes>(FREEZES_ENDPOINT, { params: { limit: ACTIVE_FREEZES_LIMIT } })).data,
+    // Matches the overview's interval, so an automatic pause shows up here as it does on the incident row.
+    refetchInterval: 60_000,
   });
 }
 

@@ -147,7 +147,9 @@ export default function SpendMonitorTab() {
   const liftFreeze = useLiftSpendFreeze();
   const showUndoToast = useUndoToast();
   const freezeMissing = useMissingAdminPermission('credits:adjust');
-  const [now] = useState(() => Date.now());
+  // Relative times are measured from the last refetch, not first mount, so they stay current while polling.
+  const [mountedAt] = useState(() => Date.now());
+  const now = overview.dataUpdatedAt || mountedAt;
   const [freezeDialog, setFreezeDialog] = useState<FreezeDialogState | null>(null);
   const [liftTarget, setLiftTarget] = useState<ActiveSpendFreezeRow | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
