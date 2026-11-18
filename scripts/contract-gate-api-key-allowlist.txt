@@ -539,6 +539,7 @@ apps/client/pages/api/oauth/code.ts
 apps/client/pages/api/oauth/device/initiate.ts
 apps/client/pages/api/oauth/device/token.ts
 apps/client/pages/api/oauth/device/verify.ts
+apps/client/pages/api/oauth/end-session.ts  # deliberately unauthenticated (auth: false): RP-Initiated Logout must still redirect a browser with no session; it signs out only the Bearer session the first-party page forwards, rate limited
 apps/client/pages/api/oauth/federated-admin.ts
 apps/client/pages/api/oauth/jwks.ts
 apps/client/pages/api/oauth/openid-configuration.ts
