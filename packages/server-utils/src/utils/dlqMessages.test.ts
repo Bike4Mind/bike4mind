@@ -23,8 +23,6 @@ import {
   recommendForDlqMessage,
 } from './dlqMessages';
 
-const PARTITION = 'aws';
-
 const msg = (id: string, receives = 1) => ({
   MessageId: id,
   ReceiptHandle: `rh-${id}-${receives}`,
@@ -140,23 +138,24 @@ describe('messageLogsUrl', () => {
     expect(decode(link!.url)).toContain("'/aws/lambda/consumer");
   });
 
-  it('links an EventBridge failure to the log group of its target function', () => {
+  it('links an EventBridge failure to the resolved log group of its target function', () => {
     const link = messageLogsUrl({
       ...base,
-      targetArn: `arn:${PARTITION}:lambda:us-east-2:000000000000:function:app-stage-Consumer:live`,
+      targetLogs: { region: 'us-east-2', logGroup: '/sst/app/stage/Consumer-LogGroup' },
     });
     const detail = decode(link!.url);
     expect(link?.scope).toBe('window');
-    expect(detail).toContain("'/aws/lambda/app-stage-Consumer)");
+    expect(detail).toContain("source~(~'/sst/app/stage/Consumer-LogGroup)");
     expect(detail).toContain(`start~'${new Date(sent - 24 * 60 * 60_000).toISOString()}`);
   });
 
-  it('accepts a target function ARN in another AWS partition', () => {
+  it('prefers the TARGET_ARN log group over the schedule target', () => {
     const link = messageLogsUrl({
       ...base,
-      targetArn: `arn:${PARTITION}-us-gov:lambda:us-east-2:000000000000:function:app-stage-Consumer`,
+      targetLogs: { region: 'us-east-2', logGroup: '/sst/target' },
+      scheduleLogs: { region: 'us-east-2', logGroup: '/sst/schedule' },
     });
-    expect(decode(link!.url)).toContain("'/aws/lambda/app-stage-Consumer)");
+    expect(decode(link!.url)).toContain("source~(~'/sst/target)");
   });
 
   it('filters on the request id over the scheduled run, using the rule target', () => {
@@ -165,12 +164,12 @@ describe('messageLogsUrl', () => {
       ...base,
       requestId: REQUEST_ID,
       scheduledAt,
-      scheduleTarget: { functionName: 'app-stage-Nightly', region: 'us-east-2' },
+      scheduleLogs: { region: 'us-east-2', logGroup: '/sst/app/stage/Nightly-LogGroup' },
     });
     const detail = decode(link!.url);
     expect(link?.scope).toBe('request');
     expect(detail).toContain(`filter @requestId = "${REQUEST_ID}"`);
-    expect(detail).toContain("'/aws/lambda/app-stage-Nightly");
+    expect(detail).toContain("source~(~'/sst/app/stage/Nightly-LogGroup)");
     expect(detail).toContain(`start~'${scheduledAt}`);
     expect(detail).toContain(`end~'${new Date(sent + 5 * 60_000).toISOString()}`);
   });
@@ -180,32 +179,29 @@ describe('messageLogsUrl', () => {
       ...base,
       requestId: REQUEST_ID,
       scheduledAt: '2000-01-01T00:00:00.000Z',
-      scheduleTarget: { functionName: 'app-stage-Nightly', region: 'us-east-2' },
+      scheduleLogs: { region: 'us-east-2', logGroup: '/sst/app/stage/Nightly-LogGroup' },
     });
     expect(decode(link!.url)).toContain(`start~'${new Date(sent - 6 * 60 * 60_000).toISOString()}`);
   });
 
-  it('drops a target outside the deploy region', () => {
-    expect(
-      messageLogsUrl({ ...base, targetArn: `arn:${PARTITION}:lambda:eu-west-1:000000000000:function:other` })
-    ).toBeNull();
+  it('drops a log group outside the deploy region', () => {
+    expect(messageLogsUrl({ ...base, targetLogs: { region: 'eu-west-1', logGroup: '/sst/other' } })).toBeNull();
     expect(
       messageLogsUrl({
         ...base,
         requestId: REQUEST_ID,
-        scheduleTarget: { functionName: 'other', region: 'eu-west-1' },
+        scheduleLogs: { region: 'eu-west-1', logGroup: '/sst/other' },
       })
     ).toBeNull();
   });
 
-  it('returns null for a non-function target, a missing rule target, or no send time', () => {
-    expect(messageLogsUrl({ ...base, targetArn: `arn:${PARTITION}:events:us-east-2:000000000000:rule/x` })).toBeNull();
+  it('returns null with no resolved log group or no send time', () => {
     expect(messageLogsUrl({ ...base, requestId: REQUEST_ID })).toBeNull();
     expect(
       messageLogsUrl({
         logs: null,
         sentTimestamp: undefined,
-        targetArn: `arn:${PARTITION}:lambda:us-east-2:0:function:f`,
+        targetLogs: { region: 'us-east-2', logGroup: '/sst/f' },
       })
     ).toBeNull();
   });

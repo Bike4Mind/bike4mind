@@ -9,7 +9,11 @@ import {
   type ConsumerLogs,
 } from '@bike4mind/server-utils/utils/dlqConsumerLogs';
 import { browseDlqMessages, countDlqReplayAttempts, findDlqFailures } from '@bike4mind/server-utils/utils/dlqMessages';
-import { resolveDlqScheduleFacts, toDlqMessageRow } from '@bike4mind/server-utils/utils/dlqMessageRow';
+import {
+  resolveDlqScheduleFacts,
+  resolveDlqTargetLogs,
+  toDlqMessageRow,
+} from '@bike4mind/server-utils/utils/dlqMessageRow';
 import { getQueueAttributes } from '@bike4mind/server-utils/utils/sqs';
 import { Logger } from '@bike4mind/observability';
 
@@ -48,11 +52,12 @@ async function mapWithConcurrency<T, R>(
 async function listQueue({ entry, dlqUrl, depth }: BrowsableQueue, logsLookup: Promise<ConsumerLogs | null>) {
   const received = await browseDlqMessages(dlqUrl, { limit: PER_QUEUE_LIMIT, maxReceives: MAX_RECEIVES_PER_QUEUE });
   const ids = received.flatMap(message => (message.MessageId ? [message.MessageId] : []));
-  const [{ failures, lookupFailed }, attempts, logs, schedules] = await Promise.all([
+  const [{ failures, lookupFailed }, attempts, logs, schedules, targetLogs] = await Promise.all([
     findDlqFailures(entry.label, entry.sourceQueue, ids),
     countDlqReplayAttempts(entry.label, ids),
     logsLookup,
     resolveDlqScheduleFacts(entry, received, depth),
+    resolveDlqTargetLogs(received),
   ]);
   const failureById = new Map(failures.map(failure => [failure.messageId, failure]));
   return received.map(message =>
@@ -62,6 +67,7 @@ async function listQueue({ entry, dlqUrl, depth }: BrowsableQueue, logsLookup: P
       logs,
       replayAttempts: attempts?.get(message.MessageId!),
       schedule: schedules.get(message.MessageId!),
+      targetLogs: targetLogs.get(message.MessageId!),
     })
   );
 }

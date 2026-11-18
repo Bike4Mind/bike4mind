@@ -13,7 +13,11 @@ import {
   findDlqFailures,
   latestCopies,
 } from '@bike4mind/server-utils/utils/dlqMessages';
-import { resolveDlqScheduleFacts, toDlqMessageRow } from '@bike4mind/server-utils/utils/dlqMessageRow';
+import {
+  resolveDlqScheduleFacts,
+  resolveDlqTargetLogs,
+  toDlqMessageRow,
+} from '@bike4mind/server-utils/utils/dlqMessageRow';
 import { getQueueAttributes, receiveFromQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
@@ -75,10 +79,11 @@ const handler = adminApi({
   ]);
   const messages = latestCopies(received);
   const ids = messages.map(message => message.MessageId!);
-  const [[failureLookup], [attempts], schedules] = await Promise.all([
+  const [[failureLookup], [attempts], schedules, targetLogs] = await Promise.all([
     settleWithinBudget([findDlqFailures(queueLabel, dlqEntry.sourceQueue, ids)], CONSUMER_LOGS_BUDGET_MS),
     settleWithinBudget([countDlqReplayAttempts(queueLabel, ids)], CONSUMER_LOGS_BUDGET_MS),
     resolveDlqScheduleFacts(dlqEntry, messages, queueDepth),
+    resolveDlqTargetLogs(messages),
   ]);
   const { failures, lookupFailed } = failureLookup ?? { failures: [], lookupFailed: true };
   const failureById = new Map(failures.map(failure => [failure.messageId, failure]));
@@ -92,6 +97,7 @@ const handler = adminApi({
       logs: consumerLogs,
       replayAttempts: attempts?.get(message.MessageId!),
       schedule: schedules.get(message.MessageId!),
+      targetLogs: targetLogs.get(message.MessageId!),
     })
   );
 

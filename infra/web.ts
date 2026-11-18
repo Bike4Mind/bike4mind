@@ -542,7 +542,8 @@ export const web = new sst.aws.Nextjs(
       {
         // Admin DLQ "View logs": finds the Lambda consumers of a source queue. ListEventSourceMappings
         // has no resource-level permissions, so it cannot be scoped. GetFunctionConfiguration is
-        // granted per consumer by dlqConsumerLogsPolicy below.
+        // granted per consumer by dlqConsumerLogsPolicy below and per dead-letter rule target in
+        // infra/webDlqFunctionLogs.ts.
         actions: ['lambda:ListEventSourceMappings'],
         resources: ['*'],
       },

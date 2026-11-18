@@ -4,7 +4,6 @@ import { dlqFailureRepository, dlqReplayLogRepository } from '@bike4mind/databas
 import { Logger } from '@bike4mind/observability';
 import { buildLogsInsightsUrl, messageLogWindow, type ConsumerLogs } from './dlqConsumerLogs';
 import { getSourceQueueUrl, type SourceQueueName } from './dlqRegistry';
-import { ARN_PARTITION } from './dlqScheduleRule';
 import { changeMessageVisibility, receiveFromQueue } from './sqs';
 
 const SQS_MAX_BATCH = 10;
@@ -104,40 +103,39 @@ export async function acquireDlqMessagesById(
 const LAMBDA_ASYNC_MAX_AGE_MS = 6 * 60 * 60_000;
 const EVENTBRIDGE_MAX_AGE_MS = 24 * 60 * 60_000;
 const AFTER_SEND_MARGIN_MS = 5 * 60_000;
-const LAMBDA_FUNCTION_ARN = new RegExp(
-  String.raw`^arn:${ARN_PARTITION}:lambda:([a-z0-9-]+):\d{12}:function:([\w-]{1,64})(?::[\w$-]+)?$`
-);
 
 export type DlqLogsLink = { url: string; scope: 'request' | 'window' };
+
+/** A resolved Lambda log group, from resolveFunctionLogGroup. */
+export type DlqFunctionLogs = { region: string; logGroup: string };
 
 export type DlqLogsLinkFacts = {
   logs: ConsumerLogs | null;
   sentTimestamp: string | undefined;
   /** Format-checked by attributeFailure. */
   requestId?: string;
-  targetArn?: string;
-  /** Scheduled Event time and the rule's Lambda target, from resolveDlqScheduleFacts. */
+  /** The EventBridge TARGET_ARN function's log group, from resolveDlqTargetLogs. */
+  targetLogs?: DlqFunctionLogs;
+  /** Scheduled Event time and the rule's Lambda target log group, from resolveDlqScheduleFacts. */
   scheduledAt?: string;
-  scheduleTarget?: { functionName: string; region: string };
+  scheduleLogs?: DlqFunctionLogs;
 };
 
 /**
- * Logs Insights link for one DLQ message: the source queue's consumer logs, else the Lambda an EventBridge
- * TARGET_ARN or the schedule rule names. A RequestID narrows the query to that invocation. Log groups
- * outside the deploy region are dropped: a forged TARGET_ARN or rule cannot point the link elsewhere.
+ * Logs Insights link for one DLQ message: the source queue's consumer logs, else the log group of the Lambda
+ * an EventBridge TARGET_ARN or the schedule rule names. A RequestID narrows the query to that invocation.
+ * Log groups outside the deploy region are dropped: a forged TARGET_ARN or rule cannot point the link elsewhere.
  */
 export function messageLogsUrl(facts: DlqLogsLinkFacts): DlqLogsLink | null {
   const sentMs = facts.sentTimestamp ? parseInt(facts.sentTimestamp, 10) : NaN;
   if (!Number.isFinite(sentMs)) return null;
   const deployRegion = process.env.AWS_REGION;
-  const target = facts.targetArn?.match(LAMBDA_FUNCTION_ARN);
+  const functionLogs = [facts.targetLogs, facts.scheduleLogs].find(logs => logs?.region === deployRegion);
   const source = facts.logs
     ? { region: facts.logs.region, logGroups: facts.logs.logGroups }
-    : target && target[1] === deployRegion
-      ? { region: target[1], logGroups: [`/aws/lambda/${target[2]}`] }
-      : facts.scheduleTarget && facts.scheduleTarget.region === deployRegion
-        ? { region: facts.scheduleTarget.region, logGroups: [`/aws/lambda/${facts.scheduleTarget.functionName}`] }
-        : null;
+    : functionLogs
+      ? { region: functionLogs.region, logGroups: [functionLogs.logGroup] }
+      : null;
   if (!source) return null;
 
   const scope = facts.requestId ? 'request' : 'window';
