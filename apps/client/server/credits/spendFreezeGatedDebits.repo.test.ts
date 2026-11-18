@@ -40,7 +40,7 @@ const CLAWBACK = 'clawback of granted credits, not metered spend';
 
 const SITES: Record<string, Array<[call: string, why: string]>> = {
   'apps/client/pages/api/ai/test-realtime-voice.ts': [
-    ['holdPreflightCredits(', 'UNGATED when credits are off (runs only inside isCreditsEnforced) - review'],
+    ['holdPreflightCredits(', "gated-by the route's own assertSpendNotFrozen ahead of its credits-enforced gate"],
   ],
   'apps/client/pages/api/ai/music.ts': [['reserveRequestCredits(', VIA_RESERVE]],
   'apps/client/pages/api/blog/generate-featured-image.ts': [['reserveRequestCredits(', VIA_RESERVE]],

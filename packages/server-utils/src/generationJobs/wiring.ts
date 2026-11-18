@@ -681,6 +681,7 @@ export const getSceneJobDeps = (): SceneJobDeps => {
       organizations: organizationRepository,
       creditTransactions: creditTransactionRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+      spendFreezes: spendFreezeRepository,
       onInsufficientCredits: recordInsufficientCredits,
     },
     enqueue: enqueueGenerationJob,
