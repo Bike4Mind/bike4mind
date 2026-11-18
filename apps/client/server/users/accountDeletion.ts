@@ -129,7 +129,8 @@ export async function scheduleAccountDeletion(
 export async function requestAdminErasure(
   req: DeletionRequest,
   userId: string,
-  now = new Date()
+  now = new Date(),
+  { recordInTransaction }: Pick<ScheduleAccountDeletionInput, 'recordInTransaction'> = {}
 ): Promise<AccountDeletionLockdown> {
   const ownedOrganizations = await findOwnedOrganizations(userId);
   if (ownedOrganizations.length > 0) {
@@ -139,7 +140,10 @@ export async function requestAdminErasure(
     });
   }
   const deletion: IUserDeletion = { requestedAt: now, scheduledFor: now, source: 'admin', requestedBy: req.user.id };
-  const { subscriptions } = await lockDownAccount(req, userId, deletion, { actorUserId: req.user.id });
+  const { subscriptions } = await lockDownAccount(req, userId, deletion, {
+    actorUserId: req.user.id,
+    recordInTransaction,
+  });
   return { deletion, subscriptions };
 }
 

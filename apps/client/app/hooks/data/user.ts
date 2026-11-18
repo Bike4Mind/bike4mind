@@ -198,11 +198,14 @@ export function useDeleteUser() {
     },
     onSuccess: data => {
       if (isApprovalPending(data)) return notifyApprovalSubmitted(queryClient);
-      toast.success('User deleted successfully');
+      toast.success('Deletion started');
       queryClient.invalidateQueries({ queryKey: ['users'] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
     },
-    onError: error => toast.error('Failed to delete user'),
+    onError: error => {
+      const data = isAxiosError(error) ? (error.response?.data as ErrorResponse | undefined) : undefined;
+      toast.error(data?.error ?? 'Failed to delete user');
+    },
   });
 }
 

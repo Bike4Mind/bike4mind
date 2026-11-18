@@ -1,11 +1,15 @@
 import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
-import { adminSettingsRepository, realtimeConnectionRepository, userRepository } from '@bike4mind/database';
+import { adminSettingsRepository, userRepository } from '@bike4mind/database';
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
-import { userService } from '@bike4mind/services';
 import {
   ConflictError,
   ForbiddenError,
+  NotFoundError,
+  UnauthorizedError,
+  assertCanActOnAdminTarget,
   canAccessAdmin,
+  escapeSlackLine,
+  hasAdminPermission,
   isFullAdmin,
   type AdminApproval,
   type IUserDocument,
@@ -14,10 +18,12 @@ import { z } from 'zod';
 import type { Request } from 'express';
 import { escapeHtml } from '@client/app/utils/htmlEscape';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
-import { hardDeleteUser } from '@bike4mind/server-utils/services/hardDeleteUser';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { isSelfOrImpersonator, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { subscriptionCancellationAudit } from '@bike4mind/server-utils/billing/cancelAccountSubscriptions';
 import { approvalDetails } from '@server/admin/creditGrants/approval';
+import { requestAdminErasure } from '@server/users/accountDeletion';
 
 export const deletedUserTarget = (id: string, user: Pick<IUserDocument, 'name' | 'username' | 'email'> | null) => ({
   kind: 'user' as const,
@@ -25,95 +31,100 @@ export const deletedUserTarget = (id: string, user: Pick<IUserDocument, 'name' |
   displayName: user?.name || user?.username || user?.email || id,
 });
 
-/** Hard-deletes `userId` as `req.user`; shared by the delete route and the approved `user.delete_admin` executor. */
+/**
+ * Erases `userId` as `req.user`; shared by the delete route and the approved `user.delete_admin` executor.
+ * Stamps an immediate admin erasure (the lockdown, the `user.deleted` audit entry and the target role
+ * re-checks commit together) and queues the account purge, which resumes under a lease if a step fails;
+ * the daily deletion sweep is the backstop when the queue is unreachable.
+ */
 export async function deleteUserAsAdmin(
   req: Request,
   userId: string,
   reason: string,
   approval?: AdminApproval,
-  options: { onDeleteCommitted?: () => void; requireNonAdmin?: boolean } = {}
+  options: { requireNonAdmin?: boolean } = {}
 ) {
   const admin = req.user!;
-  return hardDeleteUser(
-    userId,
-    {
-      deletedBy: String(admin.id),
-      initiatedBy: 'admin',
-      logger: req.logger,
-      onDeleteCommitted: options.onDeleteCommitted,
-      // Check the approved target role before cancellation and inside the delete transaction.
-      ...((approval || options.requireNonAdmin) && {
-        assertInTransaction: async () => {
-          if (approval) return assertStillAdmin(userId);
-          if (canAccessAdmin(await userRepository.findById(userId))) {
-            throw new ConflictError(
-              isFullAdmin(admin)
-                ? 'This user now has admin access; request the deletion again for approval.'
-                : 'This user now has admin access; only a full administrator can delete it.'
-            );
-          }
-        },
-      }),
-      // The delete and its audit entry commit together; cascades and notifications run after.
-      recordInTransaction: async (target, cancellation) => {
-        const canceledEntry = subscriptionCancellationAudit(cancellation, 'account_deleted');
-        const details = { ...canceledEntry?.details, ...approvalDetails(approval) };
-        await recordAdminActionFromRequest(req, {
-          action: 'user.deleted',
-          target: deletedUserTarget(userId, target),
-          summary: canceledEntry ? `deleted the user; ${canceledEntry.summary}` : 'deleted the user',
-          reason,
-          ...(Object.keys(details).length > 0 && { details }),
-        });
-      },
-      // The cancel already happened and cannot roll back, so record it on its own (best-effort).
-      onDeleteFailed: async (target, cancellation) => {
-        const canceledEntry = subscriptionCancellationAudit(cancellation, 'account_deleted');
-        if (canceledEntry) {
-          await recordAdminActionFromRequest(req, {
-            ...canceledEntry,
-            target: deletedUserTarget(userId, target),
-            reason,
-            ...(approval && { details: { ...canceledEntry.details, ...approvalDetails(approval) } }),
-          });
-        }
-      },
+  const stored = await userRepository.findById(String(admin.id));
+  const actor = stored ? await resolveRoleAdminPermissions(stored) : null;
+  if (!actor || !hasAdminPermission(actor, 'users:delete')) {
+    throw new UnauthorizedError('You are not authorized to delete users');
+  }
+  const target = await userRepository.findById(userId);
+  if (!target) throw new NotFoundError(`User ${userId} not found`);
+  assertCanActOnAdminTarget(actor, target, 'delete');
+
+  const { subscriptions } = await requestAdminErasure(req, userId, new Date(), {
+    recordInTransaction: async () => {
+      // A changed role aborts the stamp before any credentials are revoked or subscriptions canceled.
+      if (approval) await assertStillAdmin(userId);
+      else if (options.requireNonAdmin && canAccessAdmin(await userRepository.findById(userId))) {
+        throw new ConflictError(
+          isFullAdmin(admin)
+            ? 'This user now has admin access; request the deletion again for approval.'
+            : 'This user now has admin access; only a full administrator can delete it.'
+        );
+      }
+      const details = approvalDetails(approval);
+      await recordAdminActionFromRequest(req, {
+        action: 'user.deleted',
+        target: deletedUserTarget(userId, target),
+        summary: 'deleted the user',
+        reason,
+        ...(Object.keys(details).length > 0 && { details }),
+      });
     },
-    users =>
-      userService.adminDeleteUser(
-        admin.id,
-        { id: userId },
-        {
-          db: {
-            users,
-            adminSettings: adminSettingsRepository,
-            realtimeConnections: realtimeConnectionRepository,
-          },
-          resolveAdminRoles: resolveRoleAdminPermissions,
-          notify: {
-            // postMessageToSlack reports whether it delivered; the adapter contract returns void.
-            send: async (message: string) => {
-              await postMessageToSlack(message);
-            },
-          },
-          mailer: {
-            sendDeleteUserEmail: async (sendTo: string[], user: IUserDocument, adminUser: IUserDocument) => {
-              await Promise.all(
-                sendTo.map(mailTo =>
-                  EmailEvents.Send.publish({
-                    to: mailTo,
-                    subject: 'User Deletion Notification',
-                    body: `
-              <p>Admin user: ${escapeHtml(adminUser.name ?? '')} User deleted: *${escapeHtml(user.name ?? '')}* *${escapeHtml(user.email ?? '')}*</p>
-              `,
-                  })
-                )
-              );
-            },
-          },
-        }
-      )
-  );
+  });
+
+  // The stamp has committed; everything below is best-effort and never fails the request.
+  const canceledEntry = subscriptionCancellationAudit(subscriptions, 'deletion_requested');
+  if (canceledEntry) {
+    await recordAdminActionFromRequest(req, {
+      ...canceledEntry,
+      target: deletedUserTarget(userId, target),
+      reason,
+      ...(approval && { details: { ...canceledEntry.details, ...approvalDetails(approval) } }),
+    }).catch(error => req.logger.error(`Failed to audit the subscription cancellation for user ${userId}`, { error }));
+  }
+  await notifyDeletion(req, admin, target);
+
+  let queued = true;
+  try {
+    await sendToQueue(getSourceQueueUrl('accountErasureQueue'), { userId });
+  } catch (error) {
+    queued = false;
+    req.logger.error(`Failed to queue the erasure of user ${userId}; the daily sweep will run it: ${String(error)}`);
+  }
+  return { user: target, subscriptionCancellation: subscriptions, queued };
+}
+
+/** Slack and email notices, gated by the admin settings; sent while the name and email still exist. */
+async function notifyDeletion(req: Request, admin: NonNullable<Request['user']>, user: IUserDocument) {
+  try {
+    const [slack, email] = await adminSettingsRepository.findBySettingNames([
+      'EnableUserDeletionSlackNotification',
+      'EnableUserDeletionEmailNotification',
+    ]);
+    if (slack) {
+      await postMessageToSlack(
+        `Admin user: ${admin.id} User deleted: *${escapeSlackLine(user.name ?? '')}* *${escapeSlackLine(user.email ?? '')}*`
+      );
+    }
+    if (email) {
+      const feedbackEmails = (await adminSettingsRepository.findAllByTag('feedbackEmail')).map(s => s.settingValue);
+      await Promise.all(
+        feedbackEmails.map(to =>
+          EmailEvents.Send.publish({
+            to,
+            subject: 'User Deletion Notification',
+            body: `<p>Admin user: ${escapeHtml(admin.name ?? '')} User deleted: *${escapeHtml(user.name ?? '')}* *${escapeHtml(user.email ?? '')}*</p>`,
+          })
+        )
+      );
+    }
+  } catch (error) {
+    req.logger.error(`Failed to send the deletion notifications for user ${user.id}`, { error });
+  }
 }
 
 export const DeleteAdminParamsSchema = z.object({ userId: z.string().min(1), reason: z.string() });
@@ -124,20 +135,9 @@ export async function executeApprovedAdminDelete(req: Request, params: DeleteAdm
   if (isSelfOrImpersonator(req.user!, params.userId)) {
     throw new ForbiddenError('Admins cannot delete their own account.');
   }
-  // Early fail only; hardDeleteUser re-checks right before the subscription cancel and again in the transaction.
+  // Early fail only; the stamp transaction re-checks the role.
   await assertStillAdmin(params.userId);
-  let committed = false;
-  try {
-    await deleteUserAsAdmin(req, params.userId, params.reason, approval, {
-      onDeleteCommitted: () => {
-        committed = true;
-      },
-    });
-  } catch (error) {
-    // Notifications and cleanup run after the delete commits; once it has committed the approved action ran.
-    if (!committed) throw error;
-    req.logger.error('[ADMIN_APPROVAL_DELETE_AFTER_COMMIT_FAILED]', { approvalId: approval.id, error });
-  }
+  await deleteUserAsAdmin(req, params.userId, params.reason, approval);
   return { deletedUserId: params.userId };
 }
 

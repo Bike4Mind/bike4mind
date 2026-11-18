@@ -28,6 +28,7 @@ vi.mock('sst', () => ({
 const effects = vi.hoisted(() => ({
   deleteObject: vi.fn(),
   deletePrefix: vi.fn(),
+  sendToQueue: vi.fn(),
   sendCompleteEmail: vi.fn(),
   stripe: {
     retrieve: vi.fn(),
@@ -79,6 +80,9 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
     subscriptions: { list: effects.stripe.listSubscriptions, cancel: effects.stripe.cancelSubscription },
   },
 }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: effects.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: (name: string) => `queue:${name}` }));
+vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
 vi.mock('@bike4mind/server-utils/integrations/stripe/dunning', () => ({
   voidOpenSubscriptionInvoices: vi.fn(async () => ({ voided: [], failed: [] })),
 }));
@@ -104,13 +108,15 @@ vi.mock('@bike4mind/services', async importOriginal => {
 });
 
 import { completeAccountDeletion } from '@bike4mind/server-utils/users/completeAccountDeletion';
+import { deleteUserAsAdmin } from '@server/admin/deleteUserAsAdmin';
+import type { Request } from 'express';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 type Doc = Record<string, unknown>;
 const ObjectId = mongoose.Types.ObjectId;
 const raw = (model: string) => mongoose.model(model).collection;
-const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), debug: vi.fn() };
 
 // A path the schema declares, looked up longest-prefix first so `users.userId` finds `users`.
 function schemaPathFor(model: string, segments: readonly string[]) {
@@ -339,7 +345,10 @@ const EMPTY_AUDIT: Audit = { remaining: [], unclassified: [] };
 
 const PAST = new Date('2026-01-01T00:00:00.000Z');
 
-async function seedSubject(source: 'self' | 'admin') {
+type Source = 'self' | 'admin' | 'delete';
+
+// An admin Delete is stamped by the request, so it seeds no `deletion`; the purge then runs as the worker would.
+async function seedSubject(source: Source) {
   const userId = new ObjectId();
   const adminId = new ObjectId();
   const subject = { userId: String(userId), email: 'subject@example.test' };
@@ -348,13 +357,32 @@ async function seedSubject(source: 'self' | 'admin') {
     email: subject.email,
     username: 'subject',
     stripeCustomerId: SUBJECT_STRIPE_CUSTOMER,
-    deletion: {
-      requestedAt: PAST,
-      scheduledFor: PAST,
-      source,
-      ...(source === 'admin' ? { requestedBy: String(adminId) } : {}),
-    },
+    ...(source !== 'delete' && {
+      deletion: {
+        requestedAt: PAST,
+        scheduledFor: PAST,
+        source,
+        ...(source === 'admin' ? { requestedBy: String(adminId) } : {}),
+      },
+    }),
   });
+  if (source === 'delete') {
+    await raw('User').insertOne({
+      _id: adminId,
+      name: 'Admin',
+      email: 'admin@example.test',
+      username: 'admin',
+      isAdmin: true,
+    });
+    const req = {
+      user: { id: String(adminId), name: 'Admin', isAdmin: true },
+      logger,
+      headers: {},
+      socket: {},
+      url: '/',
+    } as unknown as Request;
+    await deleteUserAsAdmin(req, subject.userId, 'Confirmed duplicate account');
+  }
   // Another account's billing customer: the redaction must never reach it.
   await raw('Organization').insertOne({
     _id: new ObjectId(),
@@ -362,8 +390,10 @@ async function seedSubject(source: 'self' | 'admin') {
     userId: String(new ObjectId()),
     stripeCustomerId: ORG_STRIPE_CUSTOMER,
   });
+  // The admin Delete's own audit rows name the person and are retained; they are not registry seeds.
+  const requestAudit = await raw('AdminAuditLog').countDocuments({ 'target.id': subject.userId });
   const seeded = await seedFromRegistry(subject);
-  return { subject, adminId: String(adminId), seeded };
+  return { subject, adminId: String(adminId), seeded, requestAudit };
 }
 
 // Only these rows may vanish where the registry keeps them: the purge deletes every page the person owns
@@ -413,9 +443,9 @@ async function expectSeededOutcomes(subject: { userId: string; email: string }, 
 const touchedCustomers = () =>
   [effects.stripe.update, effects.stripe.deleteTaxId].flatMap(mock => mock.mock.calls.map(call => String(call[0])));
 
-describe.each(['self', 'admin'] as const)('account erasure matrix, %s path', source => {
+describe.each(['self', 'admin', 'delete'] as const)('account erasure matrix, %s path', source => {
   it('seeds every registry store, then leaves nothing but retained rows', async () => {
-    const { subject, adminId, seeded } = await seedSubject(source);
+    const { subject, adminId, seeded, requestAudit } = await seedSubject(source);
 
     // The plan must match the documents seeded, so a reference it cannot see fails here even when a
     // sibling reference on the same model matches. Expected counts come from the seed: each row's
@@ -441,6 +471,10 @@ describe.each(['self', 'admin'] as const)('account erasure matrix, %s path', sou
       bump(row.model, parent === 'anonymized' ? 'deleted' : parent);
       childrenCounted.add(row.model);
     }
+    if (requestAudit > 0) {
+      expected.AdminAuditLog ??= { deleted: 0, anonymized: 0, retained: 0 };
+      expected.AdminAuditLog.retained += requestAudit;
+    }
     const planned = Object.fromEntries(
       (await new SubjectErasurePlan(subject).collections()).map(({ model, deleted, anonymized, retained }) => [
         model,
@@ -463,7 +497,7 @@ describe.each(['self', 'admin'] as const)('account erasure matrix, %s path', sou
       .find({ idHash: erasureIdHash(subject.userId) })
       .toArray();
     expect(records).toHaveLength(1);
-    expect(records[0].initiatedBy).toBe(source);
+    expect(records[0].initiatedBy).toBe(source === 'self' ? 'self' : 'admin');
 
     const completed = await raw('AdminAuditLog')
       .find({ action: 'user.deletion.completed', 'target.id': subject.userId })
@@ -472,12 +506,21 @@ describe.each(['self', 'admin'] as const)('account erasure matrix, %s path', sou
     const checks = await raw('AdminAuditLog')
       .find({ action: ADMIN_ERASURE_COMPLETED_ACTION, 'target.id': subject.userId })
       .toArray();
-    if (source === 'admin') {
+    if (source !== 'self') {
       expect(checks).toHaveLength(1);
       expect(checks[0].details).toMatchObject({ requestedBy: adminId, unclassified: [] });
       expect(checks[0].details.remaining).toEqual([]);
     } else {
       expect(checks).toHaveLength(0);
+    }
+
+    if (source === 'delete') {
+      const deleted = await raw('AdminAuditLog')
+        .find({ action: 'user.deleted', 'target.id': subject.userId })
+        .toArray();
+      expect(deleted).toHaveLength(1);
+      expect(deleted[0].reason).toBe('Confirmed duplicate account');
+      expect(effects.sendToQueue).toHaveBeenCalledWith('queue:accountErasureQueue', { userId: subject.userId });
     }
 
     expect(effects.deletePrefix).toHaveBeenCalled();
@@ -512,14 +555,14 @@ describe.each(['self', 'admin'] as const)('account erasure matrix, %s path', sou
       .find({ idHash: erasureIdHash(subject.userId) })
       .toArray();
     expect(records).toHaveLength(1);
-    expect(records[0].initiatedBy).toBe(source);
+    expect(records[0].initiatedBy).toBe(source === 'self' ? 'self' : 'admin');
     expect(
       await raw('AdminAuditLog').countDocuments({ action: 'user.deletion.completed', 'target.id': subject.userId })
     ).toBe(1);
     const checks = await raw('AdminAuditLog')
       .find({ action: ADMIN_ERASURE_COMPLETED_ACTION, 'target.id': subject.userId })
       .toArray();
-    if (source === 'admin') {
+    if (source !== 'self') {
       expect(checks).toHaveLength(1);
       expect(checks[0].details).toMatchObject({ requestedBy: adminId, unclassified: [] });
       expect(checks[0].details.remaining).toEqual([]);

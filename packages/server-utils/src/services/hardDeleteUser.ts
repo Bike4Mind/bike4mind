@@ -73,8 +73,9 @@ async function emitAccountDeleted(account: IUserDocument | null, initiatedBy: Ha
 }
 
 /**
- * The one hard-delete path for a user, shared by the admin delete route (pages/api/users/[id]/delete.ts)
- * and the self-serve deletion purge (packages/server-utils/src/users/completeAccountDeletion.ts).
+ * The one hard-delete path for a user, run by the account deletion purge
+ * (packages/server-utils/src/users/completeAccountDeletion.ts), which self-serve deletion, admin data
+ * subject erasure and the admin Delete action (apps/client/server/admin/deleteUserAsAdmin.ts) all reach.
  *
  * `commitDelete` runs the caller's own delete (its authorization and notifications) with a users
  * repository whose `delete` captures integration grants and billing references, then deletes the row

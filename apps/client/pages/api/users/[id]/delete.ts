@@ -45,12 +45,20 @@ const handler = adminApi({ adminPermissions: { DELETE: 'users:delete' } }).delet
       }
     }
 
-    const { result: deletedUser, subscriptionCancellation } = await deleteUserAsAdmin(req, userId, reason, undefined, {
+    const {
+      user: deletedUser,
+      subscriptionCancellation,
+      queued,
+    } = await deleteUserAsAdmin(req, userId, reason, undefined, {
       // A delegate's target is re-checked too, in case it gained admin access since the check above.
       requireNonAdmin: policy.enabled || !isFullAdmin(req.user),
     });
 
-    return res.json({ ...toSafeUser(deletedUser), ...subscriptionCancellationResponse(subscriptionCancellation) });
+    return res.json({
+      ...toSafeUser(deletedUser),
+      ...subscriptionCancellationResponse(subscriptionCancellation),
+      queued,
+    });
   })
 );
 

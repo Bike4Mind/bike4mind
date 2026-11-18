@@ -662,6 +662,7 @@ describe('account dialogs', () => {
     it('needs the reason and the email typed exactly before it unlocks', async () => {
       const { onClose, onDeleted } = renderDelete();
 
+      expect(screen.getByText(/erases their account and all their data/)).toBeInTheDocument();
       expect(screen.getByTestId('delete-user-dialog-typed-expected')).toHaveTextContent('ada@example.com');
       pickReason('delete-user-dialog');
       expect(confirmButton('delete-user-dialog')).toBeDisabled();
