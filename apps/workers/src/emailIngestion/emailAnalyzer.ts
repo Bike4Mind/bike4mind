@@ -25,14 +25,16 @@ import {
   ingestedEmailRepository,
   User,
   IngestedEmailModel,
+  emailTriageItemRepository,
 } from '@bike4mind/database';
 // @ts-ignore - services may not be exported in types yet
 import { emailAnalysisService, apiKeyService } from '@bike4mind/services';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { NotFoundError, getSettingsByNames } from '@bike4mind/utils';
-import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
+import { getLlmByModel, getAvailableModels, type CompletionInfo } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { ChatModels } from '@bike4mind/common';
+import { triageEmail } from './emailTriage';
 
 /**
  * SQS Message payload schema
@@ -93,6 +95,8 @@ function parseTemperature(value: unknown, logger: Logger): number {
 /**
  * Main dispatch function with logger integration
  */
+const TRIAGE_MAX_TOKENS = 1200;
+
 export const dispatch: SQSHandler = dispatchWithLogger(async (event: SQSEvent, context, logger: Logger) => {
   const body = event.Records[0].body;
   const payload = EmailAnalysisPayload.parse(JSON.parse(body));
@@ -267,6 +271,43 @@ export const dispatch: SQSHandler = dispatchWithLogger(async (event: SQSEvent, c
     });
 
     logger.info('Email analysis saved to database');
+
+    // 12b. Triage for the owner's assistant brief. triageEmail never throws, so the analysis above stands.
+    await triageEmail(
+      {
+        enabled: async () => Boolean(await adminSettingsRepository.getSettingsValue('EnableEmailTriage')),
+        items: emailTriageItemRepository,
+        complete: async prompt => {
+          let reply = '';
+          let tokensUsed: number | null = null;
+          await llmBackend.complete(
+            emailAnalysisModel,
+            [{ role: 'user', content: prompt }],
+            { maxTokens: TRIAGE_MAX_TOKENS, temperature: parseTemperature(temperature, logger) },
+            async (chunks: (string | null | undefined)[], info?: CompletionInfo) => {
+              // Reasoning and tool chunks carry a channel; only the reply text is parsed.
+              if (!info?.channel) reply += chunks.filter(Boolean).join('');
+              if (info?.inputTokens !== undefined || info?.outputTokens !== undefined) {
+                tokensUsed = (info.inputTokens ?? 0) + (info.outputTokens ?? 0);
+              }
+            }
+          );
+          return { reply, model: emailAnalysisModel, tokensUsed };
+        },
+        logger,
+      },
+      {
+        email: {
+          id: payload.emailId,
+          userId: email.userId,
+          from: email.from,
+          subject: email.subject,
+          date: email.date,
+          bodyText: email.bodyText,
+        },
+        analysis: analysisResult,
+      }
+    );
 
     // 13. Send real-time update to client via WebSocket (if needed in future)
     // Note: Skipping WebSocket notification for now - would need to add 'email_analysis_completed'
