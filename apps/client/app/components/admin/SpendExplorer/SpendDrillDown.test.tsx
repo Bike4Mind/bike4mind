@@ -148,6 +148,24 @@ describe('SpendDrillDown', () => {
   });
 });
 
+describe('SpendDrillDown states', () => {
+  it('shows the error and retries from it', () => {
+    const onRetry = vi.fn();
+    renderDrillDown({ accounts: undefined, error: 'Could not load accounts: boom', onRetry });
+
+    expect(screen.getByTestId('admin-error-state')).toHaveTextContent('Could not load accounts: boom');
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it('says so when the window has no recorded spend', () => {
+    renderDrillDown({ accounts: { ...ACCOUNTS, totalCostUsd: 0, accounts: [] } });
+
+    expect(screen.getByText('No recorded spend in this window.')).toBeInTheDocument();
+  });
+});
+
 describe('formatAccountAge', () => {
   const now = new Date('2026-11-18T00:00:00.000Z');
 

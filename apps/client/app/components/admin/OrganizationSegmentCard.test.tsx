@@ -5,6 +5,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { IOrganizationDocument, WithId } from '@bike4mind/common';
+import { toast } from 'sonner';
 import OrganizationSegmentCard from './OrganizationSegmentCard';
 
 const setOrganizationAccountSegment = vi.fn();
@@ -62,5 +63,18 @@ describe('OrganizationSegmentCard', () => {
     );
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['organizations'] }));
     await waitFor(() => expect(screen.getByTestId('org-segment-select')).toHaveTextContent('Partner'));
+  });
+
+  it('toasts the error and keeps the saved segment when the save fails', async () => {
+    setOrganizationAccountSegment.mockRejectedValue(new Error('Reason is required'));
+    renderCard(makeOrg());
+
+    fireEvent.click(screen.getByTestId('org-segment-select'));
+    fireEvent.click(await screen.findByTestId('org-segment-option-partner'));
+    fireEvent.click(screen.getByTestId('org-segment-action-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('org-segment-action-dialog-confirm-btn'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Reason is required'));
+    expect(screen.getByTestId('org-segment-select')).toHaveTextContent('Customer');
   });
 });
