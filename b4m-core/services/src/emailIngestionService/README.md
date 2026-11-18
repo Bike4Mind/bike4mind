@@ -157,7 +157,7 @@ The Email Ingestion Service provides a complete solution for processing incoming
 
 ```bash
 cd your-app
-pnpm add @bike4mind/services @bike4mind/common @bike4mind/utils
+pnpm add @bike4mind/services@npm:@bike4mind/services-core @bike4mind/common @bike4mind/utils
 pnpm add mailparser  # or your preferred email parser
 ```
 

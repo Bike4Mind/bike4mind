@@ -14,7 +14,7 @@
 import type { ApiKeyTable } from '@bike4mind/llm-adapters';
 import type { GenerateImageToolCall, AudioGenerationToolCall } from '@bike4mind/common';
 import type { BuildSharedToolsOptions } from '@bike4mind/services/llm';
-import type { ImageToolConfig, MusicToolConfig, VideoToolConfig } from '@bike4mind/services/llm/tools';
+import type { AudioToolJobs, ImageToolConfig, MusicToolConfig, VideoToolConfig } from '@bike4mind/services/llm/tools';
 
 export interface BuildSubagentToolConfigInput {
   model?: string;
@@ -39,6 +39,11 @@ export interface BuildSubagentToolConfigInput {
    * touched the Audio tab; the tool then uses its defaults.
    */
   audioConfig?: Partial<AudioGenerationToolCall>;
+  /**
+   * The speech / sound-effect job functions audio_generation generates and bills through
+   * (server-utils buildAudioToolJobs). Omitted leaves the tool answering that audio is unavailable.
+   */
+  audioJobs?: AudioToolJobs;
   /**
    * Built per invocation by agentExecutor.imageToolConfig.ts around `imageConfig`; when set, the image tools start
    * capped image jobs instead of rendering in-process. Null/omitted keeps the in-process render.
@@ -65,6 +70,7 @@ export function buildSubagentToolConfig({
   apiKeyTable,
   imageConfig,
   audioConfig,
+  audioJobs,
   imageJobConfig,
   videoConfig,
   musicConfig,
@@ -85,8 +91,8 @@ export function buildSubagentToolConfig({
       : imageConfig && { image_generation: imageConfig, edit_image: imageConfig }),
     // Same for audio_generation - the classic path threads `audioConfig`
     // (ChatCompletionProcess), so agent-mode must too or the tool ignores the
-    // user's saved audio settings. Only set when present.
-    ...(audioConfig && { audio_generation: audioConfig }),
+    // user's saved audio settings. Set when either the settings or the jobs are present.
+    ...((audioConfig || audioJobs) && { audio_generation: { ...audioConfig, ...(audioJobs && { jobs: audioJobs }) } }),
     ...(videoConfig && { video_generation: videoConfig }),
     ...(musicConfig && { music_generation: musicConfig }),
   };

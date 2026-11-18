@@ -278,6 +278,12 @@ export interface IChatHistoryItem {
   /** Agent-mode images this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
   agentImagesClaimed?: number;
 
+  /** Agent-mode speech clips this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentSpeechClipsClaimed?: number;
+
+  /** Agent-mode sound effects this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentSoundEffectsClaimed?: number;
+
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;
   promptMeta?: PromptMeta;
@@ -299,6 +305,11 @@ export interface IChatHistoryItem {
    * part of any client or poll payload: it names the caller's endpoint and signing key.
    */
   callback?: IQuestCallback;
+
+  /** Set with `oauthClientId` when a federated exchange key created the quest; absent for every other caller. */
+  apiKeyId?: string;
+  /** Connected app of the exchange key that created the quest. */
+  oauthClientId?: string;
 
   /**
    * The ID of the QuestMaster plan that was created from this chat history item

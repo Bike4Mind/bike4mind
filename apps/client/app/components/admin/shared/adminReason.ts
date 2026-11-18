@@ -152,6 +152,15 @@ export const ADMIN_REASON_PRESETS = {
     'Duplicate of another suggestion',
   ],
   dlqDiscard: ['Account refused', 'Job obsolete', 'Fixed with no replay needed', 'Bad payload', 'Other'],
+  // Moderation review reasons name the review step, never what the image shows.
+  moderationNoAction: ['Reviewed against the content policy', 'Agreed with the second reviewer'],
+  moderationFalsePositive: [
+    'Reviewed against the content policy',
+    'Known classifier mistake',
+    'Agreed with the second reviewer',
+  ],
+  moderationManualReport: ['Report filed on the web form', 'Filed after the second review'],
+  moderationEscalation: ['Needs a second opinion', 'Unsure which verdict applies', 'Outside my review remit'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;

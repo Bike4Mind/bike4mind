@@ -766,6 +766,24 @@ describe('step time budget', () => {
     expect(timeout.mock.calls).toEqual([[LEASE_MS - 30_000], [LEASE_MS - 30_000]]);
   });
 
+  it('narrows the step signal to a caller step budget, never widening it', async () => {
+    const t = setup();
+    const first = await t.create();
+    const second = await t.create();
+    t.results.submit.push(running, running);
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    await t.engine.step(first.id, { stepBudgetMs: 12_000 });
+    await t.engine.step(second.id, { remainingMs: 40_000, stepBudgetMs: 60_000 });
+    expect(timeout.mock.calls).toEqual([[12_000], [10_000]]);
+  });
+
+  it('refuses a step whose caller budget is spent, leaving the job unleased', async () => {
+    const t = setup();
+    const job = await t.create();
+    await expect(t.engine.step(job.id, { stepBudgetMs: 0 })).rejects.toThrow(/no time budget/);
+    expect(t.repository.jobs.get(job.id)?.leaseUntil ?? null).toBeNull();
+  });
+
   it.each([20_000, 30_000, Number.NaN])(
     'refuses a step with no budget (%s ms left) and leaves the job unleased',
     async remainingMs => {

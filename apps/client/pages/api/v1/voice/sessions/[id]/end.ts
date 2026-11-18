@@ -44,6 +44,7 @@ const handler = nextRouteForContract(endVoiceSessionContract).post(async (req, r
       voiceSessionStartedAt: startedAt,
       voiceConnectedAt: session.voiceConnectedAt ?? null,
       voiceLastActivityAt: session.voiceLastActivityAt ?? null,
+      voiceHoldApiKeyId: session.voiceHoldApiKeyId ?? null,
     },
     // Ending the call is itself the call's last activity.
     new Date(),

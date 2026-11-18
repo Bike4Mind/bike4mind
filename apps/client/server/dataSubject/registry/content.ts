@@ -96,6 +96,7 @@ export const contentHolders = {
       { path: 'falsePositiveBy', matchBy: 'userId', action: 'anonymize' },
       { path: 'noActionBy', matchBy: 'userId', action: 'anonymize' },
       { path: 'reportedBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'escalatedBy', matchBy: 'userId', action: 'anonymize' },
     ],
   },
   ImportHistoryJob: {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { canAccessTavern, hasTavernUserTag, hasDeveloperUserTag } from './user';
+import { canAccessTavern, hasTavernUserTag, hasDeveloperUserTag, isFreeTierExempt } from './user';
 
 describe('hasTavernUserTag', () => {
   it('matches the "tavern" tag case-insensitively', () => {
@@ -42,5 +42,18 @@ describe('canAccessTavern', () => {
   it('denies a null/undefined user (unauthenticated)', () => {
     expect(canAccessTavern(null)).toBe(false);
     expect(canAccessTavern(undefined)).toBe(false);
+  });
+});
+
+describe('isFreeTierExempt', () => {
+  it('exempts admins and developer-tagged users', () => {
+    expect(isFreeTierExempt({ isAdmin: true })).toBe(true);
+    expect(isFreeTierExempt({ isAdmin: false, tags: ['Developer'] })).toBe(true);
+  });
+
+  it('does not exempt other tags, empty tags or a missing user shape', () => {
+    expect(isFreeTierExempt({ isAdmin: false, tags: ['developer-ish', 'tavern'] })).toBe(false);
+    expect(isFreeTierExempt({ isAdmin: null, tags: null })).toBe(false);
+    expect(isFreeTierExempt({})).toBe(false);
   });
 });
