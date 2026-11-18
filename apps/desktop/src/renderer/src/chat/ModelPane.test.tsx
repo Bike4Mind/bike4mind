@@ -17,6 +17,7 @@ const handle = vi.hoisted(() => ({
   orbit: vi.fn(),
   zoom: vi.fn(),
   partPoint: vi.fn(() => ({ x: 60, y: 50 })),
+  partKept: vi.fn((_name: string) => true),
 }));
 
 const closeup = vi.hoisted(() => vi.fn(async () => new Uint8Array([9, 9])));
@@ -516,6 +517,17 @@ describe('ModelPane', () => {
     expect(handle.partPoint).toHaveBeenCalledWith(['lid']);
     expect(byTestId('model-pane-edit-prompt')).not.toBeNull();
     expect(document.activeElement).toBe(byTestId('model-pane-edit-input'));
+  });
+
+  it('steps over parts the section cut has removed', () => {
+    render(engine(LANTERN));
+    const stage = byTestId('model-pane-stage') as HTMLElement;
+    handle.partKept.mockImplementation(name => name !== 'body');
+    press(stage, ']');
+    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('lid');
+    press(stage, ']');
+    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('lid');
+    handle.partKept.mockImplementation(() => true);
   });
 
   it('highlights a part of an opened GLB without offering an edit', () => {

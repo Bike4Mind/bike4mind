@@ -483,6 +483,11 @@ export class ModelStage {
   }
 }
 
+function setClippingPlanes(material: THREE.Material, planes: THREE.Plane[] | null): void {
+  if ((material.clippingPlanes?.length ?? 0) !== (planes?.length ?? 0)) material.needsUpdate = true;
+  material.clippingPlanes = planes;
+}
+
 /** Blur, as a share of the frame, at one model radius in front of or behind the focus. */
 const DOF_BLUR = 0.006;
 /** The most any point blurs, as a share of the frame: the backdrop, far behind, stops here. */
@@ -540,10 +545,11 @@ export class ModelComposer {
    */
   setInspection(overlays: readonly THREE.Object3D[], clip: THREE.Plane | null): void {
     this.overlays = overlays;
-    const material = this.ambientOcclusion.normalMaterial;
     const planes = clip ? [clip] : null;
-    if ((material.clippingPlanes?.length ?? 0) !== (planes?.length ?? 0)) material.needsUpdate = true;
-    material.clippingPlanes = planes;
+    setClippingPlanes(this.ambientOcclusion.normalMaterial, planes);
+    // BokehPass keeps its depth override material in a field @types/three does not declare.
+    const depthMaterial = (this.depthOfField as unknown as { _materialDepth?: THREE.Material })._materialDepth;
+    if (depthMaterial) setClippingPlanes(depthMaterial, planes);
   }
 
   private hideOverlaysDuring(pass: Pass): void {

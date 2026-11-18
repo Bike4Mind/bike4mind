@@ -369,7 +369,16 @@ export function ModelPane({
     const all = summary?.parts ?? [];
     if (!all.length) return;
     const at = pickedNames.length ? all.indexOf(pickedNames[pickedNames.length - 1]) : -1;
-    const next = all[(at + direction + all.length) % all.length] ?? all[0];
+    const kept = viewportHandle.current?.partKept;
+    let next: string | undefined;
+    for (let step = 1; step <= all.length; step++) {
+      const candidate = all[(((at + direction * step) % all.length) + all.length) % all.length];
+      if (!kept || kept(candidate)) {
+        next = candidate;
+        break;
+      }
+    }
+    if (!next) return;
     setPicked({ path: state.path, names: [next] });
     setPrompt(null);
   };

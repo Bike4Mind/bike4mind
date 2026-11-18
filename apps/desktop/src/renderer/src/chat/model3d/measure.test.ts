@@ -50,7 +50,41 @@ describe('snapPoint', () => {
   });
 });
 
+describe('snap radii', () => {
+  it('snaps to a corner at 9 px but not at 11 px', () => {
+    const near = new THREE.Vector3(0.9, 0, 0);
+    expect(snapPoint(near, toScreen(near), [edge], toScreen).kind).toBe('vertex');
+    const far = new THREE.Vector3(1.1, 0, 0);
+    expect(snapPoint(far, toScreen(far), [edge], toScreen).kind).not.toBe('vertex');
+  });
+
+  it('snaps to an edge at 6 px but not at 8 px', () => {
+    const near = new THREE.Vector3(5, 0.6, 0);
+    expect(snapPoint(near, toScreen(near), [edge], toScreen).kind).toBe('edge');
+    const far = new THREE.Vector3(5, 0.8, 0);
+    expect(snapPoint(far, toScreen(far), [edge], toScreen).kind).toBe('surface');
+  });
+});
+
 describe('featureEdges', () => {
+  // Two triangles sharing the x axis from 0 to 1, their normals `degrees` apart.
+  const hinge = (degrees: number) => {
+    const t = THREE.MathUtils.degToRad(degrees);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, -Math.cos(t), Math.sin(t)], 3)
+    );
+    return featureEdges(new THREE.Mesh(geometry)).filter(
+      line => line.start.y === 0 && line.start.z === 0 && line.end.y === 0 && line.end.z === 0
+    );
+  };
+
+  it('keeps a 25 degree crease and drops a 15 degree one', () => {
+    expect(hinge(25)).toHaveLength(1);
+    expect(hinge(15)).toHaveLength(0);
+  });
+
   it('finds a box outline in world space without the face diagonals', () => {
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2));
     mesh.position.set(10, 0, 0);

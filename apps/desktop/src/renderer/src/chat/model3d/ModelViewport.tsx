@@ -60,6 +60,8 @@ export type ModelViewportHandle = {
    * the edit prompt opens when the parts were picked from the keyboard. Null when none is shown.
    */
   partPoint: (names: readonly string[]) => ViewportPoint | null;
+  /** False when the section cut has removed every part of the named part (its box is wholly on the cut side). */
+  partKept: (name: string) => boolean;
 };
 
 /** A point on the viewport, in CSS px from its top left. */
@@ -474,6 +476,25 @@ export function ModelViewport({
       const bounds = renderer.domElement.getBoundingClientRect();
       return { x: ((centre.x + 1) / 2) * bounds.width, y: ((1 - centre.y) / 2) * bounds.height };
     };
+    const partKept = (name: string): boolean => {
+      const shown = shownCopy.current;
+      const box = shown ? partsBox(shown, [name]) : null;
+      if (!box || box.isEmpty()) return true;
+      const plane = clip();
+      return (
+        !plane ||
+        [0, 1].some(x =>
+          [0, 1].some(y =>
+            [0, 1].some(z =>
+              keptBy(
+                plane,
+                new THREE.Vector3(x ? box.max.x : box.min.x, y ? box.max.y : box.min.y, z ? box.max.z : box.min.z)
+              )
+            )
+          )
+        )
+      );
+    };
     const fit = () => {
       const shown = shownCopy.current;
       if (!shown || recording) return;
@@ -603,6 +624,7 @@ export function ModelViewport({
       orbit,
       zoom,
       partPoint,
+      partKept,
     };
     resize();
     return () => {
@@ -642,6 +664,7 @@ export function ModelViewport({
       orbit: (azimuth, polar) => viewer.current?.orbit(azimuth, polar),
       zoom: factor => viewer.current?.zoom(factor),
       partPoint: names => viewer.current?.partPoint(names) ?? null,
+      partKept: name => viewer.current?.partKept(name) ?? true,
     };
     return () => {
       handleRef.current = null;
@@ -752,6 +775,7 @@ export function ModelViewport({
   useEffect(() => {
     if (!viewer.current || !shownCopy.current) return;
     poseJoints(shownCopy.current, viewer.current.joints.posed(pose));
+    viewer.current.refreshMeasure(true);
     viewer.current.render();
   }, [pose]);
 
@@ -762,6 +786,7 @@ export function ModelViewport({
     const shown = shownCopy.current;
     if (from === target || !current || !shown) {
       explodeAmount.current = target;
+      current?.refreshMeasure(true);
       return;
     }
     const { camera, controls } = current;
@@ -789,7 +814,11 @@ export function ModelViewport({
       controls.update();
       current.render();
       if (t < 1) frame = requestAnimationFrame(step);
-      else current.checkCropped();
+      else {
+        current.refreshMeasure(true);
+        current.render();
+        current.checkCropped();
+      }
     });
     return () => cancelAnimationFrame(frame);
   }, [exploded]);
