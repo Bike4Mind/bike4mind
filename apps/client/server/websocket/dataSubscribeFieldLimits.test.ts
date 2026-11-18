@@ -39,6 +39,8 @@ describe('resolveFieldLimits', () => {
       embedding: false,
       slackNotification: false,
       signupActivity: false,
+      apiKeyId: false,
+      oauthClientId: false,
     });
   });
 
@@ -179,6 +181,8 @@ describe('resolveFieldLimits', () => {
       embedding: false,
       slackNotification: false,
       signupActivity: false,
+      apiKeyId: false,
+      oauthClientId: false,
     });
   });
 

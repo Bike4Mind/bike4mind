@@ -23,9 +23,15 @@ import {
   MONGO_TEST_TIMEOUT_MS,
   settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
-const h = vi.hoisted(() => ({ purgeFiles: vi.fn(), purgeContent: vi.fn(), sendComplete: vi.fn() }));
+const h = vi.hoisted(() => ({
+  purgeFiles: vi.fn(),
+  purgeContent: vi.fn(),
+  sendComplete: vi.fn(),
+  redactStripe: vi.fn(),
+}));
 vi.mock('../utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret' } }));
 vi.mock('./purgeAccountFiles', () => ({ purgeAccountFiles: h.purgeFiles }));
+vi.mock('../billing/redactAccountStripeCustomer', () => ({ redactAccountStripeCustomer: h.redactStripe }));
 vi.mock('./purgeAccountContent', () => ({ purgeAccountContent: h.purgeContent }));
 vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: h.sendComplete }));
 vi.mock('@bike4mind/services', async importOriginal => {
@@ -301,6 +307,32 @@ describe('account deletion purge claims with Mongo', () => {
     await expect(first).resolves.toEqual({ deleted: true });
     expect(await User.exists({ _id: userId })).toBeNull();
   });
+  it('retains the retryable user and newer lease when the Stripe phase loses ownership', async () => {
+    const userId = await seedUser();
+    const newerLease = 'newer-purge-worker';
+    const newerExpiry = new Date(Date.now() + 60_000);
+    h.redactStripe.mockImplementationOnce(
+      async (_userId: string, { assertLease }: { assertLease: () => Promise<void> }) => {
+        await User.updateOne(
+          { _id: userId },
+          {
+            $set: {
+              'deletion.purgeLeaseId': newerLease,
+              'deletion.purgeLeaseExpiresAt': newerExpiry,
+            },
+          }
+        );
+        await assertLease();
+      }
+    );
+    await expect(complete(userId)).rejects.toThrow('purge lease lost');
+    const pending = await User.findById(userId).lean();
+    expect(pending?.deletion?.purgeStartedAt).toBeInstanceOf(Date);
+    expect(pending?.deletion?.purgeLeaseId).toBe(newerLease);
+    expect(pending?.deletion?.purgeLeaseExpiresAt).toEqual(newerExpiry);
+    expect(h.sendComplete).not.toHaveBeenCalled();
+  });
+
   it('keeps irreversible state after a failed purge and resumes with a new lease', async () => {
     const userId = await seedUser();
     h.purgeContent.mockRejectedValueOnce(new Error('temporary storage failure'));

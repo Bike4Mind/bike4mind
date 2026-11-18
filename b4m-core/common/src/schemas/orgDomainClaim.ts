@@ -34,5 +34,11 @@ export const addOrgDomainSchema = z.object({ domain: orgDomainSchema }).strict()
 
 export const updateOrgDomainPolicySchema = z.object({ policy: z.enum(ORG_DOMAIN_JOIN_POLICIES) }).strict();
 
+/** A Space never auto-joins anyone, so its claims take only these policies. */
+export const SPACE_DOMAIN_JOIN_POLICIES = ['off', 'suggest'] as const;
+
+export const updateSpaceDomainPolicySchema = z.object({ policy: z.enum(SPACE_DOMAIN_JOIN_POLICIES) }).strict();
+
 export type AddOrgDomainInput = z.infer<typeof addOrgDomainSchema>;
 export type UpdateOrgDomainPolicyInput = z.infer<typeof updateOrgDomainPolicySchema>;
+export type UpdateSpaceDomainPolicyInput = z.infer<typeof updateSpaceDomainPolicySchema>;

@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   hardDeleteUser: vi.fn(),
   purgeFiles: vi.fn(),
   purgeContent: vi.fn(),
+  redactStripe: vi.fn(),
   endRealtimeConnections: vi.fn(),
   sendComplete: vi.fn(),
   noticeRecord: vi.fn(),
@@ -53,6 +54,7 @@ vi.mock('./ownedOrganizations', () => ({
   deleteSoleOwnedOrganizations: h.deleteSoleOwned,
 }));
 vi.mock('./purgeAccountFiles', () => ({ purgeAccountFiles: h.purgeFiles }));
+vi.mock('../billing/redactAccountStripeCustomer', () => ({ redactAccountStripeCustomer: h.redactStripe }));
 vi.mock('./purgeAccountContent', () => ({ purgeAccountContent: h.purgeContent }));
 vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: h.sendComplete }));
 vi.mock('../utils/adminAudit', () => ({
@@ -121,6 +123,9 @@ beforeEach(() => {
   });
   h.purgeContent.mockImplementation(async () => {
     h.order.push('content');
+  });
+  h.redactStripe.mockImplementation(async () => {
+    h.order.push('stripe');
   });
   h.collections.mockResolvedValue([]);
   h.updateOne.mockResolvedValue({ matchedCount: 1 });
@@ -195,6 +200,7 @@ describe('completeAccountDeletion', () => {
       'orgs',
       'files',
       'content',
+      'stripe',
       'realtime',
       'erase:beforeDelete',
       'delete',
@@ -260,6 +266,28 @@ describe('completeAccountDeletion', () => {
       );
     }
   );
+
+  it('redacts the Stripe customer after the content purge and keeps the account when that fails', async () => {
+    h.redactStripe.mockRejectedValueOnce(new Error('stripe unavailable'));
+    await expect(complete()).rejects.toThrow('stripe unavailable');
+    expect(h.order).toEqual(['orgs', 'files', 'content']);
+    expect(h.hardDeleteUser).not.toHaveBeenCalled();
+    expect(h.updateOne).toHaveBeenCalledWith(
+      { _id: USER_ID, 'deletion.purgeLeaseId': expect.any(String) },
+      { $unset: { 'deletion.purgeLeaseId': 1, 'deletion.purgeLeaseExpiresAt': 1 } }
+    );
+    expect(h.redactStripe).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ logger, assertLease: expect.any(Function) })
+    );
+  });
+
+  it('hands the Stripe step the purge lease check', async () => {
+    await complete();
+    const { assertLease } = h.redactStripe.mock.calls[0][1] as { assertLease: () => Promise<void> };
+    h.exists.mockResolvedValue(null);
+    await expect(assertLease()).rejects.toThrow('purge lease lost');
+  });
 
   it('does not delete or email after losing its lease', async () => {
     h.exists.mockResolvedValueOnce({ _id: USER_ID }).mockResolvedValue(null);
@@ -348,6 +376,7 @@ describe('completeAccountDeletion', () => {
       'orgs',
       'files',
       'content',
+      'stripe',
       'realtime',
       'erase:beforeDelete',
       'notice',
@@ -436,7 +465,7 @@ describe('completeAccountDeletion for an admin data subject erasure', () => {
   it('snapshots the scope before the purge and stores it under the lease', async () => {
     await expect(complete()).resolves.toEqual({ deleted: true });
 
-    expect(h.order.slice(0, 4)).toEqual(['plan', 'orgs', 'files', 'content']);
+    expect(h.order.slice(0, 5)).toEqual(['plan', 'orgs', 'files', 'content', 'stripe']);
     expect(h.collections.mock.calls[0]).toEqual([expect.any(Function)]);
     expect(h.updateOne).toHaveBeenCalledWith(
       expect.objectContaining({ _id: USER_ID, 'deletion.purgeLeaseId': expect.any(String) }),
