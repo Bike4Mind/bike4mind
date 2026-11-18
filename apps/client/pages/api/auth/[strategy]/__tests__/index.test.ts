@@ -53,7 +53,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({ isE2EEnabled: () => fal
 vi.mock('@server/auth/auth', () => ({
   default: {
     authenticate: (...a: unknown[]) => h.authenticate(...a),
-    _strategy: (name: string) => (h.registered.has(name) ? {} : undefined),
+    _strategy: (name: string) => (h.registered.has(name) ? { authenticate: () => undefined } : undefined),
   },
 }));
 vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', () => ({ issueStateNonce: () => 'hash' }));

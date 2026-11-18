@@ -52,7 +52,7 @@ vi.mock('passport', () => ({
   default: {
     authenticate: (...args: unknown[]) => mockAuthenticate(...args),
     // passport's own registry lookup, read by isPassportStrategyRegistered.
-    _strategy: (name: string) => (registeredStrategies.names.has(name) ? {} : undefined),
+    _strategy: (name: string) => (registeredStrategies.names.has(name) ? { authenticate: () => undefined } : undefined),
   },
 }));
 
