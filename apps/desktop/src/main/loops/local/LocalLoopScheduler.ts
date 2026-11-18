@@ -889,10 +889,12 @@ export class LocalLoopScheduler {
   async releaseAll(quitting = false): Promise<void> {
     this.quitting = quitting;
     this.stop();
-    const reason = 'The app quit';
+    const reason = quitting ? 'The app quit' : 'The account changed';
     await Promise.all(
       [...this.lanes.values()].map(lane => {
-        const loop = this.deps.store.loop(lane.run.loopId);
+        // A finishing lane already has its end; a run with a PR ends blocked (endRun), not requeued.
+        const ended = lane.finished || this.deps.store.run(lane.run.id)?.prUrl;
+        const loop = ended ? undefined : this.deps.store.loop(lane.run.loopId);
         if (loop) this.raise(loop, { kind: 'requeued', reason, ticketId: lane.run.ticketId, runId: lane.run.id });
         return this.finish(lane, { stopReason: 'requeued', reason });
       })

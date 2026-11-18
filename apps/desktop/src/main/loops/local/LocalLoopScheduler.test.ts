@@ -515,6 +515,40 @@ describe('LocalLoopScheduler', () => {
     );
   });
 
+  it('records no requeued event when a quit stops a run that opened a PR, since that run ends blocked', async () => {
+    make();
+    ticket('a');
+    scheduler.start();
+    await settle();
+    const [run] = store.openRuns();
+    store.putRun({ ...run, prUrl: 'https://github.com/o/r/pull/1' });
+    await scheduler.releaseAll(true);
+    expect(store.run(run.id)).toMatchObject({ outcome: 'blocked' });
+    expect(store.events('loop-1').filter(event => event.kind === 'requeued')).toEqual([]);
+  });
+
+  it('records one requeued event when a second release lands while the first is still stopping', async () => {
+    make();
+    ticket('a');
+    scheduler.start();
+    await settle();
+    await Promise.all([scheduler.releaseAll(), scheduler.releaseAll(true)]);
+    expect(store.events('loop-1').filter(event => event.kind === 'requeued')).toHaveLength(1);
+  });
+
+  it('records an account change, not a quit, when the release is not a quit', async () => {
+    make();
+    const t = ticket('a');
+    scheduler.start();
+    await settle();
+    const [run] = store.openRuns();
+    await scheduler.releaseAll();
+    expect(store.events('loop-1')).toContainEqual(
+      expect.objectContaining({ kind: 'requeued', reason: 'The account changed', ticketId: t.id, runId: run.id })
+    );
+    expect(store.events('loop-1').filter(event => event.reason === 'The app quit')).toEqual([]);
+  });
+
   it('does not spin on a stale pacing time once its loop is paused', async () => {
     let changes = 0;
     const paced = new LocalLoopScheduler({ ...schedulerDeps(), onChange: () => changes++ });
