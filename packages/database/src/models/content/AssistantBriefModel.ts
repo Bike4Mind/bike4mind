@@ -197,6 +197,12 @@ export const assistantBriefRepository = {
     return result.modifiedCount;
   },
 
+  /** Drops a brief that is still composing; a settled one is left alone. */
+  async discardComposing(id: string): Promise<boolean> {
+    const result = await AssistantBriefModel.deleteOne({ _id: id, status: 'composing' });
+    return result.deletedCount === 1;
+  },
+
   async findById(id: string): Promise<IAssistantBrief | null> {
     if (!mongoose.isValidObjectId(id)) return null;
     return AssistantBriefModel.findById(id).lean();

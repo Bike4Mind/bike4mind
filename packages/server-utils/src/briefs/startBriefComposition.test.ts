@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { IAssistantBrief } from '@bike4mind/database';
-import { startBriefComposition } from './composeBrief';
+import { startBriefComposition } from './startBriefComposition';
 
 const now = new Date('2026-11-17T12:00:00Z');
 const stored = (overrides: Partial<IAssistantBrief> = {}) =>
