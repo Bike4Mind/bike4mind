@@ -62,7 +62,7 @@ const BATCH_SIZE = 20;
 // text-embedding-3-small is a Matryoshka model (native: 1536 dims). The first
 // N dims remain useful at lower dimensionality, so if the chunk count grows
 // significantly you can reduce this to 1024 or 512 to shrink the embeddings
-// file (~0.84 MB at 512 vs ~2.4 MB at 1536 for ~184 chunks).
+// vectors file (4 bytes per value: ~0.36 MB at 512 vs ~1.08 MB at 1536 for ~184 chunks).
 const EMBEDDING_DIMENSIONS = 1536;
 // Number of decimal places to keep per float before the Float32 encode. 6 gives ample
 // precision for cosine similarity.
