@@ -15,7 +15,9 @@ const read = (file: string) => readFileSync(path.join(REPO_ROOT, file), 'utf8');
 function block(source: string, start: string, end: string): string {
   const from = source.indexOf(start);
   expect(from, start).toBeGreaterThanOrEqual(0);
-  return source.slice(from, source.indexOf(end, from));
+  const to = source.indexOf(end, from);
+  expect(to, end).toBeGreaterThan(from);
+  return source.slice(from, to);
 }
 
 describe('briefScheduleReconcile cron', () => {
@@ -43,7 +45,11 @@ describe('briefScheduleReconcile cron', () => {
   });
 
   it('sends the per-user brief.compose work through a dead-letter queue', () => {
-    const subscription = block(read('infra/eventBus.ts'), "'brief-compose'", "detailType: ['brief.compose']");
+    const subscription = block(
+      read('infra/eventBus.ts'),
+      'const briefComposeSubscription = eventBus.subscribe(',
+      '\n);'
+    );
     expect(subscription).toMatch(/sessionEnrichmentDeadLetter\.functionTarget/);
     expect(subscription).toMatch(/sessionEnrichmentDeadLetter\.ruleTarget/);
   });

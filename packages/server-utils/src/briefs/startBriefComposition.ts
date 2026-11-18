@@ -6,7 +6,21 @@ import {
   type IAssistantBrief,
 } from '@bike4mind/database';
 import { briefWindow } from './briefSchedule';
-import { BriefEvents } from '../utils/eventBus';
+import { BriefComposeRejectedError, publishBriefCompose } from './publishBriefCompose';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'startBriefComposition' } });
+
+export class BriefComposeStartError extends Error {
+  constructor(
+    readonly briefId: string,
+    readonly retrySafe: boolean,
+    cause: unknown
+  ) {
+    super('Brief composition event submission failed', { cause });
+    this.name = 'BriefComposeStartError';
+  }
+}
 
 type Deps = {
   briefs: Pick<
@@ -19,13 +33,13 @@ type Deps = {
 
 const defaultDeps: Deps = {
   briefs: assistantBriefRepository,
-  publishCompose: event => BriefEvents.Compose.publish(event),
+  publishCompose: publishBriefCompose,
   now: () => new Date(),
 };
 
 /**
- * Starts a brief for the user, or returns the one already composing so a double tap (or a retry) never
- * spends a second model call. The window runs from the end of the last ready brief, capped at a week.
+ * Reuses a recent composing brief on retry. The window runs from the end of the last ready brief,
+ * capped at a week; stale composing rows retain the existing five-minute recovery window.
  */
 export async function startBriefComposition(
   userId: string,
@@ -43,10 +57,16 @@ export async function startBriefComposition(
   try {
     await deps.publishCompose({ briefId, userId, ...(options.scheduled ? { scheduled: true } : {}) });
   } catch (err) {
-    // Drop the row before rethrowing: left composing, it would read as in flight to the retry (the
-    // scheduler's, or a second tap) for BRIEF_COMPOSING_STALE_MS while no worker ever composes it.
-    await deps.briefs.discardComposing(briefId).catch(() => undefined);
-    throw err;
+    let retrySafe = false;
+    if (err instanceof BriefComposeRejectedError) {
+      try {
+        retrySafe = await deps.briefs.discardComposing(briefId);
+      } catch (cleanupError) {
+        logger.error('Failed to discard a rejected brief composition', { briefId, cleanupError });
+      }
+      if (!retrySafe) logger.warn('Rejected brief retained because cleanup was not confirmed', { briefId });
+    }
+    throw new BriefComposeStartError(briefId, retrySafe, err);
   }
   return brief;
 }

@@ -21,9 +21,49 @@ private actor FakeBriefScheduleAPI: BriefScheduleAPI {
   }
 }
 
+private actor HeldBriefScheduleAPI: BriefScheduleAPI {
+  private(set) var stored = BriefSchedule.defaults(timeZone: "Asia/Kolkata")
+  private(set) var saved: [BriefSchedule] = []
+  private var pending: CheckedContinuation<BriefSchedule, any Error>?
+  private var waiting: (count: Int, continuation: CheckedContinuation<Void, Never>)?
+
+  func schedule() async throws -> BriefSchedule? { stored }
+
+  func save(_ schedule: BriefSchedule) async throws -> BriefSchedule {
+    saved.append(schedule)
+    if pending != nil {
+      stored = schedule
+      return schedule
+    }
+    return try await withCheckedThrowingContinuation { continuation in
+      pending = continuation
+      if let waiting, saved.count >= waiting.count {
+        self.waiting = nil
+        waiting.continuation.resume()
+      }
+    }
+  }
+
+  func waitForSave(_ count: Int) async {
+    if saved.count >= count { return }
+    await withCheckedContinuation { waiting = (count, $0) }
+  }
+
+  func finish(success: Bool) {
+    let continuation = pending
+    pending = nil
+    if success {
+      stored = saved.last!
+      continuation?.resume(returning: stored)
+    } else {
+      continuation?.resume(throwing: APIError.server(status: 500))
+    }
+  }
+}
+
 @MainActor
 final class BriefScheduleViewModelTests: XCTestCase {
-  private func model(_ api: FakeBriefScheduleAPI, zone: String = "Asia/Kolkata") -> BriefScheduleViewModel {
+  private func model(_ api: any BriefScheduleAPI, zone: String = "Asia/Kolkata") -> BriefScheduleViewModel {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(identifier: zone)!
     calendar.locale = Locale(identifier: "en_US")
@@ -105,5 +145,66 @@ final class BriefScheduleViewModelTests: XCTestCase {
     XCTAssertNotNil(vm.errorMessage)
     let sent = await api.saved
     XCTAssertTrue(sent.isEmpty)
+  }
+
+  func testPendingSaveBlocksAllEditsUntilTheStoredScheduleSettles() async {
+    let api = HeldBriefScheduleAPI()
+    let vm = model(api)
+    await vm.load()
+    let first = Task { await vm.setEnabled(true) }
+    await api.waitForSave(1)
+    XCTAssertTrue(vm.isSaving)
+
+    await vm.setEnabled(false)
+    await vm.setTime(Date())
+    await vm.toggleDay(6)
+    let sent = await api.saved
+    XCTAssertEqual(sent.count, 1)
+    XCTAssertEqual(vm.schedule, sent[0])
+    await api.finish(success: true)
+    await first.value
+    XCTAssertFalse(vm.isSaving)
+    let stored = await api.stored
+    XCTAssertEqual(vm.schedule, stored)
+    XCTAssertTrue(stored.enabled)
+
+    let second = Task { await vm.setEnabled(false) }
+    await api.waitForSave(2)
+    await api.finish(success: true)
+    await second.value
+    let finalStored = await api.stored
+    XCTAssertEqual(vm.schedule, finalStored)
+    XCTAssertFalse(finalStored.enabled)
+  }
+
+  func testPendingABAEditsCannotOwnTheFirstFailureOrLeaveAStaleErrorAfterRetry() async {
+    let api = HeldBriefScheduleAPI()
+    let vm = model(api)
+    await vm.load()
+    let original = vm.schedule
+    let first = Task { await vm.setEnabled(true) }
+    await api.waitForSave(1)
+    await vm.setEnabled(false)
+    await vm.setEnabled(true)
+    await api.finish(success: false)
+    await first.value
+
+    let sent = await api.saved
+    let stored = await api.stored
+    XCTAssertEqual(sent.count, 1)
+    XCTAssertEqual(vm.schedule, original)
+    XCTAssertEqual(stored, original)
+    XCTAssertNotNil(vm.errorMessage)
+    XCTAssertFalse(vm.isSaving)
+
+    let retry = Task { await vm.setEnabled(true) }
+    await api.waitForSave(2)
+    XCTAssertNil(vm.errorMessage)
+    await api.finish(success: true)
+    await retry.value
+    let finalStored = await api.stored
+    XCTAssertEqual(vm.schedule, finalStored)
+    XCTAssertTrue(finalStored.enabled)
+    XCTAssertNil(vm.errorMessage)
   }
 }

@@ -2,8 +2,9 @@
  * Starts the scheduled briefs that have come due. Each due user is claimed by moving `nextBriefAt` to its
  * next slot with a compare-and-set, so overlapping runs (at-least-once delivery, or the self-host twin
  * next to a hosted run) start a slot once. The next slot is computed from now, not from the missed one,
- * so an outage yields one brief rather than a backlog. A start that throws hands the slot back, so later
- * runs retry it for up to RETRY_WINDOW_MS after it fell due. The brief itself rides the existing `brief.compose`
+ * so an outage yields one brief rather than a backlog. Retry-safe failures hand the slot back for up to
+ * RETRY_WINDOW_MS after it fell due; uncertain event acceptance retains the row and advanced slot.
+ * The brief itself rides the existing `brief.compose`
  * event; startScheduledBrief skips users whose schedule was turned off after the claim, users with brief
  * pushes off, and windows with no agent runs.
  *
@@ -13,7 +14,11 @@ import type { Context } from 'aws-lambda';
 import { connectDB, userRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { computeNextBriefAt } from '@bike4mind/server-utils/briefs/briefSchedule';
-import { startScheduledBrief, type ScheduledBriefOutcome } from '@bike4mind/server-utils/briefs/startBriefComposition';
+import {
+  BriefComposeStartError,
+  startScheduledBrief,
+  type ScheduledBriefOutcome,
+} from '@bike4mind/server-utils/briefs/startBriefComposition';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 
@@ -100,8 +105,11 @@ export async function runBriefScheduleReconcile(
       result[await deps.startScheduledBrief(user.id)]++;
     } catch (err) {
       result.failed++;
-      // Hand the slot back so the next run retries it, until the slot is RETRY_WINDOW_MS old.
-      const retry = next !== null && now.getTime() - user.nextBriefAt.getTime() < RETRY_WINDOW_MS;
+      // Only release submission failures when non-delivery and cleanup are established.
+      const retry =
+        !(err instanceof BriefComposeStartError && !err.retrySafe) &&
+        next !== null &&
+        now.getTime() - user.nextBriefAt.getTime() < RETRY_WINDOW_MS;
       logger.error('[briefScheduleReconcile] failed to start a scheduled brief', { userId: user.id, retry, err });
       if (retry && next) {
         await deps.users.advanceNextBriefAt(user.id, next, user.nextBriefAt).catch((releaseErr: unknown) => {
@@ -128,7 +136,7 @@ export async function handler(_event: unknown, context?: Pick<Context, 'getRemai
     startScheduledBrief: userId => startScheduledBrief(userId),
     outOfTime: () => (context ? context.getRemainingTimeInMillis() < STOP_BEFORE_TIMEOUT_MS : false),
   });
-  // Throwing surfaces the run in the LambdaErrors alarm; failed starts were handed back for retry above.
+  // Surface failed starts in the LambdaErrors alarm, including retained uncertain submissions.
   if (result.failed > 0) throw new Error(`Failed to start ${result.failed} scheduled brief(s)`);
   return result;
 }

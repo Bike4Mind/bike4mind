@@ -13,20 +13,23 @@ final class BriefScheduleClientTests: XCTestCase {
 
   func testGetReadsTheSavedSchedule() async throws {
     let json = #"{"enabled":true,"timeOfDay":"07:30","days":[1,3,5],"timeZone":"America/Los_Angeles"}"#
-    let transport = FakeTransport { [envelope] _ in (200, envelope(json)) }
+    let response = envelope(json)
+    let transport = FakeTransport { _ in (200, response) }
     let client = BriefScheduleClient(baseURL: base, tokens: FakeTokens(), transport: transport)
 
     let loaded = try await client.schedule()
 
     XCTAssertEqual(loaded, schedule)
-    let request = try XCTUnwrap(await transport.requests.first)
+    let requests = await transport.requests
+    let request = try XCTUnwrap(requests.first)
     XCTAssertEqual(request.httpMethod, "GET")
     XCTAssertEqual(request.url?.path(), "/api/v1/briefs/schedule")
     XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer token-1")
   }
 
   func testGetDecodesANeverSavedScheduleAsNil() async throws {
-    let transport = FakeTransport { [envelope] _ in (200, envelope("null")) }
+    let response = envelope("null")
+    let transport = FakeTransport { _ in (200, response) }
     let client = BriefScheduleClient(baseURL: base, tokens: FakeTokens(), transport: transport)
     let loaded = try await client.schedule()
     XCTAssertNil(loaded)
@@ -41,7 +44,8 @@ final class BriefScheduleClientTests: XCTestCase {
     let saved = try await client.save(schedule)
 
     XCTAssertEqual(saved, schedule)
-    let request = try XCTUnwrap(await transport.requests.first)
+    let requests = await transport.requests
+    let request = try XCTUnwrap(requests.first)
     XCTAssertEqual(request.httpMethod, "PUT")
     XCTAssertEqual(request.url?.path(), "/api/v1/briefs/schedule")
     let json = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])

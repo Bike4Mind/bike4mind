@@ -14,6 +14,7 @@ public final class BriefScheduleViewModel {
 
   public private(set) var schedule: BriefSchedule
   public private(set) var isLoaded = false
+  public private(set) var isSaving = false
   public private(set) var errorMessage: String?
 
   @ObservationIgnored private let api: any BriefScheduleAPI
@@ -78,6 +79,7 @@ public final class BriefScheduleViewModel {
 
   /// The server needs at least one day, so the last selected day cannot be removed.
   public func toggleDay(_ day: Int) async {
+    guard !isSaving else { return }
     var next = schedule
     if next.days.contains(day) {
       guard next.days.count > 1 else {
@@ -92,6 +94,9 @@ public final class BriefScheduleViewModel {
   }
 
   private func save(_ next: BriefSchedule) async {
+    guard !isSaving else { return }
+    isSaving = true
+    defer { isSaving = false }
     var next = next
     next.timeZone = currentTimeZone().identifier
     let previous = schedule
@@ -99,10 +104,9 @@ public final class BriefScheduleViewModel {
     errorMessage = nil
     do {
       let saved = try await api.save(next)
-      if schedule == next { schedule = saved }
+      schedule = saved
     } catch {
-      // A newer change made while this one was in flight owns the state now.
-      if schedule == next { schedule = previous }
+      schedule = previous
       errorMessage = "Couldn't save your brief schedule. Try again."
     }
   }
