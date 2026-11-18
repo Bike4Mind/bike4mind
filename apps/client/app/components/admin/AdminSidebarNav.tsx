@@ -382,7 +382,7 @@ export const SidebarNav = ({
       ) : null;
     }
     const count = pendingCount(item);
-    if (!badge || badge === 'newSubscriptions' || count <= 0) return null;
+    if (!badge || count <= 0) return null;
     return (
       <CountPill
         count={count}

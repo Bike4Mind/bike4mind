@@ -171,7 +171,7 @@ export function PendingSection() {
       to: '/admin',
       search: (previous: AdminSearch) => ({
         ...previous,
-        [INVITE_CENTER_HELD_GRANTS_PARAM]: heldActionsOpen ? undefined : 'open',
+        [INVITE_CENTER_HELD_GRANTS_PARAM]: heldActionsOpen ? undefined : ('open' as const),
       }),
       replace: true,
     });
