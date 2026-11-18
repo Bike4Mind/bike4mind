@@ -126,6 +126,21 @@ export function buildMusicClip(music: PlacedAudio, timelineMs: number, underVoic
   };
 }
 
+/**
+ * The director's music bed, trimmed to a re-timed cut. A song shorter than the new cut is kept as it is and ends
+ * early under its fade; trimming only ever shortens a clip, so it never plays past its source.
+ */
+export function keptMusic(timeline: StudioTimeline, timelineMs: number): StudioAudioClip[] {
+  const track = timeline.tracks.find(candidate => candidate.id === DIRECTOR_TRACK_IDS.music);
+  if (track?.kind !== 'music') return [];
+  return track.clips.flatMap(clip => {
+    const durationMs = Math.min(clip.durationMs, timelineMs - clip.startMs);
+    if (durationMs <= 0) return [];
+    const fadeOutMs = Math.min(MUSIC_FADE_OUT_MS, Math.floor(durationMs / 2));
+    return [{ ...clip, durationMs, fadeOutMs, fadeInMs: Math.min(clip.fadeInMs, durationMs - fadeOutMs) }];
+  });
+}
+
 /** One effect at the start of its shot, never longer than the shot, so effects on one track never overlap. */
 export function buildSfxClips(effects: readonly (PlacedAudio & { slot: ShotSlot })[]): StudioAudioClip[] {
   return effects.map(({ id, fileId, durationMs, slot }) => ({
