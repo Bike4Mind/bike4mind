@@ -1684,13 +1684,16 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return { schedule: user?.preferences?.briefSchedule ?? null, nextBriefAt: user?.nextBriefAt ?? null };
   }
 
-  /** Users whose scheduled brief is due, earliest first. Served by the `user_nextBriefAt` partial index. */
+  /**
+   * Users whose scheduled brief is due, earliest first. The `$type` term is what lets the planner use the
+   * `user_nextBriefAt` partial index; without it the scan is a COLLSCAN plus an in-memory sort.
+   */
   async findDueBriefSchedules(
     now: Date,
     limit: number
   ): Promise<{ id: string; schedule: BriefSchedule | null; nextBriefAt: Date }[]> {
     const users = await this.model
-      .find({ nextBriefAt: { $lte: now } }, { 'preferences.briefSchedule': 1, nextBriefAt: 1 })
+      .find({ nextBriefAt: { $type: 'date', $lte: now } }, { 'preferences.briefSchedule': 1, nextBriefAt: 1 })
       .sort({ nextBriefAt: 1 })
       .limit(limit)
       .lean<(Pick<IUserDocument, 'preferences'> & { _id: unknown; nextBriefAt: Date })[]>();
