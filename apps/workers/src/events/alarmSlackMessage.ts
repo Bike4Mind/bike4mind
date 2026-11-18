@@ -48,7 +48,8 @@ export type AlarmLinkKey =
   | 'rate-limits'
   | 'spend-monitor'
   | 'moderation-review'
-  | 'moderation-settings';
+  | 'moderation-settings'
+  | 'model-prices';
 
 export interface AlarmCatalogEntry {
   title: string;
@@ -107,6 +108,7 @@ export const ADMIN_LINKS: Record<AlarmLinkKey, { label: string; path: string }> 
   'spend-monitor': { label: 'Credit analytics', path: '/admin?tab=credit-analytics' },
   'moderation-review': { label: 'Moderation review', path: `/admin?tab=${ADMIN_MODERATION_INCIDENTS_TAB_SLUG}` },
   'moderation-settings': { label: 'Moderation settings', path: '/admin?tab=admin-settings&section=security' },
+  'model-prices': { label: 'Model prices', path: '/admin?tab=models&modelsSection=prices' },
 };
 
 const SIGNUP_ACTION =
@@ -488,6 +490,17 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     owner:
       'Owner: the abuse/LiveOps owner triages this in the thread. Devops: no infrastructure action unless the provider console shows an unknown key spending, which is a key rotation.',
     links: ['agent-executions', 'signup-activity', 'waf-block-list'],
+  },
+  'provider-unpriced-tokens-hourly': {
+    title: 'AI spend at {provider} is partly unpriced',
+    level: 'warn',
+    category: 'cost',
+    unit: 'unpriced hours',
+    meaning:
+      "The last hour's {provider} usage report includes output tokens from models our poller has no price for, above both the volume floor and the share floor, so the provider-reported spend alarm reads low.",
+    action:
+      'Open the usage poller Lambda log and find the WARN line "no price for <ids>". Add a price for each id on the admin model prices page (or as a ModelPrice row); it reaches the poller at the next model discovery run, within 6 hours. If the price snapshot is unavailable, the adapter table or USAGE_ONLY_PRICING in b4m-core/services/src/spendReconciliation/providerUsagePricing.ts is the fallback. Meanwhile, check the {provider} console usage for that hour by hand.',
+    links: ['model-prices'],
   },
   'provider-usage-poll-errors': {
     title: 'The provider usage poller is failing',
