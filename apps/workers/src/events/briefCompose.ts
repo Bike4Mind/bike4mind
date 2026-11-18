@@ -31,7 +31,7 @@ import {
 
 /**
  * `brief.compose` consumer: composes one user's brief (POST /api/v1/briefs creates the `composing`
- * row and publishes the event), stores it and pushes `brief_ready`.
+ * row and publishes the event, as does the schedule reconciler), stores it and pushes `brief_ready`.
  *
  * Composition is one pass of the platform's operations model over the user's recent agent runs, the
  * approvals and questions still waiting on them and counts of their triaged email; there is no tool loop. Failures settle the row as `failed` so a
@@ -50,7 +50,7 @@ type LogLike = Pick<Logger, 'info' | 'warn' | 'error'>;
 export type BriefComposeDeps = {
   now: () => Date;
   users: { findById(id: string): Promise<{ id: string } | null> };
-  briefs: Pick<typeof assistantBriefRepository, 'findById' | 'markReady' | 'markFailed' | 'removeEmailSourcedItems'>;
+  briefs: Pick<typeof assistantBriefRepository, 'findById' | 'markReady' | 'markFailed' | 'removeEmailSourcedItems' | 'discardComposing'>;
   loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefActivity>;
   /** Whether the call may run: 'ok', or why not (AI access held, or the balance cannot cover it). */
   canCompose(userId: string): Promise<'ok' | 'ai_access_held' | 'insufficient_credits'>;
@@ -77,7 +77,10 @@ async function loadInstructionsSafely(deps: BriefComposeDeps, userId: string): P
   }
 }
 
-export async function composeBrief(deps: BriefComposeDeps, input: { briefId: string; userId: string }): Promise<void> {
+export async function composeBrief(
+  deps: BriefComposeDeps,
+  input: { briefId: string; userId: string; scheduled?: boolean }
+): Promise<void> {
   const { briefs, logger } = deps;
   const brief = await briefs.findById(input.briefId);
   if (!brief || brief.userId !== input.userId) {
@@ -109,6 +112,10 @@ export async function composeBrief(deps: BriefComposeDeps, input: { briefId: str
       const instructions = await loadInstructionsSafely(deps, input.userId);
       const reply = await deps.complete(input.userId, input.briefId, buildBriefPrompt(activity, instructions));
       composed = assembleBrief(reply, activity);
+    } else if (input.scheduled) {
+      // A scheduled brief with nothing to report is dropped: no row, no push.
+      await briefs.discardComposing(input.briefId);
+      return;
     } else {
       composed = emptyBrief();
     }

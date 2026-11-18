@@ -30,6 +30,7 @@ function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {
       markReady: vi.fn().mockResolvedValue(true),
       markFailed: vi.fn().mockResolvedValue(true),
       removeEmailSourcedItems: vi.fn().mockResolvedValue(0),
+      discardComposing: vi.fn().mockResolvedValue(true),
     },
     loadActivity: vi.fn().mockResolvedValue(activeActivity),
     canCompose: vi.fn().mockResolvedValue('ok'),
@@ -47,6 +48,7 @@ function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {
       markReady: ReturnType<typeof vi.fn>;
       markFailed: ReturnType<typeof vi.fn>;
       removeEmailSourcedItems: ReturnType<typeof vi.fn>;
+      discardComposing: ReturnType<typeof vi.fn>;
     };
     push: ReturnType<typeof vi.fn>;
     complete: ReturnType<typeof vi.fn>;
@@ -186,6 +188,25 @@ describe('composeBrief', () => {
 
     expect(deps.complete).not.toHaveBeenCalled();
     expect(deps.briefs.markReady.mock.calls[0][1].headline).toBe('Nothing new since your last brief.');
+  });
+
+  it('discards an empty scheduled brief without a model call or a push', async () => {
+    const deps = makeDeps({ loadActivity: vi.fn().mockResolvedValue({ ...activeActivity, runs: [], approvals: [] }) });
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1', scheduled: true });
+
+    expect(deps.briefs.discardComposing).toHaveBeenCalledWith('b1');
+    expect(deps.briefs.markReady).not.toHaveBeenCalled();
+    expect(deps.complete).not.toHaveBeenCalled();
+    expect(deps.push).not.toHaveBeenCalled();
+  });
+
+  it('still composes a scheduled brief that has activity', async () => {
+    const deps = makeDeps();
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1', scheduled: true });
+
+    expect(deps.briefs.discardComposing).not.toHaveBeenCalled();
+    expect(deps.complete).toHaveBeenCalledOnce();
+    expect(deps.push).toHaveBeenCalledOnce();
   });
 
   it('fails the brief, and sends no push, when the balance gate refuses', async () => {
