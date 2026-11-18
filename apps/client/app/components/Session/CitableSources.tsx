@@ -219,7 +219,12 @@ const CitableSourceItem: FC<CitableSourceItemProps> = ({
             ? source.metadata.displayHost
             : undefined;
         hostname = (displayHost ?? parsedUrl.hostname).replace('www.', '');
-        faviconUrl = getFaviconUrl(displayHost ? `https://${displayHost}` : source.url);
+        // A platform name such as "Reddit" has no host to look a favicon up by.
+        faviconUrl = displayHost
+          ? displayHost.includes('.')
+            ? getFaviconUrl(`https://${displayHost}`)
+            : null
+          : getFaviconUrl(source.url);
       }
     } catch {
       hostname = source.url || '';
