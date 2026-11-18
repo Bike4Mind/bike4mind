@@ -53,6 +53,7 @@ export function median(values: number[]): number {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
+/** A zero baseline (brand-new or sporadic spend) flags any bucket at or above the floor. */
 export function isSpike(totalUsd: number, baselineUsd: number): boolean {
   return totalUsd >= SPEND_SPIKE_MIN_USD && totalUsd > baselineUsd * SPEND_SPIKE_MULTIPLE;
 }

@@ -4,6 +4,7 @@ import {
   bucketKey,
   ceilToBucket,
   floorToBucket,
+  isSpike,
   lookbackStart,
   median,
   normalizeProvider,
@@ -36,6 +37,18 @@ describe('bucket helpers', () => {
     expect(normalizeProvider('Anthropic')).toBe('anthropic');
     expect(normalizeProvider('bedrock')).toBe('bedrock');
     expect(normalizeProvider('gemini')).toBe('other');
+  });
+});
+
+describe('isSpike', () => {
+  it('flags any bucket at or above the floor when there is no baseline', () => {
+    expect(isSpike(1, 0)).toBe(true);
+    expect(isSpike(0.99, 0)).toBe(false);
+  });
+
+  it('needs more than 1.5x a real baseline', () => {
+    expect(isSpike(15, 10)).toBe(false);
+    expect(isSpike(15.01, 10)).toBe(true);
   });
 });
 
