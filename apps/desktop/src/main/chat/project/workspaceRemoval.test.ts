@@ -365,8 +365,9 @@ describe('session deletion integration', () => {
         expect(releases).not.toContain('terminal-unlock');
         await expect(stat(project.workingDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
       });
+      const expectedScope = store.scopeKey();
       await service.deleteSession(session.id, true);
-      expect(remove).toHaveBeenCalledWith(session.id);
+      expect(remove).toHaveBeenCalledWith(session.id, expectedScope);
       expect(releases).toContain('terminal-unlock');
     } finally {
       service.dispose();

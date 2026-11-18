@@ -110,7 +110,8 @@ export interface PromptScenario {
   prompt: string;
   expectedKeywords: string[];
   /**
-   * The reply's deliverable is a generated image (rendered as `ai-response-image`). Success is
+   * The reply's deliverable is a generated image (rendered as `ai-response-image`, or as
+   * `image-job-card-image` when the chat image tool runs it as an image job). Success is
    * asserted on the rendered image, not on text keywords - an image-only reply carries no prose,
    * so keyword-on-text is a false negative for it. Also grants the image-generation time budget.
    */

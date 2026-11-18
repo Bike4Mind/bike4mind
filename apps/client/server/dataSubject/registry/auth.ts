@@ -2,6 +2,14 @@ import type { DataHolderRegistry } from '../types';
 import { ADMIN_NOTE, FINANCIAL_RECORD, expiresAfterTtl } from './retention';
 
 export const authHolders = {
+  AccountDeletionNotice: {
+    kind: 'holder',
+    // Transient outbox for the post-deletion confirmation email; removed on send, after the bounded
+    // retries, or by its TTL. Keyed by the erasure hash, not the person's id.
+    references: [{ path: 'email', matchBy: 'email', action: 'deleteDocument' }],
+    secretPaths: ['leaseToken'],
+    unrelatedPaths: ['idHash'],
+  },
   // Notes about the person go with them: the account purge removes them through the raw collection,
   // past the model's immutability hooks. A note this person wrote or edited as an admin about someone
   // else is that other account's record, and its identity fields are required and immutable, so it stays.
@@ -188,7 +196,8 @@ export const authHolders = {
       { path: 'promptMeta.humanReview.reviewedBy', matchBy: 'userId', action: 'anonymize' },
     ],
     // Authors of cited works and attachments, not platform users.
-    unrelatedPaths: ['promptMeta.citables.author', 'attachmentList.attachments.author'],
+    // The exchange key and connected app behind the quest: ids only, not credentials.
+    unrelatedPaths: ['promptMeta.citables.author', 'attachmentList.attachments.author', 'apiKeyId', 'oauthClientId'],
     // `signupActivity` is a retired field: never exported, though its `userId` is still anonymized.
     secretPaths: ['callback.url', 'signupActivity'],
   },
@@ -223,6 +232,13 @@ export const authHolders = {
       'tutorial.owner',
     ],
   },
+  SideAppRefusal: {
+    kind: 'holder',
+    // The 90-day expiry still applies; erasure only detaches the person from the refusal trail.
+    references: [{ path: 'userId', matchBy: 'userId', action: 'anonymize' }],
+    unrelatedPaths: ['keyId'],
+  },
+  SideAppRefusalCounter: { kind: 'noUserData', note: 'Hourly refusal counts per reason; aggregate only.' },
   SignupDomainReview: {
     kind: 'holder',
     references: [

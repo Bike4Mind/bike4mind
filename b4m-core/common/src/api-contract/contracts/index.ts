@@ -15,6 +15,7 @@ import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
 import { getClientConfigContract, getPublicClientConfigContract } from './clientConfig.contract';
 import { approvePendingActionContract, denyPendingActionContract } from './pendingActions.contract';
+import { composeBriefContract, listBriefsContract, getBriefContract } from './briefs.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
 import { listHandoffDevicesContract, sendSessionHandoffContract } from './sessionHandoff.contract';
 import { mintPersonaContract, deletePersonaContract } from './personas.contract';
@@ -87,6 +88,12 @@ import {
   listMusicGenerationsContract,
   listMusicModelsContract,
 } from './musicGeneration.contract';
+import {
+  cancelSceneCompositionContract,
+  createSceneCompositionContract,
+  getSceneCompositionContract,
+  listSceneCompositionsContract,
+} from './sceneComposition.contract';
 import { listVoicesContract, createVoiceSessionContract, endVoiceSessionContract } from './voice.contract';
 import {
   listProjectsContract,
@@ -171,6 +178,9 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getPublicClientConfigContract,
   approvePendingActionContract,
   denyPendingActionContract,
+  composeBriefContract,
+  listBriefsContract,
+  getBriefContract,
   registerPushTokenContract,
   unregisterPushTokenContract,
   listHandoffDevicesContract,
@@ -222,6 +232,10 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getMusicGenerationContract,
   listMusicGenerationsContract,
   listMusicModelsContract,
+  cancelSceneCompositionContract,
+  createSceneCompositionContract,
+  getSceneCompositionContract,
+  listSceneCompositionsContract,
   listVoicesContract,
   createVoiceSessionContract,
   endVoiceSessionContract,

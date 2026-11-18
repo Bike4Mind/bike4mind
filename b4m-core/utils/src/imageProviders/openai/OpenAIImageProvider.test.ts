@@ -7,6 +7,17 @@ import type { ProviderContext } from '../../generationProviders/types';
 import type { ImageInputs } from '../types';
 import { OpenAIImageProvider } from './OpenAIImageProvider';
 
+// Mask redrawing is editMask's (tested there on real images). Here the mask comes back as a sentinel naming the
+// convention, so a test proves the provider sends the redrawn mask, in the right convention, and not the original.
+vi.mock('../editMask', () => ({
+  withProviderMask: async (inputs: ImageInputs, convention: string): Promise<ImageInputs> => ({
+    ...inputs,
+    images: inputs.images?.map(input =>
+      input.role === 'mask' ? { ...input, bytes: Buffer.from(`normalized-${convention}`) } : input
+    ),
+  }),
+}));
+
 const { generate, edit, constructed } = vi.hoisted(() => ({
   generate: vi.fn(),
   edit: vi.fn(),
@@ -132,7 +143,7 @@ describe('OpenAIImageProvider', () => {
       expect(edit).toHaveBeenCalledWith(dataUrlOf('src'), 'a red bicycle', {
         model: ImageModels.GPT_IMAGE_1,
         size: '1024x1024',
-        mask: dataUrlOf('mask'),
+        mask: dataUrlOf('normalized-transparent'),
         referenceImages: [dataUrlOf('ref')],
       });
       expect(generate).not.toHaveBeenCalled();

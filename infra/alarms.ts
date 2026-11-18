@@ -12,6 +12,7 @@
  */
 
 import {
+  accountDeletionSweep,
   disposableDomainRefreshCron,
   modelDiscoveryCronEnabled,
   modelDiscoveryFunction,
@@ -2009,6 +2010,52 @@ if (isMonitoredStage) {
       alarmActions: [dlqAlarmTopic.arn],
       tags: {
         Application: 'Auth',
+        Severity: 'High',
+      },
+    });
+  }
+
+  /**
+   * Alarm: Account deletion nearing the erasure deadline
+   *
+   * Pages when any deletion request 25 days old or more is still open. The daily sweep emits the count
+   * every run, so a healthy day is a 0 datapoint. The period is two days because one datapoint a day
+   * can land minutes off the window edge, and FILL(m, 1) turns a window with no datapoint into a breach:
+   * a stopped sweep must page, and CloudWatch can otherwise reuse an older healthy datapoint. The same
+   * window means a cleared request keeps the alarm in ALARM for up to about two days. A newly created
+   * alarm also pages once until the first sweep run emits.
+   *
+   * Metric emitted by: apps/workers/src/cron/accountDeletionSweep.ts
+   * Namespace: Lumina5/AccountDeletion / OverdueDeletionRequests
+   * Runbook: infra/account-deletion-deadline-alarm.md
+   */
+  // The sweep only exists on scheduled stages; an ENABLE_MONITORING preview has no sweep to emit.
+  if (accountDeletionSweep) {
+    new aws.cloudwatch.MetricAlarm('accountDeletionDeadline', {
+      name: `${$app.name}-${$app.stage}-account-deletion-deadline`,
+      alarmDescription:
+        'An account deletion request is 25+ days old and still open, or the sweep has stopped reporting. See infra/account-deletion-deadline-alarm.md',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      threshold: 0,
+      metricQueries: [
+        {
+          id: 'm',
+          returnData: false,
+          metric: {
+            metricName: 'OverdueDeletionRequests',
+            namespace: 'Lumina5/AccountDeletion',
+            period: 172800, // 2 days
+            stat: 'Maximum',
+            dimensions: { Stage: $app.stage },
+          },
+        },
+        { id: 'e', returnData: true, label: 'Overdue deletion requests', expression: 'FILL(m, 1)' },
+      ],
+      treatMissingData: 'breaching',
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'AccountDeletion',
         Severity: 'High',
       },
     });

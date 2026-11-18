@@ -657,6 +657,9 @@ export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schem
     // set server-side so the client can render a targeted error state. Declared so Mongoose
     // strict mode persists it (otherwise the error UI would not survive a reload).
     errorCode: { type: String, required: false },
+    // Set only for a quest created by a federated exchange key, so per-app outcomes can be counted.
+    apiKeyId: { type: String, required: false, select: false },
+    oauthClientId: { type: String, required: false, select: false },
     // Completion callback for an API-key generation job (see IQuestCallback). select: false keeps
     // the caller's endpoint and key id out of every quest payload and out of the whole-doc
     // update() writes the generation services make, so a stale in-memory quest can never
@@ -1297,7 +1300,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    */
   async settleIfUnfinished(
     id: string,
-    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply' | 'replies' | 'fallbackInfo'>> & {
+    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply' | 'replies' | 'fallbackInfo' | 'errorCode'>> & {
       finishReason?: string;
     }
   ): Promise<boolean> {
@@ -1363,6 +1366,34 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   async addImagesByAgentExecutionId(agentExecutionId: string, images: string[]) {
     if (!images.length) return;
     await this.model.updateOne({ agentExecutionId }, { $addToSet: { images: { $each: images } } });
+  }
+
+  /**
+   * Approvals still waiting on the user in the given sessions: a `pendingAction` raised after
+   * `raisedAfterTs` (ms epoch; older ones have lapsed). Bounded by the caller's session list, so it
+   * needs no index of its own.
+   */
+  async findPendingActionsBySessionIds(sessionIds: string[], raisedAfterTs: number, limit: number) {
+    if (sessionIds.length === 0) return [];
+    const quests = await this.model
+      .find({ sessionId: { $in: sessionIds }, 'pendingAction.ts': { $gt: raisedAfterTs } })
+      .select('_id sessionId pendingAction.tool pendingAction.ts pendingAction.params')
+      .sort({ 'pendingAction.ts': -1 })
+      .limit(limit)
+      .lean<
+        Array<{
+          _id: { toString(): string };
+          sessionId: string;
+          pendingAction: { tool: string; ts: number; params: Record<string, unknown> };
+        }>
+      >();
+    return quests.map(quest => ({
+      questId: quest._id.toString(),
+      sessionId: quest.sessionId,
+      tool: quest.pendingAction.tool,
+      ts: quest.pendingAction.ts,
+      params: quest.pendingAction.params,
+    }));
   }
 
   /**
@@ -1907,6 +1938,13 @@ function initializeQuestModel() {
     ChatHistoryItemSchema.index(
       { 'promptMeta.contextTelemetry.anonymousSessionId.hash': 1 },
       { name: 'contextTelemetry_anonymousSessionHash', sparse: true }
+    );
+
+    // Serves per-app quest outcome counts. Partial, so it holds only exchange-key quests.
+    // Pre-built by 20261115120000_ensure-side-app-attribution-indexes.
+    ChatHistoryItemSchema.index(
+      { oauthClientId: 1, timestamp: -1 },
+      { name: 'oauthClient_timestamp', partialFilterExpression: { oauthClientId: { $exists: true } } }
     );
   } catch (error) {
     // Plugin already applied, ignore error

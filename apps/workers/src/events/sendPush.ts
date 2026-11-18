@@ -99,6 +99,7 @@ export const REDACTED_PUSH_COPY: Record<PushNotificationCategory, { title: strin
   generation_ready: { title: 'Generation ready', body: 'Your generated media is ready.' },
   agent_message: { title: 'New message', body: 'An agent sent you a message.' },
   session_handoff: { title: 'Continue your conversation', body: 'Tap to open the conversation you sent here.' },
+  brief_ready: { title: 'Brief ready', body: 'Your assistant has a new brief.' },
 };
 
 export type PushRecipient = {
@@ -553,7 +554,8 @@ async function dropTokensOfEndedSessions<T extends { sid: string }>(
 }
 
 function collapseIdFor(event: PushNotificationEvent): string {
-  const id = event.collapseId ?? `${event.category}:${event.questId ?? event.sessionId ?? event.userId}`;
+  const id =
+    event.collapseId ?? `${event.category}:${event.questId ?? event.sessionId ?? event.briefId ?? event.userId}`;
   return id.slice(0, MAX_COLLAPSE_ID_LENGTH);
 }
 
@@ -576,6 +578,7 @@ function buildPayload(event: PushNotificationEvent, redact: boolean, appUrl: str
     deepLink: resolveDeepLink(event.deepLink, appUrl),
     ...(event.questId && { questId: event.questId }),
     ...(event.sessionId && { sessionId: event.sessionId }),
+    ...(event.briefId && { briefId: event.briefId }),
     ...(approval && { approval }),
   };
 }
@@ -598,6 +601,7 @@ function buildFcmMessage(
       deepLink: resolveDeepLink(event.deepLink, appUrl),
       ...(event.questId && { questId: event.questId }),
       ...(event.sessionId && { sessionId: event.sessionId }),
+      ...(event.briefId && { briefId: event.briefId }),
     },
     android: {
       priority: 'HIGH',

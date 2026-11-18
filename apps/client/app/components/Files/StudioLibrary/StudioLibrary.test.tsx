@@ -25,7 +25,7 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
 const renderedConfig = () => JSON.parse(screen.getByTestId('probe').textContent ?? '{}');
 
 describe('StudioLibrary', () => {
-  it('renders inline, locked to generated media, with stars and the model filter', () => {
+  it('renders inline with no source lock, with stars and the model filter', () => {
     render(
       <TestWrapper>
         <StudioLibrary />
@@ -35,11 +35,11 @@ describe('StudioLibrary', () => {
     expect(screen.getByTestId('studio-library')).toBeInTheDocument();
     expect(renderedConfig()).toMatchObject({
       open: true,
-      lockedFilters: { source: 'generated' },
       enableStar: true,
       enableModelFilter: true,
       initialViewMode: 'grid',
     });
+    expect(renderedConfig().lockedFilters).toBeUndefined();
   });
 
   it('starts from the caller initial filters', () => {

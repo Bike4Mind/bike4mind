@@ -5,6 +5,7 @@ import { userRepository } from '@bike4mind/database';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { completeMfaEnrollment } from '@server/auth/completeMfaEnrollment';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import {
   sendPasskeyError,
   getPasskeyRelyingParty,
@@ -70,7 +71,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       passkey: toPasskeySummary(credential),
       backupCodes: result.backupCodes,
       accessToken,
-      user: redactUserSecretsForSelf(enrolledUser),
+      user: redactUserSecretsForSelf(await resolveRoleAdminPermissions(enrolledUser)),
     });
   })
 );

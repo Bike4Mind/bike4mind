@@ -45,6 +45,7 @@ vi.mock('@bike4mind/database', () => ({
   // The balance pre-flight's holder reads (see StartResearchRunAdapters).
   userRepository: { name: 'users' },
   organizationRepository: { name: 'organizations' },
+  spendFreezeRepository: { name: 'spendFreezes' },
   lakeConfigChangeEventRepository: {},
   adminSettingsRepository: {},
 }));

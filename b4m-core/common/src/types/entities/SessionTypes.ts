@@ -109,6 +109,8 @@ export type SessionProps = {
 export const QUEST_ERROR_CODES = [
   'insufficient_credits',
   'spend_cap_exceeded',
+  'spend_frozen',
+  'free_quest_limit_reached',
 ] as const satisfies readonly ApiErrorCode[];
 export type QuestErrorCode = (typeof QUEST_ERROR_CODES)[number];
 
@@ -305,6 +307,11 @@ export interface IChatHistoryItem {
    * part of any client or poll payload: it names the caller's endpoint and signing key.
    */
   callback?: IQuestCallback;
+
+  /** Set with `oauthClientId` when a federated exchange key created the quest; absent for every other caller. */
+  apiKeyId?: string;
+  /** Connected app of the exchange key that created the quest. */
+  oauthClientId?: string;
 
   /**
    * The ID of the QuestMaster plan that was created from this chat history item

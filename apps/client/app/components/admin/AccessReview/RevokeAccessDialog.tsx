@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { isAxiosError } from 'axios';
 import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 import { Alert } from '@mui/joy';
-import { sortAdminPermissions } from '@bike4mind/common';
+import { sortAdminPermissions, sortAdminRoleIds } from '@bike4mind/common';
 import { useAccessReviewDecision, type AccessReviewRow } from '@client/app/hooks/data/adminAccessReview';
 import { ActionDialog } from '../shared';
 import { useAdminUserPermissionsUpdate } from '../Users/Profile/actions/useAdminUserPermissionsUpdate';
@@ -27,6 +27,8 @@ export function RevokeAccessDialog({ admin, dormantDays, onClose }: RevokeAccess
   const updateRole = useAdminUserRoleUpdate(admin.userId);
   const decision = useAccessReviewDecision();
   const label = admin.email ?? admin.username ?? admin.userId;
+  const roleNames = admin.roles.map(role => role.name ?? 'a deleted role');
+  const rolesNote = roleNames.length > 0 ? ` Roles removed: ${roleNames.join(', ')}.` : '';
 
   const removeAccess = async (reason: string) => {
     if (admin.fullAdmin) await updateRole({ isAdmin: false, reason });
@@ -35,7 +37,7 @@ export function RevokeAccessDialog({ admin, dormantDays, onClose }: RevokeAccess
         // The permissions route compares the cleaned set and its schema rejects an id no longer listed.
         before: sortAdminPermissions(admin.directPermissions),
         adminPermissions: [],
-        beforeAdminRoleIds: admin.adminRoleIds,
+        beforeAdminRoleIds: sortAdminRoleIds(admin.adminRoleIds),
         adminRoleIds: [],
         reason,
       });
@@ -74,8 +76,8 @@ export function RevokeAccessDialog({ admin, dormantDays, onClose }: RevokeAccess
       title={`Revoke admin access for ${label}`}
       description={
         admin.fullAdmin
-          ? 'This removes the Super Admin role and any delegated admin permissions.'
-          : 'This removes every delegated admin permission and admin role.'
+          ? `This removes the Super Admin role and any delegated admin permissions.${rolesNote}`
+          : `This removes every delegated admin permission and admin role.${rolesNote}`
       }
       reasonPresets={REASON_PRESETS}
       reasonRequired={removalState === 'pending'}

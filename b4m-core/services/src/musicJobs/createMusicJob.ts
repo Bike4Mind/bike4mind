@@ -110,6 +110,8 @@ export async function createMusicJob(
       user: input.user,
       requiredCredits: estimateMusicCostCredits(caps, request),
       featureLabel: 'music generation',
+      apiKeyId: input.apiKeyId,
+      apiKeyBillingOwnerType: input.apiKeyBillingOwnerType,
     },
     deps
   );

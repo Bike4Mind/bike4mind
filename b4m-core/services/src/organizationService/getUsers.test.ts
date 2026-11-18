@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import getUsers from './getUsers';
+import getUsers, { getRoster } from './getUsers';
 import { get } from './get';
 import { IOrganizationDocument, IUserDocument, WithId } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
@@ -87,6 +87,17 @@ describe('organizationService - getUsers', () => {
     expect(result).toEqual(mockUsers);
     expect(get).toHaveBeenCalledWith(mockUser, { id: 'org1' }, mockAdapters);
     expect(mockAdapters.db.users.findByIds).toHaveBeenCalledWith(['user2', 'user3', 'user1']);
+  });
+
+  it('getRoster returns the users together with the organization they were read from', async () => {
+    vi.mocked(get).mockResolvedValue(mockOrganization as Awaited<ReturnType<typeof get>>);
+    mockAdapters.db.users.findByIds.mockResolvedValue(mockUsers);
+    const mockUser = { id: 'user2', isAdmin: false } as IUserDocument;
+
+    const result = await getRoster(mockUser, { id: 'org1' }, mockAdapters);
+
+    expect(result).toEqual({ organization: mockOrganization, users: mockUsers });
+    expect(get).toHaveBeenCalledWith(mockUser, { id: 'org1' }, mockAdapters);
   });
 
   it('should handle an organization with no users', async () => {

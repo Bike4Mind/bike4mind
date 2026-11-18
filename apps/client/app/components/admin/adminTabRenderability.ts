@@ -18,6 +18,8 @@ export function canRenderAdminTab(tab: AdminTab, visibility: AdminTabVisibility)
   if (AdminTab[tab] === undefined) return false;
   // Model lifecycle moved into the Models tab; its member stays only so its slug and palette entry keep resolving.
   if (tab === AdminTab.ModelLifecycle) return false;
+  // SecOps triage moved into the Security page's Scans view; its member stays only so its slug and palette entry redirect.
+  if (tab === AdminTab.SecOpsTriage) return false;
   if (!canOpenAdminTab(visibility.user, tab)) return false;
   if (tab === AdminTab.Migrate) return !!visibility.enableUserMigration;
   // Keep a deep link that arrived before the visibility query answered.

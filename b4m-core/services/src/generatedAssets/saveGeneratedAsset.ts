@@ -27,6 +27,8 @@ const MODALITY: Record<GeneratedAssetGenerator, Modality> = {
   speech: 'audio',
   sound_effect: 'audio',
   video: 'video',
+  // A Scene is an MP4: the video with the soundtrack muxed in.
+  scene: 'video',
   image: 'image',
 };
 

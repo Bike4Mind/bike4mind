@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, renderHook } from '@testing-library/react';
+import { render, screen, fireEvent, renderHook, act } from '@testing-library/react';
+import { useQuestMasterUpgrade } from './questMasterUpgrade';
 import BillingDeepLinkModals, { useBillingView } from './BillingDeepLinkModals';
 
 const mocks = vi.hoisted(() => ({
@@ -29,6 +30,9 @@ vi.mock('@tanstack/react-router', () => ({
   }),
   useRouterState: ({ select }: { select: (s: unknown) => unknown }) => select({ location: mocks.location }),
 }));
+vi.mock('@client/app/contexts/LLMContext', () => ({
+  useLLM: (selector: (s: { setLLM: () => void }) => unknown) => selector({ setLLM: () => {} }),
+}));
 vi.mock('@client/app/hooks/data/settings', () => ({ useGetSettingsValue: () => mocks.creditsEnabled }));
 
 vi.mock('@client/app/components/subscription/BillingModal', () => ({
@@ -45,6 +49,7 @@ describe('BillingDeepLinkModals', () => {
     vi.clearAllMocks();
     mocks.creditsEnabled = true;
     setLocation('');
+    useQuestMasterUpgrade.getState().close();
   });
 
   it('opens nothing without the billing param', () => {
@@ -75,6 +80,22 @@ describe('BillingDeepLinkModals', () => {
     setLocation('?billing=plans');
     render(<BillingDeepLinkModals />);
     expect(screen.queryByTestId('billing-modal')).not.toBeInTheDocument();
+  });
+
+  it('sends the Questmaster prompt to the plans view when credits are enforced', () => {
+    setLocation('?projectId=p1');
+    render(<BillingDeepLinkModals />);
+    act(() => useQuestMasterUpgrade.getState().open());
+    fireEvent.click(screen.getByTestId('questmaster-upgrade-plans-btn'));
+    expect(mocks.push).toHaveBeenCalledWith('/notebooks/n1?projectId=p1&billing=plans', undefined);
+  });
+
+  it('offers no plans button on the Questmaster prompt when credits are not enforced', () => {
+    mocks.creditsEnabled = false;
+    render(<BillingDeepLinkModals />);
+    act(() => useQuestMasterUpgrade.getState().open());
+    expect(screen.getByTestId('questmaster-upgrade-prompt')).toBeInTheDocument();
+    expect(screen.queryByTestId('questmaster-upgrade-plans-btn')).not.toBeInTheDocument();
   });
 
   it('closing strips only the billing param, keeping the rest of the URL', () => {

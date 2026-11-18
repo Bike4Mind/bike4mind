@@ -33,6 +33,7 @@ import type {
 } from '@bike4mind/common';
 import {
   feedLabel,
+  cleanResearchItemRuleCondition,
   isResearchRunInFlight,
   RESEARCH_CONFIG_NAME_MAX_CHARS,
   RESEARCH_CONFIG_QUERY_MAX_CHARS,
@@ -315,7 +316,11 @@ const validateDraft = (draft: ConfigDraft): DraftErrors => {
       message: `Enter a whole number from 1 to ${RESEARCH_REVIEW_BACKLOG_LIMIT_MAX}.`,
     }),
   };
-  if (draft.itemRules.some(rule => rule.condition.trim().length > RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS)) {
+  if (
+    draft.itemRules.some(
+      rule => cleanResearchItemRuleCondition(rule.condition).length > RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS
+    )
+  ) {
     errors.itemRules = `Keep each rule to ${RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS} characters or fewer.`;
   }
   // Ignoring other sites with nothing listed would ignore every result.
@@ -372,7 +377,7 @@ const draftToInput = (draft: ConfigDraft): ResearchConfigInput => ({
   unlistedSources: draft.unlistedSources,
   blockedDomains: parseList(draft.blockedDomains),
   itemRules: draft.itemRules
-    .map(rule => ({ condition: rule.condition.trim(), action: rule.action }))
+    .map(rule => ({ condition: cleanResearchItemRuleCondition(rule.condition), action: rule.action }))
     .filter(rule => rule.condition),
   proposedTags: parseList(draft.proposedTags),
   cadence: draft.cadence,
@@ -568,6 +573,7 @@ const SCHEDULE_SKIP_LABEL: Partial<Record<ResearchScheduleSkipReason, string>> =
   daily_cap: 'the lake reached its daily run limit',
   insufficient_credits: 'the lake owner did not have enough credits',
   lake_inactive: 'the data lake is not active',
+  spend_frozen: 'spending is paused for the lake owner',
 };
 
 /**

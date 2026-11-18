@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
 import { update } from './update';
-import { IOrganizationDocument, IUserDocument, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
+import { ForbiddenError, IOrganizationDocument, IUserDocument, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 
 describe('organizationService - update', () => {
@@ -45,9 +45,6 @@ describe('organizationService - update', () => {
     mockAdapters = {
       db: {
         organizations: {
-          shareable: {
-            findUpdateAccessById: vi.fn().mockResolvedValue(existingOrganization),
-          },
           update: vi.fn().mockResolvedValue(undefined),
           findById: vi.fn().mockResolvedValue(existingOrganization),
         },
@@ -55,7 +52,7 @@ describe('organizationService - update', () => {
     };
   });
 
-  it('persists redactPushContent for a caller with update access', async () => {
+  it('persists redactPushContent for the owner', async () => {
     await update(mockRegularUser as IUserDocument, { id: 'org1', redactPushContent: true }, mockAdapters);
 
     expect(mockAdapters.db.organizations.update.mock.calls[0][0]).toEqual({ id: 'org1', redactPushContent: true });
@@ -105,7 +102,7 @@ describe('organizationService - update', () => {
   });
 
   it('should throw NotFoundError when organization is not found', async () => {
-    mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(null);
+    mockAdapters.db.organizations.findById.mockResolvedValue(null);
 
     await expect(update(mockRegularUser as IUserDocument, { id: 'nonexistent-org' }, mockAdapters)).rejects.toThrow(
       NotFoundError
@@ -165,8 +162,7 @@ describe('organizationService - update', () => {
     expect(persisted).not.toHaveProperty('currentCredits');
   });
 
-  // Regression: findUpdateAccessById returns a HYDRATED Mongoose doc (unlike
-  // findAccessibleById, which returns toJSON()). Spreading a hydrated doc copies
+  // Regression: findById can return a HYDRATED Mongoose doc. Spreading a hydrated doc copies
   // `_doc`/`$__` and nests the real fields, corrupting the shape AND defeating the
   // response-boundary strip (top-level stripeCustomerId/userId would be undefined).
   // update() must normalize to a plain object first. A plain-object mock cannot
@@ -186,7 +182,7 @@ describe('organizationService - update', () => {
       stripeCustomerId: 'cus_SECRET',
       billingContact: 'b@a.com',
     });
-    mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(hydrated);
+    mockAdapters.db.organizations.findById.mockResolvedValue(hydrated);
 
     const result = (await update(mockRegularUser as IUserDocument, { id: 'org1', name: 'Acme2' }, mockAdapters)) as any;
 
@@ -226,7 +222,6 @@ describe('organizationService - update', () => {
     // Regression: `?? undefined` left the old cap in place because BSON drops undefined from
     // `$set`, so a "set null" PUT silently no-oped. The cleared cap MUST persist as null.
     const cappedOrg = { ...existingOrganization, maxCreditsPerMember: 5 };
-    mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(cappedOrg);
     mockAdapters.db.organizations.findById.mockResolvedValue(cappedOrg);
 
     const result = await update(
@@ -243,7 +238,7 @@ describe('organizationService - update', () => {
 
   it('ignores a per-member cap change from a non-admin', async () => {
     const cappedOrg = { ...existingOrganization, maxCreditsPerMember: 5 };
-    mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(cappedOrg);
+    mockAdapters.db.organizations.findById.mockResolvedValue(cappedOrg);
 
     const result = await update(
       mockRegularUser as IUserDocument,
@@ -279,7 +274,7 @@ describe('organizationService - update', () => {
 
   it('ignores a storage limit change from a non-admin manager', async () => {
     const limitedOrg = { ...existingOrganization, managerId: 'user1', storageLimit: 50 };
-    mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(limitedOrg);
+    mockAdapters.db.organizations.findById.mockResolvedValue(limitedOrg);
 
     const result = await update(
       mockRegularUser as IUserDocument,
@@ -322,33 +317,62 @@ describe('organizationService - update', () => {
     });
     expect(persisted).not.toHaveProperty('currentCredits');
   });
-  describe('sharingPolicy', () => {
+  describe('team role gate', () => {
     const policy = { allowPublicLinks: false, allowExternalSharing: false, allowedDomains: [] };
-    const appointedAdmin = { id: 'manager1', isAdmin: false } as IUserDocument;
-    const orgWithManager = {
+    const manager = { id: 'manager1', isAdmin: false } as IUserDocument;
+    const editor = { id: 'editor1', isAdmin: false } as IUserDocument;
+    const orgWithRoles = {
       ...existingOrganization,
-      adminUserIds: ['manager1'],
-      users: [{ userId: 'manager1', permissions: ['read'] }],
+      adminUserIds: ['manager1', 'lapsed1'],
+      users: [
+        { userId: 'manager1', permissions: ['read'] },
+        { userId: 'editor1', permissions: ['read', 'update', 'share'] },
+      ],
     };
 
-    it('lets an appointed admin change the policy on its own', async () => {
-      mockAdapters.db.organizations.findById.mockResolvedValue(orgWithManager);
-      mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(null);
-
-      await update(appointedAdmin, { id: 'org1', sharingPolicy: policy }, mockAdapters);
-
-      expect(mockAdapters.db.organizations.update.mock.calls[0][0]).toEqual({ id: 'org1', sharingPolicy: policy });
+    beforeEach(() => {
+      mockAdapters.db.organizations.findById.mockResolvedValue(orgWithRoles);
     });
 
-    it('keeps the update-access scope for profile fields sent alongside the policy', async () => {
-      mockAdapters.db.organizations.findById.mockResolvedValue(orgWithManager);
-      mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(null);
+    it('lets a manager change the system prompt and sharing policy together', async () => {
+      await update(manager, { id: 'org1', sharingPolicy: policy, systemPrompt: 'changed' }, mockAdapters);
 
+      expect(mockAdapters.db.organizations.update.mock.calls[0][0]).toEqual({
+        id: 'org1',
+        sharingPolicy: policy,
+        systemPrompt: 'changed',
+      });
+    });
+
+    it('ignores a billing contact sent by a manager', async () => {
+      await update(manager, { id: 'org1', name: 'Renamed', billingContact: 'other@example.com' }, mockAdapters);
+
+      expect(mockAdapters.db.organizations.update.mock.calls[0][0]).toEqual({ id: 'org1', name: 'Renamed' });
+    });
+
+    it('refuses a member holding update on the sharing ACL who is not owner or manager', async () => {
       await expect(
-        update(appointedAdmin, { id: 'org1', sharingPolicy: policy, systemPrompt: 'changed' }, mockAdapters)
-      ).rejects.toThrow(NotFoundError);
-      expect(mockAdapters.db.organizations.shareable.findUpdateAccessById).toHaveBeenCalledWith(appointedAdmin, 'org1');
+        update(editor, { id: 'org1', systemPrompt: 'changed', billingContact: 'other@example.com' }, mockAdapters)
+      ).rejects.toThrow(ForbiddenError);
       expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+    });
+
+    it('answers 404 to a stale manager without a roster row and to a stranger', async () => {
+      for (const caller of [{ id: 'lapsed1' }, { id: 'stranger' }]) {
+        await expect(
+          update({ ...caller, isAdmin: false } as IUserDocument, { id: 'org1', name: 'x' }, mockAdapters)
+        ).rejects.toThrow(NotFoundError);
+      }
+      expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+    });
+
+    it('keeps the platform-admin bypass', async () => {
+      await update(mockAdminUser as IUserDocument, { id: 'org1', billingContact: 'ops@example.com' }, mockAdapters);
+
+      expect(mockAdapters.db.organizations.update.mock.calls[0][0]).toEqual({
+        id: 'org1',
+        billingContact: 'ops@example.com',
+      });
     });
   });
 });

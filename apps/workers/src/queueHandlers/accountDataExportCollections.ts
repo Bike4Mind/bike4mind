@@ -29,6 +29,7 @@ export const ACCOUNT_ARCHIVE_METADATA_MODELS = [
   'Favorite',
   'Tag',
   'BriefcasePrompt',
+  'AssistantBrief',
   'ImageGenerationTemplate',
   'StudioComposition',
   'ResearchData',

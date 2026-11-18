@@ -260,3 +260,116 @@ describe('TokenVault.reencrypt', () => {
     }
   });
 });
+
+describe('TokenVault conditional refresh writes', () => {
+  it('keeps the current account when an earlier refresh attempts to save', async () => {
+    const vault = new TokenVault(fakeCipher(), memoryFile(), silentLogger);
+    const current = { ...TOKENS, userId: 'other-user', refreshToken: 'other-refresh' };
+    await vault.setTokens('https://api.example.test', current);
+    expect(await vault.storeFor('https://api.example.test').setAuthTokens(TOKENS, 'earlier-refresh')).toBe(false);
+    expect(await vault.getTokens('https://api.example.test')).toEqual(current);
+  });
+
+  it('keeps current credentials when an earlier refresh attempts to clear', async () => {
+    const vault = new TokenVault(fakeCipher(), memoryFile(), silentLogger);
+    await vault.setTokens('https://api.example.test', TOKENS);
+    expect(await vault.storeFor('https://api.example.test').clearAuthTokens('earlier-refresh')).toBe(false);
+    expect(await vault.getTokens('https://api.example.test')).toEqual(TOKENS);
+  });
+
+  it('orders document mutations through persistence', async () => {
+    const firstWrite = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+    const file = memoryFile();
+    const write = file.write.bind(file);
+    const writes = vi.spyOn(file, 'write').mockImplementationOnce(async contents => {
+      entered.resolve();
+      await firstWrite.promise;
+      await write(contents);
+    });
+    const vault = new TokenVault(fakeCipher(), file, silentLogger);
+    const first = vault.setTokens('https://a.example.test', TOKENS);
+    let second: Promise<void> | undefined;
+    try {
+      await entered.promise;
+      second = vault.setTokens('https://b.example.test', { ...TOKENS, userId: 'other-user' });
+      for (let turn = 0; turn < 12; turn++) await Promise.resolve();
+      expect(writes).toHaveBeenCalledTimes(1);
+      firstWrite.resolve();
+      await Promise.all([first, second]);
+      const reopened = new TokenVault(fakeCipher(), file, silentLogger);
+      expect(await reopened.getTokens('https://a.example.test')).toEqual(TOKENS);
+      expect((await reopened.getTokens('https://b.example.test'))?.userId).toBe('other-user');
+    } finally {
+      firstWrite.resolve();
+      await Promise.all([first, second]);
+    }
+  });
+});
+
+describe('TokenVault conditional writes with an unreadable current blob', () => {
+  it.each(['set', 'clear'] as const)('preserves a newer disk blob when %s cannot verify its owner', async operation => {
+    const file = memoryFile();
+    const crypto = fakeCipher();
+    const vault = new TokenVault(crypto, file, silentLogger);
+    await vault.setTokens('https://a.example.test', TOKENS);
+    const external = new TokenVault(fakeCipher(), file, silentLogger);
+    await external.setTokens('https://a.example.test', {
+      ...TOKENS,
+      refreshToken: 'newer-refresh',
+      userId: 'newer-user',
+    });
+    const persisted = file.contents;
+    vi.spyOn(crypto, 'decryptString').mockImplementation(() => {
+      throw new Error('Temporarily unavailable');
+    });
+    const store = vault.storeFor('https://a.example.test');
+    const result =
+      operation === 'set'
+        ? await store.setAuthTokens({ ...TOKENS, refreshToken: 'stale-rotation' }, TOKENS.refreshToken)
+        : await store.clearAuthTokens(TOKENS.refreshToken);
+    expect(result).toBe(false);
+    expect(file.contents).toBe(persisted);
+    expect((await external.reloadTokens('https://a.example.test'))?.refreshToken).toBe('newer-refresh');
+  });
+});
+
+describe('TokenVault conditional writes with an unreadable disk snapshot', () => {
+  it.each(['set', 'clear'] as const)('preserves a newer snapshot when %s cannot reread it', async operation => {
+    const file = memoryFile();
+    const vault = new TokenVault(fakeCipher(), file, silentLogger);
+    await vault.setTokens('https://a.example.test', TOKENS);
+    const external = new TokenVault(fakeCipher(), file, silentLogger);
+    await external.setTokens('https://a.example.test', { ...TOKENS, refreshToken: 'newer-refresh' });
+    const persisted = file.contents;
+    vi.spyOn(file, 'read').mockRejectedValueOnce(new Error('Disk temporarily unavailable'));
+    const write = vi.spyOn(file, 'write');
+    const store = vault.storeFor('https://a.example.test');
+    const result =
+      operation === 'set'
+        ? await store.setAuthTokens({ ...TOKENS, refreshToken: 'stale-rotation' }, TOKENS.refreshToken)
+        : await store.clearAuthTokens(TOKENS.refreshToken);
+    expect(result).toBe(false);
+    expect(write).not.toHaveBeenCalled();
+    expect(file.contents).toBe(persisted);
+  });
+});
+
+describe('TokenVault memory-only conditional writes', () => {
+  it('rotates and clears the matching cached session without needing disk access', async () => {
+    const file = memoryFile();
+    const vault = new TokenVault(fakeCipher(false), file, silentLogger);
+    await vault.setTokens('https://a.example.test', TOKENS);
+    const read = vi.spyOn(file, 'read').mockRejectedValue(new Error('Disk unavailable'));
+    const write = vi.spyOn(file, 'write');
+    const store = vault.storeFor('https://a.example.test');
+    const next = { ...TOKENS, refreshToken: 'rotated' };
+    expect(await store.setAuthTokens(next, TOKENS.refreshToken)).toBe(true);
+    expect(await store.reloadAuthTokens?.()).toEqual(next);
+    expect(await store.clearAuthTokens(TOKENS.refreshToken)).toBe(false);
+    expect(await store.clearAuthTokens(next.refreshToken)).toBe(true);
+    expect(await store.getAuthTokens()).toBeNull();
+    expect(read).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+  });
+});

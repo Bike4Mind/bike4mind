@@ -3,6 +3,7 @@
  * (a pending-hold row inside a transaction), for route tests that mock @bike4mind/database wholesale
  * and do not exercise the sweep. Spread into the mock factory via a dynamic import. The new-account
  * spend cap's adapters ride along: no samples and no settings rows, so it reads defaults and never refuses.
+ * So does the spend freeze lookup, which finds nothing frozen.
  */
 export const pendingCreditHoldFake = {
   pendingCreditHoldRepository: {
@@ -11,8 +12,10 @@ export const pendingCreditHoldFake = {
     markSettled: async () => true,
     findSettlement: async () => null,
   },
+  spendFreezeRepository: { findActiveForSubject: async () => null },
   cacheRepository: {},
   withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
+  warmExchangeAttribution: async () => undefined,
   newAccountSpendCapAdapters: {
     adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
     personalSpendSince: async () => [],

@@ -143,6 +143,7 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(actual.adminSettingsRepository, 'getSettingsValue').mockResolvedValue(false as never);
   // No model configurations; an unread one fails the run closed (see loadRunnableModels).
   vi.spyOn(actual.adminSettingsRepository, 'findOne').mockResolvedValue(null as never);
+  vi.spyOn(actual.spendFreezeRepository, 'findActiveForSubject').mockResolvedValue(null);
   return { ...actual, connectDB: vi.fn().mockResolvedValue(undefined) };
 });
 

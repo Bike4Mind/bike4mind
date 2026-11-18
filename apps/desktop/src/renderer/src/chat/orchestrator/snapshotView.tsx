@@ -1,14 +1,15 @@
 import Box from '@mui/joy/Box';
-import { useMemo, type ComponentType } from 'react';
+import { useMemo, type ComponentType, type ReactNode } from 'react';
 import { acceptViewAction, type ViewAction, type ViewSnapshot } from '@shared/viewSnapshot';
 import type { OrchestratorViewProps } from './OrchestratorStage';
 import { useScenePause, type ScenePauseOptions } from './tavern/useScenePause';
-import { toViewSnapshot } from './viewSnapshot';
+import { runViewAction, toViewSnapshot } from './viewSnapshot';
 
 /** All a snapshot view is given: the read-only picture, and the one way to ask the host for something. */
 export interface SnapshotViewProps {
   snapshot: ViewSnapshot;
   onAction(action: ViewAction): void;
+  agentDetailsOverlay?: ReactNode;
 }
 
 /** Stands in for the root's id when the stage was not given one; the root is only ever opened, never looked up. */
@@ -25,18 +26,27 @@ export function snapshotView(
   View: ComponentType<SnapshotViewProps>,
   { displayName, pause }: { displayName: string; pause?: ScenePauseOptions }
 ) {
-  function SnapshotHost({ agents, parent, rootId, onSelect, onInnkeeperSelect }: OrchestratorViewProps) {
+  function SnapshotHost({
+    agents,
+    parent,
+    rootId,
+    onSelect,
+    onInnkeeperSelect,
+    agentDetailsOverlay,
+  }: OrchestratorViewProps) {
     const snapshot = useMemo(
       () => toViewSnapshot(rootId ?? UNNAMED_ROOT, agents, parent ?? NO_PARENT),
       [rootId, agents, parent]
     );
     const paused = useScenePause(pause);
 
+    // This host reads no quick approvals and has no Stop: an approve is never in its snapshot and a stop rejects.
     const onAction = (action: ViewAction) => {
       const accepted = acceptViewAction(snapshot, action);
       if (!accepted) return;
-      if (accepted.kind === 'open-root') onInnkeeperSelect?.();
-      else onSelect(accepted.agentId);
+      runViewAction(accepted, { openAgent: onSelect, openRoot: () => onInnkeeperSelect?.() }).catch((error: unknown) =>
+        console.error('A view action failed', error)
+      );
     };
 
     return (
@@ -51,7 +61,7 @@ export function snapshotView(
           },
         }}
       >
-        <View snapshot={snapshot} onAction={onAction} />
+        <View snapshot={snapshot} onAction={onAction} agentDetailsOverlay={agentDetailsOverlay} />
       </Box>
     );
   }

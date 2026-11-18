@@ -8,6 +8,8 @@ import { holdCredits, releaseCreditHold, settleCreditHold, type CreditHoldAdapte
 import type { ImageCreditHolds } from './imageCreditHolds';
 import { silentLogger } from '../__tests__/utils/testUtils';
 
+const notFrozen = { findActiveForSubject: async () => null };
+
 vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
   getAvailableModels: vi.fn(),
@@ -68,6 +70,7 @@ const makeWallet = (balance: number, userFields: Record<string, unknown> = {}) =
     users,
     organizations: { findById: vi.fn(async () => null) },
     creditTransactions: {},
+    spendFreezes: { findActiveForSubject: vi.fn(async () => null) },
     deductCredits: vi.fn(async ({ credits }: { credits: number }) => {
       state.ledger.push(credits);
     }),
@@ -88,6 +91,7 @@ const makeService = (
   const service = new ImageGenerationService({
     assertModelAdmission,
     db: {
+      spendFreezes: notFrozen,
       quests: {
         findById: vi.fn(async (id: string) => {
           if (!quests.has(id)) quests.set(id, { id, sessionId: 'session1' });
