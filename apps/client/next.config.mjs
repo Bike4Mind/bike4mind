@@ -286,6 +286,11 @@ const nextConfig = {
         source: '/.well-known/assetlinks.json',
         destination: '/api/well-known/assetlinks',
       },
+      // Apple app site association: lets the iOS app use its https sign-in callback and universal links
+      {
+        source: '/.well-known/apple-app-site-association',
+        destination: '/api/well-known/apple-app-site-association',
+      },
       // Client ID Metadata Document for custom MCP connector sign-in
       {
         source: '/.well-known/oauth-client/mcp-client.json',
