@@ -43,12 +43,13 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'users:mode
     const key = await loadApiKeyOrThrow(keyId);
     await assertCanActOnKeyOwner(req.user, key.userId, 'change the moderation exception of API keys of');
 
-    const before = (await userApiKeyRepository.findModerationException(key.id))?.moderationException.categories ?? [];
     const exception: IUserApiKeyModerationException | null =
       parsed.data.length > 0 ? { categories: parsed.data, reason, setBy: req.user.id, setAt: new Date() } : null;
 
     const target = await ownerAuditTarget(key.userId);
     await withTransaction(async () => {
+      // Re-read on transaction retry so the audit names the state this write actually replaces.
+      const before = (await userApiKeyRepository.findModerationException(key.id))?.moderationException.categories ?? [];
       await userApiKeyRepository.setModerationException(key.id, exception);
       await recordAdminActionFromRequest(req, {
         action: 'user.api_key.moderation_exception_updated',

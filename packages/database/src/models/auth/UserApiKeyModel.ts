@@ -15,6 +15,7 @@ import {
   LegacyApiKeyCandidatePage,
   LegacyApiKeyCandidateQuery,
   MODERATION_EXCEPTION_CATEGORIES,
+  NotFoundError,
   OrgApiKeyGrant,
   PAYER_STANDINGS,
 } from '@bike4mind/common';
@@ -152,11 +153,12 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
   }
 
   async setModerationException(id: string, exception: IUserApiKeyModerationException | null) {
-    await this.model.updateOne(
-      { _id: id },
+    const result = await this.model.updateOne(
+      { _id: id, deletedAt: null },
       exception === null ? { $unset: { moderationException: 1 } } : { $set: { moderationException: exception } },
       { runValidators: true }
     );
+    if (result.matchedCount === 0) throw new NotFoundError('API key not found');
   }
 
   async findModerationException(id: string) {

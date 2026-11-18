@@ -15452,12 +15452,13 @@ describe('prompt moderation', () => {
     guardrailId: string | null;
     sharedOpenaiKey?: string;
   }) {
+    const completeModel = vi.fn(
+      async (_model: unknown, _messages: unknown, _options: unknown, callback: (tokens: string[]) => Promise<void>) => {
+        await callback(['Hi!']);
+      }
+    );
     mockedGetLlmByModel.mockReturnValue({
-      complete: vi
-        .fn()
-        .mockImplementation(async (_m: unknown, _msgs: unknown, _o: unknown, cb: (t: string[]) => Promise<void>) => {
-          await cb(['Hi!']);
-        }),
+      complete: completeModel,
       getModelInfo: vi.fn().mockResolvedValue([]),
       currentModel: 'gpt-4',
     } as any);
@@ -15489,6 +15490,7 @@ describe('prompt moderation', () => {
       if (key === 'openaiDemoKey') return sharedOpenaiKey;
       return undefined;
     }) as any);
+    return completeModel;
   }
 
   beforeEach(() => {
@@ -15728,13 +15730,14 @@ describe('prompt moderation', () => {
     ] as const)(
       'continues a %s-flagged turn the key is excepted from and records no hit',
       async (_s, knobs, Service, categories) => {
-        wireModMocks(knobs);
+        const completeModel = wireModMocks(knobs);
         enableAdminFlags('ModerationEnabled');
         flagWith(Service, [...categories]);
         const find = keyWith([...categories]);
 
         await service.process({ body: keyTurn, logger: mockLogger });
 
+        expect(completeModel).toHaveBeenCalledOnce();
         expect(find).toHaveBeenCalledExactlyOnceWith('key-1');
         expect(applyModerationHit).not.toHaveBeenCalled();
         expect(mockLogger.info).toHaveBeenCalledWith(
@@ -15753,6 +15756,7 @@ describe('prompt moderation', () => {
       ],
       ['the key belongs to another user', ['violence'], () => keyWith(['violence'], { userId: 'user2' })],
       ['the key is disabled', ['violence'], () => keyWith(['violence'], { status: 'disabled' })],
+      ['the key has expired', ['violence'], () => keyWith(['violence'], { expiresAt: new Date(0) })],
       [
         'the lookup fails',
         ['violence'],
@@ -15760,12 +15764,13 @@ describe('prompt moderation', () => {
       ],
       ['no key repository is wired', ['violence'], () => undefined],
     ] as const)('keeps the block and records the hit when %s', async (_label, flagged, arrange) => {
-      wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+      const completeModel = wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
       enableAdminFlags('ModerationEnabled');
       flagWith(OpenaiModerationsService, [...flagged]);
       arrange();
 
-      await service.process({ body: keyTurn, logger: mockLogger }).catch(() => undefined);
+      await expect(service.process({ body: keyTurn, logger: mockLogger })).rejects.toBeInstanceOf(FlaggedContentError);
+      expect(completeModel).not.toHaveBeenCalled();
 
       expect(mockLogger.info).not.toHaveBeenCalledWith(
         expect.stringContaining('continued under its API key exception'),
@@ -15778,12 +15783,15 @@ describe('prompt moderation', () => {
     });
 
     it('never reads the exception for a turn no API key started', async () => {
-      wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+      const completeModel = wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
       enableAdminFlags('ModerationEnabled');
       flagWith(OpenaiModerationsService, ['violence']);
       const find = keyWith(['violence']);
 
-      await service.process({ body: startParams, logger: mockLogger }).catch(() => undefined);
+      await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
+        FlaggedContentError
+      );
+      expect(completeModel).not.toHaveBeenCalled();
 
       expect(find).not.toHaveBeenCalled();
       expect(applyModerationHit).toHaveBeenCalledTimes(1);
