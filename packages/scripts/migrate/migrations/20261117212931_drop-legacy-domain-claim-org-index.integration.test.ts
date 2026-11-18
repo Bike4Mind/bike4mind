@@ -78,6 +78,18 @@ it('refuses a same-named index with a different shape and leaves it in place', a
   expect(await names()).toContain(legacyName);
 });
 
+it.each([
+  ['a different key order', { organizationId: 1, domain: -1 }, { unique: true }],
+  ['a non-unique index', { organizationId: 1, domain: 1 }, {}],
+  ['a sparse index', { organizationId: 1, domain: 1 }, { unique: true, sparse: true }],
+])('refuses a same-named index that is %s and leaves it in place', async (_label, key, options) => {
+  await OrgDomainClaim.collection.createIndex(key, { name: legacyName, ...options });
+  const drop = vi.spyOn(OrgDomainClaim.collection, 'dropIndex');
+  await expect(migration.up()).rejects.toThrow('unrecognized legacy index');
+  expect(drop).not.toHaveBeenCalled();
+  expect(await names()).toContain(legacyName);
+});
+
 it('tolerates only an index-not-found race', async () => {
   await OrgDomainClaim.collection.createIndex({ organizationId: 1, domain: 1 }, { unique: true });
   const drop = OrgDomainClaim.collection.dropIndex.bind(OrgDomainClaim.collection);

@@ -17,7 +17,11 @@ const migration: MigrationFile = {
     if (
       JSON.stringify(existing.key) !== JSON.stringify({ organizationId: 1, domain: 1 }) ||
       existing.unique !== true ||
-      existing.partialFilterExpression !== undefined
+      existing.partialFilterExpression !== undefined ||
+      existing.sparse === true ||
+      existing.collation !== undefined ||
+      existing.expireAfterSeconds !== undefined ||
+      existing.hidden === true
     )
       throw new Error(`Refusing to drop an unrecognized legacy index: ${legacyName}`);
     try {
