@@ -24,7 +24,7 @@ export interface AgentActions {
   open(id: string): void;
   stop(id: string): void | Promise<void>;
   archive(id: string): void;
-  /** False for a roster entry with no chat session behind it (a Desktop loop's free lane); defaults to true. */
+  /** False for a roster entry with no chat session behind it (a Desktop loop's free lane, ticket or run); defaults to true. */
   isSession?(id: string): boolean;
 }
 

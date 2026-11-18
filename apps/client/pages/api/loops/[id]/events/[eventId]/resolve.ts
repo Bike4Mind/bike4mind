@@ -58,14 +58,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
       const guard = { statusReason: unsureReason(resolved.reason), loopId: loop.id };
       let changed = false;
       try {
-        const ticket =
-          outcome === 'rejected' ? await workItemRepository.findByIdForUser(resolved.workItemId, userId) : null;
         const patch =
           outcome === 'resumed'
             ? { status: 'open' as const, statusReason: null }
             : {
-                // Read first so the close lands in the last stage with a history entry; the guard still decides.
-                ...ticketMovePatch(loop, ticket ?? undefined, { status: 'closed' }, 'owner'),
+                // The guard only matches a blocked ticket, which is never in the last stage, so no read is needed.
+                ...ticketMovePatch(loop, undefined, { status: 'closed' }, 'owner'),
                 statusReason: `Rejected by owner${note ? `: ${note}` : ''}`.slice(0, 1000),
               };
         const updated = await workItemRepository.updateForUser(resolved.workItemId, userId, patch, 'blocked', guard);

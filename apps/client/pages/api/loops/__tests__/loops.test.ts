@@ -1488,7 +1488,6 @@ describe('POST /api/loops/:id/events/:eventId/resolve', () => {
   });
 
   it('rejects: the ticket closes as an owner close, keeping the owner note in its reason', async () => {
-    tickets.findByIdForUser.mockResolvedValue({ id: 't1', stage: 'todo', status: 'blocked' });
     const closed = (statusReason: string) => ({
       stage: 'done',
       status: 'closed',

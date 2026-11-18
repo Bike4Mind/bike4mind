@@ -1152,15 +1152,13 @@ async function sendExecutionSnapshot(
     totalCreditsUsed: execution.totalCreditsUsed,
     iterationCount: checkpoint?.iteration ?? 0,
     ...(includeStepsInline ? { steps: persistedSteps, answer } : { stepsTruncated: true }),
-    ...(withOutcome && execution.status === 'failed'
-      ? {
-          failureReason: execution.failureReason,
-          errorMessage: toCallerSafeError(execution.error) ?? undefined,
-        }
-      : {}),
-    // A blocked loop runner run is stored as completed; the run view labels it Blocked from this.
-    ...(withOutcome && execution.status === 'completed' && execution.failureReason === 'blocked'
+    // A blocked loop runner run is stored as completed; the run view labels it Blocked from its failureReason.
+    ...(withOutcome &&
+    (execution.status === 'failed' || (execution.status === 'completed' && execution.failureReason === 'blocked'))
       ? { failureReason: execution.failureReason }
+      : {}),
+    ...(withOutcome && execution.status === 'failed'
+      ? { errorMessage: toCallerSafeError(execution.error) ?? undefined }
       : {}),
     ...(childSnapshots.length === 0
       ? {}

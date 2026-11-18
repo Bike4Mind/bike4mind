@@ -985,8 +985,8 @@ async function releaseTicket(ticket: IWorkItem, logger: Logger): Promise<void> {
 type LaneOpened = boolean | 'again';
 
 /**
- * Pushes a loop with a lane running (or a desktop-only loop) but nothing to claim to its next interval (a `tickets` wake-mode loop: no next
- * run); a ticket change makes it due again.
+ * Pushes a loop with a lane running (or a desktop-only loop) but nothing to claim to its next interval
+ * (a `tickets` wake-mode loop: no next run); a ticket change makes it due again.
  */
 async function parkLaneless(loop: ILoop, now: Date): Promise<void> {
   const parked = await loopRepository.updateForUser(
