@@ -177,6 +177,19 @@ describe('releaseDueSubscriptionRewards against a real replica set', () => {
     expect(paymentOutcome).not.toHaveBeenCalled();
   });
 
+  it('still releases a pending reward 1ms before its deadline', async () => {
+    const inviter = await seedDueReward();
+    const createdAt = new Date(NOW.getTime() - TTL_MS + 1);
+    await ReferralSubscriptionRewardModel.collection.updateOne({ invoiceId: 'in_1' }, { $set: { createdAt } });
+
+    expect(await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid })).toMatchObject({
+      released: 1,
+      cancelled: 0,
+      failed: 0,
+    });
+    expect((await User.findById(inviter.id))?.currentCredits).toBe(REWARD_CREDITS);
+  });
+
   describe('admin signup grant block', () => {
     const block = (userId: string) => User.updateOne({ _id: userId }, { $set: { 'signupGrant.blocked': { at: NOW } } });
     const reward = () => referralSubscriptionRewardRepository.findByInvoiceId('in_1');
