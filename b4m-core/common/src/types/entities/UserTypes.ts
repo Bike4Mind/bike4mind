@@ -318,7 +318,7 @@ export interface IUserModeration {
   hits: IModerationHit[];
   /** Current escalation state. */
   status: UserModerationStatus;
-  /** When `status` last changed. */
+  /** When an admin last set `status`. Automatic escalations leave it alone, so it marks the last human review. */
   statusChangedAt: Date | null;
   /** While `throttled`, the instant the throttle expires. */
   throttledUntil: Date | null;
@@ -1299,12 +1299,13 @@ export interface IUserRepository
   findModerationReviewQueue: (limit: number) => Promise<ModerationReviewUser[]>;
   /**
    * Transition a user's moderation escalation state. Leaves `isModerated` alone. Returns the
-   * updated user.
+   * updated user. `automatic` marks a policy-driven transition: it does not stamp
+   * `statusChangedAt`, which records the last admin decision.
    */
   setModerationStatus: (
     userId: string,
     status: UserModerationStatus,
-    options?: { throttledUntil?: Date | null }
+    options?: { throttledUntil?: Date | null; automatic?: boolean }
   ) => Promise<IUserDocument | null>;
   /**
    * Store a recomputed risk score. Preserve pending holds and approved/banned rulings in the

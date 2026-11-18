@@ -1542,7 +1542,11 @@ describe('PUT /api/users/:id/update - moderation status decisions', () => {
 
   it('reads a user with no moderation record as active', async () => {
     decide('', 'suspended');
-    await run({ user: ADMIN, userId: 'other-user', body: { moderationStatus: 'suspended' } }).promise;
+    await run({
+      user: ADMIN,
+      userId: 'other-user',
+      body: { moderationStatus: 'suspended', statusChangeReason: REASON },
+    }).promise;
 
     expect(mockRecord).toHaveBeenCalledWith(
       expect.anything(),
@@ -1550,11 +1554,37 @@ describe('PUT /api/users/:id/update - moderation status decisions', () => {
     );
   });
 
-  it('writes no moderation audit when the status did not change', async () => {
-    decide('throttled', 'throttled');
-    await run({ user: ADMIN, userId: 'other-user', body: { moderationStatus: 'throttled' } }).promise;
+  it('records a decision that keeps the status, with the throttle expiry it re-armed', async () => {
+    const until = new Date('2026-11-19T00:00:00.000Z');
+    mockUserFindById.mockReturnValue({
+      ...target('throttled'),
+      moderation: { status: 'throttled', throttledUntil: new Date('2026-11-18T06:00:00.000Z') },
+    });
+    mockAdminUpdateUser.mockResolvedValue({
+      user: { ...target('throttled'), moderation: { status: 'throttled', throttledUntil: until } },
+      creditAdjustment: undefined,
+    });
+    await run({
+      user: ADMIN,
+      userId: 'other-user',
+      body: { moderationStatus: 'throttled', statusChangeReason: REASON },
+    }).promise;
 
-    expect(mockRecord.mock.calls.some(([, input]) => input.action === 'user.moderation_status.changed')).toBe(false);
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.moderation_status.changed',
+        reason: REASON,
+        changes: [
+          { field: 'moderation.status', before: 'throttled', after: 'throttled' },
+          {
+            field: 'moderation.throttledUntil',
+            before: '2026-11-18T06:00:00.000Z',
+            after: until.toISOString(),
+          },
+        ],
+      })
+    );
   });
 
   it('refuses a delegate without users:moderate', async () => {

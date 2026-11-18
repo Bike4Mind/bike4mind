@@ -93,6 +93,7 @@ describe('moderationPolicy - applyModerationHit', () => {
     const result = await applyModerationHit({ users, userId: 'user-1', hit, now: NOW });
 
     expect(users.setModerationStatus).toHaveBeenCalledWith('user-1', 'throttled', {
+      automatic: true,
       throttledUntil: new Date(NOW.getTime() + MODERATION_POLICY.throttleDurationMs),
     });
     expect(result).toMatchObject({ action: 'throttle', status: 'throttled' });
@@ -103,7 +104,10 @@ describe('moderationPolicy - applyModerationHit', () => {
 
     const result = await applyModerationHit({ users, userId: 'user-1', hit, now: NOW });
 
-    expect(users.setModerationStatus).toHaveBeenCalledWith('user-1', 'suspend_pending', { throttledUntil: null });
+    expect(users.setModerationStatus).toHaveBeenCalledWith('user-1', 'suspend_pending', {
+      automatic: true,
+      throttledUntil: null,
+    });
     expect(result).toMatchObject({ action: 'suspend_pending', status: 'suspend_pending' });
   });
 
@@ -126,6 +130,7 @@ describe('moderationPolicy - applyModerationHit', () => {
     const result = await applyModerationHit({ users, userId: 'user-1', hit, now: NOW });
 
     expect(users.setModerationStatus).toHaveBeenCalledWith('user-1', 'throttled', {
+      automatic: true,
       throttledUntil: new Date(NOW.getTime() + MODERATION_POLICY.throttleDurationMs),
     });
     expect(result.status).toBe('throttled');
@@ -137,7 +142,10 @@ describe('moderationPolicy - applyModerationHit', () => {
 
     const result = await applyModerationHit({ users, userId: 'user-1', hit, now: NOW });
 
-    expect(users.setModerationStatus).toHaveBeenCalledWith('user-1', 'suspend_pending', { throttledUntil: null });
+    expect(users.setModerationStatus).toHaveBeenCalledWith('user-1', 'suspend_pending', {
+      automatic: true,
+      throttledUntil: null,
+    });
     expect(result.status).toBe('suspend_pending');
   });
 

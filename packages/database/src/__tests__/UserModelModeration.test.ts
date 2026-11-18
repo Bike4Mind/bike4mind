@@ -65,6 +65,15 @@ describe('UserModel — moderation hit tracking', () => {
     expect(updated?.isModerated).toBe(false);
   });
 
+  it('leaves statusChangedAt alone on an automatic transition', async () => {
+    const user = await User.create({ username: 'mod-auto', name: 'Mod Auto' });
+
+    const updated = await userRepository.setModerationStatus(user.id, 'suspend_pending', { automatic: true });
+
+    expect(updated?.moderation?.status).toBe('suspend_pending');
+    expect(updated?.moderation?.statusChangedAt).toBeNull();
+  });
+
   it('clears throttledUntil when suspended without setting isModerated', async () => {
     const user = await User.create({ username: 'mod-5', name: 'Mod Five' });
     await userRepository.setModerationStatus(user.id, 'throttled', { throttledUntil: new Date(Date.now() + 60_000) });
@@ -151,5 +160,30 @@ describe('UserModel - findModerationReviewQueue', () => {
     await userRepository.setModerationStatus(user.id, 'suspended');
 
     expect(await userRepository.findModerationReviewQueue(10)).toEqual([]);
+  });
+
+  it('still flags a severe hit that triggered an automatic escalation', async () => {
+    const user = await User.create({ username: 'rq-auto', name: 'Auto' });
+    await userRepository.recordModerationHit(user.id, hit({ at: minutesAgo(1), categories: ['sexual/minors'] }));
+    await userRepository.setModerationStatus(user.id, 'suspend_pending', { automatic: true });
+
+    const queue = await userRepository.findModerationReviewQueue(10);
+
+    expect(queue).toHaveLength(1);
+    expect(queue[0].hasUnreviewedSevereHit).toBe(true);
+  });
+
+  it('returns the most recent hits first and honours the limit', async () => {
+    const ids: string[] = [];
+    for (const [index, age] of [30, 20, 10].entries()) {
+      const user = await User.create({ username: `rq-limit-${index}`, name: `Limit ${index}` });
+      await userRepository.recordModerationHit(user.id, hit({ at: minutesAgo(age) }));
+      await userRepository.setModerationStatus(user.id, 'throttled', { throttledUntil: minutesAgo(-60) });
+      ids.push(user.id);
+    }
+
+    const queue = await userRepository.findModerationReviewQueue(2);
+
+    expect(queue.map(row => row.id)).toEqual([ids[2], ids[1]]);
   });
 });
