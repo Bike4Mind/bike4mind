@@ -711,6 +711,8 @@ export class BrowserManager implements BrowserProvider {
   /** Placement failures already logged, so a wedged page logs once rather than on every event. */
   private readonly warned = new Set<string>();
   private readonly artifactViews = new ArtifactViewRegistry();
+  /** The artifact each tab was opened on, so asking for it again can switch back instead of duplicating it. */
+  private readonly artifactTabs = new WeakMap<ElectronPage, { key: string; content: string; url: string }>();
 
   /**
    * The user's own Chrome sessions, for sites they named. Public because the renderer drives it
@@ -819,12 +821,21 @@ export class BrowserManager implements BrowserProvider {
    * http/https rule because main mints the url here, for content the renderer already shows in
    * its sandboxed frame; typed addresses and the agent's tools still refuse the scheme. Opens a
    * new tab when the active one is showing a page, so the agent's place is not lost.
+   *
+   * With a `key`, a tab still showing that same artifact is brought forward instead. A tab that
+   * has since navigated away, or was opened on different content, does not count.
    */
-  async openArtifact(sessionId: string, title: string, content: string): Promise<BrowserPaneState> {
+  async openArtifact(sessionId: string, title: string, content: string, key?: string): Promise<BrowserPaneState> {
     this.session();
+    const open = key ? this.artifactTab(sessionId, key, content) : undefined;
+    if (open) {
+      this.activate(sessionId, open);
+      return this.stateOf(sessionId);
+    }
     const url = this.artifactViews.add(title, content);
     const current = this.sessions.get(sessionId)?.active;
     const page = current?.showable ? (this.openTab(sessionId, true) ?? current) : this.activeTab(sessionId);
+    if (key) this.artifactTabs.set(page, { key, content, url });
     try {
       await page.navigate(url);
     } catch (err) {
@@ -832,6 +843,13 @@ export class BrowserManager implements BrowserProvider {
     }
     this.apply();
     return this.stateOf(sessionId);
+  }
+
+  private artifactTab(sessionId: string, key: string, content: string): ElectronPage | undefined {
+    return this.sessions.get(sessionId)?.list.find(tab => {
+      const opened = this.artifactTabs.get(tab);
+      return opened?.key === key && opened.content === content && tab.currentUrl() === opened.url;
+    });
   }
 
   /** Back, forward or reload. The resulting navigation arrives on its own as a state push. */
