@@ -415,32 +415,34 @@ export default function AccessReviewTab() {
         }
       />
 
-      <Stack sx={{ gap: 2, minWidth: 0 }}>
-        <Typography level="title-md" component="h2">
-          Admin roles
-        </Typography>
-        <DataTable
-          label="Admin roles"
-          testId="admin-access-review-roles-table"
-          rows={data?.roles ?? []}
-          columns={roleColumns}
-          getRowId={role => role.id}
-          rowTestId={role => `admin-access-review-role-row-${role.id}`}
-          loading={isPending}
-          error={isError && !data ? 'The access review could not be loaded.' : undefined}
-          onRetry={() => void refetch()}
-          pagination={false}
-          minWidth="44rem"
-          maxHeight="none"
-          empty={
-            <EmptyState
-              title="No admin roles defined"
-              description="Roles created on the Roles page appear here with their members."
-              action={null}
-            />
-          }
-        />
-      </Stack>
+      {/* A failed load is reported once, by the admin table above. */}
+      {!(isError && !data) && (
+        <Stack sx={{ gap: 2, minWidth: 0 }}>
+          <Typography level="title-md" component="h2">
+            Admin roles
+          </Typography>
+          <DataTable
+            label="Admin roles"
+            testId="admin-access-review-roles-table"
+            rows={data?.roles ?? []}
+            columns={roleColumns}
+            getRowId={role => role.id}
+            rowTestId={role => `admin-access-review-role-row-${role.id}`}
+            loading={isPending}
+            onRetry={() => void refetch()}
+            pagination={false}
+            minWidth="44rem"
+            maxHeight="none"
+            empty={
+              <EmptyState
+                title="No admin roles defined"
+                description="Roles created on the Roles page appear here with their members."
+                action={null}
+              />
+            }
+          />
+        </Stack>
+      )}
 
       {revoking && <RevokeAccessDialog admin={revoking} dormantDays={dormantDays} onClose={() => setRevoking(null)} />}
     </Stack>

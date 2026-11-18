@@ -16,6 +16,7 @@ const DELEGATE = 'c'.repeat(24);
 const mocks = vi.hoisted(() => ({
   calls: [] as string[],
   report: null as unknown,
+  reportError: false,
   status: null as unknown,
   decisionFails: false,
   updatePermissions: vi.fn(),
@@ -24,7 +25,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/hooks/data/adminAccessReview', () => ({
-  useAccessReviewReport: () => ({ data: mocks.report, isPending: false, isError: false, refetch: vi.fn() }),
+  useAccessReviewReport: () => ({ data: mocks.report, isPending: false, isError: mocks.reportError, refetch: vi.fn() }),
   useAccessReviewStatus: (enabled: boolean) => ({ data: enabled ? mocks.status : undefined }),
   useAccessReviewDecision: () => ({
     mutate: mocks.mutate,
@@ -116,6 +117,7 @@ const revoke = async (userId: string) => {
 describe('AccessReviewTab', () => {
   beforeEach(() => {
     mocks.calls = [];
+    mocks.reportError = false;
     mocks.decisionFails = false;
     mocks.updatePermissions.mockReset();
     mocks.updateRole.mockReset();
@@ -228,6 +230,14 @@ describe('AccessReviewTab', () => {
   it('shows an empty state when no admin roles are defined', () => {
     renderWithTheme(<AccessReviewTab />);
     expect(screen.getByText('No admin roles defined')).toBeInTheDocument();
+  });
+
+  it('reports a failed load once, not again under the admin roles table', () => {
+    mocks.report = undefined;
+    mocks.reportError = true;
+    renderWithTheme(<AccessReviewTab />);
+    expect(screen.getAllByText('The access review could not be loaded.')).toHaveLength(1);
+    expect(screen.queryByTestId('admin-access-review-roles-table')).not.toBeInTheDocument();
   });
 
   it('names the roles a revoke removes', async () => {
