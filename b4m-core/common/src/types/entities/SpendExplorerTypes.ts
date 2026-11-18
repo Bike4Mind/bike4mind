@@ -54,7 +54,6 @@ export type SpendTimelineParams = {
   bucket: SpendBucketSize;
   splitBy: SpendSplitDimension;
   segmentIds: SpendSegmentIds;
-  /** Restricts to one credit holder (the account drill-down). */
   /** Narrow to the events one user ran (the actor), whoever paid for them. */
   actorUserId?: string;
 };

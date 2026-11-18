@@ -9,7 +9,7 @@ import OrganizationSegmentCard from './OrganizationSegmentCard';
 
 const setOrganizationAccountSegment = vi.fn();
 
-vi.mock('@client/app/utils/organizationSegmentAPICalls', () => ({
+vi.mock('@client/app/utils/organizationAPICalls', () => ({
   setOrganizationAccountSegment: (...args: unknown[]) => setOrganizationAccountSegment(...args),
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));

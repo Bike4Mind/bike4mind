@@ -565,7 +565,7 @@ export const USERS_AND_BILLING_GUIDE: readonly AdminGuideEntry[] = [
       'Use "Split by" to restack the bars, and tick "Previous period" to compare with the window before.',
       'Click a bar to list the accounts that drove it; each row is the user who ran the calls, with who paid (the user or their org) under "Billed to".',
       'Click an account row for its spend by model; "Copy summary for Slack" copies a one-line summary of the range.',
-      'Tag an organization as internal, partner or customer in its Account type card, or mark a user as partner from their profile, to split spend by account type.',
+      'Tag an organization as internal, partner or customer in its Account segment card, or mark a user as partner from their profile, to split spend by account type.',
     ],
     keywords: ['spend', 'ai cost', 'cost spike', 'provider cost', 'top spenders', 'cogs', 'account type', 'partner'],
   },

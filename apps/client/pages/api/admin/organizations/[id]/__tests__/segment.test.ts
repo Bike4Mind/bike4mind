@@ -3,8 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ADMIN_AUDIT_CATALOGUE } from '@bike4mind/common';
 
+const baseApiOptions = vi.hoisted(() => ({ value: undefined as unknown }));
+
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (options: unknown) => {
+    baseApiOptions.value = options;
     const middlewares: ((req: unknown, res: unknown, next: () => void) => unknown)[] = [];
     const chain = {
       use: (middleware: (req: unknown, res: unknown, next: () => void) => unknown) => {
@@ -50,6 +53,10 @@ const call = async (body: unknown, user: Record<string, unknown> = { id: 'admin-
 };
 
 describe('PUT /api/admin/organizations/[id]/segment', () => {
+  it('declares first-party JWT-only authentication and only PUT', () => {
+    expect(baseApiOptions.value).toMatchObject({ auth: 'jwtOnly', allowedMethods: ['PUT'] });
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockFindById.mockResolvedValue({ id: 'org-1', name: 'Acme' });
@@ -73,7 +80,7 @@ describe('PUT /api/admin/organizations/[id]/segment', () => {
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        action: 'organization.segment.changed',
+        action: 'org.segment.changed',
         reason: REASON,
         target: expect.objectContaining({ kind: 'organization', id: 'org-1' }),
         changes: [{ field: 'accountSegment', before: 'customer', after: segment }],
@@ -128,6 +135,6 @@ describe('PUT /api/admin/organizations/[id]/segment', () => {
   });
 
   it('records the change strictly', () => {
-    expect(ADMIN_AUDIT_CATALOGUE['organization.segment.changed']).toMatchObject({ write: 'strict' });
+    expect(ADMIN_AUDIT_CATALOGUE['org.segment.changed']).toMatchObject({ write: 'strict' });
   });
 });

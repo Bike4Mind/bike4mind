@@ -42,7 +42,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:m
       );
 
       await recordAdminActionFromRequest(req, {
-        action: 'organization.segment.changed',
+        action: 'org.segment.changed',
         target: { kind: 'organization', id: organizationId, displayName: organization.name ?? organizationId },
         summary: `set the account segment to ${accountSegment}`,
         reason,

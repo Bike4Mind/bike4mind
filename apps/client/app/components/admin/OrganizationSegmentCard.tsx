@@ -9,7 +9,7 @@ import {
 } from '@bike4mind/common';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { setOrganizationAccountSegment } from '@client/app/utils/organizationSegmentAPICalls';
+import { setOrganizationAccountSegment } from '@client/app/utils/organizationAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 import { ActionDialog, ADMIN_REASON_PRESETS, SettingsSection } from './shared';
 
