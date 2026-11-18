@@ -25,10 +25,13 @@ import {
   IOrganizationRepository,
   IScopedSettingsRepository,
   type ReadOrgModelPolicy,
+  isTerminalCreditRefusal,
 } from '@bike4mind/common';
 import { b4mTools, generateTools } from '../llm/tools';
 import { meterCompletionBackend, type CompletionMeter } from '../billing/completionMeter';
 import { applyOrgToolPolicy } from '../llm/orgToolPolicy';
+import { isOrgModelNotAllowedError } from '../llm/modelAdmission';
+import { isAiAccessRefusal } from '../userService/accountState';
 
 /**
  * This host builds the whole tool registry but injects no `ToolContext.decide` runner, so `decide`
@@ -272,7 +275,10 @@ export async function generateAndSendProactiveMessage({
 
     logger.info(`Successfully generated and sent proactive message for agent ${agent.name}`);
   } catch (error) {
-    logger.error(`Failed to generate proactive message for agent ${agent.name}:`, error as Error);
+    // Planned refusals are skipped at warn by the caller (apps/workers/src/queueHandlers/agentProactiveMessage.ts).
+    if (!isTerminalCreditRefusal(error) && !isAiAccessRefusal(error) && !isOrgModelNotAllowedError(error)) {
+      logger.error(`Failed to generate proactive message for agent ${agent.name}:`, error as Error);
+    }
     throw error;
   }
 }

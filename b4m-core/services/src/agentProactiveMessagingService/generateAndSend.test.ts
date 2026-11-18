@@ -3,6 +3,7 @@ import { join } from 'path';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ForbiddenError, ORG_MODEL_NOT_ALLOWED_ERROR_CODE, type ReadOrgModelPolicy } from '@bike4mind/common';
 import { b4mTools, generateTools } from '../llm/tools';
+import { createToolModelAdmission } from '../llm/tools/helpers/modelAdmission';
 import {
   buildProactiveMessageMessages,
   generateAndSendProactiveMessage,
@@ -32,7 +33,7 @@ import type {
 } from '@bike4mind/common';
 
 /**
- * The tool deps generateAndSendProactiveMessage hands generateTools are pinned at the source, like the agentExecutor wiring in
+ * Wiring the behavioral harness below cannot observe is pinned at the source, like the agentExecutor wiring in
  * apps/workers/src/queueHandlers/agentExecutor.lakeWriteTools.e2e.test.ts.
  */
 describe('generateAndSendProactiveMessage tool deps', () => {
@@ -66,9 +67,7 @@ describe('generateAndSendProactiveMessage tool deps', () => {
     expect(source).not.toMatch(/sessions: db\.sessions,/);
   });
 
-  it('meters the message completion but leaves tool-internal calls on the raw backend', () => {
-    expect(source).toMatch(/const llm = meterCompletionBackend\(backend, meter, modelInfo, models\);/);
-    expect(source).toMatch(/\.complete\(model, messages, completionOptions/);
+  it('leaves tool-internal calls on the raw backend', () => {
     expect(source).toMatch(/\n\s+backend,\n\s+\{ web_search:/);
   });
 });
@@ -143,6 +142,52 @@ describe('generateAndSendProactiveMessage org model policy', () => {
     ).rejects.toThrow('Model not allowed');
     expect(h.complete).not.toHaveBeenCalled();
     expect(db.quests.create).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('logs an unexpected failure as an error', async () => {
+    h.complete.mockRejectedValueOnce(new Error('provider down'));
+
+    await expect(run(null)).rejects.toThrow('provider down');
+    expect(logger.error).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a disallowed model inside a tool built from the same deps', async () => {
+    const actual = await vi.importActual<typeof import('../llm/tools')>('../llm/tools');
+    const admissions: Array<Promise<void>> = [];
+    const probe = {
+      ...b4mTools.dice_roll,
+      implementation: (context: Parameters<typeof b4mTools.dice_roll.implementation>[0]) => ({
+        ...b4mTools.dice_roll.implementation(context, undefined as never),
+        toolFn: async () => {
+          const admission = await createToolModelAdmission(context);
+          admissions.push(admission.assert('claude-sonnet-4-6'), admission.assert('gpt-image-1'));
+          return 'probed';
+        },
+      }),
+    };
+    h.generateTools.mockImplementationOnce((...args: Parameters<typeof generateTools>) => {
+      args[13] = { dice_roll: probe } as never;
+      return actual.generateTools(...args);
+    });
+    const findOrganization = vi.fn();
+    const gateOff = { settingName: 'freeTierModelGateEnabled', settingValue: false };
+    Object.assign(db, {
+      adminSettings: {
+        findOne: vi.fn(async () => null),
+        findAll: vi.fn(async () => [gateOff]),
+        findBySettingNames: vi.fn(async () => [gateOff]),
+      },
+      organizations: { findById: findOrganization },
+    });
+
+    await run({ allowedProviders: null, allowedModels: ['claude-sonnet-4-6'], allowedTools: null });
+    const offered = h.complete.mock.calls[0][2].tools as Array<{ toolFn: (input: unknown) => Promise<unknown> }>;
+    await offered[0].toolFn({});
+
+    await expect(admissions[0]).resolves.toBeUndefined();
+    await expect(admissions[1]).rejects.toThrow('not allowed by your organization');
+    expect(findOrganization).not.toHaveBeenCalled();
   });
 });
 
