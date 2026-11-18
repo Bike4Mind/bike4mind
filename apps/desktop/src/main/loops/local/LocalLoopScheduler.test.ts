@@ -509,6 +509,27 @@ describe('LocalLoopScheduler', () => {
     expect(chat.turns).toHaveLength(4);
   });
 
+  it('starts a run before the server-unreachable hold ends when the owner asks to run now', async () => {
+    make();
+    ticket('a');
+    scheduler.start();
+    await settle();
+    scheduler.observe({
+      type: 'error',
+      sessionId: chat.turns[0].sessionId,
+      messageId: 'm',
+      message: 'Cannot reach the Bike4Mind server.',
+      stopReason: SERVER_UNREACHABLE_STOP,
+    });
+    await settle();
+    scheduler.poke();
+    await settle();
+    expect(chat.turns).toHaveLength(1);
+    scheduler.runNow(store.loops()[0].id);
+    await settle();
+    expect(chat.turns).toHaveLength(2);
+  });
+
   it('still blocks the ticket and counts the streak for an error from a reachable server', async () => {
     make();
     const t = ticket('a');

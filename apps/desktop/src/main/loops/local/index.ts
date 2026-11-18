@@ -286,7 +286,7 @@ export function registerLocalLoops(
   handle(IPC_CHANNELS.localLoopsRunNow, input => {
     const id = idOf(input);
     if (loopOf(id).status !== 'live') throw new BadRequestError('Set the loop live first.');
-    scheduler.poke();
+    scheduler.runNow(id);
     return detail(id);
   });
   handle(IPC_CHANNELS.localLoopsCreateTicket, input => {

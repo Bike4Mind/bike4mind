@@ -234,6 +234,12 @@ export class LocalLoopScheduler {
     if (this.running) void this.tick();
   }
 
+  /** The owner asked for a run now: drop the server-unreachable hold so it is not waited out. */
+  runNow(loopId: string): void {
+    this.serverBackoff.delete(loopId);
+    this.poke();
+  }
+
   /**
    * A run with no end in the store was cut off (quit, crash, power loss): its session is gone with the old
    * process, so its ticket goes back to open without counting the run.
