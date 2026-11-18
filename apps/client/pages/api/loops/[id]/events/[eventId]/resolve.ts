@@ -5,13 +5,14 @@ import { LOOP_DIRECTIVE_NOTE_MAX, type LoopGateOutcome } from '@bike4mind/common
 import { BadRequestError } from '@bike4mind/utils';
 import { ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { assertLoopsEnabled, LOOP_RATE_LIMIT, LOOP_RATE_WINDOW_MS } from '@server/utils/loopValidation';
-import { makeDueIfReady, unsureReason, unsureRow } from '@server/utils/loopTickets';
-import { requestLoopDispatch } from '@server/utils/loopDispatch';
+import { makeDueIfReady, ticketMovePatch, unsureReason, unsureRow } from '@server/utils/loopTickets';
+import { pushLoopChanged, requestLoopDispatch } from '@server/utils/loopDispatch';
 
 /**
  * The owner's answer to a question a loop run asked with `loop_ticket_unsure`. `resumed` (with the answer as
- * `note`) reopens the ticket, and its next run is shown the answer; `rejected` leaves it blocked. Gate-sourced
- * unsure events are resolved through the paused run's gate card instead.
+ * `note`) reopens the ticket, and its next run is shown the answer; `rejected` closes it as an owner close does,
+ * keeping the rejection (and its note) as the reason. Gate-sourced unsure events are resolved through the paused
+ * run's gate card instead.
  */
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: LOOP_RATE_LIMIT, windowMs: LOOP_RATE_WINDOW_MS, bucket: 'loops-events-resolve' }))
@@ -55,24 +56,30 @@ const handler = baseApi({ auth: 'jwtOnly' })
       // Only while the ticket is still parked on this question in this loop: one the owner moved by hand, or a
       // later run blocked for another reason, is left alone.
       const guard = { statusReason: unsureReason(resolved.reason), loopId: loop.id };
-      let reopened = false;
-      let ticketSkipped = false;
+      let changed = false;
       try {
+        const ticket =
+          outcome === 'rejected' ? await workItemRepository.findByIdForUser(resolved.workItemId, userId) : null;
         const patch =
           outcome === 'resumed'
             ? { status: 'open' as const, statusReason: null }
-            : { statusReason: `Rejected by owner${note ? `: ${note}` : ''}`.slice(0, 1000) };
+            : {
+                // Read first so the close lands in the last stage with a history entry; the guard still decides.
+                ...ticketMovePatch(loop, ticket ?? undefined, { status: 'closed' }, 'owner'),
+                statusReason: `Rejected by owner${note ? `: ${note}` : ''}`.slice(0, 1000),
+              };
         const updated = await workItemRepository.updateForUser(resolved.workItemId, userId, patch, 'blocked', guard);
-        ticketSkipped = !updated;
-        reopened = !!updated && outcome === 'resumed';
+        changed = !!updated;
       } catch (error) {
         // The ticket is still parked on the question, so reopen it for the owner to answer again.
         await loopEventRepository.reopenAsked(resolved.id, now).catch(() => undefined);
         throw error;
       }
-      if (reopened && (await makeDueIfReady(loop, now))) await requestLoopDispatch(loop.id, req.logger);
       // `ticketSkipped` tells the owner the answer was saved but the ticket was left as it is.
-      if (ticketSkipped) return res.json({ ...unsureRow(resolved), ticketSkipped });
+      if (!changed) return res.json({ ...unsureRow(resolved), ticketSkipped: true });
+      // A reject frees the ticket's dependents, which the tick reopens (reopenSatisfiedBlocks).
+      if (await makeDueIfReady(loop, now)) await requestLoopDispatch(loop.id, req.logger);
+      await pushLoopChanged(userId, loop.id, req.logger);
     }
 
     res.json(unsureRow(resolved));

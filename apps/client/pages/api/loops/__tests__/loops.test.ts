@@ -1487,24 +1487,32 @@ describe('POST /api/loops/:id/events/:eventId/resolve', () => {
     expect(res._getJSONData()).not.toHaveProperty('ticketSkipped');
   });
 
-  it('rejects: the ticket stays blocked with the owner note in its reason', async () => {
+  it('rejects: the ticket closes as an owner close, keeping the owner note in its reason', async () => {
+    tickets.findByIdForUser.mockResolvedValue({ id: 't1', stage: 'todo', status: 'blocked' });
+    const closed = (statusReason: string) => ({
+      stage: 'done',
+      status: 'closed',
+      closedAt: expect.any(Date),
+      statusReason,
+      blockedOn: null,
+      stageHistoryEntry: { stage: 'done', at: expect.any(Date), by: 'owner' },
+    });
     await resolve({ outcome: 'rejected', note: 'not worth it' }).result;
     expect(tickets.updateForUser).toHaveBeenCalledWith(
       't1',
       'u1',
-      { statusReason: 'Rejected by owner: not worth it' },
+      closed('Rejected by owner: not worth it'),
       'blocked',
       { statusReason: 'Unsure: EU or US?', loopId: OID }
     );
     await resolve({ outcome: 'rejected' }).result;
-    expect(tickets.updateForUser).toHaveBeenLastCalledWith(
-      't1',
-      'u1',
-      { statusReason: 'Rejected by owner' },
-      'blocked',
-      { statusReason: 'Unsure: EU or US?', loopId: OID }
-    );
-    expect(repo.makeDueNow).not.toHaveBeenCalled();
+    expect(tickets.updateForUser).toHaveBeenLastCalledWith('t1', 'u1', closed('Rejected by owner'), 'blocked', {
+      statusReason: 'Unsure: EU or US?',
+      loopId: OID,
+    });
+    // Its dependents may now be ready, as after an owner close.
+    expect(repo.makeDueNow).toHaveBeenCalledWith(OID, expect.any(Date));
+    expect(dispatch.pushLoopChanged).toHaveBeenCalledWith('u1', OID, expect.anything());
   });
 
   it('leaves a ticket no longer parked on this question alone and does not wake the loop', async () => {
