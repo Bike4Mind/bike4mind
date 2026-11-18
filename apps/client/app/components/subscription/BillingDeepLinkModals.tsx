@@ -62,7 +62,7 @@ const BillingDeepLinkModals = () => {
         entry={focusSection ? 'deep_link' : 'profile_menu'}
         onClose={closeView}
       />
-      <QuestMasterUpgradePrompt onUpgrade={() => openView('plans')} />
+      <QuestMasterUpgradePrompt onUpgrade={isCreditsEnabled ? () => openView('plans') : undefined} />
     </>
   );
 };

@@ -1,7 +1,7 @@
 import { Button, Modal, ModalClose, ModalDialog, Stack, Typography } from '@mui/joy';
 import { useQuestMasterUpgrade } from './questMasterUpgrade';
 
-const QuestMasterUpgradePrompt = ({ onUpgrade }: { onUpgrade: () => void }) => {
+const QuestMasterUpgradePrompt = ({ onUpgrade }: { onUpgrade?: () => void }) => {
   const { isOpen, close } = useQuestMasterUpgrade();
 
   return (
@@ -18,15 +18,17 @@ const QuestMasterUpgradePrompt = ({ onUpgrade }: { onUpgrade: () => void }) => {
           <Button variant="plain" onClick={close} data-testid="questmaster-upgrade-cancel-btn">
             Not now
           </Button>
-          <Button
-            onClick={() => {
-              close();
-              onUpgrade();
-            }}
-            data-testid="questmaster-upgrade-plans-btn"
-          >
-            View plans
-          </Button>
+          {onUpgrade && (
+            <Button
+              onClick={() => {
+                close();
+                onUpgrade();
+              }}
+              data-testid="questmaster-upgrade-plans-btn"
+            >
+              View plans
+            </Button>
+          )}
         </Stack>
       </ModalDialog>
     </Modal>

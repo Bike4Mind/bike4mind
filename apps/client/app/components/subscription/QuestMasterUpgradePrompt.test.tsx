@@ -38,4 +38,15 @@ describe('QuestMasterUpgradePrompt', () => {
     expect(onUpgrade).not.toHaveBeenCalled();
     expect(screen.queryByTestId('questmaster-upgrade-prompt')).not.toBeInTheDocument();
   });
+
+  it('keeps the explanation without an upgrade action when billing is unavailable', () => {
+    useQuestMasterUpgrade.getState().open();
+    render(
+      <CssVarsProvider theme={theme}>
+        <QuestMasterUpgradePrompt />
+      </CssVarsProvider>
+    );
+    expect(screen.getByTestId('questmaster-upgrade-prompt')).toBeInTheDocument();
+    expect(screen.queryByTestId('questmaster-upgrade-plans-btn')).not.toBeInTheDocument();
+  });
 });
