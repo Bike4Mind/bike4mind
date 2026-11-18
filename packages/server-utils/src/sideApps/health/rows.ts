@@ -84,7 +84,7 @@ function addEvent(counts: WindowCounts, event: HealthEvent, count: number): void
   counts.reasons[event.reason] = (counts.reasons[event.reason] ?? 0) + count;
 }
 
-/** Fold grouped rows into per-client hourly buckets (trailing 7 days) and last-hour counts. */
+/** Fold grouped rows into per-client hourly buckets (trailing GAP_LOOKBACK_DAYS) and last-hour counts. */
 export function buildClientInputs(hourlyRows: HealthRow[], lastHourRows: HealthRow[]): ClientHealthInput[] {
   const clients = new Map<string, { hourly: Map<number, HourlyBucket & WindowCounts>; lastHour: WindowCounts }>();
   const client = (clientId: string) => {

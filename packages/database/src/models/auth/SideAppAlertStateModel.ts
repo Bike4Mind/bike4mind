@@ -56,16 +56,24 @@ export class SideAppAlertStateRepository extends BaseRepository<ISideAppAlertSta
   }
 
   /**
-   * Insert an open alert, stamped as notified by the caller. A duplicate-key error means another
-   * run already holds the open alert, so only the run that gets `opened` may send.
+   * Insert an open alert, stamped as notified by the caller unless `notified` is false (held back,
+   * to be announced later). A duplicate-key error means another run already holds the open alert,
+   * so only the run that gets `opened` may send.
    */
   async open(
     scope: string,
     rule: string,
-    now: Date
+    now: Date,
+    notified = true
   ): Promise<{ outcome: 'opened'; id: string } | { outcome: 'exists' }> {
     try {
-      const doc = await this.model.create({ scope, rule, open: true, openedAt: now, lastNotifiedAt: now });
+      const doc = await this.model.create({
+        scope,
+        rule,
+        open: true,
+        openedAt: now,
+        ...(notified ? { lastNotifiedAt: now } : {}),
+      });
       return { outcome: 'opened', id: String(doc._id) };
     } catch (error) {
       if ((error as { code?: number }).code === DUPLICATE_KEY_ERROR_CODE) return { outcome: 'exists' };

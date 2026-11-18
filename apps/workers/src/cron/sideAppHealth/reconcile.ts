@@ -70,8 +70,12 @@ async function safePost(ctx: ReconcileContext, message: { text: string; blocks: 
 /**
  * Make the stored alert state match `desired`: announce new alerts once, remind every 24 hours while
  * open, announce recovery once. Opening is an insert guarded by a partial unique index, so a second
- * concurrent run gets a duplicate-key error and stays quiet. A failed post gives its claim back so
- * the next run sends it, and never stops the remaining alerts. Database errors propagate.
+ * concurrent run gets a duplicate-key error and stays quiet. A muted alert is stored unannounced and
+ * sent as a new alert once nothing mutes it. Recovery is posted before the alert is closed, under
+ * the same claim as reminders, so a failed post leaves it open for the next run and two runs never
+ * both post. An alert replaced by a different rule for the same app closes without a recovery
+ * message. A failed post gives its claim back and never stops the remaining alerts. Database errors
+ * propagate.
  */
 export async function reconcileAlerts(desired: DesiredAlert[], ctx: ReconcileContext): Promise<ReconcileResult> {
   const result: ReconcileResult = { opened: 0, reminded: 0, resolved: 0, postFailures: 0 };
@@ -86,7 +90,10 @@ export async function reconcileAlerts(desired: DesiredAlert[], ctx: ReconcileCon
   for (const alert of desired) {
     const label = `${alert.scope}:${alert.rule}`;
     const existing = openByKey.get(keyOf(alert.scope, alert.rule));
-    if (alert.muted) continue;
+    if (alert.muted) {
+      if (!existing) await repo.open(alert.scope, alert.rule, ctx.now, false);
+      continue;
+    }
 
     if (!existing) {
       const opened = await repo.open(alert.scope, alert.rule, ctx.now);
@@ -112,14 +119,23 @@ export async function reconcileAlerts(desired: DesiredAlert[], ctx: ReconcileCon
   }
 
   const keep = new Set(desired.map(alert => keyOf(alert.scope, alert.rule)));
+  const desiredScopes = new Set(desired.map(alert => alert.scope));
   for (const ref of open) {
     if (keep.has(keyOf(ref.scope, ref.rule))) continue;
-    if (!(await repo.resolve(ref.id, ctx.now))) continue;
-    // Announced only if the alert had ever been sent: one that never got out has nothing to retract.
-    if (!ref.lastNotifiedAt) continue;
+    // Nothing to retract when the alert never got out, or when another rule now covers the app.
+    if (!ref.lastNotifiedAt || desiredScopes.has(ref.scope)) {
+      await repo.resolve(ref.id, ctx.now);
+      continue;
+    }
+    if (!(await repo.claimNotification(ref.id, ref.lastNotifiedAt, ctx.now))) continue;
     const resolvedMessage = messageFor('resolved', { scope: ref.scope, rule: ref.rule }, ctx, names, ref.openedAt);
-    if (await safePost(ctx, resolvedMessage, `${ref.scope}:${ref.rule}`)) result.resolved += 1;
-    else result.postFailures += 1;
+    if (await safePost(ctx, resolvedMessage, `${ref.scope}:${ref.rule}`)) {
+      await repo.resolve(ref.id, ctx.now);
+      result.resolved += 1;
+    } else {
+      result.postFailures += 1;
+      await repo.releaseClaim(ref.id, ctx.now, ref.lastNotifiedAt);
+    }
   }
   return result;
 }

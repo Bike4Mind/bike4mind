@@ -46,6 +46,13 @@ describe('side app alert state', () => {
     expect((await repo.open('other', 'failing', t0)).outcome).toBe('opened');
   });
 
+  it('can store an alert without marking it notified', async () => {
+    expect((await repo.open('app', 'failing', t0, false)).outcome).toBe('opened');
+    const [ref] = await repo.listOpen();
+    expect(ref.lastNotifiedAt).toBeUndefined();
+    expect(ref.openedAt).toEqual(t0);
+  });
+
   it('grants a notification claim to one caller only, and returns it on release', async () => {
     const opened = await repo.open('app', 'failing', t0);
     if (opened.outcome !== 'opened') throw new Error('expected open');

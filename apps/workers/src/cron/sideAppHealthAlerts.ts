@@ -1,4 +1,4 @@
-import { connectDB, oauthClientRepository } from '@bike4mind/database';
+import { connectDB, oauthClientRepository, sideAppAlertStateRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { desiredAlerts, evaluateClient, evaluatePlatform } from '@bike4mind/server-utils/sideApps/health/rules';
@@ -30,8 +30,10 @@ export async function handler(event?: { time?: string }) {
 
   const rows = await collectClientHealthRows(now);
   const inputs = buildClientInputs(rows.hourly, rows.lastHour);
-  const verdicts = inputs.map(input => evaluateClient(input, now.getTime()));
-  const desired = desiredAlerts(verdicts);
+  const open = await sideAppAlertStateRepository.listOpen();
+  const openRuleOf = (clientId: string) => open.find(ref => ref.scope === clientId)?.rule;
+  const verdicts = inputs.map(input => evaluateClient(input, now.getTime(), openRuleOf(input.clientId)));
+  const desired = desiredAlerts(verdicts, open);
   const { armed } = evaluatePlatform(verdicts);
 
   const result = await reconcileAlerts(desired, {

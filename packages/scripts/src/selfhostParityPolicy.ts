@@ -117,6 +117,15 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'c8f7a1da54367bdfacb6ccdf02843f4bca8200dfd493942452a3a402dab910c4',
     'Hosted business analytics and Stripe receipts; not applicable to a portable deployment.'
   ),
+  broker(
+    'queue:infra/sideAppHealthAlerts.ts:sideAppHealthAlertsDLQ',
+    'fb350c04edf256a7f3dbdd2e2897229530d8ecd9fda5e7d251f9a6f8e9f7ea8e'
+  ),
+  hostedOnly(
+    'schedule:infra/sideAppHealthAlerts.ts:sideAppHealthAlerts',
+    '38ed4dcf02cdb3fbb4562be4a387be0bc349129eeeeee84c405d00a2505e2924',
+    'Hosted operator alerting on connected-app traffic; not applicable to a portable deployment.'
+  ),
   wired(
     'event:infra/eventBus.ts:brief-compose',
     '750e523f91dd4fe35a5f02fe429c1cec6dc208f3e09d24a421c64a85a78389a8',

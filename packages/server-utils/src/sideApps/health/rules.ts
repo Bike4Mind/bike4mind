@@ -1,6 +1,8 @@
 export const HOUR_MS = 60 * 60 * 1000;
 export const DAY_MS = 24 * HOUR_MS;
 export const BASELINE_DAYS = 7;
+/** Hourly history the silence baseline sees. Two weeks, so a weekday-only app's previous weekend counts as a closed gap. */
+export const GAP_LOOKBACK_DAYS = 14;
 
 /** A client is armed once it has this many successes on at least ARM_MIN_ACTIVE_DAYS of the trailing 7 days. */
 export const ARM_MIN_SUCCESSES = 5;
@@ -38,7 +40,7 @@ export interface WindowCounts {
 
 export interface ClientHealthInput {
   clientId: string;
-  /** Hourly buckets covering the trailing 7 days, up to and including the current hour. */
+  /** Hourly buckets covering the trailing GAP_LOOKBACK_DAYS, up to and including the current hour. */
   hourly: HourlyBucket[];
   /** The trailing 60 minutes, counted exactly rather than from clock-hour buckets. */
   lastHour: WindowCounts;
@@ -121,7 +123,11 @@ export function topFailureReasons(reasons: Record<string, number>, limit = TOP_F
     .map(([reason, count]) => ({ reason, count }));
 }
 
-export function evaluateClient(input: ClientHealthInput, now: number): ClientVerdict {
+/**
+ * `openRule` is the rule of this client's currently open alert, if any. An open `failing` alert
+ * outlasts a quiet hour: it holds until an hour with a success that is not failing by rate.
+ */
+export function evaluateClient(input: ClientHealthInput, now: number, openRule?: string): ClientVerdict {
   const armed = isArmed(input.hourly, now);
   const threshold = silenceThresholdHours(longestClosedGapHours(input.hourly));
   const sinceSuccess = hoursSinceLastSuccess(input.hourly, now);
@@ -129,6 +135,7 @@ export function evaluateClient(input: ClientHealthInput, now: number): ClientVer
   if (armed) {
     if (isFailingNow(input.lastHour)) rule = 'failing';
     else if (sinceSuccess !== null && sinceSuccess > threshold) rule = 'silent';
+    else if (openRule === 'failing' && input.lastHour.successes === 0) rule = 'failing';
   }
   return {
     clientId: input.clientId,
@@ -161,12 +168,29 @@ export interface DesiredAlert {
   verdict?: ClientVerdict;
 }
 
-/** Every alert that should be open after this run. */
-export function desiredAlerts(verdicts: ClientVerdict[]): DesiredAlert[] {
+export interface OpenAlertKey {
+  scope: string;
+  rule: string;
+}
+
+/**
+ * Every alert that should be open after this run. An open alert for a client that is no longer
+ * armed stays desired until the client has a success again: losing arming is not recovery.
+ */
+export function desiredAlerts(verdicts: ClientVerdict[], open: OpenAlertKey[] = []): DesiredAlert[] {
   const { platformDown } = evaluatePlatform(verdicts);
   const alerts: DesiredAlert[] = verdicts
     .filter(verdict => verdict.rule !== null)
     .map(verdict => ({ scope: verdict.clientId, rule: verdict.rule as string, muted: platformDown, verdict }));
+  const byClient = new Map(verdicts.map(verdict => [verdict.clientId, verdict]));
+  for (const { scope, rule } of open) {
+    if (scope === PLATFORM_SCOPE) continue;
+    const verdict = byClient.get(scope);
+    if (verdict?.armed) continue;
+    if (verdict && verdict.hoursSinceSuccess !== null && verdict.hoursSinceSuccess < 1) continue;
+    if (alerts.some(alert => alert.scope === scope && alert.rule === rule)) continue;
+    alerts.push({ scope, rule, muted: platformDown, verdict });
+  }
   if (platformDown) alerts.push({ scope: PLATFORM_SCOPE, rule: PLATFORM_RULE, muted: false });
   return alerts;
 }

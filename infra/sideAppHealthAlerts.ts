@@ -13,7 +13,7 @@ if (sideAppHealthAlertsDLQ) {
   const deadLetter = createEventBusDeadLetter('sideAppHealthAlertsDLQ', sideAppHealthAlertsDLQ);
   const cron = new sst.aws.Cron('sideAppHealthAlerts', {
     schedule: 'cron(15 * * * ? *)',
-    enabled: process.env.SIDE_APP_HEALTH_ALERTS_ENABLED !== 'false',
+    enabled: process.env.SIDE_APP_HEALTH_ALERTS_ENABLED === 'true',
     function: {
       vpc: lambdaVpc,
       handler: 'apps/workers/src/cron/sideAppHealthAlerts.handler',

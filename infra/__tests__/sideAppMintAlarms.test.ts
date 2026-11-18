@@ -110,7 +110,7 @@ describe('side app health alerts cron infra', () => {
   it('runs hourly behind runsScheduledJobs with a dead-letter queue and an enabled flag', () => {
     expect(source).toContain('runsScheduledJobs');
     expect(source).toContain("schedule: 'cron(15 * * * ? *)'");
-    expect(source).toContain("process.env.SIDE_APP_HEALTH_ALERTS_ENABLED !== 'false'");
+    expect(source).toContain("process.env.SIDE_APP_HEALTH_ALERTS_ENABLED === 'true'");
     expect(source).toContain('deadLetter.sendPermission');
     expect(source).toContain('apps/workers/src/cron/sideAppHealthAlerts.handler');
   });

@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   reconcile: vi.fn(),
   post: vi.fn(),
   findByClientIds: vi.fn(),
+  listOpen: vi.fn(),
   resource: {
     App: { stage: 'dev' },
     SLACK_ALARMS_WEBHOOK_URL: { value: 'https://example.test/alarms' },
@@ -16,6 +17,7 @@ vi.mock('sst', () => ({ Resource: mocks.resource }));
 vi.mock('@bike4mind/database', () => ({
   connectDB: mocks.connect,
   oauthClientRepository: { findByClientIds: mocks.findByClientIds },
+  sideAppAlertStateRepository: { listOpen: mocks.listOpen },
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://example/%STAGE%' } }));
 vi.mock('@bike4mind/utils', () => ({ postMessageToSlack: mocks.post }));
@@ -34,6 +36,7 @@ beforeEach(() => {
   mocks.collect.mockResolvedValue({ hourly: [], lastHour: [] });
   mocks.reconcile.mockResolvedValue({ opened: 0, reminded: 0, resolved: 0, postFailures: 0 });
   mocks.findByClientIds.mockResolvedValue(new Map());
+  mocks.listOpen.mockResolvedValue([]);
 });
 
 describe('sideAppHealthAlerts handler', () => {

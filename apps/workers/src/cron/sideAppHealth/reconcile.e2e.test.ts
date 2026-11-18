@@ -28,6 +28,17 @@ const verdict = (clientId: string): ClientVerdict => ({
   silenceThresholdHours: 6,
   topReasons: [],
 });
+const silentVerdict = (clientId: string): ClientVerdict => ({
+  ...verdict(clientId),
+  rule: 'silent',
+  hoursSinceSuccess: 40,
+});
+const silent = (scope: string): DesiredAlert => ({
+  scope,
+  rule: 'silent',
+  muted: false,
+  verdict: silentVerdict(scope),
+});
 const failing = (scope: string, muted = false): DesiredAlert => ({
   scope,
   rule: 'failing',
@@ -147,6 +158,69 @@ describe('side app health state and delivery', () => {
 
     expect(await reconcileAlerts(muted, ctxAt(new Date(later.getTime() + 1000)))).toMatchObject({ opened: 0 });
     expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an alert open and says nothing when its client is still desired as the same rule', async () => {
+    await reconcileAlerts([failing('a')], ctxAt(t0));
+    post.mockClear();
+    expect(await reconcileAlerts([failing('a')], ctxAt(new Date(t0.getTime() + 1000)))).toMatchObject({ resolved: 0 });
+    expect(post).not.toHaveBeenCalled();
+    expect(await SideAppAlertState.countDocuments({ open: true })).toBe(1);
+  });
+
+  it('opens silent and closes failing without a recovery message when the rule changes', async () => {
+    await reconcileAlerts([failing('a')], ctxAt(t0));
+    post.mockClear();
+    const next = await reconcileAlerts([silent('a')], ctxAt(new Date(t0.getTime() + 60 * 60 * 1000)));
+    expect(next).toMatchObject({ opened: 1, resolved: 0 });
+    expect(texts()).toHaveLength(1);
+    expect(texts()[0]).toContain('traffic has gone silent');
+    expect(texts().join(' ')).not.toContain('recovered');
+    expect(await SideAppAlertState.countDocuments({ open: true, rule: 'silent' })).toBe(1);
+    expect(await SideAppAlertState.countDocuments({ open: true, rule: 'failing' })).toBe(0);
+  });
+
+  it('retries a failed recovery post on the next run and sends it once', async () => {
+    await reconcileAlerts([failing('a')], ctxAt(t0));
+    post.mockClear();
+    post.mockResolvedValueOnce(false);
+    const first = await reconcileAlerts([], ctxAt(new Date(t0.getTime() + 1000)));
+    expect(first).toMatchObject({ resolved: 0, postFailures: 1 });
+    expect(await SideAppAlertState.countDocuments({ open: true })).toBe(1);
+
+    const results = await Promise.all([
+      reconcileAlerts([], ctxAt(new Date(t0.getTime() + 2000))),
+      reconcileAlerts([], ctxAt(new Date(t0.getTime() + 2000))),
+    ]);
+    expect(results.reduce((sum, r) => sum + r.resolved, 0)).toBe(1);
+    expect(texts().filter(t => t.includes('recovered'))).toHaveLength(2);
+    expect(await SideAppAlertState.countDocuments({ open: true })).toBe(0);
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+
+  it('stores a muted alert unannounced and announces it once, with its original opening time, when the platform alert ends', async () => {
+    const platform: DesiredAlert = { scope: PLATFORM_SCOPE, rule: PLATFORM_RULE, muted: false };
+    expect(await reconcileAlerts([failing('a', true), platform], ctxAt(t0))).toMatchObject({ opened: 1 });
+    expect(texts()).toHaveLength(1);
+    const stored = await SideAppAlertState.findOne({ scope: 'a', open: true }).lean();
+    expect(stored?.lastNotifiedAt).toBeUndefined();
+    expect(stored?.openedAt.getTime()).toBe(t0.getTime());
+
+    const later = new Date(t0.getTime() + 3 * 60 * 60 * 1000);
+    expect(await reconcileAlerts([failing('a', true), platform], ctxAt(later))).toMatchObject({ reminded: 0 });
+    expect(texts()).toHaveLength(1);
+
+    post.mockClear();
+    const cleared = new Date(later.getTime() + 60 * 60 * 1000);
+    await reconcileAlerts([failing('a')], ctxAt(cleared));
+    await reconcileAlerts([failing('a')], ctxAt(new Date(cleared.getTime() + 1000)));
+    expect(texts().filter(t => t.includes('Connected app alert:') || t.includes('Connected app alert ['))).toHaveLength(
+      1
+    );
+    expect(texts()[0]).not.toContain('still open');
+    const after = await SideAppAlertState.findOne({ scope: 'a', open: true }).lean();
+    expect(after?.openedAt.getTime()).toBe(t0.getTime());
+    expect(after?.lastNotifiedAt?.getTime()).toBe(cleared.getTime());
   });
 
   it('never carries user identifiers in a message', async () => {

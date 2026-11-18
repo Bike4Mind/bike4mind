@@ -1,6 +1,6 @@
 import type { PipelineStage } from 'mongoose';
 import { AgentExecutionModel, ApiKeyUsageLog, Quest, SideAppRefusal } from '@bike4mind/database';
-import { BASELINE_DAYS, DAY_MS, HOUR_MS } from '@bike4mind/server-utils/sideApps/health/rules';
+import { DAY_MS, GAP_LOOKBACK_DAYS, HOUR_MS } from '@bike4mind/server-utils/sideApps/health/rules';
 import type { HealthRow } from '@bike4mind/server-utils/sideApps/health/rows';
 import type { StatusClass } from '@bike4mind/server-utils/sideApps/outcomes';
 
@@ -108,10 +108,10 @@ export async function collectHealthRows(from: Date, to: Date, bucketed: boolean)
   ];
 }
 
-/** Hourly rows for the trailing 7 days and exact counts for the trailing 60 minutes. */
+/** Hourly rows for the trailing GAP_LOOKBACK_DAYS and exact counts for the trailing 60 minutes. */
 export async function collectClientHealthRows(now: Date) {
   const [hourly, lastHour] = await Promise.all([
-    collectHealthRows(new Date(now.getTime() - BASELINE_DAYS * DAY_MS), new Date(now.getTime() + 1), true),
+    collectHealthRows(new Date(now.getTime() - GAP_LOOKBACK_DAYS * DAY_MS), new Date(now.getTime() + 1), true),
     collectHealthRows(new Date(now.getTime() - HOUR_MS), new Date(now.getTime() + 1), false),
   ]);
   return { hourly, lastHour };

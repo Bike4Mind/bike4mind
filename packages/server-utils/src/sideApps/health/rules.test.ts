@@ -4,6 +4,7 @@ import {
   ARM_MIN_SUCCESSES,
   DAY_MS,
   FAIL_MIN_ATTEMPTS,
+  GAP_LOOKBACK_DAYS,
   HOUR_MS,
   PLATFORM_RULE,
   PLATFORM_SCOPE,
@@ -18,6 +19,7 @@ import {
   reminderDue,
   topFailureReasons,
   type ClientHealthInput,
+  type ClientVerdict,
   type HourlyBucket,
   type WindowCounts,
 } from './rules';
@@ -170,6 +172,100 @@ describe('silent rule', () => {
     );
     expect(verdict.rule).toBe('failing');
     expect(verdict.topReasons[0]).toEqual({ reason: 'agent_failed', count: 8 });
+  });
+});
+
+describe('weekday-only apps', () => {
+  /** Successes 9:00-17:59 UTC on Monday to Friday, for the 16 days before `until`. */
+  const weekdaySeries = (until: number, days = GAP_LOOKBACK_DAYS + 2): HourlyBucket[] => {
+    const series: HourlyBucket[] = [];
+    for (let hourStart = hourStartOf(until) - days * DAY_MS; hourStart < until; hourStart += HOUR_MS) {
+      const at = new Date(hourStart);
+      const weekday = at.getUTCDay() >= 1 && at.getUTCDay() <= 5;
+      if (weekday && at.getUTCHours() >= 9 && at.getUTCHours() < 18) {
+        series.push({ hourStart, successes: 3, failures: 0, ourFaultFailures: 0 });
+      }
+    }
+    return series;
+  };
+  const saturday = Date.UTC(2026, 10, 21, 23);
+  const sunday = Date.UTC(2026, 10, 22, 23);
+  const within = (hourly: HourlyBucket[], now: number, days: number) =>
+    hourly.filter(bucket => bucket.hourStart >= now - days * DAY_MS);
+
+  it('is not silent over a weekend once the lookback holds the previous weekend', () => {
+    for (const now of [saturday, sunday]) {
+      const hourly = within(weekdaySeries(now), now, GAP_LOOKBACK_DAYS);
+      const verdict = evaluateClient(client(hourly, lastHour()), now);
+      expect(verdict.armed).toBe(true);
+      expect(verdict.rule).toBeNull();
+    }
+  });
+
+  it('would go silent over the weekend on a 7-day baseline alone', () => {
+    const hourly = within(weekdaySeries(sunday), sunday, 7);
+    expect(evaluateClient(client(hourly, lastHour()), sunday).rule).toBe('silent');
+  });
+
+  it('still alerts when a daily app stops for longer than its closed gaps', () => {
+    const now = Date.UTC(2026, 10, 21, 23);
+    const daily: HourlyBucket[] = [];
+    for (let hourStart = hourStartOf(now) - 14 * DAY_MS; hourStart < now - 2 * DAY_MS; hourStart += HOUR_MS) {
+      const hour = new Date(hourStart).getUTCHours();
+      if (hour >= 9 && hour < 18) daily.push({ hourStart, successes: 3, failures: 0, ourFaultFailures: 0 });
+    }
+    expect(evaluateClient(client(daily, lastHour()), now).rule).toBe('silent');
+  });
+});
+
+describe('failing hysteresis', () => {
+  const quiet = lastHour({ failures: FAIL_MIN_ATTEMPTS - 2 });
+
+  it('does not open on a low-volume hour', () => {
+    expect(evaluateClient(client(steadySeries(), quiet), NOW).rule).toBeNull();
+  });
+
+  it('keeps an open failing alert through a low-volume hour with no success', () => {
+    expect(evaluateClient(client(steadySeries(), quiet), NOW, 'failing').rule).toBe('failing');
+  });
+
+  it('releases an open failing alert once an hour has a success and is not failing by rate', () => {
+    expect(evaluateClient(client(steadySeries(), lastHour({ successes: 3 })), NOW, 'failing').rule).toBeNull();
+  });
+
+  it('keeps it open while the rate clause still fails', () => {
+    const rate = lastHour({ successes: 2, failures: 8, ourFaultFailures: 8 });
+    expect(evaluateClient(client(steadySeries(), rate), NOW, 'failing').rule).toBe('failing');
+  });
+});
+
+describe('open alerts of unarmed clients', () => {
+  const verdict = (partial: Partial<ClientVerdict>): ClientVerdict => ({
+    clientId: 'app',
+    armed: false,
+    rule: null,
+    lastHour: emptyWindowCounts(),
+    hoursSinceSuccess: 200,
+    silenceThresholdHours: SILENCE_FLOOR_HOURS,
+    topReasons: [],
+    ...partial,
+  });
+  const open = [{ scope: 'app', rule: 'silent' }];
+
+  it('keeps the alert while the client has no recent success', () => {
+    expect(desiredAlerts([verdict({})], open)).toMatchObject([{ scope: 'app', rule: 'silent', muted: false }]);
+  });
+
+  it('keeps it for a client that no longer appears in the data', () => {
+    expect(desiredAlerts([], open)).toMatchObject([{ scope: 'app', rule: 'silent' }]);
+  });
+
+  it('drops it once the client has a success again', () => {
+    expect(desiredAlerts([verdict({ hoursSinceSuccess: 0.4 })], open)).toEqual([]);
+  });
+
+  it('drops it for an armed client that no longer has a rule', () => {
+    expect(desiredAlerts([verdict({ armed: true, hoursSinceSuccess: 2 })], open)).toEqual([]);
   });
 });
 
