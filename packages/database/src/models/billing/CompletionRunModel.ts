@@ -126,6 +126,7 @@ export class CompletionRunRepository {
         $expr: { $gte: [remaining, Math.max(1, minimumCredits)] },
       },
       [{ $set: { committedCredits: { $add: ['$committedCredits', { $min: [wantedCredits, remaining] }] } } }],
+      // update-validators-off: an aggregation pipeline update, which Mongoose cannot validate
       { new: false }
     ).lean<CompletionRunRecord>();
     if (before?.budgetCredits !== undefined) {
@@ -149,7 +150,8 @@ export class CompletionRunRepository {
     if (deltaCredits === 0) return;
     await CompletionRunModel.updateOne(
       { _id: runId, budgetCredits: { $exists: true } },
-      { $inc: { committedCredits: deltaCredits } }
+      { $inc: { committedCredits: deltaCredits } },
+      { runValidators: true }
     );
   }
 
@@ -167,7 +169,7 @@ export class CompletionRunRepository {
     const record = await CompletionRunModel.findOneAndUpdate(
       { _id: runId, budgetCredits: { $exists: true, $lt: budgetCredits } },
       { $set: { budgetCredits } },
-      { new: true }
+      { new: true, runValidators: true }
     ).lean<CompletionRunRecord>();
     if (record) return { kind: 'raised', run: toCompletionRun(record) };
 

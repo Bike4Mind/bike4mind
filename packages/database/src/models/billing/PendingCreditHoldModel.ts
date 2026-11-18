@@ -93,7 +93,8 @@ export class PendingCreditHoldRepository {
   async markSettled(id: string, settledCredits: number): Promise<boolean> {
     const result = await this.model.updateOne(
       { _id: id, settledAt: { $exists: false } },
-      { $set: { settledAt: new Date(), settledCredits } }
+      { $set: { settledAt: new Date(), settledCredits } },
+      { runValidators: true }
     );
     return result.modifiedCount === 1;
   }
@@ -107,7 +108,7 @@ export class PendingCreditHoldRepository {
       .findOneAndUpdate(
         { _id: id, settledAt: { $exists: false } },
         { $set: { settledAt: new Date(), settledCredits } },
-        { new: true }
+        { new: true, runValidators: true }
       )
       .lean<PendingCreditHoldDocument>();
     return doc ? toPendingCreditHold(doc) : null;
@@ -117,7 +118,8 @@ export class PendingCreditHoldRepository {
   async addRunClaimCredits(id: string, credits: number): Promise<boolean> {
     const result = await this.model.updateOne(
       { _id: id, settledAt: { $exists: false }, runClaim: { $exists: true } },
-      { $inc: { 'runClaim.credits': credits } }
+      { $inc: { 'runClaim.credits': credits } },
+      { runValidators: true }
     );
     return result.modifiedCount === 1;
   }
