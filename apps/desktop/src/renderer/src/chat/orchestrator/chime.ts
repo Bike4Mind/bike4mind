@@ -53,9 +53,24 @@ export function useOrchestratorSound(): [boolean, () => void] {
 
 let context: AudioContext | null = null;
 
-/** Plays the chime if the setting is on. Synthesised, so the app ships no audio file. */
-export function playChime(): void {
-  if (!enabled || typeof AudioContext !== 'function') return;
+/**
+ * Plays the chime if the setting is on. Synthesised, so the app ships no audio file. `soundUrl` is a
+ * skin's finale sound (served by main over b4m-skin:); if it cannot play, the built-in chime does.
+ * The needs-you alert never passes one: that sound is locked (statePalette.ts).
+ */
+export function playChime(soundUrl?: string): void {
+  if (!enabled) return;
+  if (soundUrl && typeof Audio === 'function') {
+    const audio = new Audio(soundUrl);
+    audio.volume = 0.6;
+    audio.play().catch(() => playTones());
+    return;
+  }
+  playTones();
+}
+
+function playTones(): void {
+  if (typeof AudioContext !== 'function') return;
   context ??= new AudioContext();
   const audio = context;
   // A context created before any user gesture starts suspended; resuming may be refused, which only costs this chime.

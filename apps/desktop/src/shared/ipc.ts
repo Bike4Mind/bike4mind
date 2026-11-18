@@ -1,3 +1,4 @@
+import type { SkinSummary } from './mods';
 import type { NewSessionDefaults } from './sessionDefaults';
 import type { StudioApi } from './studioIpc';
 import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
@@ -599,6 +600,10 @@ export const IPC_CHANNELS = {
   watchRespond: 'watch:respond',
   watchFocusAgent: 'watch:focus-agent',
   watchCloseMini: 'watch:close-mini',
+  /** Rescan userData/mods and return every skin, valid or broken (main/mods). */
+  skinsList: 'skins:list',
+  /** main -> renderer push after the mods folder changed on disk. */
+  skinsChanged: 'skins:changed',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -755,6 +760,11 @@ export interface MiniTavernApi {
 export interface DesktopApi {
   studio: StudioApi;
   getAppInfo(): Promise<AppInfo>;
+  /** Data-only skins for the Orchestrate views; only validated values ever arrive here. */
+  skins: {
+    list(): Promise<SkinSummary[]>;
+    onChanged(listener: (skins: SkinSummary[]) => void): () => void;
+  };
   setTheme(mode: 'light' | 'dark' | 'system', backgroundColor: string): Promise<void>;
   update: {
     getState(): Promise<UpdateState>;

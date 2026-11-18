@@ -48,6 +48,7 @@ import {
   type SlotPoint,
   type TavernZone,
 } from './scene';
+import { useSkinTheme } from '../skins';
 import { stateLampColor } from '../statePalette';
 import { TavernLight, type TavernMood } from './TavernLight';
 import { INNKEEPER_ART, TAVERN_BACKDROP, characterSprite, type CharacterId, type InnkeeperPose } from './tavernArt';
@@ -648,6 +649,7 @@ export function TavernView({
   /** The "needs you" bubbles carry the answer buttons; off where another card already answers (the mini Tavern). */
   answerFromBubble?: boolean;
 }) {
+  const backdrop = useSkinTheme().sprites.tavernBackdrop ?? TAVERN_BACKDROP;
   const mode = useTheme().palette.mode;
   const mood: TavernMood = settled ? 'last-call' : mode === 'dark' ? 'night' : 'day';
   const { placements, previous } = usePlacements(agents);
@@ -779,7 +781,7 @@ export function TavernView({
         sx={{
           position: 'absolute',
           inset: '-6%',
-          backgroundImage: `url(${TAVERN_BACKDROP})`,
+          backgroundImage: `url("${backdrop}")`,
           backgroundSize: 'cover',
           backgroundPosition: 'center',
           filter: 'blur(28px) brightness(0.45) saturate(1.2)',
@@ -814,7 +816,7 @@ export function TavernView({
       >
         <Box
           component="img"
-          src={TAVERN_BACKDROP}
+          src={backdrop}
           alt=""
           draggable={false}
           sx={{
