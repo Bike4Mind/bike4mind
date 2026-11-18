@@ -259,6 +259,12 @@ export function useUserRevokeSharing(
   });
 }
 
+interface ClientSessionTeardown {
+  setCurrentUser: (user: IUserDocument | null) => void;
+  resetTokens: () => void;
+  queryClient: QueryClient;
+}
+
 /**
  * Client-side teardown shared by every sign-out path (this-device logout, log-out-all-devices):
  * drop the in-memory user + tokens, wipe client persistence, purge queries (keeping only the
@@ -266,11 +272,19 @@ export function useUserRevokeSharing(
  * (components, query subscriptions, WebSocket) survives. The server-side revoke differs per path
  * and is done by the caller BEFORE this runs.
  */
-export async function tearDownClientSession(opts: {
-  setCurrentUser: (user: IUserDocument | null) => void;
-  resetTokens: () => void;
-  queryClient: QueryClient;
-}): Promise<void> {
+export async function tearDownClientSession(opts: ClientSessionTeardown): Promise<void> {
+  await clearClientSession(opts);
+
+  // Hard reload to /login to destroy all in-memory state (React components,
+  // query subscriptions, WebSocket connections). Matches the pattern used by
+  // loginAs/returnToAdmin flows which also use window.location.replace().
+  const redirectTo = new URLSearchParams(window.location.search).get('redirectTo');
+  const qs = redirectTo ? `?redirectTo=${encodeURIComponent(redirectTo)}` : '';
+  window.location.replace(`/login${qs}`);
+}
+
+/** tearDownClientSession without the reload, for a sign-out page that navigates on its own (/oauth/logout). */
+export async function clearClientSession(opts: ClientSessionTeardown): Promise<void> {
   opts.setCurrentUser(null);
   opts.resetTokens();
   // Clear all client-side persistence (IndexedDB: React Query, Dexie, TagCache,
@@ -282,13 +296,6 @@ export async function tearDownClientSession(opts: {
   opts.queryClient.removeQueries({
     predicate: query => query.queryKey[0] !== 'server-config-public',
   });
-
-  // Hard reload to /login to destroy all in-memory state (React components,
-  // query subscriptions, WebSocket connections). Matches the pattern used by
-  // loginAs/returnToAdmin flows which also use window.location.replace().
-  const redirectTo = new URLSearchParams(window.location.search).get('redirectTo');
-  const qs = redirectTo ? `?redirectTo=${encodeURIComponent(redirectTo)}` : '';
-  window.location.replace(`/login${qs}`);
 }
 
 export function useUserLogout() {

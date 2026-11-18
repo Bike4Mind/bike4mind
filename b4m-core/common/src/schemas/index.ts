@@ -53,6 +53,7 @@ export * from './clientConfig';
 export * from './pushToken';
 export * from './personas';
 export * from './pendingActions';
+export * from './brief';
 export * from './pushNotification';
 export * from './studioJobCompleted';
 export * from './liveActivityPush';

@@ -274,6 +274,7 @@ export const PlansSection = ({ onSubscriptionChanged }: { onSubscriptionChanged?
               ? `Up to ${teamMinSeats} people at one flat price`
               : `Up to ${teamMinSeats} people at one flat price; $${centsToDollars(teamSeatPrice).toFixed(2)} per month for each person after that`,
             'Shared credit pool with 3-month rollover',
+            'Questmaster included',
             'Advanced Projects with RAG & Auto-Summary',
             'Team workspace & knowledge management',
             'Automated tagging & organization',

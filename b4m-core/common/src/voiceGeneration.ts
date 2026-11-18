@@ -2,7 +2,7 @@ import z from 'zod';
 import type { ApiErrorCode } from './apiErrorCodes';
 // The specific file, not the `./schemas` barrel - the barrel drags in an unbuilt
 // dist in the CI openapi job (same note as tts.contract.ts).
-import { ApiErrorSchema, BillingOrganizationForbiddenErrorSchema } from './schemas/chat';
+import { ApiErrorSchema, MeteredBillingOrganizationForbiddenErrorSchema } from './schemas/chat';
 import { EndUserIdSchema } from './schemas/endUserId';
 import {
   extendGeneratedAudioResponseSchema,
@@ -185,7 +185,7 @@ export const TTS_ERROR_CODES = [
  * enshrine in a schema.
  */
 /** 403 body: the `ai:generate` scope refusal (`required_scopes`), or a billing refusal. */
-export const ttsForbiddenResponseSchema = BillingOrganizationForbiddenErrorSchema.extend({
+export const ttsForbiddenResponseSchema = MeteredBillingOrganizationForbiddenErrorSchema.extend({
   provider: supportedVoiceGenerationVendor.optional(),
 });
 

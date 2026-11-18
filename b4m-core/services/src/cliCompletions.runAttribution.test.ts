@@ -66,6 +66,7 @@ function buildDb() {
       findById: vi.fn().mockResolvedValue(user),
     } as never,
     usageEvents: usageEvents as never,
+    spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
   };
   return { db, usageEvents };
 }

@@ -236,6 +236,7 @@ function GenericAddItemsModal<T>({
         >
           <IconButton
             className="generic-add-items-modal-close-button"
+            aria-label={t('common.close', 'Close')}
             sx={{
               position: 'absolute',
               top: { xs: '5px', sm: '10px' },

@@ -47,6 +47,7 @@ Open a Team with **View Details**. The tabs on the left are grouped: **Team** (O
 On the **Members** tab:
 
 - The header shows how many seats are in use, for example "3 of 10 seats used". Pending invites hold a seat until they are accepted or cancelled.
+- The Team owner, Team managers and platform admins see each member's email address. Other members see names only, and search the list by name.
 - The Team owner, Team managers and platform admins can invite people, cancel pending invites and remove members. Only the owner and platform admins can remove a Team manager. Click **Add Member**, type at least 3 characters, select a person and add them. The search finds people you already share a Team or project with by name, or anyone by their full email address. They receive an invite and show as **Pending** until they accept. New invites give the **Viewer** role.
 - If every seat is taken, the owner sees "You've reached your seat limit" and needs to add seats before inviting more people.
 - Use the three-dot menu on a member to **Revoke Access**, or on a pending invite to **Cancel Invite**. Each option appears only to people who are allowed to use it. Members can choose **Leave Team** for themselves.

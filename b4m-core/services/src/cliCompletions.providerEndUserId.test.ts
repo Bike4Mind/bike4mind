@@ -52,6 +52,7 @@ const db = {
     findById: vi.fn().mockResolvedValue(user),
   } as never,
   usageEvents: { record: vi.fn().mockResolvedValue(undefined) } as never,
+  spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
 };
 
 const run = (overrides: Partial<CompletionParams> = {}) =>

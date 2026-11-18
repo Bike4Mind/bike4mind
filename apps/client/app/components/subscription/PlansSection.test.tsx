@@ -9,6 +9,7 @@ import type { IUserSubscription } from '@bike4mind/server-utils/lib/userSubscrip
 import type { ModelAnswerCost } from '@client/app/utils/creditEstimate';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { PlansSection } from './PlansSection';
+import { SUBSCRIPTION_PLANS } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 
 /**
  * The plans section is where the delinquent row reaches the plan card: it filters the raw
@@ -264,6 +265,18 @@ describe('PlansSection', () => {
     payInvoice.mockReset();
     trackUpsell.mockReset();
     sessionStorage.clear();
+  });
+
+  it('includes Questmaster on both visible paid plans without changing hidden plans', async () => {
+    renderSection();
+
+    expect(screen.getByTestId('plan-card')).toHaveTextContent('Questmaster included');
+    await userEvent.setup({ delay: null }).click(screen.getByTestId('subscription-modal-business-tab'));
+    expect(screen.getByTestId('plan-card')).toHaveTextContent('Questmaster included');
+    for (const plan of SUBSCRIPTION_PLANS.filter(plan => plan.hidden)) {
+      expect(plan.features).not.toContain('Questmaster included');
+      expect(screen.getByTestId('plan-card')).not.toHaveTextContent(plan.name);
+    }
   });
 
   it('says every account starts with free credits rather than claiming there is no free tier', () => {

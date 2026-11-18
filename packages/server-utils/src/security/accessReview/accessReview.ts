@@ -1,3 +1,4 @@
+import { AdminRoleIdSchema, formatAdminPermissionSource, type AdminPermissionSource } from '@bike4mind/common';
 import { z } from 'zod';
 
 /**
@@ -7,6 +8,18 @@ import { z } from 'zod';
 
 export const ACCESS_REVIEW_RUNBOOK = 'docs/security/quarterly-access-review.md';
 export const STALE_API_KEY_DAYS = 90;
+
+/** Canonical role identities for review reads; malformed stored references remain visible unchanged. */
+export function normalizeAccessReviewRoleIds(values: readonly unknown[]): string[] {
+  return [
+    ...new Set(
+      values.map(value => {
+        const id = String(value);
+        return AdminRoleIdSchema.safeParse(id).success ? id.toLowerCase() : id;
+      })
+    ),
+  ];
+}
 
 export type AccessReviewAccountStatus = 'active' | 'banned' | 'deleted';
 
@@ -26,6 +39,10 @@ export interface AccessReviewAdmin {
   /** The stored fields a revoke rewrites, as the `before` of the permissions update. */
   directPermissions: string[];
   adminRoleIds: string[];
+  /** One entry per held role id; an id with no role row (deleted, malformed) has a null name and grants nothing. */
+  roles: AccessReviewHeldRole[];
+  /** The direct grant and roles behind each effective permission, in `permissions` order. */
+  permissionSources: AdminPermissionSource[];
   status: AccessReviewAccountStatus;
   lastActiveAt: string | null;
   /** Newest admin audit entry this account performed, denied attempts excluded. */
@@ -42,6 +59,28 @@ export interface AccessReviewAdmin {
   oauthRefreshTokens: number;
   bridgeDevices: number;
   activeApiKeys: number;
+}
+
+export interface AccessReviewHeldRole {
+  id: string;
+  name: string | null;
+  deleted: boolean;
+}
+
+export interface AccessReviewRoleMember {
+  userId: string;
+  email: string | null;
+  username: string | null;
+  status: AccessReviewAccountStatus;
+}
+
+/** Every admin role defined, with the admin accounts holding it. */
+export interface AccessReviewRole {
+  id: string;
+  name: string;
+  description: string;
+  permissions: string[];
+  members: AccessReviewRoleMember[];
 }
 
 /** Never carries the key secret, hash, digest or prefix. */
@@ -94,6 +133,7 @@ export interface AccessReviewSnapshot {
   allApiKeysListed: boolean;
   counts: AccessReviewCounts;
   admins: AccessReviewAdmin[];
+  roles: AccessReviewRole[];
   apiKeys: AccessReviewApiKey[];
   supportAccess: AccessReviewDelegation[];
   impersonation: AccessReviewDelegation[];
@@ -198,6 +238,11 @@ function countsTable(counts: AccessReviewCounts, baseline?: AccessReviewBaseline
   );
 }
 
+const roleLabel = (role: AccessReviewHeldRole): string => role.name ?? `deleted role ${role.id}`;
+
+const sourceLabel = (source: AdminPermissionSource): string =>
+  `${source.permission} (${formatAdminPermissionSource(source)})`;
+
 const delegationRows = (rows: AccessReviewDelegation[]) =>
   rows.map(row => [
     row.sessionId,
@@ -214,7 +259,7 @@ const delegationRows = (rows: AccessReviewDelegation[]) =>
  * privileged access, with blank decision columns the reviewer fills in before filing it.
  */
 export function formatAccessReviewMarkdown(snapshot: AccessReviewSnapshot, baseline?: AccessReviewBaseline): string {
-  const { counts, admins, apiKeys, supportAccess, impersonation } = snapshot;
+  const { counts, admins, roles, apiKeys, supportAccess, impersonation } = snapshot;
   const keyHeading = snapshot.allApiKeysListed ? 'Active API keys' : 'Privileged API keys';
   const keyScope = snapshot.allApiKeysListed
     ? 'Every active, unexpired API key.'
@@ -238,6 +283,7 @@ export function formatAccessReviewMarkdown(snapshot: AccessReviewSnapshot, basel
         'User',
         'Email',
         'Status',
+        'Roles',
         'Access',
         'Last active',
         'Sessions',
@@ -252,7 +298,8 @@ export function formatAccessReviewMarkdown(snapshot: AccessReviewSnapshot, basel
         admin.username ?? admin.userId,
         admin.email,
         admin.status,
-        admin.fullAdmin ? 'full admin' : admin.permissions.join(', '),
+        admin.roles.map(roleLabel).join(', ') || null,
+        admin.fullAdmin ? 'full admin' : admin.permissionSources.map(sourceLabel).join(', '),
         day(admin.lastActiveAt),
         admin.activeSessions,
         admin.trustedDevices,
@@ -262,6 +309,17 @@ export function formatAccessReviewMarkdown(snapshot: AccessReviewSnapshot, basel
         admin.activeApiKeys,
         '',
         '',
+      ])
+    ),
+    '',
+    `## Admin roles (${roles.length})`,
+    '',
+    ...table(
+      ['Role', 'Permissions', 'Members'],
+      roles.map(role => [
+        role.name,
+        role.permissions.join(', '),
+        role.members.map(member => member.email ?? member.username ?? member.userId).join(', ') || null,
       ])
     ),
     '',

@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/server-utils",
-  "version": "0.0.18",
+  "version": "0.0.19",
   "private": true,
   "type": "module",
   "exports": {
@@ -9,7 +9,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "typecheck:native": "tsgo --noEmit",
-    "typecheck:fast": "tsgo --noEmit || tsc --noEmit",
+    "typecheck:fast": "tsgo --noEmit",
     "test": "vitest run",
     "test:integration": "SERVER_UTILS_TEST_LANE=integration vitest run"
   },

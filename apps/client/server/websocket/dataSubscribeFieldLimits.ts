@@ -1,6 +1,7 @@
 import {
   CHAT_MESSAGE_WITHHELD_FIELDS,
   ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS,
+  ORGANIZATION_MEMBER_CONTACT_FIELDS,
   ORGANIZATION_MEMBER_CREDIT_FIELDS,
   ORGANIZATION_OWNER_ONLY_FIELDS,
   ORGANIZATION_SECRET_FIELDS,
@@ -34,7 +35,7 @@ import {
  * organizations: the subscription streams raw org documents, so it reuses the field lists
  * `toSafeOrganization` applies on the REST paths. A Mongo projection is per-query, not
  * per-document, so it can only be stricter: billingContact is kept only for a platform admin; the
- * administrator-only fields and member credit details are kept only for a platform admin, or an
+ * administrator-only fields, member credit details and member emails are kept only for a platform admin, or an
  * owner/manager whose query is pinned to their verified org. Every other subscriber, including a
  * member who may edit the team profile, gets the member view.
  *
@@ -121,11 +122,15 @@ export function resolveFieldLimits(
       ...ORGANIZATION_SECRET_FIELDS,
       ...(isPlatformAdmin ? [] : ORGANIZATION_OWNER_ONLY_FIELDS),
       // Mirrors toSafeOrganization's member view. A per-query projection cannot keep one row, so
-      // non-privileged subscribers lose the credit fields on every row (the budget notice reads its
-      // own row over REST).
+      // non-privileged subscribers lose the credit and contact fields on every row (the budget
+      // notice reads its own row over REST).
       ...(isPlatformAdmin || isPrivilegedOrgSubscriber
         ? []
-        : [...ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS, ...ORGANIZATION_MEMBER_CREDIT_FIELDS]),
+        : [
+            ...ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS,
+            ...ORGANIZATION_MEMBER_CREDIT_FIELDS,
+            ...ORGANIZATION_MEMBER_CONTACT_FIELDS,
+          ]),
     ];
     return Object.fromEntries(excluded.map(field => [field, false]));
   }
