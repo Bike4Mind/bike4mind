@@ -6,6 +6,7 @@ import { extendZodWithOpenApi } from '@asteasolutions/zod-to-openapi';
 import type { EndpointContract } from '../api-contract/types';
 import { PUBLIC_DOC_API_KEY_SCOPES } from '../types/entities/UserApiKeyTypes';
 import { buildOpenApiDocument, infoDescription } from './document';
+import { applyOpenApiPatch, diffOpenApiDocument, type OpenApiPatchNode } from './openApiPatch';
 import { registerContracts } from './operations';
 
 // Must match the sidecar name apps/client/scripts/generate-premium-glue.mjs writes.
@@ -52,6 +53,31 @@ export function buildDeploymentOpenApiDocument(
     info.description = infoDescription([...listed]);
   }
   return doc;
+}
+
+/**
+ * The deployment spec as a patch over the core spec, or null with no add-on contracts. The route applies
+ * it to the committed core spec it already bundles, so the server holds one copy of the shared document.
+ * Pass that committed document as `base` so the patch is relative to the bytes the route applies it to;
+ * without it the base is the core spec built in-process (no committed file to diff against).
+ * Like buildDeploymentOpenApiDocument it registers into the module-global registry: call it once per process.
+ */
+export function buildDeploymentOpenApiPatch(
+  version: string,
+  extraContracts: readonly EndpointContract[],
+  base?: Record<string, unknown>
+): OpenApiPatchNode | null {
+  if (extraContracts.length === 0) return null;
+  // Built before the add-on contracts register, so it is exactly the core spec.
+  const core = base ?? buildOpenApiDocument(version);
+  const document = buildDeploymentOpenApiDocument(version, extraContracts);
+  if (!document) return null;
+  const patch = diffOpenApiDocument(core, document);
+  // A patch that does not reproduce the document would silently serve a wrong spec.
+  if (JSON.stringify(applyOpenApiPatch(core, patch)) !== JSON.stringify(document)) {
+    throw new Error('[openapi] the deployment spec patch does not reproduce the deployment document');
+  }
+  return patch;
 }
 
 /**
