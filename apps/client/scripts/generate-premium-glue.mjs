@@ -18,7 +18,7 @@
  *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
  *   app/premium-generated/premiumToolDisplayLabels.generated.ts - overlay tool display names
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
- *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
+ *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec patch (null form)
  *
  * plus packages/scripts/migrate/migrations/core.generated.ts, the core migrations registry built
  * from the migration files on disk (not overlay glue, but every consumer already runs this script),
@@ -1778,8 +1778,8 @@ function generateContracts(packages) {
   writeFile(
     join(CLIENT_ROOT, 'server/premium-generated/deploymentOpenApi.generated.ts'),
     `${GENERATED_BANNER}// Overwritten by: pnpm --filter @bike4mind/common openapi:generate:deployment\n\n` +
-      `import type { DeploymentOpenApiSpec } from '../utils/openApiSpecHandler';\n\n` +
-      `export const deploymentOpenApiSpec: DeploymentOpenApiSpec | null = null;\n`
+      `import type { OpenApiPatchNode } from '@bike4mind/common';\n\n` +
+      `export const deploymentOpenApiPatch: OpenApiPatchNode | null = null;\n`
   );
 
   const contributors = packages.filter(p => p.contributions.contractsExport);

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,6 +20,8 @@ const KEPT = [
   `${PNPM}/tiktoken@1.0.22/node_modules/tiktoken/tiktoken_bg.wasm`,
   `${PNPM}/next@16.4.5_@playwright+test@1.65.0/node_modules/next/dist/server/next-server.js`,
   `${PNPM}/mongoose@8.24.8/node_modules/mongoose/index.js`,
+  `${PNPM}/isolated-vm@7.0.1/node_modules/isolated-vm/isolated-vm.js`,
+  `${PNPM}/isolated-vm@7.0.1/node_modules/isolated-vm/prebuilds/linux-x64/isolated-vm.abi137.glibc.node`,
 ];
 const PRUNED = [
   `${PNPM}/tiktoken@1.0.22/node_modules/tiktoken/encoders/o200k_base.cjs`,
@@ -27,6 +30,13 @@ const PRUNED = [
   `${PNPM}/playwright-core@1.65.0/node_modules/playwright-core/lib/server/index.js`,
   `${PNPM}/playwright@1.65.0/node_modules/playwright-core`,
   `${PNPM}/@playwright+test@1.65.0/node_modules/@playwright/test/index.js`,
+  `${PNPM}/isolated-vm@7.0.1/node_modules/isolated-vm/prebuilds/linux-x64/isolated-vm.abi147.glibc.node`,
+  `${PNPM}/isolated-vm@7.0.1/node_modules/isolated-vm/prebuilds/linux-arm64/isolated-vm.abi137.glibc.node`,
+  `${PNPM}/isolated-vm@7.0.1/node_modules/isolated-vm/prebuilds/linux-arm64/isolated-vm.abi147.glibc.node`,
+  `${PNPM}/isolated-vm@7.0.1/node_modules/isolated-vm/prebuilds/linux-x64/isolated-vm.abi137.musl.node`,
+  `${PNPM}/isolated-vm@7.0.1/node_modules/isolated-vm/prebuilds/linux-x64/isolated-vm.abi137.glibc.node.bak`,
+  `${PNPM}/isolated-vm@7.0.1/node_modules/isolated-vm/prebuilds/darwin-arm64/isolated-vm.abi137.node`,
+  '../../node_modules/isolated-vm-775954ddb2422596/prebuilds/linux-arm64/isolated-vm.abi137.glibc.node',
 ];
 
 let tmpRoot: string;
@@ -116,5 +126,45 @@ describe('pruneServerTrace.mjs', () => {
 
     expect(status).toBe(1);
     expect(output).toContain('no .nft.json traces');
+  });
+});
+
+// Lambda runtime -> NODE_MODULE_VERSION of the Node major it runs. A runtime bump with no entry
+// here fails below, which is the prompt to point HOSTED_SERVER_PREBUILD at the new ABI.
+const NODE_ABI_BY_LAMBDA_RUNTIME: Record<string, string> = { 'nodejs24.x': '137' };
+
+describe('the isolated-vm prebuild the hosted server keeps', () => {
+  it('matches the runtime and architecture infra/web.ts gives the Next server function', async () => {
+    const { HOSTED_SERVER_RUNTIME, HOSTED_SERVER_PREBUILD } = (await import(SCRIPT)) as {
+      HOSTED_SERVER_RUNTIME: string;
+      HOSTED_SERVER_PREBUILD: string;
+    };
+    const web = fs.readFileSync(path.join(REPO_ROOT, 'infra', 'web.ts'), 'utf8');
+    const serverStart = web.indexOf('    server: {');
+    expect(serverStart, 'infra/web.ts Nextjs server block moved').toBeGreaterThan(-1);
+    const serverBlock = web.slice(serverStart, web.indexOf('\n    },', serverStart));
+    // `transform.server` takes full FunctionArgs, so it can set the architecture too.
+    const transformStart = web.indexOf('      server: args => {');
+    expect(transformStart, 'infra/web.ts transform.server moved').toBeGreaterThan(-1);
+    const transformBlock = web.slice(transformStart, web.indexOf('\n      },', transformStart));
+    expect(transformBlock).not.toMatch(/architecture/);
+
+    expect(serverBlock).toContain(`runtime: '${HOSTED_SERVER_RUNTIME}'`);
+    // No architecture means SST's x86_64 default; anything other than a literal 'x86_64' (arm64, or
+    // a value this test cannot read) needs HOSTED_SERVER_PREBUILD revisited.
+    for (const match of serverBlock.matchAll(/architecture:\s*([^,\n]+)/g)) {
+      expect(match[1].trim()).toBe("'x86_64'");
+    }
+    expect(HOSTED_SERVER_PREBUILD).toBe(
+      `linux-x64/isolated-vm.abi${NODE_ABI_BY_LAMBDA_RUNTIME[HOSTED_SERVER_RUNTIME]}.glibc.node`
+    );
+  });
+
+  it('exists in the installed isolated-vm, so the prune never leaves the sandbox with no binary', async () => {
+    const { HOSTED_SERVER_PREBUILD } = (await import(SCRIPT)) as { HOSTED_SERVER_PREBUILD: string };
+    const clientRequire = createRequire(path.join(REPO_ROOT, 'apps', 'client', 'package.json'));
+    const pkgDir = path.dirname(clientRequire.resolve('isolated-vm'));
+
+    expect(fs.existsSync(path.join(pkgDir, 'prebuilds', HOSTED_SERVER_PREBUILD))).toBe(true);
   });
 });
