@@ -92,7 +92,8 @@ export const emailTriageItemRepository = {
     if (emailIds.length === 0) return 0;
     const result = await EmailTriageItemModel.updateMany(
       { userId, emailId: { $in: emailIds }, briefedAt: null },
-      { $set: { briefedAt: at } }
+      { $set: { briefedAt: at } },
+      { runValidators: true }
     );
     return result.modifiedCount;
   },
