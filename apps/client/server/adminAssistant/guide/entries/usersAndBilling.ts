@@ -64,7 +64,7 @@ export const USERS_AND_BILLING_GUIDE: readonly AdminGuideEntry[] = [
       'The tabs are Overview, Activity, Credits, API keys, Sign-ins and Admin log (the audit trail of admin changes).',
       'The Credits tab shows the credit ledger for the account.',
       'Header buttons: "Adjust credits" and "Suspend". The "More actions" menu has Edit profile, Log in as user, Send message, Grant subscription, Change role, Manage product access and Compliance record.',
-      'More actions also has Restrict, Move to limited tier, Schedule deletion, Cancel scheduled deletion and Delete user. Delete user erases the account and all its data immediately (the same purge as Erase user data); Schedule deletion does that after a grace period and can be cancelled.',
+      'More actions also has Restrict, Move to limited tier, Schedule deletion, Cancel scheduled deletion and Delete user. After any required approval, Delete user locks the account and requests asynchronous permanent erasure; records covered by retention rules remain. Schedule deletion starts a grace period before erasure and can be cancelled.',
       'Deleting or scheduling deletion of an account needs the users:delete permission; only full administrators can act on accounts that have admin access.',
     ],
     keywords: [

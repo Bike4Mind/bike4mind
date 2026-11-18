@@ -70,14 +70,15 @@ import { executeApprovedAdminDelete } from '@server/admin/deleteUserAsAdmin';
 type Actor = { id: string; isAdmin: boolean; adminPermissions?: string[] };
 const NO_SUBS = { canceled: [], failed: [] };
 
-async function run(options: { user?: Actor; body?: unknown; id?: string } = {}) {
+async function run(options: { user?: Actor; storedActor?: Actor | null; body?: unknown; id?: string } = {}) {
   const user = options.user ?? { id: 'admin1', isAdmin: true };
-  m.users[user.id] ??= user;
+  if ('storedActor' in options) m.users[user.id] = options.storedActor;
+  else m.users[user.id] ??= user;
   const { req, res } = createMocks({
     method: 'DELETE',
     query: { id: options.id ?? 'u1' },
-    body: 'body' in options ? options.body : { reason: 'Confirmed duplicate account' },
   });
+  req.body = 'body' in options ? options.body : { reason: 'Confirmed duplicate account' };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   Object.assign(req, { user, logger });
   const call = (async () => {
@@ -121,6 +122,39 @@ describe('DELETE /api/users/[id]/delete', () => {
     );
     expect(m.sendToQueue).toHaveBeenCalledWith('queue:accountErasureQueue', { userId: 'u1' });
   });
+
+  it('uses the stored canonical ID for erasure, audit and queue payloads', async () => {
+    const canonicalId = 'abcdef0123456789abcdef01';
+    const alias = canonicalId.toUpperCase();
+    const target = { id: canonicalId, name: 'Target' };
+    m.users[canonicalId] = target;
+    m.users[alias] = target;
+
+    const { call } = await run({ id: alias });
+    await call;
+
+    expect(m.requestErasure).toHaveBeenCalledWith(expect.anything(), canonicalId, expect.any(Date), expect.anything());
+    expect(m.record).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ target: expect.objectContaining({ id: canonicalId }) })
+    );
+    expect(m.sendToQueue).toHaveBeenCalledWith('queue:accountErasureQueue', { userId: canonicalId });
+  });
+
+  it.each([
+    { label: 'revoked', storedActor: { id: 'admin1', isAdmin: false } },
+    { label: 'missing', storedActor: null },
+  ])(
+    'rejects a $label stored actor even when the authenticated snapshot still has permission',
+    async ({ storedActor }) => {
+      const { call } = await run({ storedActor });
+
+      await expect(call).rejects.toMatchObject({ statusCode: 401 });
+      expect(m.requestErasure).not.toHaveBeenCalled();
+      expect(m.record).not.toHaveBeenCalled();
+      expect(m.sendToQueue).not.toHaveBeenCalled();
+    }
+  );
 
   it('records user.deleted inside the stamp transaction, so an audit failure leaves nothing queued', async () => {
     m.record.mockRejectedValue(new Error('audit down'));

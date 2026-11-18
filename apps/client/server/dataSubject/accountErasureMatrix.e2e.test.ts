@@ -110,6 +110,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
 import { completeAccountDeletion } from '@bike4mind/server-utils/users/completeAccountDeletion';
 import { deleteUserAsAdmin } from '@server/admin/deleteUserAsAdmin';
 import type { Request } from 'express';
+import { z } from 'zod';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -348,8 +349,8 @@ const PAST = new Date('2026-01-01T00:00:00.000Z');
 type Source = 'self' | 'admin' | 'delete';
 
 // An admin Delete is stamped by the request, so it seeds no `deletion`; the purge then runs as the worker would.
-async function seedSubject(source: Source) {
-  const userId = new ObjectId();
+async function seedSubject(source: Source, inputCase: 'canonical' | 'uppercase' = 'canonical') {
+  const userId = inputCase === 'uppercase' ? new ObjectId('abcdef0123456789abcdef01') : new ObjectId();
   const adminId = new ObjectId();
   const subject = { userId: String(userId), email: 'subject@example.test' };
   await raw('User').insertOne({
@@ -381,7 +382,11 @@ async function seedSubject(source: Source) {
       socket: {},
       url: '/',
     } as unknown as Request;
-    await deleteUserAsAdmin(req, subject.userId, 'Confirmed duplicate account');
+    await deleteUserAsAdmin(
+      req,
+      inputCase === 'uppercase' ? subject.userId.toUpperCase() : subject.userId,
+      'Confirmed duplicate account'
+    );
   }
   // Another account's billing customer: the redaction must never reach it.
   await raw('Organization').insertOne({
@@ -443,9 +448,14 @@ async function expectSeededOutcomes(subject: { userId: string; email: string }, 
 const touchedCustomers = () =>
   [effects.stripe.update, effects.stripe.deleteTaxId].flatMap(mock => mock.mock.calls.map(call => String(call[0])));
 
-describe.each(['self', 'admin', 'delete'] as const)('account erasure matrix, %s path', source => {
+describe.each([
+  { label: 'self', source: 'self', inputCase: 'canonical' },
+  { label: 'admin', source: 'admin', inputCase: 'canonical' },
+  { label: 'delete', source: 'delete', inputCase: 'canonical' },
+  { label: 'delete uppercase ID', source: 'delete', inputCase: 'uppercase' },
+] as const)('account erasure matrix, $label path', ({ source, inputCase }) => {
   it('seeds every registry store, then leaves nothing but retained rows', async () => {
-    const { subject, adminId, seeded, requestAudit } = await seedSubject(source);
+    const { subject, adminId, seeded, requestAudit } = await seedSubject(source, inputCase);
 
     // The plan must match the documents seeded, so a reference it cannot see fails here even when a
     // sibling reference on the same model matches. Expected counts come from the seed: each row's
@@ -485,7 +495,12 @@ describe.each(['self', 'admin', 'delete'] as const)('account erasure matrix, %s 
       expect(Object.keys(planned), `${model} missing from the plan`).toContain(model);
     expect(planned).toEqual(expected);
 
-    await expect(completeAccountDeletion(subject.userId, { logger, erasureRegistry })).resolves.toEqual({
+    const queuedCall = effects.sendToQueue.mock.calls.find(
+      (call: readonly unknown[]) => call[0] === 'queue:accountErasureQueue'
+    );
+    const purgeUserId =
+      source === 'delete' ? z.object({ userId: z.string().min(1) }).parse(queuedCall?.[1]).userId : subject.userId;
+    await expect(completeAccountDeletion(purgeUserId, { logger, erasureRegistry })).resolves.toEqual({
       deleted: true,
     });
 
@@ -536,7 +551,7 @@ describe.each(['self', 'admin', 'delete'] as const)('account erasure matrix, %s 
   });
 
   it('resumes after a failed Stripe step and completes once', async () => {
-    const { subject, adminId, seeded } = await seedSubject(source);
+    const { subject, adminId, seeded } = await seedSubject(source, inputCase);
     effects.stripe.update.mockRejectedValueOnce(new Error('stripe unavailable'));
 
     await expect(completeAccountDeletion(subject.userId, { logger, erasureRegistry })).rejects.toThrow(

@@ -54,11 +54,13 @@ export async function deleteUserAsAdmin(
   if (!target) throw new NotFoundError(`User ${userId} not found`);
   assertCanActOnAdminTarget(actor, target, 'delete');
 
-  const { subscriptions } = await requestAdminErasure(req, userId, new Date(), {
+  const canonicalUserId = target.id;
+
+  const { subscriptions } = await requestAdminErasure(req, canonicalUserId, new Date(), {
     recordInTransaction: async () => {
       // A changed role aborts the stamp before any credentials are revoked or subscriptions canceled.
-      if (approval) await assertStillAdmin(userId);
-      else if (options.requireNonAdmin && canAccessAdmin(await userRepository.findById(userId))) {
+      if (approval) await assertStillAdmin(canonicalUserId);
+      else if (options.requireNonAdmin && canAccessAdmin(await userRepository.findById(canonicalUserId))) {
         throw new ConflictError(
           isFullAdmin(admin)
             ? 'This user now has admin access; request the deletion again for approval.'
@@ -68,7 +70,7 @@ export async function deleteUserAsAdmin(
       const details = approvalDetails(approval);
       await recordAdminActionFromRequest(req, {
         action: 'user.deleted',
-        target: deletedUserTarget(userId, target),
+        target: deletedUserTarget(canonicalUserId, target),
         summary: 'deleted the user',
         reason,
         ...(Object.keys(details).length > 0 && { details }),
@@ -81,19 +83,23 @@ export async function deleteUserAsAdmin(
   if (canceledEntry) {
     await recordAdminActionFromRequest(req, {
       ...canceledEntry,
-      target: deletedUserTarget(userId, target),
+      target: deletedUserTarget(canonicalUserId, target),
       reason,
       ...(approval && { details: { ...canceledEntry.details, ...approvalDetails(approval) } }),
-    }).catch(error => req.logger.error(`Failed to audit the subscription cancellation for user ${userId}`, { error }));
+    }).catch(error =>
+      req.logger.error(`Failed to audit the subscription cancellation for user ${canonicalUserId}`, { error })
+    );
   }
   await notifyDeletion(req, admin, target);
 
   let queued = true;
   try {
-    await sendToQueue(getSourceQueueUrl('accountErasureQueue'), { userId });
+    await sendToQueue(getSourceQueueUrl('accountErasureQueue'), { userId: canonicalUserId });
   } catch (error) {
     queued = false;
-    req.logger.error(`Failed to queue the erasure of user ${userId}; the daily sweep will run it: ${String(error)}`);
+    req.logger.error(
+      `Failed to queue the erasure of user ${canonicalUserId}; the daily sweep will run it: ${String(error)}`
+    );
   }
   return { user: target, subscriptionCancellation: subscriptions, queued };
 }
