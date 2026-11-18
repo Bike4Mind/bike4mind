@@ -45,6 +45,8 @@ vi.mock('@client/app/hooks/useComposerMcpConnections', () => {
         { name: 'x'.repeat(60), enabled: true, state: 'active' },
       ],
     },
+    // Every tool id is over 64 chars, so nothing is listed and the group is dropped.
+    { slug: 'longnames', displayName: 'Long Names', tools: [{ name: 'y'.repeat(60), enabled: true, state: 'active' }] },
   ];
   return { useComposerMcpConnections: () => ({ offered, all: offered, loaded: true }) };
 });
@@ -588,6 +590,7 @@ describe('LoopFormModal stage settings', () => {
     let listbox = within(screen.getByRole('listbox'));
     expect(listbox.getByRole('option', { name: 'DeepWiki: ask_wiki_question' })).toBeInTheDocument();
     expect(listbox.queryByRole('option', { name: /needs_review|switched_off|xxxx/ })).toBeNull();
+    expect(listbox.queryByTestId('loop-form-tools-server-all-longnames')).toBeNull();
     fireEvent.click(listbox.getByTestId('loop-form-tools-server-all-deepwiki'));
     fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' });
 

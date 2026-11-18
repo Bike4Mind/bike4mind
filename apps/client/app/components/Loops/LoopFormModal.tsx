@@ -425,33 +425,31 @@ export default function LoopFormModal({ open, onClose, loop, template }: LoopFor
     }));
 
   // The executor names MCP tools `<lowercased server>__<tool>` (toolGenerators generateMcpToolsFromCache).
-  const mcpGroups = mcpServers
-    .filter(server => server.enabled)
-    .map(server => ({
-      name: server.name as string,
-      prefix: server.name.toLowerCase(),
-      tools: server.tools.map(tool => ({
-        value: `${server.name.toLowerCase()}__${tool}`,
-        label: `${server.name}: ${tool}`,
+  const mcpGroups = [
+    ...mcpServers
+      .filter(server => server.enabled)
+      .map(server => ({
+        name: server.name,
+        prefix: server.name.toLowerCase(),
+        tools: server.tools.map(tool => ({
+          value: `${server.name.toLowerCase()}__${tool}`,
+          label: `${server.name}: ${tool}`,
+        })),
       })),
-    }))
-    .concat(
-      // Ids match customMcpToolId (services customMcpTools.ts) and the filter matches offeredToolCount (customMcpModel).
-      // ponytail: an id over 64 chars gets a sha256 suffix the client can't compute, so those tools aren't listed;
-      // expose the executor id on GET /api/mcp-connections if that ever matters. A saved one still shows as unavailable.
-      customConnections.map(connection => ({
-        name: connection.displayName,
-        prefix: connection.slug,
-        tools: connection.tools
-          .filter(tool => tool.enabled && tool.state === 'active')
-          .map(tool => ({
-            value: `${connection.slug}__${tool.name}`,
-            label: `${connection.displayName}: ${tool.name}`,
-          }))
-          .filter(tool => tool.value.length <= 64),
-      }))
-    )
-    .filter(server => server.tools.length > 0);
+    // Ids match customMcpToolId (services customMcpTools.ts); org allowWriteTools is applied server-side only.
+    // ponytail: ids over 64 chars get a server-side hash suffix, so they're skipped (a saved one shows as unavailable).
+    ...customConnections.map(connection => ({
+      name: connection.displayName,
+      prefix: connection.slug,
+      tools: connection.tools
+        .filter(tool => tool.enabled && tool.state === 'active')
+        .map(tool => ({
+          value: `${connection.slug}__${tool.name}`,
+          label: `${connection.displayName}: ${tool.name}`,
+        }))
+        .filter(tool => tool.value.length <= 64),
+    })),
+  ].filter(server => server.tools.length > 0);
   const listedTools = new Set<string>([
     ...PICKABLE_TOOLS,
     ...mcpGroups.flatMap(server => server.tools.map(t => t.value)),
