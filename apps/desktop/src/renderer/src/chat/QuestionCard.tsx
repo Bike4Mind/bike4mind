@@ -59,7 +59,7 @@ function OptionRow({
         bgcolor: checked ? 'background.surface' : 'transparent',
         border: '1px solid',
         borderColor: checked ? 'primary.solidBg' : 'divider',
-        boxShadow: checked ? '0 0 0 1px var(--joy-palette-primary-solidBg)' : 'none',
+        boxShadow: checked ? theme => `0 0 0 1px ${theme.vars.palette.primary.solidBg}` : 'none',
         transition: 'border-color 120ms, background-color 120ms, box-shadow 120ms',
         '&:hover': {
           bgcolor: 'background.surface',
@@ -214,13 +214,15 @@ export function QuestionCard({
               data-testid={`chat-question-${q}`}
               data-active={q === active ? 'true' : 'false'}
             >
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.75 }}>
+              <Stack direction="row" spacing={1} useFlexGap alignItems="center" sx={{ mb: 0.75, flexWrap: 'wrap' }}>
                 <Chip
                   size="sm"
                   variant="soft"
                   color="primary"
-                  slotProps={{ label: { sx: { overflow: 'visible', textOverflow: 'clip', whiteSpace: 'nowrap' } } }}
-                  sx={{ maxWidth: 'none', fontWeight: 'lg', letterSpacing: '0.02em' }}
+                  slotProps={{
+                    label: { sx: { overflow: 'visible', textOverflow: 'clip', whiteSpace: 'normal', overflowWrap: 'anywhere' } },
+                  }}
+                  sx={{ maxWidth: '100%', fontWeight: 'lg', letterSpacing: '0.02em' }}
                   data-testid={`chat-question-header-${q}`}
                 >
                   {question.header}
