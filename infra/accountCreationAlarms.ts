@@ -7,7 +7,7 @@ import {
   NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR_DEFAULT,
   SIGNUP_ALARM_PER_HOUR_DEFAULT,
 } from './accountCreationAlarmConfig';
-import { DEFAULT_LAMBDA_ENVIRONMENT, runsScheduledJobs } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, isPreviewStage, runsScheduledJobs } from './constants';
 import { dlqAlarmTopic } from './dlqAlarms';
 import { allSecrets } from './secrets';
 import { lambdaVpc } from './vpc';
@@ -28,8 +28,12 @@ const signals = [
   },
 ].map(signal => ({ ...signal, threshold: accountCreationAlarmThreshold(signal.raw, signal.env, signal.fallback) }));
 
-if (runsScheduledJobs && isMonitoredStage($app.stage, ['dev', 'production'], process.env.ENABLE_MONITORING)) {
-  if (!dlqAlarmTopic) throw new Error('account creation alarms require dlqAlarmTopic');
+// TEMP preview-only: run the census on previews without alarms. Revert before merge.
+if (
+  isPreviewStage ||
+  (runsScheduledJobs && isMonitoredStage($app.stage, ['dev', 'production'], process.env.ENABLE_MONITORING))
+) {
+  if (!dlqAlarmTopic && !isPreviewStage) throw new Error('account creation alarms require dlqAlarmTopic');
   const namespace = `${$app.name}/${$app.stage}/AccountCreation`;
   const failures = new aws.sqs.Queue('AccountCreationMetricsDlq', { messageRetentionSeconds: 14 * 24 * 3600 });
   const metrics = new sst.aws.Function('AccountCreationMetrics', {
@@ -81,41 +85,43 @@ if (runsScheduledJobs && isMonitoredStage($app.stage, ['dev', 'production'], pro
     deadLetterConfig: { arn: failures.arn },
     retryPolicy: { maximumEventAgeInSeconds: 3600, maximumRetryAttempts: 2 },
   });
-  for (const signal of signals) {
-    new aws.cloudwatch.MetricAlarm(`AccountCreation${signal.metric}`, {
-      ...accountCreationAlarmArgs(signal.metric, signal.threshold),
-      name: `${$app.name}-${$app.stage}-${signal.metric}`,
+  if (dlqAlarmTopic) {
+    for (const signal of signals) {
+      new aws.cloudwatch.MetricAlarm(`AccountCreation${signal.metric}`, {
+        ...accountCreationAlarmArgs(signal.metric, signal.threshold),
+        name: `${$app.name}-${$app.stage}-${signal.metric}`,
+        namespace,
+        alarmActions: [dlqAlarmTopic.arn],
+        okActions: [dlqAlarmTopic.arn],
+      });
+    }
+    new aws.cloudwatch.MetricAlarm('AccountCreationMetricsMissing', {
+      name: `${$app.name}-${$app.stage}-account-creation-metrics-missing`,
       namespace,
+      metricName: 'CensusCompleted',
+      comparisonOperator: 'LessThanThreshold',
+      threshold: 1,
+      period: 3600,
+      evaluationPeriods: 3,
+      datapointsToAlarm: 2,
+      statistic: 'Maximum',
+      treatMissingData: 'breaching',
       alarmActions: [dlqAlarmTopic.arn],
-      okActions: [dlqAlarmTopic.arn],
+    });
+    new aws.cloudwatch.MetricAlarm('AccountCreationMetricsFailed', {
+      name: `${$app.name}-${$app.stage}-account-creation-metrics-failed`,
+      namespace: 'AWS/SQS',
+      metricName: 'ApproximateNumberOfMessagesVisible',
+      dimensions: { QueueName: failures.name },
+      comparisonOperator: 'GreaterThanThreshold',
+      threshold: 0,
+      period: 300,
+      evaluationPeriods: 1,
+      statistic: 'Maximum',
+      treatMissingData: 'ignore',
+      alarmActions: [dlqAlarmTopic.arn],
     });
   }
-  new aws.cloudwatch.MetricAlarm('AccountCreationMetricsMissing', {
-    name: `${$app.name}-${$app.stage}-account-creation-metrics-missing`,
-    namespace,
-    metricName: 'CensusCompleted',
-    comparisonOperator: 'LessThanThreshold',
-    threshold: 1,
-    period: 3600,
-    evaluationPeriods: 3,
-    datapointsToAlarm: 2,
-    statistic: 'Maximum',
-    treatMissingData: 'breaching',
-    alarmActions: [dlqAlarmTopic.arn],
-  });
-  new aws.cloudwatch.MetricAlarm('AccountCreationMetricsFailed', {
-    name: `${$app.name}-${$app.stage}-account-creation-metrics-failed`,
-    namespace: 'AWS/SQS',
-    metricName: 'ApproximateNumberOfMessagesVisible',
-    dimensions: { QueueName: failures.name },
-    comparisonOperator: 'GreaterThanThreshold',
-    threshold: 0,
-    period: 300,
-    evaluationPeriods: 1,
-    statistic: 'Maximum',
-    treatMissingData: 'ignore',
-    alarmActions: [dlqAlarmTopic.arn],
-  });
 }
 
 const emailSignals = [
