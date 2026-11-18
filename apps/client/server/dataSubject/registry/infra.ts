@@ -335,6 +335,8 @@ export const infraHolders = {
   EmailTriageItem: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    // The ingested email's id, not an address.
+    unrelatedPaths: ['emailId'],
   },
   FallbackLakeSetting: { kind: 'noUserData', note: 'Per-lake grounding settings; no user reference.' },
   GitHubLakeAuthGrant: {

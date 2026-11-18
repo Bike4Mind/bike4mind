@@ -141,6 +141,24 @@ export const assistantBriefRepository = {
     return result.modifiedCount === 1;
   },
 
+  /** Removes the items sourced from these ingested emails from every brief of the owner, so a deleted email leaves no copy behind. */
+  async removeEmailSourcedItems(userId: string, emailIds: string[]): Promise<number> {
+    if (emailIds.length === 0) return 0;
+    const fromEmails = { 'source.emailId': { $in: emailIds } };
+    const result = await AssistantBriefModel.updateMany(
+      {
+        userId,
+        $or: [
+          { 'happened.source.emailId': { $in: emailIds } },
+          { 'handled.source.emailId': { $in: emailIds } },
+          { 'decisions.source.emailId': { $in: emailIds } },
+        ],
+      },
+      { $pull: { happened: fromEmails, handled: fromEmails, decisions: fromEmails } }
+    );
+    return result.modifiedCount;
+  },
+
   async findById(id: string): Promise<IAssistantBrief | null> {
     if (!mongoose.isValidObjectId(id)) return null;
     return AssistantBriefModel.findById(id).lean();
