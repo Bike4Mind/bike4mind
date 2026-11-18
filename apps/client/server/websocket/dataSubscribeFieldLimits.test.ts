@@ -39,6 +39,8 @@ describe('resolveFieldLimits', () => {
       embedding: false,
       slackNotification: false,
       signupActivity: false,
+      apiKeyId: false,
+      oauthClientId: false,
     });
   });
 
@@ -95,6 +97,7 @@ describe('resolveFieldLimits', () => {
     const limits = resolveFieldLimits('users', opts());
     expect(limits).toEqual({
       password: false,
+      freeQuestStartId: false,
       'signupGrant.blocked': false,
       stripeCustomerId: false,
       resetPasswordToken: false,
@@ -179,6 +182,8 @@ describe('resolveFieldLimits', () => {
       embedding: false,
       slackNotification: false,
       signupActivity: false,
+      apiKeyId: false,
+      oauthClientId: false,
     });
   });
 

@@ -1,6 +1,7 @@
 import { ToolDefinition } from '../../base/types';
 import { IUserDocument } from '@bike4mind/common';
 import { guardedFetch } from '../webfetch/guardedFetch';
+import { resolveBlogApiKey } from '../blogIntegration';
 
 interface BlogEditParams {
   postId: string;
@@ -21,7 +22,8 @@ async function editBlogPost(user: IUserDocument, params: BlogEditParams): Promis
     );
   }
 
-  const { apiKey, baseUrl } = user.blogIntegration;
+  const { baseUrl } = user.blogIntegration;
+  const apiKey = resolveBlogApiKey(user.blogIntegration.apiKey);
 
   // Build update payload - only include fields that were provided
   const updatePayload: Record<string, any> = {};

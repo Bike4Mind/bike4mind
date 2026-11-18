@@ -42,8 +42,16 @@ export type SceneJobDeps = StoreOutputDeps & {
    * through the upload scan. Owner-only on purpose, as for video inputs: the bytes are re-published in a new file.
    */
   loadInputFile(userId: string, fileId: string): Promise<SceneInputFile | null>;
-  /** Streams a stored input to a local path. */
-  downloadInputFile(params: { s3Key: string; destinationPath: string; signal: AbortSignal }): Promise<void>;
+  /**
+   * Streams a stored input to a local path and reports the bytes written. Rejects with a SceneInputError once the
+   * stream passes `maxBytes`, the room left in the Scene's total input budget.
+   */
+  downloadInputFile(params: {
+    s3Key: string;
+    destinationPath: string;
+    maxBytes: number;
+    signal: AbortSignal;
+  }): Promise<{ bytes: number }>;
   ffmpeg: FfmpegRunner;
   /** Scenes hold no credits in v1; settlement only records 0 (and would return a hold, were one ever taken). */
   credits: CreditHoldAdapters;

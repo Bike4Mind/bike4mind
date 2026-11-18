@@ -141,6 +141,28 @@ describe('useAdminTabUrlSync', () => {
     expect(routerMock.navigate).not.toHaveBeenCalled();
   });
 
+  it('rewrites the retired sec-ops-triage link to the Security page, Scans view, once', () => {
+    routerMock.search = { tab: 'sec-ops-triage' };
+
+    const { result, rerender } = renderHook(() => useHarness(AdminTab.Dashboard), { wrapper: StrictMode });
+
+    expect(result.current.activeTab).toBe(AdminTab.Dashboard);
+    expect(routerMock.navigate).toHaveBeenCalled();
+    for (const [call] of routerMock.navigate.mock.calls) {
+      expect(call.replace).toBe(true);
+      expect(call.search({ tab: 'sec-ops-triage' })).toMatchObject({
+        tab: 'security-dashboard',
+        securityView: 'scans',
+      });
+    }
+
+    routerMock.navigate.mockClear();
+    routerMock.search = { tab: 'security-dashboard', securityView: 'scans' };
+    rerender();
+    expect(result.current.activeTab).toBe(AdminTab.SecurityDashboard);
+    expect(routerMock.navigate).not.toHaveBeenCalled();
+  });
+
   it('replaces a legacy llm-dashboard link with the models slug', () => {
     routerMock.search = { tab: 'llm-dashboard' };
 

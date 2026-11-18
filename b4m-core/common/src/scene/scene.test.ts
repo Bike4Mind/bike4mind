@@ -37,6 +37,15 @@ describe('SceneCompositionRequestSchema', () => {
     });
   });
 
+  it('accepts a fade of exactly 10 seconds', () => {
+    const parsed = SceneCompositionRequestSchema.parse({
+      videoFileId: VIDEO_ID,
+      audioFileId: AUDIO_ID,
+      audio: { fadeInSeconds: 10, fadeOutSeconds: 10 },
+    });
+    expect(parsed.audio).toMatchObject({ fadeInSeconds: 10, fadeOutSeconds: 10 });
+  });
+
   it.each([
     ['an uppercase file id', { videoFileId: 'A'.repeat(24) }],
     ['a fade over the cap', { audio: { fadeInSeconds: 10.5 } }],

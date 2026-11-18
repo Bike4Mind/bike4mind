@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   findByIdAndUserId: vi.fn(),
   findOne: vi.fn(),
   download: vi.fn(),
+  getContent: vi.fn(),
   upload: vi.fn(),
   generatedDownload: vi.fn(),
   findSessionIdsByImage: vi.fn(),
@@ -14,7 +15,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'https://ws.example.test' } } }));
 vi.mock('../utils/storage/index', () => ({
-  getFilesStorage: () => ({ download: mocks.download, upload: mocks.upload, getSignedUrl: vi.fn() }),
+  getFilesStorage: () => ({
+    download: mocks.download,
+    getContent: mocks.getContent,
+    upload: mocks.upload,
+    getSignedUrl: vi.fn(),
+  }),
   getGeneratedImageStorage: () => ({ download: mocks.generatedDownload }),
 }));
 vi.mock('../utils/sqs', () => ({ sendToQueue: vi.fn() }));
@@ -40,7 +46,11 @@ vi.mock('../utils/saveGeneratedAssetToFiles', () => ({
   saveGeneratedAssetToFiles: (...a: unknown[]) => mocks.saveGeneratedAssetToFiles(...a),
 }));
 
-import { loadInputImage, loadSceneInputFile, saveToFiles } from './wiring';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { Readable } from 'node:stream';
+import { SceneInputError } from '@bike4mind/services/sceneJobs';
+import { downloadSceneInputFile, loadInputImage, loadSceneInputFile, saveToFiles } from './wiring';
 
 const FILE_ID = '64b7f1c2a1b2c3d4e5f60718';
 const image = { id: FILE_ID, filePath: 'uploads/a.png', mimeType: 'image/png', moderationStatus: 'clean' };
@@ -190,6 +200,9 @@ describe('loadSceneInputFile', () => {
     ['a file with no filePath', { ...audio, filePath: undefined }],
     ['a file with no mime type', { ...audio, mimeType: undefined }],
     ['a moderation-blocked file', { ...audio, moderationStatus: 'blocked' }],
+    ['a moderation-pending file', { ...audio, moderationStatus: 'pending' }],
+    ['a file still being scanned', { ...audio, moderationStatus: 'scanning' }],
+    ['a file with no moderation status', { ...audio, moderationStatus: undefined }],
     ['a soft-deleted file', { ...audio, deletedAt: new Date() }],
     ['a file with no recorded size', { ...audio, fileSize: undefined }],
     ['a file with a null size', { ...audio, fileSize: null }],
@@ -197,5 +210,35 @@ describe('loadSceneInputFile', () => {
   ])('returns null for %s', async (_label, fabFile) => {
     mocks.findByIdAndUserId.mockResolvedValue(fabFile);
     await expect(loadSceneInputFile('user1', FILE_ID)).resolves.toBeNull();
+  });
+});
+
+describe('downloadSceneInputFile', () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(`${tmpdir()}/scene-download-test-`);
+    return () => rm(dir, { recursive: true, force: true });
+  });
+  const download = (maxBytes: number) =>
+    downloadSceneInputFile({
+      s3Key: 'uploads/song.mp3',
+      destinationPath: `${dir}/audio`,
+      maxBytes,
+      signal: new AbortController().signal,
+    });
+
+  it('writes the stream and reports the bytes written', async () => {
+    mocks.getContent.mockResolvedValue(Readable.from([Buffer.alloc(6), Buffer.alloc(4)]));
+    await expect(download(10)).resolves.toEqual({ bytes: 10 });
+    expect((await readFile(`${dir}/audio`)).byteLength).toBe(10);
+  });
+
+  it('rejects with an unsupported_input SceneInputError once the stream passes the budget', async () => {
+    mocks.getContent.mockResolvedValue(Readable.from([Buffer.alloc(6), Buffer.alloc(5)]));
+    const error = await download(10).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(SceneInputError);
+    expect(error).toMatchObject({ code: 'unsupported_input' });
   });
 });

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { truncate, writeFile } from 'node:fs/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SCENE_MAX_INPUT_BYTES } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
@@ -7,7 +7,7 @@ import { createInMemoryGenerationJobRepository } from '../generationJobs/__test_
 import { GenerationJobEngine } from '../generationJobs/engine';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
 import { createSceneCompositionJob } from './createSceneCompositionJob';
-import { createSceneJobHandler } from './sceneJobHandler';
+import { createSceneJobHandler, SceneInputError } from './sceneJobHandler';
 import type {
   CreateSceneCompositionJobDeps,
   CreateSceneCompositionJobResult,
@@ -49,7 +49,9 @@ const FILES: Record<string, SceneInputFile> = {
 };
 
 /** A stand-in ffmpeg: a probe answers from PROBES by input name, a render writes a small file at the output path. */
-const stubFfmpeg = (overrides: { probes?: Partial<Record<string, string>>; renderExitCode?: number } = {}) => {
+const stubFfmpeg = (
+  overrides: { probes?: Partial<Record<string, string>>; renderExitCode?: number; renderBytes?: number } = {}
+) => {
   const renders: string[][] = [];
   const runner: FfmpegRunner = {
     run: vi.fn(async args => {
@@ -58,6 +60,7 @@ const stubFfmpeg = (overrides: { probes?: Partial<Record<string, string>>; rende
         renders.push([...args]);
         if (overrides.renderExitCode) return { exitCode: overrides.renderExitCode, stderr: 'Could not write header' };
         await writeFile(output, Buffer.from('rendered scene'));
+        if (overrides.renderBytes) await truncate(output, overrides.renderBytes);
         return { exitCode: 0, stderr: '' };
       }
       const name = output.slice(output.lastIndexOf('/') + 1);
@@ -82,6 +85,7 @@ const setup = (
     downloadInputFile: vi.fn(async ({ destinationPath }: { destinationPath: string }) => {
       workDirs.push(destinationPath.slice(0, destinationPath.lastIndexOf('/')));
       await writeFile(destinationPath, Buffer.from('input'));
+      return { bytes: 5 };
     }),
     ffmpeg: ffmpeg.runner,
     saveToFiles: vi.fn(async ({ generation: { jobId } }: { generation: { jobId: string } }) => ({
@@ -215,7 +219,81 @@ describe('createSceneCompositionJob', () => {
   });
 });
 
+describe('scene limit boundaries', () => {
+  const MAX_INPUT_BYTES = 209_715_200;
+  const withTotalBytes = (total: number): Partial<SceneJobDeps> => ({
+    loadInputFile: vi.fn(async (_userId: string, fileId: string) => {
+      const file = FILES[fileId];
+      return file && { ...file, bytes: fileId === VIDEO_ID ? total - FILES[AUDIO_ID].bytes : file.bytes };
+    }),
+  });
+
+  it('accepts inputs totalling exactly 200 MiB and refuses one byte more', async () => {
+    const atCap = setup({ deps: withTotalBytes(MAX_INPUT_BYTES) });
+    const job = atCap.jobOf(await create(atCap.deps));
+    await atCap.runToCompletion();
+    expect(atCap.repository.jobs.get(job.id)).toMatchObject({ state: 'succeeded' });
+
+    const overCap = setup({ deps: withTotalBytes(MAX_INPUT_BYTES + 1) });
+    expect(await create(overCap.deps)).toMatchObject({ ok: false, status: 422, code: 'limit_exceeded' });
+  });
+
+  it('fails at render, without downloading, when inputs grew past 200 MiB after create', async () => {
+    const { deps, jobOf, runToCompletion, repository } = setup();
+    const job = jobOf(await create(deps));
+    Object.assign(deps, withTotalBytes(MAX_INPUT_BYTES + 1));
+    await runToCompletion();
+    expect(repository.jobs.get(job.id)).toMatchObject({ state: 'failed', error: { code: 'unsupported_input' } });
+    expect(deps.downloadInputFile).not.toHaveBeenCalled();
+  });
+
+  it('accepts a video of exactly 300 seconds and refuses 301', async () => {
+    const probeFor = (clock: string) =>
+      stubFfmpeg({ probes: { video: probeOutput([`  Duration: ${clock}`, '  Stream #0:0: Video: h264']) } });
+
+    const at = setup({ ffmpeg: probeFor('00:05:00.00') });
+    const okJob = at.jobOf(await create(at.deps));
+    await at.runToCompletion();
+    expect(at.repository.jobs.get(okJob.id)).toMatchObject({ state: 'succeeded' });
+
+    const over = setup({ ffmpeg: probeFor('00:05:01.00') });
+    const badJob = over.jobOf(await create(over.deps));
+    await over.runToCompletion();
+    expect(over.repository.jobs.get(badJob.id)).toMatchObject({
+      state: 'failed',
+      error: { code: 'unsupported_input' },
+    });
+  });
+
+  it('fails with output_too_large when the rendered file is over 256 MiB', async () => {
+    const { deps, jobOf, runToCompletion, repository } = setup({
+      ffmpeg: stubFfmpeg({ renderBytes: 268_435_456 + 1 }),
+    });
+    const job = jobOf(await create(deps));
+    await runToCompletion();
+    expect(repository.jobs.get(job.id)).toMatchObject({ state: 'failed', error: { code: 'output_too_large' } });
+    expect(deps.saveToFiles).not.toHaveBeenCalled();
+  });
+});
+
 describe('createSceneJobHandler', () => {
+  it('fails with unsupported_input, without retrying, when a download passes the input budget', async () => {
+    const { deps, jobOf, runToCompletion, repository } = setup();
+    const job = jobOf(await create(deps));
+    vi.mocked(deps.downloadInputFile).mockRejectedValueOnce(new SceneInputError('too big', 'unsupported_input'));
+    await runToCompletion();
+    expect(repository.jobs.get(job.id)).toMatchObject({ state: 'failed', error: { code: 'unsupported_input' } });
+    expect(deps.downloadInputFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives each download only the input budget the earlier ones left', async () => {
+    const { deps, jobOf, runToCompletion } = setup();
+    jobOf(await create(deps));
+    await runToCompletion();
+    const budgets = vi.mocked(deps.downloadInputFile).mock.calls.map(([params]) => params.maxBytes);
+    expect(budgets).toEqual([209_715_200, 209_715_200 - 5]);
+  });
+
   it('renders, stores the Scene with lineage to every input, and settles nothing', async () => {
     const { deps, ffmpeg, workDirs, jobOf, runToCompletion, repository } = setup();
     const job = jobOf(await create(deps, { coverFileId: COVER_ID, title: 'Sunrise' }));

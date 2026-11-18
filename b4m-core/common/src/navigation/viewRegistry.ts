@@ -814,11 +814,11 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'admin.secops_triage',
     section: 'admin',
-    label: 'SecOps triage',
+    label: 'Security scan issue filing',
     description:
-      'Configure the SecOps triage pipeline: enablement, dry-run, GitHub issue filing and Slack alerts for security findings',
+      'Security page, Scans view: GitHub issue filing status, recent filing runs and its settings (dry run, repository, Slack)',
     navigationType: 'tab',
-    target: '51', // AdminTab.SecOpsTriage
+    target: '51', // AdminTab.SecOpsTriage, retired: opens the Security page's Scans view
     keywords: ['secops', 'security triage', 'security alerts', 'vulnerabilities', 'security issues'],
     requiresAdmin: true,
   },

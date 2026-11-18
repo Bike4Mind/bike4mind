@@ -39,3 +39,18 @@ export function toProviderEndUserId(internalId: string | null | undefined): stri
   if (!trimmed) return undefined;
   return createHash('sha256').update(trimmed).digest('hex');
 }
+
+// Domain-separation prefix, NUL-delimited so no (owner, end user) pair can produce the byte string
+// toProviderEndUserId hashes for a plain internal id, nor the one another pair produces.
+const PLATFORM_END_USER_DOMAIN = 'b4m-platform-end-user:v1';
+
+/**
+ * The provider end-user identifier for an end user of a platform API key (a key holding
+ * `ai:end-user-id`), named by the platform's own `end_user_id`. Namespaced under the key owner so two
+ * platforms' end users never share an identifier, and domain-separated from toProviderEndUserId so
+ * no platform end user can take a real account's identifier. Same 64-hex shape and the same
+ * no-salt reasoning as toProviderEndUserId; resolved back by the PlatformEndUser collection.
+ */
+export function toPlatformEndUserProviderId(ownerId: string, endUserId: string): string {
+  return createHash('sha256').update(`${PLATFORM_END_USER_DOMAIN}\0${ownerId.trim()}\0${endUserId}`).digest('hex');
+}

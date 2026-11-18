@@ -12,7 +12,8 @@
  * Production page-level alarms carry the mention token from the per-stage SSM parameter.
  * Alarms whose catalog entry asks for a detail get it loaded first (young-account spend lists
  * the accounts behind the breach; provider spend breaks the window down by account age, source,
- * model and account); a failed load posts the alarm with a note instead.
+ * model and account; a refused-request burst names its top IPs, paths and signup accounts); a
+ * failed load posts the alarm with a note instead.
  */
 
 import type { SNSEvent } from 'aws-lambda';
@@ -30,6 +31,7 @@ import {
 } from './alarmSlackMessage';
 import { readAlarmMention } from './alarmSlackMention';
 import { providerSpendSection } from './providerSpendDetail';
+import { refusedRequestBurstSection } from './refusedRequestBurstDetail';
 import { youngAccountSpendSection } from './youngAccountSpendDetail';
 import type { CloudWatchAlarmPayload } from './cloudwatchAlarmTypes';
 import { collectDlqTriage, finishDlqTriageDelivery, canNotifyDlqTriage } from './dlqTriage';
@@ -44,6 +46,7 @@ async function loadDetails(
   const detail = alarmCatalogEntry(alarm, stage)?.detail;
   if (detail === 'young-account-spend') return [await youngAccountSpendSection(alarm, { appUrl })];
   if (detail === 'provider-spend') return [await providerSpendSection(alarm, { appUrl })];
+  if (detail === 'refused-request-burst') return [await refusedRequestBurstSection(alarm, { appUrl })];
   return [];
 }
 

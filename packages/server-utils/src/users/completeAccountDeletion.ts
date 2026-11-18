@@ -3,15 +3,18 @@ import { ADMIN_ERASURE_COMPLETED_ACTION, type AdminErasureCollection, type IUser
 import {
   Organization,
   User,
+  accountDeletionNoticeRepository,
   adminAuditLogRepository,
   realtimeConnectionRepository,
   type mongoose,
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { adminAuditService, authSessionService } from '@bike4mind/services';
+import { redactAccountStripeCustomer } from '../billing/redactAccountStripeCustomer';
+import { erasureIdHash } from '../privacy/erasureHash';
 import { hardDeleteUser } from '../services/hardDeleteUser';
 import { systemAuditActor } from '../utils/adminAudit';
-import { sendAccountDeletionCompleteEmail } from './accountDeletionEmail';
+import { sendPendingDeletionNotice } from './accountDeletionNotice';
 import { classifyOwnedOrganizations, deleteSoleOwnedOrganizations } from './ownedOrganizations';
 import { purgeAccountContent } from './purgeAccountContent';
 import { purgeAccountFiles } from './purgeAccountFiles';
@@ -148,6 +151,8 @@ export async function completeAccountDeletion(
     await deleteSoleOwnedOrganizations(userId, { logger, assertLease });
     await purgeAccountFiles(userId, { logger, assertLease });
     await purgeAccountContent(userId, { logger, assertLease });
+    // Before the user row goes: the customer ID lives on it, so only this phase can retry the redaction.
+    await redactAccountStripeCustomer(userId, { logger, assertLease });
     await assertLease();
     await authSessionService.endRealtimeConnections(
       { userId },
@@ -170,6 +175,14 @@ export async function completeAccountDeletion(
         // The admin audit entry commits with the delete, as the admin delete route's does.
         recordInTransaction: async target => {
           await Organization.deleteMany({ userId, personal: true }, { hardDelete: true });
+          // The address is unreadable once the row is gone, so the confirmation's outbox commits with the delete.
+          if (!erasure && user.email) {
+            await accountDeletionNoticeRepository.record({
+              idHash: erasureIdHash(userId),
+              email: user.email,
+              now: new Date(),
+            });
+          }
           await adminAuditService.recordAdminAction(
             {
               action: 'user.deletion.completed',
@@ -220,13 +233,7 @@ export async function completeAccountDeletion(
     return { deleted: true };
   }
   logger.info(`[AccountDeletion] Deleted user ${userId} whose deletion grace period ended`);
-  if (user.email) {
-    try {
-      await sendAccountDeletionCompleteEmail(user.email);
-    } catch (error) {
-      logger.error(`Failed to send the deletion-complete email for user ${userId}: ${String(error)}`);
-    }
-  }
+  if (user.email) await sendPendingDeletionNotice(erasureIdHash(userId), { logger });
   return { deleted: true };
 }
 

@@ -8,7 +8,9 @@ import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import type { ChatImageRef } from '@shared/chat';
 import { ExternalLink } from '../ExternalLink';
+import { FilePathLink } from '../FilePathLink';
 import { useImageMenu } from '../ImageContextMenu';
+import { FILE_PATH_PROPERTY, rehypeFilePaths } from './filePaths';
 import { fastRenderer } from './highlightElements';
 import { codeBlockSx, markdownSx } from './markdownSx';
 import { closeOpenFence } from './streamingMarkdown';
@@ -27,9 +29,11 @@ import { SYNTAX_THEMES } from './syntaxTheme';
  * buys nothing that markdown does not already say. rehype-sanitize is kept behind that as the
  * second lock rather than the only one; its default schema is also what preserves the
  * `language-*` class on a fence, which is what the highlighter reads the language from.
+ *
+ * rehypeFilePaths runs after the sanitizer, which would strip the attribute it adds.
  */
 const REMARK_PLUGINS = [remarkGfm, remarkBreaks];
-const REHYPE_PLUGINS = [rehypeSanitize];
+const REHYPE_PLUGINS = [rehypeSanitize, rehypeFilePaths];
 
 type CodeProps = ComponentProps<'code'> & ExtraProps;
 
@@ -113,6 +117,13 @@ function buildComponents(mode: 'light' | 'dark'): Components {
     },
 
     img: ({ node: _node, ...props }) => <MarkdownImage {...props} />,
+
+    // A reply cannot write a span (raw HTML is never parsed, see above), so this is rehypeFilePaths' marker.
+    span({ node, children, ...props }) {
+      const path = node?.properties?.[FILE_PATH_PROPERTY];
+      if (typeof path === 'string') return <FilePathLink path={path}>{children}</FilePathLink>;
+      return <span {...props}>{children}</span>;
+    },
 
     // The same link a prompt draws, so the two open, and look, the same way. Bare urls arrive
     // here as links too: remark-gfm's autolink literals turn them into ordinary `a` nodes.

@@ -21,6 +21,7 @@ const levers = (overrides: Partial<LegacyResearchRunLevers> = {}): LegacyResearc
   minRelevance: 0.6,
   costCeilingMicroUsd: 50_000,
   proposedTags: [],
+  itemRules: [],
   ...overrides,
 });
 
@@ -68,6 +69,28 @@ describe('DataLakeResearchRunRepository', () => {
     const reread = await repo.findByIdInLake(created.id, LAKE);
 
     expect(reread?.levers).toMatchObject({ query: 'coastal erosion', recencyDays: 30, model: 'gpt-4.1-mini' });
+  });
+
+  it('snapshots item rules and defaults the rule totals to zero', async () => {
+    const itemRules = [{ condition: 'About sports', action: 'review' as const }];
+    const created = await repo.createRun(input({ levers: levers({ itemRules }) }));
+    const reread = await repo.findByIdInLake(created.id, LAKE);
+    expect(reread?.levers.itemRules).toEqual(itemRules);
+    expect(reread?.totals).toMatchObject({ blockedByRule: 0, reviewedByRule: 0 });
+  });
+
+  it('persists the rule totals a run settles with', async () => {
+    const created = await repo.createRun(input());
+    await repo.settleRun(created.id, {
+      status: 'completed',
+      completedAt: new Date(),
+      spentMicroUsd: 1,
+      totals: { ...emptyResearchRunTotals(), blockedByRule: 2, reviewedByRule: 1 },
+    });
+    expect((await repo.findByIdInLake(created.id, LAKE))?.totals).toMatchObject({
+      blockedByRule: 2,
+      reviewedByRule: 1,
+    });
   });
 
   it('lists one lake newest first, honoring a limit, and never another lake', async () => {

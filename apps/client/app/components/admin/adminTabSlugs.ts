@@ -28,8 +28,9 @@ import {
   type AdminSearch,
 } from './adminTabParams';
 import { MODELS_SECTION_PARAM, MODELS_TAB_SLUG } from './Models/modelsSearch';
+import { SECURITY_VIEW_PARAM } from './securityDashboardSearch';
 
-type RetiredTab = AdminTab.RegistrationInvites | AdminTab.PartnerSignupRules;
+type RetiredTab = AdminTab.RegistrationInvites | AdminTab.PartnerSignupRules | AdminTab.SecOpsTriage;
 
 /**
  * AdminTab -> URL slug, for the console's `?tab=` param.
@@ -87,7 +88,6 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<Exclude<AdminTab, RetiredTab>, string>>
   [AdminTab.ArchitectureDiagrams]: 'architecture-diagrams',
   [AdminTab.Dependencies]: 'dependencies',
   [AdminTab.ApiCookbook]: 'api-cookbook',
-  [AdminTab.SecOpsTriage]: 'sec-ops-triage',
   [AdminTab.VoiceSettings]: 'voice-settings',
   [AdminTab.AgentExecutions]: 'agent-executions',
   [AdminTab.PublishedPages]: 'published-pages',
@@ -116,10 +116,11 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<Exclude<AdminTab, RetiredTab>, string>>
   [AdminTab.Roles]: 'roles',
 };
 
-// Retired tabs now live in Invite Center sections; their old slugs stay as redirects, and in-app links resolve here.
+// Retired tabs now live in sections of other pages; their old slugs stay as redirects, and in-app links resolve here.
 const RETIRED_TAB_SLUGS: Readonly<Record<RetiredTab, string>> = {
   [AdminTab.RegistrationInvites]: 'registration-invites',
   [AdminTab.PartnerSignupRules]: 'partner-signup-rules',
+  [AdminTab.SecOpsTriage]: 'sec-ops-triage',
 };
 
 export type AdminTabRedirect = { tab: AdminTab; search?: Partial<AdminSearch> };
@@ -132,6 +133,10 @@ export const ADMIN_TAB_SLUG_REDIRECTS: ReadonlyMap<string, AdminTabRedirect> = n
   ['subscribers', { tab: AdminTab.Waitlist }],
   [RETIRED_TAB_SLUGS[AdminTab.RegistrationInvites], { tab: AdminTab.Waitlist, search: { inviteSection: 'invites' } }],
   [RETIRED_TAB_SLUGS[AdminTab.PartnerSignupRules], { tab: AdminTab.Waitlist, search: { inviteSection: 'packages' } }],
+  [
+    RETIRED_TAB_SLUGS[AdminTab.SecOpsTriage],
+    { tab: AdminTab.SecurityDashboard, search: { [SECURITY_VIEW_PARAM]: 'scans' } },
+  ],
 ]);
 
 /**
@@ -187,8 +192,8 @@ export function adminTabToSlug(tab: AdminTab | string | null): string | undefine
 }
 
 /**
- * The `/admin` search that opens a tab, sending a retired tab to the Invite Center section that
- * replaced it. `tab` is undefined for a value with no tab to name.
+ * The `/admin` search that opens a tab, sending a retired tab to the page section that replaced it.
+ * `tab` is undefined for a value with no tab to name.
  */
 export function adminTabLinkSearch(tab: AdminTab): Partial<AdminSearch> & { tab: string | undefined } {
   const redirect = adminTabRedirectFromSlug((RETIRED_TAB_SLUGS as Partial<Record<AdminTab, string>>)[tab]);

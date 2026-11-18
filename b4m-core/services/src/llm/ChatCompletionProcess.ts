@@ -1,3 +1,5 @@
+import { isQuestMasterCompatible } from './questMasterEligibility';
+import { resolveSuccessorChain } from '@bike4mind/llm-adapters';
 import {
   type EmbeddingCredential,
   type EmbeddingRuntime,
@@ -1397,6 +1399,7 @@ export class ChatCompletionProcess {
     this.coreTutorialTurns = options.coreTutorialTurns;
     this.getScopeFilter = options.getScopeFilter;
     this.getEntitlements = options.getEntitlements;
+    this.admitQuestStart = options.admitQuestStart;
     this.getThinkingVisibility = options.getThinkingVisibility;
     this.getMcpClient = options.getMcpClient;
     this.customMcp = options.customMcp;
@@ -2187,6 +2190,8 @@ export class ChatCompletionProcess {
     return resolveRecentImageJobFiles({ recentImageJobs, resolver, userId: this.user.id, logger });
   }
 
+  private admitQuestStart: IChatCompletionServiceOptions['admitQuestStart'];
+
   public async process({
     body,
     logger,
@@ -2244,6 +2249,21 @@ export class ChatCompletionProcess {
     if (prefetchedQuest?.type === 'error') {
       logger.info(`Skipping process: quest ${prefetchedQuest.id} was already saved as an error`);
       return;
+    }
+
+    if (
+      body.enableQuestMaster &&
+      !body.questMaster &&
+      isQuestMasterCompatible(resolveSuccessorChain(body.params.model)) &&
+      (await this.db.adminSettings.getSettingsValue('EnableQuestMaster')) === true
+    ) {
+      // A message queued without admission (sent before this check shipped, or EnableQuestMaster turned on
+      // after invoke) is admitted here; the quest id stays the same across redelivery.
+      if (!body.questMasterStartId || !body.questAdmittedAs) {
+        await this.admitQuestStart(this.user, body.questId);
+      } else if (body.questAdmittedAs === 'free') {
+        await this.admitQuestStart(this.user, body.questMasterStartId);
+      }
     }
 
     // Started now so its reads overlap context assembly instead of delaying the first token.

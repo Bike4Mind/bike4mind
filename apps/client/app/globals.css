@@ -31,6 +31,14 @@ body {
   /* Font family is now managed by next/font/google in layout.tsx for optimal performance */
 }
 
+/* The theme's styles arrive with the client-only SPA ([[...slug]]/SpaShell), but the color-scheme
+   script marks <html> before first paint, so a dark-mode load paints dark instead of flashing white.
+   Once the theme mounts, the variable resolves to its own value. */
+[data-joy-color-scheme='dark'] body {
+  background-color: var(--joy-palette-background-body, #0e1214);
+  color-scheme: dark;
+}
+
 * {
   min-width: 0;
 }
