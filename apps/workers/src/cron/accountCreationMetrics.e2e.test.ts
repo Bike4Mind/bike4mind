@@ -120,8 +120,10 @@ describe('account creation census', () => {
             ...[
               ['SignupGrantPoolSpent', 'signup', 250],
               ['SignupGrantPoolBudget', 'signup', 1000],
+              ['SignupGrantPoolBudgetMissing', 'signup', 0],
               ['SignupGrantPoolSpent', 'trickle', 100],
               ['SignupGrantPoolBudget', 'trickle', 400],
+              ['SignupGrantPoolBudgetMissing', 'trickle', 0],
             ].map(([MetricName, pool, Value]) => ({
               MetricName,
               Value,
@@ -141,7 +143,7 @@ describe('account creation census', () => {
     mocks.option.mockResolvedValue([]);
     await handler(event);
     expect(mocks.send.mock.calls[0][0].input.MetricData.map((metric: { Value: number }) => metric.Value)).toEqual([
-      0, 0, 0, 250, 1000, 100, 400, 1,
+      0, 0, 0, 250, 1000, 0, 100, 400, 0, 1,
     ]);
   });
 
@@ -150,7 +152,16 @@ describe('account creation census', () => {
     await handler(event);
     const data = mocks.send.mock.calls[0][0].input.MetricData as { MetricName: string; Value: number }[];
     expect(data.filter(m => m.MetricName === 'SignupGrantPoolBudget').map(m => m.Value)).toEqual([0, 0]);
+    expect(data.filter(m => m.MetricName === 'SignupGrantPoolBudgetMissing').map(m => m.Value)).toEqual([1, 1]);
     expect(data.map(m => m.MetricName)).toContain('CensusCompleted');
+  });
+
+  it('does not flag a deliberately paused pool as missing', async () => {
+    mocks.resolvePoolBudget.mockResolvedValue({ budget: 0, missing: false });
+    await handler(event);
+    const data = mocks.send.mock.calls[0][0].input.MetricData as { MetricName: string; Value: number }[];
+    expect(data.filter(m => m.MetricName === 'SignupGrantPoolBudget').map(m => m.Value)).toEqual([0, 0]);
+    expect(data.filter(m => m.MetricName === 'SignupGrantPoolBudgetMissing').map(m => m.Value)).toEqual([0, 0]);
   });
 
   it('reads the pool-day of the window start, so the 00:05 run publishes the day that just closed', async () => {

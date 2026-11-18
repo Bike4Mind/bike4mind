@@ -9,7 +9,7 @@ import { Resource } from 'sst';
 const HOUR_MS = 60 * 60 * 1000;
 const GRANT_POOLS = ['signup', 'trickle'] as const;
 
-export type GrantPoolUsage = { pool: (typeof GRANT_POOLS)[number]; spent: number; budget: number };
+export type GrantPoolUsage = { pool: (typeof GRANT_POOLS)[number]; spent: number; budget: number; missing: boolean };
 
 export function accountCreationWindow(time: string) {
   const scheduled = Date.parse(time);
@@ -63,12 +63,18 @@ export function accountCreationMetricData(
   grantPools: GrantPoolUsage[] = []
 ) {
   const { since, until } = accountCreationWindow(time);
-  const poolMetrics = grantPools.flatMap(({ pool, spent, budget }) => [
+  const poolMetrics = grantPools.flatMap(({ pool, spent, budget, missing }) => [
     // Snapshots like NegativeBalances, so stamped with the hour boundary.
     { MetricName: 'SignupGrantPoolSpent', Value: spent, Timestamp: until, Dimensions: [{ Name: 'Pool', Value: pool }] },
     {
       MetricName: 'SignupGrantPoolBudget',
       Value: budget,
+      Timestamp: until,
+      Dimensions: [{ Name: 'Pool', Value: pool }],
+    },
+    {
+      MetricName: 'SignupGrantPoolBudgetMissing',
+      Value: missing ? 1 : 0,
       Timestamp: until,
       Dimensions: [{ Name: 'Pool', Value: pool }],
     },
@@ -89,10 +95,10 @@ async function grantPoolUsage(since: Date): Promise<GrantPoolUsage[]> {
   const day = userService.signupGrantBudgetDay(since);
   return Promise.all(
     GRANT_POOLS.map(async pool => {
-      // A missing budget row resolves to 0, which must not fail the census.
-      const { budget } = await userService.resolvePoolBudget(adminSettingsRepository, pool);
+      // A missing budget row resolves to 0 and is flagged, never failing the census.
+      const { budget, missing } = await userService.resolvePoolBudget(adminSettingsRepository, pool);
       const spent = await signupGrantBudgetRepository.getSpent(userService.signupGrantBudgetKey(pool, day));
-      return { pool, spent, budget };
+      return { pool, spent, budget, missing };
     })
   );
 }
