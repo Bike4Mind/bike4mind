@@ -270,10 +270,10 @@ describe('OrganizationSettingsSection - Delete flow', () => {
     expect(screen.getByTestId('delete-dialog-stub').getAttribute('data-can-open-billing')).toBe('true');
   });
 
-  it('does not offer Billing to a platform admin, whom the Billing tab refuses', () => {
+  it('offers Billing to a platform admin, who holds manageBilling', () => {
     renderAs({ id: 'admin9', isAdmin: true });
     fireEvent.click(screen.getByTestId('organization-settings-delete-btn'));
-    expect(screen.getByTestId('delete-dialog-stub').getAttribute('data-can-open-billing')).toBe('false');
+    expect(screen.getByTestId('delete-dialog-stub').getAttribute('data-can-open-billing')).toBe('true');
   });
 
   it('replaces the deleted team page with the teams list', () => {
