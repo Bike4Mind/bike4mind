@@ -4,6 +4,8 @@
  * 5 minutes per container), so a stage that should be challenging sign-ins and is not gets noticed.
  * Also alarms on `turnstile-misconfigured` (apps/client/server/middlewares/requireTurnstile.ts), where
  * the challenge is on but rejects every request because the secret or hostname allowlist is wrong.
+ * Also counts `turnstile-client-failure` (apps/client/pages/api/turnstile/client-failure.ts), the
+ * browser-reported challenge failures that block sign-in before any gated request, with no alarm.
  */
 
 import { web } from './web';
@@ -81,4 +83,18 @@ if (isMonitoredStage) {
     'TurnstileMisconfigured',
     'Turnstile rejected the server configuration in the last hour, so challenged sign-ins are failing'
   );
+
+  // Browser-reported challenge failures (apps/client/pages/api/turnstile/client-failure.ts).
+  // Counted only, no alarm.
+  new aws.cloudwatch.LogMetricFilter('turnstileClientFailureFilter', {
+    name: `${$app.name}-${$app.stage}-turnstile-client-failure`,
+    logGroupName: serverLogGroupName,
+    pattern: messageFilterPattern('turnstile-client-failure'),
+    metricTransformation: {
+      name: 'TurnstileClientFailures',
+      namespace: metricNamespace,
+      value: '1',
+      unit: 'Count',
+    },
+  });
 }
