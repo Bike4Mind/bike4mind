@@ -314,6 +314,8 @@ describe('transcribeUpload credit hold', () => {
     });
 
     expect(hold.settle).toHaveBeenCalledWith(expect.any(Number), expect.objectContaining({ apiKeyId: 'key-1' }));
+    // The hold checks the spend freeze, so a frozen key must reach it.
+    expect(mockHoldCredits).toHaveBeenCalledWith(expect.anything(), expect.any(Number), logger, 'key-1');
   });
 
   it('holds the size-based cost before the provider runs, then settles that hold', async () => {

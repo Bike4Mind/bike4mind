@@ -211,6 +211,21 @@ describe('reserveRequestCredits', () => {
       expect(findActiveFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: null, apiKeyId: 'key1' });
     });
 
+    it('refuses a frozen key named only for the freeze, and still bills the user', async () => {
+      findActiveFreeze.mockResolvedValueOnce(freeze('apiKey'));
+      const error = await reserveRequestCredits({
+        req: userReq(),
+        requiredCredits: 5,
+        enforceCredits: true,
+        featureLabel: 'transcription',
+        billingOrganizationId: null,
+        spendFreezeApiKey: { keyId: 'key1' },
+      }).catch((err: unknown) => err);
+      expect(isSpendFrozenError(error)).toBe(true);
+      expect(findActiveFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: null, apiKeyId: 'key1' });
+      expect(userIncrement).not.toHaveBeenCalled();
+    });
+
     it('checks an org-billed key with its acting user, so a frozen user cannot spend through it', async () => {
       orgFindById.mockResolvedValue({ id: 'org1', currentCredits: 100, userDetails: [], users: [{ userId: 'u1' }] });
       orgIncrement.mockResolvedValue({ currentCredits: 95 });
