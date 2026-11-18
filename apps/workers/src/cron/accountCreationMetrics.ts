@@ -83,9 +83,10 @@ export function accountCreationMetricData(
   ].map(metric => ({ ...metric, Unit: 'Count' as const }));
 }
 
-async function grantPoolUsage(until: Date): Promise<GrantPoolUsage[]> {
-  // The pool-day containing the boundary, so a redelivered event reads the same counter.
-  const day = userService.signupGrantBudgetDay(until);
+async function grantPoolUsage(since: Date): Promise<GrantPoolUsage[]> {
+  // The pool-day of the window start: the 00:05 run reads the day that just closed, so its last hour is published
+  // and a redelivered event reads the same counter.
+  const day = userService.signupGrantBudgetDay(since);
   return Promise.all(
     GRANT_POOLS.map(async pool => {
       // A missing budget row resolves to 0, which must not fail the census.
@@ -107,7 +108,7 @@ export async function handler(event: ScheduledEvent): Promise<void> {
     User.countDocuments(queries.signups).maxTimeMS(60_000),
     UserApiKey.aggregate<{ count: number }>(queries.keys).option({ maxTimeMS: 60_000 }),
     User.countDocuments(queries.negativeBalances).maxTimeMS(60_000),
-    grantPoolUsage(until),
+    grantPoolUsage(since),
   ]);
   // Maximum, not Sum, makes a redelivered scheduled window idempotent at the alarm boundary.
   await new CloudWatchClient({}).send(
