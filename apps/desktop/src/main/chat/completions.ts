@@ -446,6 +446,18 @@ export class RunNotFoundError extends Error {
   }
 }
 
+/** No connection to the server opened at all, so the request never reached it and nothing was billed. */
+export class ServerUnreachableError extends Error {
+  readonly errorCode = 'server_unreachable';
+  constructor() {
+    super('Cannot reach the Bike4Mind server. Check the environment and your connection.');
+    this.name = 'ServerUnreachableError';
+  }
+}
+
+/** Connect-phase codes only: a reset or timeout may have reached the server, so those stay ordinary failures. */
+const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH']);
+
 function isRunNotFound(error: unknown, body: ErrorBody | undefined): boolean {
   return isAxiosError(error) && error.response?.status === 404 && body?.errorCode === 'run_not_found';
 }
@@ -488,9 +500,7 @@ function toRequestError(error: unknown, body?: string): Error {
     if (status) {
       return new Error(body ? `${body} (status ${status})` : `The completion request failed with status ${status}.`);
     }
-    if (error.code === 'ECONNREFUSED') {
-      return new Error('Cannot reach the Bike4Mind server. Check the environment and your connection.');
-    }
+    if (error.code && UNREACHABLE_CODES.has(error.code)) return new ServerUnreachableError();
     // Not retried here: the server does not cancel on disconnect, so the abandoned request may
     // still run and bill, and a silent resend could charge the turn twice.
     if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {

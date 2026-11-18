@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ChatAutomaticOrigin, ChatStreamEvent } from '@shared/chat';
+import { SERVER_UNREACHABLE_STOP, type ChatAutomaticOrigin, type ChatStreamEvent } from '@shared/chat';
 import type { LocalLoop, LocalRun } from '@shared/localLoops';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MachineSample } from '../budget';
@@ -438,6 +438,50 @@ describe('LocalLoopScheduler', () => {
     await vi.advanceTimersByTimeAsync(SCHEDULER_MS.creditCapBackoff);
     await settle();
     expect(chat.turns).toHaveLength(2);
+  });
+
+  it('puts back a run that could not reach the server, keeps the error streak, and holds the loop', async () => {
+    make({ errorStreak: 1 });
+    const t = ticket('a');
+    scheduler.start();
+    await settle();
+    const first = store.openRuns()[0];
+    scheduler.observe({
+      type: 'error',
+      sessionId: chat.turns[0].sessionId,
+      messageId: 'm',
+      message: 'Cannot reach the Bike4Mind server.',
+      stopReason: SERVER_UNREACHABLE_STOP,
+    });
+    await settle();
+    expect(store.run(first.id)).toMatchObject({ stopReason: 'requeued', reason: 'Bike4Mind server unreachable' });
+    expect(store.ticket(t.id)).toMatchObject({ status: 'open', runCount: 0 });
+    expect(store.loop('loop-1')).toMatchObject({ status: 'live', errorStreak: 1 });
+    expect(alerts).toEqual([]);
+    expect(scheduler.summary(store.loop('loop-1')!).idleReason).toBe('waiting: Bike4Mind server unreachable');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(chat.turns).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(SCHEDULER_MS.serverUnreachableBackoff);
+    await settle();
+    expect(chat.turns).toHaveLength(2);
+  });
+
+  it('still blocks the ticket and counts the streak for an error from a reachable server', async () => {
+    make();
+    const t = ticket('a');
+    scheduler.start();
+    await settle();
+    scheduler.observe({
+      type: 'error',
+      sessionId: chat.turns[0].sessionId,
+      messageId: 'm',
+      message: 'Model returned 500',
+    });
+    await settle();
+    expect(store.ticket(t.id)).toMatchObject({ status: 'blocked' });
+    expect(store.loop('loop-1')?.errorStreak).toBe(1);
+    expect(alerts).toEqual([expect.stringMatching(/^blocked: /)]);
   });
 
   it('hands the owner a cut-off run that had opened a PR instead of re-running it', async () => {

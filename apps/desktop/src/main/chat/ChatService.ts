@@ -101,6 +101,7 @@ import {
   parseLocalModelId,
   pickLocalModel,
   SERVER_CREDENTIALS_STOP,
+  SERVER_UNREACHABLE_STOP,
   SESSION_EXPIRED_STOP,
 } from '@shared/chat';
 import { AUTO_COMPACT_PERCENT, inputSide, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
@@ -197,6 +198,7 @@ import { devLog } from '../devlog/DevLogSink';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import {
   DEFAULT_COMPLETIONS_PATH,
+  ServerUnreachableError,
   streamCompletion,
   supportsPromptCache,
   withCacheBreakpoints,
@@ -4929,7 +4931,9 @@ export class ChatService {
         ? { stopReason: SESSION_EXPIRED_STOP }
         : err instanceof ServerCredentialsError
           ? { stopReason: SERVER_CREDENTIALS_STOP }
-          : {};
+          : err instanceof ServerUnreachableError
+            ? { stopReason: SERVER_UNREACHABLE_STOP }
+            : {};
 
       if (segmentSettled) {
         // settleSegment already stored this reply whole, rounds and artifacts included; a

@@ -2171,6 +2171,9 @@ export const SESSION_EXPIRED_STOP = 'session_expired';
 /** The stop reason of a turn a model server refused with 401 or 403; the thread offers to enter new credentials. */
 export const SERVER_CREDENTIALS_STOP = 'server_credentials';
 
+/** The stop reason of a turn that could not open a connection to the Bike4Mind server; a local loop requeues it. */
+export const SERVER_UNREACHABLE_STOP = 'server_unreachable';
+
 /**
  * Whether Continue can carry the turn on in place. A turn cut by an expired session stopped at
  * a request boundary - before any of that request streamed - so its transcript ends where a

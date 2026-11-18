@@ -20,7 +20,7 @@ import {
   ticketRunLimit,
   untriaged,
 } from '@bike4mind/common/loops';
-import type { ChatSession, ChatStreamEvent } from '@shared/chat';
+import { SERVER_UNREACHABLE_STOP, type ChatSession, type ChatStreamEvent } from '@shared/chat';
 import type {
   LocalLoop,
   LocalLoopCapReason,
@@ -103,6 +103,8 @@ export const SCHEDULER_MS = {
    * re-admitting at once would turn it into a one-response run every tick (the server's interval does this there).
    */
   creditCapBackoff: 10 * 60_000,
+  /** After a run could not reach the server: such a run fails in seconds, so without a hold an outage is a run storm. */
+  serverUnreachableBackoff: 2 * 60_000,
 } as const;
 
 /** Runs in a row that error before the loop stops in `error`. */
@@ -179,6 +181,8 @@ export class LocalLoopScheduler {
   private readonly paced = new Map<string, number>();
   /** loopId -> no run starts before this, after a run stopped at its credit cap. */
   private readonly capBackoff = new Map<string, number>();
+  /** loopId -> no run starts before this, after a run could not reach the Bike4Mind server. */
+  private readonly serverBackoff = new Map<string, number>();
   private quitting = false;
   /** Why no run starts now, for the whole machine (lanes busy, battery...). */
   private waitingReason: string | undefined;
@@ -386,8 +390,8 @@ export class LocalLoopScheduler {
 
       const work = this.nextWork(fresh, now, mine);
       if (!work) return undefined;
-      const backoff = this.capBackoff.get(loop.id);
-      if (backoff !== undefined && backoff > now.getTime()) {
+      const backoff = Math.max(this.capBackoff.get(loop.id) ?? 0, this.serverBackoff.get(loop.id) ?? 0);
+      if (backoff > now.getTime()) {
         this.paced.set(loop.id, backoff);
         return undefined;
       }
@@ -624,6 +628,9 @@ export class LocalLoopScheduler {
       const loop = this.deps.store.loop(lane.run.loopId);
       if (loop && !loop.cappedUntil) this.cap(loop, 'credits', new Date(this.now()));
       void this.finish(lane, { outcome: 'budget_stopped', reason: 'Out of credits' });
+    } else if (event.type === 'error' && event.stopReason === SERVER_UNREACHABLE_STOP) {
+      this.serverBackoff.set(lane.run.loopId, this.now() + SCHEDULER_MS.serverUnreachableBackoff);
+      void this.finish(lane, { stopReason: 'requeued', reason: 'Bike4Mind server unreachable' });
     } else if (event.type === 'error')
       void this.finish(
         lane,
@@ -790,9 +797,14 @@ export class LocalLoopScheduler {
       let loop = store.loop(run.loopId);
       if (!loop) return;
       const failed = ended.outcome === 'failed';
-      const errorStreak = failed ? loop.errorStreak + 1 : 0;
+      // An uncounted run (requeued, capped) is neither a success nor a failure, so the streak stands.
+      const errorStreak = failed
+        ? loop.errorStreak + 1
+        : UNCOUNTED.has(ended.stopReason ?? ended.outcome)
+          ? loop.errorStreak
+          : 0;
       const streakError =
-        errorStreak >= ERROR_STREAK_LIMIT
+        failed && errorStreak >= ERROR_STREAK_LIMIT
           ? `${errorStreak} runs in a row failed; last: ${ended.reason ?? 'unknown'}`
           : undefined;
       loop = {
@@ -804,7 +816,8 @@ export class LocalLoopScheduler {
         updatedAt: now.toISOString(),
       };
       store.putLoop(loop);
-      if (errorStreak === ERROR_STREAK_LIMIT) this.raise(loop, { kind: 'error', runId: run.id, reason: streakError! });
+      if (failed && errorStreak === ERROR_STREAK_LIMIT)
+        this.raise(loop, { kind: 'error', runId: run.id, reason: streakError! });
 
       if (run.kind === 'triage') {
         // As the server's defaultUntriaged, and only for a run that ended on its own (not a quit, cap or watchdog).
@@ -946,13 +959,15 @@ export class LocalLoopScheduler {
               ? `capped until ${clockTime(new Date(loop.cappedUntil))} (${CAP_TEXT[loop.capReason ?? 'loop_budget']})`
               : lanesBusy > 0
                 ? undefined
-                : paced
-                  ? `paced until ${new Date(paced).toISOString()}`
-                  : this.waitingReason
-                    ? `waiting: ${this.waitingReason}`
-                    : needsYou > 0
-                      ? 'waiting on you'
-                      : 'no work';
+                : (this.serverBackoff.get(loop.id) ?? 0) > now.getTime()
+                  ? 'waiting: Bike4Mind server unreachable'
+                  : paced
+                    ? `paced until ${new Date(paced).toISOString()}`
+                    : this.waitingReason
+                      ? `waiting: ${this.waitingReason}`
+                      : needsYou > 0
+                        ? 'waiting on you'
+                        : 'no work';
     return {
       loop,
       lanesBusy,
@@ -1071,6 +1086,7 @@ export class LocalLoopScheduler {
         !this.waitingReason &&
         !this.paced.has(loop.id) &&
         (this.capBackoff.get(loop.id) ?? 0) <= now &&
+        (this.serverBackoff.get(loop.id) ?? 0) <= now &&
         !lanes.some(lane => lane.run.loopId === loop.id) &&
         this.hasWork(loop, at),
     }));
