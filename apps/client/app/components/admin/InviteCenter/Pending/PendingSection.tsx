@@ -292,6 +292,11 @@ export function PendingSection() {
 
   return (
     <Stack gap={1.5} data-testid="pending-section">
+      {heldActionsMounted && (
+        <div hidden={!heldActionsOpen}>
+          <HeldGrantActions />
+        </div>
+      )}
       <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center">
         <Button
           variant="outlined"
@@ -319,11 +324,6 @@ export function PendingSection() {
           </Button>
         ))}
       </Stack>
-      {heldActionsMounted && (
-        <div hidden={!heldActionsOpen}>
-          <HeldGrantActions />
-        </div>
-      )}
       <PendingHeader />
       <FilterBar state={listState} filters={FILTERS} onChange={updateList} search={false} />
       {failed.length > 0 && (
