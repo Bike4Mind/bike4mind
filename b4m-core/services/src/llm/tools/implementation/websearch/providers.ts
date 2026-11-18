@@ -13,12 +13,7 @@ export interface WebSearchProviderResult {
   title: string;
   url: string;
   snippet: string;
-  /**
-   * What to label the hit with, set only when `url` is a search-engine redirect that hides the
-   * destination (SerpAPI can return `google.com/goto?url=<opaque token>`): the destination's
-   * hostname, or the platform name ("Reddit") when the provider gives no URL. `url` stays the
-   * redirect, which opens the right page; this is what a label should show instead of its host.
-   */
+  /** Label for a hit whose `url` is a search-engine redirect: the destination host, or a platform name ("Reddit"). */
   displayHost?: string;
   /** Provider-supplied image for this hit, absent when the provider gave none. Same as `images[0]`. */
   thumbnail?: string;
@@ -297,7 +292,7 @@ const GOOGLE_HOSTS: ReadonlySet<string> = new Set(['google.com', 'www.google.com
 function breadcrumbHost(displayedLink: string | undefined): string | undefined {
   if (!displayedLink) return undefined;
   try {
-    const shown = new URL(displayedLink.trim().split(/\s/)[0]);
+    const shown = new URL(displayedLink.trim().split(/[\s\u203a]/)[0]);
     const isWeb = shown.protocol === 'https:' || shown.protocol === 'http:';
     return isWeb && !GOOGLE_HOSTS.has(shown.hostname) ? shown.hostname : undefined;
   } catch {
@@ -309,7 +304,11 @@ const MAX_PLATFORM_NAME_CHARS = 40;
 
 /** Platform name from SerpAPI's `source` ("Reddit \u00b7 r/investing" -> "Reddit"), never a Google name. */
 function sourcePlatformName(source: string | undefined): string | undefined {
-  const name = source?.split(/\s\u00b7\s/)[0]?.trim();
+  // Brackets and parentheses would break the `[label](url)` link web_search writes for the model.
+  const name = source
+    ?.split(/\s\u00b7\s/)[0]
+    ?.replace(/[[\]()]/g, '')
+    .trim();
   return name && !/^google\b/i.test(name) ? name.slice(0, MAX_PLATFORM_NAME_CHARS) : undefined;
 }
 

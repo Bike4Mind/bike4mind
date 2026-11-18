@@ -178,6 +178,18 @@ describe('createSerpApiProvider', () => {
       expect(results[0].displayHost).toBe('www.lambdafin.com');
     });
 
+    it('reads the host when the breadcrumb has no spaces around its separator', async () => {
+      const results = await searchWith({ link: goto, displayed_link: 'https://massive.com\u203ablog\u203aapi' });
+
+      expect(results[0].displayHost).toBe('massive.com');
+    });
+
+    it('strips markdown link characters from a platform name', async () => {
+      const results = await searchWith({ link: goto, displayed_link: '5 likes', source: 'Foo](https://x.y) (Bar)' });
+
+      expect(results[0].displayHost).toBe('Foohttps://x.y Bar');
+    });
+
     it('falls back to the platform name in source when the breadcrumb is not a URL', async () => {
       const results = await searchWith({
         link: goto,
