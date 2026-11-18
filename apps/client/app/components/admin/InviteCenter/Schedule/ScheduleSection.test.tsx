@@ -145,11 +145,13 @@ describe('ScheduleSection', () => {
     fireEvent.change(screen.getByTestId('admin-setting-signupUnlockPaymentHoldHours-input'), {
       target: { value: '48' },
     });
+    fireEvent.click(screen.getByTestId('admin-setting-signupGrantActivityPreviewTestMode-switch'));
     fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
     await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
     expect(mocks.mutateAsync).toHaveBeenCalledWith({ key: 'signupGrantDripCap', value: 4000 });
     expect(mocks.mutateAsync).toHaveBeenCalledWith({ key: 'freeTierDay1SpendCapCredits', value: 75 });
     expect(mocks.mutateAsync).toHaveBeenCalledWith({ key: 'signupGrantActivityMinActiveSeconds', value: 120 });
     expect(mocks.mutateAsync).toHaveBeenCalledWith({ key: 'signupUnlockPaymentHoldHours', value: 48 });
+    expect(mocks.mutateAsync).toHaveBeenCalledWith({ key: 'signupGrantActivityPreviewTestMode', value: true });
   });
 });
