@@ -14,6 +14,7 @@ export type HeldCreditReward = {
   description: string;
   metadata?: Record<string, unknown>;
   lotRef?: string;
+  /** After this the reward is voided instead of paid. */
   expiresAt?: Date;
   heldAt: Date;
   status: HeldCreditRewardStatus;

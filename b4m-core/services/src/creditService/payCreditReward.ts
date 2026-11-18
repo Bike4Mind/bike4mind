@@ -27,6 +27,7 @@ export type HeldCreditRewardInput = {
   metadata?: Record<string, unknown>;
   /** Stamped as the paid lot's stripeRef, so a refund take-back can find the lot (clawbackCreditLotsByStripeRef). */
   lotRef?: string;
+  /** After this the reward is voided instead of paid. */
   expiresAt?: Date;
 };
 
