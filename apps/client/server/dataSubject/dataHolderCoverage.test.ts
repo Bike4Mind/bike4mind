@@ -3,7 +3,7 @@ import { mongoose } from '@bike4mind/database';
 // Registered outside the `@bike4mind/database` barrel, so they register only when imported.
 import '@bike4mind/server-utils/models/Subscription';
 import '@server/models/UserSubscription';
-import { DATA_HOLDER_REGISTRY, findUnclassifiedModels } from './registry';
+import { DATA_HOLDER_REGISTRY, assertContributedRegistryValid, findUnclassifiedModels } from './registry';
 import {
   listSchemaLeaves,
   listSchemaPaths,
@@ -62,6 +62,10 @@ describe('data holder registry', () => {
   it('sanity: the model barrels registered a realistic number of models', () => {
     // Guards the tests below against passing vacuously if the side-effect imports stop registering.
     expect(registeredModels.length).toBeGreaterThan(200);
+  });
+
+  it('has no contributed entry that collides with core or is otherwise rejected', () => {
+    expect(() => assertContributedRegistryValid()).not.toThrow();
   });
 
   it('classifies every registered model', () => {

@@ -42,6 +42,7 @@ function registryForStage(stage: ErasureStage, registry: DataHolderRegistry = DA
 
 /** The data holder registry the account purge (completeAccountDeletion.ts) plans, erases and checks against. */
 export const erasureRegistry: ErasureRegistry = {
+  assertReady: assertContributedRegistryValid,
   async scope(subject, assertLease) {
     assertEveryModelClassified(mongoose.modelNames());
     return new SubjectErasurePlan(subject).collections(assertLease);
