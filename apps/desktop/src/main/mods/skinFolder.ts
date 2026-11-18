@@ -231,8 +231,10 @@ function parse<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
   throw new SkinRejected(`${label}: ${issues.join('; ')}`);
 }
 
+// The needs-you sound stays the built-in chime, so it is neither checked nor served.
 function referencedPaths(tokens: SkinTokens): string[] {
-  return [...Object.values(tokens.sprites ?? {}), ...Object.values(tokens.sounds ?? {})].filter(
+  const { 'needs-you': _locked, ...sounds } = tokens.sounds ?? {};
+  return [...Object.values(tokens.sprites ?? {}), ...Object.values(sounds)].filter(
     (path): path is string => typeof path === 'string'
   );
 }

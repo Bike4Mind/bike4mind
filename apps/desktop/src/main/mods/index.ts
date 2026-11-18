@@ -65,7 +65,10 @@ export function registerSkins(): void {
     .then(() => {
       try {
         watcher = watch(modsRoot, { recursive: true, persistent: false }, changed);
-        watcher.on('error', () => watcher?.close());
+        watcher.on('error', (error: unknown) => {
+          console.warn(`SKINS: watcher stopped: ${String(error)}`);
+          watcher?.close();
+        });
       } catch {
         // Not watchable here (recursive watch is unsupported on some Linux setups): Refresh still rescans.
       }
@@ -105,9 +108,10 @@ function withAssetUrls(id: string, tokens: SkinTokens): SkinTokens {
       Object.entries(paths).map(([key, path]) => [key, path === undefined ? undefined : skinAssetUrl(id, path)])
     ) as T);
   const { sprites, sounds, ...rest } = tokens;
+  const { 'needs-you': _locked, ...servedSounds } = sounds ?? {};
   return {
     ...rest,
     ...(sprites ? { sprites: toUrls(sprites) } : {}),
-    ...(sounds ? { sounds: toUrls(sounds) } : {}),
+    ...(sounds ? { sounds: toUrls(servedSounds) } : {}),
   };
 }

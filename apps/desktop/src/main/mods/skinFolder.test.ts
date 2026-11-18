@@ -38,7 +38,6 @@ describe('loadSkin', () => {
     expect(result.skin.manifest.name).toBe('Nightglass');
     expect(result.skin.tokens.states?.working).toBe('#3cc8ff');
     expect([...result.skin.assets.keys()].sort()).toEqual([
-      'sounds/alarm.ogg',
       'sounds/finale.ogg',
       'sprites/tank.png',
       'sprites/tavern.png',
@@ -129,6 +128,16 @@ describe('loadSkin', () => {
     const folder = await installSampleSkin(modsRoot);
     await writeJson(join(folder, 'tokens.json'), { sprites: { tavernBackdrop: '../other/sprites/a.png' } });
     expectRejected(await loadSkin(modsRoot, 'nightglass'), /tokens\.json: sprites\.tavernBackdrop/);
+  });
+
+  it('ignores the needs-you sound, so a missing file for it does not reject the skin', async () => {
+    const folder = await installSampleSkin(modsRoot);
+    await rm(join(folder, 'sounds/alarm.ogg'));
+
+    const result = await loadSkin(modsRoot, 'nightglass');
+
+    if (result === 'not-a-skin' || !result.ok) throw new Error(JSON.stringify(result));
+    expect(result.skin.assets.has('sounds/alarm.ogg')).toBe(false);
   });
 
   it('rejects a referenced file that is missing', async () => {
