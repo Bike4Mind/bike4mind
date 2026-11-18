@@ -16,7 +16,7 @@ import { Request, Response, NextFunction } from 'express';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
-import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
+import { exchangeAttribution, resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 import { extractApiKeyFromHeaders } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 import { createHash } from 'crypto';
 import type { z } from 'zod';
@@ -282,6 +282,7 @@ export const apiKeyAuth = (
         preauthorizedLakeIds: validation.preauthorizedLakeIds,
         createdAt: validation.createdAt,
         oauthExchangeClientId: validation.oauthExchangeClientId,
+        payerStanding: validation.payerStanding,
       };
 
       // Create CASL ability for the user
@@ -338,6 +339,7 @@ export const apiKeyAuth = (
         // credit sections can disagree with this view.
         source: resolveApiCompletionSource(flattenHeaders(req.headers)),
         ownerType: resolveApiKeyOwnerType(validation),
+        ...exchangeAttribution(validation),
       };
       req._apiKeyUsageInfo = usageInfo;
 
@@ -366,6 +368,8 @@ export const apiKeyAuth = (
           statusCode,
           source: usageInfo.source,
           ownerType: usageInfo.ownerType,
+          oauthClientId: usageInfo.oauthClientId,
+          payerStanding: usageInfo.payerStanding,
           logger: req.logger,
         }).catch(err => {
           req.logger?.warn('Failed to log detailed API key usage', err);

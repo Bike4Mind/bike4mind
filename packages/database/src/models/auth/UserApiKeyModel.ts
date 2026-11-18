@@ -14,6 +14,7 @@ import {
   LegacyApiKeyCandidatePage,
   LegacyApiKeyCandidateQuery,
   OrgApiKeyGrant,
+  PAYER_STANDINGS,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 import { decryptAtRest, encryptAtRest } from '@bike4mind/utils/security';
@@ -598,6 +599,7 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
       createdByUserId: { type: String },
       // OAuth client that minted this key via the federated AI-token exchange. See IUserApiKeyMetadata.
       oauthClientId: { type: String },
+      payerStanding: { type: String, enum: [...PAYER_STANDINGS] },
       baseline: {
         avgRequestsPerHour: { type: Number },
         avgRequestsPerDay: { type: Number },

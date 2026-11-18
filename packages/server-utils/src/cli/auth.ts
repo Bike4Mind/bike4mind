@@ -8,6 +8,7 @@ import {
   type ApiKeyBillingOwnerType,
   type CompletionSource,
   type IEmbedBranding,
+  type PayerStanding,
 } from '@bike4mind/common';
 import { User, userApiKeyRepository, cacheRepository } from '@bike4mind/database';
 import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
@@ -72,6 +73,8 @@ export interface ApiKeyInfo {
   createdByUserId?: string;
   /** OAuth client that minted this key, present only for a federated exchange key. */
   oauthExchangeClientId?: string;
+  /** The exchange key owner's paid standing at mint; absent when the mint could not read it. */
+  payerStanding?: PayerStanding;
 }
 
 /**
@@ -229,6 +232,7 @@ function toApiKeyInfo(v: {
   currentSpend?: number;
   createdByUserId?: string;
   oauthExchangeClientId?: string;
+  payerStanding?: PayerStanding;
 }): ApiKeyInfo {
   return {
     keyId: v.keyId!,
@@ -245,6 +249,7 @@ function toApiKeyInfo(v: {
     currentSpend: v.currentSpend,
     createdByUserId: v.createdByUserId,
     oauthExchangeClientId: v.oauthExchangeClientId,
+    payerStanding: v.payerStanding,
   };
 }
 
