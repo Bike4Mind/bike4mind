@@ -295,6 +295,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
 
   async setPlanStorageLimit(organizationId: string, limitMb: number): Promise<boolean> {
     if (!mongoose.isValidObjectId(organizationId)) return false;
+    // update-validators-off: Pipeline preserves legacy overrides; readPlanStorageLimit validates new plan values.
     const res = await this.organizationModel.updateOne({ _id: organizationId }, [
       {
         $set: {
@@ -320,6 +321,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   async setStorageLimitOverride(organizationId: string, limitMb: number | null): Promise<IOrganizationDocument | null> {
+    // update-validators-off: Pipeline resolves the stored plan atomically; organizationService.update validates admin input.
     const row = await this.organizationModel.findByIdAndUpdate(
       organizationId,
       [
