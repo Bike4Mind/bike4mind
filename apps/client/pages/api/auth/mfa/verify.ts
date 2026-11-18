@@ -52,6 +52,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
         });
       }
 
+      // Before the code is checked and the session minted, and outside the try: a lookup failure
+      // must leave no session behind and must not be booked as a failed MFA attempt.
+      const { roleAdminPermissions = [] } = await resolveRoleAdminPermissions({
+        adminRoleIds: freshUser.adminRoleIds,
+      });
+
       let loginBody: { deviceRemembered: boolean; accessToken: string };
       let loggedInUser: Awaited<ReturnType<typeof mfaService.verifyMFA>>['user'];
       try {
@@ -90,12 +96,15 @@ const handler = baseApi({ auth: 'jwtOnly' })
         });
       }
 
-      // Outside the try: a response-boundary or role-lookup failure is our bug and must not be
-      // booked as a failed MFA attempt by the catch above.
+      // Outside the try: a response-boundary failure is our bug and must not be booked as a failed
+      // MFA attempt by the catch above. The permissions were resolved above; this reattaches them to
+      // the post-verification user without a second role query.
       return respond(res, verifyResponseSchema, {
         verified: true,
         ...loginBody,
-        user: redactUserSecretsForSelf(await resolveRoleAdminPermissions(loggedInUser)),
+        user: redactUserSecretsForSelf(
+          await resolveRoleAdminPermissions(loggedInUser, async () => [{ permissions: roleAdminPermissions }])
+        ),
       });
     })
   );
