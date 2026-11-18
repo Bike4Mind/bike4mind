@@ -1,13 +1,13 @@
 import { useMemo } from 'react';
 import { Alert, Stack, Typography } from '@mui/joy';
 import WarningIcon from '@mui/icons-material/Warning';
-import { stageHiddenSettingKeys } from '@bike4mind/common';
-import { useConfig, useSettingsFromServer } from '@client/app/hooks/data/settings';
+import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import { SettingsDraftProvider } from '../../SettingsDraftProvider';
 import { ErrorState, LoadingState } from '../../shared';
 import { FREE_TIER_LIMIT_KEYS, SIGNUP_SCHEDULE_KEYS, SIGNUP_TIMING_KEYS } from '../../settingHomes';
 import { SettingBlocks, type SettingBlock } from '../shared/SettingBlocks';
 import { useStoredByKey } from '../shared/useStoredByKey';
+import { useStageHiddenSettingKeys } from '../../useStageHiddenSettingKeys';
 import {
   INVITE_SEND_LIMITS_LIVE,
   describeNewAccountGrant,
@@ -41,12 +41,11 @@ const BLOCKS: readonly SettingBlock[] = [
 
 export function ScheduleSection() {
   const { data, isLoading, isError, isFetching, refetch } = useSettingsFromServer();
-  const config = useConfig();
-  const blocks = useMemo(() => {
-    const hidden = config.data?.hiddenAdminSettingKeys;
-    const hiddenKeys = new Set<string>(Array.isArray(hidden) ? hidden : stageHiddenSettingKeys(true));
-    return BLOCKS.map(block => ({ ...block, keys: block.keys.filter(key => !hiddenKeys.has(key)) }));
-  }, [config.data]);
+  const hiddenKeys = useStageHiddenSettingKeys();
+  const blocks = useMemo(
+    () => BLOCKS.map(block => ({ ...block, keys: block.keys.filter(key => !hiddenKeys.has(key)) })),
+    [hiddenKeys]
+  );
 
   const storedByKey = useStoredByKey(data);
 
