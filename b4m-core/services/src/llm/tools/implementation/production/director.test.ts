@@ -370,6 +370,25 @@ describe('production director tools', () => {
     expect(harness.counts.music).toBe(1);
   });
 
+  it('refuses a re-time that leaves a shot too short for its voice line', async () => {
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
+    await run(productionAddAudioTool, harness, { compositionId: COMPOSITION_ID, voiceover: true });
+    const squeezed = {
+      ...STORYBOARD,
+      shots: STORYBOARD.shots.map((shot, index) => (index === 0 ? { ...shot, durationSeconds: 1 } : shot)),
+    };
+
+    const refused = await run(productionStoryboardTool, harness, squeezed);
+    expect(refused).toMatch(/^Error: shot-1's voice line runs 1500 ms but would have 800 ms/);
+
+    const rewritten = {
+      ...squeezed,
+      shots: squeezed.shots.map((shot, index) => (index === 0 ? { ...shot, voiceLine: 'Hi.' } : shot)),
+    };
+    expect(await run(productionStoryboardTool, harness, rewritten)).not.toMatch(/^Error/);
+  });
+
   it('keeps stills on the timeline when animate is false', async () => {
     await run(productionStoryboardTool, harness, STORYBOARD);
     await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });

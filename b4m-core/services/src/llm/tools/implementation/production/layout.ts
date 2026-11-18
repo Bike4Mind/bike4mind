@@ -21,7 +21,7 @@ type DirectorTrackKind = keyof typeof DIRECTOR_TRACK_IDS;
 const DIRECTOR_TRACK_ORDER: readonly DirectorTrackKind[] = ['video', 'music', 'voice', 'sfx', 'captions'];
 
 export const DEFAULT_SHOT_DURATION_MS = 4000;
-const VOICE_LEAD_IN_MS = 200;
+export const VOICE_LEAD_IN_MS = 200;
 const MUSIC_FADE_IN_MS = 300;
 const MUSIC_FADE_OUT_MS = 1000;
 /** The bed sits under a voiceover; alone it plays at a fuller level. */
@@ -138,6 +138,28 @@ export function keptMusic(timeline: StudioTimeline, timelineMs: number): StudioA
     if (durationMs <= 0) return [];
     const fadeOutMs = Math.min(MUSIC_FADE_OUT_MS, Math.floor(durationMs / 2));
     return [{ ...clip, durationMs, fadeOutMs, fadeInMs: Math.min(clip.fadeInMs, durationMs - fadeOutMs) }];
+  });
+}
+
+/**
+ * Shots a re-timed storyboard leaves too short for their voice line: the line is unchanged, so its placed clip's
+ * length still holds, and it has until the next spoken shot starts (buildVoiceClips cuts it there).
+ */
+export function shotsTooShortForVoice(
+  timeline: StudioTimeline,
+  previous: readonly StudioShot[],
+  shots: readonly StudioShot[]
+): { id: string; lineMs: number; roomMs: number }[] {
+  const placed = new Map(directorClips(timeline, 'voice').map(clip => [clip.id, clip.durationMs]));
+  return shots.flatMap((shot, index) => {
+    const lineMs = placed.get(`${shot.id}-voice`);
+    if (!shot.voiceLine || shot.voiceLine !== previous[index]?.voiceLine || lineMs === undefined) return [];
+    const nextSpoken = shots.findIndex((candidate, at) => at > index && candidate.voiceLine);
+    const roomMs =
+      shots
+        .slice(index, nextSpoken === -1 ? shots.length : nextSpoken)
+        .reduce((sum, candidate) => sum + (candidate.durationMs ?? DEFAULT_SHOT_DURATION_MS), 0) - VOICE_LEAD_IN_MS;
+    return lineMs > roomMs ? [{ id: shot.id, lineMs, roomMs }] : [];
   });
 }
 

@@ -8,7 +8,7 @@ import {
 import type { ToolContext, ToolDefinition } from '../../base/types';
 import { buildUnavailableTool, toToolParameters } from '../generationJobTool';
 import { isProductionToolConfig } from './config';
-import { DIRECTOR_TRACK_IDS, keptMusic, withDirectorTracks } from './layout';
+import { DIRECTOR_TRACK_IDS, keptMusic, shotsTooShortForVoice, withDirectorTracks } from './layout';
 import { CompositionIdArg, ProductionToolError, describeProductionError } from './shared';
 
 export const STORYBOARD_MAX_SHOTS = 12;
@@ -131,6 +131,15 @@ export const productionStoryboardTool: ToolDefinition = {
               `${outgrown.join(', ')} would run longer than its clip, which would drop the clip and need a new one. ` +
                 'Keep those shots at their length: to fit a long voice line, spread it over two shots or shorten it. ' +
                 'Pass replace: true only to make the new clips anyway.'
+            );
+          }
+          const tooShort = shotsTooShortForVoice(current.timeline, current.shots, shots);
+          if (!args.replace && tooShort.length > 0) {
+            throw new ProductionToolError(
+              tooShort
+                .map(({ id, lineMs, roomMs }) => `${id}'s voice line runs ${lineMs} ms but would have ${roomMs} ms`)
+                .join('; ') +
+                '. Keep those shots long enough for their lines, or shorten the lines; pass replace: true to cut them.'
             );
           }
           const products = current.brandKit.productFileIds;
