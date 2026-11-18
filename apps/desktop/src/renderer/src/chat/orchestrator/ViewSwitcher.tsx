@@ -128,14 +128,21 @@ export function ViewSwitcher({
     if (currentFocus?.on) currentFocus.onToggle(false);
   };
   useEffect(() => {
+    // Capture phase and stopped: the composer's and peek drawer's Escape handlers would otherwise
+    // take the chord first (stopping a turn, closing the drawer) and the reset would never run.
+    const onResetKeyDown = (event: KeyboardEvent) => {
+      if (!isViewReset(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      resetView();
+    };
+    window.addEventListener('keydown', onResetKeyDown, true);
+    return () => window.removeEventListener('keydown', onResetKeyDown, true);
+  }, []);
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       const { focus: currentFocus } = latest.current;
-      if (isViewReset(event)) {
-        event.preventDefault();
-        resetView();
-        return;
-      }
       if (currentFocus && isFocusToggle(event)) {
         event.preventDefault();
         currentFocus.onToggle(!currentFocus.on);

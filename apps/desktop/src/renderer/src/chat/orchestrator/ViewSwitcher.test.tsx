@@ -155,6 +155,29 @@ describe('ViewSwitcher', () => {
     expect(onToggle).toHaveBeenCalledWith(false);
   });
 
+  it('resets from a focused composer that would otherwise stop the turn', async () => {
+    await themed.render(
+      <>
+        <ViewSwitcher view="tavern" onViewChange={onViewChange} />
+        <textarea data-testid="fake-composer" />
+      </>
+    );
+    const onStop = vi.fn();
+    // Mirrors the composer's own handler: Escape with a live turn stops it.
+    const textarea = el('fake-composer');
+    textarea.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !event.defaultPrevented) {
+        event.preventDefault();
+        onStop();
+      }
+    });
+    act(() => {
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { ...shortcut('Escape'), key: 'Escape', bubbles: true }));
+    });
+    expect(onViewChange).toHaveBeenCalledWith(RESET_VIEW);
+    expect(onStop).not.toHaveBeenCalled();
+  });
+
   it('leaves Focus alone on reset when it is already off', async () => {
     const onToggle = vi.fn();
     await themed.render(<ViewSwitcher view="table" onViewChange={onViewChange} focus={{ on: false, onToggle }} />);
