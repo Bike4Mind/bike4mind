@@ -154,6 +154,17 @@ describe('triageEmail', () => {
     );
   });
 
+  it('still drops brief items of a deleted email when deleting its triage item fails', async () => {
+    const deps = makeDeps({ emailExists: vi.fn(async () => false) });
+    deps.items.deleteByEmailIds.mockRejectedValueOnce(new Error('db down'));
+    expect(await triageEmail(deps, { email, analysis })).toBe('email_deleted');
+    expect(deps.removeBriefItems).toHaveBeenCalledWith('user-1', ['email-1']);
+    expect(deps.logger.warn).toHaveBeenCalledWith('Could not drop the triage item of a deleted email', {
+      emailId: 'email-1',
+      error: 'db down',
+    });
+  });
+
   it('makes no model call when the setting is off', async () => {
     const deps = makeDeps({ enabled: vi.fn(async () => false) });
     expect(await triageEmail(deps, { email, analysis })).toBe('disabled');

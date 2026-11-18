@@ -150,8 +150,23 @@ export async function triageEmail(
     // and brief items (apps/client/pages/api/users/[id]/ingested-emails.ts), so checking after the insert leaves no
     // orphan, and a brief composed from the new item in between is cleaned here.
     if (created && !(await deps.emailExists(email.id))) {
-      await deps.items.deleteByEmailIds(email.userId, [email.id]);
-      await deps.removeBriefItems(email.userId, [email.id]);
+      // Independent steps: a failed triage-item delete must not leave the brief items behind.
+      try {
+        await deps.items.deleteByEmailIds(email.userId, [email.id]);
+      } catch (error) {
+        deps.logger.warn('Could not drop the triage item of a deleted email', {
+          emailId: email.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      try {
+        await deps.removeBriefItems(email.userId, [email.id]);
+      } catch (error) {
+        deps.logger.warn('Could not drop the brief items of a deleted email', {
+          emailId: email.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       deps.logger.info('Email deleted during triage; dropped its triage item', { emailId: email.id });
       return 'email_deleted';
     }
