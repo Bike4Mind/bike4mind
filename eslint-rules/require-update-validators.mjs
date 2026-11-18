@@ -87,15 +87,16 @@ export default {
         }
         if (enabled === true) return;
 
-        const comments = source
-          .getAllComments()
-          .filter(
-            comment =>
-              (comment.range[0] >= node.range[0] && comment.range[1] <= outer.range[1]) ||
-              (comment.range[1] <= node.range[0] &&
+        const comments = [
+          ...source.getCommentsInside(outer),
+          ...source
+            .getCommentsBefore(node)
+            .filter(
+              comment =>
                 comment.loc.end.line >= node.loc.start.line - 1 &&
-                source.text.slice(comment.range[1], node.range[0]).trim() === '')
-          );
+                source.text.slice(comment.range[1], node.range[0]).trim() === ''
+            ),
+        ];
         if (comments.some(comment => OPT_OUT.test(comment.value))) return;
         context.report({ node, messageId: 'validators', data: { method } });
       },
