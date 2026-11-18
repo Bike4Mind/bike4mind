@@ -70,7 +70,16 @@ async function makeVoiceover(
     else notes.push(`voiceover for ${slot.shot.id} failed (${result.code}): ${result.message}`);
   }
   if (lines.length === 0 && notes.length === 0) notes.push('No shot has a voice line, so there is no voiceover.');
-  return { clips: buildVoiceClips(lines, totalMs), notes };
+  const clips = buildVoiceClips(lines, totalMs);
+  for (const line of lines) {
+    const placed = clips.find(clip => clip.id === line.id);
+    if (!placed || placed.durationMs < line.durationMs)
+      notes.push(
+        `the voice line for ${line.slot.shot.id} runs ${line.durationMs} ms, longer than the time it has; it is cut ` +
+          `to ${placed?.durationMs ?? 0} ms. Shorten the line or lengthen the shot, then replace the voiceover.`
+      );
+  }
+  return { clips, notes };
 }
 
 async function makeSoundEffects(

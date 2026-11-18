@@ -135,7 +135,7 @@ describe('buildVoiceClips', () => {
     ]);
   });
 
-  it('never overlaps: a long line pushes the next one back', () => {
+  it('keeps each line on its own shot: a long line is cut where the next one starts', () => {
     const [first, second] = slotsFor([2000, 2000]) as [ShotSlot, ShotSlot];
     const clips = buildVoiceClips(
       [
@@ -145,23 +145,40 @@ describe('buildVoiceClips', () => {
       4000
     );
     expect(clips.map(clip => [clip.startMs, clip.durationMs])).toEqual([
-      [200, 3500],
-      [3700, 300],
+      [200, 2000],
+      [2200, 500],
     ]);
-    expect(clips[1]!.startMs).toBeGreaterThanOrEqual(clips[0]!.startMs + clips[0]!.durationMs);
   });
 
-  it('cuts a line at the end of the timeline and drops one that starts past it', () => {
+  it('runs a line on past its shot when the next shot has no line', () => {
+    const [first, , third] = slotsFor([2000, 2000, 2000]) as [ShotSlot, ShotSlot, ShotSlot];
+    const clips = buildVoiceClips(
+      [
+        { id: 'v1', fileId: FILE_A, durationMs: 3000, slot: first },
+        { id: 'v3', fileId: FILE_B, durationMs: 500, slot: third },
+      ],
+      6000
+    );
+    expect(clips.map(clip => [clip.startMs, clip.durationMs])).toEqual([
+      [200, 3000],
+      [4200, 500],
+    ]);
+  });
+
+  it('cuts the last line at the end of the timeline and drops one that starts past it', () => {
     const [first, second] = slotsFor([2000, 2000]) as [ShotSlot, ShotSlot];
     const clips = buildVoiceClips(
       [
-        { id: 'v1', fileId: FILE_A, durationMs: 9000, slot: first },
-        { id: 'v2', fileId: FILE_B, durationMs: 500, slot: second },
+        { id: 'v1', fileId: FILE_A, durationMs: 500, slot: first },
+        { id: 'v2', fileId: FILE_B, durationMs: 9000, slot: second },
       ],
       4000
     );
-    expect(clips).toHaveLength(1);
-    expect(clips[0]).toMatchObject({ id: 'v1', startMs: 200, durationMs: 3800 });
+    expect(clips.map(clip => [clip.id, clip.startMs, clip.durationMs])).toEqual([
+      ['v1', 200, 500],
+      ['v2', 2200, 1800],
+    ]);
+    expect(buildVoiceClips([{ id: 'v3', fileId: FILE_C, durationMs: 500, slot: second }], 2100)).toEqual([]);
   });
 });
 
