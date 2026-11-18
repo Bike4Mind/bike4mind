@@ -49,15 +49,19 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-async function listQueue({ entry, dlqUrl, depth }: BrowsableQueue, logsLookup: Promise<ConsumerLogs | null>) {
+async function listQueue(
+  { entry, dlqUrl, depth }: BrowsableQueue,
+  logsLookup: Promise<ConsumerLogs | null>,
+  deadline: number
+) {
   const received = await browseDlqMessages(dlqUrl, { limit: PER_QUEUE_LIMIT, maxReceives: MAX_RECEIVES_PER_QUEUE });
   const ids = received.flatMap(message => (message.MessageId ? [message.MessageId] : []));
   const [{ failures, lookupFailed }, attempts, logs, schedules, targetLogs] = await Promise.all([
     findDlqFailures(entry.label, entry.sourceQueue, ids),
     countDlqReplayAttempts(entry.label, ids),
     logsLookup,
-    resolveDlqScheduleFacts(entry, received, depth),
-    resolveDlqTargetLogs(received),
+    resolveDlqScheduleFacts(entry, received, depth, deadline),
+    resolveDlqTargetLogs(received, deadline),
   ]);
   const failureById = new Map(failures.map(failure => [failure.messageId, failure]));
   return received.map(message =>
@@ -85,6 +89,7 @@ const handler = adminApi({
   requiredScopes: [ApiKeyScope.ADMIN],
   auth: 'jwtOnly',
 }).get(async (req, res) => {
+  const enrichmentDeadline = Date.now() + CONSUMER_LOGS_BUDGET_MS;
   const adminUserId = req.user?.id;
   if (!adminUserId) throw new BadRequestError('Admin user ID is required');
 
@@ -117,15 +122,16 @@ const handler = adminApi({
 
   // Started before browsing and awaited per queue, so a slow lookup overlaps the SQS receives.
   const logsLookup = settleWithinBudget(
-    toBrowse.map(({ entry }) => resolveConsumerLogsForSourceQueue(entry.sourceQueue)),
-    CONSUMER_LOGS_BUDGET_MS
+    toBrowse.map(({ entry }) => resolveConsumerLogsForSourceQueue(entry.sourceQueue, enrichmentDeadline)),
+    enrichmentDeadline - Date.now()
   );
   const listings = await mapWithConcurrency(toBrowse, QUEUE_CONCURRENCY, async (queue, index) => {
     const { label } = queue.entry;
     try {
       const messages = await listQueue(
         queue,
-        logsLookup.then(logs => logs[index] ?? null)
+        logsLookup.then(logs => logs[index] ?? null),
+        enrichmentDeadline
       );
       return { label, messages, failed: false };
     } catch (error) {

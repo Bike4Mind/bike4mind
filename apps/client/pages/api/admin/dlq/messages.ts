@@ -49,6 +49,7 @@ const handler = adminApi({
   adminPermissions: { GET: 'support:read' },
   requiredScopes: [ApiKeyScope.ADMIN],
 }).get(async (req, res) => {
+  const enrichmentDeadline = Date.now() + CONSUMER_LOGS_BUDGET_MS;
   const result = QuerySchema.safeParse(req.query);
   if (!result.success) {
     throw new BadRequestError(result.error.issues[0]?.message || 'Invalid query parameters');
@@ -69,9 +70,10 @@ const handler = adminApi({
 
   const [received, consumerLogs, queueDepth] = await Promise.all([
     receiveFromQueue(dlqUrl, maxMessages, 0, RECEIVE_WAIT_SECONDS, DLQ_BROWSE_MESSAGE_ATTRIBUTES),
-    settleWithinBudget([resolveConsumerLogsForSourceQueue(dlqEntry.sourceQueue)], CONSUMER_LOGS_BUDGET_MS).then(
-      ([logs]) => logs
-    ),
+    settleWithinBudget(
+      [resolveConsumerLogsForSourceQueue(dlqEntry.sourceQueue, enrichmentDeadline)],
+      enrichmentDeadline - Date.now()
+    ).then(([logs]) => logs),
     getQueueAttributes(dlqUrl).then(
       attributes => attributes.approximateMessageCount + attributes.approximateNotVisibleCount,
       () => undefined
@@ -82,8 +84,8 @@ const handler = adminApi({
   const [[failureLookup], [attempts], schedules, targetLogs] = await Promise.all([
     settleWithinBudget([findDlqFailures(queueLabel, dlqEntry.sourceQueue, ids)], CONSUMER_LOGS_BUDGET_MS),
     settleWithinBudget([countDlqReplayAttempts(queueLabel, ids)], CONSUMER_LOGS_BUDGET_MS),
-    resolveDlqScheduleFacts(dlqEntry, messages, queueDepth),
-    resolveDlqTargetLogs(messages),
+    resolveDlqScheduleFacts(dlqEntry, messages, queueDepth, enrichmentDeadline),
+    resolveDlqTargetLogs(messages, enrichmentDeadline),
   ]);
   const { failures, lookupFailed } = failureLookup ?? { failures: [], lookupFailed: true };
   const failureById = new Map(failures.map(failure => [failure.messageId, failure]));

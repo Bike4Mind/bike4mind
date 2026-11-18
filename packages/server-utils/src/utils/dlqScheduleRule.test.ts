@@ -29,7 +29,7 @@ const FUNCTION_ARN = `arn:${PARTITION}:lambda:us-east-2:000000000000:function:ap
 
 const respond = (rule: Record<string, unknown>, targets: Array<{ Arn: string }>) =>
   h.send.mockImplementation(async (command: { kind: string }) =>
-    command.kind === 'describe' ? rule : { Targets: targets }
+    command.kind === 'describe' ? { Arn: RULE_ARN, ...rule } : { Targets: targets }
   );
 
 beforeEach(() => {
@@ -88,14 +88,11 @@ describe('parseScheduledEvent', () => {
 
 describe('resolveScheduleRule', () => {
   it('returns the rule state, schedule and Lambda target without its qualifier', async () => {
-    respond({ State: 'ENABLED', ScheduleExpression: 'rate(1 hour)' }, [
-      { Arn: `arn:${PARTITION}:sqs:us-east-2:000000000000:queue` },
-      { Arn: `${FUNCTION_ARN}:live` },
-    ]);
+    respond({ State: 'ENABLED', ScheduleExpression: 'rate(1 hour)' }, [{ Arn: `${FUNCTION_ARN}:live` }]);
     expect(await resolveScheduleRule(RULE_ARN)).toEqual({
       state: 'ENABLED',
       scheduleExpression: 'rate(1 hour)',
-      targetFunctionName: 'app-stage-NightlyFn',
+      targetFunctionArn: FUNCTION_ARN,
     });
     expect(h.send.mock.calls[0][0].input).toEqual({ Name: 'app-stage-Nightly' });
   });
