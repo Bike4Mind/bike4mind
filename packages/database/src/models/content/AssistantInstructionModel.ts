@@ -27,6 +27,10 @@ export const AssistantInstructionModel =
   (mongoose.models.AssistantInstruction as mongoose.Model<IAssistantInstruction> | undefined) ??
   mongoose.model<IAssistantInstruction>('AssistantInstruction', schema);
 
+// Bounds how long a save ranked within the cap waits for racing saves ranked past it to back off.
+const CAP_SETTLE_ATTEMPTS = 10;
+const CAP_SETTLE_DELAY_MS = 25;
+
 /** Every method is scoped to the owner, so another user's instruction reads as missing. */
 export const assistantInstructionRepository = {
   /** Unlimited on purpose: `createWithinCap` bounds the set, and every counted row must stay visible and deletable. */
@@ -44,17 +48,28 @@ export const assistantInstructionRepository = {
   },
 
   /**
-   * Saves unless the user already holds `cap` instructions; null when refused. The recount after the insert
-   * rolls back a save that a concurrent one pushed over the cap, so racing saves can never leave more than `cap`.
+   * Saves unless the user already holds `cap` instructions; null when refused. A save keeps its row only after
+   * a post-insert recount sees at most `cap`, so racing saves never leave more. When a race overshoots, the rows
+   * ranked past `cap` back off at once and the rest wait for that, so a race for the last slot still has a winner.
    */
   async createWithinCap(input: { userId: string; text: string }, cap: number): Promise<IAssistantInstruction | null> {
-    if ((await AssistantInstructionModel.countDocuments({ userId: input.userId })) >= cap) return null;
+    const owned = { userId: input.userId };
+    if ((await AssistantInstructionModel.countDocuments(owned)) >= cap) return null;
     const created = await AssistantInstructionModel.create(input);
-    if ((await AssistantInstructionModel.countDocuments({ userId: input.userId })) > cap) {
-      await AssistantInstructionModel.deleteOne({ _id: created._id });
-      return null;
+    for (let attempt = 0; ; attempt++) {
+      if ((await AssistantInstructionModel.countDocuments(owned)) <= cap) return created.toObject();
+      const keepers = await AssistantInstructionModel.find(owned)
+        .sort({ createdAt: 1, _id: 1 })
+        .limit(cap)
+        .select('_id')
+        .lean();
+      const ranked = keepers.some(row => row._id.equals(created._id));
+      if (!ranked || attempt >= CAP_SETTLE_ATTEMPTS) {
+        await AssistantInstructionModel.deleteOne({ _id: created._id });
+        return null;
+      }
+      await new Promise(resolve => setTimeout(resolve, CAP_SETTLE_DELAY_MS));
     }
-    return created.toObject();
   },
 
   /** False when the id is malformed, missing, or belongs to someone else. */

@@ -58,15 +58,14 @@ describe('assistantInstructionRepository', () => {
     expect((await repo.listByUser('u1')).map(i => i.text)).toEqual(['rule-0', 'rule-1', 'rule-2']);
   });
 
-  it('never leaves more than the cap when saves race at the boundary', async () => {
+  it('gives the last slot to exactly one of several racing saves', async () => {
     for (let i = 0; i < 19; i++) await repo.create({ userId: 'u1', text: `rule-${i}` });
     const results = await Promise.all(
       Array.from({ length: 8 }, (_, i) => repo.createWithinCap({ userId: 'u1', text: `race-${i}` }, 20))
     );
-    const count = await repo.countByUser('u1');
-    expect(count).toBeLessThanOrEqual(20);
-    expect(count).toBe(19 + results.filter(Boolean).length);
-    expect(await repo.listByUser('u1')).toHaveLength(count);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(await repo.countByUser('u1')).toBe(20);
+    expect(await repo.listByUser('u1')).toHaveLength(20);
   });
 
   it('rejects text over the length cap at the model', async () => {
