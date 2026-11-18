@@ -534,6 +534,8 @@ describe('AdminSettingsTab Credits System group', () => {
     // 'drip' matches the drip cap's name; the audit log links a setting change as ?q=<key>.
     ['drip', 'invite-center-schedule', 'schedule'],
     ['signupGrantDripCap', 'invite-center-schedule', 'schedule'],
+    ['signupGrantActivityMinActiveSeconds', 'invite-center-schedule', 'schedule'],
+    ['signupUnlockPaymentHoldHours', 'invite-center-schedule', 'schedule'],
     ['freeTierDays2To7SpendCapCredits', 'invite-center-schedule', 'schedule'],
     ['ReferralHoldDays', 'invite-center-rewards', 'rewards'],
     ['gearRewardMinAccountAgeDays', 'invite-center-rewards', 'rewards'],
@@ -563,13 +565,13 @@ describe('AdminSettingsTab stage-hidden settings', () => {
     renderUsersTab();
 
     for (const key of stageGated) expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
-    expect(screen.getByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeTruthy();
+    expect(screen.queryByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeNull();
   });
 
-  it('shows them when the server hides nothing', () => {
+  it('leaves moved preview controls to Schedule even when the server hides nothing', () => {
     renderUsersTab();
 
-    for (const key of stageGated) expect(screen.getByTestId(`generic-setting-${key}`), key).toBeTruthy();
+    for (const key of stageGated) expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
   });
 
   it.each([
@@ -588,7 +590,7 @@ describe('AdminSettingsTab stage-hidden settings', () => {
     renderSettings();
     fireEvent.click(screen.getByRole('checkbox', { name: 'All Tabs' }));
 
-    expect(screen.getByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeTruthy();
+    expect(screen.queryByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeNull();
     for (const key of stageGated) expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
   });
 });
