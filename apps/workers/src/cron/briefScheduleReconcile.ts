@@ -4,7 +4,8 @@
  * next to a hosted run) start a slot once. The next slot is computed from now, not from the missed one,
  * so an outage yields one brief rather than a backlog. A start that throws hands the slot back, so later
  * runs retry it for up to RETRY_WINDOW_MS after it fell due. The brief itself rides the existing `brief.compose`
- * event; startScheduledBrief skips users with brief pushes off and windows with no agent runs.
+ * event; startScheduledBrief skips users whose schedule was turned off after the claim, users with brief
+ * pushes off, and windows with no agent runs.
  *
  * Schedule: rate(5 minutes). Self-host twin: apps/workers/src/selfhost/briefScheduleReconcile.ts.
  */
