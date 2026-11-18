@@ -63,6 +63,9 @@ const SORT_LABEL: Readonly<Record<(typeof PENDING_SORTS)[number], string>> = {
 const options = <K extends string>(labels: Readonly<Record<K, string>>) =>
   (Object.entries(labels) as [K, string][]).map(([value, label]) => ({ value, label }));
 
+const DEFAULT_ACTIVE_DAYS: (typeof PENDING_ACTIVE_DAYS)[number] = '7';
+const lastDays = (days: string | number) => `last ${days} day${Number(days) === 1 ? '' : 's'}`;
+
 const FILTERS: readonly AdminFilter[] = [
   { id: 'status', label: 'Status', options: options(STATUS_LABEL) },
   { id: 'heldReason', label: 'Held reason', options: options(REASON_LABEL) },
@@ -71,7 +74,7 @@ const FILTERS: readonly AdminFilter[] = [
   {
     id: 'activeDays',
     label: 'Activity',
-    options: PENDING_ACTIVE_DAYS.map(value => ({ value, label: `Active in last ${value} days` })),
+    options: PENDING_ACTIVE_DAYS.map(value => ({ value, label: `Active in ${lastDays(value)}` })),
   },
   { id: 'sort', label: 'Sort', options: options(SORT_LABEL) },
 ];
@@ -108,7 +111,7 @@ const PendingHeader = ({ activeDays }: { activeDays: number }) => {
         comparison={exposure ? `${credits(exposure.totalRemaining)} left in all grants` : undefined}
       />
       <StatTile
-        label={`Active in last ${activeDays} days`}
+        label={`Payable, active in ${lastDays(activeDays)}`}
         value={activity ? activity.accounts : activity === null ? UNAVAILABLE : blank}
         comparison={activity ? `${credits(activity.remaining)} left in their grants` : undefined}
       />
@@ -312,7 +315,7 @@ export function PendingSection() {
           </Button>
         ))}
       </Stack>
-      <PendingHeader activeDays={Number(filters.activeDays ?? 7)} />
+      <PendingHeader activeDays={Number(filters.activeDays ?? DEFAULT_ACTIVE_DAYS)} />
       <FilterBar state={listState} filters={FILTERS} onChange={updateList} search={false} />
       {failed.length > 0 && (
         <Alert color="warning" variant="soft" data-testid="pending-bulk-failed">

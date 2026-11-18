@@ -97,7 +97,7 @@ describe('PendingSection', () => {
     render(<PendingSection />, { wrapper: Wrapper });
     const [accounts, drip, active, dueToday, trickle, queue] = tiles();
     expect(accounts).toContain('7');
-    expect(active).toContain('Active in last 7 days');
+    expect(active).toContain('Payable, active in last 7 days');
     expect(active).toContain('4');
     expect(active).toContain('5,000 left in their grants');
     expect(dueToday).toContain('Drip due today (UTC)');
@@ -273,7 +273,7 @@ describe('PendingSection', () => {
     render(<PendingSection />, { wrapper: Wrapper });
     expect(mocks.listArgs.at(-1)).toMatchObject({ activeDays: '30' });
     expect(mocks.summaryArgs.at(-1)).toBe(30);
-    expect(tiles()[2]).toContain('Active in last 30 days');
+    expect(tiles()[2]).toContain('Payable, active in last 30 days');
     fireEvent.click(screen.getByTestId('admin-filter-activeDays'));
     fireEvent.click(screen.getByTestId('admin-filter-activeDays-7'));
     const { search } = mocks.navigate.mock.calls.at(-1)![0];
@@ -285,6 +285,15 @@ describe('PendingSection', () => {
     render(<PendingSection />, { wrapper: Wrapper });
     expect(mocks.listArgs.at(-1)).toMatchObject({ activeDays: undefined });
     expect(mocks.summaryArgs.at(-1)).toBe(7);
+  });
+
+  it('uses the singular for the one-day window', () => {
+    mocks.search = { pendingActiveDays: '1' };
+    render(<PendingSection />, { wrapper: Wrapper });
+    expect(tiles()[2]).toContain('Payable, active in last 1 day');
+    expect(tiles()[2]).not.toContain('1 days');
+    fireEvent.click(screen.getByTestId('admin-filter-activeDays'));
+    expect(screen.getByTestId('admin-filter-activeDays-1').textContent).toBe('Active in last 1 day');
   });
 
   it('sizes the Source column for its chips rather than an equal share of the table', () => {
