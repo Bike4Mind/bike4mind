@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { watch } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SkinLoadResult } from './skinFolder';
 
 const harness = vi.hoisted(() => ({
@@ -42,7 +43,72 @@ describe('registerSkins scan ordering', () => {
   });
 });
 
+describe('registerSkins watcher', () => {
+  const flushMkdir = () => vi.advanceTimersByTimeAsync(0);
+
+  async function startWatching() {
+    let onChange!: () => void;
+    const close = vi.fn();
+    const listeners = new Map<string, (error: unknown) => void>();
+    vi.mocked(watch).mockImplementation(((_path: string, _options: unknown, listener: () => void) => {
+      onChange = listener;
+      return { close, on: (event: string, handler: (error: unknown) => void) => listeners.set(event, handler) };
+    }) as unknown as typeof watch);
+    const { registerSkins } = await import('./index');
+    registerSkins();
+    await flushMkdir();
+    return { onChange: () => onChange(), close, listeners };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    harness.loadSkins.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('rescans once after a burst of change events settles', async () => {
+    const { onChange } = await startWatching();
+
+    onChange();
+    await vi.advanceTimersByTimeAsync(200);
+    onChange();
+    await vi.advanceTimersByTimeAsync(200);
+    onChange();
+    expect(harness.loadSkins).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(harness.loadSkins).toHaveBeenCalledTimes(1);
+  });
+
+  it('warns once and closes when the watcher errors', async () => {
+    const { close, listeners } = await startWatching();
+
+    listeners.get('error')?.(new Error('EMFILE'));
+
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('SKINS: watcher stopped'));
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('toSummary', () => {
+  it('never carries the needs-you sound', async () => {
+    const { toSummary } = await import('./index');
+    const summary = toSummary({
+      ok: true,
+      skin: {
+        manifest: { manifest: 1, id: 'loud', name: 'Loud', version: '1.0.0', kind: 'skin', contract: 1 },
+        tokens: { sounds: { finale: 'sounds/finale.ogg', 'needs-you': 'sounds/alarm.ogg' } },
+        assets: new Map(),
+      },
+    });
+
+    expect(summary).toMatchObject({ tokens: { sounds: { finale: 'b4m-skin://loud/sounds/finale.ogg' } } });
+    expect(JSON.stringify(summary)).not.toContain('alarm');
+  });
+
   it('reports a colour too close to the needs-you amber as a warning naming its key', async () => {
     const { toSummary } = await import('./index');
     const summary = toSummary({

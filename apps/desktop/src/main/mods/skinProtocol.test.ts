@@ -45,6 +45,7 @@ describe('serveSkinAsset', () => {
     ['the tokens', 'b4m-skin://nightglass/tokens.json'],
     ['an unknown skin', 'b4m-skin://other/sprites/tank.png'],
     ['an unreferenced file', 'b4m-skin://nightglass/sprites/unused.png'],
+    ['the locked needs-you sound', 'b4m-skin://nightglass/sounds/alarm.ogg'],
     ['a dot-dot path', 'b4m-skin://nightglass/sprites/../mod.json'],
     ['an encoded dot-dot path', 'b4m-skin://nightglass/sprites/%2e%2e/mod.json'],
     ['an encoded separator', 'b4m-skin://nightglass/sprites%2ftank.png'],
@@ -54,6 +55,18 @@ describe('serveSkinAsset', () => {
   ])('answers 404 for %s', async (_label, url) => {
     if (url.includes('unused')) await writeFile(join(folder, 'sprites/unused.png'), PNG_BYTES);
     expect((await serveSkinAsset(skins, url)).status).toBe(404);
+  });
+
+  it.skipIf(process.platform === 'win32')('refuses a served file swapped for a link after the scan', async () => {
+    const outside = await mkdtemp(join(tmpdir(), 'skin-outside-'));
+    try {
+      await writeFile(join(outside, 'tank.png'), PNG_BYTES);
+      await rm(join(folder, 'sprites/tank.png'));
+      await symlink(join(outside, 'tank.png'), join(folder, 'sprites/tank.png'));
+      expect((await serveSkinAsset(skins, 'b4m-skin://nightglass/sprites/tank.png')).status).toBe(404);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 
   it.skipIf(process.platform === 'win32')('refuses a sprites folder swapped for a link after the scan', async () => {
