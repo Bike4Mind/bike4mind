@@ -77,7 +77,7 @@ import { openInSessionBrowser } from './prLinks';
 import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
-import { isUntouchedImport, projectForGroup } from './grouping';
+import { isUntouchedImport, projectForGroup, projectGroupDirectory } from './grouping';
 import { useImportedInline } from './importedInline';
 import { TerminalPanel } from './TerminalPanel';
 import {
@@ -723,7 +723,13 @@ export function ChatShell({
   const spawnedStates = useMemo(() => agentStates(sessions, statuses, activeId), [sessions, statuses, activeId]);
   const orchestrationSession =
     sessionDraft.session && sessionDraft.session.id === conversation.session?.id ? conversation.session : activeSummary;
-  const orchestratorPrefs = useOrchestratorPrefs(activeId, orchestrationSession?.project?.directory);
+  // The view is remembered per sidebar group, so a Claude Code worktree shares its repository's choice. Only
+  // the active session's project counts: a Code draft can briefly stand in for another session.
+  const orchestrationProject = orchestrationSession?.id === activeId ? orchestrationSession.project : undefined;
+  const orchestratorPrefs = useOrchestratorPrefs(
+    activeId,
+    orchestrationProject && projectGroupDirectory(orchestrationProject)
+  );
   const { setDockOpen, setView: setOrchestratorView, setSurface: setOrchestratorSurface } = orchestratorPrefs;
   // A Code session can orchestrate before it has any agents; a Chat session only shows its agents.
   // One at the depth cap, or on a model sent no tools, could start none: main ignores its flag

@@ -107,6 +107,7 @@ describe('orchestratorPrefs', () => {
   it('defaults when nothing is stored', () => {
     expect(readSurface('s1')).toBe('chat');
     expect(readView('s1')).toBe('tavern');
+    expect(readView('s1', '/p')).toBe('tavern');
     expect(readDockOpen()).toBe(true);
     expect(readIntroSeen()).toBe(false);
   });
@@ -155,6 +156,7 @@ describe('orchestratorPrefs', () => {
     expect(() => {
       writeSurface('s1', 'orchestrate');
       writeView('s1', 'table');
+      writeView('s1', 'table', '/p');
       writeDockOpen(false);
       writeIntroSeen();
     }).not.toThrow();
