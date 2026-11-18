@@ -195,6 +195,7 @@ describe("starting a new session from a project group's header", () => {
     expect(createCodeSession).not.toHaveBeenCalled();
     expect(document.querySelectorAll('[data-testid="chat-session-item"]')).toHaveLength(2);
     await act(async () => el('composer-orchestrate-toggle').click());
+    await act(async () => el('orchestrate-budget-start-btn').click());
     expect(el('composer-orchestrate-toggle').getAttribute('aria-pressed')).toBe('true');
     expect(setSessionOrchestrate).not.toHaveBeenCalled();
     await act(async () => el('orchestrator-example-quest-1').click());

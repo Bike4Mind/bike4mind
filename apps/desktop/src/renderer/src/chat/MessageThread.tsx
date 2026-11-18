@@ -19,6 +19,7 @@ import { useNavigate } from '@tanstack/react-router';
 import {
   isTurnBudgetStop,
   lastBoundaryIndex,
+  RUN_BUDGET_STOP,
   SERVER_CREDENTIALS_STOP,
   SESSION_EXPIRED_STOP,
   type ChatMessage,
@@ -45,6 +46,7 @@ import { describeTokenRate, formatTokenRate, useShowTokenRate } from './tokenRat
 import { clampWindow, extendWindow, initialWindow, WINDOW_STEP, type ThreadWindow } from './threadWindow';
 import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
 import { OrphanVideoJobs } from './VideoJobCard';
+import { RunBudgetRaiseRow } from './orchestrator/RunBudgetRaiseRow';
 
 /** What each budget the agent loop enforces is called in the thread. See isTurnBudgetStop. */
 const BUDGET_STOP_LABELS: Record<string, string> = {
@@ -60,7 +62,19 @@ const BUDGET_STOP_LABELS: Record<string, string> = {
  * happened and here is what to do about it" - the chip alone read as a dead end, which is
  * exactly what it no longer is.
  */
-function StopReasonRow({ reason, onContinue }: { reason?: string; onContinue?: () => void }) {
+function StopReasonRow({
+  reason,
+  onContinue,
+  sessionId,
+}: {
+  reason?: string;
+  onContinue?: () => void;
+  sessionId?: string | null;
+}) {
+  // Continue alone would be refused again: only a raise resumes the run. Offered on the last turn only.
+  if (reason === RUN_BUDGET_STOP) {
+    return onContinue && sessionId ? <RunBudgetRaiseRow sessionId={sessionId} /> : null;
+  }
   if (reason === 'max_tokens') {
     return (
       <Chip size="sm" color="warning" variant="soft" sx={{ mt: 1 }} data-testid="chat-truncated-chip">
@@ -327,11 +341,14 @@ const AssistantTurn = memo(function AssistantTurn({
   onRespond,
   onMove,
   onContinue,
+  sessionId,
   status,
   live = false,
   skipRounds = 0,
 }: {
   message: ChatMessage;
+  /** The open conversation, for the controls a stopped turn offers; absent with none open. */
+  sessionId?: string | null;
   onRespond: RespondToApproval;
   /** Absent with no conversation open; the running-command control is then not drawn. */
   onMove?: MoveCallToBackground;
@@ -415,7 +432,7 @@ const AssistantTurn = memo(function AssistantTurn({
         </Alert>
       )}
 
-      <StopReasonRow reason={message.stopReason} onContinue={onContinue} />
+      <StopReasonRow reason={message.stopReason} onContinue={onContinue} sessionId={sessionId} />
 
       {/* Last, under the reply it describes, which is where the eye already is while a turn
           runs. It lived in the composer before and read as a property of the input box rather
@@ -856,7 +873,7 @@ export function MessageThread({
         {...(onMove ? { onMove } : {})}
         // Only the last turn, and only while nothing is running: resuming writes back
         // into its own message, so a Continue on an older one would edit history.
-        {...(index === messages.length - 1 && !streaming ? { onContinue } : {})}
+        {...(index === messages.length - 1 && !streaming ? { onContinue, sessionId } : {})}
         {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
         {...(skipRounds > 0 ? { skipRounds } : {})}
       />

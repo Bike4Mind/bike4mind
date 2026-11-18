@@ -397,6 +397,7 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('orchestrate-example-quests')).toBeNull();
 
     await act(async () => el('composer-orchestrate-toggle').click());
+    await act(async () => el('orchestrate-budget-start-btn').click());
     expect(setSessionOrchestrate).toHaveBeenCalledWith(CODE.id, true);
     expect(el('composer-orchestrate-toggle').getAttribute('aria-pressed')).toBe('true');
     expect(query('chat-surface-toggle')).toBeNull();
@@ -490,11 +491,13 @@ describe('orchestrate mode in the chat shell', () => {
 
     setSessionOrchestrate.mockRejectedValueOnce(new Error('disk full'));
     await act(async () => el('composer-orchestrate-toggle').click());
+    await act(async () => el('orchestrate-budget-start-btn').click());
     expect(el('chat-notice').textContent).toContain('Could not change Orchestrate. disk full');
     expect(el('composer-orchestrate-toggle').getAttribute('aria-pressed')).toBe('false');
 
     setSessionOrchestrate.mockResolvedValueOnce(null);
     await act(async () => el('composer-orchestrate-toggle').click());
+    await act(async () => el('orchestrate-budget-start-btn').click());
     expect(el('composer-orchestrate-toggle').getAttribute('aria-pressed')).toBe('false');
   });
 

@@ -1,8 +1,12 @@
-import type { AxiosInstance } from 'axios';
+import { isAxiosError, type AxiosInstance } from 'axios';
+import { z } from 'zod';
 import {
+  CompletionRunBudgetStateSchema,
   CompletionRunSchema,
   CompletionRunUsageSchema,
+  RUN_BUDGET_NOT_RAISED_ERROR_CODE,
   type CompletionRun,
+  type CompletionRunBudgetState,
   type CompletionRunUsage,
 } from '@bike4mind/common';
 
@@ -19,10 +23,12 @@ const MINT_TIMEOUT_MS = 10_000;
 export async function requestCompletionRun(
   axios: AxiosInstance,
   rootSessionId: string,
-  onError: (message: string) => void
+  onError: (message: string) => void,
+  budgetCredits?: number
 ): Promise<CompletionRun | undefined> {
   try {
-    const response = await axios.post<unknown>(COMPLETION_RUNS_PATH, { rootSessionId }, { timeout: MINT_TIMEOUT_MS });
+    const body = { rootSessionId, ...(budgetCredits !== undefined ? { budgetCredits } : {}) };
+    const response = await axios.post<unknown>(COMPLETION_RUNS_PATH, body, { timeout: MINT_TIMEOUT_MS });
     const parsed = CompletionRunSchema.safeParse(response.data);
     if (parsed.success) return parsed.data;
     onError(`unexpected response: ${parsed.error.message}`);
@@ -47,7 +53,8 @@ export const MINT_FAILURE_BACKOFF_MS = 60_000;
 export type CompletionRunMinter = (
   key: string,
   axios: AxiosInstance,
-  rootSessionId: string
+  rootSessionId: string,
+  budgetCredits?: number
 ) => Promise<CompletionRun | undefined>;
 
 export function createCompletionRunMinter(
@@ -57,12 +64,12 @@ export function createCompletionRunMinter(
 ): CompletionRunMinter {
   const inFlight = new Map<string, Promise<CompletionRun | undefined>>();
   const failedAt = new Map<string, number>();
-  return (key, axios, rootSessionId) => {
+  return (key, axios, rootSessionId, budgetCredits) => {
     const pending = inFlight.get(key);
     if (pending) return pending;
     const failed = failedAt.get(key);
     if (failed !== undefined && now() - failed < MINT_FAILURE_BACKOFF_MS) return Promise.resolve(undefined);
-    const minted = request(axios, rootSessionId, onError)
+    const minted = request(axios, rootSessionId, onError, budgetCredits)
       .then(run => {
         if (run) failedAt.delete(key);
         else failedAt.set(key, now());
@@ -90,5 +97,51 @@ export async function readCompletionRunUsage(axios: AxiosInstance, runId: string
     return { ok: false, reason: `unexpected response: ${parsed.error.message}` };
   } catch (err) {
     return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Only the part of the usage read Desktop acts on, so the rest of the report can grow freely. */
+const RunUsageBudgetSchema = z.object({ budget: CompletionRunBudgetStateSchema.optional() });
+
+/**
+ * A budgeted run's ceiling and what is held against it, from `GET .../usage`. `undefined` for a
+ * run minted without a budget; throws on a failed request or a response that is not a usage read.
+ */
+export async function fetchRunBudget(
+  axios: AxiosInstance,
+  serverRunId: string
+): Promise<CompletionRunBudgetState | undefined> {
+  const response = await axios.get<unknown>(`${COMPLETION_RUNS_PATH}/${encodeURIComponent(serverRunId)}/usage`, {
+    timeout: USAGE_TIMEOUT_MS,
+  });
+  return RunUsageBudgetSchema.parse(response.data).budget;
+}
+
+/** The new budget was not above the current one (409 run_budget_not_raised). */
+export class RunBudgetNotRaisedError extends Error {
+  readonly errorCode = RUN_BUDGET_NOT_RAISED_ERROR_CODE;
+  constructor(message?: string) {
+    super(message || 'The new budget must be higher than the current one.');
+    this.name = 'RunBudgetNotRaisedError';
+  }
+}
+
+/** Raise a run's budget to `budgetCredits`. Rejects with RunBudgetNotRaisedError when it is not a raise. */
+export async function raiseRunBudget(axios: AxiosInstance, serverRunId: string, budgetCredits: number): Promise<void> {
+  try {
+    await axios.post<unknown>(
+      `${COMPLETION_RUNS_PATH}/${encodeURIComponent(serverRunId)}/budget`,
+      { budgetCredits },
+      { timeout: USAGE_TIMEOUT_MS }
+    );
+  } catch (err) {
+    if (isAxiosError(err) && err.response?.status === 409) {
+      const data: unknown = err.response.data;
+      const record = typeof data === 'object' && data !== null ? (data as Record<string, unknown>) : {};
+      if (record.errorCode === RUN_BUDGET_NOT_RAISED_ERROR_CODE) {
+        throw new RunBudgetNotRaisedError(typeof record.message === 'string' ? record.message : undefined);
+      }
+    }
+    throw err;
   }
 }

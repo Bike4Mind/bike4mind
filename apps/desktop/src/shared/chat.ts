@@ -2126,10 +2126,20 @@ export const SESSION_EXPIRED_STOP = 'session_expired';
 export const SERVER_CREDENTIALS_STOP = 'server_credentials';
 
 /**
+ * The stop reason of a turn the server refused because its orchestration run's credit budget is
+ * used up. Resumable: refused before the provider ran, so the transcript ends on a request
+ * boundary, and raising the budget continues every session the run paused.
+ */
+export const RUN_BUDGET_STOP = 'run_budget_exhausted';
+
+/** What raising a run budget did: how many paused sessions it continued, or why it was refused. */
+export type RaiseRunBudgetResult = { ok: true; resumed: number } | { ok: false; error: string };
+
+/**
  * Whether Continue can carry the turn on in place. A turn cut by an expired session stopped at
  * a request boundary - before any of that request streamed - so its transcript ends where a
  * budget-stopped one does, or on the user's own prompt.
  */
 export function isResumableStop(reason?: string): boolean {
-  return isTurnBudgetStop(reason) || reason === SESSION_EXPIRED_STOP;
+  return isTurnBudgetStop(reason) || reason === SESSION_EXPIRED_STOP || reason === RUN_BUDGET_STOP;
 }
