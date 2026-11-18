@@ -70,6 +70,31 @@ describe('buildModerationEscalationMessage', () => {
     expect(pending.attachments?.[0].color).not.toEqual(severe.attachments?.[0].color);
   });
 
+  it('titles an alert that is both severe and pending suspension for both', () => {
+    const message = buildModerationEscalationMessage({
+      alert: { ...severeAlert, reasons: ['suspend_pending', 'severe_category'] },
+      account: null,
+      stage: 'production',
+      appUrl: 'https://app.example.com',
+    });
+
+    expect(message.text).toContain('Severe moderation hit; user pending suspension');
+  });
+
+  it('names the flagging source and omits the buttons without an app url', () => {
+    const message = buildModerationEscalationMessage({
+      alert: { ...severeAlert, source: 'provider' },
+      account: null,
+      stage: 'production',
+      appUrl: undefined,
+    });
+    const text = textOf(message);
+
+    expect(text).toContain('Provider refusal');
+    expect(text).not.toContain('Open user');
+    expect(text).not.toContain('Review list');
+  });
+
   it('says the account is unavailable when the lookup failed', () => {
     const message = buildModerationEscalationMessage({
       alert: severeAlert,
@@ -100,6 +125,32 @@ describe('handleModerationEscalation', () => {
 
     expect(deps.post).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledWith('moderation-escalation-account-context-failed', { error: 'mongo down' });
+  });
+
+  it('posts without the account line when the lookup hangs past the timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = makeDeps({ resolveAccount: vi.fn().mockReturnValue(new Promise(() => undefined)) });
+      const logger = makeLogger();
+
+      const handled = handleModerationEscalation(severeAlert, deps, logger);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await handled;
+
+      expect(deps.post).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith('moderation-escalation-account-context-failed', {
+        error: 'timed out after 5000 ms',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('throws when the mention lookup fails, so the event bus retries it', async () => {
+    const deps = makeDeps({ readMention: vi.fn().mockRejectedValue(new Error('ssm down')) });
+
+    await expect(handleModerationEscalation(severeAlert, deps, makeLogger())).rejects.toThrow('ssm down');
+    expect(deps.post).not.toHaveBeenCalled();
   });
 
   it('drops a malformed event without posting', async () => {

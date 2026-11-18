@@ -326,6 +326,13 @@ export interface IUserModeration {
  */
 export const MODERATION_SEVERE_CATEGORIES: readonly string[] = ['sexual/minors'];
 
+/** Display names for each {@link ModerationHitSource}, shared by the review list and the escalation alert. */
+export const MODERATION_SOURCE_LABELS: Record<ModerationHitSource, string> = {
+  openai: 'OpenAI moderation',
+  bedrock: 'Bedrock guardrail',
+  provider: 'Provider refusal',
+};
+
 /** Statuses the admin moderation review list always shows: they await a human decision. */
 export const MODERATION_REVIEW_STATUSES = [
   'throttled',
