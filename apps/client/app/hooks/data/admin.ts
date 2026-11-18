@@ -12,6 +12,7 @@ import type {
   IncidentState,
 } from '@client/app/components/admin/SecurityDashboard/incidentTypes';
 import type { SignupAnomalySnapshot } from '@bike4mind/server-utils/app/utils/signupAnomaly';
+import type { SecopsTriageStatusResponse } from '@client/pages/api/admin/secops-triage/status';
 
 export interface LiveOpsTriageEnv {
   stage: string;
@@ -418,9 +419,11 @@ export const useSecurityDashboardCloud = () => {
   });
 };
 
+export const SECURITY_DASHBOARD_PROWLER_QUERY_KEY = ['admin', 'security-dashboard', 'cloud-prowler'] as const;
+
 export const useSecurityDashboardProwler = () => {
   return useQuery<SecurityDashboardProwlerSnapshot | null>({
-    queryKey: ['admin', 'security-dashboard', 'cloud-prowler'],
+    queryKey: SECURITY_DASHBOARD_PROWLER_QUERY_KEY,
     queryFn: async () => {
       const res = await api.get<SecurityDashboardProwlerSnapshot | null>('/api/admin/security-dashboard/cloud-prowler');
       return res.data ?? null;
@@ -549,6 +552,16 @@ export const useRunProwlerScan = () => {
     // Prowler results arrive asynchronously (~10 min via GitHub Actions).
     // No automatic invalidation - the user refreshes the Prowler Audit tab
     // when they expect the scan to be complete.
+  });
+};
+
+export const SECOPS_TRIAGE_STATUS_QUERY_KEY = ['admin', 'secops-triage', 'status'] as const;
+
+/** Issue filing readiness for the saved settings, plus the recent filing runs. */
+export const useSecopsTriageStatus = () => {
+  return useQuery<SecopsTriageStatusResponse>({
+    queryKey: SECOPS_TRIAGE_STATUS_QUERY_KEY,
+    queryFn: async () => (await api.get<SecopsTriageStatusResponse>('/api/admin/secops-triage/status')).data,
   });
 };
 

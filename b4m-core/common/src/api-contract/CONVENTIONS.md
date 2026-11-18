@@ -184,6 +184,7 @@ re-deciding per endpoint:
 | Malformed path/query resource id | `404` | - |
 | Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
 | Free-tier account calls a model that needs a paid plan (admin-set free-tier allowlist) | `403` | `model_requires_subscription` (upgrade, or choose a free-tier model from `GET /api/v1/models`) |
+| Free account already started its one QuestMaster quest | `403` | `free_quest_limit_reached` (subscribe to start another; deletion does not restore the allowance) |
 | Org-billed API key names a billing organization other than its own | `403` | `billing_organization_mismatch` |
 | The caller's organization policy does not allow the requested model | `403` | `org_model_not_allowed` (choose a model from `GET /api/v1/models`, which lists only allowed ones) |
 | The request names a built-in tool the caller's organization policy does not allow | `403` | `org_tool_not_allowed` (drop the tool from the request) |

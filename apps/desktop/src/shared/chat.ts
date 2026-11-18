@@ -499,6 +499,23 @@ export type ChatImageAction = 'copy' | 'save' | 'copy-path' | 'copy-markdown' | 
 /** `done` is false when the user cancelled a save dialog. */
 export type ChatImageActionResult = { ok: true; done: boolean } | { ok: false; error: string };
 
+/** `revealed` when the file would run rather than open, and was shown in its folder instead. */
+export type ChatFilePathOpenResult = { ok: true; opened: 'opened' | 'revealed' } | { ok: false; error: string };
+
+/** What a file link's context menu can do besides open and attach, each run in main. */
+export type ChatFilePathAction = 'copy-path' | 'copy-relative-path' | 'copy-markdown' | 'reveal';
+export type ChatFilePathActionResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * A path a reply names, as the Files pane shows it. `path` is absolute. `text` holds at most the
+ * first MAX_VIEW_BYTES (main/chat/filePathLinks.ts), with `truncated` set when the file is longer;
+ * `line` is the line a cited `file.ts:12` names. A folder or binary file carries no content.
+ */
+export type ChatFileView =
+  | { kind: 'text'; path: string; name: string; size: number; text: string; truncated: boolean; line?: number }
+  | { kind: 'directory' | 'binary'; path: string; name: string; size: number }
+  | { kind: 'error'; error: string };
+
 /**
  * Everything the artifact card needs to draw one, whether it came out of a reply or back off
  * the server.

@@ -1,10 +1,11 @@
 import { useState, type FormEvent } from 'react';
 import { styled } from '@mui/system';
-import { Button, CircularProgress, Input, Option, Select, Stack, Typography } from '@mui/joy';
+import { Button, CircularProgress, Input, Stack, Typography } from '@mui/joy';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { toast } from 'sonner';
 import {
   STUDIO_COMPOSITION_LIMITS,
+  STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS,
   STUDIO_COMPOSITION_TEMPLATES,
   type StudioCompositionSummaryResponse,
   type StudioCompositionTemplate,
@@ -20,14 +21,43 @@ import {
 import { StudioPanel, StudioSectionLabel } from '../design/StudioPanel';
 import { studioColor, studioRadius } from '../design/studioTokens';
 
-export const TEMPLATE_LABELS: Record<StudioCompositionTemplate, string> = {
-  ad_campaign: 'Ad campaign (15s, 16:9 + 9:16 + 1:1)',
-  social_pack: 'Social pack (15s, 9:16 + 1:1 + 4:5)',
-  product_video: 'Product video (30s, 16:9)',
-  explainer: 'Explainer (60s, 16:9)',
-  short_film: 'Short film (2 min, 16:9)',
-  blank: 'Blank (15s, 16:9)',
+const formatLength = (durationMs: number) =>
+  durationMs >= 60_000 ? `${durationMs / 60_000} min` : `${durationMs / 1000}s`;
+
+/** "15s, 16:9 + 9:16 + 1:1": what a template starts with, from the shared template data. */
+export const templateSummary = (template: StudioCompositionTemplate) => {
+  const { durationMs, aspects } = STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS[template];
+  return `${formatLength(durationMs)}, ${aspects.join(' + ')}`;
 };
+
+const TemplateGrid = styled('div')({
+  display: 'grid',
+  gap: '8px',
+  gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+});
+
+const TemplateCard = styled('button')({
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'flex-start',
+  gap: '4px',
+  padding: '12px',
+  textAlign: 'left',
+  font: 'inherit',
+  color: studioColor('text'),
+  cursor: 'pointer',
+  borderRadius: studioRadius('md'),
+  border: `1px solid ${studioColor('border')}`,
+  background: studioColor('raised'),
+  '&:hover': { background: studioColor('hover') },
+  '&[aria-checked="true"]': {
+    borderColor: studioColor('accent-border'),
+    background: studioColor('accent-soft'),
+    color: studioColor('accent-on-soft'),
+  },
+  '& > strong': { fontWeight: 600, color: 'inherit' },
+  '& > span': { fontSize: '12px', color: studioColor('text-secondary') },
+});
 
 const Row = styled('li')({
   display: 'flex',
@@ -60,7 +90,7 @@ const RowTitle = styled('div')({
 
 const updatedFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
-/** Productions' landing: start a production from a template, then open, rename or delete the user's own. */
+/** Productions' home: start a production from a template (Ad campaign by default), then open, rename or delete one. */
 const ProductionsList = () => {
   const compositions = useStudioCompositions();
   return (
@@ -109,45 +139,54 @@ const CreateProductionForm = () => {
   return (
     <StudioPanel testId="productions-create">
       <form onSubmit={onSubmit}>
-        <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ md: 'flex-end' }}>
-          <Stack spacing={0.5} sx={{ flex: 1 }}>
-            <StudioSectionLabel>New production</StudioSectionLabel>
-            <Input
+        <Stack spacing={1.5}>
+          <StudioSectionLabel>Start from a template</StudioSectionLabel>
+          <TemplateGrid role="radiogroup" aria-label="Template" data-testid="productions-create-templates">
+            {STUDIO_COMPOSITION_TEMPLATES.map(option => {
+              const definition = STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS[option];
+              return (
+                <TemplateCard
+                  key={option}
+                  type="button"
+                  role="radio"
+                  aria-checked={option === template}
+                  onClick={() => setTemplate(option)}
+                  data-testid={`productions-template-${option}`}
+                >
+                  <strong>{definition.label}</strong>
+                  <span>{definition.description}</span>
+                  <span>{templateSummary(option)}</span>
+                </TemplateCard>
+              );
+            })}
+          </TemplateGrid>
+          <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ md: 'flex-end' }}>
+            <Stack spacing={0.5} sx={{ flex: 1 }}>
+              <StudioSectionLabel htmlFor="productions-create-title">Name</StudioSectionLabel>
+              <Input
+                size="sm"
+                id="productions-create-title"
+                placeholder="Spring launch ad"
+                value={title}
+                onChange={event => setTitle(event.target.value)}
+                slotProps={{
+                  input: {
+                    maxLength: STUDIO_COMPOSITION_LIMITS.titleMaxLength,
+                    'data-testid': 'productions-create-title-input',
+                  },
+                }}
+              />
+            </Stack>
+            <Button
               size="sm"
-              placeholder="Spring launch ad"
-              value={title}
-              onChange={event => setTitle(event.target.value)}
-              slotProps={{
-                input: {
-                  maxLength: STUDIO_COMPOSITION_LIMITS.titleMaxLength,
-                  'data-testid': 'productions-create-title-input',
-                },
-              }}
-            />
+              type="submit"
+              loading={create.isPending}
+              disabled={!title.trim()}
+              data-testid="productions-create-btn"
+            >
+              Create {STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS[template].label.toLowerCase()}
+            </Button>
           </Stack>
-          <Select
-            size="sm"
-            value={template}
-            onChange={(_, value) => value && setTemplate(value)}
-            aria-label="Template"
-            data-testid="productions-create-template-select"
-            sx={{ minWidth: '280px' }}
-          >
-            {STUDIO_COMPOSITION_TEMPLATES.map(option => (
-              <Option key={option} value={option}>
-                {TEMPLATE_LABELS[option]}
-              </Option>
-            ))}
-          </Select>
-          <Button
-            size="sm"
-            type="submit"
-            loading={create.isPending}
-            disabled={!title.trim()}
-            data-testid="productions-create-btn"
-          >
-            Create
-          </Button>
         </Stack>
       </form>
     </StudioPanel>
@@ -214,7 +253,7 @@ const ProductionRow = ({ composition }: { composition: StudioCompositionSummaryR
           </Link>
         </RowTitle>
       )}
-      <Typography level="body-xs">{TEMPLATE_LABELS[composition.template].split(' (')[0]}</Typography>
+      <Typography level="body-xs">{STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS[composition.template].label}</Typography>
       <Typography level="body-xs">Updated {updatedFormat.format(composition.updatedAt)}</Typography>
       {!isRenaming && (
         <Stack direction="row" spacing={0.5}>

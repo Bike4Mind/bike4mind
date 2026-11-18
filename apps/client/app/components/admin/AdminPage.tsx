@@ -101,7 +101,6 @@ const TutorialsTab = dynamic(() => import('./TutorialsTab'), { ssr: false });
 const IntegrationHealthTab = dynamic(() => import('./IntegrationHealth'), { ssr: false });
 const IntegrationDemandTab = dynamic(() => import('./IntegrationDemandTab'), { ssr: false });
 const SreAgentTab = dynamic(() => import('./SreAgentTab'), { ssr: false });
-const SecopsTriageTab = dynamic(() => import('./SecopsTriageTab'), { ssr: false });
 const PublishedArtifactsTab = dynamic(() => import('./PublishedArtifactsTab'), { ssr: false });
 const PrReportTab = dynamic(() => import('./PrReport/PrReportTab'), { ssr: false });
 const ArchitectureDiagramsTab = dynamic(() => import('./ArchitectureDiagramsTab'), { ssr: false });
@@ -348,9 +347,6 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
             {activeTab === AdminTab.IntegrationDemand && <IntegrationDemandTab />}
           </TabPanel>
           <TabPanel value={AdminTab.SreAgent}>{activeTab === AdminTab.SreAgent && <SreAgentTab />}</TabPanel>
-          <TabPanel value={AdminTab.SecOpsTriage}>
-            {activeTab === AdminTab.SecOpsTriage && <SecopsTriageTab />}
-          </TabPanel>
           <TabPanel value={AdminTab.PublishedPages}>
             {activeTab === AdminTab.PublishedPages && <PublishedArtifactsTab />}
           </TabPanel>
