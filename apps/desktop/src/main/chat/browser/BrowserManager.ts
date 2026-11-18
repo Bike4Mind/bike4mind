@@ -8,6 +8,7 @@ import {
   type Session,
   type WebContents,
 } from 'electron';
+import { paneDocument } from '@shared/artifactPaneDocument';
 import type { CookieImportState } from '@shared/browserCookies';
 import { browserSnapshotSchema, type BrowserSnapshot } from '@shared/browserPage';
 import type { ChatArtifact, ChatMedia } from '@shared/chat';
@@ -866,18 +867,19 @@ export class BrowserManager implements BrowserProvider {
    * matched by the model's identifier. Each tab reloads where it is: none is opened, activated or
    * focused, and an artifact no tab is showing is left alone.
    *
-   * HTML only: every other type reaches a tab wrapped by the renderer's paneDocument, which main
-   * does not rebuild, so a tab opened on one from the Artifacts menu keeps its version.
+   * The page is rebuilt with the same paneDocument the renderer opens it with, so the recorded
+   * content still matches when the updated version is picked again.
    */
   refreshArtifacts(sessionId: string, artifacts: readonly ChatArtifact[]): void {
     const tabs = this.sessions.get(sessionId)?.list ?? [];
     for (const artifact of artifacts) {
-      if (!artifact.identifier || artifact.type !== 'html') continue;
+      if (!artifact.identifier) continue;
+      const content = paneDocument(artifact);
       for (const tab of tabs) {
         const opened = this.artifactTabs.get(tab);
         if (opened?.key !== artifact.identifier || tab.currentUrl() !== opened.url) continue;
-        if (!this.artifactViews.replace(opened.url, artifact.title, artifact.content)) continue;
-        opened.content = artifact.content;
+        if (!this.artifactViews.replace(opened.url, artifact.title, content)) continue;
+        opened.content = content;
         tab.go('reload');
       }
     }

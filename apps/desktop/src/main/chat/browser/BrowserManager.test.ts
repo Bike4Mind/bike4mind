@@ -1,5 +1,6 @@
 import { runInNewContext } from 'node:vm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { paneDocument } from '@shared/artifactPaneDocument';
 import type { BrowserPaneState } from '@shared/ipc';
 
 /**
@@ -1450,12 +1451,29 @@ describe('BrowserManager opening an artifact', () => {
       expect(contents.reloads).toEqual([]);
     });
 
-    it('only reloads for an HTML update, the one type a tab is opened on as raw content', async () => {
-      await manager.openArtifact('s', 'Chart', '<p>v1</p>', 'chart');
+    it('rebuilds a non-HTML artifact as the same wrapped page the Artifacts menu opens it with', async () => {
+      await manager.openArtifact(
+        's',
+        'Logo',
+        paneDocument({ type: 'svg', title: 'Logo', content: '<svg>1</svg>' }),
+        'logo'
+      );
+      const url = tabUrl();
 
-      manager.refreshArtifacts('s', [update('<svg></svg>', 'chart', 'svg')]);
+      manager.refreshArtifacts('s', [{ ...update('<svg>2</svg>', 'logo', 'svg'), title: 'Logo' }]);
 
-      expect(contents.reloads).toEqual([]);
+      expect(contents.reloads).toHaveLength(1);
+      await expect(serve(url).text()).resolves.toBe(
+        paneDocument({ type: 'svg', title: 'Logo', content: '<svg>2</svg>' })
+      );
+      const loadsBefore = contents.loads.length;
+      await manager.openArtifact(
+        's',
+        'Logo',
+        paneDocument({ type: 'svg', title: 'Logo', content: '<svg>2</svg>' }),
+        'logo'
+      );
+      expect(contents.loads).toHaveLength(loadsBefore);
     });
   });
 
