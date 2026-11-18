@@ -1,7 +1,7 @@
 import { isLocalUrl } from '@shared/browserUrl';
 import type { BrowserTabSummary } from '@shared/ipc';
 
-/** The tab strip's right-click menu. */
+/** What each item of the tab strip's right-click menu closes. */
 export type BrowserTabCloseAction = 'this' | 'others' | 'right' | 'all';
 
 /** Why closing a tab would interrupt something: the model is using it, or it shows a local dev server. */

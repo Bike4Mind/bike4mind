@@ -86,6 +86,27 @@ describe('BrowserTabMenu', () => {
     expect(byTestId('browser-tab-menu-close-all-btn')?.textContent).toBe('Close all tabs');
   });
 
+  it.each([
+    { key: 'F10', shiftKey: true },
+    { key: 'ContextMenu', shiftKey: false },
+  ])('opens from the keyboard with $key', init => {
+    mount(() => null);
+    const target = document.querySelector<HTMLElement>('[data-testid="browser-tab-select-btn"][data-tab-id="2"]');
+    act(() => {
+      target?.dispatchEvent(new KeyboardEvent('keydown', { ...init, bubbles: true, cancelable: true }));
+    });
+    expect(byTestId('browser-tab-menu')).not.toBeNull();
+  });
+
+  it('does not open on F10 without Shift', () => {
+    mount(() => null);
+    const target = document.querySelector<HTMLElement>('[data-testid="browser-tab-select-btn"][data-tab-id="2"]');
+    act(() => {
+      target?.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', bubbles: true, cancelable: true }));
+    });
+    expect(byTestId('browser-tab-menu')).toBeNull();
+  });
+
   it('closes tabs not in use straight away', () => {
     const onCloseTabs = mount(() => null);
     rightClick(2);

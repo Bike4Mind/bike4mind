@@ -17,6 +17,11 @@ export interface StripTab<Id extends string | number> {
   ended?: boolean;
 }
 
+const belowTab = (tab: Element) => {
+  const rect = tab.getBoundingClientRect();
+  return { x: rect.left, y: rect.bottom };
+};
+
 /**
  * A row of closable tabs with a "new" button, shared by the browser pane and the terminal panel.
  *
@@ -76,8 +81,7 @@ export function TabStrip<Id extends string | number>({
                   onSelect(tab.id);
                 } else if (onContextMenu && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) {
                   event.preventDefault();
-                  const rect = event.currentTarget.getBoundingClientRect();
-                  onContextMenu(tab.id, { x: rect.left, y: rect.bottom });
+                  onContextMenu(tab.id, belowTab(event.currentTarget));
                 }
               }}
               onContextMenu={
@@ -85,11 +89,10 @@ export function TabStrip<Id extends string | number>({
                 (event => {
                   event.preventDefault();
                   // A contextmenu raised from the keyboard reports no pointer position.
-                  const rect = event.currentTarget.getBoundingClientRect();
                   const fromKeyboard = event.clientX === 0 && event.clientY === 0;
                   onContextMenu(
                     tab.id,
-                    fromKeyboard ? { x: rect.left, y: rect.bottom } : { x: event.clientX, y: event.clientY }
+                    fromKeyboard ? belowTab(event.currentTarget) : { x: event.clientX, y: event.clientY }
                   );
                 })
               }
