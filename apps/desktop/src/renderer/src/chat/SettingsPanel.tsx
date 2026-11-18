@@ -59,6 +59,13 @@ import { useAppUpdate, type AppUpdateController } from './useAppUpdate';
 import { useWorktreeByDefault, worktreeDefaultSummary } from './worktreeDefault';
 
 /** What the General page is for, said on the page so it does not have to be inferred from a name. */
+const settingsColumnSx = {
+  ...contentColumnSx,
+  maxWidth: 1040,
+  boxSizing: 'border-box',
+  px: { xs: 3, md: 5 },
+} as const;
+
 const SETTINGS_INTRO = 'How the app looks, behaves, connects, and keeps itself up to date.';
 
 const THEME_MODE_LABEL: Record<ThemeMode, string> = { system: 'System', light: 'Light', dark: 'Dark' };
@@ -710,13 +717,13 @@ export function SettingsScreen({
   return (
     <Stack sx={{ height: '100vh', bgcolor: 'background.body' }} data-testid="settings-panel">
       {/* ProfileScreen's header, with its column set over the page beside the nav rather than the
-          whole window, so the back button lines up with the page below it: same max width and padding as the page column. */}
+          whole window, so the back button lines up with the page below it: shares settingsColumnSx with the page column. */}
       <Box sx={{ borderBottom: '1px solid', borderColor: 'divider', pl: `${SETTINGS_NAV_WIDTH}px`, ...columnStackSx }}>
         <Stack
           direction="row"
           alignItems="center"
           spacing={1}
-          sx={{ ...contentColumnSx, maxWidth: 1040, boxSizing: 'border-box', px: { xs: 3, md: 5 }, py: 1.25 }}
+          sx={{ ...settingsColumnSx, py: 1.25 }}
         >
           <IconButton
             size="sm"
@@ -768,7 +775,7 @@ export function SettingsScreen({
 
         <Box sx={{ flex: 1, minWidth: 0, overflowY: 'auto', scrollbarGutter: 'stable', ...thinScrollbarSx }}>
           <Box
-            sx={{ ...contentColumnSx, maxWidth: 1040, boxSizing: 'border-box', px: { xs: 3, md: 5 }, py: 4 }}
+            sx={{ ...settingsColumnSx, py: 4 }}
             data-testid={`settings-page-${section}`}
           >
             <SectionPage section={section} entries={entries[section]} />
