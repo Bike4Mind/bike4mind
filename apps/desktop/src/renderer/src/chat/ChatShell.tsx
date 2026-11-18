@@ -108,6 +108,8 @@ import { roundsOf } from './replyRounds';
 import { describeActivity, latestReply, writingProse, type ComposerUsage } from './statusLine';
 import { useAccountCredits } from './useAccountCredits';
 import { ImageMenuProvider } from './ImageContextMenu';
+import { FilePathLinkProvider, type ShowFile } from './FilePathLink';
+import { FilePane, type TextFileView } from './FilePane';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
 import { useVideoJobs, VideoJobsContext } from './useVideoJobs';
@@ -455,6 +457,27 @@ export function ChatShell({
     } else if (modelPath) setModelOpen(true);
   }, [activeId, modelPath]);
   const toggleModel = useCallback(() => setModelOpen(current => !current), []);
+  // The file a link opened, held for the conversation it was opened in so it never follows the
+  // user into another one. `requested` is the path as the reply wrote it, which main re-resolves.
+  const [openFile, setOpenFile] = useState<{ sessionId: string; requested: string; view: TextFileView } | null>(null);
+  const fileSelectionEpoch = useRef(0);
+  const showFile = useCallback<ShowFile>(
+    (requested, view) => {
+      if (activeId) setOpenFile({ sessionId: activeId, requested, view });
+    },
+    [activeId]
+  );
+  const closeFile = useCallback(() => {
+    fileSelectionEpoch.current += 1;
+    setOpenFile(null);
+  }, []);
+  const openFileExternally = useCallback(
+    (requested: string) =>
+      activeId
+        ? window.b4m.chat.openFilePath(activeId, requested)
+        : Promise.resolve({ ok: false as const, error: 'No conversation is open.' }),
+    [activeId]
+  );
   const toggleBrowser = useCallback(() => {
     setBrowserOpen(current => {
       writeBrowserPaneOpen(!current);
@@ -1321,103 +1344,114 @@ export function ChatShell({
             {/* Keyed so an open menu can never carry an image into another conversation,
             should a switch ever skip the `opening` gate that unmounts this today. */}
             <ImageMenuProvider key={activeId ?? 'none'} onAttach={activeId ? draft.attachImage : undefined}>
-              <MessageThread
-                // Remounted per conversation, so its window and scroll start over and nothing it
-                // set going outlives the conversation it was for. Prefixed, as the session panel
-                // beside it is: two siblings sharing a key leave one of them mounted in the DOM
-                // after React drops it.
-                key={`thread-${activeId ?? 'none'}`}
-                messages={conversation.messages}
+              {/* A path not found yet is asked again once a turn settles: replies name files before writing them.
+              Keyed like the image menu: its answers and an open menu belong to one conversation's folders. */}
+              <FilePathLinkProvider
+                key={activeId ?? 'none'}
                 sessionId={activeId}
-                // What stands in for the transcript when there is no session to have one. It is the
-                // only control on screen that starts one from here, so it is a button and not a
-                // sentence pointing at the sidebar: the header above says what the state is, this
-                // says what to do about it, and the composer's placeholder names the same step.
-                noSession={
-                  mode === 'code' ? (
-                    <Stack spacing={1.5} alignItems="center">
-                      <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
-                        Start a Code session to run a task here.
-                      </Typography>
-                      <Button
-                        size="sm"
-                        variant="soft"
-                        loading={creatingCode}
-                        onClick={() => void onCreate()}
-                        data-testid="chat-start-session-btn"
-                      >
-                        New Code session
-                      </Button>
-                    </Stack>
-                  ) : (
-                    <BlankChatGreeting line="Start a conversation to chat, write, or create something new.">
-                      <Button
-                        size="sm"
-                        variant="soft"
-                        loading={creatingCode}
-                        onClick={() => void onCreate()}
-                        sx={{ mt: 2.5 }}
-                        data-testid="chat-start-session-btn"
-                      >
-                        New conversation
-                      </Button>
-                    </BlankChatGreeting>
-                  )
-                }
-                emptySession={
-                  initialCodeSetup ? (
-                    <Box sx={{ width: '100%', maxWidth: 420, minWidth: 0 }} data-testid="chat-code-workspace-setup">
-                      <Typography level="title-sm" sx={{ mb: 1.5 }}>
-                        Set up this workspace
-                      </Typography>
-                      <SessionChips
-                        layout="embedded"
-                        project={conversation.session?.project ?? null}
-                        {...(conversation.session?.grantedDirectories
-                          ? { grantedDirectories: conversation.session.grantedDirectories }
-                          : {})}
-                        binding={conversation.project}
-                        settledTurns={conversation.settledTurns}
-                        preparing={conversation.preparing !== null}
-                      />
-                    </Box>
-                  ) : blankChatId ? (
-                    <BlankChat sessionId={blankChatId} tools={creationTools} onPick={fillComposer} />
-                  ) : undefined
-                }
-                // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
-                // one parked at the approval gate - is still running, and Continue must not be
-                // offered on top of it.
-                streaming={turnOpen}
-                onRespond={conversation.respondToApproval}
-                onMove={background.moveToBackground}
-                onContinue={() => void conversation.continueReply()}
-                onReplyToSelection={onReplyToSelection}
-                onSideChatFromSelection={text => void onSideChatFromSelection(text)}
-                status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
-                // At the foot of the thread rather than above the composer: a background command is
-                // something this conversation started, so it reads as the last thing that happened
-                // in it. It scrolls with the transcript, which is the trade - the panel is reached
-                // from the bottom of the thread, not from a bar that is always on screen.
-                footer={
-                  <>
-                    {/* The turn line's own slot only exists once a reply does, and the worktree is
-              cut before there is one; this sits where that line will appear. */}
-                    {!conversation.turn && conversation.preparing && (
-                      <Box data-testid="chat-workspace-status">
-                        <TurnStatus
-                          turn={{ startedAt: conversation.preparing.since, tokens: null }}
-                          activity={{ kind: 'tool', label: workspacePhrase(conversation.preparing) }}
+                recheck={conversation.settledTurns}
+                showFile={showFile}
+                selectionEpoch={fileSelectionEpoch}
+                onAttach={activeId ? draft.attachFilePath : undefined}
+              >
+                <MessageThread
+                  // Remounted per conversation, so its window and scroll start over and nothing it
+                  // set going outlives the conversation it was for. Prefixed, as the session panel
+                  // beside it is: two siblings sharing a key leave one of them mounted in the DOM
+                  // after React drops it.
+                  key={`thread-${activeId ?? 'none'}`}
+                  messages={conversation.messages}
+                  sessionId={activeId}
+                  // What stands in for the transcript when there is no session to have one. It is the
+                  // only control on screen that starts one from here, so it is a button and not a
+                  // sentence pointing at the sidebar: the header above says what the state is, this
+                  // says what to do about it, and the composer's placeholder names the same step.
+                  noSession={
+                    mode === 'code' ? (
+                      <Stack spacing={1.5} alignItems="center">
+                        <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
+                          Start a Code session to run a task here.
+                        </Typography>
+                        <Button
+                          size="sm"
+                          variant="soft"
+                          loading={creatingCode}
+                          onClick={() => void onCreate()}
+                          data-testid="chat-start-session-btn"
+                        >
+                          New Code session
+                        </Button>
+                      </Stack>
+                    ) : (
+                      <BlankChatGreeting line="Start a conversation to chat, write, or create something new.">
+                        <Button
+                          size="sm"
+                          variant="soft"
+                          loading={creatingCode}
+                          onClick={() => void onCreate()}
+                          sx={{ mt: 2.5 }}
+                          data-testid="chat-start-session-btn"
+                        >
+                          New conversation
+                        </Button>
+                      </BlankChatGreeting>
+                    )
+                  }
+                  emptySession={
+                    initialCodeSetup ? (
+                      <Box sx={{ width: '100%', maxWidth: 420, minWidth: 0 }} data-testid="chat-code-workspace-setup">
+                        <Typography level="title-sm" sx={{ mb: 1.5 }}>
+                          Set up this workspace
+                        </Typography>
+                        <SessionChips
+                          layout="embedded"
+                          project={conversation.session?.project ?? null}
+                          {...(conversation.session?.grantedDirectories
+                            ? { grantedDirectories: conversation.session.grantedDirectories }
+                            : {})}
+                          binding={conversation.project}
+                          settledTurns={conversation.settledTurns}
+                          preparing={conversation.preparing !== null}
                         />
                       </Box>
-                    )}
-                    {/* The panel lists these itself while it is on screen. */}
-                    {!panelShown && (
-                      <BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />
-                    )}
-                  </>
-                }
-              />
+                    ) : blankChatId ? (
+                      <BlankChat sessionId={blankChatId} tools={creationTools} onPick={fillComposer} />
+                    ) : undefined
+                  }
+                  // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
+                  // one parked at the approval gate - is still running, and Continue must not be
+                  // offered on top of it.
+                  streaming={turnOpen}
+                  onRespond={conversation.respondToApproval}
+                  onMove={background.moveToBackground}
+                  onContinue={() => void conversation.continueReply()}
+                  onReplyToSelection={onReplyToSelection}
+                  onSideChatFromSelection={text => void onSideChatFromSelection(text)}
+                  status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
+                  // At the foot of the thread rather than above the composer: a background command is
+                  // something this conversation started, so it reads as the last thing that happened
+                  // in it. It scrolls with the transcript, which is the trade - the panel is reached
+                  // from the bottom of the thread, not from a bar that is always on screen.
+                  footer={
+                    <>
+                      {/* The turn line's own slot only exists once a reply does, and the worktree is
+              cut before there is one; this sits where that line will appear. */}
+                      {!conversation.turn && conversation.preparing && (
+                        <Box data-testid="chat-workspace-status">
+                          <TurnStatus
+                            turn={{ startedAt: conversation.preparing.since, tokens: null }}
+                            activity={{ kind: 'tool', label: workspacePhrase(conversation.preparing) }}
+                          />
+                        </Box>
+                      )}
+                      {/* The panel lists these itself while it is on screen. */}
+                      {!panelShown && (
+                        <BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />
+                      )}
+                    </>
+                  }
+                />
+              </FilePathLinkProvider>
             </ImageMenuProvider>
           </SessionOpenerContext.Provider>
         </ArtifactBrowserContext.Provider>
@@ -2115,6 +2149,20 @@ export function ChatShell({
       {/* macOS only: `available` is false elsewhere, so the pane and its button never draw. */}
       {simulatorOpen && simulatorView.available && screen === 'conversation' && (
         <SimulatorPane state={simulatorView} onClose={toggleSimulator} />
+      )}
+
+      {openFile && openFile.sessionId === activeId && screen === 'conversation' && (
+        <FilePane
+          key={openFile.sessionId}
+          sessionId={openFile.sessionId}
+          requested={openFile.requested}
+          view={openFile.view}
+          // A settled turn may have rewritten the file it is showing.
+          refreshKey={conversation.settledTurns}
+          conversation={conversationColumn}
+          onOpenExternally={openFileExternally}
+          onClose={closeFile}
+        />
       )}
 
       {modelOpen && modelAvailable && (

@@ -6,6 +6,7 @@ import {
   isExchangeKeyMetadata,
   type IUserApiKeyMetadata,
 } from '@bike4mind/common';
+import { recordSideAppRefusal } from '../auth/sideAppRefusal';
 import { ForbiddenError } from '../utils/errors';
 import { ALL_KNOWN_API_KEY_SCOPE_VALUES } from '../app/constants/apiKeyScopes';
 
@@ -263,6 +264,7 @@ export function decideScopeGate(
 export type ScopedRequest = {
   apiKeyInfo?: {
     keyId?: string;
+    userId?: string;
     scopes?: ApiKeyScopeValue[];
     createdAt?: Date;
     oauthExchangeClientId?: string;
@@ -338,5 +340,18 @@ export function assertApiKeyScope(
   message: string,
   options?: ScopeCheckOptions
 ): void {
-  if (!holdsApiKeyScope(req, required, options)) throw new ForbiddenError(message);
+  if (holdsApiKeyScope(req, required, options)) return;
+  // Recorded here, not in holdsApiKeyScope, which also shapes responses and would log false refusals.
+  if (req.apiKeyInfo?.oauthExchangeClientId) {
+    recordSideAppRefusal({
+      verified: true,
+      clientId: req.apiKeyInfo.oauthExchangeClientId,
+      stage: 'use',
+      reason: 'insufficient_scope',
+      status: 403,
+      userId: req.apiKeyInfo.userId,
+      keyId: req.apiKeyInfo.keyId,
+    });
+  }
+  throw new ForbiddenError(message);
 }

@@ -9,6 +9,7 @@ import type {
   ChatArtifactPublishProgress,
   ChatArtifactPublishRequest,
   ChatAttachmentInput,
+  ChatFilePathAction,
   ChatImageAction,
   ChatImageRef,
   ChatQueueEvent,
@@ -295,6 +296,16 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatImageAction, image, action),
     attachImage: (sessionId: string, image: ChatImageRef) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatAttachImage, sessionId, image),
+    checkFilePaths: (sessionId: string, paths: string[]) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatCheckFilePaths, sessionId, paths),
+    openFilePath: (sessionId: string, path: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatOpenFilePath, sessionId, path),
+    readFilePath: (sessionId: string, path: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatReadFilePath, sessionId, path),
+    filePathAction: (sessionId: string, path: string, action: ChatFilePathAction) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatFilePathAction, sessionId, path, action),
+    attachFilePath: (sessionId: string, path: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatAttachFilePath, sessionId, path),
     respondToApproval: (approvalId: string, answer: ChatApprovalAnswer) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatRespondToApproval, approvalId, answer),
     listArtifacts: () => ipcRenderer.invoke(IPC_CHANNELS.chatListArtifacts),

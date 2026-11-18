@@ -2553,6 +2553,12 @@ export class ChatService {
     return this.deps.store.setApprovalMode(sessionId, mode);
   }
 
+  /** The folders this session's tools may read, for links to files a reply names; null for an unknown session. */
+  async fileLinkScope(sessionId: string): Promise<{ roots: readonly string[]; workingDirectory?: string } | null> {
+    const session = await this.deps.store.get(sessionId);
+    return session ? this.resolveToolScope(session) : null;
+  }
+
   /**
    * Share a folder the user named - from a picker (the Code chip or the Chat composer's Add folder)
    * or `/add-dir` - with this conversation, before its first message too.

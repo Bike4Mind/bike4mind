@@ -4,7 +4,6 @@ import {
   canReadOrganizationAudit,
   hasOrgPermission,
   orgMemberHasPermission,
-  Permission,
   type OrgPermission,
   type OrgRoleSubject,
 } from '@bike4mind/common';
@@ -63,36 +62,11 @@ const permissionGate =
     !!currentUser && !!organization && hasOrgPermission(currentUser, organization, permission);
 
 /**
- * Who may edit the team profile (the system prompt). Mirrors organizationService.update, whose
- * finder admits the owner and a `users[]` row holding `update` (updateAccessArms in
- * SharableDocumentModel.ts), plus a platform admin. `share` alone is not enough: the save would
- * 404. Group-granted `update` is not visible here, so such a member fails closed.
+ * Who may open and edit the Settings tab (and the header's Settings button). Mirrors
+ * organizationService.update: every field there is org-wide, so the gate is the team role
+ * (`managePolicies`), never a sharing-ACL row. The page computes it once and passes it down.
  */
-export const canEditOrgProfile = (
-  currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
-  organization:
-    { userId: string; users?: ReadonlyArray<{ userId: string; permissions?: Permission[] }> } | null | undefined
-): boolean => {
-  if (!currentUser || !organization) return false;
-  if (currentUser.isAdmin === true || currentUser.id === organization.userId) return true;
-  const row = organization.users?.find(u => u.userId === currentUser.id);
-  return row?.permissions?.includes(Permission.update) ?? false;
-};
-
-/**
- * Who may open the Settings tab (and the header's Settings button): anyone who can edit the
- * profile, plus a `managePolicies` holder, whom organizationService.update admits for
- * `sharingPolicy` alone (OrganizationSharingSettings). The single source for `canManageOrg`; the
- * page computes it once and passes it down.
- */
-export const canManageOrgSettings = (
-  currentUser: TabViewer,
-  organization:
-    | (Omit<OrgRoleSubject, 'users'> & { users?: ReadonlyArray<{ userId: string; permissions?: Permission[] }> })
-    | null
-    | undefined
-): boolean =>
-  canEditOrgProfile(currentUser, organization) || permissionGate('managePolicies')(currentUser, organization);
+export const canManageOrgSettings = permissionGate('managePolicies');
 
 /** Analysis: the feedback-report routes (`manageContent`). */
 export const canViewOrgAnalysis = permissionGate('manageContent');

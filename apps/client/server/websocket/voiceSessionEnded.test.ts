@@ -58,6 +58,7 @@ vi.mock('@bike4mind/database', () => ({
   Connection: { findOne: async () => ({ userId: 'u1' }) },
   modelPriceRepository: { rowsInForce: async () => [] },
   usageEventRepository: { record: () => Promise.resolve() },
+  warmExchangeAttribution: async () => {},
   userRepository: {
     findById: async () => ({ id: 'u1', currentCredits: state.balance }),
     incrementCredits: async (_id: string, delta: number) => {

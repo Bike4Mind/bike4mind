@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { styled } from '@mui/system';
 import { useBlocker } from '@tanstack/react-router';
 import { Button, Chip, Input, Modal, ModalDialog, Slider, Stack, Typography } from '@mui/joy';
@@ -17,9 +17,13 @@ import StudioChip from '../design/StudioChip';
 import { StudioPanel, StudioSectionLabel } from '../design/StudioPanel';
 import StudioSegmentedControl from '../design/StudioSegmentedControl';
 import { studioColor } from '../design/studioTokens';
+import BrandKitPanel from './BrandKitPanel';
+import BriefPanel from './BriefPanel';
 import ClipInspector from './ClipInspector';
+import HookVariationButton from './HookVariationButton';
 import { probeMediaDurationMs } from './probeMediaDuration';
 import SecondsField from './SecondsField';
+import ShotsBoard from './ShotsBoard';
 import { formatTimecode } from './timelinePlayback';
 import {
   DEFAULT_IMAGE_CLIP_MS,
@@ -33,6 +37,7 @@ import TimelinePreview from './TimelinePreview';
 import TimelineTracks, { type AddClipRequest } from './TimelineTracks';
 import { usePlaybackClock, usePlaybackTime, type PlaybackClock } from './usePlaybackClock';
 import { useTimelineAutosave, type TimelineEditorIssue, type TimelineSaveStatus } from './useTimelineAutosave';
+import { FieldDirtyReporterContext, type AutosavedField } from './useFieldAutosave';
 import { useTimelineFiles } from './useTimelineFiles';
 
 // Used when the browser cannot read a picked file's length; the clip can be trimmed to fit afterwards.
@@ -54,6 +59,13 @@ const Workspace = styled('div')({
   gap: '20px',
   gridTemplateColumns: 'minmax(0, 1fr)',
   '@media (min-width: 1100px)': { gridTemplateColumns: 'minmax(0, 1fr) 320px' },
+});
+
+const PlanGrid = styled('div')({
+  display: 'grid',
+  gap: '20px',
+  gridTemplateColumns: 'minmax(0, 1fr)',
+  '@media (min-width: 900px)': { gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)' },
 });
 
 const Toolbar = styled('div')({
@@ -126,8 +138,9 @@ const PlaybackTransport = ({ clock, durationMs }: { clock: PlaybackClock; durati
 };
 
 /**
- * The timeline editor for one production: its title, length and output shapes; the live preview with transport
- * and output switch; the tracks; and the selected clip's inspector. Edits stay in a local draft that autosaves.
+ * The editor for one production, top to bottom: its title, length and output shapes; the plan (brief, brand kit and
+ * shots board, each autosaving on its own); the live preview with transport and output switch; the tracks; and the
+ * selected clip's inspector. Timeline edits stay in a local draft that autosaves.
  */
 const ProductionEditor = ({ composition }: { composition: StudioCompositionResponse }) => {
   const [timeline, setTimeline] = useState(composition.timeline);
@@ -141,6 +154,18 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
     timeline,
     composition.timeline,
     context
+  );
+  const [dirtyFields, setDirtyFields] = useState<ReadonlySet<AutosavedField>>(new Set());
+  const reportFieldDirty = useCallback(
+    (field: AutosavedField, fieldIsDirty: boolean) =>
+      setDirtyFields(current => {
+        if (current.has(field) === fieldIsDirty) return current;
+        const next = new Set(current);
+        if (fieldIsDirty) next.add(field);
+        else next.delete(field);
+        return next;
+      }),
+    []
   );
   const clock = usePlaybackClock(timeline.durationMs);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
@@ -175,8 +200,7 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
     return probed ?? FALLBACK_MEDIA_CLIP_MS;
   };
 
-  const onFilesPicked = async (picked: IFabFileDocument[]) => {
-    const trackKind: StudioMediaTrackKind = pickRequest === 'image' ? 'video' : pickRequest;
+  const appendFiles = async (picked: IFabFileDocument[], trackKind: StudioMediaTrackKind) => {
     const lengths = await Promise.all(picked.map(clipLengthFor));
     // Applied to the latest draft, not the one from when the picker opened: probing takes a moment.
     let next = timelineRef.current;
@@ -194,111 +218,129 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
     if (lastClipId) setSelectedClipId(lastClipId);
   };
 
-  return (
-    <Stack spacing={2.5} data-testid="production-editor">
-      <Toolbar>
-        <TitleField compositionId={composition.id} initialTitle={composition.title} />
-        <SecondsField
-          label="Length"
-          valueMs={timeline.durationMs}
-          testId="production-length-input"
-          onCommit={durationMs => setTimeline(current => setTimelineDuration(current, durationMs))}
-        />
-        <Stack spacing={0.5}>
-          <StudioSectionLabel>Output sizes</StudioSectionLabel>
-          <Stack direction="row" spacing={0.75}>
-            {STUDIO_OUTPUT_ASPECT_RATIOS.map(aspectRatio => (
-              <StudioChip
-                key={aspectRatio}
-                selected={timeline.outputs.some(candidate => candidate.aspectRatio === aspectRatio)}
-                onClick={() => setTimeline(current => toggleOutput(current, aspectRatio))}
-                testId={`production-output-toggle-${aspectRatio.replace(':', 'x')}`}
-              >
-                {aspectRatio}
-              </StudioChip>
-            ))}
-          </Stack>
-        </Stack>
-        <Chip
-          variant="soft"
-          color={STATUS_COLOR[status.kind]}
-          data-testid="production-save-status"
-          data-status={status.kind}
-          sx={{ marginLeft: 'auto' }}
-        >
-          {status.kind === 'error' ? `${STATUS_LABEL.error}: ${status.message}` : STATUS_LABEL[status.kind]}
-        </Chip>
-      </Toolbar>
+  const onFilesPicked = (picked: IFabFileDocument[]) =>
+    appendFiles(picked, pickRequest === 'image' ? 'video' : pickRequest);
 
-      <Workspace>
-        <Stack spacing={1.5}>
-          <TimelinePreview
+  return (
+    <FieldDirtyReporterContext.Provider value={reportFieldDirty}>
+      <Stack spacing={2.5} data-testid="production-editor">
+        <Toolbar>
+          <TitleField compositionId={composition.id} initialTitle={composition.title} />
+          <HookVariationButton composition={composition} hasUnsavedEdits={isDirty || dirtyFields.size > 0} />
+          <SecondsField
+            label="Length"
+            valueMs={timeline.durationMs}
+            testId="production-length-input"
+            onCommit={durationMs => setTimeline(current => setTimelineDuration(current, durationMs))}
+          />
+          <Stack spacing={0.5}>
+            <StudioSectionLabel>Output sizes</StudioSectionLabel>
+            <Stack direction="row" spacing={0.75}>
+              {STUDIO_OUTPUT_ASPECT_RATIOS.map(aspectRatio => (
+                <StudioChip
+                  key={aspectRatio}
+                  selected={timeline.outputs.some(candidate => candidate.aspectRatio === aspectRatio)}
+                  onClick={() => setTimeline(current => toggleOutput(current, aspectRatio))}
+                  testId={`production-output-toggle-${aspectRatio.replace(':', 'x')}`}
+                >
+                  {aspectRatio}
+                </StudioChip>
+              ))}
+            </Stack>
+          </Stack>
+          <Chip
+            variant="soft"
+            color={STATUS_COLOR[status.kind]}
+            data-testid="production-save-status"
+            data-status={status.kind}
+            sx={{ marginLeft: 'auto' }}
+          >
+            {status.kind === 'error' ? `${STATUS_LABEL.error}: ${status.message}` : STATUS_LABEL[status.kind]}
+          </Chip>
+        </Toolbar>
+
+        <PlanGrid>
+          <BriefPanel composition={composition} />
+          <BrandKitPanel composition={composition} />
+        </PlanGrid>
+        <ShotsBoard
+          composition={composition}
+          timeline={timeline}
+          onTimelineChange={setTimeline}
+          onSendTake={file => void appendFiles([file], 'video')}
+        />
+
+        <Workspace>
+          <Stack spacing={1.5}>
+            <TimelinePreview
+              timeline={timeline}
+              output={output}
+              files={files}
+              clock={clock}
+              onSourceDuration={reportDuration}
+            />
+            <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+              <PlaybackTransport clock={clock} durationMs={timeline.durationMs} />
+              <StudioSegmentedControl
+                aria-label="Preview size"
+                value={output.id}
+                onChange={setOutputId}
+                testId="production-preview-size"
+                options={timeline.outputs.map(candidate => ({
+                  value: candidate.id,
+                  label: candidate.aspectRatio,
+                  testId: `production-preview-size-${candidate.aspectRatio.replace(':', 'x')}`,
+                }))}
+              />
+            </Stack>
+          </Stack>
+          <ClipInspector
             timeline={timeline}
-            output={output}
+            clipId={selectedClipId}
+            files={files}
+            onChange={setTimeline}
+            onDeselect={() => setSelectedClipId(null)}
+          />
+        </Workspace>
+
+        <StudioPanel testId="production-timeline-panel">
+          <TimelineTracks
+            timeline={timeline}
             files={files}
             clock={clock}
-            onSourceDuration={reportDuration}
+            selectedClipId={selectedClipId}
+            invalidClipIds={invalidClipIds}
+            onSelect={setSelectedClipId}
+            onChange={setTimeline}
+            onSeek={clock.seek}
+            onAdd={onAdd}
           />
-          <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
-            <PlaybackTransport clock={clock} durationMs={timeline.durationMs} />
-            <StudioSegmentedControl
-              aria-label="Preview size"
-              value={output.id}
-              onChange={setOutputId}
-              testId="production-preview-size"
-              options={timeline.outputs.map(candidate => ({
-                value: candidate.id,
-                label: candidate.aspectRatio,
-                testId: `production-preview-size-${candidate.aspectRatio.replace(':', 'x')}`,
-              }))}
-            />
-          </Stack>
-        </Stack>
-        <ClipInspector
-          timeline={timeline}
-          clipId={selectedClipId}
-          files={files}
-          onChange={setTimeline}
-          onDeselect={() => setSelectedClipId(null)}
+        </StudioPanel>
+
+        {statusIssues.length > 0 && (
+          <IssueList data-testid="production-issues">
+            {statusIssues.map((issue, index) => (
+              <li key={`${issue.code}-${index}`}>{issue.message}</li>
+            ))}
+          </IssueList>
+        )}
+
+        <EmbeddedFileBrowser
+          ref={pickerRef}
+          lockedFilters={{ type: PICKER_FILTER[pickRequest] }}
+          addButtonLabelKey="file_browser.add_files_to_production"
+          onAdd={picked => void onFilesPicked(picked)}
         />
-      </Workspace>
-
-      <StudioPanel testId="production-timeline-panel">
-        <TimelineTracks
-          timeline={timeline}
-          files={files}
-          clock={clock}
-          selectedClipId={selectedClipId}
-          invalidClipIds={invalidClipIds}
-          onSelect={setSelectedClipId}
-          onChange={setTimeline}
-          onSeek={clock.seek}
-          onAdd={onAdd}
-        />
-      </StudioPanel>
-
-      {statusIssues.length > 0 && (
-        <IssueList data-testid="production-issues">
-          {statusIssues.map((issue, index) => (
-            <li key={`${issue.code}-${index}`}>{issue.message}</li>
-          ))}
-        </IssueList>
-      )}
-
-      <EmbeddedFileBrowser
-        ref={pickerRef}
-        lockedFilters={{ type: PICKER_FILTER[pickRequest] }}
-        addButtonLabelKey="file_browser.add_files_to_production"
-        onAdd={picked => void onFilesPicked(picked)}
-      />
-      <LeaveGuard isDirty={isDirty} blocksNavigation={blocksNavigation} />
-    </Stack>
+        <LeaveGuard isDirty={isDirty || dirtyFields.size > 0} blocksNavigation={blocksNavigation} />
+      </Stack>
+    </FieldDirtyReporterContext.Provider>
   );
 };
 
 /**
- * Closing the tab with unsaved edits asks first. In-app navigation asks only when the edits cannot be sent on the
- * way out (an invalid or rejected draft); otherwise the autosave hook sends them as the editor unmounts.
+ * Closing the tab with unsaved edits (timeline or a plan field) asks first. In-app navigation asks only when the
+ * timeline edits cannot be sent on the way out (an invalid or rejected draft); otherwise the autosave hooks send them
+ * as the editor unmounts.
  */
 const LeaveGuard = ({ isDirty, blocksNavigation }: { isDirty: boolean; blocksNavigation: boolean }) => {
   const blocker = useBlocker({

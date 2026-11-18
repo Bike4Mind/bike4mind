@@ -84,16 +84,16 @@ const ORG = {
   name: 'Acme',
   userId: 'owner1',
   personal: false,
-  adminUserIds: [],
+  adminUserIds: ['manager3'],
   seats: 5,
   currentCredits: 100,
   description: 'A team',
   storageLimit: 0,
   users: [
     { userId: 'owner1' },
-    // Holds manage permissions but is neither owner nor manager: the one caller for whom the two
-    // gates disagree, so the phone select must offer Settings but not Usage.
-    { userId: 'manager2', permissions: [Permission.read, Permission.update] },
+    // ACL update permission alone does not grant the manager-only Settings tab.
+    { userId: 'acl-only-member', permissions: [Permission.read, Permission.update] },
+    { userId: 'manager3', permissions: [Permission.read] },
   ],
 } as unknown as IOrganizationDocument;
 
@@ -238,9 +238,9 @@ describe('organization detail page - responsive rail', () => {
     expect(document.getElementById(panelId)).not.toBeNull();
   });
 
-  it('offers only the tabs the viewer may open and navigates on pick', () => {
+  it('hides manager-only Settings from an ACL-only member and navigates on pick', () => {
     mobile.current = true;
-    user.current = { id: 'manager2' };
+    user.current = { id: 'acl-only-member' };
 
     const rerender = renderThroughLoad();
     fireEvent.click(screen.getByRole('combobox', { name: 'Team section' }));
@@ -249,11 +249,28 @@ describe('organization detail page - responsive rail', () => {
     const options = within(listbox)
       .getAllByRole('option')
       .map(option => option.textContent);
-    expect(options).toEqual(['Overview', 'Members', 'Library', 'Settings']);
+    expect(options).toEqual(['Overview', 'Members', 'Library']);
 
     fireEvent.click(within(listbox).getByRole('option', { name: 'Members' }));
     expect(navigateSpy).toHaveBeenLastCalledWith(navigationTo(OrganizationTabs.Members));
     applyNavigation(rerender);
     expect(screen.getByRole('combobox', { name: 'Team section' }).textContent).toContain('Members');
+  });
+
+  it('offers Settings to a current manager on phones and navigates to its panel', () => {
+    mobile.current = true;
+    user.current = { id: 'manager3' };
+
+    const rerender = renderThroughLoad();
+    fireEvent.click(screen.getByRole('combobox', { name: 'Team section' }));
+    const listbox = screen.getByRole('listbox', { name: 'Team sections' });
+    expect(within(listbox).getByRole('option', { name: 'Settings' })).toBeTruthy();
+    expect(within(listbox).queryByRole('option', { name: 'Billing' })).toBeNull();
+
+    fireEvent.click(within(listbox).getByRole('option', { name: 'Settings' }));
+    expect(navigateSpy).toHaveBeenLastCalledWith(navigationTo(OrganizationTabs.Settings));
+    applyNavigation(rerender);
+    expect(screen.getByRole('tabpanel', { name: 'Settings' })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'Unsaved settings draft' })).toBeTruthy();
   });
 });
