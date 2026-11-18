@@ -181,10 +181,15 @@ export function videoDurationFor(caps: VideoModelCapabilities, shotMs: number): 
 }
 
 export const pickVideoModel = (usable: readonly VideoModelId[]): VideoModelId | undefined =>
-  usable.find(id => {
-    const caps = VIDEO_MODEL_CATALOG[id];
-    return caps.modes.includes('image_to_video') && (caps.inputs.first_frame?.max ?? 0) > 0;
-  });
+  realModelsFirst(
+    usable,
+    id => VIDEO_MODEL_CATALOG[id].provider === 'test',
+    ids =>
+      ids.find(id => {
+        const caps = VIDEO_MODEL_CATALOG[id];
+        return caps.modes.includes('image_to_video') && (caps.inputs.first_frame?.max ?? 0) > 0;
+      })
+  );
 
 /** Animates a chosen still into a clip of `durationSeconds`. */
 export async function submitShotClip(
@@ -244,13 +249,25 @@ const musicRange = (id: MusicModelId): { min: number; max: number } => {
   return duration.control === 'fixed' ? { min: duration.seconds, max: duration.seconds } : duration;
 };
 
+/**
+ * Runs `pick` over the real models first: the 'test' provider stubs (sample clip, sample track) are usable where an
+ * environment enables them, and a production made from them is useless unless nothing else is usable.
+ */
+function realModelsFirst<T>(
+  usable: readonly T[],
+  isStub: (id: T) => boolean,
+  pick: (ids: readonly T[]) => T | undefined
+) {
+  return pick(usable.filter(id => !isStub(id))) ?? pick(usable.filter(isStub));
+}
+
 /** A model that can make a track of about `seconds`: an exact-length model first, since the bed is cut to fit. */
 export function pickMusicModel(usable: readonly MusicModelId[], seconds: number): MusicModelId | undefined {
   const fits = (id: MusicModelId) => musicRange(id).max >= seconds;
-  return (
-    usable.find(id => fits(id) && MUSIC_MODEL_CATALOG[id].duration.control === 'exact') ??
-    usable.find(fits) ??
-    usable[0]
+  return realModelsFirst(
+    usable,
+    id => MUSIC_MODEL_CATALOG[id].provider === 'test',
+    ids => ids.find(id => fits(id) && MUSIC_MODEL_CATALOG[id].duration.control === 'exact') ?? ids.find(fits) ?? ids[0]
   );
 }
 

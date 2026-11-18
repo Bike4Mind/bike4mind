@@ -22,8 +22,14 @@ const job = (id: string, state: GenerationJobState, extra: Partial<ProductionJob
 describe('pickMusicModel', () => {
   it('prefers an exact-length model that fits over an earlier approximate one', () => {
     expect(MUSIC_MODEL_CATALOG['lyria-3.5'].duration.control).toBe('approximate');
+    expect(MUSIC_MODEL_CATALOG['music_v2'].duration.control).toBe('exact');
+    expect(pickMusicModel(['lyria-3.5', 'music_v2'], 15)).toBe('music_v2');
+  });
+
+  it('takes a real model over the test stub, and the stub only when nothing else is usable', () => {
     expect(MUSIC_MODEL_CATALOG['test-music'].duration.control).toBe('exact');
-    expect(pickMusicModel(['lyria-3.5', 'test-music'], 15)).toBe('test-music');
+    expect(pickMusicModel(['test-music', 'lyria-3.5'], 15)).toBe('lyria-3.5');
+    expect(pickMusicModel(['test-music'], 15)).toBe('test-music');
   });
 
   it('takes the first model that fits when none is exact', () => {
@@ -66,6 +72,11 @@ describe('pickVideoModel', () => {
     expect(pickVideoModel(['flux-3-video', 'veo-3.1-fast-generate-preview', 'test-video'])).toBe(
       'veo-3.1-fast-generate-preview'
     );
+  });
+
+  it('takes a real model over the test stub, and the stub only when nothing else animates a still', () => {
+    expect(pickVideoModel(['test-video', 'veo-3.1-fast-generate-preview'])).toBe('veo-3.1-fast-generate-preview');
+    expect(pickVideoModel(['test-video', 'flux-3-video'])).toBe('test-video');
   });
 
   it('skips text-to-video-only models, and is undefined when nothing animates a still', () => {
