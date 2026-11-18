@@ -63,7 +63,8 @@ export const SETTING_HOMES: readonly SettingHome[] = [
   {
     id: 'invite-center-schedule',
     label: 'Invite Center > Schedule',
-    summary: 'The signup credit schedule, the signup and trickle pools and the free-tier spend caps are edited in',
+    summary:
+      'The signup credit schedule, the signup and trickle pools, activity and payment-unlock timing and the free-tier spend caps are edited in',
     keys: [...SIGNUP_SCHEDULE_KEYS, ...SIGNUP_TIMING_KEYS, ...FREE_TIER_LIMIT_KEYS],
     inviteSection: 'schedule',
   },
