@@ -31,6 +31,23 @@ vi.mock('@client/app/hooks/data/mcpServers', () => ({
     ],
   }),
 }));
+vi.mock('@client/app/hooks/useComposerMcpConnections', () => {
+  const offered = [
+    {
+      slug: 'deepwiki',
+      displayName: 'DeepWiki',
+      tools: [
+        { name: 'ask_wiki_question', enabled: true, state: 'active' },
+        { name: 'read_wiki_contents', enabled: true, state: 'active' },
+        { name: 'needs_review', enabled: true, state: 'pending_review' },
+        { name: 'switched_off', enabled: false, state: 'active' },
+        // deepwiki__ + 60 chars is over 64, so the executor hashes it.
+        { name: 'x'.repeat(60), enabled: true, state: 'active' },
+      ],
+    },
+  ];
+  return { useComposerMcpConnections: () => ({ offered, all: offered, loaded: true }) };
+});
 vi.mock('@client/app/hooks/data/agents', () => ({
   useGetAgents: () => ({
     data: [
@@ -563,6 +580,61 @@ describe('LoopFormModal stage settings', () => {
     fireEvent.click(within(screen.getByTestId('loop-form-stage-tools-0')).getByRole('combobox'));
     fireEvent.click(screen.getByRole('option', { name: 'Notion: search' }));
     expect(screen.getAllByTestId('loop-form-tools-new-hint')).toHaveLength(2);
+  });
+
+  it('lists custom MCP connectors by connector, with All, on the loop and stage pickers', () => {
+    renderForm(saved as never);
+    fireEvent.click(screen.getByRole('combobox', { name: /tools/i }));
+    let listbox = within(screen.getByRole('listbox'));
+    expect(listbox.getByRole('option', { name: 'DeepWiki: ask_wiki_question' })).toBeInTheDocument();
+    expect(listbox.queryByRole('option', { name: /needs_review|switched_off|xxxx/ })).toBeNull();
+    fireEvent.click(listbox.getByTestId('loop-form-tools-server-all-deepwiki'));
+    fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' });
+
+    fireEvent.click(screen.getByTestId('loop-form-stage-settings-toggle'));
+    fireEvent.click(within(screen.getByTestId('loop-form-stage-tools-0')).getByRole('combobox'));
+    listbox = within(screen.getAllByRole('listbox').at(-1)!);
+    expect(listbox.getByTestId('loop-form-tools-server-all-deepwiki').parentElement).toHaveTextContent('DeepWiki');
+    fireEvent.click(listbox.getByRole('option', { name: 'DeepWiki: ask_wiki_question' }));
+    expect(screen.getByTestId('loop-form-tools-new-hint')).toHaveTextContent(
+      '1 new tool on DeepWiki; not used until you pick it'
+    );
+
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(updateLoop.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: ['deepwiki__ask_wiki_question', 'deepwiki__read_wiki_contents'],
+        stageConfig: [{ stage: 'todo', tools: ['deepwiki__ask_wiki_question'] }],
+      }),
+      expect.anything()
+    );
+  });
+
+  it('keeps a saved tool no picker lists, labelled unavailable, on the loop and a stage', () => {
+    renderForm({
+      ...saved,
+      tools: ['gone__tool', 'web_search'],
+      stageConfig: [{ stage: 'todo', tools: ['deepwiki__needs_review'] }],
+    } as never);
+    fireEvent.click(screen.getByRole('combobox', { name: /tools/i }));
+    expect(screen.getByTestId('loop-form-tools-unlisted-gone__tool')).toHaveTextContent('gone__tool (unavailable)');
+    expect(screen.getByTestId('loop-form-tools-unlisted-gone__tool')).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' });
+    fireEvent.click(screen.getByTestId('loop-form-stage-settings-toggle'));
+    fireEvent.click(within(screen.getByTestId('loop-form-stage-tools-0')).getByRole('combobox'));
+    expect(screen.getByTestId('loop-form-tools-unlisted-deepwiki__needs_review')).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(updateLoop.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: ['gone__tool', 'web_search'],
+        stageConfig: [{ stage: 'todo', tools: ['deepwiki__needs_review'] }],
+      }),
+      expect.anything()
+    );
   });
 
   it("defaults a stage's agent to the loop's and its skills to none, and sends picked ones", () => {
