@@ -3034,8 +3034,10 @@ function CliApp() {
       case 'new': {
         // Clear the terminal screen and re-render the banner so the fresh
         // session starts with the same header the user sees on startup.
-        console.clear();
-        renderBanner();
+        if (!fullscreenEnabled()) {
+          console.clear();
+          renderBanner();
+        }
 
         const newSession = await createFreshSession(buildLifecycleContext());
 

@@ -69,6 +69,20 @@ b4m
 
 When you are signed out, the CLI starts on a local model from Ollama or a model server saved in Desktop. With no local model available, it offers Bike4Mind sign-in.
 
+### Optional fullscreen mode
+
+Run `b4m --fullscreen` to use the terminal's alternate screen. This opt-in mode
+redraws the live display after resizing and restores the original shell screen
+when it exits. It requires interactive stdin and stdout; piped and headless runs
+keep their normal output behavior. The default normal-screen mode is unchanged,
+including its known resize artifacts in some reflowing terminals.
+
+Alternate screen has no native scrollback. Press Ctrl+O to browse completed
+messages, Left/Right to change messages, and Up/Down or PageUp/PageDown to scroll
+wrapped text. Press Ctrl+O again to return to the input. Completed agent steps
+are available as plain JSON text below the message body. Session persistence is
+unchanged. As with other terminal applications, a forced kill cannot run cleanup.
+
 ### Chat without signing in
 
 Start Ollama and pull a model, then open the CLI:
