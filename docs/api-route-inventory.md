@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1242 routes: 112 contracted, 11 aliases of another route, 333 with no static caller in `apps/client/app`.
+1250 routes: 120 contracted, 11 aliases of another route, 339 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -153,7 +153,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 8 | 0 | 7 | 1 | 0 | 0 | 1 |
 | users | 36 | 0 | 28 | 8 | 0 | 0 | 5 |
-| v1 | 110 | 106 | 98 | 5 | 0 | 7 | 98 |
+| v1 | 118 | 114 | 98 | 10 | 0 | 7 | 104 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -1857,8 +1857,11 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/artifacts/[id]/versions/[version]` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | yes | - | 0 |
 | `/api/v1/artifacts/search` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | yes | - | 0 |
 | `/api/v1/artifacts/types` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | yes | - | 0 |
+| `/api/v1/assistant/instructions` | GET, POST | jwt | - | - | yes | - | 0 |
+| `/api/v1/assistant/instructions/[id]` | DELETE | jwt | - | - | yes | - | 0 |
 | `/api/v1/briefs` | GET, POST | jwt | - | - | yes | - | 0 |
 | `/api/v1/briefs/[id]` | GET | jwt | - | - | yes | - | 0 |
+| `/api/v1/briefs/[id]/decisions/[decisionId]/reply` | POST | jwt | - | - | yes | - | 0 |
 | `/api/v1/client-config` | GET | jwt+key | `ai:chat`, `ai:generate`, `me:read` | - | yes | - | 0 |
 | `/api/v1/client-config/public` | GET | handler | - | - | yes | - | 0 |
 | `/api/v1/completion-runs` | POST | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
@@ -1881,8 +1884,12 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/files/bulk-delete` | POST | jwt+key | `files:write` | - | yes | - | 0 |
 | `/api/v1/files/by-ids` | GET | jwt+key | `files:read` | - | yes | - | 0 |
 | `/api/v1/files/search` | GET | jwt+key | `files:read` | - | yes | - | 0 |
+| `/api/v1/handoff-devices` | GET | jwt | - | - | yes | - | 1: `components/Session/SessionHandoff.tsx` |
 | `/api/v1/image-edits` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
 | `/api/v1/image-generations` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
+| `/api/v1/image-jobs` | GET, POST | unknown | - | - | yes | - | 0 |
+| `/api/v1/image-jobs/[id]` | GET | unknown | - | - | yes | - | 0 |
+| `/api/v1/image-jobs/[id]/cancel` | POST | unknown | - | - | yes | - | 0 |
 | `/api/v1/image-models` | GET | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/studioImageJobs.ts` |
 | `/api/v1/me` | GET | jwt+key | `me:read` | - | yes | - | 0 |
 | `/api/v1/models` | GET | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
@@ -1912,6 +1919,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/scene-compositions` | GET, POST | jwt+key | `ai:generate` | - | yes | - | 0 |
 | `/api/v1/scene-compositions/[id]` | GET | jwt+key | `ai:generate` | - | yes | - | 0 |
 | `/api/v1/scene-compositions/[id]/cancel` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
+| `/api/v1/session-handoffs` | POST | jwt | - | - | yes | - | 1: `components/Session/SessionHandoff.tsx` |
 | `/api/v1/sessions` | GET, POST | jwt+key | GET: `notebooks:read`, `notebooks:write`; POST: `ai:generate`, `notebooks:write` | - | yes | - | 0 |
 | `/api/v1/sessions/[id]/clone` | POST | jwt+key | `notebooks:write` | - | yes | - | 0 |
 | `/api/v1/sessions/[id]/files` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | yes | - | 0 |

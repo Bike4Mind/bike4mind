@@ -140,6 +140,20 @@ export const API_ERROR_CODES = [
   // the codes it shares with video and music are listed above.
   /** A 404: an input file id is not one of the caller's readable files. */
   'input_file_not_found',
+  // Image jobs (POST /api/v1/image-jobs). Must stay in sync with IMAGE_JOB_API_ERROR_CODES; the codes it shares with
+  // video and music are listed above.
+  'missing_input',
+  'unexpected_input',
+  'too_many_inputs',
+  'unsupported_size',
+  'unsupported_quality',
+  'unsupported_style',
+  'unsupported_output_format',
+  'unsupported_output_count',
+  'unsupported_transparent_background',
+  'unsupported_seed',
+  'unsupported_edit_regions',
+  'unsupported_input_image',
   // Decisions (POST /api/v1/decisions); see DECISIONS_ERROR_CODES.
   /** The provider stayed overloaded or timed out through our one retry; the response carries Retry-After. */
   'provider_overloaded',

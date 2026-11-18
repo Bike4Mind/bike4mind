@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Generate one image through the Bike4Mind image API using the signed-in CLI account (`b4m login`).
+// Generate one image through the Bike4Mind image-jobs API using the signed-in CLI account (`b4m login`).
 // Usage: node gen.mjs --name <id> --out <file.png> --model <model> --size <WxH> [--background transparent|opaque|auto]
 //          --prompt-file <txt> [--api-url <origin>] [--api-key-file <file>]
 // The API origin comes from --api-url, else B4M_API_URL, else the CLI config's custom URL.
@@ -9,6 +9,7 @@
 // the image-generation scope.
 // Records {name: {model, size, background, prompt, date}} in generations.json next to --out; keep that
 // ledger out of the repo, it is a local scratch record.
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -44,10 +45,10 @@ async function getAuth(apiUrl, apiKeyFile) {
   return { baseUrl, headers: { authorization: `Bearer ${auth.accessToken}` } };
 }
 
-async function api({ baseUrl, headers }, method, route, body) {
+async function api({ baseUrl, headers }, method, route, body, extraHeaders = {}) {
   const response = await fetch(`${baseUrl}${route}`, {
     method,
-    headers: { ...headers, 'content-type': 'application/json' },
+    headers: { ...headers, ...extraHeaders, 'content-type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await response.text();
@@ -63,30 +64,32 @@ async function main() {
   const body = {
     prompt,
     model: args.model,
-    prompt_resolution: 'literal',
-    sessionName: `tavern-art ${args.name}`,
+    mode: 'generate',
+    count: 1,
     ...(args.size ? { size: args.size } : {}),
-    ...(args.background ? { background: args.background } : {}),
+    ...(args.background === 'transparent' ? { transparent_background: true } : {}),
     ...(args.quality ? { quality: args.quality } : {}),
   };
-  const ack = await api(auth, 'POST', '/api/v1/image-generations', body);
-  const questId = ack.quest.id;
+  const ack = await api(auth, 'POST', '/api/v1/image-jobs', body, { 'idempotency-key': randomUUID() });
+  const jobId = ack.data[0].id;
   console.log(`queued ${args.name}`);
 
   const deadline = Date.now() + POLL_TIMEOUT_MS;
-  let quest;
+  let job;
   for (;;) {
-    quest = await api(auth, 'GET', `/api/v1/quests/${questId}`);
-    const settled = quest.status === 'done' || quest.status === 'stopped' || quest.type === 'error';
-    if (settled && (quest.type === 'error' || (quest.images ?? []).length > 0 || quest.status !== 'running')) break;
+    job = await api(auth, 'GET', `/api/v1/image-jobs/${jobId}`);
+    if (['failed', 'blocked', 'cancelled'].includes(job.state)) {
+      throw new Error(`generation ${job.state}: ${job.error?.code ?? ''} ${job.error?.message ?? ''}`);
+    }
+    // A succeeded job can still be pending_scan; only a ready output has a url.
+    if (job.state === 'succeeded' && job.output?.availability === 'unavailable') {
+      throw new Error(`no downloadable output for ${args.name}`);
+    }
+    if (job.state === 'succeeded' && job.output?.availability === 'ready' && job.output.url) break;
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${args.name}`);
     await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
   }
-  if (quest.type === 'error') throw new Error(`generation failed: ${quest.errorCode ?? ''} ${quest.reply ?? ''}`);
-  const urls = new Map((quest.files ?? []).map(file => [file.name, file.url]));
-  const imageName = (quest.images ?? [])[0];
-  const url = urls.get(imageName);
-  if (!url) throw new Error(`no image url for ${args.name}: ${JSON.stringify(Object.keys(quest))}`);
+  const url = job.output.url;
 
   const image = await fetch(url);
   if (!image.ok) throw new Error(`download failed: HTTP ${image.status}`);

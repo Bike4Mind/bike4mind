@@ -1,5 +1,6 @@
 import {
   toPublicAudioJobErrorCode,
+  toPublicImageJobErrorCode,
   toPublicMusicJobErrorCode,
   toPublicSceneJobErrorCode,
   toPublicVideoJobErrorCode,
@@ -206,12 +207,12 @@ export const SOUND_EFFECT_GENERATION_PROJECTION = {
 };
 
 /**
- * The internal per-id image resource the chat job card reads (GET /api/image-jobs/[id]). Not published yet: the copy
- * table covers every code, so nothing is folded.
+ * The published image job (/api/v1/image-jobs), also served as is to the chat job card (GET /api/image-jobs/[id]).
+ * Must stay in sync with ImageJobSchema (b4m-core/common/src/schemas/imageJobs.ts), key order included.
  */
 export const IMAGE_GENERATION_PROJECTION = {
   object: 'image_generation' as const,
-  toPublicErrorCode: (code: GenerationJobErrorCode) => code,
+  toPublicErrorCode: toPublicImageJobErrorCode,
   errorCopy: IMAGE_JOB_ERROR_COPY,
   requestFields: ({ payload: { request, groupId } }: ImageJob) => ({
     model: request.model,

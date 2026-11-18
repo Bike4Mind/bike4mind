@@ -113,7 +113,7 @@ export function infoDescription(scopes: readonly string[] = PUBLIC_DOC_API_KEY_S
     '',
     '## Async jobs',
     'Work that is not provably fast is queued and polled rather than held open:',
-    '- **Chat** (`POST /api/chat`) and **image generation/editing** (`POST /api/v1/image-generations`, ' +
+    '- **Chat** (`POST /api/chat`) and the deprecated quest-based image routes (`POST /api/v1/image-generations`, ' +
       '`POST /api/v1/image-edits`) return a quest. Poll `GET /api/v1/quests/{id}` until `status` is `done` or `stopped`; ' +
       'chat text arrives in `reply`, generated images in `images`, edited images in `files[].url`. Check for ' +
       'failure before reading results: a job that ends `done` with `type: "error"` failed (the reason is in ' +
@@ -123,6 +123,8 @@ export function infoDescription(scopes: readonly string[] = PUBLIC_DOC_API_KEY_S
       'the reply is ready.',
     '- **Agent runs** (`POST /api/v1/agent-executions`) return `202`. Poll ' +
       '`GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.',
+    '- **Image generation and editing** (`POST /api/v1/image-jobs`) returns `202` with one job per image. ' +
+      'Poll `GET /api/v1/image-jobs/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
     '- **Video generation** (`POST /api/v1/video-generations`) returns `202`. Poll ' +
       '`GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
     '- **Music generation** (`POST /api/v1/music-generations`) returns `202`. Poll ' +
@@ -387,7 +389,12 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
         'A video and a music track composed into one shareable clip, queued with `202` and polled at ' +
         '`GET /api/v1/scene-compositions/{id}`.',
     },
-    { name: 'Images', description: 'Image generation and editing, queued and polled as quests.' },
+    {
+      name: 'Images',
+      description:
+        'Image generation and editing, queued with `202` and polled at `GET /api/v1/image-jobs/{id}`. ' +
+        '`/api/v1/image-generations` and `/api/v1/image-edits` are deprecated.',
+    },
     {
       name: 'Transcriptions',
       description: 'Speech-to-text: upload an audio file, then transcribe it.',
