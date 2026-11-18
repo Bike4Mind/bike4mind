@@ -124,8 +124,9 @@ export type DlqScheduleFacts = {
  * Schedule facts per message ID for Scheduled Event bodies. A rule is looked up when the queue is flagged
  * superseded-schedule (for nextRunDueAt) or the message carries a Lambda RequestID (for the logs link
  * target). nextRunDueAt is set only when `messages` holds the whole queue (`queueDepth` known and reached;
- * it must count in-flight messages too, since a hidden copy may be the next run) and the next run of the same rule is not among them. Each rule is looked up once, within the
- * consumer-logs budget; a failed or slow lookup leaves only the rule-derived fields unset.
+ * it must count in-flight messages too, since a hidden copy may be the next run) and the next run of the
+ * same rule is not among them. Each rule is looked up once, within the consumer-logs budget; a failed or
+ * slow lookup leaves only the rule-derived fields unset.
  */
 export async function resolveDlqScheduleFacts(
   entry: Pick<RegisteredDlqDescriptor, 'staleWhen'>,
