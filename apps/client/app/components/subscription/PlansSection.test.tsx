@@ -254,20 +254,6 @@ describe('PlansSection - Team tab', () => {
 });
 
 describe('PlansSection', () => {
-  it('includes Questmaster on both visible paid plans without changing hidden plans', async () => {
-    subscriptions = [];
-    settingValues = { enableTeamPlan: true };
-    renderSection();
-
-    expect(screen.getByTestId('plan-card')).toHaveTextContent('Questmaster included');
-    await userEvent.setup({ delay: null }).click(screen.getByTestId('subscription-modal-business-tab'));
-    expect(screen.getByTestId('plan-card')).toHaveTextContent('Questmaster included');
-    for (const plan of SUBSCRIPTION_PLANS.filter(plan => plan.hidden)) {
-      expect(plan.features).not.toContain('Questmaster included');
-      expect(screen.getByTestId('plan-card')).not.toHaveTextContent(plan.name);
-    }
-  });
-
   beforeEach(() => {
     subscriptions = [];
     teamPriceActive = true;
@@ -279,6 +265,18 @@ describe('PlansSection', () => {
     payInvoice.mockReset();
     trackUpsell.mockReset();
     sessionStorage.clear();
+  });
+
+  it('includes Questmaster on both visible paid plans without changing hidden plans', async () => {
+    renderSection();
+
+    expect(screen.getByTestId('plan-card')).toHaveTextContent('Questmaster included');
+    await userEvent.setup({ delay: null }).click(screen.getByTestId('subscription-modal-business-tab'));
+    expect(screen.getByTestId('plan-card')).toHaveTextContent('Questmaster included');
+    for (const plan of SUBSCRIPTION_PLANS.filter(plan => plan.hidden)) {
+      expect(plan.features).not.toContain('Questmaster included');
+      expect(screen.getByTestId('plan-card')).not.toHaveTextContent(plan.name);
+    }
   });
 
   it('says every account starts with free credits rather than claiming there is no free tier', () => {
