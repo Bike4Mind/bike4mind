@@ -2705,8 +2705,33 @@ export class ChatService {
    * when they settle, so without the live part a window opening mid-turn has nothing for the
    * next event to extend, and shows the prompt alone until the turn ends.
    */
-  async getSession(sessionId: string): Promise<ChatSession | null> {
-    const session = await this.deps.store.get(sessionId);
+  async getSession(sessionId: string, viewed = false): Promise<ChatSession | null> {
+    let session = await this.deps.store.get(sessionId);
+    const task = session?.workerTask;
+    if (
+      viewed &&
+      task &&
+      !task.attentionViewed &&
+      (task.state.status === 'completed' ||
+        (task.state.status === 'blocked' &&
+          !task.state.decision &&
+          task.state.reason === 'The attempt stopped without a structured result.'))
+    ) {
+      const updated = await this.deps.store.updateWorkerTask(sessionId, current => {
+        if (
+          current.state.status !== 'completed' &&
+          !(
+            current.state.status === 'blocked' &&
+            !current.state.decision &&
+            current.state.reason === 'The attempt stopped without a structured result.'
+          )
+        )
+          return current;
+        return { ...current, attentionViewed: true };
+      });
+      if (updated) this.deps.summaryChanged?.(updated);
+      session = await this.deps.store.get(sessionId);
+    }
     const preparing = this.preparing.get(sessionId);
     if (session && preparing) return { ...session, preparingWorkspace: { ...preparing } };
     const live = this.live.get(sessionId);

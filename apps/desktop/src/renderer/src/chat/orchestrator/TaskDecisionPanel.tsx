@@ -77,12 +77,16 @@ export function TaskDecisionPanel({ agent, compact = false }: { agent: AgentView
   const state = task?.state;
   const stopped = agent.state !== 'working';
   const allowed = agent.orchestrationPolicy?.policy.escalation;
+  const taskOpen = state && state.status !== 'canceled' && !(state.status === 'completed' && state.accepted);
+  const needsAssessment = taskOpen && state.status !== 'queued' && state.status !== 'running';
   return (
     <Stack spacing={1} data-testid="agent-task-panel">
-      <Typography level="body-xs" data-testid="agent-effective-model">
-        {agent.workerSelection?.role ?? 'Inherited worker'}: {name(agent.model)}
-        {agent.workerSelection ? ` (${agent.workerSelection.source})` : ''}
-      </Typography>
+      {!compact && (
+        <Typography level="body-xs" data-testid="agent-effective-model">
+          {agent.workerSelection?.role ?? 'Inherited worker'}: {name(agent.model)}
+          {agent.workerSelection ? ` (${agent.workerSelection.source})` : ''}
+        </Typography>
+      )}
       {error && (
         <Typography role="alert" color="danger" sx={{ whiteSpace: 'pre-line' }}>
           {error}
@@ -90,10 +94,12 @@ export function TaskDecisionPanel({ agent, compact = false }: { agent: AgentView
       )}
       {task && state && (
         <>
-          <Typography level="title-sm" data-testid="agent-task-state">
-            Task: {state.status}
-            {state.status === 'completed' ? (state.accepted ? ' - accepted' : ' - awaiting assessment') : ''}
-          </Typography>
+          {!compact && (
+            <Typography level="title-sm" data-testid="agent-task-state">
+              Task: {state.status}
+              {state.status === 'completed' ? (state.accepted ? ' - accepted' : ' - awaiting assessment') : ''}
+            </Typography>
+          )}
           {'reason' in state && <Typography level="body-sm">{state.reason}</Typography>}
           {state.status === 'canceled' && (
             <Typography level="body-xs" data-testid="agent-task-closed-note">
@@ -134,7 +140,7 @@ export function TaskDecisionPanel({ agent, compact = false }: { agent: AgentView
               </>
             )}
           </TaskDetails>
-          {state.status !== 'canceled' && !(state.status === 'completed' && state.accepted) && (
+          {needsAssessment && (
             <>
               <Textarea
                 aria-label="Task decision evidence or revision"
@@ -203,16 +209,18 @@ export function TaskDecisionPanel({ agent, compact = false }: { agent: AgentView
                   </Button>
                 </>
               )}
-              <Button
-                color="danger"
-                variant="plain"
-                disabled={busy}
-                data-testid="agent-task-cancel-btn"
-                onClick={() => void decide({ kind: 'cancel', reason: note.trim() || 'Canceled by user.' })}
-              >
-                Cancel task
-              </Button>
             </>
+          )}
+          {taskOpen && (
+            <Button
+              color="danger"
+              variant="plain"
+              disabled={busy}
+              data-testid="agent-task-cancel-btn"
+              onClick={() => void decide({ kind: 'cancel', reason: note.trim() || 'Canceled by user.' })}
+            >
+              Cancel task
+            </Button>
           )}
         </>
       )}

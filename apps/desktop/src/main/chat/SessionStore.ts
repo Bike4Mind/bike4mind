@@ -594,13 +594,19 @@ export class SessionStore implements SessionWritesStore {
       id,
       session => {
         if (!session.workerTask) return null;
-        const changed = change(session.workerTask);
+        const previous = session.workerTask;
+        const changed = change(previous);
         const attempts =
           changed.attempts.length > MAX_TASK_ATTEMPTS
             ? [changed.attempts[0], ...changed.attempts.slice(1 - MAX_TASK_ATTEMPTS)]
             : changed.attempts;
         const resolvedDecisions = changed.resolvedDecisions.slice(-MAX_RESOLVED_DECISIONS);
-        session.workerTask = workerTaskSchema.parse({ ...changed, attempts, resolvedDecisions });
+        session.workerTask = workerTaskSchema.parse({
+          ...changed,
+          ...(changed.state !== previous.state ? { attentionViewed: undefined } : {}),
+          attempts,
+          resolvedDecisions,
+        });
         if (model && session.workerSelection) {
           session.model = model;
           session.workerSelection = { ...session.workerSelection, effectiveModel: model, source: 'escalation' };
@@ -1344,6 +1350,9 @@ export class SessionStore implements SessionWritesStore {
     }
 
     session.messages.push(message);
+    if (message.role === 'assistant' && session.workerTask) {
+      session.workerTask = { ...session.workerTask, attentionViewed: false };
+    }
     session.updatedAt = new Date().toISOString();
     if (session.importOrigin && !session.importOrigin.forkedAt && !isImportedMessageId(message.id)) {
       session.importOrigin = { ...session.importOrigin, forkedAt: session.updatedAt };
@@ -1367,6 +1376,9 @@ export class SessionStore implements SessionWritesStore {
     if (!target) return session;
 
     Object.assign(target, changes);
+    if (target.role === 'assistant' && session.workerTask) {
+      session.workerTask = { ...session.workerTask, attentionViewed: false };
+    }
     session.updatedAt = new Date().toISOString();
     await this.write(directory, session);
     return session;

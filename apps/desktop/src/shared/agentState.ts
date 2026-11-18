@@ -88,7 +88,11 @@ export function deriveTaskAgentState(
   if (runtimeState === 'working' || runtimeState === 'needs-you' || !task) return runtimeState;
   // Queued or running with no live status (a pre-reply gap, a model switch, a restart) waits on nothing.
   if (task.status === 'queued' || task.status === 'running') return runtimeState;
-  if (task.status === 'completed' && task.accepted) return 'done';
+  if (task.status === 'completed' && task.accepted && session.workerTask?.attentionViewed !== false) return 'done';
+  const updateOnly =
+    task.status === 'completed' ||
+    (task.status === 'blocked' && !task.decision && task.reason === 'The attempt stopped without a structured result.');
+  if (updateOnly && session.workerTask?.attentionViewed) return 'done';
   return task.status === 'canceled' ? 'stopped' : 'needs-you';
 }
 
