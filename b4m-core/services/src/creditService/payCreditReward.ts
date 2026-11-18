@@ -292,10 +292,14 @@ export type ReleaseHeldCreditRewardsResult = {
   paidRewards: Array<{ source: CreditRewardSource; creditTransactionId: string }>;
 };
 
+/** Days from the reward's creation after which an unpaid referral subscription reward is cancelled or voided. */
+export const REFERRAL_SUBSCRIPTION_REWARD_TTL_DAYS = 90;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 const rewardExpired = (reward: HeldCreditRewardRow, now: Date): boolean => {
   const expiresAt =
     reward.expiresAt ??
-    (reward.source === 'referral_subscription' ? new Date(reward.heldAt.getTime() + 90 * 24 * 60 * 60 * 1000) : null);
+    (reward.source === 'referral_subscription' ? new Date(reward.heldAt.getTime() + REFERRAL_SUBSCRIPTION_REWARD_TTL_DAYS * DAY_MS) : null);
   return !!expiresAt && expiresAt.getTime() <= now.getTime();
 };
 
