@@ -17,8 +17,9 @@ export const ARN_PARTITION = 'aws[a-z-]*';
 const RULE_ARN = new RegExp(
   String.raw`^arn:${ARN_PARTITION}:events:([a-z0-9-]+):\d{12}:rule/(?:[\w.-]+/)?([\w.-]{1,64})$`
 );
-const LAMBDA_FUNCTION_ARN = new RegExp(
-  String.raw`^arn:${ARN_PARTITION}:lambda:[a-z0-9-]+:\d{12}:function:([\w-]{1,64})(?::[\w$-]+)?$`
+/** Captures region ([1]) and function name ([2]); any version or alias qualifier is dropped. */
+export const LAMBDA_FUNCTION_ARN = new RegExp(
+  String.raw`^arn:${ARN_PARTITION}:lambda:([a-z0-9-]+):\d{12}:function:([\w-]{1,64})(?::[\w$-]+)?$`
 );
 const RETRYABLE_ERRORS = new Set(['ThrottlingException', 'TooManyRequestsException', 'TimeoutError']);
 
@@ -90,7 +91,7 @@ async function lookupRule(ruleArn: string): Promise<{ rule: ScheduleRule | null;
     const described = await client.send(new DescribeRuleCommand({ Name: name }));
     if (described.State !== 'ENABLED' && described.State !== 'DISABLED') return { rule: null, retryable: false };
     const { Targets = [] } = await client.send(new ListTargetsByRuleCommand({ Rule: name }));
-    const targetFunctionName = Targets.map(target => target.Arn?.match(LAMBDA_FUNCTION_ARN)?.[1]).find(Boolean);
+    const targetFunctionName = Targets.map(target => target.Arn?.match(LAMBDA_FUNCTION_ARN)?.[2]).find(Boolean);
     return {
       rule: {
         state: described.State,

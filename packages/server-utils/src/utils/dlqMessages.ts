@@ -4,7 +4,7 @@ import { dlqFailureRepository, dlqReplayLogRepository } from '@bike4mind/databas
 import { Logger } from '@bike4mind/observability';
 import { buildLogsInsightsUrl, messageLogWindow, type ConsumerLogs } from './dlqConsumerLogs';
 import { getSourceQueueUrl, type SourceQueueName } from './dlqRegistry';
-import { ARN_PARTITION } from './dlqScheduleRule';
+import { LAMBDA_FUNCTION_ARN } from './dlqScheduleRule';
 import { changeMessageVisibility, receiveFromQueue } from './sqs';
 
 const SQS_MAX_BATCH = 10;
@@ -104,9 +104,6 @@ export async function acquireDlqMessagesById(
 const LAMBDA_ASYNC_MAX_AGE_MS = 6 * 60 * 60_000;
 const EVENTBRIDGE_MAX_AGE_MS = 24 * 60 * 60_000;
 const AFTER_SEND_MARGIN_MS = 5 * 60_000;
-const LAMBDA_FUNCTION_ARN = new RegExp(
-  String.raw`^arn:${ARN_PARTITION}:lambda:([a-z0-9-]+):\d{12}:function:([\w-]{1,64})(?::[\w$-]+)?$`
-);
 
 export type DlqLogsLink = { url: string; scope: 'request' | 'window' };
 
