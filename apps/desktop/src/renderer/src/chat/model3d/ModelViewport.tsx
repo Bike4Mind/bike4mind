@@ -5,7 +5,10 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { ModelJoint, ModelView } from '@shared/model3d';
 import { newPartNames, startBuildIn } from './buildIn';
 import { changedParts, startEditFlash, type EditFlash } from './editFlash';
+import { measureLabel, type ModelTool } from './inspection';
 import { CLICK_SLOP, JointDragController } from './jointDragController';
+import { addMeasurePoint, featureEdges, snapPoint, stillOnSurface, type MeasurePoint, type SnapKind } from './measure';
+import { MeasureOverlay } from './measureOverlay';
 import {
   explodeModel,
   extendsPastView,
@@ -25,6 +28,8 @@ import {
   type StageLighting,
   viewportPixelRatio,
 } from './modelStage';
+import { keptBy, type SectionState } from './section';
+import { SectionCut } from './sectionCut';
 import {
   recordCanvas,
   swing,
@@ -55,6 +60,8 @@ export type ModelViewportHandle = {
    * the edit prompt opens when the parts were picked from the keyboard. Null when none is shown.
    */
   partPoint: (names: readonly string[]) => ViewportPoint | null;
+  /** False when the section cut has removed every part of the named part (its box is wholly on the cut side). */
+  partKept: (name: string) => boolean;
 };
 
 /** A point on the viewport, in CSS px from its top left. */
@@ -105,6 +112,17 @@ type Props = {
   adjusting?: boolean;
   /** Filled with the viewport's handle while it is mounted. */
   handleRef?: MutableRefObject<ModelViewportHandle | null>;
+  /**
+   * The inspection tool on, if any. Measure takes clicks for its points (no part picking or joint
+   * dragging meanwhile); section cuts the model, and what it cuts away cannot be picked or dragged.
+   */
+  tool?: ModelTool | null;
+  /** The section tool's plane, used while `tool` is 'section'. */
+  section?: SectionState;
+  /** The model's units, for the dimension label. */
+  units?: string;
+  /** The measure tool's picked points (none, one or two, world space) whenever they change. */
+  onMeasure?: (points: THREE.Vector3[]) => void;
 };
 
 const PICK_GLOW = new THREE.Color('#2f7cf6');
@@ -149,6 +167,11 @@ type Viewer = {
   joints: JointDragController;
   /** Re-checks whether the shown model reaches past the view and tells the pane when that changes. */
   checkCropped: () => boolean;
+  /** Cuts (or uncuts) the shown copy as the `tool` and `section` props say now. */
+  applySection: () => void;
+  /** Redraws the dimension; with `rebuilt`, first drops it unless both points are still on the model. */
+  refreshMeasure: (rebuilt?: boolean) => void;
+  clearMeasure: () => void;
 } & ModelViewportHandle;
 
 /** The interactive three.js view: orbit (drag), zoom (wheel) and pan (right drag), rendered on demand. */
@@ -172,6 +195,10 @@ export function ModelViewport({
   onCroppedChange,
   adjusting = false,
   handleRef,
+  tool = null,
+  section,
+  units = '',
+  onMeasure,
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewer = useRef<Viewer | null>(null);
@@ -208,6 +235,14 @@ export function ModelViewport({
   onCroppedChangeRef.current = onCroppedChange;
   const adjustingRef = useRef(adjusting);
   adjustingRef.current = adjusting;
+  const toolRef = useRef(tool);
+  toolRef.current = tool;
+  const sectionRef = useRef(section);
+  sectionRef.current = section;
+  const unitsRef = useRef(units);
+  unitsRef.current = units;
+  const onMeasureRef = useRef(onMeasure);
+  onMeasureRef.current = onMeasure;
 
   useEffect(() => {
     const element = host.current;
@@ -233,6 +268,13 @@ export function ModelViewport({
     let recording = false;
     // Assigned just below; a joint drag holds the AO pass back until it settles, as an orbit does.
     let jointDrag: JointDragController | null = null;
+    const cut = new SectionCut();
+    const measureOverlay = new MeasureOverlay();
+    scene.add(cut.group, measureOverlay.group);
+    stage.unreflected.add(cut.group);
+    stage.unreflected.add(measureOverlay.group);
+    const clip = () => (cut.active ? cut.plane : null);
+    let measurePoints: MeasurePoint[] = [];
     const render = () => {
       if (recording) return;
       composer.render(false);
@@ -248,7 +290,8 @@ export function ModelViewport({
       scene,
       shown: () => shownCopy.current,
       pose: () => poseRef.current,
-      enabled: () => !recording,
+      enabled: () => !recording && toolRef.current !== 'measure',
+      clip,
       onChange: (name, value) => onPoseChangeRef.current?.(name, value),
       onStart: () => onJointDragStartRef.current?.(),
       render,
@@ -298,8 +341,86 @@ export function ModelViewport({
       const previousFit = fitAngle(camera);
       camera.aspect = clientWidth / clientHeight;
       camera.updateProjectionMatrix();
+      measureOverlay.setAspect(camera.aspect);
       reframe(previousFit);
       checkCropped();
+      render();
+    };
+    const pointerNdc = (event: PointerEvent, bounds: DOMRect) =>
+      new THREE.Vector2(
+        ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
+        -((event.clientY - bounds.top) / bounds.height) * 2 + 1
+      );
+    /** The point a measuring click at `event` would place, snapped to a corner or edge when close. */
+    const measurePointAt = (event: PointerEvent): MeasurePoint | null => {
+      const shown = shownCopy.current;
+      if (!shown) return null;
+      const bounds = renderer.domElement.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return null;
+      const hit = meshAt(shown, camera, pointerNdc(event, bounds), clip());
+      if (!hit || !(hit.object instanceof THREE.Mesh)) return null;
+      const toScreen = (world: THREE.Vector3) => {
+        const projected = world.clone().project(camera);
+        return new THREE.Vector2(((projected.x + 1) / 2) * bounds.width, ((1 - projected.y) / 2) * bounds.height);
+      };
+      const cursor = new THREE.Vector2(event.clientX - bounds.left, event.clientY - bounds.top);
+      let snapped: { point: THREE.Vector3; kind: SnapKind } = snapPoint(
+        hit.point,
+        cursor,
+        featureEdges(hit.object),
+        toScreen
+      );
+      // A corner the cut took away is not there to snap to.
+      if (!keptBy(clip(), snapped.point)) snapped = { point: hit.point.clone(), kind: 'surface' };
+      const normal = hit.face
+        ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld)
+        : camera.position.clone().sub(hit.point).normalize();
+      return { ...snapped, normal };
+    };
+    const showMeasure = () => {
+      const points = measurePoints.map(entry => entry.point);
+      measureOverlay.setPoints(points, measureLabel(points, unitsRef.current));
+    };
+    const reportMeasure = () => onMeasureRef.current?.(measurePoints.map(entry => entry.point.clone()));
+    const clearMeasure = () => {
+      const had = measurePoints.length > 0;
+      measurePoints = [];
+      measureOverlay.clear();
+      renderer.domElement.style.cursor = '';
+      if (had) reportMeasure();
+    };
+    const refreshMeasure = (rebuilt = false) => {
+      const shown = shownCopy.current;
+      if (rebuilt && measurePoints.length) {
+        const tolerance = Math.max(stage.radius, 1e-6) * 1e-3;
+        shown?.updateMatrixWorld(true);
+        if (!shown || !measurePoints.every(entry => stillOnSurface(shown, entry, tolerance))) {
+          clearMeasure();
+          return;
+        }
+      }
+      showMeasure();
+    };
+    const applySection = () => {
+      const state = toolRef.current === 'section' ? (sectionRef.current ?? null) : null;
+      cut.apply(shownCopy.current, state, stage.bounds);
+      composer.setInspection([cut.group, measureOverlay.group], clip());
+    };
+    applySection();
+    let hoverFrame = 0;
+    const onPointerMove = (event: PointerEvent) => {
+      if (toolRef.current !== 'measure' || event.buttons !== 0 || recording) return;
+      cancelAnimationFrame(hoverFrame);
+      hoverFrame = requestAnimationFrame(() => {
+        const found = measurePointAt(event);
+        measureOverlay.setHover(found?.point ?? null, found?.kind);
+        renderer.domElement.style.cursor = found ? 'crosshair' : '';
+        render();
+      });
+    };
+    const onPointerLeave = () => {
+      cancelAnimationFrame(hoverFrame);
+      measureOverlay.setHover(null);
       render();
     };
     let pressedAt: { x: number; y: number } | null = null;
@@ -312,12 +433,17 @@ export function ModelViewport({
       if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) > CLICK_SLOP) return;
       const shown = shownCopy.current;
       if (!shown) return;
+      if (toolRef.current === 'measure') {
+        const found = measurePointAt(event);
+        if (!found) return;
+        measurePoints = addMeasurePoint(measurePoints, found);
+        showMeasure();
+        reportMeasure();
+        render();
+        return;
+      }
       const bounds = renderer.domElement.getBoundingClientRect();
-      const pointer = new THREE.Vector2(
-        ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
-        -((event.clientY - bounds.top) / bounds.height) * 2 + 1
-      );
-      const hit = meshAt(shown, camera, pointer);
+      const hit = meshAt(shown, camera, pointerNdc(event, bounds), clip());
       onPickRef.current({
         name: hit ? hit.object.name : null,
         additive: event.shiftKey,
@@ -326,6 +452,8 @@ export function ModelViewport({
     };
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
     renderer.domElement.addEventListener('pointerup', onPointerUp);
+    renderer.domElement.addEventListener('pointermove', onPointerMove);
+    renderer.domElement.addEventListener('pointerleave', onPointerLeave);
     const observer = new ResizeObserver(resize);
     observer.observe(element);
 
@@ -347,6 +475,25 @@ export function ModelViewport({
       const centre = box.getCenter(new THREE.Vector3()).project(camera);
       const bounds = renderer.domElement.getBoundingClientRect();
       return { x: ((centre.x + 1) / 2) * bounds.width, y: ((1 - centre.y) / 2) * bounds.height };
+    };
+    const partKept = (name: string): boolean => {
+      const shown = shownCopy.current;
+      const box = shown ? partsBox(shown, [name]) : null;
+      if (!box || box.isEmpty()) return true;
+      const plane = clip();
+      return (
+        !plane ||
+        [0, 1].some(x =>
+          [0, 1].some(y =>
+            [0, 1].some(z =>
+              keptBy(
+                plane,
+                new THREE.Vector3(x ? box.max.x : box.min.x, y ? box.max.y : box.min.y, z ? box.max.z : box.min.z)
+              )
+            )
+          )
+        )
+      );
     };
     const fit = () => {
       const shown = shownCopy.current;
@@ -421,6 +568,7 @@ export function ModelViewport({
       composer.setSize(width, height, 1);
       canvas.style.objectFit = 'contain';
       camera.aspect = width / height;
+      measureOverlay.setAspect(camera.aspect);
       // Framed for the landscape clip from the angle the user was looking at it.
       const shots = turntableShots(camera, shown, startPosition.clone().sub(startTarget), startPose);
       try {
@@ -467,24 +615,33 @@ export function ModelViewport({
       stopFit,
       joints: jointDrag,
       checkCropped,
+      applySection,
+      refreshMeasure,
+      clearMeasure,
       fit,
       recordTurntable,
       setView,
       orbit,
       zoom,
       partPoint,
+      partKept,
     };
     resize();
     return () => {
       observer.disconnect();
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
       renderer.domElement.removeEventListener('pointerup', onPointerUp);
+      renderer.domElement.removeEventListener('pointermove', onPointerMove);
+      renderer.domElement.removeEventListener('pointerleave', onPointerLeave);
+      cancelAnimationFrame(hoverFrame);
       clearTimeout(idleTimer);
       stopFit();
       onCroppedChangeRef.current?.(false);
       cancelAnimationFrame(buildFrame.current);
       if (flash.current) cancelAnimationFrame(flash.current.frame);
       jointDrag.dispose();
+      cut.dispose();
+      measureOverlay.dispose();
       controls.dispose();
       composer.dispose();
       stage.dispose();
@@ -507,6 +664,7 @@ export function ModelViewport({
       orbit: (azimuth, polar) => viewer.current?.orbit(azimuth, polar),
       zoom: factor => viewer.current?.zoom(factor),
       partPoint: names => viewer.current?.partPoint(names) ?? null,
+      partKept: name => viewer.current?.partKept(name) ?? true,
     };
     return () => {
       handleRef.current = null;
@@ -595,13 +753,29 @@ export function ModelViewport({
     } else {
       current.checkCropped();
     }
+    current.applySection();
+    current.refreshMeasure(true);
     current.render();
   }, [object, wireframe, grid, lighting, dark, dimmed, frameKey]);
+
+  useEffect(() => {
+    const current = viewer.current;
+    if (!current) return;
+    current.applySection();
+    if (tool !== 'measure') current.clearMeasure();
+    current.render();
+  }, [tool, section]);
+
+  useEffect(() => {
+    viewer.current?.refreshMeasure();
+    viewer.current?.render();
+  }, [units]);
 
   // A slider drag or playback only turns nodes: no re-clone, no re-frame.
   useEffect(() => {
     if (!viewer.current || !shownCopy.current) return;
     poseJoints(shownCopy.current, viewer.current.joints.posed(pose));
+    viewer.current.refreshMeasure(true);
     viewer.current.render();
   }, [pose]);
 
@@ -612,6 +786,7 @@ export function ModelViewport({
     const shown = shownCopy.current;
     if (from === target || !current || !shown) {
       explodeAmount.current = target;
+      current?.refreshMeasure(true);
       return;
     }
     const { camera, controls } = current;
@@ -639,7 +814,11 @@ export function ModelViewport({
       controls.update();
       current.render();
       if (t < 1) frame = requestAnimationFrame(step);
-      else current.checkCropped();
+      else {
+        current.refreshMeasure(true);
+        current.render();
+        current.checkCropped();
+      }
     });
     return () => cancelAnimationFrame(frame);
   }, [exploded]);

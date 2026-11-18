@@ -540,7 +540,7 @@ export const imageGenerationTool: ToolDefinition = {
             // when it fits BFL's supported range - it is not OpenAI-exclusive, just
             // OpenAI-priced.
             description:
-              "The size of the image to generate: '1024x1024' square, '1536x1024' landscape, or '1024x1536' portrait. Ignored by providers that take an aspect ratio instead (Flux Ultra, Gemini), or that cannot produce the requested dimensions. Omit this field when the user does not ask for a specific shape, so their saved preference applies.",
+              "The size of the image to generate: '1024x1024' square, '1536x1024' landscape, or '1024x1536' portrait. Models that take an aspect ratio use its shape; models that cannot produce it ignore it. Omit this field when the user does not ask for a specific shape, so their saved preference applies.",
             enum: [...PRICEABLE_IMAGE_SIZES],
           },
           quality: {

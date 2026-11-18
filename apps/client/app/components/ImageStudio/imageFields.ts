@@ -13,12 +13,14 @@ import {
   type CapabilityField,
   type CapabilityOption,
   type ChipsField,
+  type ImageField,
   type ReferenceCutout,
 } from '@client/app/components/Studio/capabilityFields';
 import { STUDIO_IMAGE_COUNT_MAX } from '@client/app/hooks/data/studioImageJobs';
 import {
   imageAspectRatioOptions,
   imageFieldProblems,
+  imageMaskSupport,
   imageQualityOptions,
   imageReferenceMax,
   imageSizeOptions,
@@ -32,6 +34,9 @@ export type ImageFieldActions = {
   update: (patch: Partial<ImageFormState>) => void;
   updateIntent: (patch: Partial<ImageIntent>) => void;
   pickReference: () => void;
+  pickEditSource: () => void;
+  // Opens the mask painter over the edit source.
+  drawMask: () => void;
   // Background removal per reference (useReferenceCutouts); without these the chips offer no cutout.
   cutoutOf?: (fileId: string) => ReferenceCutout | undefined;
   toggleCutout?: (fileId: string, on: boolean) => void;
@@ -78,10 +83,10 @@ const settingFields = (model: ImageModels, intent: ImageIntent, actions: ImageFi
     label: USE_MODEL_DEFAULT,
     apply: () => actions.updateIntent(patch),
   });
-  const aspectRatios = imageAspectRatioOptions(model);
+  const aspectRatios = imageAspectRatioOptions(model, intent.mode);
   const sizes = imageSizeOptions(model);
   const qualities = imageQualityOptions(model);
-  const referenceMax = imageReferenceMax(model);
+  const referenceMax = imageReferenceMax(model, intent.mode);
   const fields: CapabilityControl[] = [];
 
   if (shown(aspectRatios, intent.aspectRatio, problems.aspect)) {
@@ -190,23 +195,77 @@ const lookField = (prompt: string, actions: ImageFieldActions): ChipsField => {
   };
 };
 
+const MODE_OPTIONS: readonly CapabilityOption[] = [
+  { value: 'generate', label: 'Create' },
+  { value: 'edit', label: 'Edit' },
+];
+
+const editSourceField = (intent: ImageIntent, actions: ImageFieldActions): ImageField => ({
+  kind: 'image',
+  id: 'edit-source',
+  label: 'Image to edit',
+  fileName: intent.editSource?.fileName ?? null,
+  ...(intent.editSource && { previewFileId: intent.editSource.fileId }),
+  onPick: actions.pickEditSource,
+});
+
+/**
+ * The mask, offered when the model takes one or the form holds one it does not take (marked, with a fix). A required
+ * mask (FLUX Fill) reads as the model's why-not reason until one is drawn.
+ */
+const maskField = (model: ImageModels, intent: ImageIntent, actions: ImageFieldActions): ImageField[] => {
+  const support = imageMaskSupport(model);
+  const problem = imageFieldProblems(model, intent).mask;
+  if (support === 'none' && !intent.mask) return [];
+  const clear = () => actions.updateIntent({ mask: undefined });
+  return [
+    {
+      kind: 'image',
+      id: 'mask',
+      label: support === 'required' ? 'Mask' : 'Mask (optional)',
+      fileName: intent.mask?.fileName ?? null,
+      pickLabel: intent.mask ? 'Redraw mask' : 'Draw mask',
+      onPick: actions.drawMask,
+      onClear: clear,
+      disabled: !intent.editSource,
+      hint: intent.editSource
+        ? 'Paint the area to change; the rest of the image is kept.'
+        : 'Choose the image to edit first.',
+      ...(problem && {
+        invalidReason: problem,
+        ...(support === 'none' && { fix: { label: 'Remove the mask', apply: clear } }),
+      }),
+    },
+  ];
+};
+
 /** The image Create controls for the selected model, in display order. */
 export function imageCapabilityFields(
   model: ImageModels,
   form: ImageFormState,
   actions: ImageFieldActions
 ): CapabilityField[] {
+  const editing = form.intent.mode === 'edit';
   return [
+    {
+      kind: 'segmented',
+      id: 'mode',
+      label: 'Mode',
+      value: form.intent.mode,
+      options: MODE_OPTIONS,
+      onChange: value => actions.updateIntent({ mode: value === 'edit' ? 'edit' : 'generate' }),
+    },
+    ...(editing ? [editSourceField(form.intent, actions)] : []),
     {
       kind: 'text',
       id: 'prompt',
-      label: 'Prompt',
+      label: editing ? 'What to change' : 'Prompt',
       value: form.prompt,
-      placeholder: 'Describe the image you want',
+      placeholder: editing ? 'Describe the change, e.g. "make the sky a sunset"' : 'Describe the image you want',
       maxLength: IMAGE_JOB_PROMPT_MAX_CHARS,
       onChange: prompt => actions.update({ prompt }),
     },
-    lookField(form.prompt, actions),
+    ...(editing ? maskField(model, form.intent, actions) : [lookField(form.prompt, actions)]),
     ...settingFields(model, form.intent, actions),
     {
       kind: 'segmented',

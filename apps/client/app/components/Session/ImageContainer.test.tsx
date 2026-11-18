@@ -6,6 +6,12 @@ import { getThemeConfig } from '../../utils/themes';
 import ImageContainer, { extractS3KeyFromUrl, isGeneratedImage } from './ImageContainer';
 import { SessionReadOnlyProvider } from './SessionReadOnlyContext';
 
+// The Studio hand-off is covered in ImageContainer.editFlow.test.tsx; these tests keep the in-chat masker.
+vi.mock('@client/app/components/Studio/useStudioFeature', () => ({ useStudioFeature: () => false }));
+vi.mock('@client/app/components/ImageStudio/useOpenStudioImageEdit', () => ({
+  useOpenStudioImageEdit: () => vi.fn(),
+}));
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (

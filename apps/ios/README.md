@@ -184,9 +184,7 @@ in sync with the manifests and with what the build actually sends.
 
 ## fastlane and CI
 
-- `bundle install`, then `bundle exec fastlane test` (same as `make test`), `build` (simulator build) and `beta` (TestFlight).
-  **`beta` is a stub:** it refuses to run until `IOS_TEAM_ID`, `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_CONTENT_BASE64` are set,
-  and signing is not configured in the repo.
+- `bundle install`, then `bundle exec fastlane test` (same as `make test`), `build` (simulator build) and `beta` (TestFlight). `beta` refuses to run until `IOS_TEAM_ID`, `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_CONTENT_BASE64`, `B4M_MARKETING_VERSION` and `B4M_BUILD_NUMBER` are set. CI runs it from `.github/workflows/ios-testflight.yml` on a `mobile-v*` tag; the version scheme, parity gate and secrets are in [docs/mobile-release-train.md](../../docs/mobile-release-train.md).
 - `.github/workflows/ios.yml` runs on changes to `apps/ios/**`: the entitlements parity check (`Tools/check-entitlements-parity.sh`), `make lint`, `make test`,
   the generated-client reproducibility check (`make generate-client` then `git status --porcelain` must be empty) and `make build`, with SwiftPM cached.
   The workflow selects the newest installed Xcode 26.x and the first available iPhone simulator. The runner needs an Xcode that matches the project's SDK; adjust the runner image if it lags.

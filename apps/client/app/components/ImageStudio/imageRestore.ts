@@ -53,10 +53,11 @@ function restoreModel(
   stored: unknown,
   models: readonly { id: string; name: string }[],
   intent: ImageIntent,
-  notices: string[]
+  notices: string[],
+  handoff: boolean
 ): ImageModels | undefined {
   if (typeof stored !== 'string') {
-    notices.push('The take did not record its model, so the default model is picked.');
+    if (!handoff) notices.push('The take did not record its model, so the default model is picked.');
     return undefined;
   }
   const successor = resolveLegacyImageModel(stored);
@@ -87,21 +88,28 @@ function storedInputs(
   return [];
 }
 
-function restoreReferences(restore: StudioRestoreRequest, notices: string[]): ReferenceFile[] {
-  const references: ReferenceFile[] = [];
+type RestoredInputs = Pick<ImageIntent, 'mode' | 'editSource' | 'mask' | 'references'>;
+
+/** An edit (its stored mode, or an edit source among its inputs) comes back in edit mode with its source and mask. */
+function restoreInputs(restore: StudioRestoreRequest, notices: string[]): RestoredInputs {
   const inputs = storedInputs(restore, notices);
-  if (inputs.some(input => input.role === 'edit_source')) {
-    notices.push('Create makes new images rather than edits, so the edit source comes back as a reference image.');
-  }
+  const restored: RestoredInputs = {
+    mode: restore.request.mode === 'edit' || inputs.some(input => input.role === 'edit_source') ? 'edit' : 'generate',
+    references: [],
+  };
+  const references: ReferenceFile[] = [];
   for (const { role, fileId } of inputs) {
-    if (role !== 'reference' && role !== 'edit_source') {
+    if (role !== 'reference' && role !== 'edit_source' && role !== 'mask') {
       notices.push(`Create does not take a ${roleNoun(role)}, so the take's was left out.`);
       continue;
     }
     const file = restoreInputFile(fileId, role, restore.fileNames, notices);
-    if (file && !references.some(reference => reference.fileId === fileId)) references.push(file);
+    if (!file) continue;
+    if (role === 'edit_source') restored.editSource ??= file;
+    else if (role === 'mask') restored.mask ??= file;
+    else if (!references.some(reference => reference.fileId === fileId)) references.push(file);
   }
-  return references;
+  return { ...restored, references };
 }
 
 function noticeUnsetKeys(request: Record<string, unknown>, notices: string[]) {
@@ -117,8 +125,8 @@ function noticeUnsetKeys(request: Record<string, unknown>, notices: string[]) {
 }
 
 /**
- * The image form for a stored image request. Create only generates, so an edit's source comes back as a reference
- * image; values the picked model no longer takes stay in place for the form to mark with a fix.
+ * The image form for a stored image request. An edit reopens in edit mode with its source, mask and references; values
+ * the picked model no longer takes stay in place for the form to mark with a fix.
  */
 export function restoreImageForm(
   restore: StudioRestoreRequest,
@@ -138,10 +146,10 @@ export function restoreImageForm(
       notices
     ),
     quality: readStoredField(shape.quality, request.quality, undefined, 'quality', notices),
-    references: restoreReferences(restore, notices),
+    ...restoreInputs(restore, notices),
   };
   const count = readStoredField(StoredCountSchema, request.n, 1, 'image count', notices);
   noticeUnsetKeys(request, notices);
-  const modelId = restoreModel(request.model, models, intent, notices);
+  const modelId = restoreModel(request.model, models, intent, notices, restore.handoff === true);
   return { value: { form: { prompt, count, intent }, modelId }, notices };
 }
