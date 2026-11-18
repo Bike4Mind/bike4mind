@@ -51,7 +51,8 @@ export async function startBriefComposition(
   return brief;
 }
 
-export type ScheduledBriefOutcome = 'enqueued' | 'in_flight' | 'no_activity' | 'push_off' | 'user_missing';
+export type ScheduledBriefOutcome =
+  'enqueued' | 'in_flight' | 'no_activity' | 'push_off' | 'schedule_off' | 'user_missing';
 
 export type ScheduledBriefDeps = Deps & {
   users: Pick<typeof userRepository, 'findById'>;
@@ -79,6 +80,8 @@ export async function startScheduledBrief(
 ): Promise<ScheduledBriefOutcome> {
   const user = await deps.users.findById(userId);
   if (!user) return 'user_missing';
+  // The reconciler claims the slot before this re-read, so a PUT that just disabled the schedule wins here.
+  if (!user.preferences?.briefSchedule?.enabled) return 'schedule_off';
   if (!isPushCategoryEnabled(user.preferences?.pushNotifications, 'brief_ready')) return 'push_off';
   if (await deps.briefs.findActiveComposing(userId, deps.now())) return 'in_flight';
 
