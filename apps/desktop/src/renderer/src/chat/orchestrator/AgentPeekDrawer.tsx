@@ -2,6 +2,11 @@ import { TaskDecisionPanel } from './TaskDecisionPanel';
 import { TaskDecisionCard } from '../TaskDecisionCards';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
+import ButtonGroup from '@mui/joy/ButtonGroup';
+import Dropdown from '@mui/joy/Dropdown';
+import Menu from '@mui/joy/Menu';
+import MenuButton from '@mui/joy/MenuButton';
+import MenuItem from '@mui/joy/MenuItem';
 import IconButton from '@mui/joy/IconButton';
 import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
@@ -9,7 +14,8 @@ import { useTheme } from '@mui/joy/styles';
 import { snippetOf } from '@shared/agentOutcome';
 import { isStoppableState } from '@shared/agentState';
 import type { ChatApprovalAnswer, ChatMessage, ChatQueuedMessage, ChatToolCall } from '@shared/chat';
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { CaretDownIcon } from '../icons';
 import { ToolCallList } from '../ToolCallList';
 import { groupToolCalls } from '../toolRows';
 import { pendingCallsIn } from '@shared/needsYou';
@@ -134,7 +140,7 @@ export function PendingRequests({ calls }: { calls: ChatToolCall[] }) {
   );
 }
 
-function ReplyBox({ agentId }: { agentId: string }) {
+function ReplyBox({ agentId, actionButton }: { agentId: string; actionButton: ReactNode }) {
   const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [queued, setQueued] = useState<ChatQueuedMessage | null>(null);
@@ -238,15 +244,20 @@ function ReplyBox({ agentId }: { agentId: string }) {
           </Box>
         </Box>
       )}
-      <Button
-        size="sm"
-        disabled={!text.trim() || sending}
-        data-testid="orchestrator-peek-send-btn"
-        onClick={() => void send()}
-        sx={{ alignSelf: 'flex-end' }}
+      <Box
+        data-testid="orchestrator-peek-action-row"
+        sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}
       >
-        Send
-      </Button>
+        {actionButton}
+        <Button
+          size="sm"
+          disabled={!text.trim() || sending}
+          data-testid="orchestrator-peek-send-btn"
+          onClick={() => void send()}
+        >
+          Send
+        </Button>
+      </Box>
     </Box>
   );
 }
@@ -370,41 +381,45 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions, skin }: Agen
         </Box>
       </Box>
 
-      <ReplyBox agentId={agent.id} />
-
-      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-        <Button
-          size="sm"
-          variant="outlined"
-          data-testid="orchestrator-peek-open-btn"
-          onClick={() => actions.open(agent.id)}
-        >
-          Open
-        </Button>
-        {canStop && (
-          <Button
-            size="sm"
-            variant="outlined"
-            color="danger"
-            data-testid="orchestrator-peek-stop-btn"
-            onClick={() => void actions.stop(agent.id)}
-          >
-            Stop
-          </Button>
-        )}
-        <Button
-          size="sm"
-          variant="outlined"
-          color="neutral"
-          data-testid="orchestrator-peek-archive-btn"
-          onClick={() => {
-            actions.archive(agent.id);
-            onClose();
-          }}
-        >
-          Archive
-        </Button>
-      </Box>
+      <ReplyBox
+        agentId={agent.id}
+        actionButton={
+          <Dropdown>
+            <ButtonGroup size="sm" variant="outlined" color="neutral" data-testid="orchestrator-peek-actions">
+              <Button data-testid="orchestrator-peek-open-btn" onClick={() => actions.open(agent.id)}>
+                Open
+              </Button>
+              <MenuButton
+                aria-label="More agent actions"
+                data-testid="orchestrator-peek-actions-menu-btn"
+                sx={{ px: 0.75 }}
+              >
+                <CaretDownIcon />
+              </MenuButton>
+            </ButtonGroup>
+            <Menu size="sm" placement="top-start" data-testid="orchestrator-peek-actions-menu">
+              {canStop && (
+                <MenuItem
+                  color="danger"
+                  data-testid="orchestrator-peek-stop-btn"
+                  onClick={() => void actions.stop(agent.id)}
+                >
+                  Stop
+                </MenuItem>
+              )}
+              <MenuItem
+                data-testid="orchestrator-peek-archive-btn"
+                onClick={() => {
+                  actions.archive(agent.id);
+                  onClose();
+                }}
+              >
+                Archive
+              </MenuItem>
+            </Menu>
+          </Dropdown>
+        }
+      />
     </Box>
   );
 }

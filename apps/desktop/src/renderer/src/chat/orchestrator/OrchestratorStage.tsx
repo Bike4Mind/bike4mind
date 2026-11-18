@@ -210,7 +210,8 @@ export function OrchestratorStage({
     />
   );
 
-  const detailsInScene = view === 'tavern' && renderView !== undefined && agents.length > 0 && !focused;
+  const detailsInScene =
+    (view === 'tavern' || view === 'aquarium') && renderView !== undefined && agents.length > 0 && !focused;
   const detailsOverlay = selected && (
     // Stay mounted while settled so waking restores the draft and selection.
     <Box
