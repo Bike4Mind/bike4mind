@@ -1,6 +1,7 @@
 import { premiumDataSubjectRegistries } from '@server/premium-generated/premiumDataSubjectRegistry.generated';
 import { CONTRIBUTED_DATA_HOLDER_KINDS } from '../types';
 import type { ContributedDataHolderRegistry, DataHolderRegistry } from '../types';
+import { assertEntryStructure } from '../registryStructure';
 import { aiHolders } from './ai';
 import { analyticsHolders } from './analytics';
 import { authHolders } from './auth';
@@ -35,8 +36,12 @@ export function mergeRegistries(registries: readonly DataHolderRegistry[]): Data
   return merged;
 }
 
-/** Rejects what a JS overlay can get past the types: a core-only kind, or a hook name core never resolved. */
+/**
+ * Rejects what a JS overlay can get past the types: a core-only kind, or a hook name core never
+ * resolved. Returns a frozen copy so the overlay's own object cannot change after this check.
+ */
 export function assertContributedRegistry(registry: ContributedDataHolderRegistry): DataHolderRegistry {
+  const copy: Record<string, DataHolderRegistry[string]> = {};
   for (const [modelName, holder] of Object.entries(registry)) {
     const kind: string = holder.kind;
     if (!(CONTRIBUTED_DATA_HOLDER_KINDS as readonly string[]).includes(kind)) {
@@ -45,8 +50,14 @@ export function assertContributedRegistry(registry: ContributedDataHolderRegistr
     if ('beforeErasure' in holder) {
       throw new Error(`Contributed data holder "${modelName}" may not declare beforeErasure`);
     }
+    copy[modelName] = Object.freeze({ ...holder });
   }
-  return registry;
+  return Object.freeze(copy);
+}
+
+/** Runs the structural rules the coverage test applies to core entries on each contributed model. */
+export function assertContributedStructure(registry: DataHolderRegistry, contributedNames: readonly string[]): void {
+  for (const modelName of contributedNames) assertEntryStructure(modelName, registry);
 }
 
 /**
@@ -54,10 +65,17 @@ export function assertContributedRegistry(registry: ContributedDataHolderRegistr
  * contributed registry also registers the overlays' models, so every process that loads this module
  * has them before it classifies.
  */
+const CONTRIBUTED_REGISTRIES = premiumDataSubjectRegistries.map(assertContributedRegistry);
+
 export const DATA_HOLDER_REGISTRY: DataHolderRegistry = mergeRegistries([
   ...DOMAIN_REGISTRIES,
-  ...premiumDataSubjectRegistries.map(assertContributedRegistry),
+  ...CONTRIBUTED_REGISTRIES,
 ]);
+
+assertContributedStructure(
+  DATA_HOLDER_REGISTRY,
+  CONTRIBUTED_REGISTRIES.flatMap(registry => Object.keys(registry))
+);
 
 /**
  * Models registered in this process that the registry does not classify. Some models register only

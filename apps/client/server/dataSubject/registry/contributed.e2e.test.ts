@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mongoose } from '@bike4mind/database';
-import { Schema } from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import {
   createMongoReplSet,
@@ -23,9 +22,14 @@ const h = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@server/premium-generated/premiumDataSubjectRegistry.generated', () => ({
-  premiumDataSubjectRegistries: [h.contributed],
-}));
+// The registry module validates contributed models on import, so they must be registered by then.
+vi.mock('@server/premium-generated/premiumDataSubjectRegistry.generated', async () => {
+  const { mongoose: db } = await import('@bike4mind/database');
+  const { Schema: S } = await import('mongoose');
+  db.model('FixtureOverlayNote', new S({ ownerId: S.Types.ObjectId, text: String }));
+  db.model('FixtureOverlayLog', new S({ actorId: S.Types.ObjectId, actorName: String, text: String }));
+  return { premiumDataSubjectRegistries: [h.contributed] };
+});
 vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
   purgeUserPublishedArtifacts: vi.fn(async () => undefined),
 }));
@@ -38,11 +42,8 @@ import { DATA_HOLDER_REGISTRY } from './index';
 import { SubjectRecordExport } from '../subjectRecordExport';
 import { DELETED_USER_OBJECT_ID } from '../placeholder';
 
-const Note = mongoose.model('FixtureOverlayNote', new Schema({ ownerId: Schema.Types.ObjectId, text: String }));
-const Log = mongoose.model(
-  'FixtureOverlayLog',
-  new Schema({ actorId: Schema.Types.ObjectId, actorName: String, text: String })
-);
+const Note = mongoose.model('FixtureOverlayNote');
+const Log = mongoose.model('FixtureOverlayLog');
 
 let mongoServer: MongoMemoryReplSet | undefined;
 

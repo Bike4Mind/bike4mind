@@ -82,9 +82,11 @@ describe('premium data subject registry', () => {
     writeOverlay('gamma', {});
     const out = generate();
     expect(out).toContain(
-      `import { dataSubjectRegistry as registry0 } from '../../../premium/alpha/src/data-subject';`
+      `import { dataSubjectRegistry as registry0 } from '../../../../packages/premium/alpha/src/data-subject';`
     );
-    expect(out).toContain(`import { dataSubjectRegistry as registry1 } from '../../../premium/beta/src/data-subject';`);
+    expect(out).toContain(
+      `import { dataSubjectRegistry as registry1 } from '../../../../packages/premium/beta/src/data-subject';`
+    );
     expect(out).toContain('= [\n  registry0,\n  registry1\n];');
     expect(out).not.toContain('gamma');
   });

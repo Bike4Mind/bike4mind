@@ -11,64 +11,12 @@ import {
   looksLikeUserReference,
   schemaDeclaresPath,
 } from './schemaPaths';
-import type { DataHolder, UserReference } from './types';
+import type { DataHolder } from './types';
 import { uniqueIndexPaths } from './placeholder';
+import { alsoRedactOf, declaredPathsOf, isArrayOrArrayKey, referencesOf, walkParentChain } from './registryStructure';
 
 const registeredModels = mongoose.modelNames().sort();
 const classifiedModels = Object.keys(DATA_HOLDER_REGISTRY).sort();
-
-function referencePaths(reference: UserReference): string[] {
-  const scopePaths = reference.scope === 'personal' ? ['organizationId'] : [];
-  return [
-    reference.path,
-    ...Object.keys(reference.where ?? {}),
-    ...scopePaths,
-    ...alsoRedactOf(reference),
-    ...(reference.identifies ?? []),
-  ];
-}
-
-function alsoRedactOf(reference: UserReference): readonly string[] {
-  return reference.action === 'anonymize' || reference.action === 'retain' ? (reference.alsoRedact ?? []) : [];
-}
-
-function referencesOf(holder: DataHolder): readonly UserReference[] {
-  switch (holder.kind) {
-    case 'subject':
-    case 'holder':
-      return holder.references;
-    case 'viaParent':
-      return holder.attribution ?? [];
-    default:
-      return [];
-  }
-}
-
-function declaredPathsOf(holder: DataHolder): string[] {
-  switch (holder.kind) {
-    case 'subject':
-      return [...holder.references.flatMap(referencePaths), ...holder.secretPaths, ...(holder.unrelatedPaths ?? [])];
-    case 'holder':
-      return [
-        ...holder.references.flatMap(referencePaths),
-        ...(holder.secretPaths ?? []),
-        ...(holder.unrelatedPaths ?? []),
-        ...Object.keys(holder.unmatchedPaths ?? {}),
-      ];
-    case 'viaParent':
-      return [
-        holder.foreignKey,
-        ...(holder.attribution ?? []).flatMap(referencePaths),
-        ...(holder.secretPaths ?? []),
-        ...(holder.unrelatedPaths ?? []),
-      ];
-    case 'pseudonymous':
-    case 'noUserData':
-      return [...(holder.unrelatedPaths ?? [])];
-    case 'discriminator':
-      return [];
-  }
-}
 
 /** Paths the entry has said how to erase, or said are not a person. A secret is neither. */
 function acknowledgedPathsOf(holder: DataHolder): Set<string> {
@@ -305,14 +253,9 @@ describe('data holder registry', () => {
   it.each(classifiedModels.filter(name => DATA_HOLDER_REGISTRY[name].kind === 'viaParent'))(
     '%s: its parent chain ends at a holder without a cycle',
     modelName => {
-      const seen = [modelName];
-      let current: DataHolder | undefined = DATA_HOLDER_REGISTRY[modelName];
-      while (current?.kind === 'viaParent') {
-        expect(seen, `parent cycle through ${seen.join(' -> ')}`).not.toContain(current.parent);
-        seen.push(current.parent);
-        current = DATA_HOLDER_REGISTRY[current.parent];
-      }
-      expect(current?.kind, `chain ${seen.join(' -> ')} does not end at a holder`).toBe('holder');
+      const chain = walkParentChain(modelName, DATA_HOLDER_REGISTRY);
+      const current: DataHolder | undefined = DATA_HOLDER_REGISTRY[chain[chain.length - 1]];
+      expect(current?.kind, `chain ${chain.join(' -> ')} does not end at a holder`).toBe('holder');
     }
   );
 
@@ -324,9 +267,7 @@ describe('data holder registry', () => {
     })
   )('%s: pullFromArray path %s is an array or a key inside one', (modelName, path) => {
     const { schema } = mongoose.model(modelName);
-    const isArray = (candidate: string) => /Array/.test(schema.path(candidate)?.instance ?? '');
-    const parentPath = path.includes('.') ? path.slice(0, path.lastIndexOf('.')) : '';
-    expect(isArray(path) || (parentPath !== '' && isArray(parentPath))).toBe(true);
+    expect(isArrayOrArrayKey(schema, path)).toBe(true);
   });
 });
 
