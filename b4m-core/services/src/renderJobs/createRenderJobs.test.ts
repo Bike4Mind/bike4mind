@@ -84,8 +84,12 @@ const setup = (overrides: Partial<CreateRenderJobsDeps> = {}) => {
   const repository = createInMemoryGenerationJobRepository();
   const deps: CreateRenderJobsDeps = {
     repository,
-    // creditHold is module-mocked; the batch spend cap only reads users.findById (null: nothing to cap).
-    credits: { users: { findById: vi.fn(async () => null) } } as unknown as CreditHoldAdapters,
+    // creditHold is module-mocked; the batch spend cap reads users.findById and the freeze check
+    // reads spendFreezes (null for both: nothing to cap, no freeze).
+    credits: {
+      users: { findById: vi.fn(async () => null) },
+      spendFreezes: { findActiveForSubject: vi.fn(async () => null) },
+    } as unknown as CreditHoldAdapters,
     enqueue: vi.fn(async () => undefined),
     engine: { failBeforeStart: (jobId, error) => engine.failBeforeStart(jobId, error) },
     getSettings: async () => ({ enforceCredits: true, pricing: PRICING }),
