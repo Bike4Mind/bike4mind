@@ -29,11 +29,9 @@ export const AssistantInstructionModel =
 
 /** Every method is scoped to the owner, so another user's instruction reads as missing. */
 export const assistantInstructionRepository = {
+  /** Unlimited on purpose: `createWithinCap` bounds the set, and every counted row must stay visible and deletable. */
   async listByUser(userId: string): Promise<IAssistantInstruction[]> {
-    return AssistantInstructionModel.find({ userId })
-      .sort({ createdAt: 1, _id: 1 })
-      .limit(ASSISTANT_INSTRUCTION_LIMITS.perUser)
-      .lean();
+    return AssistantInstructionModel.find({ userId }).sort({ createdAt: 1, _id: 1 }).lean();
   },
 
   async countByUser(userId: string): Promise<number> {
@@ -42,6 +40,20 @@ export const assistantInstructionRepository = {
 
   async create(input: { userId: string; text: string }): Promise<IAssistantInstruction> {
     const created = await AssistantInstructionModel.create(input);
+    return created.toObject();
+  },
+
+  /**
+   * Saves unless the user already holds `cap` instructions; null when refused. The recount after the insert
+   * rolls back a save that a concurrent one pushed over the cap, so racing saves can never leave more than `cap`.
+   */
+  async createWithinCap(input: { userId: string; text: string }, cap: number): Promise<IAssistantInstruction | null> {
+    if ((await AssistantInstructionModel.countDocuments({ userId: input.userId })) >= cap) return null;
+    const created = await AssistantInstructionModel.create(input);
+    if ((await AssistantInstructionModel.countDocuments({ userId: input.userId })) > cap) {
+      await AssistantInstructionModel.deleteOne({ _id: created._id });
+      return null;
+    }
     return created.toObject();
   },
 

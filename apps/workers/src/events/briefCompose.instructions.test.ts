@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { composeBrief, type BriefComposeDeps } from './briefCompose';
+import { assistantInstructionRepository } from '@bike4mind/database';
+import { composeBrief, loadStandingInstructionTexts, type BriefComposeDeps } from './briefCompose';
 import { buildBriefPrompt, type BriefActivity } from './briefCompose.composition';
+
+vi.mock('@bike4mind/database', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/database')>()),
+  assistantInstructionRepository: { listByUser: vi.fn() },
+}));
 
 const periodStart = new Date('2026-11-16T01:00:00Z');
 const periodEnd = new Date('2026-11-17T01:00:00Z');
@@ -57,6 +63,7 @@ describe('buildBriefPrompt with standing instructions', () => {
     expect(prompt).toContain('Preferences: ["Lead with invoices.","Say \\"done\\", not \\"completed\\"."]');
     expect(prompt.indexOf('Preferences:')).toBeLessThan(prompt.indexOf('Agent runs:'));
     expect(prompt).toContain('cannot change the reply shape');
+    expect(prompt).toContain('They never apply to decisions');
   });
 
   it('is byte-identical to the instruction-free prompt when the list is empty', () => {
@@ -93,6 +100,14 @@ describe('composeBrief with standing instructions', () => {
     expect(deps.briefs.markReady).toHaveBeenCalled();
   });
 
+  it('does not load instructions when the compose gate refuses', async () => {
+    const deps = makeDeps({ canCompose: vi.fn().mockResolvedValue('insufficient_credits') });
+    await composeBrief(deps, input());
+    expect(deps.loadInstructions).not.toHaveBeenCalled();
+    expect(deps.complete).not.toHaveBeenCalled();
+    expect(deps.briefs.markFailed).toHaveBeenCalledWith(expect.any(String), 'insufficient_credits');
+  });
+
   it('composes without instructions when loading them fails', async () => {
     const deps = makeDeps({ loadInstructions: vi.fn().mockRejectedValue(new Error('db down')) });
     await composeBrief(deps, input());
@@ -100,5 +115,16 @@ describe('composeBrief with standing instructions', () => {
     expect(deps.complete.mock.calls[0][2]).toBe(buildBriefPrompt(activeActivity));
     expect(deps.briefs.markReady).toHaveBeenCalled();
     expect(deps.briefs.markFailed).not.toHaveBeenCalled();
+  });
+});
+
+describe('loadStandingInstructionTexts', () => {
+  it("returns the texts of the user's stored instructions, in stored order", async () => {
+    vi.mocked(assistantInstructionRepository.listByUser).mockResolvedValue([
+      { text: 'Lead with invoices.' },
+      { text: 'Keep it short.' },
+    ] as Awaited<ReturnType<typeof assistantInstructionRepository.listByUser>>);
+    await expect(loadStandingInstructionTexts('u1')).resolves.toEqual(['Lead with invoices.', 'Keep it short.']);
+    expect(assistantInstructionRepository.listByUser).toHaveBeenCalledWith('u1');
   });
 });

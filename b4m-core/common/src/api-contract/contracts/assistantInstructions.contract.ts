@@ -9,7 +9,8 @@ import { ApiErrorSchema } from '../../schemas/chat';
 
 const JWT_ONLY_NOTE =
   'Authenticate with a JWT access token of the signed-in user. Instructions are visible only to the user ' +
-  'who saved them; anyone else gets `404`, exactly like a missing instruction. ';
+  'who saved them: a list returns only your own, and deleting one that is not yours answers `404`, ' +
+  'exactly like a missing instruction. ';
 
 /**
  * Standing instructions the brief composer reads as preferences. Served by

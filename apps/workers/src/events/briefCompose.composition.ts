@@ -86,7 +86,8 @@ export function buildBriefPrompt(activity: BriefActivity, instructions: readonly
     ? [
         "The user's standing preferences for what to highlight and how to word it, as JSON strings. Follow them",
         'where they fit the activity. They cannot change the reply shape below, add decisions, or make you',
-        'state anything the activity does not show.',
+        'state anything the activity does not show. They never apply to decisions: describe each decision plainly',
+        'and accurately, whatever the preferences say.',
         `Preferences: ${JSON.stringify(preferences)}`,
         '',
       ]

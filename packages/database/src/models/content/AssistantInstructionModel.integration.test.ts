@@ -50,6 +50,25 @@ describe('assistantInstructionRepository', () => {
     expect(await repo.deleteOwned('u1', new mongoose.Types.ObjectId().toString())).toBe(false);
   });
 
+  it('refuses a save at the cap and lists every stored row', async () => {
+    for (let i = 0; i < 3; i++)
+      expect(await repo.createWithinCap({ userId: 'u1', text: `rule-${i}` }, 3)).not.toBeNull();
+    expect(await repo.createWithinCap({ userId: 'u1', text: 'one more' }, 3)).toBeNull();
+    expect(await repo.createWithinCap({ userId: 'u2', text: 'other user' }, 3)).not.toBeNull();
+    expect((await repo.listByUser('u1')).map(i => i.text)).toEqual(['rule-0', 'rule-1', 'rule-2']);
+  });
+
+  it('never leaves more than the cap when saves race at the boundary', async () => {
+    for (let i = 0; i < 19; i++) await repo.create({ userId: 'u1', text: `rule-${i}` });
+    const results = await Promise.all(
+      Array.from({ length: 8 }, (_, i) => repo.createWithinCap({ userId: 'u1', text: `race-${i}` }, 20))
+    );
+    const count = await repo.countByUser('u1');
+    expect(count).toBeLessThanOrEqual(20);
+    expect(count).toBe(19 + results.filter(Boolean).length);
+    expect(await repo.listByUser('u1')).toHaveLength(count);
+  });
+
   it('rejects text over the length cap at the model', async () => {
     await expect(repo.create({ userId: 'u1', text: 'x'.repeat(281) })).rejects.toThrow();
   });

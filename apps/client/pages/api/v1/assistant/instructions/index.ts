@@ -31,15 +31,15 @@ const listRoute = nextRouteForContract(listAssistantInstructionsContract, {
 const createRoute = nextRouteForContract(createAssistantInstructionContract, {
   rateLimit: perUserRateLimit('POST /api/v1/assistant/instructions'),
 }).post(async (req, res) => {
-  // Count-then-create is not atomic: two concurrent saves at the cap can both land. One over is harmless,
-  // since the composer and the list read at most the cap.
-  const count = await assistantInstructionRepository.countByUser(req.user.id);
-  if (count >= ASSISTANT_INSTRUCTION_LIMITS.perUser) {
+  const created = await assistantInstructionRepository.createWithinCap(
+    { userId: req.user.id, text: req.validated.text },
+    ASSISTANT_INSTRUCTION_LIMITS.perUser
+  );
+  if (!created) {
     throw new BadRequestError(`You can keep up to ${ASSISTANT_INSTRUCTION_LIMITS.perUser} instructions`, {
       errorCode: INSTRUCTION_LIMIT_REACHED_ERROR_CODE,
     });
   }
-  const created = await assistantInstructionRepository.create({ userId: req.user.id, text: req.validated.text });
   return res.status(201).json(serializeInstruction(created));
 });
 

@@ -471,13 +471,13 @@ export interface paths {
     };
     /**
      * List assistant instructions
-     * @description Lists your standing instructions, oldest first. The assistant reads them when it composes a brief, as preferences for what to highlight and how to word it. Authenticate with a JWT access token of the signed-in user. Instructions are visible only to the user who saved them; anyone else gets `404`, exactly like a missing instruction.
+     * @description Lists your standing instructions, oldest first. The assistant reads them when it composes a brief, as preferences for what to highlight and how to word it. Authenticate with a JWT access token of the signed-in user. Instructions are visible only to the user who saved them: a list returns only your own, and deleting one that is not yours answers `404`, exactly like a missing instruction.
      */
     get: operations['listAssistantInstructions'];
     put?: never;
     /**
      * Add an assistant instruction
-     * @description Saves a standing instruction (up to 280 characters, trimmed) that later briefs follow. Instructions shape what a brief highlights and how it is worded; they cannot add a decision or change the brief format. You can keep up to 20. Authenticate with a JWT access token of the signed-in user. Instructions are visible only to the user who saved them; anyone else gets `404`, exactly like a missing instruction.
+     * @description Saves a standing instruction (up to 280 characters, trimmed) that later briefs follow. Instructions shape what a brief highlights and how it is worded; they cannot add a decision or change the brief format. You can keep up to 20. Authenticate with a JWT access token of the signed-in user. Instructions are visible only to the user who saved them: a list returns only your own, and deleting one that is not yours answers `404`, exactly like a missing instruction.
      */
     post: operations['createAssistantInstruction'];
     delete?: never;
@@ -498,7 +498,7 @@ export interface paths {
     post?: never;
     /**
      * Remove an assistant instruction
-     * @description Removes one of your instructions. Briefs composed after this no longer follow it. Authenticate with a JWT access token of the signed-in user. Instructions are visible only to the user who saved them; anyone else gets `404`, exactly like a missing instruction.
+     * @description Removes one of your instructions. Briefs composed after this no longer follow it. Authenticate with a JWT access token of the signed-in user. Instructions are visible only to the user who saved them: a list returns only your own, and deleting one that is not yours answers `404`, exactly like a missing instruction.
      */
     delete: operations['deleteAssistantInstruction'];
     options?: never;

@@ -6,15 +6,16 @@ import { INSTRUCTION_LIMIT_REACHED_ERROR_CODE } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   listByUser: vi.fn(),
-  countByUser: vi.fn(),
-  create: vi.fn(),
+  createWithinCap: vi.fn(),
   deleteOwned: vi.fn(),
+  baseApiOptions: [] as { auth?: unknown }[],
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   methodNotAllowedHandler: () => (_req: unknown, res: { status: (code: number) => { end: () => void } }) =>
     res.status(405).end(),
-  baseApi: () => {
+  baseApi: (options: { auth?: unknown }) => {
+    h.baseApiOptions.push(options);
     const compose =
       (...handlers: ((req: unknown, res: unknown, next: () => void) => unknown)[]) =>
       async (req: unknown, res: unknown) => {
@@ -41,8 +42,7 @@ vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLi
 vi.mock('@bike4mind/database', () => ({
   assistantInstructionRepository: {
     listByUser: h.listByUser,
-    countByUser: h.countByUser,
-    create: h.create,
+    createWithinCap: h.createWithinCap,
     deleteOwned: h.deleteOwned,
   },
 }));
@@ -74,8 +74,14 @@ async function run(handler: unknown, opts: Parameters<typeof createMocks>[0]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  h.countByUser.mockResolvedValue(0);
-  h.create.mockImplementation(async ({ text }: { text: string }) => doc(text));
+  h.createWithinCap.mockImplementation(async ({ text }: { text: string }) => doc(text));
+});
+
+describe('auth', () => {
+  it('builds every route JWT-only, so an API key never reaches a handler', () => {
+    expect(h.baseApiOptions.length).toBeGreaterThanOrEqual(3);
+    for (const options of h.baseApiOptions) expect(options.auth).toBe('jwtOnly');
+  });
 });
 
 describe('GET /api/v1/assistant/instructions', () => {
@@ -94,17 +100,16 @@ describe('POST /api/v1/assistant/instructions', () => {
   it('saves trimmed text for the caller with 201', async () => {
     const res = await run(collection, { method: 'POST', body: { text: '  lead with invoices  ' } });
     expect(res._getStatusCode()).toBe(201);
-    expect(h.create).toHaveBeenCalledWith({ userId: USER_ID, text: 'lead with invoices' });
+    expect(h.createWithinCap).toHaveBeenCalledWith({ userId: USER_ID, text: 'lead with invoices' }, 20);
     expect(res._getJSONData().text).toBe('lead with invoices');
   });
 
-  it('refuses a save past the cap with instruction_limit_reached and writes nothing', async () => {
-    h.countByUser.mockResolvedValue(20);
+  it('refuses a save past the cap with instruction_limit_reached', async () => {
+    h.createWithinCap.mockResolvedValue(null);
     await expect(run(collection, { method: 'POST', body: { text: 'one more' } })).rejects.toMatchObject({
       statusCode: 400,
       additionalInfo: { errorCode: INSTRUCTION_LIMIT_REACHED_ERROR_CODE },
     });
-    expect(h.create).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -114,7 +119,7 @@ describe('POST /api/v1/assistant/instructions', () => {
     ['not a string', 42],
   ])('rejects %s text before writing', async (_label, text) => {
     await expect(run(collection, { method: 'POST', body: { text } })).rejects.toMatchObject({ name: 'ZodError' });
-    expect(h.create).not.toHaveBeenCalled();
+    expect(h.createWithinCap).not.toHaveBeenCalled();
   });
 });
 

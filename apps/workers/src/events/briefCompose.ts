@@ -53,14 +53,17 @@ export type BriefComposeDeps = {
   canCompose(userId: string): Promise<'ok' | 'ai_access_held' | 'insufficient_credits'>;
   /** Sends the activity prompt to the model and returns its raw reply. */
   complete(userId: string, briefId: string, prompt: string): Promise<string>;
-  /** The user's standing instruction texts. Absent or failing means the brief is composed without them. */
-  loadInstructions?(userId: string): Promise<string[]>;
+  /** The user's standing instruction texts. A failing load means the brief is composed without them. */
+  loadInstructions(userId: string): Promise<string[]>;
   push(event: PushNotificationEvent): Promise<void>;
   logger: LogLike;
 };
 
+export async function loadStandingInstructionTexts(userId: string): Promise<string[]> {
+  return (await assistantInstructionRepository.listByUser(userId)).map(instruction => instruction.text);
+}
+
 async function loadInstructionsSafely(deps: BriefComposeDeps, userId: string): Promise<string[]> {
-  if (!deps.loadInstructions) return [];
   try {
     return await deps.loadInstructions(userId);
   } catch (error) {
@@ -166,8 +169,7 @@ export const handler = withEventContext(async (event, logger) => {
       users: userRepository,
       briefs: assistantBriefRepository,
       loadActivity,
-      loadInstructions: async userId =>
-        (await assistantInstructionRepository.listByUser(userId)).map(instruction => instruction.text),
+      loadInstructions: loadStandingInstructionTexts,
       canCompose: async userId => {
         const user = await userRepository.findById(userId);
         if (!user || aiAccessDeniedMessage(user)) return 'ai_access_held';
