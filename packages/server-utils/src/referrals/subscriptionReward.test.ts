@@ -324,6 +324,8 @@ describe('recordSubscriptionPaymentReward', () => {
 describe('releaseDueSubscriptionRewards', () => {
   const due = {
     id: 'r1',
+    createdAt: NOW,
+    releaseAt: NOW,
     inviterId: 'inviter1',
     payerId: 'friend1',
     invoiceId: 'in_1',
@@ -353,7 +355,8 @@ describe('releaseDueSubscriptionRewards', () => {
         lotRef: 'referral-subscription:inviter1:in_1',
         metadata: { step: 'first_payment', referredUserId: 'friend1', invoiceId: 'in_1' },
       }),
-      { builtWith: { inTransaction: true, duplicateTransactionId: 'throw' } }
+      { builtWith: { inTransaction: true, duplicateTransactionId: 'throw' } },
+      { now: NOW }
     );
     expect(mockAlert).toHaveBeenCalledWith('tx1', 50);
   });

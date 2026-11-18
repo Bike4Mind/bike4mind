@@ -5,6 +5,7 @@ import { createMocks } from 'node-mocks-http';
 const h = vi.hoisted(() => ({
   findSetting: vi.fn(),
   findRecentRuns: vi.fn(),
+  findLatestRuns: vi.fn(),
   forSystem: vi.fn(),
   baseOptions: [] as unknown[],
 }));
@@ -34,7 +35,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   AdminSettings: { findOne: h.findSetting },
-  secopsTriageRunRepository: { findRecentByStage: h.findRecentRuns },
+  secopsTriageRunRepository: {
+    findRecentByStage: h.findRecentRuns,
+    findLatestPerSourceByStage: h.findLatestRuns,
+  },
 }));
 vi.mock('@bike4mind/server-utils/services/githubService', () => ({ GitHubService: { forSystem: h.forSystem } }));
 vi.mock('@bike4mind/server-utils/security/resolveStage', () => ({ resolveStage: () => 'test-stage' }));
@@ -80,6 +84,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   saveConfig({ enabled: true, githubRepo: 'test-org/test-repo' });
   h.findRecentRuns.mockResolvedValue([]);
+  h.findLatestRuns.mockResolvedValue([]);
   h.forSystem.mockResolvedValue(github());
 });
 
@@ -105,8 +110,12 @@ describe('GET /api/admin/secops-triage/status', () => {
     expect(res._getJSONData()).toEqual({
       stage: 'test-stage',
       enabled: true,
+      dryRun: false,
+      severityThreshold: 'high',
+      maxIssuesPerScan: 20,
       github: { connected: true, repo: 'test-org/test-repo', check: { ok: true } },
       recentRuns: [],
+      latestRunPerSource: [],
     });
     expect(h.findSetting).toHaveBeenCalledWith({ settingName: 'secopsTriageConfig' });
   });
@@ -195,6 +204,83 @@ describe('GET /api/admin/secops-triage/status', () => {
       enabled: false,
       github: { repo: '', check: { ok: false, reason: 'not_configured' } },
     });
+  });
+
+  it('reports the saved dry run, severity threshold and per-scan cap', async () => {
+    saveConfig({
+      enabled: true,
+      githubRepo: 'test-org/test-repo',
+      dryRun: true,
+      severityThreshold: 'critical',
+      maxIssuesPerScan: 5,
+    });
+
+    const res = await call(admin);
+
+    expect(res._getJSONData()).toMatchObject({ dryRun: true, severityThreshold: 'critical', maxIssuesPerScan: 5 });
+  });
+
+  it('keeps the saved filing fields of a config that breaks a cross-field rule', async () => {
+    saveConfig({ enabled: true, githubRepo: '', dryRun: true, maxIssuesPerScan: 7 });
+
+    const res = await call(admin);
+
+    expect(res._getJSONData()).toMatchObject({ enabled: true, dryRun: true, maxIssuesPerScan: 7 });
+  });
+
+  it('reports the defaults for a saved value whose fields do not parse', async () => {
+    saveConfig({ enabled: true, githubRepo: 'test-org/test-repo', dryRun: true, maxIssuesPerScan: 0 });
+
+    const res = await call(admin);
+
+    expect(res._getJSONData()).toMatchObject({ dryRun: false, severityThreshold: 'high', maxIssuesPerScan: 20 });
+  });
+
+  it('returns the newest run of each scan source on the stage, without ids', async () => {
+    h.findLatestRuns.mockResolvedValue([
+      {
+        id: 'run-9',
+        stage: 'test-stage',
+        scanSource: 'active-defense',
+        status: 'failed',
+        dryRun: false,
+        findingCount: 3,
+        error: 'rate limited',
+        startedAt: new Date('2026-11-17T11:00:00Z'),
+      },
+      {
+        id: 'run-4',
+        stage: 'test-stage',
+        scanSource: 'cloud',
+        status: 'skipped',
+        reason: 'not_allowed',
+        dryRun: false,
+        findingCount: 0,
+        startedAt: new Date('2026-11-17T09:00:00Z'),
+      },
+    ]);
+
+    const res = await call(admin);
+
+    expect(h.findLatestRuns).toHaveBeenCalledWith('test-stage');
+    expect(res._getJSONData().latestRunPerSource).toEqual([
+      {
+        scanSource: 'active-defense',
+        status: 'failed',
+        dryRun: false,
+        findingCount: 3,
+        error: 'rate limited',
+        startedAt: '2026-11-17T11:00:00.000Z',
+      },
+      {
+        scanSource: 'cloud',
+        status: 'skipped',
+        reason: 'not_allowed',
+        dryRun: false,
+        findingCount: 0,
+        startedAt: '2026-11-17T09:00:00.000Z',
+      },
+    ]);
   });
 
   it('returns the stage recent runs newest first, without ids', async () => {

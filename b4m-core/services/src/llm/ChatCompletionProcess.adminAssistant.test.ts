@@ -224,6 +224,7 @@ describe('ChatCompletionProcess admin assistant gate', () => {
       creditTransactions: {},
       agents: {},
       projects: { findById: vi.fn() },
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
     };
     const tokenizer = {
       countTokens: vi.fn().mockResolvedValue(100),

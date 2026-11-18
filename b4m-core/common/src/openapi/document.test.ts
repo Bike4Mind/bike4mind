@@ -10,7 +10,7 @@ import {
   PUBLIC_DOC_API_KEY_SCOPES,
   UNDOCUMENTED_API_KEY_SCOPES,
 } from '../types/entities/UserApiKeyTypes';
-import { CONTRACTS, chatContract, synthesizeSpeechContract } from '../api-contract';
+import { CONTRACTS, chatContract, getMeContract, synthesizeSpeechContract } from '../api-contract';
 import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spec doc is loosely typed for traversal
@@ -125,27 +125,32 @@ describe('buildOpenApiDocument', () => {
   });
 
   it('auto-injects 401 (and 403 for scoped ops) on authenticated endpoints, streaming included', () => {
-    // Guards the central auth-response injection in registerContract. GET /api/v1/me
-    // declares neither 401 nor 403 itself, so both come purely from the injection;
-    // dropping it silently narrows the published spec and generated SDKs
+    // Guards the central auth-response injection in registerContract. getMeContract
+    // is scoped and declares neither 401 nor 403 itself, so both come purely from the
+    // injection; dropping it silently narrows the published spec and generated SDKs
     // stop modelling the missing-credential / under-scoped-key paths.
+    expect(getMeContract.scopes?.length).toBeGreaterThan(0);
+    expect(getMeContract.responses).not.toHaveProperty('401');
+    expect(getMeContract.responses).not.toHaveProperty('403');
     expect(me.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
     // The scope 403 extends the envelope with the route's required scopes (apiKeyAuth.ts).
     expect(me.responses['403'].content['application/json'].schema).toEqual(ref('ScopeForbiddenResponse'));
+    // Chat and completions declare their own 403 (it also carries spend_frozen), which
+    // replaces the injected one; their 401 is still injected. Completions
+    // authenticates before it opens its stream, so the streaming op gets it too.
     expect(chat.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
-    // Completions authenticates before it opens its stream, so it gets the injected 401 too.
     expect(completions.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
   });
 
-  it('publishes the organization policy refusals on the chat and completions 403s', () => {
+  it('publishes the organization policy and spend freeze refusals on the chat and completions 403s', () => {
     const errorCodes = (op: string) => doc.components.schemas[op].properties.errorCode.enum;
     expect(chat.responses['403'].content['application/json'].schema).toEqual(ref('sendChatMessageResponse403'));
     expect(errorCodes('sendChatMessageResponse403')).toEqual(
-      expect.arrayContaining(['account_suspended', 'org_model_not_allowed', 'org_tool_not_allowed'])
+      expect.arrayContaining(['account_suspended', 'org_model_not_allowed', 'org_tool_not_allowed', 'spend_frozen'])
     );
     expect(completions.responses['403'].content['application/json'].schema).toEqual(ref('createCompletionResponse403'));
     expect(errorCodes('createCompletionResponse403')).toEqual(
-      expect.arrayContaining(['account_suspended', 'org_model_not_allowed'])
+      expect.arrayContaining(['account_suspended', 'org_model_not_allowed', 'spend_frozen'])
     );
   });
 
@@ -449,9 +454,11 @@ describe('buildOpenApiDocument', () => {
   });
 
   it('excludes rate-limit headers from the INJECTED 401/403 but keeps them on a contract-declared 401', () => {
-    // GET /api/v1/me declares neither status: both come from registerContract's auth injection
+    // getMe declares neither status: both come from registerContract's auth injection
     // and mean "apiKeyAuth rejected the credential", which happens before
-    // apiKeyRateLimit runs - so those responses genuinely carry no rate-limit headers.
+    // apiKeyRateLimit runs - so those responses genuinely carry no rate-limit headers,
+    // even though the route's own 200 does.
+    expect(me.responses['200'].headers['X-RateLimit-Limit-Minute']).toBeDefined();
     expect(me.responses['401'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
     expect(me.responses['403'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
     // tts declares its OWN 401 (provider_not_configured), thrown from the handler

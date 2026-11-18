@@ -74,6 +74,40 @@ const buttons = (m: SlackAlarmMessage | null) =>
 const contextOf = (m: SlackAlarmMessage | null) =>
   (bodyOf(m).find(b => b.type === 'context')?.elements?.[0].text as string) ?? '';
 
+describe('account deletion deadline alarm routing', () => {
+  const alarm = { ...sample, AlarmName: 'bike4mind-production-account-deletion-deadline' };
+
+  it('pages production with the actual jobs catalog and sweep runbook', () => {
+    const message = formatAlarmSlackMessage(alarm, 'production', { mention: 'here' });
+    expect(message).not.toBeNull();
+    expect(message?.text).toContain('<!here>');
+    expect(header(message)).toBe(':rotating_light: PRODUCTION ALARM: Account deletion needs attention');
+    expect(contextOf(message)).toContain('level page  |  category jobs');
+    expect(sectionText(message, 'Why it matters')).toContain('sweep has not reported');
+    expect(sectionText(message, 'What to do')).toContain('infra/account-deletion-deadline-alarm.md');
+    expect(sectionText(message, 'What to do')).toContain('dead-letter queue');
+  });
+
+  it('keeps a development deadline page visible without a production mention', () => {
+    const message = formatAlarmSlackMessage({ ...alarm, AlarmName: 'bike4mind-dev-account-deletion-deadline' }, 'dev', {
+      mention: 'here',
+    });
+    expect(message).not.toBeNull();
+    expect(contextOf(message)).toContain('level page  |  category jobs');
+    expect(message?.text).not.toContain('<!here>');
+    expect(header(message)).toContain('Account deletion needs attention');
+  });
+
+  it('renders a real recovery but keeps initial insufficient-data settlement quiet', () => {
+    const recovered = formatAlarmSlackMessage({ ...alarm, NewStateValue: 'OK', OldStateValue: 'ALARM' }, 'production');
+    expect(recovered).not.toBeNull();
+    expect(bodyOf(recovered)[0].text?.text).toContain('back to normal');
+    expect(
+      formatAlarmSlackMessage({ ...alarm, NewStateValue: 'OK', OldStateValue: 'INSUFFICIENT_DATA' }, 'production')
+    ).toBeNull();
+  });
+});
+
 describe('formatAlarmSlackMessage on production', () => {
   it('renders a page-level alarm with a siren header, red bar, numbers and buttons', () => {
     const message = formatAlarmSlackMessage(burst, 'production', { appUrl: 'https://app.example.com/' });
@@ -437,6 +471,7 @@ describe('ALARM_CATALOG', () => {
       'llm-spend-rate': 'provider-spend',
       'llm-spend-hourly': 'provider-spend',
       'llm-spend-hourly-warn': 'provider-spend',
+      'refused-request-burst': 'refused-request-burst',
     });
     expect(ALARM_CATALOG['young-account-spend-rate'].action).toContain('listed above');
     expect(alarmCatalogEntry({ ...sample, AlarmName: 'bike4mind-dev-young-account-spend-rate' }, 'dev')?.detail).toBe(

@@ -4,7 +4,7 @@ import { collectAccessReview } from '@bike4mind/server-utils/security/accessRevi
 import { adminApi } from '@server/middlewares/adminApi';
 import { assertAccessReviewer, parseDormantDays, toAccessReviewRows } from '@server/admin/accessReview';
 
-/** The current quarter's admin access review: only the admin rows of the snapshot leave the server. */
+/** The current quarter's admin access review: only the admin rows and the role catalog of the snapshot leave the server. */
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'settings:manage' } }).get(async (req, res) => {
   assertAccessReviewer(req.user);
   const dormantDays = parseDormantDays(req.query.dormantDays);
@@ -21,6 +21,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'settings:m
     dormantDays,
     overdue: isAccessReviewOverdue(latestCompleted?.completedAt ?? null, now),
     admins: toAccessReviewRows(snapshot.admins, record, now, dormantDays),
+    roles: snapshot.roles,
     record,
   });
 });

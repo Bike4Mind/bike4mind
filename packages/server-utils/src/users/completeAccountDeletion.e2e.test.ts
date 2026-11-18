@@ -29,6 +29,7 @@ const h = vi.hoisted(() => ({
   sendComplete: vi.fn(),
   redactStripe: vi.fn(),
 }));
+vi.mock('../utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret' } }));
 vi.mock('./purgeAccountFiles', () => ({ purgeAccountFiles: h.purgeFiles }));
 vi.mock('../billing/redactAccountStripeCustomer', () => ({ redactAccountStripeCustomer: h.redactStripe }));
 vi.mock('./purgeAccountContent', () => ({ purgeAccountContent: h.purgeContent }));

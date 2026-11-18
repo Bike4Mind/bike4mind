@@ -379,7 +379,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/scoped-settings` | GET, PUT, DELETE | jwt+key | `admin:*` | GET: `settings:manage`; PUT: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `hooks/data/settings.ts` |
 | `/api/admin/scoped-settings/effective` | GET | jwt+key | `admin:*` | GET: `settings:manage` | no | - | 0 |
 | `/api/admin/search` | GET | jwt | - | GET: `support:read` | no | - | 1: `components/admin/shared/useAdminEntitySearch.ts` |
-| `/api/admin/secops-triage/status` | GET | jwt | - | GET: `support:read` | no | - | 1: `components/admin/SecopsTriageTab.tsx` |
+| `/api/admin/secops-triage/status` | GET | jwt | - | GET: `support:read` | no | - | 1: `hooks/data/admin.ts` |
 | `/api/admin/security-dashboard/attack-simulation` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/admin.ts` |
 | `/api/admin/security-dashboard/attack-simulation-ingest` | POST | handler | - | - | no | - | 0 |
 | `/api/admin/security-dashboard/cloud` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `hooks/data/admin.ts` |
@@ -423,7 +423,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/slack-app/reconnect` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
 | `/api/admin/slack-app/update-manifest` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
 | `/api/admin/slack-audit-logs` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 0 |
-| `/api/admin/slack-workspaces` | GET, PATCH | jwt+key | `admin:*` | GET: `settings:manage`; PATCH: `settings:manage` | no | - | 5: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx`, `components/admin/ContextInspectorTab.tsx`, `components/admin/SecopsTriageTab.tsx` +2 more |
+| `/api/admin/slack-workspaces` | GET, PATCH | jwt+key | `admin:*` | GET: `settings:manage`; PATCH: `settings:manage` | no | - | 5: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx`, `components/admin/ContextInspectorTab.tsx`, `components/admin/SecurityDashboard/IssueFilingSettingsDialog.tsx` +2 more |
 | `/api/admin/spend` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/ModelMetrics/hooks/useSpend.ts` |
 | `/api/admin/spend-reconciliation` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/CreditAnalysis/components/ReconciliationBanner.tsx` |
 | `/api/admin/stripe-disputes` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/stripeDisputes.ts` |

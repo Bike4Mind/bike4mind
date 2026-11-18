@@ -3,6 +3,8 @@ import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import {
   ErasureRecordModel,
+  AccountDeletionNoticeModel,
+  accountDeletionNoticeRepository,
   OrgAdminNotificationPrefModel,
   OrgAlertNotificationModel,
   Inbox,
@@ -45,6 +47,8 @@ beforeAll(async () => {
   database = await createMongoReplSet();
   await mongoose.connect(database.getUri(), { autoIndex: false });
   await settleAutoIndexBuilds(mongoose);
+  await AccountDeletionNoticeModel.createCollection();
+  await AccountDeletionNoticeModel.createIndexes();
 });
 afterAll(async () => {
   await mongoose.disconnect();
@@ -56,6 +60,7 @@ beforeEach(async () => {
   await OrgAlertNotificationModel.collection.deleteMany({});
   await Inbox.collection.deleteMany({});
   await ErasureRecordModel.deleteMany({});
+  await AccountDeletionNoticeModel.deleteMany({});
   await FeedbackNoteModel.deleteMany({});
   await FeedbackAiModel.deleteMany({});
   await FeedbackModel.deleteMany({});
@@ -115,6 +120,33 @@ const erase = (recordInTransaction?: () => Promise<void>) =>
   hardDeleteUser(id, { deletedBy: id, initiatedBy: 'self', logger, recordInTransaction }, users => users.delete(id));
 
 describe('hardDeleteUser erasure record transaction', () => {
+  it('commits the stored confirmation with the actual user deletion transaction', async () => {
+    const idHash = erasureIdHash(id);
+    await erase(() =>
+      accountDeletionNoticeRepository.record({ idHash, email: 'erase-me@example.test', now: new Date() })
+    );
+    expect(await User.collection.countDocuments({ _id: userId })).toBe(0);
+    expect(await accountDeletionNoticeRepository.find(idHash)).toMatchObject({
+      email: 'erase-me@example.test',
+      attempts: 0,
+    });
+    expect(await accountDeletionNoticeRepository.claimDue(idHash, new Date())).not.toBeNull();
+    expect(JSON.stringify(await ErasureRecordModel.find().lean())).not.toContain('erase-me@example.test');
+  });
+
+  it('rolls the confirmation back with the actual delete if a later audit step fails', async () => {
+    const idHash = erasureIdHash(id);
+    await expect(
+      erase(async () => {
+        await accountDeletionNoticeRepository.record({ idHash, email: 'erase-me@example.test', now: new Date() });
+        throw new Error('audit failed after notice');
+      })
+    ).rejects.toThrow('audit failed after notice');
+    expect(await User.collection.countDocuments({ _id: userId })).toBe(1);
+    expect(await accountDeletionNoticeRepository.find(idHash)).toBeNull();
+    expect(await ErasureRecordModel.countDocuments()).toBe(0);
+  });
+
   it('commits the hash-only record with the delete', async () => {
     await erase();
     expect(await User.collection.countDocuments({ _id: userId })).toBe(0);

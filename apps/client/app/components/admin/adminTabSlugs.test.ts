@@ -11,7 +11,7 @@ import {
   adminTabToSlug,
 } from './adminTabSlugs';
 
-const RETIRED_TABS = [AdminTab.RegistrationInvites, AdminTab.PartnerSignupRules];
+const RETIRED_TABS = [AdminTab.RegistrationInvites, AdminTab.PartnerSignupRules, AdminTab.SecOpsTriage];
 const ALL_TABS = Object.values(AdminTab).filter(
   (value): value is AdminTab => typeof value === 'number' && !RETIRED_TABS.includes(value)
 );
@@ -62,6 +62,13 @@ describe('adminTabRedirectFromSlug', () => {
     expect(adminTabFromSlug(slug)).toBeUndefined();
   });
 
+  it('sends the retired issue filing page to the Security page, Scans view', () => {
+    const redirect = adminTabRedirectFromSlug('sec-ops-triage');
+    expect(redirect?.tab).toBe(AdminTab.SecurityDashboard);
+    expect(redirect?.search).toEqual({ securityView: 'scans' });
+    expect(adminTabFromSlug('sec-ops-triage')).toBeUndefined();
+  });
+
   it('never redirects a current slug', () => {
     for (const slug of ADMIN_TAB_SLUG_REDIRECTS.keys()) {
       expect(ALL_TABS.map(tab => adminTabToSlug(tab))).not.toContain(slug);
@@ -84,6 +91,10 @@ describe('adminTabLinkSearch', () => {
     [AdminTab.PartnerSignupRules, 'packages'],
   ])('links retired tab %s to its Invite Center section', (tab, section) => {
     expect(adminTabLinkSearch(tab)).toEqual({ tab: 'waitlist', inviteSection: section });
+  });
+
+  it('links the retired issue filing page to the Security page, Scans view', () => {
+    expect(adminTabLinkSearch(AdminTab.SecOpsTriage)).toEqual({ tab: 'security-dashboard', securityView: 'scans' });
   });
 
   it('names no tab for a value that is not a member', () => {

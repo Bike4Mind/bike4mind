@@ -1300,7 +1300,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    */
   async settleIfUnfinished(
     id: string,
-    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply' | 'replies' | 'fallbackInfo'>> & {
+    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply' | 'replies' | 'fallbackInfo' | 'errorCode'>> & {
       finishReason?: string;
     }
   ): Promise<boolean> {
@@ -1366,6 +1366,34 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   async addImagesByAgentExecutionId(agentExecutionId: string, images: string[]) {
     if (!images.length) return;
     await this.model.updateOne({ agentExecutionId }, { $addToSet: { images: { $each: images } } });
+  }
+
+  /**
+   * Approvals still waiting on the user in the given sessions: a `pendingAction` raised after
+   * `raisedAfterTs` (ms epoch; older ones have lapsed). Bounded by the caller's session list, so it
+   * needs no index of its own.
+   */
+  async findPendingActionsBySessionIds(sessionIds: string[], raisedAfterTs: number, limit: number) {
+    if (sessionIds.length === 0) return [];
+    const quests = await this.model
+      .find({ sessionId: { $in: sessionIds }, 'pendingAction.ts': { $gt: raisedAfterTs } })
+      .select('_id sessionId pendingAction.tool pendingAction.ts pendingAction.params')
+      .sort({ 'pendingAction.ts': -1 })
+      .limit(limit)
+      .lean<
+        Array<{
+          _id: { toString(): string };
+          sessionId: string;
+          pendingAction: { tool: string; ts: number; params: Record<string, unknown> };
+        }>
+      >();
+    return quests.map(quest => ({
+      questId: quest._id.toString(),
+      sessionId: quest.sessionId,
+      tool: quest.pendingAction.tool,
+      ts: quest.pendingAction.ts,
+      params: quest.pendingAction.params,
+    }));
   }
 
   /**

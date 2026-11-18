@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
-import { UnauthorizedError } from '@bike4mind/utils';
+import { ForbiddenError } from '@bike4mind/utils';
 import { InviteType } from '@bike4mind/common';
 import { listInvitesForDocument } from './listForDocument';
 
@@ -45,14 +45,18 @@ describe('sharingService - listInvitesForDocument', () => {
     db.sessions.shareable.findShareAccessById.mockResolvedValue(null);
 
     await expect(listInvitesForDocument(user, { documentId, type: InviteType.Session }, { db } as any)).rejects.toThrow(
-      UnauthorizedError
+      ForbiddenError
     );
     expect(db.invites.findAllByDocumentId).not.toHaveBeenCalled();
   });
 
   it('authorizes a Group via findById + membership on its parent org', async () => {
     db.groups.findById.mockResolvedValue({ id: documentId, organizationId: 'org-1' });
-    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'other', users: [{ userId: 'user-1', permissions: ['read'] }] });
+    db.organizations.findById.mockResolvedValue({
+      id: 'org-1',
+      userId: 'other',
+      users: [{ userId: 'user-1', permissions: ['read'] }],
+    });
     db.invites.findAllByDocumentId.mockResolvedValue([{ id: 'i3', documentId, type: InviteType.Group }]);
 
     const result = await listInvitesForDocument(user, { documentId, type: InviteType.Group }, { db } as any);
@@ -66,7 +70,7 @@ describe('sharingService - listInvitesForDocument', () => {
     db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'other', users: [] });
 
     await expect(listInvitesForDocument(user, { documentId, type: InviteType.Group }, { db } as any)).rejects.toThrow(
-      UnauthorizedError
+      ForbiddenError
     );
   });
 
@@ -85,7 +89,7 @@ describe('sharingService - listInvitesForDocument', () => {
     db.groups.findById.mockResolvedValue(null);
 
     await expect(listInvitesForDocument(user, { documentId, type: InviteType.Group }, { db } as any)).rejects.toThrow(
-      UnauthorizedError
+      ForbiddenError
     );
     expect(db.invites.findAllByDocumentId).not.toHaveBeenCalled();
   });

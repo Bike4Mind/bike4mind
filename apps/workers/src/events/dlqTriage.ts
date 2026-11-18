@@ -8,13 +8,13 @@ import {
   SQSClient,
 } from '@aws-sdk/client-sqs';
 import { dlqTriageDeliveryRepository } from '@bike4mind/database';
-import { connectDB } from '@bike4mind/db-core';
 import { Logger } from '@bike4mind/observability';
 import { getDlqByLabel } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { triageDlqMessage, loadDlqTriageConfig } from '@server/admin/dlq/triage';
 import { Resource } from 'sst';
 import { buildDlqTriageSection } from './dlqTriageMessage';
 import { withinTriageBudget } from './dlqTriageBudget';
+import { connectRelayDb } from './relayDb';
 
 export async function collectDlqTriage(alarmName: string, appUrl?: string, runDeadline = Date.now() + 15_000) {
   const deadline = Math.min(runDeadline, Date.now() + 15_000);
@@ -32,13 +32,7 @@ async function collect(alarmName: string, appUrl: string | undefined, deadline: 
   const label = alarmName.slice(prefix.length).replace(/-(messages|age)$/, '');
   const entry = getDlqByLabel(label);
   if (!entry) return null;
-  await connectDB(Resource.MONGODB_URI.value.replace('%STAGE%', Resource.App.stage), new Logger(), {
-    serverSelectionTimeoutMS: 2_000,
-    connectTimeoutMS: 2_000,
-    socketTimeoutMS: 2_000,
-    timeoutMS: 2_000,
-    bufferCommands: false,
-  });
+  await connectRelayDb(2_000);
   const config = await loadDlqTriageConfig();
   if (!config.enabled || config.features.dlqTriage.mode === 'off' || config.dlqQueueModes[label] === 'off') return null;
   const alarms = await new CloudWatchClient({ maxAttempts: 1 }).send(

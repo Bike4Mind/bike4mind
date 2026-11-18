@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
-import { ForbiddenError, NotFoundError, UnauthorizedError } from '@bike4mind/utils';
+import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { InviteType } from '@bike4mind/common';
 import { cancelInviteById } from './cancelInviteById';
 
@@ -54,7 +54,7 @@ describe('sharingService - cancelInviteById', () => {
     });
     db.sessions.shareable.findShareAccessById.mockResolvedValue(null);
 
-    await expect(cancelInviteById(user, { id: 'inv-1' }, { db } as any)).rejects.toThrow(UnauthorizedError);
+    await expect(cancelInviteById(user, { id: 'inv-1' }, { db } as any)).rejects.toThrow(ForbiddenError);
     expect(db.invites.closeInvite).not.toHaveBeenCalled();
   });
 
@@ -145,7 +145,7 @@ describe('sharingService - cancelInviteById', () => {
     });
     db.groups.findById.mockResolvedValue(null);
 
-    await expect(cancelInviteById(user, { id: 'inv-1' }, { db } as any)).rejects.toThrow(UnauthorizedError);
+    await expect(cancelInviteById(user, { id: 'inv-1' }, { db } as any)).rejects.toThrow(ForbiddenError);
     expect(db.invites.closeInvite).not.toHaveBeenCalled();
   });
 

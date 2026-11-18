@@ -336,7 +336,10 @@ export interface ChatToolApproval {
   decidedBy: ChatApprovalDecidedBy;
   /** Whether a card was shown for this call. */
   asked: boolean;
-  /** Why the card asked when something beyond the tool itself raised it (a rule, a protected path, a loop). */
+  /**
+   * Why the card asked when something beyond the tool itself raised it (a rule, a protected path, a loop),
+   * or, in Full access, which of its stops held the call.
+   */
   askedBecause?: string;
   /** ISO time the card was shown; absent when none was. */
   requestedAt?: string;
@@ -1425,6 +1428,8 @@ export function normalizeSessionTitle(text: string): string {
 }
 
 export interface ChatSessionSummary extends ChatSessionMeta {
+  studioWorkspaceId?: string;
+  studioRootSessionId?: string;
   messageCount: number;
   /** How the last assistant turn ended; absent when the session has no assistant message. */
   lastOutcome?: ChildOutcome;
@@ -1440,6 +1445,9 @@ export interface ChatSessionSummary extends ChatSessionMeta {
 
 export interface ChatSession extends ChatSessionMeta {
   messages: ChatMessage[];
+  /** Local family ownership, independent of the server notebook identity. */
+  studioWorkspaceId?: string;
+  studioRootSessionId?: string;
   /**
    * The b4m notebook this conversation files its generations under, created lazily by the
    * server on the first one.

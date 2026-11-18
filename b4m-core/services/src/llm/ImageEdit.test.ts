@@ -25,6 +25,8 @@ import { estimateImageCredits } from '../imageCost';
 import { ImageEditBodySchema, ImageEditService, type ImageEditBody } from './ImageEdit';
 import type { SaveGeneratedAssetFn } from './saveGeneratedImage';
 
+const notFrozen = { findActiveForSubject: async () => null };
+
 // The real stochastic rounding, with its draw pinned so the final debit is assertable.
 const { settlementDraw } = vi.hoisted(() => ({ settlementDraw: vi.fn(() => 0.5) }));
 vi.mock('@bike4mind/common', async importOriginal => {
@@ -183,6 +185,7 @@ describe('ImageEditService.process model dispatch', () => {
       assertModelAdmission,
       creditHolds,
       db: {
+        spendFreezes: notFrozen,
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
         quests: { findById: vi.fn(async () => quest), update: vi.fn(async () => quest) },
         users: { findById: vi.fn(async () => richUser) },
@@ -851,6 +854,7 @@ describe('ImageEditService.process reference images (#2744)', () => {
     const service = new ImageEditService({
       assertModelAdmission: async () => {},
       db: {
+        spendFreezes: notFrozen,
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
         quests: { findById: vi.fn(async () => quest), update: vi.fn(async () => quest) },
         users: { findById: vi.fn(async () => richUser) },
@@ -1115,6 +1119,7 @@ describe('ImageEditService.process mask access (#3069)', () => {
     const service = new ImageEditService({
       assertModelAdmission: async () => {},
       db: {
+        spendFreezes: notFrozen,
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
         quests: { findById: vi.fn(async () => quest), update: vi.fn(async () => quest) },
         users: { findById: vi.fn(async () => richUser) },
@@ -1492,6 +1497,7 @@ describe('ImageEditService.invoke (retry quest bound to its session)', () => {
     const service = new ImageEditService({
       assertModelAdmission: async () => {},
       db: {
+        spendFreezes: notFrozen,
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
         quests: {
           findById: vi.fn(async () => ({
@@ -1575,6 +1581,7 @@ describe('ImageEditService quest partial writes', () => {
       assertModelAdmission: async () => {},
       creditHolds,
       db: {
+        spendFreezes: notFrozen,
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
         quests: { findById: vi.fn(async () => quest), update },
         users: { findById: vi.fn(async () => richUser) },
@@ -1735,6 +1742,49 @@ describe('ImageEditService quest partial writes', () => {
       expect(creditHolds.settle).not.toHaveBeenCalled();
       expect(doneWrite(update)?.creditsUsed).toBe(7);
     });
+
+    describe('spend freeze with credit enforcement off', () => {
+      const arrangeFreeze = (freeze: { scopeType: 'User'; frozenAt: Date } | null) => {
+        editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/out.png' });
+        const findActiveForSubject = vi.fn(async () => freeze);
+        return {
+          findActiveForSubject,
+          ...makeService('session1', undefined, { spendFreezes: { findActiveForSubject } }),
+        };
+      };
+
+      it('refuses a frozen subject with spend_frozen before the provider call', async () => {
+        const { service, update, creditHolds, findActiveForSubject } = arrangeFreeze({
+          scopeType: 'User',
+          frozenAt: new Date('2026-11-16T10:00:00.000Z'),
+        });
+
+        await process(service);
+
+        expect(findActiveForSubject).toHaveBeenCalledWith({
+          userId: 'user1',
+          organizationId: null,
+          apiKeyId: undefined,
+        });
+        expect(editSpy).not.toHaveBeenCalled();
+        expect(creditHolds.hold).not.toHaveBeenCalled();
+        const errorWrite = update.mock.calls
+          .map(c => c[0] as Record<string, unknown>)
+          .find(arg => arg.type === 'error');
+        expect(errorWrite?.errorCode).toBe('spend_frozen');
+      });
+
+      it('edits an unfrozen subject', async () => {
+        const { service, update, creditHolds, findActiveForSubject } = arrangeFreeze(null);
+
+        await process(service);
+
+        expect(findActiveForSubject).toHaveBeenCalledTimes(1);
+        expect(editSpy).toHaveBeenCalledTimes(1);
+        expect(creditHolds.hold).not.toHaveBeenCalled();
+        expect(doneWrite(update)?.status).toBe('done');
+      });
+    });
   });
 
   describe('saving the edited image to the user files', () => {
@@ -1890,6 +1940,7 @@ describe('ImageEditService.process (settled quest and early failure)', () => {
     const service = new ImageEditService({
       assertModelAdmission: async () => {},
       db: {
+        spendFreezes: notFrozen,
         quests: { findById: vi.fn(async () => quest), update },
         users: { findById: usersFindById },
         organizations: { findById: vi.fn(async () => null) },

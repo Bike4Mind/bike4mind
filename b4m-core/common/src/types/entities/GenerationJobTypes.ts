@@ -3,6 +3,7 @@ import type { GeneratedAssetSaveSkippedReason } from '../../generatedAsset';
 import type { GenerationProviderJobHandle, ProviderOutput } from '../../generation';
 import type { ImageProviderId, StoredImageRequest } from '../../image';
 import type { MusicGenerationRequest, MusicProviderId } from '../../music';
+import type { StoredSceneCompositionRequest } from '../../scene';
 import type { SoundGenerationVendor } from '../../soundGeneration';
 import type { ProviderJobHandle, VideoGenerationRequest, VideoProviderId } from '../../video';
 import type { VoiceGenerationVendor, VoiceOutputFormat } from '../../voiceGeneration';
@@ -10,7 +11,8 @@ import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType, type CreditHoldRecord } from './CreditHolderTypes';
 
-export const GENERATION_JOB_KINDS = ['video', 'music', 'image', 'speech', 'sound_effect'] as const;
+/** `compose` renders a Scene (a video with a music track muxed in) from files the caller already has. */
+export const GENERATION_JOB_KINDS = ['video', 'music', 'image', 'speech', 'sound_effect', 'compose'] as const;
 export type GenerationJobKind = (typeof GENERATION_JOB_KINDS)[number];
 
 /** The kinds a chat message can start; every generation kind can now land on a quest. */
@@ -79,6 +81,8 @@ export const GENERATION_JOB_ERROR_CODES = [
   'enqueue_failed',
   'cancelled',
   'account_blocked',
+  /** An input file the job reads is missing, unreadable, or outside the kind's limits (a compose job's media). */
+  'unsupported_input',
 ] as const;
 export type GenerationJobErrorCode = (typeof GENERATION_JOB_ERROR_CODES)[number];
 
@@ -237,6 +241,18 @@ export type SoundEffectJobPayload = {
   output?: AudioJobOutput;
 };
 
+/** Same storage fields as VideoJobOutput: the Scene is a video file. */
+export type ComposeJobOutput = VideoJobOutput;
+
+/**
+ * A Scene is rendered by our own worker (ffmpeg), not a provider: submit downloads the inputs, muxes them and stores
+ * the result in one step, so no provider handle or bytes ever reach this payload. Nothing is billed in v1.
+ */
+export type ComposeJobPayload = {
+  request: StoredSceneCompositionRequest;
+  output?: ComposeJobOutput;
+};
+
 /** Each kind's payload; the job type is a union discriminated on `kind`. */
 export type GenerationJobPayloads = {
   video: VideoJobPayload;
@@ -244,6 +260,7 @@ export type GenerationJobPayloads = {
   image: ImageJobPayload;
   speech: SpeechJobPayload;
   sound_effect: SoundEffectJobPayload;
+  compose: ComposeJobPayload;
 };
 
 export const GENERATION_JOB_DELIVERY_KINDS = ['slack'] as const;
@@ -300,12 +317,17 @@ export type IGenerationJobDocument = IGenerationJob & IMongoDocument;
 
 export type IGenerationJobDocumentOf<K extends GenerationJobKind> = Extract<IGenerationJobDocument, { kind: K }>;
 
-/** The text a job was made from, for titles and notifications: audio kinds take `text`, the rest a prompt. */
+/**
+ * The text a job was made from, for titles and notifications: audio kinds take `text`, a Scene (which has no prompt)
+ * its optional title, the rest a prompt.
+ */
 export const generationJobPrompt = (job: IGenerationJob): string => {
   switch (job.kind) {
     case 'speech':
     case 'sound_effect':
       return job.payload.request.text;
+    case 'compose':
+      return job.payload.request.title ?? '';
     default:
       return job.payload.request.prompt;
   }

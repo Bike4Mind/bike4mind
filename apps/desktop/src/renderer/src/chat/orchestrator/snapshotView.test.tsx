@@ -61,17 +61,48 @@ describe('snapshotView', () => {
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
+  it('answers a decision the snapshot lists, and logs a refusal from main', async () => {
+    const answerTaskDecision = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('gone'));
+    (window as unknown as { b4m: unknown }).b4m = { chat: { answerTaskDecision } };
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const decision = {
+      id: 'd1',
+      askedAt: '2026-10-01T00:00:00.000Z',
+      question: { question: 'Which?', header: 'Decision', options: [{ label: 'A', description: 'A' }] },
+    };
+    await themed.render(<ProbeView {...hostProps([agentFixture('a', 'needs-you', { decision })])} />);
+    const action = {
+      kind: 'answer',
+      agentId: 'a',
+      decisionId: 'd1',
+      answer: { status: 'answered', answers: [{ selected: ['A'] }] },
+    };
+    await act(async () => seen?.onAction(action as ViewAction));
+    expect(answerTaskDecision).toHaveBeenCalledWith('a', 'd1', action.answer);
+    expect(error).not.toHaveBeenCalled();
+    await act(async () => seen?.onAction(action as ViewAction));
+    expect(error).toHaveBeenCalledWith('A view action failed', expect.any(Error));
+    error.mockRestore();
+    delete (window as unknown as { b4m?: unknown }).b4m;
+  });
+
   it('pauses every animation under it while the window is hidden', async () => {
     Object.defineProperty(document, 'hidden', { configurable: true, value: true });
     await themed.render(<ProbeView {...hostProps([agentFixture('a')])} />);
     expect(el('probe').parentElement?.dataset.paused).toBe('hidden');
   });
 
-  it.each(['tile-wall', 'aquarium'] as const)('registers %s as a snapshot view that opens agents', async view => {
+  it.each([
+    ['tile-wall', 'orchestrator-tile-a'],
+    ['aquarium', 'orchestrator-fish-a'],
+    ['swimlanes', 'orchestrator-swimlanes-lane-a'],
+    ['constellation', 'orchestrator-constellation-node-a'],
+    ['transit', 'orchestrator-transit-agent-a'],
+  ] as const)('registers %s as a snapshot view that opens agents', async (view, targetId) => {
     const View = ORCHESTRATOR_VIEW_COMPONENTS[view];
     await themed.render(<View {...hostProps([agentFixture('a', 'needs-you')])} />);
-    const target = view === 'tile-wall' ? el('orchestrator-tile-a') : el('orchestrator-fish-a');
-    act(() => target.click());
+    const target = el(targetId);
+    act(() => target.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(onSelect).toHaveBeenCalledWith('a');
   });
 });

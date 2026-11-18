@@ -1,6 +1,7 @@
 import { cliTools } from '@bike4mind/services';
 import type { ServerToolExecutors } from '@bike4mind/services';
 import { adminSettingsRepository, apiKeyRepository, toolExecutionLogRepository } from '@bike4mind/database';
+import { SPEND_FROZEN_ERROR_CODE } from '@bike4mind/common';
 
 /**
  * Shared tool execution logic for both Lambda and Next.js API.
@@ -62,11 +63,13 @@ export function validateToolRequest(
 
 /**
  * HTTP status for an executed tool: 200, a 422 for a billed tool the caller cannot afford (the status
- * every credit refusal uses, with `errorCode: insufficient_credits` in the body), else 500.
+ * every credit refusal uses, with `errorCode: insufficient_credits` in the body), a 403 for a spend
+ * freeze (`errorCode: spend_frozen`, as on every other metered route), else 500.
  */
-export function toolResultStatus(result: { success: boolean; errorCode?: string }): 200 | 422 | 500 {
+export function toolResultStatus(result: { success: boolean; errorCode?: string }): 200 | 403 | 422 | 500 {
   if (result.success) return 200;
-  return result.errorCode === 'insufficient_credits' ? 422 : 500;
+  if (result.errorCode === 'insufficient_credits') return 422;
+  return result.errorCode === SPEND_FROZEN_ERROR_CODE ? 403 : 500;
 }
 
 /** Executes a tool and logs results; single source of truth for execution and audit logging. */

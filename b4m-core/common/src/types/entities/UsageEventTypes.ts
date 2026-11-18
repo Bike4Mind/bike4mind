@@ -5,6 +5,7 @@ import { CreditHolderType } from './CreditHolderTypes';
 import { NamedApiKeyUsage, ISourceUsage, ILedgerUsageTotal } from './CreditTransactionTypes';
 import { ApiKeyCompletionSource, COMPLETION_SOURCES, CompletionSource, IPlatformEndpointUsage } from '../analytics';
 import { COMPLETION_RUN_PURPOSES, COMPLETION_RUN_ROLES } from '../../constants/completionRuns';
+import type { SpendBreakdown, SpendBreakdownParams, SpendTimelineParams, SpendTimelineRow } from './SpendExplorerTypes';
 
 /**
  * Which product surface generated the provider call.
@@ -104,6 +105,7 @@ export const USAGE_EVENT_OPERATIONS = [
   'notebook_tagging',
   'context_summary',
   'memento',
+  'assistant_brief',
 ] as const;
 
 export type UsageEventOperation = (typeof USAGE_EVENT_OPERATIONS)[number];
@@ -863,6 +865,15 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
    * per window (current + prior) to build vs-prior KPI deltas.
    */
   spendSummary(filters?: ISpendSummaryFilters): Promise<ISpendSummary>;
+
+  /**
+   * Admin Spend explorer: cost per (bucket, series key) over [from, to), one row per
+   * non-empty pair, ascending by bucket. The caller fills empty buckets and folds small series.
+   */
+  spendTimeline(params: SpendTimelineParams): Promise<SpendTimelineRow[]>;
+
+  /** Admin Spend explorer: total, provider and segment cuts, and the top accounts over [from, to). */
+  spendBreakdown(params: SpendBreakdownParams): Promise<SpendBreakdown>;
 
   /** Settlement-basis rollup over the trailing N days (default 30): provider-vs-local token delta and written-off credits. */
   settlementBreakdown(days?: number): Promise<ISettlementBreakdown[]>;

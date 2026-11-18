@@ -44,6 +44,7 @@ import { executeCompletion } from './cliCompletions';
 const db = {
   adminSettings: {} as any,
   apiKeys: {} as any,
+  spendFreezes: { findActiveForSubject: async () => null },
   creditTransactions: {} as any,
   users: {
     incrementCredits: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100 }),

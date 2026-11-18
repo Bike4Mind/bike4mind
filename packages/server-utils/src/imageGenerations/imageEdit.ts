@@ -11,6 +11,7 @@ import {
   questRepository,
   Session,
   sessionRepository,
+  spendFreezeRepository,
   usageEventRepository,
   userRepository,
 } from '@bike4mind/database';
@@ -50,6 +51,7 @@ export const getImageEdit = (): ImageEditService => {
         usageEvents: usageEventRepository,
         organizations: organizationRepository,
         imageModerationIncidents,
+        spendFreezes: spendFreezeRepository,
       },
       imageProcessorLambdaName: Resource.ImageProcessor.name,
       imageModerationService: new RekognitionImageModerationService(),
