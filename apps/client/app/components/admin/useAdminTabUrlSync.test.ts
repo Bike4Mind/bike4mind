@@ -120,7 +120,7 @@ describe('useAdminTabUrlSync', () => {
 
   it.each([
     ['registration-invites', 'invites'],
-    ['partner-signup-rules', 'packages'],
+    ['partner-signup-rules', 'partners'],
     ['held-signup-grants', 'pending'],
   ])('rewrites the retired %s link to the %s Invite Center section, once', (slug, section) => {
     routerMock.search = { tab: slug };
@@ -136,7 +136,11 @@ describe('useAdminTabUrlSync', () => {
     expect(routerMock.navigate).toHaveBeenCalled();
 
     routerMock.navigate.mockClear();
-    routerMock.search = { tab: 'waitlist', inviteSection: section };
+    routerMock.search = {
+      tab: 'waitlist',
+      inviteSection: section,
+      ...(slug === 'held-signup-grants' && { heldGrants: 'open' }),
+    };
     rerender();
     expect(result.current.activeTab).toBe(AdminTab.Waitlist);
     expect(routerMock.navigate).not.toHaveBeenCalled();

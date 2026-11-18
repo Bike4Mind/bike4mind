@@ -214,7 +214,7 @@ describe('IncidentView', () => {
 
   it.each([
     ['risk-review', { tab: 'signup-risk-review' }],
-    ['held-grants', { tab: 'waitlist', inviteSection: 'pending' }],
+    ['held-grants', { tab: 'waitlist', inviteSection: 'pending', heldGrants: 'open' }],
     ['domain-holds', { tab: 'signup-domain-holds' }],
   ])('opens the %s queue at its current home', (queue, search) => {
     renderView();

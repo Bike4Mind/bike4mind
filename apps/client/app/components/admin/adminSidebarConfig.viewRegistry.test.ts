@@ -12,7 +12,11 @@ const sidebarTabs = SIDEBAR_SECTIONS.flatMap(section => section.items.map(item =
 
 describe('admin sidebar <-> VIEW_REGISTRY parity', () => {
   it('resolves the held queue view inside Invite Center', () => {
-    expect(adminTabLinkSearch(AdminTab.HeldSignupGrants)).toEqual({ tab: 'waitlist', inviteSection: 'pending' });
+    expect(adminTabLinkSearch(AdminTab.HeldSignupGrants)).toEqual({
+      tab: 'waitlist',
+      inviteSection: 'pending',
+      heldGrants: 'open',
+    });
   });
   it('registers every sidebar tab as an admin tab view', () => {
     const registeredTargets = new Set(adminTabViews.map(view => view.target));
