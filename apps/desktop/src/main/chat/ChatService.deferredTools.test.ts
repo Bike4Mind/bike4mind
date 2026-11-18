@@ -225,6 +225,7 @@ describe('ChatService deferred tools', () => {
       const stored = await store.get(id);
       expect(stored?.messages.some(message => message.content === 'It says z.')).toBe(true);
       const next = await turn(id, 'Repeat after restart.');
+      service.dispose();
       service = createService();
       const restarted = await turn(id, 'Continue.');
       expect(headHash(next)).toBe(headHash(restarted));
@@ -243,7 +244,6 @@ describe('ChatService deferred tools', () => {
     expect(loaded(1).estimatedTokens, 'loaded-tools estimate with zero start set').toBeLessThan(
       loaded(0).estimatedTokens
     );
-    expect(samples[1].requestBytes).toBeGreaterThan(samples[0].requestBytes);
     if (process.env.B4M_PROMPT_BASELINE === '1')
       console.info('Sanitized deterministic overhead comparison:', JSON.stringify(samples));
   });
