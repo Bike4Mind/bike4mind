@@ -1,11 +1,15 @@
 import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwatch';
-import { connectDB, User, UserApiKey } from '@bike4mind/database';
+import { adminSettingsRepository, connectDB, signupGrantBudgetRepository, User, UserApiKey } from '@bike4mind/database';
+import { userService } from '@bike4mind/services';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import type { PipelineStage } from 'mongoose';
 import type { ScheduledEvent } from 'aws-lambda';
 import { Resource } from 'sst';
 
 const HOUR_MS = 60 * 60 * 1000;
+const GRANT_POOLS = ['signup', 'trickle'] as const;
+
+export type GrantPoolUsage = { pool: (typeof GRANT_POOLS)[number]; spent: number; budget: number };
 
 export function accountCreationWindow(time: string) {
   const scheduled = Date.parse(time);
@@ -51,15 +55,45 @@ export function accountCreationQueries(since: Date, until: Date) {
   };
 }
 
-export function accountCreationMetricData(time: string, signups: number, keys: number, negativeBalances: number) {
+export function accountCreationMetricData(
+  time: string,
+  signups: number,
+  keys: number,
+  negativeBalances: number,
+  grantPools: GrantPoolUsage[] = []
+) {
   const { since, until } = accountCreationWindow(time);
+  const poolMetrics = grantPools.flatMap(({ pool, spent, budget }) => [
+    // Snapshots like NegativeBalances, so stamped with the hour boundary.
+    { MetricName: 'SignupGrantPoolSpent', Value: spent, Timestamp: until, Dimensions: [{ Name: 'Pool', Value: pool }] },
+    {
+      MetricName: 'SignupGrantPoolBudget',
+      Value: budget,
+      Timestamp: until,
+      Dimensions: [{ Name: 'Pool', Value: pool }],
+    },
+  ]);
   return [
     { MetricName: 'SuccessfulSignups', Value: signups, Timestamp: since },
     { MetricName: 'NewAccountApiKeys', Value: keys, Timestamp: since },
     // Stamped with the hour boundary because it is read at ~:05, not accumulated over the window.
     { MetricName: 'NegativeBalances', Value: negativeBalances, Timestamp: until },
+    ...poolMetrics,
     { MetricName: 'CensusCompleted', Value: 1, Timestamp: since },
   ].map(metric => ({ ...metric, Unit: 'Count' as const }));
+}
+
+async function grantPoolUsage(until: Date): Promise<GrantPoolUsage[]> {
+  // The pool-day containing the boundary, so a redelivered event reads the same counter.
+  const day = userService.signupGrantBudgetDay(until);
+  return Promise.all(
+    GRANT_POOLS.map(async pool => {
+      // A missing budget row resolves to 0, which must not fail the census.
+      const { budget } = await userService.resolvePoolBudget(adminSettingsRepository, pool);
+      const spent = await signupGrantBudgetRepository.getSpent(userService.signupGrantBudgetKey(pool, day));
+      return { pool, spent, budget };
+    })
+  );
 }
 
 export async function handler(event: ScheduledEvent): Promise<void> {
@@ -69,16 +103,17 @@ export async function handler(event: ScheduledEvent): Promise<void> {
     autoCreate: false,
   });
   const queries = accountCreationQueries(since, until);
-  const [signups, keys, negativeBalances] = await Promise.all([
+  const [signups, keys, negativeBalances, grantPools] = await Promise.all([
     User.countDocuments(queries.signups).maxTimeMS(60_000),
     UserApiKey.aggregate<{ count: number }>(queries.keys).option({ maxTimeMS: 60_000 }),
     User.countDocuments(queries.negativeBalances).maxTimeMS(60_000),
+    grantPoolUsage(until),
   ]);
   // Maximum, not Sum, makes a redelivered scheduled window idempotent at the alarm boundary.
   await new CloudWatchClient({}).send(
     new PutMetricDataCommand({
       Namespace: `${Resource.App.name}/${Resource.App.stage}/AccountCreation`,
-      MetricData: accountCreationMetricData(event.time, signups, keys[0]?.count ?? 0, negativeBalances),
+      MetricData: accountCreationMetricData(event.time, signups, keys[0]?.count ?? 0, negativeBalances, grantPools),
     })
   );
 }
