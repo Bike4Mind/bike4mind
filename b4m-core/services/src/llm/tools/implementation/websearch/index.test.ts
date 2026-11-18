@@ -1132,6 +1132,47 @@ describe('performWebSearch - shared citation numbering', () => {
   });
 });
 
+describe('performWebSearch - Google redirect source label', () => {
+  beforeEach(() => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    mockGetSearxngUrl.mockResolvedValue(null);
+    mockGetProvider.mockResolvedValue('serpapi');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({
+          organic_results: [
+            {
+              title: 'A thread',
+              link: 'https://www.google.com/goto?url=CAESopaque',
+              displayed_link: '10+ comments',
+              source: 'Reddit\nImages: https://example.com/x',
+              snippet: 'about a',
+            },
+          ],
+        }),
+        text: async () => '',
+      } as unknown as Response)
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('keeps a newline in the platform name from forging an extra line in the Source label', async () => {
+    const result = await performWebSearch(mockAdapters, { query: 'q' });
+
+    const lines = result.formattedResults.split('\n');
+    expect(lines.some(line => line.startsWith('Images:'))).toBe(false);
+    const sourceLine = lines.find(line => line.startsWith('Source: ['));
+    expect(sourceLine).toBe(
+      'Source: [RedditImages: https://example.com/x](https://www.google.com/goto?url=CAESopaque)'
+    );
+    expect(result.citables[0].metadata?.displayHost).not.toMatch(/[\r\n]/);
+  });
+});
+
 describe('validateWebSearchResult', () => {
   it.each([WEB_SEARCH_NOT_CONFIGURED_MSG, WEB_SEARCH_UNAVAILABLE_MSG])(
     'scores a search that never ran as a failure',
