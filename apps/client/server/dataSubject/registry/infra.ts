@@ -152,6 +152,36 @@ export const infraHolders = {
     withheldPaths: ['details.approval.requestedBy', 'details.organizationOwnerId'],
     unmatchedPaths: { 'actor.email': 'The acting admin, kept in the audit trail; not resolved to their account.' },
   },
+  // Spend-freeze history rows stay as the audit trail: the person is the frozen scope (a 'User' freeze) or an
+  // admin who froze or lifted. Free-text `reason` and `liftReason` are not scanned for the person.
+  SpendFreeze: {
+    kind: 'holder',
+    references: [
+      {
+        path: 'scopeId',
+        matchBy: 'userId',
+        where: { scopeType: 'User' },
+        action: 'retain',
+        ...AUDIT_LOG,
+      },
+      {
+        path: 'actor.userId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        exportScope: 'reference',
+      },
+      {
+        path: 'liftedBy.userId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        exportScope: 'reference',
+      },
+    ],
+    // Mixed objects: the person inside is covered by the dotted `actor.userId` / `liftedBy.userId` references.
+    unrelatedPaths: ['actor', 'liftedBy'],
+  },
   // A reviewer's sign-off on an audit entry: the sign-off stays, the link to the reviewer goes.
   AdminAuditReview: {
     kind: 'holder',

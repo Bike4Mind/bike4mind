@@ -6,6 +6,7 @@ import {
   resolveLegacyImageModel,
   usdToCredits,
   validateImageRequest,
+  type ApiKeyBillingOwnerType,
   type ImageJobRequest,
   type ImageModelCatalogEntry,
   type StoredImageRequest,
@@ -162,7 +163,17 @@ export async function createImageJobs(
 
   const { enforceCredits } = await deps.getSettings();
   const requiredCredits = usdToCredits(estimateImageJobUsd(request));
-  const holds = await holdBatch(missingIndexes.length, { enforceCredits, user: input.user, requiredCredits }, deps);
+  const holds = await holdBatch(
+    missingIndexes.length,
+    {
+      enforceCredits,
+      user: input.user,
+      requiredCredits,
+      apiKeyId: input.apiKeyId,
+      apiKeyBillingOwnerType: input.apiKeyBillingOwnerType,
+    },
+    deps
+  );
   if (!holds.ok) return holds;
 
   const groupId = replayed[0]?.payload.groupId ?? new Types.ObjectId().toHexString();
@@ -186,7 +197,13 @@ export async function createImageJobs(
   };
 }
 
-type HoldParams = { enforceCredits: boolean; user: CreateImageJobsInput['user']; requiredCredits: number };
+type HoldParams = {
+  enforceCredits: boolean;
+  user: CreateImageJobsInput['user'];
+  requiredCredits: number;
+  apiKeyId?: string;
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
+};
 
 async function holdBatch(
   count: number,

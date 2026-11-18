@@ -92,11 +92,17 @@ describe('snapshotView', () => {
     expect(el('probe').parentElement?.dataset.paused).toBe('hidden');
   });
 
-  it.each(['tile-wall', 'aquarium'] as const)('registers %s as a snapshot view that opens agents', async view => {
+  it.each([
+    ['tile-wall', 'orchestrator-tile-a'],
+    ['aquarium', 'orchestrator-fish-a'],
+    ['swimlanes', 'orchestrator-swimlanes-lane-a'],
+    ['constellation', 'orchestrator-constellation-node-a'],
+    ['transit', 'orchestrator-transit-agent-a'],
+  ] as const)('registers %s as a snapshot view that opens agents', async (view, targetId) => {
     const View = ORCHESTRATOR_VIEW_COMPONENTS[view];
     await themed.render(<View {...hostProps([agentFixture('a', 'needs-you')])} />);
-    const target = view === 'tile-wall' ? el('orchestrator-tile-a') : el('orchestrator-fish-a');
-    act(() => target.click());
+    const target = el(targetId);
+    act(() => target.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(onSelect).toHaveBeenCalledWith('a');
   });
 });

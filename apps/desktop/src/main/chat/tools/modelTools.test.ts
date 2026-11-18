@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatMedia } from '@shared/chat';
-import { EMPTY_MODEL_STATE, type ModelBuildReport, type ModelViewState } from '@shared/model3d';
+import { EMPTY_MODEL_STATE, type ModelBuildReport, type ModelVersion, type ModelViewState } from '@shared/model3d';
 import { BUILD_TIMEOUT_MS } from '../model3d/engineProtocol';
-import { modelRecord, modelScreenshot, modelView, turntablePath } from './modelTools';
+import { modelRecord, modelScreenshot, modelVersions, modelView, turntablePath } from './modelTools';
 import type { ModelViewPort, ToolContext, ToolReporter } from './types';
 
 vi.mock('electron', () => ({ protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() } }));
@@ -20,8 +20,10 @@ function setup(report: ModelBuildReport = OK) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'model-tools-')));
   writeFileSync(join(root, 'chest.model.js'), 'export default () => null');
   let state: ModelViewState = EMPTY_MODEL_STATE;
+  const versions: ModelVersion[] = [];
   const view = {
     current: () => state,
+    versions: vi.fn(async () => versions),
     open: vi.fn(async (path: string) => {
       state = { path, kind: 'model', generation: 1, source: '', missing: false };
       return state;
@@ -58,7 +60,10 @@ function setup(report: ModelBuildReport = OK) {
     },
     report: report_,
   };
-  return { root, view, context, images, media, keepScreenshot };
+  const setState = (next: ModelViewState) => {
+    state = next;
+  };
+  return { root, view, context, images, media, keepScreenshot, versions, setState };
 }
 
 describe('model_view', () => {
@@ -275,5 +280,61 @@ describe('turntablePath', () => {
     expect(turntablePath(join('/p', 'chest.model.js'), 'studio')).toBe(join('/p', 'chest-turntable.webm'));
     expect(turntablePath(join('/p', 'Lamp.GLB'), 'night')).toBe(join('/p', 'Lamp-night-turntable.webm'));
     expect(turntablePath(join('/p', 'Lamp.GLB'), 'sunset')).toBe(join('/p', 'Lamp-sunset-turntable.webm'));
+  });
+});
+
+describe('model_versions', () => {
+  const version = (number: number, path: string, source: string, extra: Partial<ModelVersion> = {}): ModelVersion => ({
+    number,
+    path,
+    source,
+    jointAngles: {},
+    createdAt: Date.UTC(2026, 10, 18, 9, number),
+    ...extra,
+  });
+
+  it('says how to restore through the file tools, so a restore keeps its approval', () => {
+    expect(modelVersions.schema.description).toContain('write its source back to its');
+    expect(modelVersions.schema.description).toContain('kept as a new version');
+    expect(modelView.schema.description).toContain('model_versions');
+  });
+
+  it('lists the versions oldest first and marks the newest one matching the file', async () => {
+    const { root, context, versions, setState } = setup();
+    const path = join(root, 'chest.model.js');
+    versions.push(version(1, path, 'a'), version(2, path, 'b'), version(3, path, 'a', { note: 'Restored v1' }));
+    setState({ path, kind: 'model', generation: 4, source: 'a', missing: false });
+    const result = await modelVersions.run({}, context);
+    const lines = result.split('\n');
+    expect(lines[0]).toContain('3 kept versions');
+    expect(lines[1]).toMatch(/^v1 .*chest\.model\.js$/);
+    expect(lines[2]).toMatch(/^v2 /);
+    expect(lines[3]).toContain('(Restored v1)  <- current');
+  });
+
+  it("returns one version's source and pose", async () => {
+    const { root, context, versions } = setup();
+    const path = join(root, 'chest.model.js');
+    versions.push(version(2, path, 'export default () => box', { jointAngles: { lid: 40 } }));
+    const result = await modelVersions.run({ version: 2 }, context);
+    expect(result).toContain('Joint pose: lid=40.');
+    expect(result).toContain(`write this source back to ${path}`);
+    expect(result).toContain('export default () => box');
+  });
+
+  it('names the kept range for a version that is gone', async () => {
+    const { root, context, versions } = setup();
+    const path = join(root, 'chest.model.js');
+    versions.push(version(4, path, 'a'), version(5, path, 'b'));
+    expect(await modelVersions.run({ version: 1 }, context)).toBe(
+      'There is no v1 in this conversation. Kept: v4 to v5.'
+    );
+  });
+
+  it("hides versions of files outside the session's folders", async () => {
+    const { context, versions } = setup();
+    versions.push(version(1, join(tmpdir(), 'elsewhere', 'secret.model.js'), 'private'));
+    expect(await modelVersions.run({}, context)).toContain('No versions are kept');
+    expect(await modelVersions.run({ version: 1 }, context)).toContain('There is no v1');
   });
 });

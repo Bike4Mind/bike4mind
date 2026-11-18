@@ -103,6 +103,7 @@ function buildDb() {
     creditTransactions: {},
     users,
     usageEvents: { record: vi.fn().mockResolvedValue(undefined) },
+    spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
   } as unknown as Parameters<typeof executeCompletion>[0]['db'];
 }
 

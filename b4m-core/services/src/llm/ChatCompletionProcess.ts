@@ -328,6 +328,8 @@ import {
   isMemberCreditCapExceeded,
   checkNewAccountSpendCap,
 } from '../creditService';
+import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
+import { spendFreezeSubjectForHold } from '../spendFreezeService/spendFreezeSubjectForHold';
 import {
   TelemetryBuilder,
   mapBackendToProvider,
@@ -3139,6 +3141,17 @@ export class ChatCompletionProcess {
           );
         }
       }
+
+      // Before any credit gate and whether or not credits are enforced: a frozen subject spends nothing new.
+      // The org is the loaded `organization` the reservation below holds against, so the two cannot diverge.
+      await assertSpendNotFrozen(
+        spendFreezeSubjectForHold({
+          userId: this.user.id,
+          organizationId: organization?.id ?? null,
+          apiKeyId: this.turnApiKeyId,
+        }),
+        { db: { spendFreezes: this.db.spendFreezes } }
+      );
 
       if (adminModerationEnabled) {
         const moderationStartTime = Date.now();

@@ -10,6 +10,7 @@ import {
   userRepository,
   lakeAccessEventRepository,
   scopedSettingsRepository,
+  spendFreezeRepository,
 } from '@bike4mind/database';
 import {
   apiKeyService,
@@ -46,6 +47,11 @@ import type { RetrievalLakeScope } from '@bike4mind/server-utils/dataLakes/resol
 import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 import { getRequestMembershipOrgIds } from '@bike4mind/server-utils/dataLakes/requestMembership';
 import { assertApiKeyOrgMembership } from '@bike4mind/server-utils/billing/assertApiKeyOrgMembership';
+import {
+  billedOrganizationIdForFreeze,
+  spendFreezeSubjectForRequest,
+} from '@bike4mind/server-utils/billing/spendFreezeSubject';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
 import { activePlanResolver } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
@@ -266,6 +272,13 @@ export async function runLakeSemanticSearch(
   if (shouldBill && billingUser) {
     assertApiKeyOrgMembership({ billingOrg, billingUser, isApiKeyCaller: Boolean(req.apiKeyInfo) });
   }
+
+  // Not gated on shouldBill: a freeze stops spend whether or not this deployment debits it. The key's
+  // own org stands in when the best-effort holder read above failed, so that failure cannot skip it.
+  await assertSpendNotFrozen(
+    spendFreezeSubjectForRequest(req, billingOrg?.id ?? billedOrganizationIdForFreeze(req.apiKeyInfo)),
+    { db: { spendFreezes: spendFreezeRepository } }
+  );
 
   // --- Get the embedding-provider API keys, for every provider we have one, not just the
   // requested model's own provider ---

@@ -1,12 +1,16 @@
 import {
   insufficientCreditsError,
+  isSpendFrozenError,
+  type ForbiddenError,
   type ISessionDocument,
   type ModelInfo,
+  type SpendFreezeSubject,
   type TooManyRequestsError,
 } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   organizationRepository,
+  spendFreezeRepository,
   usageEventRepository,
   userRepository,
 } from '@bike4mind/database';
@@ -54,10 +58,12 @@ export interface SessionOperationalCreditPreflightArgs {
 
 /**
  * Discriminated so a caller that must not fail its primary action can branch on the reason. `dailyCapError`
- * is set when the free-tier daily cap refused, so the throwing entry point keeps its 429 and Retry-After.
+ * is set when the free-tier daily cap refused, so the throwing entry point keeps its 429 and Retry-After;
+ * `frozenError` likewise carries the 403 `spend_frozen` of a frozen payer or organization.
  */
 export type SessionOperationalCreditVerdict =
-  { allowed: true } | { allowed: false; reason: string; dailyCapError?: TooManyRequestsError };
+  | { allowed: true }
+  | { allowed: false; reason: string; dailyCapError?: TooManyRequestsError; frozenError?: ForbiddenError };
 
 type BillingUser = NonNullable<Awaited<ReturnType<typeof userRepository.findById>>>;
 type BillingOrg = Awaited<ReturnType<typeof organizationRepository.findById>>;
@@ -174,6 +180,20 @@ function resolveRefusalReason({
 }
 
 /**
+ * The refusal verdict for a frozen subject, or null. A read failure is not defaulted to allow: it throws,
+ * which the assert variant surfaces and the filter variant turns into excluding the sessions.
+ */
+async function spendFreezeRefusal(subject: SpendFreezeSubject): Promise<SessionOperationalCreditVerdict | null> {
+  try {
+    await creditService.assertSpendNotFrozen(subject, { db: { spendFreezes: spendFreezeRepository } });
+    return null;
+  } catch (err) {
+    if (isSpendFrozenError(err)) return { allowed: false, reason: err.message, frozenError: err };
+    throw err;
+  }
+}
+
+/**
  * Credit pre-flight for the request handlers that queue session operational work. That work
  * settles asynchronously through `recordSessionOperationalUsage` -> `recordOperationalUsage`,
  * which is debit-capable but deliberately exempt from the per-member cap (#1651) because it must
@@ -219,16 +239,6 @@ export async function checkSessionOperationalCredits({
     return { allowed: true };
   };
 
-  // A deployment that does not meter credits never bills this work, so skip the holder reads.
-  // Inside the fail-open boundary: AdminSettingsCache awaits findAll() on a cache miss with no
-  // error handling of its own, and on the project-attach path a throw lands after
-  // withTransaction has already committed.
-  try {
-    if (!(await areCreditsEnforced(settingsDb, logger))) return { allowed: true };
-  } catch (err) {
-    return gateDisabled(err);
-  }
-
   // Best-effort resolution, matching the semantic-search pre-flight: a billing-store blip must
   // not turn a working request into a 500. Both assigned only after both reads succeed - a
   // half-resolved pair (user set, org null) would skip the member cap and read the member's
@@ -247,12 +257,29 @@ export async function checkSessionOperationalCredits({
       '[sessionOperationalCreditPreflight] gate disabled: failed to resolve user/organization for billing',
       err
     );
-    return { allowed: true };
+    // The credit gate fails open here, but the freeze does not: the payer id is known without the holder
+    // reads, and settlement may still charge.
+    return (await spendFreezeRefusal({ userId })) ?? { allowed: true };
   }
 
   // No user means nothing to attribute or bill: recordSessionOperationalUsage skips the same
-  // case, so there is no spend for this gate to guard.
-  if (!billingUser) return { allowed: true };
+  // case, so there is no spend for this gate to guard. The freeze is still read so every admit path checks it.
+  if (!billingUser) return (await spendFreezeRefusal({ userId })) ?? { allowed: true };
+
+  // The freeze comes before the credits-enforced and billing-enabled gates below: a freeze stops spend even
+  // where nothing is metered, as at the reservation gates. Ahead of the free-tier cap too.
+  const frozen = await spendFreezeRefusal({ userId: billingUser.id, organizationId: billingOrg?.id });
+  if (frozen) return frozen;
+
+  // A deployment that does not meter credits never bills this work, so skip the holder reads.
+  // Inside the fail-open boundary: AdminSettingsCache awaits findAll() on a cache miss with no
+  // error handling of its own, and on the project-attach path a throw lands after
+  // withTransaction has already committed.
+  try {
+    if (!(await areCreditsEnforced(settingsDb, logger))) return { allowed: true };
+  } catch (err) {
+    return gateDisabled(err);
+  }
 
   // Gated on exactly what recordOperationalUsage requires to debit, via the shared helper and the
   // same holder recordSessionOperationalUsage passes: a holder that would never be billed for this
@@ -318,11 +345,11 @@ export async function checkSessionOperationalCredits({
 /**
  * `checkSessionOperationalCredits` for the entry points whose whole purpose is the operational
  * spend, where a refusal is the answer to the request. Throws a 422 tagged
- * `insufficient_credits` - a billing state, not a bug - or the free-tier daily cap's 429.
+ * `insufficient_credits` - a billing state, not a bug - the free-tier daily cap's 429, or a freeze's 403.
  */
 export async function assertSessionOperationalCredits(args: SessionOperationalCreditPreflightArgs): Promise<void> {
   const verdict = await checkSessionOperationalCredits(args);
-  if (!verdict.allowed) throw verdict.dailyCapError ?? insufficientCreditsError(verdict.reason);
+  if (!verdict.allowed) throw verdict.dailyCapError ?? verdict.frozenError ?? insufficientCreditsError(verdict.reason);
 }
 
 /**
@@ -346,12 +373,24 @@ export async function filterSessionIdsByOperationalCredits(
 ): Promise<Set<string>> {
   const ownerless = sessions.filter(session => !session.userId).map(session => session.id);
   const billableCount = sessions.length - ownerless.length;
-  const verdict = await checkSessionOperationalCredits({
-    userId: payerId,
-    operationCount: billableCount * operationsPerSession,
-    operation,
-    logger,
-  });
+  let verdict: SessionOperationalCreditVerdict;
+  try {
+    verdict = await checkSessionOperationalCredits({
+      userId: payerId,
+      operationCount: billableCount * operationsPerSession,
+      operation,
+      logger,
+    });
+  } catch (err) {
+    // The only thing the check throws is an unreadable freeze. A caller whose primary action already committed
+    // must not turn into a 500, and the spend must not go ahead unchecked, so the sessions are left out.
+    logger?.warn(`[sessionOperationalCreditPreflight] skipping ${operation}; spend freeze could not be read`, {
+      payerId,
+      sessionCount: billableCount,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return new Set(ownerless);
+  }
   if (verdict.allowed) return new Set(sessions.map(session => session.id));
 
   logger?.warn(`[sessionOperationalCreditPreflight] skipping ${operation}; payer cannot cover it`, {
