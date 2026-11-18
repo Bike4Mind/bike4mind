@@ -815,6 +815,17 @@ const DLQ_REGISTRY = [
     describe: noEntity,
   },
   {
+    label: 'side-app-health-alerts',
+    displayName: 'Side App Health Alerts',
+    application: 'SideApps',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed connected app health alert invocations for inspection.',
+    replayNote: 'No SQS replay destination; the next hourly run re-evaluates, so inspect the failure instead.',
+    owner: 'Platform ops',
+    describe: noEntity,
+  },
+  {
     label: 'alarm-handler',
     displayName: 'DLQ Alarm Handler',
     application: 'AlarmPipeline',

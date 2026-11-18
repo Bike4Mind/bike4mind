@@ -31,6 +31,7 @@ export * from './dlqAlarms';
 export * from './mailAlarms';
 export * from './vectorizeAlarms';
 export * from './signupAlarms';
+export * from './sideAppMintAlarms';
 export * from './turnstileAlarms';
 export * from './imageModerationReviewAlarms';
 export * from './accountCreationAlarms';
