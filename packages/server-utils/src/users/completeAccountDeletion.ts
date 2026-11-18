@@ -9,6 +9,7 @@ import {
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { adminAuditService, authSessionService } from '@bike4mind/services';
+import { redactAccountStripeCustomer } from '../billing/redactAccountStripeCustomer';
 import { hardDeleteUser } from '../services/hardDeleteUser';
 import { systemAuditActor } from '../utils/adminAudit';
 import { sendAccountDeletionCompleteEmail } from './accountDeletionEmail';
@@ -148,6 +149,8 @@ export async function completeAccountDeletion(
     await deleteSoleOwnedOrganizations(userId, { logger, assertLease });
     await purgeAccountFiles(userId, { logger, assertLease });
     await purgeAccountContent(userId, { logger, assertLease });
+    // Before the user row goes: the customer ID lives on it, so only this phase can retry the redaction.
+    await redactAccountStripeCustomer(userId, { logger, assertLease });
     await assertLease();
     await authSessionService.endRealtimeConnections(
       { userId },
