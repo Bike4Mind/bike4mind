@@ -79,6 +79,11 @@ const argv = await yargs(hideBin(process.argv))
     type: 'boolean',
     description: 'Point the CLI at Bike4Mind production and remember it',
   })
+  .option('fullscreen', {
+    type: 'boolean',
+    description: 'Use alternate screen (TTY only); Ctrl+O browses completed messages',
+    default: false,
+  })
   .option('verbose', {
     alias: 'v',
     type: 'boolean',
@@ -458,6 +463,7 @@ const argv = await yargs(hideBin(process.argv))
   .parse();
 
 // Set environment variables from CLI flags
+process.env.B4M_FULLSCREEN = argv.fullscreen ? '1' : '0';
 if (argv.verbose) {
   process.env.B4M_VERBOSE = '1';
   process.env.LOG_LEVEL = 'debug'; // Enable debug logs in core packages

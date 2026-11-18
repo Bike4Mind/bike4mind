@@ -24,6 +24,7 @@ import type { McpManager } from '../utils/mcpAdapter';
 import { processFileReferences, hasFileReferences } from '../utils/processFileReferences.js';
 import type { CommandDefinition } from '../config/commands.js';
 import { useStdoutDimensions } from '../hooks/useStdoutDimensions.js';
+import { FullscreenHistory } from './FullscreenHistory.js';
 /**
  * Live-frame rows reserved for everything outside the step trace and any open
  * prompt: the thinking line and its margin, the bordered input box and the
@@ -46,6 +47,7 @@ const QUEUE_HINT = 'Enter steers this turn \u00B7 Tab queues for next turn \u00B
 const PEER_QUEUE_HINT = 'Enter and Tab queue your next turn \u00B7 Peer work does not receive your input';
 
 interface AppProps {
+  fullscreen?: boolean;
   onMessage: (message: string) => Promise<void>;
   onBackgroundCompletion?: () => Promise<void>; // Silent handler for background agent results
   onCommand: (command: string, args: string[]) => Promise<void>;
@@ -67,6 +69,7 @@ interface AppProps {
 }
 
 export function App({
+  fullscreen = false,
   onMessage,
   onBackgroundCompletion,
   onCommand,
@@ -179,6 +182,13 @@ export function App({
   // highlight in MessageItem.tsx). Subscribes to resize so the live frame
   // repaints at the new width instead of keeping the stale startup width.
   const [terminalCols, terminalRows] = useStdoutDimensions();
+  const [browsingHistory, setBrowsingHistory] = useState(false);
+  useInput(
+    (input, key) => {
+      if (key.ctrl && input === 'o') setBrowsingHistory(value => !value);
+    },
+    { isActive: fullscreen && !promptKey && !showConfigEditor && !showMcpViewer }
+  );
 
   // Ink wipes and rebuilds scrollback on every frame taller than the viewport
   // (see liveStepWindow.ts), so the trace and streaming reply only get the rows
@@ -262,6 +272,8 @@ export function App({
         <Box flexDirection="column" paddingX={1}>
           <McpViewer config={config} mcpManager={mcpManager} onClose={() => setShowMcpViewer(false)} />
         </Box>
+      ) : fullscreen && browsingHistory && !promptKey ? (
+        <FullscreenHistory messages={messages} rows={terminalRows} columns={terminalCols} />
       ) : (
         <>
           {/* HISTORY MESSAGES — rendered via <Static> so each message is
@@ -270,13 +282,20 @@ export function App({
               free. Trade-off: Ink 7.0.1 has a known resize-render bug
               where widening the terminal can leave ghost frames in
               scrollback. Re-evaluate when upgrading Ink. */}
-          <Static items={messages}>
-            {message => (
-              <Box key={message.id} flexDirection="column">
-                <MessageItem message={message} showThoughts={showThoughts} />
-              </Box>
-            )}
-          </Static>
+          {!fullscreen && (
+            <Static items={messages}>
+              {message => (
+                <Box key={message.id} flexDirection="column">
+                  <MessageItem message={message} showThoughts={showThoughts} />
+                </Box>
+              )}
+            </Static>
+          )}
+          {fullscreen && (
+            <Text dimColor wrap="truncate">
+              Ctrl+O: completed message history ({messages.length})
+            </Text>
+          )}
 
           <Box flexDirection="column">
             {/* PENDING MESSAGES - Dynamic rendering (updates in real-time) */}
