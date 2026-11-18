@@ -171,6 +171,29 @@ describe('OrchestratorStage', () => {
     expect(query('orchestrator-peek-drawer')).toBeNull();
   });
 
+  it.each(['tavern', 'aquarium'] as const)(
+    'keeps the %s parent scene action distinct from attention focus',
+    async view => {
+      const onParentFocus = vi.fn();
+      const onParentToggle = vi.fn();
+      await themed.render(
+        <OrchestratorStage
+          agents={[agentFixture('w', 'working')]}
+          onParentFocus={onParentFocus}
+          onParentToggle={onParentToggle}
+          view={view}
+          onViewChange={onViewChange}
+          actions={actions}
+          introPlaying={false}
+          renderView={(_view, props) => <button data-testid="scene-parent-action" onClick={props.onInnkeeperSelect} />}
+        />
+      );
+      await act(async () => el('scene-parent-action').click());
+      expect(onParentToggle).toHaveBeenCalledTimes(view === 'tavern' ? 1 : 0);
+      expect(onParentFocus).toHaveBeenCalledTimes(view === 'aquarium' ? 1 : 0);
+    }
+  );
+
   it('opens the first failed agent from the failed pill, and leaves it out when none failed', async () => {
     await renderStage([agentFixture('d', 'done'), agentFixture('f', 'failed'), agentFixture('g', 'failed')]);
     expect(el('orchestrator-summary-strip').textContent).not.toContain('failed');

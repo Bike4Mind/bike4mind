@@ -2,7 +2,7 @@ import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
-import { useEffect, useMemo, type ReactNode, useState } from 'react';
+import { useEffect, useMemo, type ReactNode, useRef, useState } from 'react';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
 import { playChime } from './chime';
 import { ExampleQuestButtons } from './exampleQuests';
@@ -143,6 +143,19 @@ export function OrchestratorStage({
   const hasSelection = selected !== null;
   const settled = ambient?.settled === true;
   const focused = focus?.on === true && rootId !== undefined && agents.length > 0;
+  const handledDetailsClicks = useRef(new WeakSet<Event>());
+
+  useEffect(() => {
+    if (!hasSelection || settled) return;
+    const onClick = (event: MouseEvent) => {
+      if (handledDetailsClicks.current.has(event)) return;
+      if (event.target instanceof Element && event.target.closest('[role="menu"], [role="listbox"], [role="dialog"]'))
+        return;
+      setSelectedId(null);
+    };
+    window.addEventListener('click', onClick);
+    return () => window.removeEventListener('click', onClick);
+  }, [hasSelection, settled]);
 
   useEffect(() => {
     if (conversationRequest) setSelectedId(null);
@@ -250,7 +263,7 @@ export function OrchestratorStage({
     introPlaying,
     personas,
     parent,
-    onInnkeeperSelect: onParentToggle ?? onParentFocus,
+    onInnkeeperSelect: view === 'tavern' ? (onParentToggle ?? onParentFocus) : onParentFocus,
     celebrating: finale.shown,
     sceneOverlay: bannerInScene ? banner : undefined,
     agentDetailsOverlay: detailsInScene ? detailsOverlay : undefined,
@@ -293,6 +306,13 @@ export function OrchestratorStage({
     <Box
       data-testid="orchestrator-stage"
       data-agent-details-open={hasSelection && !settled ? 'true' : undefined}
+      onClickCapture={event => {
+        handledDetailsClicks.current.add(event.nativeEvent);
+        if (!hasSelection || settled || !(event.target instanceof Element)) return;
+        if (!event.currentTarget.contains(event.target)) return;
+        if (event.target.closest('[data-agent-details-panel]')) return;
+        setSelectedId(null);
+      }}
       sx={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}
     >
       {settled ? (

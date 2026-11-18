@@ -672,28 +672,53 @@ describe('orchestrate mode in the chat shell', () => {
     expect((el('chat-composer-input') as HTMLTextAreaElement).value).toBe('');
   });
 
-  it.each(['tavern', 'aquarium'] as const)('closes the %s conversation only on scene click-away', async view => {
-    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
-    window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, view);
-    await openParent();
-    await enterOrchestrate();
-    await act(async () => el('chat-thread-empty-host').click());
-    expect(query('orchestrator-dock')).not.toBeNull();
-    await act(async () => el('thread-portal-control').click());
-    expect(query('orchestrator-dock')).not.toBeNull();
-    await act(async () => el(view === 'tavern' ? 'orchestrator-tavern' : 'orchestrator-aquarium').click());
-    expect(query('orchestrator-dock')).toBeNull();
-    await act(async () => el('orchestrator-dock-toggle-btn').click());
-    await act(async () =>
-      el(view === 'tavern' ? `orchestrator-tavern-agent-${CHILD.id}` : `orchestrator-fish-${CHILD.id}`).click()
-    );
-    expect(query('orchestrator-dock')).toBeNull();
-    expect(query('orchestrator-peek-drawer')).not.toBeNull();
-    await act(async () => el('chat-surface-toggle-chat').click());
-    await act(async () => el('chat-thread-region').click());
-    expect(query('chat-thread-empty-host')).not.toBeNull();
-    expect(query('orchestrator-dock-hidden')).toBeNull();
-  });
+  it.each(['tavern', 'aquarium'] as const)(
+    'closes the %s conversation on outside clicks but preserves portals',
+    async view => {
+      window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+      window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, view);
+      await openParent();
+      await enterOrchestrate();
+      await act(async () => el('chat-thread-empty-host').click());
+      expect(query('orchestrator-dock')).not.toBeNull();
+      await act(async () => el('thread-portal-control').click());
+      expect(query('orchestrator-dock')).not.toBeNull();
+      await act(async () => el('chat-composer-input').click());
+      expect(query('orchestrator-dock')).toBeNull();
+      await act(async () => el('orchestrator-dock-toggle-btn').click());
+      await act(async () => el('chat-header-tools').click());
+      expect(query('orchestrator-dock')).toBeNull();
+      await act(async () => el('orchestrator-dock-toggle-btn').click());
+      await act(async () => document.body.click());
+      expect(query('orchestrator-dock')).toBeNull();
+      await act(async () => el('orchestrator-dock-toggle-btn').click());
+      await act(async () => el(view === 'tavern' ? 'orchestrator-tavern' : 'orchestrator-aquarium').click());
+      expect(query('orchestrator-dock')).toBeNull();
+      await act(async () => el('orchestrator-dock-toggle-btn').click());
+      await act(async () =>
+        el(view === 'tavern' ? `orchestrator-tavern-agent-${CHILD.id}` : `orchestrator-fish-${CHILD.id}`).click()
+      );
+      expect(query('orchestrator-dock')).toBeNull();
+      expect(query('orchestrator-peek-drawer')).not.toBeNull();
+      await act(async () => el('orchestrator-peek-drawer').click());
+      expect(query('orchestrator-peek-drawer')).not.toBeNull();
+      await act(async () => el('orchestrator-peek-actions-menu-btn').click());
+      await act(async () => el('orchestrator-peek-actions-menu').click());
+      expect(query('orchestrator-peek-drawer')).not.toBeNull();
+      await act(async () => document.body.click());
+      expect(query('orchestrator-peek-drawer')).toBeNull();
+      await act(async () =>
+        el(view === 'tavern' ? `orchestrator-tavern-agent-${CHILD.id}` : `orchestrator-fish-${CHILD.id}`).click()
+      );
+      expect(query('orchestrator-peek-drawer')).not.toBeNull();
+      await act(async () => el('chat-composer-input').click());
+      expect(query('orchestrator-peek-drawer')).toBeNull();
+      await act(async () => el('chat-surface-toggle-chat').click());
+      await act(async () => el('chat-thread-region').click());
+      expect(query('chat-thread-empty-host')).not.toBeNull();
+      expect(query('orchestrator-dock-hidden')).toBeNull();
+    }
+  );
 
   it('celebrates a quest_complete summary and reads the report by scrolling to it', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');

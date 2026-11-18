@@ -302,6 +302,7 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions, skin, visibl
       aria-label={`Agent details: ${agent.title}`}
       tabIndex={-1}
       data-testid="orchestrator-peek-drawer"
+      data-agent-details-panel
       sx={{
         outline: 'none',
         width: 320,

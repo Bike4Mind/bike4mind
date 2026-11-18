@@ -1496,9 +1496,33 @@ export function ChatShell({
   const threadDockMode: ThreadDockMode = !orchestratorShown ? 'chat' : dockVisible ? 'docked' : 'hidden';
   const sceneConversation =
     orchestratorShown && !orchestratorPrefs.focus && ORCHESTRATOR_VIEW_INFO[orchestratorView].group === 'scene';
+  const handledConversationClicks = useRef(new WeakSet<Event>());
+  useEffect(() => {
+    if (!sceneConversation || !dockVisible) return;
+    const onClick = (event: MouseEvent) => {
+      if (handledConversationClicks.current.has(event)) return;
+      if (event.target instanceof Element && event.target.closest('[role="menu"], [role="listbox"], [role="dialog"]'))
+        return;
+      closeDock();
+    };
+    window.addEventListener('click', onClick);
+    return () => window.removeEventListener('click', onClick);
+  }, [sceneConversation, dockVisible, closeDock]);
 
   return (
-    <Box sx={chatShellRootSx} {...drop.handlers} data-testid="chat-shell">
+    <Box
+      sx={chatShellRootSx}
+      {...drop.handlers}
+      data-testid="chat-shell"
+      onClickCapture={event => {
+        handledConversationClicks.current.add(event.nativeEvent);
+        if (!sceneConversation || !dockVisible || !(event.target instanceof Element)) return;
+        if (!event.currentTarget.contains(event.target)) return;
+        if (threadHost.current?.contains(event.target)) return;
+        if (event.target.closest('[data-conversation-toggle]')) return;
+        closeDock();
+      }}
+    >
       <SpawnFailureToast />
       {deleteSessionId && (
         <DeleteSessionDialog
@@ -1731,13 +1755,6 @@ export function ChatShell({
                 never remounts the thread and loses the reader's place in it. */}
               <Box
                 data-testid="chat-thread-region"
-                onClickCapture={event => {
-                  if (!sceneConversation || !dockVisible || !(event.target instanceof Element)) return;
-                  if (!event.currentTarget.contains(event.target)) return;
-                  if (threadHost.current?.contains(event.target)) return;
-                  if (event.target.closest('[data-conversation-toggle]')) return;
-                  closeDock();
-                }}
                 sx={{
                   position: 'relative',
                   display: 'flex',
