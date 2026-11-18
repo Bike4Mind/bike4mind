@@ -669,6 +669,8 @@ export interface BrowserTabSummary {
   title: string;
   url: string;
   loading: boolean;
+  /** When an agent tool last took this tab (ms since epoch); absent or 0 if it never has. */
+  agentUsedAt?: number;
 }
 
 export type BrowserPageStateEvent = BrowserPaneState & { sessionId: string };
