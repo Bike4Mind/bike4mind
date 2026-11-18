@@ -13,6 +13,7 @@ import {
   ChartColumn,
   ChartLine,
   ChartSpline,
+  ChartColumnStacked,
   Clock,
   Code,
   Coins,
@@ -55,7 +56,6 @@ import {
   ScrollText,
   ClipboardCheck,
   Settings,
-  ShieldAlert,
   ShieldCheck,
   Siren,
   Sparkles,
@@ -121,6 +121,7 @@ export enum AdminTab {
   ArchitectureDiagrams = 47,
   Dependencies = 48,
   ApiCookbook = 49,
+  /** Retired page: its slug redirects to the Security page's Scans view (adminTabSlugs.ts). */
   SecOpsTriage = 51,
   VoiceSettings = 52,
   AgentExecutions = 53,
@@ -152,7 +153,8 @@ export enum AdminTab {
   LegacyApiKeys = 79,
   Roles = 80,
   AccessReview = 81,
-  TextModerationReview = 82,
+  SpendExplorer = 82,
+  TextModerationReview = 83,
 }
 
 /**
@@ -260,6 +262,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     items: [
       { Icon: ChartSpline, tab: AdminTab.Revenue, label: 'Revenue & payments', testid: 'admin-revenue-btn' },
       { Icon: Coins, tab: AdminTab.CreditAnalytics, label: 'Credits' },
+      {
+        Icon: ChartColumnStacked,
+        tab: AdminTab.SpendExplorer,
+        label: 'Spend explorer',
+        testid: 'admin-spend-explorer-btn',
+      },
       { Icon: CreditCard, tab: AdminTab.Subscriptions, label: 'Subscriptions', badge: 'newSubscriptions' },
       { Icon: Tag, tab: AdminTab.GrowthPricing, label: 'Pricing', testid: 'admin-growth-pricing-btn' },
     ],
@@ -270,7 +278,6 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     label: 'Trust and safety',
     items: [
       { Icon: ShieldCheck, tab: AdminTab.SecurityDashboard, label: 'Security', testid: 'admin-security-dashboard-btn' },
-      { Icon: ShieldAlert, tab: AdminTab.SecOpsTriage, label: 'SecOps triage', testid: 'admin-secops-triage-btn' },
       {
         Icon: ImageOff,
         tab: AdminTab.ModerationIncidents,

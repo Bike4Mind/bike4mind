@@ -119,6 +119,13 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
   },
   {
     kind: 's3',
+    bucket: 'modelPriceSnapshotBucket',
+    holds: 'Model price snapshot for the usage poller',
+    locatedBy: 'Not keyed by user',
+    erasure: { action: 'noPersonalData', note: 'Model ids and per-token prices only; overwritten every discovery run' },
+  },
+  {
+    kind: 's3',
     bucket: 'publishedArtifactsBucket',
     holds: 'Published artifact bundles and thumbnails',
     locatedBy: 'PublishedArtifact `storageKeyPrefix`',
@@ -204,11 +211,9 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
   {
     kind: 'service',
     name: 'Stripe',
-    receives: 'Customer record (email, name), payment methods, subscriptions, invoices and risk metadata',
-    erasure: {
-      action: 'notErased',
-      gap: 'Account deletion cancels subscriptions (`cancelAccountSubscriptions`) but keeps the customer: decide between deleting it and keeping it under the financial-record period',
-    },
+    receives:
+      'Customer record (email, name), payment methods, subscriptions, invoices and risk metadata. Customers of sole-owned organizations are subscription-cancelled with the organization but not redacted',
+    erasure: { action: 'erased', erasedBy: 'redactAccountStripeCustomer' },
     cannotRecall: `Charges and invoices, which Stripe keeps for its own legal obligations; ours: ${FINANCIAL_RECORD.reason}`,
   },
   {

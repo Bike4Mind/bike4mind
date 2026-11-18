@@ -17,7 +17,10 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock('@tanstack/react-query', () => ({ useQuery: (options: unknown) => mocks.query(options) }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn() } }));
-vi.mock('../../shared/useAdminListUrlState', () => ({ useAdminListUrlState: () => [mocks.state, mocks.update] }));
+// A fresh state object per render, as the real hook builds one from the URL on every call.
+vi.mock('../../shared/useAdminListUrlState', () => ({
+  useAdminListUrlState: () => [{ ...mocks.state, filters: { ...mocks.state.filters } }, mocks.update],
+}));
 const funding = { purchased: 10, subscription: 0, granted: 0, unknown: 5 };
 const report = {
   from: '2026-08-01T00:00:00Z',
@@ -100,5 +103,26 @@ describe('CreditEconomy', () => {
     expect(revoke).toHaveBeenCalledWith('blob:report');
     click.mockRestore();
     vi.unstubAllGlobals();
+  });
+
+  it('writes the default window to the URL once, not on every render while that write is pending', () => {
+    const pinned = mocks.state.filters;
+    mocks.state.filters = { from: '', to: '', owner: 'User', flow: '' };
+    try {
+      const { rerender } = draw();
+      for (let i = 0; i < 3; i++)
+        rerender(
+          <CssVarsProvider theme={theme}>
+            <CreditEconomy />
+          </CssVarsProvider>
+        );
+      expect(mocks.update).toHaveBeenCalledTimes(1);
+      expect(mocks.update).toHaveBeenCalledWith({
+        view: 'economy',
+        filters: { owner: 'User', flow: '', from: expect.any(String), to: expect.any(String) },
+      });
+    } finally {
+      mocks.state.filters = pinned;
+    }
   });
 });

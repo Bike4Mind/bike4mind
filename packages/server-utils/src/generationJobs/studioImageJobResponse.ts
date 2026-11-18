@@ -13,6 +13,7 @@ const PUBLIC_ERROR_MESSAGES: Record<GenerationJobErrorCode, string> = {
   region_unavailable: 'This model is not available in your region.',
   output_too_large: 'The generated image exceeded the maximum size.',
   input_image_not_found: 'An input image could not be found.',
+  unsupported_input: 'An input file could not be used for this image.',
   enqueue_failed: 'The image could not be started.',
   cancelled: 'The generation was cancelled.',
   account_blocked: 'This account cannot generate images.',

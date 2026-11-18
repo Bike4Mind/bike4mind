@@ -8,6 +8,7 @@ const { reads } = vi.hoisted(() => ({
     listQaRuns: vi.fn(),
     getQaRunDetail: vi.fn(),
     getQaTestHistory: vi.fn(),
+    getQaSummary: vi.fn(),
   },
 }));
 
@@ -42,6 +43,7 @@ import overview from '../overview';
 import runs from '../runs/index';
 import runDetail from '../runs/[id]';
 import tests from '../tests';
+import summary from '../summary';
 
 type Route = (req: unknown, res: unknown) => Promise<void>;
 const ADMIN = { id: 'admin1', isAdmin: true };
@@ -64,7 +66,7 @@ afterEach(() => {
 
 describe('admin QA read routes', () => {
   it('403s a non-admin on every route', async () => {
-    for (const route of [facets, overview, runs, runDetail, tests]) {
+    for (const route of [facets, overview, runs, runDetail, tests, summary]) {
       const query = { product: 'product-a', id: 'a'.repeat(24), testKey: 'k' };
       const response = await call(route, query, { id: 'u', isAdmin: false });
       expect(response.status).toBe(403);
@@ -97,6 +99,24 @@ describe('admin QA read routes', () => {
       from: new Date(from),
       to: new Date(to),
     });
+  });
+
+  it('passes summary filters without a product, with the picker from/to', async () => {
+    const from = '2026-11-01T00:00:00.000Z';
+    const to = '2026-11-08T00:00:00.000Z';
+    const { status } = await call(summary, { env: 'staging', from, to, range: '30d' });
+    expect(status).toBe(200);
+    expect(reads.getQaSummary).toHaveBeenCalledWith({
+      env: 'staging',
+      branch: 'main',
+      from: new Date(from),
+      to: new Date(to),
+    });
+  });
+
+  it('422s a summary range wider than the cap', async () => {
+    const res = await call(summary, { from: '2025-01-01T00:00:00.000Z', to: '2026-11-01T00:00:00.000Z' });
+    expect(res.status).toBe(422);
   });
 
   it('422s the overview without a product', async () => {

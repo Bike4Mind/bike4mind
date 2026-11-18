@@ -92,4 +92,33 @@ describe('ApiKeyUsageManager.logUsage', () => {
       ApiKeyUsageManager.logUsage({ ...baseParams, source: 'api', ownerType: CreditHolderType.User })
     ).resolves.toBeUndefined();
   });
+
+  it('stamps the app and standing on both writers for an exchange key', async () => {
+    const attribution = { oauthClientId: 'app-1', payerStanding: 'paid' as const };
+    await ApiKeyUsageManager.logUsage({
+      ...baseParams,
+      source: 'api',
+      ownerType: CreditHolderType.User,
+      ...attribution,
+    });
+    await ApiKeyUsageManager.beginCompletionUsage({
+      ...baseParams,
+      source: 'api',
+      ownerType: CreditHolderType.User,
+      ...attribution,
+    });
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining(attribution));
+    expect(beginMock).toHaveBeenCalledWith(expect.objectContaining(attribution));
+  });
+
+  it('drops a standing that has no app and stamps nothing for a personal key', async () => {
+    await ApiKeyUsageManager.logUsage({
+      ...baseParams,
+      source: 'api',
+      ownerType: CreditHolderType.User,
+      payerStanding: 'paid',
+    });
+    expect(createMock.mock.calls.at(-1)?.[0]).not.toHaveProperty('payerStanding');
+    expect(createMock.mock.calls.at(-1)?.[0]).not.toHaveProperty('oauthClientId');
+  });
 });

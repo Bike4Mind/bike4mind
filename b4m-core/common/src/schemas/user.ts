@@ -232,6 +232,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   acquisition: true,
   isSynthetic: true,
   isInternal: true,
+  accountSegment: true,
   isPersona: true,
   personaExpiresAt: true,
   mfaEnforcement: true,

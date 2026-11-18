@@ -14,6 +14,8 @@ const MEDIUM_BY_KIND: Record<GenerationJobKind, StudioCompletionMedium> = {
   music: 'music',
   speech: 'speech',
   sound_effect: 'sound-effects',
+  // A Scene is a rendered video clip.
+  compose: 'video',
 };
 
 const UNTITLED = 'Untitled';

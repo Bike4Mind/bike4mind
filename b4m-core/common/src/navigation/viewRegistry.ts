@@ -719,7 +719,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
     description:
       'Review users throttled or pending suspension for flagged prompts, or with a severe-category hit; confirm the suspension, keep them throttled or return them to active',
     navigationType: 'tab',
-    target: '82', // AdminTab.TextModerationReview
+    target: '83', // AdminTab.TextModerationReview
     keywords: [
       'text moderation',
       'flagged prompts',
@@ -832,11 +832,11 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'admin.secops_triage',
     section: 'admin',
-    label: 'SecOps triage',
+    label: 'Security scan issue filing',
     description:
-      'Configure the SecOps triage pipeline: enablement, dry-run, GitHub issue filing and Slack alerts for security findings',
+      'Security page, Scans view: GitHub issue filing status, recent filing runs and its settings (dry run, repository, Slack)',
     navigationType: 'tab',
-    target: '51', // AdminTab.SecOpsTriage
+    target: '51', // AdminTab.SecOpsTriage, retired: opens the Security page's Scans view
     keywords: ['secops', 'security triage', 'security alerts', 'vulnerabilities', 'security issues'],
     requiresAdmin: true,
   },
@@ -860,6 +860,17 @@ export const VIEW_REGISTRY: NavigableView[] = [
     navigationType: 'tab',
     target: '81', // AdminTab.AccessReview
     keywords: ['access review', 'quarterly review', 'admin access', 'dormant admins', 'least privilege', 'compliance'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.spend_explorer',
+    section: 'admin',
+    label: 'Spend explorer',
+    description:
+      'AI provider cost per day or hour with spikes against the rolling median, split by provider, model, feature or account type, and the accounts that drove any day',
+    navigationType: 'tab',
+    target: '82', // AdminTab.SpendExplorer
+    keywords: ['spend', 'ai cost', 'cost spike', 'provider cost', 'top spenders', 'cogs'],
     requiresAdmin: true,
   },
   {

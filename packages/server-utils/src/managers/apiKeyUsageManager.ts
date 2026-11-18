@@ -4,6 +4,7 @@ import type {
   ApiKeyBillingOwnerType,
   ApiKeyCompletionSource,
   IUserApiKeyBaseline,
+  PayerStanding,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
@@ -17,10 +18,18 @@ export interface LogApiKeyUsageParams {
   statusCode: number;
   source: ApiKeyCompletionSource;
   ownerType: ApiKeyBillingOwnerType;
+  /** Set for an exchange key only. */
+  oauthClientId?: string;
+  payerStanding?: PayerStanding;
   completionObservation?: ApiCompletionObservation;
   existingLogId?: string;
   logger?: Logger;
 }
+
+const exchangeAttributionFields = ({ oauthClientId, payerStanding }: LogApiKeyUsageParams) => ({
+  ...(oauthClientId ? { oauthClientId } : {}),
+  ...(oauthClientId && payerStanding ? { payerStanding } : {}),
+});
 
 /**
  * Service for logging API key usage
@@ -30,6 +39,7 @@ export class ApiKeyUsageManager {
   /** Resolves to the start row id, `null` when the account is gone, or `undefined` when the write failed. */
   static async beginCompletionUsage(params: LogApiKeyUsageParams): Promise<string | null | undefined> {
     const { keyId, userId, ipAddress, endpoint, method, source, ownerType, completionObservation, logger } = params;
+    const attribution = exchangeAttributionFields(params);
     try {
       return await apiKeyUsageLogRepository.beginCompletionObservation({
         keyId,
@@ -40,6 +50,7 @@ export class ApiKeyUsageManager {
         source,
         ownerType,
         completionObservation,
+        ...attribution,
       });
     } catch (error) {
       logger?.warn('Completion request start metadata could not be recorded', {
@@ -97,6 +108,7 @@ export class ApiKeyUsageManager {
         statusCode,
         source,
         ownerType,
+        ...exchangeAttributionFields(params),
         ...(completionObservation ? { completionObservation } : {}),
       });
 

@@ -25,17 +25,25 @@ export type BubblePlan =
   | { kind: 'choose'; prompt: string; options: BubbleOption[]; target: BubbleTarget }
   | { kind: 'open'; prompt?: string };
 
+/**
+ * A single-choice question's options as one-click buttons, or undefined when any of them is longer than
+ * `maxFace` or reads as destructive, so the question goes to the full card. Focus mode uses it too.
+ */
+export function oneClickOptions(labels: readonly string[], maxFace = BUBBLE_OPTION_MAX): BubbleOption[] | undefined {
+  const options = labels.map(label => {
+    const recommended = label.endsWith(RECOMMENDED_SUFFIX);
+    const face = recommended ? label.slice(0, -RECOMMENDED_SUFFIX.length) : label;
+    return { label, face, recommended };
+  });
+  return options.every(option => option.face.length <= maxFace && !DESTRUCTIVE.test(option.face)) ? options : undefined;
+}
+
 /** A question the bubble can answer with one click per option, or `open` when it cannot. */
 export function planForQuestion(question: ChatQuestion, target: BubbleTarget): BubblePlan {
   const prompt = question.question;
   if (question.multiSelect) return { kind: 'open', prompt };
-  const options = question.options.map(option => {
-    const recommended = option.label.endsWith(RECOMMENDED_SUFFIX);
-    const face = recommended ? option.label.slice(0, -RECOMMENDED_SUFFIX.length) : option.label;
-    return { label: option.label, face, recommended };
-  });
-  const oneClick = options.every(option => option.face.length <= BUBBLE_OPTION_MAX && !DESTRUCTIVE.test(option.face));
-  return oneClick ? { kind: 'choose', prompt, options, target } : { kind: 'open', prompt };
+  const options = oneClickOptions(question.options.map(option => option.label));
+  return options ? { kind: 'choose', prompt, options, target } : { kind: 'open', prompt };
 }
 
 /** The first call parked at the approval gate, as the bubble can answer it. */

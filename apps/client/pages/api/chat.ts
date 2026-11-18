@@ -41,6 +41,8 @@ import {
   BadGatewayError,
   chatContract,
   filterKnownTools,
+  ForbiddenError,
+  FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
   GatewayTimeoutError,
   OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
@@ -286,15 +288,31 @@ async function handleChat(
   const invokeService = new ChatCompletionInvoke(chatCompletionOptions);
   const turnAuth = requestTurnAuth(req);
   let quest: Awaited<ReturnType<ChatCompletionInvoke['invoke']>>;
-  try {
-    quest = await invokeService.invoke({
+  const invokeTurn = () =>
+    invokeService.invoke({
       body: internalRequest,
       userId: req.user.id,
       // The key (when one authenticated the turn) also attributes a lake write a tool drives.
       ...turnAuth,
+      oauthClientId: req.apiKeyInfo?.oauthExchangeClientId,
       adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
       // The visit the question was asked in, so the queued turn's first_value names it. A key turn names none.
       visitId: turnAuth.authOrigin === 'session' ? readVisitId(req.headers.cookie) : undefined,
+    });
+  try {
+    quest = await invokeTurn().catch(error => {
+      if (
+        simplifiedRequest.enableQuestMaster === undefined &&
+        !simplifiedRequest.toolMode &&
+        simplifiedRequest.enableTools === true &&
+        error instanceof ForbiddenError &&
+        error.additionalInfo?.errorCode === FREE_QUEST_LIMIT_REACHED_ERROR_CODE
+      ) {
+        // Admission refuses before quest creation, so the legacy default can safely fall back.
+        internalRequest.enableQuestMaster = false;
+        return invokeTurn();
+      }
+      throw error;
     });
   } catch (error) {
     // invoke validates a caller-supplied model (unknown, disabled, no longer accessible) before it
@@ -329,6 +347,8 @@ async function handleChat(
             body: {
               ...internalRequest,
               ...(invokeService.autoNameDispatched ? { autoNameDispatched: true } : {}),
+              questMasterStartId: invokeService.questMasterStartId,
+              questAdmittedAs: invokeService.questAdmittedAs,
               questId: quest.id,
               userId: req.user.id,
               // Mirrors invoke() above: process() reads the tool context's auth from this body only.

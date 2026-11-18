@@ -9,6 +9,7 @@ import {
   type ModelSummary,
   type ModelViewState,
 } from '@shared/model3d';
+import type { ModelInspection } from './inspection';
 import { latestOnly } from './latestOnly';
 import { checkedOutcome, errorMessage, ModelEngineFrame, reportGoodFileBuild } from './modelEngineFrame';
 import {
@@ -59,6 +60,11 @@ export type ModelEngine = {
   /** Saves a recorded turntable clip beside this conversation's model; null when cancelled. */
   saveRecording(sessionId: string | null, bytes: Uint8Array): Promise<string | null>;
   openFile(): Promise<void>;
+  /**
+   * What the pane's measure and section tools show now (null with neither on), so the agent's
+   * screenshots of this conversation's model carry them too.
+   */
+  setInspection(inspection: ModelInspection | null): void;
 };
 
 type Tracked = { sessionId: string | null; state: ModelViewState };
@@ -107,6 +113,7 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
   const darkRef = useRef(dark);
   darkRef.current = dark;
   const objectRef = useRef<THREE.Group | null>(null);
+  const inspectionRef = useRef<ModelInspection | null>(null);
   const stateRef = useRef(state);
   const sessionRef = useRef(sessionId);
   const overrides = useRef<Record<string, number>>({});
@@ -276,7 +283,8 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
                 current,
                 request.views,
                 darkRef.current,
-                request.pose === 'open' ? openPose(current) : {}
+                request.pose === 'open' ? openPose(current) : {},
+                inspectionRef.current
               );
         rendered
           .then(bytes => window.b4m.model.captureResult({ id, bytes }))
@@ -344,6 +352,9 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
   }, []);
 
   const setJointAngles = useCallback((angles: Record<string, number>) => setJointAnglesState(angles), []);
+  const setInspection = useCallback((inspection: ModelInspection | null) => {
+    inspectionRef.current = inspection;
+  }, []);
 
   return {
     sessionId,
@@ -364,5 +375,6 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
     exportFile,
     saveRecording,
     openFile,
+    setInspection,
   };
 }

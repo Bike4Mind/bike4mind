@@ -3,8 +3,10 @@ import {
   IUserDocument,
   MAX_STORAGE_LIMIT_MB,
   OrganizationSharingPolicySchema,
-  isOrgOwnerOrCurrentAdmin,
   ForbiddenError,
+  canAdministerOrganization,
+  isOrgMember,
+  isOrgOwnerOrPlatformAdmin,
 } from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { NotFoundError } from '@bike4mind/utils';
@@ -34,37 +36,21 @@ interface UpdateAdapters {
 export const update = async (user: IUserDocument, params: UpdateParameters, adapters: UpdateAdapters) => {
   const { id, ...rest } = secureParameters(params, updateSchema);
 
-  // A policy-only request is gated by isOrgOwnerOrCurrentAdmin below; any other field in the body keeps
-  // the findUpdateAccessById scope, so attaching sharingPolicy cannot widen who edits the profile.
-  const isPolicyOnly =
-    rest.sharingPolicy !== undefined &&
-    Object.entries(rest).every(([key, value]) => key === 'sharingPolicy' || value === undefined);
-  let organization = isPolicyOnly
-    ? await adapters.db.organizations.findById(id)
-    : await adapters.db.organizations.shareable.findUpdateAccessById(user, id);
-  if (user.isAdmin) {
-    organization = await adapters.db.organizations.findById(id);
-  }
-
+  const organization = await adapters.db.organizations.findById(id);
   if (!organization) throw new NotFoundError('Organization not found');
 
-  // Normalize a possibly-hydrated Mongoose doc to a plain object before spreading.
-  // findUpdateAccessById returns a hydrated doc (unlike findAccessibleById, which
-  // returns toJSON()); spreading it copies `_doc`/`$__` and nests the real fields,
-  // which corrupts the response shape AND defeats the response-boundary field strip
-  // in toSafeOrganization (top-level stripeCustomerId/userId would be undefined).
+  // Spreading a hydrated doc nests the real fields under `_doc`, which defeats toSafeOrganization's strip.
   const plain = (
     typeof (organization as { toJSON?: unknown }).toJSON === 'function'
       ? (organization as unknown as { toJSON: () => NonNullable<typeof organization> }).toJSON()
       : organization
   ) as NonNullable<typeof organization>;
 
-  if (rest.sharingPolicy !== undefined && !isOrgOwnerOrCurrentAdmin(user, plain)) {
-    throw new ForbiddenError('Only organization owners and managers can change sharing policy.');
+  // Every field here is org-wide, so the gate is the team role, never a sharing-ACL row.
+  if (!canAdministerOrganization(user, plain)) {
+    if (!isOrgMember(user, plain)) throw new NotFoundError('Organization not found');
+    throw new ForbiddenError('Only organization owners and managers can change organization settings.');
   }
-
-  const isManager = (plain.adminUserIds ?? []).includes(user.id);
-  const isOwner = plain.userId === user.id;
 
   // Persist ONLY the caller-editable fields this request changed, never a spread of
   // the read snapshot. A whole-document write reverted concurrent credit, seat and
@@ -72,20 +58,16 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
   const update: Partial<typeof plain> & { id: string } = { id };
   if (rest.name !== undefined) update.name = rest.name;
   if (rest.description !== undefined) update.description = rest.description;
-  // Only allow billing contact changes for owners and admins, not managers.
-  if (rest.billingContact !== undefined && !(isManager && !isOwner && !user.isAdmin)) {
+  // Owner or platform admin only; a manager's value is ignored, matching the client, which never sends it.
+  if (rest.billingContact !== undefined && isOrgOwnerOrPlatformAdmin(user, plain)) {
     update.billingContact = rest.billingContact;
   }
-  // Managers can update systemPrompt intentionally - they customize org-wide AI
-  // behavior. Authorization is already checked via findUpdateAccessById.
   if (rest.systemPrompt !== undefined) update.systemPrompt = rest.systemPrompt;
-  // Same audience as systemPrompt: a privacy posture for the whole org's devices.
   if (rest.redactPushContent !== undefined) update.redactPushContent = rest.redactPushContent;
   if (rest.sharingPolicy !== undefined) update.sharingPolicy = rest.sharingPolicy;
 
-  // Platform-admin path only. Owners and appointed org admins set the default through
-  // memberCreditBudget.setMemberCreditDefault (PUT /api/organizations/:id/member-credit-budget),
-  // which this generic update cannot serve: appointed admins fail findUpdateAccessById above.
+  // Platform-admin path only. Owners and managers set the default through
+  // memberCreditBudget.setMemberCreditDefault (PUT /api/organizations/:id/member-credit-budget).
   // Coalesce a cleared cap to null, NOT undefined:
   // $set persists null (read as "no cap" by isMemberCreditCapExceeded), and BSON drops
   // undefined, so `?? undefined` would leave the previous cap in place (a null PUT no-ops).

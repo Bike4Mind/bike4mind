@@ -154,7 +154,7 @@ describe('OrganizationGeneralSection', () => {
     expect(screen.getByTestId('organization-general-logo-btn')).toBeTruthy();
   });
 
-  it('shows name and description read-only to a manager without edit access, who can still set the logo', () => {
+  it('shows name and description read-only when the profile is not editable, keeping the logo upload', () => {
     renderAs({ id: 'mgr1' }, false);
     expect(input('organization-general-name-input').disabled).toBe(true);
     expect((screen.getByTestId('organization-general-description-input') as HTMLTextAreaElement).disabled).toBe(true);

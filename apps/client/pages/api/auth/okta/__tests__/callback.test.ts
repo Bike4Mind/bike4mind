@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ResponseBodyError } from 'openid-client';
 import { AuthStrategy } from '@bike4mind/common';
 import { ACCOUNT_LINK_EMAIL_MISMATCH, ACCOUNT_LINK_VERIFICATION_REQUIRED } from '@server/utils/auth/oauthAccountLink';
 import { IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
@@ -1007,5 +1008,55 @@ describe('/api/auth/okta/callback - missing code or state log level', () => {
     expect(res._getRedirectUrl()).toBe('/login?error=invalid_state');
     expect(Logger.warn).toHaveBeenCalledWith('[Okta Callback] Missing PKCE code verifier cookie');
     expect(Logger.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/auth/okta/callback - token exchange failure log level', () => {
+  function providerRejection(error: string) {
+    return new ResponseBodyError('server responded with an error in the response body', {
+      cause: { error, error_description: 'The authorization code is invalid or has expired.' },
+      response: new Response(null, { status: 400 }),
+    });
+  }
+
+  it('logs a provider-rejected code (invalid_grant) at warn with the provider error code only', async () => {
+    mockExchange.mockRejectedValue(providerRejection('invalid_grant'));
+
+    const res = await runCallback({ user: null, userInfo: {} });
+
+    expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
+    expect(Logger.warn).toHaveBeenCalledWith('[Okta Callback] Token exchange rejected by provider:', {
+      error: 'invalid_grant',
+    });
+    expect(Logger.error).not.toHaveBeenCalled();
+    expect(mockAuthFailCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        strategy: 'okta',
+        reason: 'invalid_grant',
+        meta: expect.objectContaining({ status: 400 }),
+      })
+    );
+  });
+
+  it('keeps a provider rejection of our client (invalid_client) at error', async () => {
+    const rejection = providerRejection('invalid_client');
+    mockExchange.mockRejectedValue(rejection);
+
+    await runCallback({ user: null, userInfo: {} });
+
+    expect(Logger.error).toHaveBeenCalledWith('[Okta Callback] Processing error:', rejection);
+  });
+
+  it('keeps an unexpected failure (network) at error', async () => {
+    const networkError = new TypeError('fetch failed');
+    mockExchange.mockRejectedValue(networkError);
+
+    const res = await runCallback({ user: null, userInfo: {} });
+
+    expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
+    expect(Logger.error).toHaveBeenCalledWith('[Okta Callback] Processing error:', networkError);
+    expect(mockAuthFailCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ meta: expect.objectContaining({ status: 500 }) })
+    );
   });
 });
