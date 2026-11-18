@@ -916,8 +916,8 @@ export const OrchestrationDefaultsSchema = z.object({
     'excel_generation',
     // Only offered when the run gets a video config, which enforces agentVideoClipsPerRun.
     'video_generation',
-    // Only offered when the run gets a production config: an admin with EnableStudioProductions on. Each writes
-    // only a composition the user owns, and every take, clip and track is a capped generation job.
+    // Only offered when the run gets a production config: the Productions flag and its audience rule must open to
+    // the run's user (never an API-key run). Each writes only a composition the user owns; every take is a capped job.
     'production_storyboard',
     'production_generate_shot',
     'production_add_audio',

@@ -122,7 +122,12 @@ async function makeTakes(
       continue;
     }
     const prompt = buildShotImagePrompt(shot.prompt, composition.brandKit.colors, products.length > 0);
-    const submitted = await submitShotImages(context, config, { prompt, references: products, aspectRatio }, takes);
+    const submitted = await submitShotImages(
+      context,
+      config,
+      { prompt, references: products, aspectRatio, compositionId, shotId: shot.id },
+      takes
+    );
     if (submitted.ok) started.set(shot.id, submitted.jobIds);
     else reports.set(shot.id, { id: shot.id, problem: submitted.message });
   }

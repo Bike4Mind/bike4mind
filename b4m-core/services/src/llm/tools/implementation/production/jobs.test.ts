@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { MUSIC_MODEL_CATALOG, VIDEO_MODEL_CATALOG, type GenerationJobState } from '@bike4mind/common';
+import {
+  IMAGE_MODEL_CATALOG,
+  MUSIC_MODEL_CATALOG,
+  VIDEO_MODEL_CATALOG,
+  type GenerationJobState,
+  type ImageModels,
+} from '@bike4mind/common';
 import type { ProductionJobView } from './config';
 import type { ProductionToolConfig } from './config';
 import {
@@ -7,7 +13,9 @@ import {
   jobOutcome,
   pickMusicModel,
   pickVideoModel,
+  DEAD_REPLAY_MESSAGE,
   submitMusic,
+  submitShotImages,
   submitShotClip,
   videoDurationFor,
   waitForJobs,
@@ -212,6 +220,63 @@ describe('submitMusic retries', () => {
     const result = await submitMusic(context, configWith(createJob), { prompt: 'calm', seconds: 10 });
     expect(result.ok).toBe(false);
     expect(createJob).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('submitShotImages', () => {
+  const referenceModel = (Object.keys(IMAGE_MODEL_CATALOG) as ImageModels[]).find(
+    id => (IMAGE_MODEL_CATALOG[id].modes.generate?.inputs.reference?.max ?? 0) > 0
+  );
+  const context = {
+    userId: 'user1',
+    questId: 'quest1',
+    user: { isAdmin: false },
+    statusUpdate: vi.fn(async () => undefined),
+  } as never;
+  const replayed = (id: string, state: GenerationJobState, created: boolean) => ({
+    ok: true as const,
+    created,
+    jobs: [{ id, state }],
+  });
+  const configWith = (createJobs: ReturnType<typeof vi.fn>) =>
+    ({ image: { createJobs }, imageModels: [referenceModel] }) as unknown as ProductionToolConfig;
+  const shot = (shotId: string) => ({
+    prompt: 'a red bike',
+    references: [] as string[],
+    aspectRatio: '16:9',
+    compositionId: 'c'.repeat(24),
+    shotId,
+  });
+  const keyOf = (createJobs: ReturnType<typeof vi.fn>, call: number) =>
+    (createJobs.mock.calls[call]![0] as { idempotencyKey: string }).idempotencyKey;
+
+  it('keys takes by shot, so identical prompts on two shots do not share a job', async () => {
+    const createJobs = vi.fn().mockResolvedValue(replayed('j', 'queued', true));
+    const config = configWith(createJobs);
+    await submitShotImages(context, config, shot('s1'), 2);
+    await submitShotImages(context, config, shot('s2'), 2);
+    await submitShotImages(context, config, shot('s1'), 2);
+    expect(keyOf(createJobs, 0)).not.toBe(keyOf(createJobs, 1));
+    expect(keyOf(createJobs, 0)).toBe(keyOf(createJobs, 2));
+  });
+
+  describe('retries', () => {
+    it('gives up once every attempt has failed', async () => {
+      const createJobs = vi.fn().mockResolvedValue(replayed('dead', 'failed', false));
+      const result = await submitShotImages(context, configWith(createJobs), shot('s1'), 1);
+      expect(result).toEqual({ ok: false, message: DEAD_REPLAY_MESSAGE });
+      expect(createJobs).toHaveBeenCalledTimes(3);
+    });
+
+    it('moves past a replay of a failed job and returns the fresh one', async () => {
+      const createJobs = vi
+        .fn()
+        .mockResolvedValueOnce(replayed('dead', 'failed', false))
+        .mockResolvedValueOnce(replayed('fresh', 'queued', true));
+      const result = await submitShotImages(context, configWith(createJobs), shot('s1'), 1);
+      expect(result).toEqual({ ok: true, jobIds: ['fresh'] });
+      expect(createJobs).toHaveBeenCalledTimes(2);
+    });
   });
 });
 
