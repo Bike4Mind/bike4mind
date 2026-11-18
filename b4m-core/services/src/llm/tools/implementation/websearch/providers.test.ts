@@ -153,50 +153,53 @@ describe('createSerpApiProvider', () => {
       return createSerpApiProvider(adapters).search('q', 3);
     };
 
-    it('rebuilds the page URL from the breadcrumb displayed_link', async () => {
+    it('keeps the redirect as url and carries the destination host from the breadcrumb', async () => {
       const results = await searchWith({
         link: goto,
         displayed_link: 'https://massive.com \u203a blog \u203a polygon-is-now-massive',
       });
 
-      expect(results[0].url).toBe('https://massive.com/blog/polygon-is-now-massive');
+      expect(results[0]).toMatchObject({ url: goto, displayHost: 'massive.com' });
     });
 
-    it('rebuilds a bare-host displayed_link and a /url redirect', async () => {
+    it('reads the host of a /url redirect and a bare-host breadcrumb', async () => {
+      const redirect = 'https://www.google.com/url?sa=t&url=CAESVQ';
+      const results = await searchWith({ link: redirect, displayed_link: 'https://www.massive.com' });
+
+      expect(results[0]).toMatchObject({ url: redirect, displayHost: 'www.massive.com' });
+    });
+
+    it('still reads the host when the breadcrumb path is cut short', async () => {
       const results = await searchWith({
-        link: 'https://www.google.com/url?sa=t&url=CAESVQ',
-        displayed_link: 'https://massive.com',
+        link: goto,
+        displayed_link: 'https://www.lambdafin.com \u203a articles \u203a api-for-stock-t\u2026',
       });
 
-      expect(results[0].url).toBe('https://massive.com/');
+      expect(results[0].displayHost).toBe('www.lambdafin.com');
     });
 
     it.each([
-      ['a truncated breadcrumb', 'https://massive.com \u203a docs \u203a rest \u203a stocks \u203a \u2026'],
-      ['a three-dot truncation', 'https://massive.com \u203a docs...'],
       ['a non-URL such as a video view count', '920+ views'],
       ['a breadcrumb that is itself a Google host', 'https://www.google.com \u203a search'],
       ['no displayed_link', undefined],
-    ])('keeps the redirect link for %s', async (_label, displayed_link) => {
+    ])('sets no displayHost for %s', async (_label, displayed_link) => {
       const results = await searchWith({ link: goto, displayed_link });
 
       expect(results[0].url).toBe(goto);
+      expect(results[0]).not.toHaveProperty('displayHost');
     });
 
-    it('leaves a /goto link on a non-Google host untouched', async () => {
+    it('sets no displayHost on a /goto link from a non-Google host', async () => {
       const lookalike = 'https://google.evil.com/goto?url=CAESbQ';
       const results = await searchWith({ link: lookalike, displayed_link: 'https://massive.com' });
 
-      expect(results[0].url).toBe(lookalike);
+      expect(results[0]).toEqual({ title: 'T', url: lookalike, snippet: 's' });
     });
 
-    it('leaves a direct link untouched even when displayed_link differs', async () => {
-      const results = await searchWith({
-        link: 'https://x.com/a?b=1',
-        displayed_link: 'https://other.com \u203a a',
-      });
+    it('sets no displayHost on a direct link even when displayed_link differs', async () => {
+      const results = await searchWith({ link: 'https://x.com/a?b=1', displayed_link: 'https://other.com \u203a a' });
 
-      expect(results[0].url).toBe('https://x.com/a?b=1');
+      expect(results[0]).toEqual({ title: 'T', url: 'https://x.com/a?b=1', snippet: 's' });
     });
   });
 
