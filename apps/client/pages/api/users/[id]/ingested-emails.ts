@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { IngestedEmailModel } from '@bike4mind/database';
+import { emailTriageItemRepository, IngestedEmailModel } from '@bike4mind/database';
 import mongoose from 'mongoose';
 
 /**
@@ -91,6 +91,7 @@ const handler = baseApi()
 
       // Soft-delete emails that belong to this user (deleteMany is overridden by soft-delete plugin)
       const result = await IngestedEmailModel.deleteMany({ _id: { $in: emailIds }, userId });
+      await emailTriageItemRepository.deleteByEmailIds(userId, emailIds);
       return res.json({ deletedCount: result.deletedCount });
     })
   );

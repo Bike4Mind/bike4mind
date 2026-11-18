@@ -7440,6 +7440,27 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 400
+                },
+                "source": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "email"
+                      ]
+                    },
+                    "emailId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The ingested email the item was triaged from."
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "emailId"
+                  ],
+                  "description": "The record the item came from, when it was not agent activity."
                 }
               },
               "required": [
@@ -7463,6 +7484,27 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 400
+                },
+                "source": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "email"
+                      ]
+                    },
+                    "emailId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The ingested email the item was triaged from."
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "emailId"
+                  ],
+                  "description": "The record the item came from, when it was not agent activity."
                 }
               },
               "required": [
@@ -7487,6 +7529,27 @@
                   "minLength": 1,
                   "maxLength": 400
                 },
+                "source": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "email"
+                      ]
+                    },
+                    "emailId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The ingested email the item was triaged from."
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "emailId"
+                  ],
+                  "description": "The record the item came from, when it was not agent activity."
+                },
                 "approval": {
                   "type": "object",
                   "properties": {
@@ -7510,6 +7573,31 @@
                     "pendingActionTs"
                   ],
                   "description": "Present when the decision is an agent approval. The approval may have lapsed or been answered since the brief was composed; the pending-actions endpoints are authoritative."
+                },
+                "draftReply": {
+                  "type": "object",
+                  "properties": {
+                    "to": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "subject": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "body": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4000
+                    }
+                  },
+                  "required": [
+                    "to",
+                    "subject",
+                    "body"
+                  ],
+                  "description": "Proposed reply for the user to review; nothing sends it."
                 }
               },
               "required": [
@@ -7593,6 +7681,27 @@
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 400
+                      },
+                      "source": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "email"
+                            ]
+                          },
+                          "emailId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "The ingested email the item was triaged from."
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "emailId"
+                        ],
+                        "description": "The record the item came from, when it was not agent activity."
                       }
                     },
                     "required": [
@@ -7616,6 +7725,27 @@
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 400
+                      },
+                      "source": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "email"
+                            ]
+                          },
+                          "emailId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "The ingested email the item was triaged from."
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "emailId"
+                        ],
+                        "description": "The record the item came from, when it was not agent activity."
                       }
                     },
                     "required": [
@@ -7640,6 +7770,27 @@
                         "minLength": 1,
                         "maxLength": 400
                       },
+                      "source": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "email"
+                            ]
+                          },
+                          "emailId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "The ingested email the item was triaged from."
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "emailId"
+                        ],
+                        "description": "The record the item came from, when it was not agent activity."
+                      },
                       "approval": {
                         "type": "object",
                         "properties": {
@@ -7663,6 +7814,31 @@
                           "pendingActionTs"
                         ],
                         "description": "Present when the decision is an agent approval. The approval may have lapsed or been answered since the brief was composed; the pending-actions endpoints are authoritative."
+                      },
+                      "draftReply": {
+                        "type": "object",
+                        "properties": {
+                          "to": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "subject": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "body": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4000
+                          }
+                        },
+                        "required": [
+                          "to",
+                          "subject",
+                          "body"
+                        ],
+                        "description": "Proposed reply for the user to review; nothing sends it."
                       }
                     },
                     "required": [
@@ -7748,6 +7924,27 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 400
+                },
+                "source": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "email"
+                      ]
+                    },
+                    "emailId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The ingested email the item was triaged from."
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "emailId"
+                  ],
+                  "description": "The record the item came from, when it was not agent activity."
                 }
               },
               "required": [
@@ -7771,6 +7968,27 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 400
+                },
+                "source": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "email"
+                      ]
+                    },
+                    "emailId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The ingested email the item was triaged from."
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "emailId"
+                  ],
+                  "description": "The record the item came from, when it was not agent activity."
                 }
               },
               "required": [
@@ -7795,6 +8013,27 @@
                   "minLength": 1,
                   "maxLength": 400
                 },
+                "source": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "email"
+                      ]
+                    },
+                    "emailId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The ingested email the item was triaged from."
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "emailId"
+                  ],
+                  "description": "The record the item came from, when it was not agent activity."
+                },
                 "approval": {
                   "type": "object",
                   "properties": {
@@ -7818,6 +8057,31 @@
                     "pendingActionTs"
                   ],
                   "description": "Present when the decision is an agent approval. The approval may have lapsed or been answered since the brief was composed; the pending-actions endpoints are authoritative."
+                },
+                "draftReply": {
+                  "type": "object",
+                  "properties": {
+                    "to": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "subject": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "body": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4000
+                    }
+                  },
+                  "required": [
+                    "to",
+                    "subject",
+                    "body"
+                  ],
+                  "description": "Proposed reply for the user to review; nothing sends it."
                 }
               },
               "required": [
@@ -35137,7 +35401,7 @@
       "get": {
         "operationId": "getBrief",
         "summary": "Get a brief",
-        "description": "Reads one brief. Decision items that reference an agent approval carry its `questId` and `pendingActionTs`; answer it through the pending-actions endpoints. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call. ",
+        "description": "Reads one brief. Decision items that reference an agent approval carry its `questId` and `pendingActionTs`; answer it through the pending-actions endpoints. Items triaged from an ingested email carry a `source`, and an email decision may carry a `draftReply` for you to review; nothing sends it. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call. ",
         "tags": [
           "AI"
         ],
