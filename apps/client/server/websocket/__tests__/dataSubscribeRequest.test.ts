@@ -101,8 +101,8 @@ vi.mock('@server/websocket/subscriptionScopes', () => ({
 
 // The real classes: the account-state gate throws @bike4mind/common's errors, so a stand-in class would never match.
 vi.mock('@bike4mind/server-utils/utils/errors', async () => {
-  const { ForbiddenError, NotFoundError, UnauthorizedError } = await import('@bike4mind/common');
-  return { ForbiddenError, NotFoundError, UnauthorizedError };
+  const { BadRequestError, ForbiddenError, NotFoundError, UnauthorizedError } = await import('@bike4mind/common');
+  return { BadRequestError, ForbiddenError, NotFoundError, UnauthorizedError };
 });
 
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
@@ -140,6 +140,7 @@ vi.mock('sst', () => ({
 }));
 
 import { func } from '../dataSubscribeRequest';
+import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { Organization, Project, User } from '@bike4mind/database';
 import { accessibleBy } from '@casl/mongoose';
 import { adminSettingsSubscriptionScope, inviteSubscriptionScope } from '@server/websocket/subscriptionScopes';
@@ -158,6 +159,139 @@ const baseEvent = (accessToken = 'token-123') => ({
   }),
 });
 const noopLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+
+describe('catalog signal initial delivery ordering', () => {
+  const orgId = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+  const trace: string[] = [];
+  const row = { _id: orgId, id: orgId, toJSON: () => ({ _id: orgId, id: orgId, modelPolicy: null }) };
+  let rows: Promise<Array<typeof row>>;
+  let initialReadFailure: Error | undefined;
+  const find = vi.fn((query: Record<string, unknown>) => ({
+    setOptions: () => ({
+      getQuery: () => query,
+      then: (resolve: (value: Array<typeof row>) => unknown, reject: (error: unknown) => unknown) => {
+        trace.push('find');
+        return (initialReadFailure ? Promise.reject(initialReadFailure) : rows).then(resolve, reject);
+      },
+    }),
+  }));
+  const runHandler = func as unknown as (event: unknown, context: unknown, logger: unknown) => Promise<unknown>;
+  const invoke = (overrides: Record<string, unknown> = {}) =>
+    runHandler(
+      {
+        requestContext: { connectionId: 'conn-1' },
+        body: JSON.stringify({
+          action: 'subscribe_query',
+          accessToken: 'token-123',
+          subscriptionId: 'catalog',
+          collectionName: 'organizations',
+          query: { _id: orgId },
+          fields: {},
+          fetchInitialData: true,
+          initialDataAfterSubscribe: true,
+          ...overrides,
+        }),
+      },
+      {},
+      noopLogger
+    );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    trace.length = 0;
+    connectionRow = { userId: 'caller-1' };
+    mockConnectionFindOne.mockImplementation(() => ({ lean: async () => connectionRow }));
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockVerifyToken.mockReturnValue({ id: 'caller-1' });
+    vi.mocked(User.findById).mockResolvedValue({ _id: 'caller-1', id: 'caller-1', tokenVersion: undefined } as never);
+    vi.mocked(Organization.findById).mockResolvedValue(null);
+    mockFindModelByCollectionName.mockReturnValue({ find });
+    rows = Promise.resolve([row]);
+    initialReadFailure = undefined;
+    mockUpsertSubscriber.mockReset().mockImplementation(async () => {
+      trace.push('upsert');
+    });
+    vi.mocked(sendToConnection)
+      .mockReset()
+      .mockImplementation(async () => {
+        trace.push('send');
+      });
+    mockRemoveConnectionSubscribers.mockResolvedValue(undefined);
+    mockCloseConnection.mockResolvedValue(undefined);
+  });
+
+  it.each([false, true])('preserves generic order and opts signal delivery in explicitly (flag=%s)', async flag => {
+    await invoke({ initialDataAfterSubscribe: flag });
+    expect(trace).toEqual(flag ? ['find', 'upsert', 'send'] : ['find', 'send', 'upsert']);
+    expect(mockUpsertSubscriber.mock.calls[0][0]).toMatchObject({
+      collectionName: 'organizations',
+      query: { $and: [{ _id: orgId }, {}] },
+    });
+  });
+
+  it('keeps an existing same-id subscriber untouched when the initial read fails', async () => {
+    const failure = new Error('initial read unavailable');
+    initialReadFailure = failure;
+    await expect(invoke()).rejects.toBe(failure);
+    expect(mockUpsertSubscriber).not.toHaveBeenCalled();
+    expect(mockRemoveConnectionSubscribers).not.toHaveBeenCalled();
+    expect(sendToConnection).toHaveBeenCalledWith(
+      'conn-1',
+      expect.any(String),
+      expect.objectContaining({ action: 'data_subscribe_error' })
+    );
+  });
+
+  it('does not register or deliver when the connection ends during the initial read', async () => {
+    let resolve: ((value: Array<typeof row>) => void) | undefined;
+    rows = new Promise(resolveRows => {
+      resolve = resolveRows;
+    });
+    const pending = invoke();
+    await vi.waitFor(() => expect(trace).toContain('find'));
+    connectionRow = null;
+    resolve?.([row]);
+    await expect(pending).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(mockUpsertSubscriber).not.toHaveBeenCalled();
+    expect(sendToConnection).not.toHaveBeenCalled();
+    expect(mockRemoveConnectionSubscribers).toHaveBeenCalledWith('conn-1');
+  });
+
+  it('removes a registration that raced revocation before sending the initial signal', async () => {
+    mockUpsertSubscriber.mockImplementationOnce(async () => {
+      connectionRow = null;
+    });
+    await expect(invoke()).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(sendToConnection).not.toHaveBeenCalled();
+    expect(mockRemoveConnectionSubscribers).toHaveBeenCalledWith('conn-1');
+    expect(mockCloseConnection).toHaveBeenCalled();
+  });
+
+  it('checks closure after initial delivery without writing a later registration', async () => {
+    vi.mocked(sendToConnection).mockImplementationOnce(async () => {
+      trace.push('send');
+      connectionRow = null;
+    });
+    await expect(invoke()).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(trace).toEqual(['find', 'upsert', 'send']);
+    expect(mockUpsertSubscriber).toHaveBeenCalledTimes(1);
+    expect(mockRemoveConnectionSubscribers).toHaveBeenCalledWith('conn-1');
+  });
+
+  it.each([
+    { collectionName: 'users' },
+    { query: {} },
+    { query: { _id: orgId, name: 'broad' } },
+    { query: { _id: 'invalid' } },
+    { fetchInitialData: false },
+    { fields: { modelPolicy: 0 } },
+  ])('refuses signal ordering outside a full single-org initial subscription: %j', async overrides => {
+    await expect(invoke(overrides)).rejects.toMatchObject({ statusCode: 400 });
+    expect(find).not.toHaveBeenCalled();
+    expect(mockUpsertSubscriber).not.toHaveBeenCalled();
+  });
+});
 
 describe('dataSubscribeRequest WS handler - rotation grace window', () => {
   beforeEach(() => {

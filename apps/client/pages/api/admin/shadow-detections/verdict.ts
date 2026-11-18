@@ -12,6 +12,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { respond } from '@server/utils/respond';
+import { withAiSuggestionId } from '@server/admin/ai/audit';
+import { recordDetectionAssessmentDecision } from '@server/admin/ai/assessmentSuggestion';
 
 const ONE_MINUTE_MS = 60_000;
 export const SHADOW_DETECTION_VERDICT_RATE_LIMIT = 60;
@@ -52,7 +54,7 @@ const handler = adminApi({
       const parsed = shadowDetectionVerdictRequestSchema.safeParse(req.body);
       if (!parsed.success) throw new BadRequestError('Expected a detection id, its revision and a verdict');
       const reason = parseAdminActionReason(parsed.data.reason);
-      const { id, expectedRevision, verdict } = parsed.data;
+      const { id, expectedRevision, verdict, aiDecision } = parsed.data;
 
       const result = await shadowDetectionRepository.addVerdict({
         id,
@@ -67,15 +69,30 @@ const handler = adminApi({
         return;
       }
 
-      // The verdict has already committed: a failed audit write must not turn it into a 500, which the
-      // reviewer's retry would then meet as a 409 against their own verdict.
+      // The verdict has already committed: a failed suggestion or audit write must not turn it into a 500,
+      // which the reviewer's retry would then meet as a 409 against their own verdict.
+      let aiSuggestionId: string | undefined;
+      if (aiDecision) {
+        try {
+          aiSuggestionId = await recordDetectionAssessmentDecision({
+            detectionId: result.item.id,
+            verdict,
+            aiDecision,
+            fallbackReason: reason,
+            decidedBy: { userId: req.user.impersonatedBy ?? req.user.id, name: req.user.username || 'Admin' },
+          });
+        } catch (error) {
+          req.logger.error(`AI suggestion decision failed for shadow detection verdict ${result.item.id}`, error);
+        }
+      }
       try {
+        const details = auditDetails(result.item);
         await recordAdminActionFromRequest(req, {
           action: 'security.detection.reviewed',
           target: { kind: 'system', id: result.item.id, displayName: `Shadow detection ${result.item.id}` },
           summary: `graded a ${result.item.detector} detection as ${verdict}`,
           reason,
-          details: auditDetails(result.item),
+          details: aiSuggestionId ? withAiSuggestionId(details, aiSuggestionId) : details,
         });
       } catch (error) {
         req.logger.error(`Audit entry failed for shadow detection verdict ${result.item.id}`, error);

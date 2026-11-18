@@ -4,7 +4,7 @@
 // handler is not built on defineLambdaRoute.
 //
 // A Function URL is a public endpoint: it skips every middleware the Next.js
-// transport installs, so the contract has to be wired at the handler. This is the
+// transport installs, so the contract has to be wired at the handler. This is
 // scan 4 of scripts/check-contract-gate.sh; the earlier scans cover
 // apps/client/pages/api and cannot see a Lambda declared in infra/.
 //
@@ -515,7 +515,7 @@ function main() {
   if (problems.length > 0) {
     for (const problem of problems) console.error(`::error::${problem}`);
     console.error(
-      `ERROR: ${problems.length} unreadable Function URL declaration(s) under infra/; the contract gate cannot verify them.`
+      `ERROR: ${problems.length} unverifiable Function URL declaration(s) under infra/; the contract gate cannot verify them.`
     );
     process.exit(2);
   }

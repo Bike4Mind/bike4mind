@@ -7,24 +7,17 @@ tags: [project-intelligence, gantt, scheduling, experimental]
 
 # B4M Pi - Project Intelligence
 
-*(Experimental Feature — enable in [Profile > Settings > Experimental Features](./profile-settings.md#experimental-features))*
+*(Experimental Feature - enabled by an administrator)*
 
-B4M Pi is a project intelligence dashboard that provides repository analysis, task scheduling, Gantt chart visualization, and team activity tracking — all powered by your connected GitHub repositories.
+B4M Pi is a project intelligence dashboard that provides repository analysis, task scheduling, Gantt chart visualization, and team activity tracking, all powered by your connected GitHub repositories.
 
-> **Availability:** This feature may be enabled or disabled at the organizational level by your administrator. If the toggle is grayed out with "Disabled by administrator," contact your organization admin to request access.
+> **Availability:** An administrator enables B4M Pi and grants access to it. There is no per-user switch. If you do not see B4M Pi, contact your organization admin to request access.
 
 ---
 
-## How to Enable
-
-1. Click your **avatar** in the sidebar footer to open your Profile
-2. Go to the **Settings** tab
-3. Scroll to **Experimental Features**
-4. Toggle **B4M Pi** on
-
 ## How to Access
 
-Once enabled, B4M Pi is available from the sidebar footer:
+Once you have access, B4M Pi is available from the sidebar footer:
 
 1. In the left sidebar footer, click the **three-dot menu** (more options button)
 2. Select **B4M Pi** from the menu

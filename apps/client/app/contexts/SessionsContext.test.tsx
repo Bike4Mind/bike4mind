@@ -79,7 +79,6 @@ const mockUserSettings = {
       enableDeepResearch: false,
       enableRapidReply: false,
       enableResearchEngine: false,
-      enableBmPi: false,
       enableLattice: false,
     },
   },

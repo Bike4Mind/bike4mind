@@ -704,7 +704,7 @@ B4M_DISCOVERY_DRIVER=true
 
 The `worker` is the only service that runs discovery on a schedule, even though every service loads the same env file. It runs discovery once at boot (if no recent successful run exists) and then on the interval. The flag gates the admin "Run now" button too: without it the app answers 503 and starts nothing, so an install that never sets it stays offline however the run is asked for.
 
-Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Profile menu -> More -> API Keys) - there is nothing extra to configure, except for Bedrock (see [Amazon Bedrock](#amazon-bedrock-optional) below). Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
+Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Profile menu -> More -> API Keys) - there is nothing extra to configure, except for Bedrock (see [Amazon Bedrock](#amazon-bedrock-optional) below). Everything else is tuned in the app under **Admin > AI > Models**, in the **Settings** section: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). The **Discovery** section of the same page shows the last run and what it found.
 
 ### Amazon Bedrock (optional)
 
@@ -1137,14 +1137,14 @@ Per-IP rate limits (sign-in codes, unauthenticated endpoints), the SSO failure l
 
 Behind a reverse proxy that peer is the proxy, so every visitor would share one rate-limit bucket. Tell the app how many proxies sit in front of it:
 
-| Setup | `TRUSTED_PROXY_HOPS` |
-| --- | --- |
-| No proxy (direct `:3000`) | unset (or `0`) - on Docker Desktop (macOS/Windows) published ports arrive from the Docker gateway, so every client still shares one bucket |
-| Tailscale sidecar (Path A, including the Headscale variant) | `1` - set for you by `compose.tailscale.yaml`, which also binds the app port to loopback; hops=1 trusts only the rightmost `X-Forwarded-For` entry, which `tailscale serve` (Go `httputil.ReverseProxy` in Rewrite mode) sets to the tailnet peer's address. This follows from serve's proxy design and has not been tested end to end here. |
-| Bundled Caddy (`compose.caddy.yaml`) | `1` - set for you |
-| Your own single proxy (nginx, Traefik, a cloud load balancer) | `1` |
-| Kubernetes chart via `kubectl port-forward` | unset - every connection arrives from the pod's loopback, so users share one bucket; add `TRUSTED_PROXY_HOPS` under the chart's `config:` once you put an ingress in front |
-| A CDN or load balancer in front of your proxy | `2`, and the inner proxy must append to (not replace) `X-Forwarded-For` |
+| Setup                                                         | `TRUSTED_PROXY_HOPS`                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No proxy (direct `:3000`)                                     | unset (or `0`) - on Docker Desktop (macOS/Windows) published ports arrive from the Docker gateway, so every client still shares one bucket                                                                                                                                                                                                   |
+| Tailscale sidecar (Path A, including the Headscale variant)   | `1` - set for you by `compose.tailscale.yaml`, which also binds the app port to loopback; hops=1 trusts only the rightmost `X-Forwarded-For` entry, which `tailscale serve` (Go `httputil.ReverseProxy` in Rewrite mode) sets to the tailnet peer's address. This follows from serve's proxy design and has not been tested end to end here. |
+| Bundled Caddy (`compose.caddy.yaml`)                          | `1` - set for you                                                                                                                                                                                                                                                                                                                            |
+| Your own single proxy (nginx, Traefik, a cloud load balancer) | `1`                                                                                                                                                                                                                                                                                                                                          |
+| Kubernetes chart via `kubectl port-forward`                   | unset - every connection arrives from the pod's loopback, so users share one bucket; add `TRUSTED_PROXY_HOPS` under the chart's `config:` once you put an ingress in front                                                                                                                                                                   |
+| A CDN or load balancer in front of your proxy                 | `2`, and the inner proxy must append to (not replace) `X-Forwarded-For`                                                                                                                                                                                                                                                                      |
 
 With `N` hops the client IP is the `N`th `X-Forwarded-For` entry counted **from the right** - the one your outermost trusted proxy wrote - so anything a client prepends is ignored. Only `X-Forwarded-For` is read; every proxy you count must append to it. Caddy discards a client-sent `X-Forwarded-For` unless you configure its `trusted_proxies`, so a CDN in front of Caddy also needs `trusted_proxies` set in the Caddyfile. **Whenever `TRUSTED_PROXY_HOPS` is 1 or more, the app port must be reachable only through the proxy** (loopback-bound, as `compose.caddy.yaml` does, or firewalled): a client that reaches `:3000` directly supplies the whole `X-Forwarded-For` chain itself and can mint a new IP per request. Setting the value higher than your real proxy count lets clients spoof their IP the same way, and a value that is not a whole number stops the app from starting rather than guessing.
 
@@ -1312,7 +1312,7 @@ Focused verification:
 
 ```sh
 pnpm --filter @bike4mind/database test src/models/ai/DataLakeModel.purge.test.ts src/models/content/FabFileModel.cleanupTransaction.test.ts
-pnpm --filter @bike4mind/services test src/dataLakeService/cleanupDeletedDataLake.test.ts
+pnpm --filter @bike4mind/services-core test src/dataLakeService/cleanupDeletedDataLake.test.ts
 pnpm --filter @bike4mind/workers test src/selfhost/dataLakeCleanupQueue.test.ts
 pnpm --filter @bike4mind/workers test src/queueHandlers/dataLakeCleanup.test.ts
 # Requires an isolated loopback MinIO, a disposable bucket, and test AWS credentials.
@@ -1405,7 +1405,8 @@ Covered shapes (inventory kind in brackets):
 - `sst.aws.Cron`, including shared Function `job` targets (`schedule`)
 - `sst.aws.Bus` `subscribe()` / `subscribeQueue()` (`event`)
 - bucket `notify()` notifications to a Function or queue (`notification`)
-- `aws.cloudwatch.EventRule` with its `aws.cloudwatch.EventTarget`s (`eventRule`)
+- `aws.cloudwatch.EventRule` with its `aws.cloudwatch.EventTarget`s (`eventRule`); a target that is a
+  not-covered storage resource such as a log group delivers to no function
 - `aws.ses.ReceiptRule` (`sesRule`)
 - `aws.cloudwatch.LogSubscriptionFilter` (`logSubscription`)
 - `aws.sns.TopicSubscription` and `sst.aws.SnsTopic` `subscribe()` (`snsSubscription`)
@@ -1422,7 +1423,8 @@ in `b4mContributions.infraResources`: their constructors are listed by name expr
 Not covered: every other `sst.aws.*` / `aws.<ns>.*` constructor must be listed, with a one-line
 reason, in the `NOT_COVERED` constant in `packages/scripts/src/selfhostParityInventory.ts`
 (HTTP Functions, web/router/WebSocket surfaces, CDN origin request policies, topics and buses whose subscriptions are
-covered, alarms, dashboards, outbound SES metric destinations, IAM policies, deploy-time invocations, network and WAF plumbing,
+covered, alarms, dashboards, outbound SES metric destinations, IAM policies, KMS keys and aliases, Secrets Manager secrets and
+their resource policies, log groups and their resource policies, deploy-time invocations, network and WAF plumbing,
 and infrastructure contributed by private overlays). A constructor that is neither covered nor
 listed fails the guard.
 

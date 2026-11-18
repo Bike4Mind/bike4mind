@@ -592,6 +592,17 @@ describe('validateUserApiKey - exchange key marker', () => {
     expect(result.oauthExchangeClientId).toBe('client-1');
   });
 
+  it('projects the payer standing for an exchange key only', async () => {
+    const exchange = await validateWithMetadata({
+      createdFrom: 'oauth-exchange',
+      oauthClientId: 'client-1',
+      payerStanding: 'paid',
+    });
+    expect(exchange.payerStanding).toBe('paid');
+    const personal = await validateWithMetadata({ createdFrom: 'api', payerStanding: 'paid' });
+    expect(personal.payerStanding).toBeUndefined();
+  });
+
   it.each([
     ['missing', undefined],
     ['empty', ''],

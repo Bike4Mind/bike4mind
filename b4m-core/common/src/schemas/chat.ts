@@ -3,11 +3,16 @@ import { MAX_MODEL_ID_LENGTH } from './modelId';
 import {
   ACCOUNT_SUSPENDED_ERROR_CODE,
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
+  MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+  ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+  ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
   UPGRADE_REQUIRED_ERROR_CODE,
   OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   UNKNOWN_MODEL_ERROR_CODE,
   RUN_NOT_FOUND_ERROR_CODE,
+  END_USER_ID_NOT_ALLOWED_ERROR_CODE,
+  INVALID_END_USER_ID_ERROR_CODE,
   type ApiErrorCode,
 } from '../apiErrorCodes';
 import { StorageLimitErrorInfoSchema } from '../errors';
@@ -413,8 +418,8 @@ export const ProviderNotConfiguredErrorSchema = ApiErrorSchema.extend({
 });
 
 /**
- * 400 for provider-rejected caller input, a `model` the caller cannot use, or a refused tool search
- * request; `errorCode` is absent on the other 400s (e.g. malformed JSON).
+ * 400 for provider-rejected caller input, a `model` the caller cannot use, a refused tool search
+ * request, or an `end_user_id` the credential may not send; `errorCode` is absent on the other 400s (e.g. malformed JSON).
  */
 export const CompletionsBadRequestErrorSchema = ApiErrorSchema.extend({
   errorCode: z
@@ -423,6 +428,8 @@ export const CompletionsBadRequestErrorSchema = ApiErrorSchema.extend({
       UNKNOWN_MODEL_ERROR_CODE,
       ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,
       ...COMPLETION_TOOL_ERROR_CODES,
+      END_USER_ID_NOT_ALLOWED_ERROR_CODE,
+      INVALID_END_USER_ID_ERROR_CODE,
     ])
     .optional(),
 });
@@ -471,10 +478,40 @@ export const ScopeForbiddenErrorSchema = ApiErrorSchema.extend({
 });
 
 /**
- * 403 on the v1 media create routes and POST /api/v1/agent-executions: the scope refusal above, or an
+ * 403 on the v1 media create routes and POST /api/v1/agent-executions: the scope refusal above, an
  * organization-billed API key sent with another billing organization
- * (apps/client/server/billing/resolveMediaBillingOrgId.ts).
+ * (apps/client/server/billing/resolveMediaBillingOrgId.ts), or a model or built-in tool the
+ * organization policy does not allow.
  */
 export const BillingOrganizationForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
-  errorCode: z.enum([ACCOUNT_SUSPENDED_ERROR_CODE, BILLING_ORGANIZATION_MISMATCH_ERROR_CODE]).optional(),
+  errorCode: z
+    .enum([
+      ACCOUNT_SUSPENDED_ERROR_CODE,
+      BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
+      ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+      ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+    ])
+    .optional(),
+});
+
+/**
+ * 403 on the completions route: the scope refusal above, a model outside the free-tier allowlist, or a
+ * model the organization policy does not allow.
+ */
+export const ModelPolicyForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
+  errorCode: z
+    .enum([ACCOUNT_SUSPENDED_ERROR_CODE, MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE, ORG_MODEL_NOT_ALLOWED_ERROR_CODE])
+    .optional(),
+});
+
+/** 403 on POST /api/chat: the completions refusals, or a built-in tool the organization policy does not allow. */
+export const ChatForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
+  errorCode: z
+    .enum([
+      ACCOUNT_SUSPENDED_ERROR_CODE,
+      MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+      ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+      ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+    ])
+    .optional(),
 });

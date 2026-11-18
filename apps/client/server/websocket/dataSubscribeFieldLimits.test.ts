@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   CHAT_MESSAGE_WITHHELD_FIELDS,
+  ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS,
   OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
   SERVER_OWNED_SESSION_FIELDS,
   USER_SECRET_FIELDS,
@@ -15,6 +16,18 @@ const opts = (overrides: Partial<FieldLimitOptions> = {}): FieldLimitOptions => 
   ...overrides,
 });
 
+const memberOrganizationLimits = {
+  stripeCustomerId: false,
+  signupGrantUnlockCount: false,
+  signupInviteBonusCount: false,
+  billingContact: false,
+  ...Object.fromEntries(ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS.map(field => [field, false])),
+  'userDetails.usedCredits': false,
+  'userDetails.maxCredits': false,
+  'userDetails.lastCreditUsedAt': false,
+  'userDetails.periodStart': false,
+};
+
 describe('resolveFieldLimits', () => {
   it('excludes every owner-only promptMeta path for the quests collection', () => {
     const limits = resolveFieldLimits('quests', opts());
@@ -26,6 +39,8 @@ describe('resolveFieldLimits', () => {
       embedding: false,
       slackNotification: false,
       signupActivity: false,
+      apiKeyId: false,
+      oauthClientId: false,
     });
   });
 
@@ -166,20 +181,21 @@ describe('resolveFieldLimits', () => {
       embedding: false,
       slackNotification: false,
       signupActivity: false,
+      apiKeyId: false,
+      oauthClientId: false,
     });
   });
 
-  it('excludes stripeCustomerId and billingContact for a non-admin organizations subscriber', () => {
-    expect(resolveFieldLimits('organizations', opts())).toEqual({
-      stripeCustomerId: false,
-      signupGrantUnlockCount: false,
-      signupInviteBonusCount: false,
-      billingContact: false,
-      'userDetails.usedCredits': false,
-      'userDetails.maxCredits': false,
-      'userDetails.lastCreditUsedAt': false,
-      'userDetails.periodStart': false,
-    });
+  it('limits a non-privileged organizations subscriber to the member view', () => {
+    expect(resolveFieldLimits('organizations', opts())).toEqual(memberOrganizationLimits);
+  });
+
+  it('withholds administrator-only settings such as systemPrompt from a member subscriber', () => {
+    const limits = resolveFieldLimits('organizations', opts());
+    expect(limits).toMatchObject({ systemPrompt: false, sharingPolicy: false, budgetAlerts: false });
+    expect(findWithheldFilterPaths({ systemPrompt: { $regex: 'a' } }, limits)).toEqual(['systemPrompt']);
+    expect(limits).not.toHaveProperty('currentCredits');
+    expect(limits).not.toHaveProperty('adminUserIds');
   });
 
   it('keeps credit details for a verified owner or manager on a single-org subscription', () => {
@@ -217,16 +233,9 @@ describe('resolveFieldLimits', () => {
   });
 
   it('uses the passed-in organization collection name rather than a hardcoded literal', () => {
-    expect(resolveFieldLimits('orgs_v2', opts({ organizationCollectionName: 'orgs_v2' }))).toEqual({
-      stripeCustomerId: false,
-      signupGrantUnlockCount: false,
-      signupInviteBonusCount: false,
-      billingContact: false,
-      'userDetails.usedCredits': false,
-      'userDetails.maxCredits': false,
-      'userDetails.lastCreditUsedAt': false,
-      'userDetails.periodStart': false,
-    });
+    expect(resolveFieldLimits('orgs_v2', opts({ organizationCollectionName: 'orgs_v2' }))).toEqual(
+      memberOrganizationLimits
+    );
   });
 
   it('drops invite recipients and the bearer token for a non-admin', () => {

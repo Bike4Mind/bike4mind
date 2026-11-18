@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ImageModerationIncident } from '@bike4mind/common';
 import {
+  alertEscalationReviewers,
+  deliverEscalationReminderDigest,
   renderIncidentReminderDigest,
   withReviewerAlerts,
+  type IncidentEscalationAlertDeps,
   type IncidentReviewAlertDeps,
   type RecordedIncident,
 } from './incidentReviewAlerts';
@@ -271,5 +274,142 @@ describe('renderIncidentReminderDigest', () => {
     expect(email.html).toContain('1 hour<');
     expect(email.html).toContain('https://app.example/admin?a=1&amp;b=2');
     expect(email.html).not.toMatch(/incident-|user|label/i);
+  });
+});
+
+describe('alertEscalationReviewers', () => {
+  const ESCALATED_AT = new Date('2026-10-20T13:00:00.000Z');
+  const STAMPED_AT = new Date('2026-10-20T13:00:05.000Z');
+
+  function escalationSetup(overrides: Partial<IncidentEscalationAlertDeps> = {}) {
+    const deps: IncidentEscalationAlertDeps = {
+      incidents: { markEscalationAlerted: vi.fn().mockResolvedValue(undefined) },
+      getRecipients: vi.fn().mockResolvedValue(['reviewer-one@example.com']),
+      getEscalationRecipients: vi.fn().mockResolvedValue(['second-one@example.com', 'second-two@example.com']),
+      sendEmail: vi.fn().mockResolvedValue({ messageId: 'm-1' }),
+      appUrl: () => 'https://app.example/',
+      logger: { warn: vi.fn(), error: vi.fn() },
+      ...overrides,
+    };
+    return deps;
+  }
+  const escalated: RecordedIncident = {
+    id: 'incident-123',
+    createdAt: CREATED_AT,
+    surface: 'upload',
+    escalatedAt: ESCALATED_AT,
+  };
+  const run = (deps: IncidentEscalationAlertDeps, incident: RecordedIncident = escalated) =>
+    alertEscalationReviewers(incident, deps, () => STAMPED_AT);
+
+  it('emails each escalation reviewer separately, never the first list, and stamps the delivery', async () => {
+    const deps = escalationSetup();
+
+    await expect(run(deps)).resolves.toEqual({ outcome: 'delivered', alertedAt: STAMPED_AT });
+
+    expect(vi.mocked(deps.sendEmail).mock.calls.map(call => call[0])).toEqual([
+      'second-one@example.com',
+      'second-two@example.com',
+    ]);
+    expect(deps.getRecipients).not.toHaveBeenCalled();
+    const email = vi.mocked(deps.sendEmail).mock.calls[0][1];
+    expect(email.subject).toBe('Moderation review escalated');
+    expect(email.html).toContain('second review step');
+    expect(email.html).toContain('incident-123');
+    expect(email.html).toContain(CREATED_AT.toISOString());
+    expect(email.html).toContain('upload');
+    expect(email.html).toContain(REVIEW_LINK);
+    expect(deps.incidents.markEscalationAlerted).toHaveBeenCalledExactlyOnceWith('incident-123', STAMPED_AT);
+  });
+
+  it('reports no_recipients, sends nothing and stamps nothing when the escalation list is empty', async () => {
+    const deps = escalationSetup({ getEscalationRecipients: vi.fn().mockResolvedValue([]) });
+
+    await expect(run(deps)).resolves.toEqual({ outcome: 'no_recipients', alertedAt: null });
+
+    expect(deps.sendEmail).not.toHaveBeenCalled();
+    expect(deps.incidents.markEscalationAlerted).not.toHaveBeenCalled();
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      '[ImageModeration] incident was escalated but no escalation reviewer is configured (ImageModerationEscalationEmails)',
+      { incidentId: 'incident-123' }
+    );
+  });
+
+  it.each([
+    ['a send that resolves false', { sendEmail: vi.fn().mockResolvedValue(false) }],
+    ['a send that throws', { sendEmail: vi.fn().mockRejectedValue(new Error('smtp down for second-one@example.com')) }],
+    ['an unreadable list', { getEscalationRecipients: vi.fn().mockRejectedValue(new Error('db down')) }],
+  ])('reports failed without stamping after %s, and never logs an address', async (_label, override) => {
+    const deps = escalationSetup(override);
+
+    await expect(run(deps)).resolves.toEqual({ outcome: 'failed', alertedAt: null });
+
+    expect(deps.incidents.markEscalationAlerted).not.toHaveBeenCalled();
+    const logged = JSON.stringify([vi.mocked(deps.logger.error).mock.calls, vi.mocked(deps.logger.warn).mock.calls]);
+    expect(logged).toContain('incident-123');
+    expect(logged).not.toContain('@example.com');
+  });
+
+  it('still reports the delivery when the stamp cannot be written, with no stamp time', async () => {
+    const deps = escalationSetup({
+      incidents: { markEscalationAlerted: vi.fn().mockRejectedValue(new Error('write failed')) },
+    });
+
+    await expect(run(deps)).resolves.toEqual({ outcome: 'delivered', alertedAt: null });
+    expect(deps.logger.error).toHaveBeenCalledWith(expect.stringContaining('escalationAlertedAt was not recorded'), {
+      incidentId: 'incident-123',
+    });
+  });
+
+  it('carries no labels, user id, file id, storage path or image in the escalation email', async () => {
+    const deps = escalationSetup();
+    const leaky = {
+      ...INPUT,
+      ...escalated,
+      storageKey: 'uploads/SENTINEL-KEY.png',
+      imageUrl: 'https://bucket.example/SENTINEL-KEY.png?X-Amz-Signature=abc',
+    } as RecordedIncident;
+
+    await run(deps, leaky);
+
+    const email = vi.mocked(deps.sendEmail).mock.calls[0][1];
+    expect(Object.keys(email).sort()).toEqual(['html', 'subject']);
+    const text = `${email.subject}\n${email.html}`;
+    for (const forbidden of [
+      INPUT.userId,
+      INPUT.fabFileId!,
+      INPUT.sessionId!,
+      INPUT.questId!,
+      'Category A',
+      'Parent B',
+      'uploads/',
+      'SENTINEL',
+      'X-Amz',
+      '<img',
+    ]) {
+      expect(text).not.toContain(forbidden);
+    }
+    expect(new Set(text.match(/https?:\/\/[^\s"<]+/g))).toEqual(new Set([REVIEW_LINK]));
+  });
+});
+
+describe('deliverEscalationReminderDigest', () => {
+  it('sends the counts-only digest to the escalation list alone', async () => {
+    const deps = {
+      getRecipients: vi.fn().mockResolvedValue(['reviewer-one@example.com']),
+      getEscalationRecipients: vi.fn().mockResolvedValue(['second-one@example.com']),
+      sendEmail: vi.fn().mockResolvedValue({ messageId: 'm-1' }),
+      appUrl: () => 'https://app.example',
+      logger: { warn: vi.fn(), error: vi.fn() },
+    };
+
+    await expect(deliverEscalationReminderDigest({ pendingCount: 2, oldestAgeMinutes: 1500 }, deps)).resolves.toBe(
+      'delivered'
+    );
+
+    expect(deps.sendEmail).toHaveBeenCalledExactlyOnceWith('second-one@example.com', {
+      subject: 'Moderation reviews still pending',
+      html: expect.stringContaining('25 hours'),
+    });
   });
 });

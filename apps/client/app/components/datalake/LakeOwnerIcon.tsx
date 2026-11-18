@@ -11,7 +11,7 @@ export default function LakeOwnerIcon({ lake, testId }: { lake: { ownerDisplayNa
         role="img"
         aria-hidden={false}
         aria-label={label}
-        sx={{ fontSize: 14, color: 'warning.400', flexShrink: 0 }}
+        sx={{ fontSize: 14, color: 'text.tertiary', flexShrink: 0 }}
       />
     </Tooltip>
   );

@@ -33,6 +33,7 @@ struct HomeDrawer: View {
             .background(Tokens.Palette.sidebar.ignoresSafeArea())
             .offset(x: -width * (1 - progress))
             .gesture(dragGesture(width: width))
+            .accessibilityElement(children: .contain)
             .accessibilityAddTraits(.isModal)
             .accessibilityIdentifier("home-drawer")
         }

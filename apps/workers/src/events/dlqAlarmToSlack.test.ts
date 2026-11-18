@@ -14,6 +14,19 @@ const detail = vi.hoisted(() => ({
   youngAccountSpendSection: vi.fn(async () => '*Top accounts in the window*\n1. `u1` 1.52 USD in 36 calls'),
 }));
 vi.mock('./youngAccountSpendDetail', () => detail);
+const triage = vi.hoisted(() => ({ collect: vi.fn(), finish: vi.fn(), notify: vi.fn() }));
+vi.mock('./dlqTriage', () => ({
+  collectDlqTriage: triage.collect,
+  finishDlqTriageDelivery: triage.finish,
+  canNotifyDlqTriage: triage.notify,
+}));
+
+const providerDetail = vi.hoisted(() => ({
+  providerSpendSection: vi.fn(
+    async () => '*Where the spend went*\nAccounts under 7 days old: *0.00 of 21.34 USD (0%)*'
+  ),
+}));
+vi.mock('./providerSpendDetail', () => providerDetail);
 
 import { handler } from './dlqAlarmToSlack';
 
@@ -61,10 +74,14 @@ describe('dlqAlarmToSlack handler', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    triage.collect.mockReset().mockResolvedValue(null);
+    triage.finish.mockReset();
+    triage.notify.mockReset().mockResolvedValue(true);
     resource.SLACK_ALARMS_WEBHOOK_URL = undefined;
     resource.SLACK_COST_ALARMS_WEBHOOK_URL = undefined;
     resource.App.stage = 'production';
     detail.youngAccountSpendSection.mockClear();
+    providerDetail.providerSpendSection.mockClear();
     fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, statusText: 'OK' });
     vi.stubGlobal('fetch', fetchMock);
   });
@@ -77,8 +94,23 @@ describe('dlqAlarmToSlack handler', () => {
     const sections = (body.attachments[0].blocks as { type: string; text?: { text: string } }[])
       .filter(b => b.type === 'section' && b.text)
       .map(b => b.text!.text.split('\n')[0]);
-    expect(sections).toEqual(['*What happened*', '*Why it matters*', '*Top accounts in the window*', '*What to do*']);
+    expect(sections).toEqual([
+      '*What happened*',
+      '*Whose it is*',
+      '*Why it matters*',
+      '*Top accounts in the window*',
+      '*What to do*',
+    ]);
     expect(JSON.stringify(body.attachments)).toContain('`u1` 1.52 USD in 36 calls');
+    expect(providerDetail.providerSpendSection).not.toHaveBeenCalled();
+  });
+
+  it('breaks down the spend on a ledger provider spend alarm', async () => {
+    await handler(makeEvent(alarmPayload('ALARM', 'bike4mind-production-llm-spend-hourly-openai')));
+    expect(providerDetail.providerSpendSection).toHaveBeenCalledOnce();
+    expect(detail.youngAccountSpendSection).not.toHaveBeenCalled();
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(JSON.stringify(body.attachments)).toContain('*Where the spend went*');
   });
 
   it('does not look accounts up for other alarms, resolutions, or alarms this stage drops', async () => {
@@ -87,6 +119,7 @@ describe('dlqAlarmToSlack handler', () => {
     resource.App.stage = 'dev';
     await handler(makeEvent(alarmPayload('ALARM', 'bike4mind-dev-test-alarm')));
     expect(detail.youngAccountSpendSection).not.toHaveBeenCalled();
+    expect(providerDetail.providerSpendSection).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -164,5 +197,33 @@ describe('dlqAlarmToSlack handler', () => {
   it('throws when the Slack webhook returns a non-ok response', async () => {
     fetchMock.mockResolvedValue({ ok: false, status: 500, statusText: 'Internal Server Error' });
     await expect(handler(makeEvent(alarmPayload('ALARM')))).rejects.toThrow('Slack webhook failed: 500');
+  });
+  it.each(['http', 'timeout'])(
+    'retries the base alarm after an unconfirmed %s triage post without resending recommendations',
+    async failure => {
+      const recommendation = {
+        key: 'batch',
+        queueLabel: 'fixture',
+        suggestionIds: ['one'],
+        section: 'Fixture recommendation',
+      };
+      triage.collect.mockResolvedValueOnce(recommendation).mockResolvedValue(null);
+      if (failure === 'http') fetchMock.mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Unavailable' });
+      else fetchMock.mockRejectedValueOnce(new Error('timeout'));
+      const event = makeEvent(alarmPayload('ALARM'));
+      await expect(handler(event)).rejects.toThrow('not confirmed');
+      expect(triage.finish).toHaveBeenCalledWith(recommendation, false);
+      await handler(event);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls[0][1].body).toContain('Fixture recommendation');
+      expect(fetchMock.mock.calls[1][1].body).not.toContain('Fixture recommendation');
+    }
+  );
+  it('posts the base alarm without recommendations when the pre-send switch is off', async () => {
+    triage.collect.mockResolvedValue({ section: 'Fixture recommendation' });
+    triage.notify.mockResolvedValue(false);
+    await handler(makeEvent(alarmPayload('ALARM')));
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][1].body).not.toContain('Fixture recommendation');
   });
 });

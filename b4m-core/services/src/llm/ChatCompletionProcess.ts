@@ -5,6 +5,7 @@ import {
   resolveEmbeddingWithKeylessFallback,
 } from '@bike4mind/utils/embeddingProviders';
 import {
+  AiAccessRefusedError,
   type AttachmentLakeAccess,
   IChatHistoryItemDocument,
   IFabFileDocument,
@@ -77,6 +78,7 @@ import {
   reasoningChannelOf,
   withholdsReasoning,
   type ThinkingVisibility,
+  readOrgModelPolicy,
 } from '@bike4mind/common';
 import { fallbackThinkingVisibility } from '../thinkingVisibility';
 import { resolveUsageProject } from './usageProject';
@@ -132,7 +134,12 @@ import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attach
 import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { chatReasoningOptionsFor } from './chatReasoningOptions';
 import { withOllamaThinkingDefault } from './ollamaThinkingDefault';
-import { buildRecentGeneratedImagesNote } from './recentGeneratedImagesNote';
+import {
+  buildRecentGeneratedImagesNote,
+  resolveRecentImageJobFiles,
+  type ImageJobFilesResolver,
+  type RecentImageJobFile,
+} from './recentGeneratedImagesNote';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
@@ -180,6 +187,7 @@ import { resolveDataSourceStatus } from './dataSourceStatus';
 import { scrubMissingKnowledgeIds } from '../sessionService/scrubMissingKnowledgeIds';
 import { scrubStaleSystemFiles } from '../sessionService/scrubStaleFileReferences';
 import { b4mTools, LATTICE_TOOL_NAMES } from './tools';
+import { withAudioToolJobs } from './tools/implementation/audioGeneration';
 import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
 import { createToolFailureGuard } from './tools/toolFailureGuard';
 import {
@@ -200,6 +208,7 @@ import {
   loadModelConfigurations,
   type ModelAdmission,
 } from './modelAdmission';
+import { applyOrgToolPolicy } from './orgToolPolicy';
 import {
   TurnCreditLimiter,
   accumulatedRoundsUsd,
@@ -238,10 +247,12 @@ import { MongoAbility } from '@casl/ability';
 import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
+import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { resolveToolAvailability } from './toolAvailability';
 import { resolveToolConfigSafely } from './resolveToolConfigSafely';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
 import type { MusicToolConfig } from './tools/implementation/musicGeneration';
+import type { ImageToolConfig } from './tools/implementation/imageGeneration';
 import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
@@ -268,7 +279,7 @@ import { AgentDetectionFeature } from './features/AgentDetectionFeature';
 import { SkillsFeature, type QuestWithSkillCatalog } from './features/SkillsFeature';
 import { StatusManager } from './StatusManager';
 import { DEFAULT_VERBATIM_WINDOW_FRACTION, SYSTEM_PROMPT_RESERVE_TOKENS } from './historyBudgetConstants';
-import { buildContextOverflowMessage } from './contextOverflowMessage';
+import { buildContextOverflowMessage, ContextOverflowError, isContextOverflowError } from './contextOverflowMessage';
 import {
   ALWAYS_ON_FLOOR_SOURCES,
   buildTaggedContextMessages,
@@ -727,7 +738,7 @@ export function isOperatorFault(error: unknown): boolean {
     error instanceof ResponsesStreamTruncatedError ||
     isToolPairingError(error) ||
     isOverloadedError(error) ||
-    error.message.startsWith('Your request is too large for')
+    isContextOverflowError(error)
   );
 }
 
@@ -1292,6 +1303,7 @@ export class ChatCompletionProcess {
   private attachedKnowledgeFilesMemo: IFabFileDocument[] | null | undefined;
   private storage: IChatCompletionServiceOptions['storage'];
   private imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
+  private audioToolJobs: IChatCompletionServiceOptions['audioToolJobs'];
   private imageProcessorLambdaName?: string;
   private wsHttpsUrl: string;
   private abilityGetter: IChatCompletionServiceOptions['abilityGetter'];
@@ -1369,6 +1381,7 @@ export class ChatCompletionProcess {
     this.loadSystemPromptById = options.loadSystemPromptById;
     this.storage = options.storage;
     this.imageGenerateStorage = options.imageGenerateStorage;
+    this.audioToolJobs = options.audioToolJobs;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;
     this.logger = options.logger;
     this.user = options.user;
@@ -2158,6 +2171,22 @@ export class ChatCompletionProcess {
     }
   }
 
+  /** The recent-images note's job outputs; a lookup failure only drops them from the note. */
+  private async resolveRecentImageJobFiles({
+    recentImageJobs,
+    resolver,
+    wanted,
+    logger,
+  }: {
+    recentImageJobs: { jobId: string; prompt: string }[] | undefined;
+    resolver: ImageJobFilesResolver | undefined;
+    wanted: boolean;
+    logger: Logger;
+  }): Promise<RecentImageJobFile[]> {
+    if (!wanted) return [];
+    return resolveRecentImageJobFiles({ recentImageJobs, resolver, userId: this.user.id, logger });
+  }
+
   public async process({
     body,
     logger,
@@ -2167,6 +2196,8 @@ export class ChatCompletionProcess {
     externalTools,
     videoToolConfigResolver,
     musicToolConfigResolver,
+    imageJobsResolver,
+    imageJobFilesResolver,
     abortSignal,
   }: {
     body: z.infer<typeof QuestStartBodySchema>;
@@ -2183,6 +2214,19 @@ export class ChatCompletionProcess {
     videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
     /** Resolves the music tool's capability; only invoked when music_generation is enabled. */
     musicToolConfigResolver?: () => Promise<MusicToolConfig | null>;
+    /**
+     * Resolves the image job engine's create step; only invoked when image_generation or edit_image is enabled.
+     * Null (or no resolver) keeps those tools rendering in-process.
+     */
+    imageJobsResolver?: () => Promise<ImageToolConfig['createJobs'] | null>;
+    /**
+     * The output file of each listed image job that the caller requested and that succeeded (any other id is left
+     * out), so the recent-images note can name those files. Without it the note lists generated keys only.
+     */
+    imageJobFilesResolver?: (input: {
+      jobIds: string[];
+      userId: string;
+    }) => Promise<{ jobId: string; fileId: string }[]>;
     /**
      * Caller-side cancellation (e.g. the wait=true request deadline). Aborts the turn the same
      * way the cancel watcher does: process() releases or reconciles its own credit reservation,
@@ -2844,6 +2888,7 @@ export class ChatCompletionProcess {
       // without this the find returns undefined and the run dies with "Invalid LLM backend".
       const resolvedModelId = resolveDeprecatedModelId(model, 'ChatCompletionProcess');
       const requestedModelInfo = models.find(m => m.id === resolvedModelId);
+      const orgModelPolicy = readOrgModelPolicy(organization?.modelPolicy);
       // Substitute only the executing model; see resolveShadowModelInfo.
       const { settings: shadowSettings, modelInfo: shadowModelInfo } = await resolveShadowRouting({
         user: this.user,
@@ -2851,6 +2896,7 @@ export class ChatCompletionProcess {
         models,
         adminSettings: this.db.adminSettings,
         logger,
+        orgModelPolicy,
       });
       const modelInfo = shadowModelInfo ?? requestedModelInfo;
       // The model id handed to features and tools that call the backend themselves: the
@@ -2894,6 +2940,7 @@ export class ChatCompletionProcess {
         models,
         enforceCredits: getSettingsValue('enforceCredits', defaultAdminSettings) === true,
         freeTierAllowedModels: await loadFreeTierAllowedModels(this.db.adminSettings),
+        orgModelPolicy,
       });
       // Always the final id, remapped or not: /api/chat admits the requested model in
       // ChatCompletionInvoke, but the quest/Slack queue handlers construct this class directly.
@@ -3073,10 +3120,13 @@ export class ChatCompletionProcess {
 
       if (adminModerationEnabled) {
         const moderationStartTime = Date.now();
-        // Only run OpenAI moderation if we have an OpenAI key available
-        if (apiKeyTable?.openai) {
+        const moderationOpenaiKey = resolveModerationOpenaiKey(
+          apiKeyTable?.openai,
+          getSettingsValue('openaiDemoKey', defaultAdminSettings)
+        );
+        if (moderationOpenaiKey) {
           try {
-            await new OpenaiModerationsService(apiKeyTable.openai, logger).checkPrompt(message);
+            await new OpenaiModerationsService(moderationOpenaiKey, logger).checkPrompt(message);
           } catch (moderationError) {
             // On a flag, record a per-user moderation hit and auto-escalate (throttle to
             // suspend_pending) BEFORE rethrowing to block this prompt. Recording
@@ -3826,6 +3876,13 @@ export class ChatCompletionProcess {
       const musicToolConfig = enabledTools.includes('music_generation')
         ? await resolveToolConfigSafely('music_generation', musicToolConfigResolver, logger)
         : null;
+      const createImageJobs =
+        enabledTools.includes('image_generation') || enabledTools.includes('edit_image')
+          ? await resolveToolConfigSafely('image_generation', imageJobsResolver, logger)
+          : null;
+      const imageToolConfig: ImageToolConfig | typeof imageConfig = createImageJobs
+        ? { selection: imageConfig, createJobs: createImageJobs }
+        : imageConfig;
 
       const subagentModels = agentStore
         ? shadowSettings
@@ -3845,6 +3902,7 @@ export class ChatCompletionProcess {
         // builder produces never appear in that list - MCP tools and the delegate tool's captured
         // parentTools.
         sessionDisabledTools: deniedTools,
+        orgToolPolicy: readOrgModelPolicy(organization?.modelPolicy),
         mcpToolsByServer,
         quest,
         saveQuest,
@@ -3857,9 +3915,9 @@ export class ChatCompletionProcess {
             apiKeys: shadowSettings ? undefined : apiKeyTable,
           },
           edit_file: shadowSettings ? { model: runModel } : undefined,
-          image_generation: imageConfig,
-          edit_image: imageConfig,
-          audio_generation: audioConfig,
+          image_generation: imageToolConfig,
+          edit_image: imageToolConfig,
+          audio_generation: withAudioToolJobs(audioConfig, this.audioToolJobs),
           web_search: { imageUrlSigningSecret: this.telemetryHmacSecret },
           video_generation: videoToolConfig ?? undefined,
           music_generation: musicToolConfig ?? undefined,
@@ -3898,6 +3956,15 @@ export class ChatCompletionProcess {
       if (deniedTools && allTools) {
         const denied = new Set(deniedTools);
         allTools = allTools.filter(t => !denied.has(t.toolSchema.name));
+      }
+      if (allTools) {
+        const orgFiltered = applyOrgToolPolicy(allTools, readOrgModelPolicy(organization?.modelPolicy));
+        if (orgFiltered.stripped.length > 0) {
+          logger.info('[OrgToolPolicy] stripped tools the organization does not allow', {
+            tools: orgFiltered.stripped,
+          });
+          allTools = orgFiltered.tools;
+        }
       }
 
       // Research Mode runs its configurations in parallel over one tool list, so a shared budget
@@ -4301,6 +4368,13 @@ export class ChatCompletionProcess {
       // default so the nudge can never be silently stripped.
       const helpCenterContent = getSettingsValue('HelpCenterPrompt', defaultAdminSettings, HELP_CENTER_PROMPT);
 
+      const recentImageJobFiles = await this.resolveRecentImageJobFiles({
+        recentImageJobs: cacheInfo.recentImageJobs,
+        resolver: imageJobFilesResolver,
+        wanted: (editImageAvailable || videoGenerationAvailable) && session.userId === this.user.id,
+        logger,
+      });
+
       // Extracted so the overflow-guard safety net below can rebuild with a trimmed
       // history without duplicating this (long, order-sensitive) system/context block.
       const taggedContextMessages = buildTaggedContextMessages({
@@ -4379,6 +4453,7 @@ export class ChatCompletionProcess {
         // assumption that broke the view registry once navigate_view became auto-added.
         recentImages: buildRecentGeneratedImagesNote({
           images: cacheInfo.recentGeneratedImages,
+          imageJobFiles: recentImageJobFiles,
           editImageAvailable,
           videoGenerationAvailable,
           sessionOwnerId: session.userId,
@@ -4860,20 +4935,6 @@ export class ChatCompletionProcess {
         );
       }
       if (!inputTokensEstimated && inputTokens > maxSafeInputTokens) {
-        logger.error(`🚨 CRITICAL: Context overflow detected!`, {
-          inputTokens,
-          maxTokens: safeMaxTokens,
-          contextLimit,
-          maxSafeInputTokens,
-          userId: this.user.id,
-          sessionId,
-          questId,
-          model,
-          mementoCount: (featureContextMessages['mementos'] ?? []).length,
-          totalMessages: messages.length,
-          tokenBreakdown: tokensBySource,
-        });
-
         // Persist telemetry before throwing - the outer catch block's saveQuest() writes it to MongoDB
         if (telemetryBuilder) {
           telemetryBuilder.setContextWindow({
@@ -4888,15 +4949,26 @@ export class ChatCompletionProcess {
           quest.promptMeta!.contextTelemetry = telemetryBuilder.build();
         }
 
-        throw new Error(
+        const mementoCount = (featureContextMessages['mementos'] ?? []).length;
+        throw new ContextOverflowError(
           buildContextOverflowMessage({
             modelName: requestedModelInfo.name || model,
             inputTokens,
             maxSafeInputTokens,
             tokensBySource,
             messageCount: messages.length,
-            mementoCount: (featureContextMessages['mementos'] ?? []).length,
-          })
+            mementoCount,
+          }),
+          {
+            modelId: model,
+            inputTokens,
+            maxSafeInputTokens,
+            contextLimit,
+            reservedOutputTokens: safeMaxTokens,
+            tokenBreakdown: tokensBySource ?? null,
+            messageCount: messages.length,
+            mementoCount,
+          }
         );
       }
 
@@ -4931,7 +5003,9 @@ export class ChatCompletionProcess {
 
       const resolveResearchRunModel = (requested: ModelInfo): ModelInfo =>
         shadowSettings
-          ? (resolveShadowModelInfo(this.user, requested, models, shadowSettings.allowlist, logger) ?? requested)
+          ? (resolveShadowModelInfo(this.user, requested, models, shadowSettings.allowlist, logger, {
+              orgModelPolicy,
+            }) ?? requested)
           : requested;
 
       this.turnCreditLimiter = null;
@@ -5644,7 +5718,7 @@ export class ChatCompletionProcess {
       // themselves can't say this: every iteration appends into the same indices.
       let toolCallsSeen = 0;
       let visibleCharsAtLastToolCall = 0;
-      // Generating tools deliver through statusUpdate({ images }) or, for a background job (video, music),
+      // Generating tools deliver through statusUpdate({ images }) or, for a background job (video, music, image),
       // statusUpdate({ generationJobs }); applyQuestStatusChanges (tools/ToolBuilder.ts) merges both with
       // dedup, so growth means a new file or a new job card.
       const countDeliverables = () => (quest.images?.length ?? 0) + questGenerationJobs(quest).length;
@@ -6338,7 +6412,9 @@ export class ChatCompletionProcess {
             // the substitution itself (no status, no fallbackInfo, the requested id stays shown).
             // A failing allowlisted requested model starts a substitution here.
             if (shadowSettings) {
-              const next = shadowCandidates(models, shadowSettings.allowlist).find(m => !triedModelIds.has(m.id));
+              const next = shadowCandidates(models, shadowSettings.allowlist, { orgModelPolicy }).find(
+                m => !triedModelIds.has(m.id)
+              );
               const nextLlm =
                 next && getLlmByModel(chatApiKeyTable, { modelInfo: next, logger, endUserId: this.user.id });
               if (!next || !nextLlm) {
@@ -7079,7 +7155,7 @@ export class ChatCompletionProcess {
         // tool called more than once in a turn settles as the sum of every call, not
         // the count times the last call's cost (see settleToolCallCredits).
         quest.promptMeta!.functionCalls = settleToolCallCredits(
-          quest.promptMeta!.functionCalls || [],
+          this.withReservedToolCalls(quest.promptMeta!.functionCalls || []),
           this.toolCreditsMap
         );
 
@@ -7165,10 +7241,8 @@ export class ChatCompletionProcess {
           if (!this.db.creditTransactions) {
             throw new BadRequestError('Enforce credits is enabled but credit transactions are not available');
           }
-          const toolCreditsUsed = (quest.promptMeta!.functionCalls || []).reduce(
-            (sum, fc) => sum + (fc.creditsUsed || 0),
-            0
-          );
+          // Adapter telemetry can omit delivered calls or be replaced by a text-only callback.
+          const toolCreditsUsed = this.chargedToolCredits();
           const totalCreditsUsed = textCreditsUsed + toolCreditsUsed;
           quest.creditsUsed = totalCreditsUsed;
 
@@ -7315,9 +7389,9 @@ export class ChatCompletionProcess {
 
             // Record audit-trail transactions with skipBalanceUpdate (balance already settled)
             if (toolCreditsUsed > 0) {
-              const toolNames = (quest.promptMeta!.functionCalls || [])
-                .filter(fc => fc.creditsUsed && fc.creditsUsed > 0)
-                .map(fc => fc.name)
+              const toolNames = Array.from(this.toolCreditsMap)
+                .filter(([, charges]) => charges.some(credits => credits > 0))
+                .map(([name]) => name)
                 .join(', ');
               // NOT currentModel.id: the charge belongs to whatever model the tools ran
               // on. One aggregate row can only name it when a single model charged (see
@@ -7801,14 +7875,16 @@ export class ChatCompletionProcess {
         );
       }
 
-      // A Stop or disconnect that threw, or a later tool call refused for credits, still bills what
-      // streamed and the tools already delivered; the rollback below then has nothing left to refund.
-      // Any other failure refunds the whole hold. Keyed on the basis, not the hold: a hold the caller
-      // already released (a stuck turn) still bills the full actual.
+      // A Stop or disconnect that threw, or a later tool call refused for credits or account standing,
+      // still bills what streamed and the tools already delivered; the rollback below then has nothing
+      // left to refund. Any other failure refunds the whole hold. Keyed on the basis, not the hold: a
+      // hold the caller already released (a stuck turn) still bills the full actual.
       if (
         this.reservationBasis &&
         this.reservedCreditsOwnerId &&
-        (isAbortError(err) || resolveQuestErrorCode(err) === 'insufficient_credits')
+        (isAbortError(err) ||
+          resolveQuestErrorCode(err) === 'insufficient_credits' ||
+          err instanceof AiAccessRefusedError)
       ) {
         await this.settleAbortedReservation(quest, processStartTime, logger).catch(settleError =>
           logger.error(`Failed to settle the aborted turn for quest ${questId}; refunding its hold`, settleError)
@@ -7879,9 +7955,11 @@ export class ChatCompletionProcess {
         quest.reply = combined.join('');
       };
       // Provider text on a restricted-tier turn can name the substitute. Credit errors keep their
-      // message; the categorized branches below overwrite this reply with fixed text anyway.
+      // message, as does an account refusal (fixed text from accountState); the categorized branches
+      // below overwrite this reply with fixed text anyway.
       const masksMessage =
-        this.shadowSubstitution && !(err instanceof InsufficientCreditsError || resolveQuestErrorCode(err));
+        this.shadowSubstitution &&
+        !(err instanceof InsufficientCreditsError || err instanceof AiAccessRefusedError || resolveQuestErrorCode(err));
       setErrorReply(masksMessage ? MODEL_UNAVAILABLE_ERROR_REPLY : (err as Error).message);
       quest.type = 'error';
       setTerminalQuestStatus(quest, 'done');
@@ -7905,6 +7983,11 @@ export class ChatCompletionProcess {
         // Terminal: nothing to retry until credits are added, so return without re-throwing
         // (a throw would route the queue handler to DLQ/retry). Quest already saved above.
         logger.log(`Insufficient credits for quest ${questId}`);
+        return;
+      } else if (err instanceof AiAccessRefusedError) {
+        // Terminal like the credit refusal: a media tool found the account blocked mid-turn. The
+        // quest already carries the refusal text; rethrowing would log it as a processing failure.
+        logger.warn(`[Account refusal] Quest ${questId}: ${err.message}`);
         return;
       } else if (err instanceof Error && (err.message.toLowerCase().includes('aborted') || err.name === 'AbortError')) {
         logger.log(`Chat completion was stopped by user for quest ${questId}: ${err.message}`);
@@ -7970,9 +8053,13 @@ export class ChatCompletionProcess {
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
-      } else if (err instanceof Error && err.message.startsWith('Your request is too large for')) {
-        logger.error(`[Context Overflow] Quest ${questId}: ${err.message}`);
-        // quest.reply already set to err.message above (line 2825) - includes token breakdown
+      } else if (isContextOverflowError(err)) {
+        // Expected refusal (the request does not fit the chosen model), so warn, not error: it must
+        // not page. The reply set from err.message above already carries the breakdown and remedy.
+        logger.warn('[Context Overflow] Request refused: too large for the selected model', {
+          questId,
+          ...err.details,
+        });
         return;
       }
       throw err;
@@ -8247,6 +8334,20 @@ export class ChatCompletionProcess {
     }
   }
 
+  /** Adds a placeholder call per reserved charge beyond the recorded calls, so missing tool telemetry cannot drop charged credits from the per-call breakdown. */
+  private withReservedToolCalls<T extends { name?: string }>(
+    functionCalls: T[]
+  ): Array<T | { name: string; parameters: Record<string, never> }> {
+    const calls: Array<T | { name: string; parameters: Record<string, never> }> = [...functionCalls];
+    for (const [name, charges] of this.toolCreditsMap) {
+      const recordedCalls = functionCalls.filter(call => call.name === name).length;
+      for (let index = recordedCalls; index < charges.length; index++) {
+        calls.push({ name, parameters: {} });
+      }
+    }
+    return calls;
+  }
+
   /**
    * A turn ended by a thrown abort (a Stop, a disconnect) still spent what it streamed: settle the
    * reservation on the answering model, at the larger of the provider-reported counts and the input
@@ -8297,15 +8398,10 @@ export class ChatCompletionProcess {
           }
         : { modelInfo: basis.modelInfo, inputTokens: basis.inputTokens, outputTokens };
     if (quest.promptMeta) {
-      const calls = [...(quest.promptMeta.functionCalls ?? [])];
-      // A thrown tool call may prevent the backend's final toolsUsed callback. Keep delivered charges visible.
-      for (const [name, charges] of this.toolCreditsMap) {
-        const recordedCalls = calls.filter(call => call.name === name).length;
-        for (let index = recordedCalls; index < charges.length; index++) {
-          calls.push({ name, parameters: {} });
-        }
-      }
-      quest.promptMeta.functionCalls = settleToolCallCredits(calls, this.toolCreditsMap);
+      quest.promptMeta.functionCalls = settleToolCallCredits(
+        this.withReservedToolCalls(quest.promptMeta.functionCalls ?? []),
+        this.toolCreditsMap
+      );
     }
     await this.settleReservation(quest, [usage], processStartTime, logger, 'error', toolCredits);
   }

@@ -22,6 +22,7 @@ import {
   sessionRepository,
   usageEventRepository,
   userRepository,
+  warmExchangeAttribution,
   withTransaction,
 } from '@bike4mind/database';
 import { sessionService } from '@bike4mind/services';
@@ -122,6 +123,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
   // Both transactions below carry the request logger, so withTransaction reports a retry and its exhaustion.
   const transactionOptions = { ...VOICE_TRANSACTION_OPTIONS, logger };
+
+  await warmExchangeAttribution(session.voiceHoldApiKeyId);
 
   if (responseId) {
     // One response of a live call. Its ledger row, the hold's billed total and the debit commit

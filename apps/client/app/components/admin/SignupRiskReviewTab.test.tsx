@@ -13,6 +13,7 @@ const m = vi.hoisted(() => ({
   useSignupRiskReviews: vi.fn(),
   mutate: vi.fn(),
   mutateAsync: vi.fn(),
+  accept: vi.fn(),
   search: {} as Record<string, unknown>,
   navigate: vi.fn(),
   openProfile: vi.fn(),
@@ -29,7 +30,14 @@ vi.mock('@client/app/hooks/data/signupRiskReviews', () => ({
     error: null,
   }),
 }));
-vi.mock('@tanstack/react-router', () => ({ useSearch: () => m.search, useNavigate: () => m.navigate }));
+vi.mock('@client/app/hooks/data/aiAssessmentSuggestions', () => ({
+  useAcceptAssessmentSuggestion: () => ({ mutate: m.accept, isPending: false }),
+}));
+vi.mock('@tanstack/react-router', () => ({
+  useSearch: () => m.search,
+  useNavigate: () => m.navigate,
+  useRouter: () => undefined,
+}));
 vi.mock('./Users/Profile/useOpenUserProfile', () => ({ useOpenUserProfile: () => m.openProfile }));
 vi.mock('./Users/BulkAbuseResponseModal', () => ({
   default: (props: { selectedUserIds: string[]; onExecuted: () => void }) => {
@@ -42,7 +50,8 @@ vi.mock('./Users/BulkAbuseResponseModal', () => ({
   },
 }));
 
-import SignupRiskReviewTab, { advisoryTooltip } from './SignupRiskReviewTab';
+import SignupRiskReviewTab from './SignupRiskReviewTab';
+import { advisoryTooltip } from './SignupAdvisoryCell';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -365,11 +374,12 @@ describe('SignupRiskReviewTab', () => {
     });
   });
 
-  it('shows an advisory model verdict as a chip, coloring only an abuse verdict', () => {
+  it('shows an advisory model verdict, offering the AI suggestion only for abuse', () => {
     m.useSignupRiskReviews.mockReturnValue(
       queue([
         row({
           advisory: {
+            assessmentId: 'c'.repeat(24),
             detectionId: 'd1',
             detector: 'signupNetworkBurst',
             result: 'abuse',
@@ -383,6 +393,7 @@ describe('SignupRiskReviewTab', () => {
           userId: 'u2',
           email: 'jane@example.org',
           advisory: {
+            assessmentId: 'c'.repeat(24),
             detectionId: 'd2',
             detector: 'signupNetworkBurst',
             result: 'legitimate_automation',
@@ -396,6 +407,7 @@ describe('SignupRiskReviewTab', () => {
           userId: 'u3',
           email: 'sam@example.net',
           advisory: {
+            assessmentId: 'c'.repeat(24),
             detectionId: 'd3',
             detector: 'signupNetworkBurst',
             result: 'insufficient_evidence',
@@ -411,8 +423,9 @@ describe('SignupRiskReviewTab', () => {
 
     const chip = (userId: string) =>
       within(screen.getByTestId(`signup-risk-advisory-${userId}`)).getByTestId('admin-status-chip');
-    expect(chip('u1').textContent).toBe('Model: abuse');
-    expect(chip('u1').getAttribute('data-tone')).toBe('bad');
+    expect(screen.getByTestId('signup-risk-ai-u1-chip').textContent).toContain('Likely abuse: keep in review');
+    expect(screen.getByTestId('signup-risk-ai-u1-chip').getAttribute('data-tone')).toBe('neutral');
+    expect(screen.queryByTestId('signup-risk-advisory-u1')).toBeNull();
     expect(chip('u2').textContent).toBe('Model: legit automation');
     expect(chip('u2').getAttribute('data-tone')).toBe('neutral');
     expect(chip('u3').textContent).toBe('Model: unsure');
@@ -422,6 +435,7 @@ describe('SignupRiskReviewTab', () => {
   it('words the advisory tooltip with the detector, confidence, age and other verdicts', () => {
     const now = new Date('2026-11-02T10:00:00.000Z').getTime();
     const advisory = {
+      assessmentId: 'c'.repeat(24),
       detectionId: 'd1',
       detector: 'signupNetworkBurst' as const,
       result: 'abuse' as const,
@@ -450,6 +464,7 @@ describe('SignupRiskReviewTab', () => {
     const now = new Date('2026-11-02T10:00:00.000Z').getTime();
     const tooltip = advisoryTooltip(
       {
+        assessmentId: 'c'.repeat(24),
         detectionId: 'd1',
         detector: 'signupNetworkBurst',
         result: 'insufficient_evidence',
@@ -469,5 +484,106 @@ describe('SignupRiskReviewTab', () => {
     renderTab();
 
     expect(screen.queryByTestId('signup-risk-advisory-u1')).toBeNull();
+    expect(screen.queryByTestId('signup-risk-ai-u1')).toBeNull();
+    fireEvent.click(screen.getByTestId('signup-risk-actions-u1'));
+    expect(screen.queryByTestId('signup-risk-accept-assessment-u1')).toBeNull();
+  });
+
+  describe('accepting or overriding the abuse assessment', () => {
+    const ASSESSMENT_ID = 'c'.repeat(24);
+    const advisoryOf = (result: 'abuse' | 'legitimate_automation') => ({
+      assessmentId: ASSESSMENT_ID,
+      detectionId: 'd1',
+      detector: 'signupNetworkBurst' as const,
+      result,
+      confidence: 0.9,
+      assessedAt: '2026-11-02T10:00:00.000Z',
+      otherVerdicts: 0,
+      newerVerdicts: 0,
+    });
+
+    it('posts the accept with the surface, user and assessment, changing nothing else', async () => {
+      m.useSignupRiskReviews.mockReturnValue(queue([row({ advisory: advisoryOf('abuse') })]));
+      renderTab();
+
+      fireEvent.click(screen.getByTestId('signup-risk-actions-u1'));
+      fireEvent.click(await screen.findByTestId('signup-risk-accept-assessment-u1'));
+
+      expect(m.accept).toHaveBeenCalledWith(
+        { surface: 'signupRiskReview', userId: 'u1', assessmentId: ASSESSMENT_ID },
+        expect.anything()
+      );
+      expect(m.mutate).not.toHaveBeenCalled();
+    });
+
+    it('accepts with the row shortcut', () => {
+      m.useSignupRiskReviews.mockReturnValue(queue([row({ advisory: advisoryOf('abuse') })]));
+      renderTab();
+
+      fireEvent.keyDown(screen.getByTestId('signup-risk-row-u1'), { key: 'a' });
+
+      expect(m.accept).toHaveBeenCalledTimes(1);
+    });
+
+    it('opens the approve dialog on override and sends the aiDecision on confirm', async () => {
+      m.useSignupRiskReviews.mockReturnValue(queue([row({ advisory: advisoryOf('abuse') })]));
+      renderTab();
+
+      fireEvent.click(screen.getByTestId('signup-risk-actions-u1'));
+      fireEvent.click(await screen.findByTestId('signup-risk-override-assessment-u1'));
+      expect(screen.getByTestId('signup-risk-approve-dialog')).toBeTruthy();
+      expect(m.mutate).not.toHaveBeenCalled();
+      fireEvent.click(await screen.findByTestId('signup-risk-approve-reason-preset-0'));
+      fireEvent.click(screen.getByTestId('signup-risk-approve-confirm-btn'));
+
+      expect(m.mutate).toHaveBeenCalledWith(
+        {
+          action: 'approve',
+          userIds: ['u1'],
+          reason: 'Verified legitimate user',
+          aiDecision: { assessmentId: ASSESSMENT_ID },
+        },
+        expect.anything()
+      );
+    });
+
+    it('sends no aiDecision when approving the same row the ordinary way', async () => {
+      m.useSignupRiskReviews.mockReturnValue(queue([row({ advisory: advisoryOf('abuse') })]));
+      renderTab();
+
+      await approveFirstRow();
+
+      expect(m.mutate.mock.calls[0][0]).not.toHaveProperty('aiDecision');
+    });
+
+    it.each(['accepted', 'overridden'] as const)(
+      'offers no accept or override once the assessment is %s',
+      async decision => {
+        m.useSignupRiskReviews.mockReturnValue(queue([row({ advisory: { ...advisoryOf('abuse'), decision } })]));
+        renderTab();
+
+        fireEvent.click(screen.getByTestId('signup-risk-actions-u1'));
+        await screen.findByTestId('signup-risk-approve-u1');
+        expect(screen.queryByTestId('signup-risk-accept-assessment-u1')).toBeNull();
+        expect(screen.queryByTestId('signup-risk-override-assessment-u1')).toBeNull();
+        expect(screen.queryByTestId('signup-risk-ai-u1')).toBeNull();
+        expect(screen.getByTestId('signup-risk-decision-u1')).toHaveTextContent(
+          decision === 'accepted' ? 'Accepted' : 'Overridden'
+        );
+        fireEvent.keyDown(screen.getByTestId('signup-risk-row-u1'), { key: 'a' });
+        expect(m.accept).not.toHaveBeenCalled();
+      }
+    );
+
+    it('offers no accept or override on a non-abuse verdict', async () => {
+      m.useSignupRiskReviews.mockReturnValue(queue([row({ advisory: advisoryOf('legitimate_automation') })]));
+      renderTab();
+
+      fireEvent.click(screen.getByTestId('signup-risk-actions-u1'));
+      await screen.findByTestId('signup-risk-approve-u1');
+      expect(screen.queryByTestId('signup-risk-accept-assessment-u1')).toBeNull();
+      expect(screen.queryByTestId('signup-risk-override-assessment-u1')).toBeNull();
+      expect(screen.queryByTestId('signup-risk-ai-u1')).toBeNull();
+    });
   });
 });

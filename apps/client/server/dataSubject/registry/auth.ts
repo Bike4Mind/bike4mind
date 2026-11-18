@@ -188,7 +188,8 @@ export const authHolders = {
       { path: 'promptMeta.humanReview.reviewedBy', matchBy: 'userId', action: 'anonymize' },
     ],
     // Authors of cited works and attachments, not platform users.
-    unrelatedPaths: ['promptMeta.citables.author', 'attachmentList.attachments.author'],
+    // The exchange key and connected app behind the quest: ids only, not credentials.
+    unrelatedPaths: ['promptMeta.citables.author', 'attachmentList.attachments.author', 'apiKeyId', 'oauthClientId'],
     // `signupActivity` is a retired field: never exported, though its `userId` is still anonymized.
     secretPaths: ['callback.url', 'signupActivity'],
   },
@@ -208,7 +209,9 @@ export const authHolders = {
   SessionModel: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      // A personal notebook goes; an organization's stays with the organization, its owner cleared.
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
       { path: 'users.userId', matchBy: 'userId', action: 'pullFromArray' },
       // The payer of a live voice hold; only ever set while a voice session is running.
       { path: 'voiceHoldUserId', matchBy: 'userId', action: 'anonymize' },
@@ -221,6 +224,13 @@ export const authHolders = {
       'tutorial.owner',
     ],
   },
+  SideAppRefusal: {
+    kind: 'holder',
+    // The 90-day expiry still applies; erasure only detaches the person from the refusal trail.
+    references: [{ path: 'userId', matchBy: 'userId', action: 'anonymize' }],
+    unrelatedPaths: ['keyId'],
+  },
+  SideAppRefusalCounter: { kind: 'noUserData', note: 'Hourly refusal counts per reason; aggregate only.' },
   SignupDomainReview: {
     kind: 'holder',
     references: [

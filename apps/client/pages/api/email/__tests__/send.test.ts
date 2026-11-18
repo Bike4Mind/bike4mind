@@ -29,6 +29,7 @@ const mockTryAdd = vi.fn(async (key: string, amount: number, limit: number, ttlM
   return { success: true, count: live.count, expiresAt: live.expiresAt };
 });
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: async (work: () => Promise<unknown>) => work(),
   organizationRepository: { findById: (...args: unknown[]) => mockFindOrganization(...args) },
   userRepository: { findOne: (...args: unknown[]) => mockFindRecipient(...args) },
   cacheRepository: { tryAddWithinLimitFixedWindow: (...a: [string, number, number, number]) => mockTryAdd(...a) },
@@ -80,6 +81,17 @@ describe('email send', () => {
       moderationStatus: 'clean',
     });
     mockSend.mockResolvedValue({ method: 'smtp', filesUploaded: 0 });
+  });
+
+  it('answers 429 with Retry-After once a recipient inbox has used its allowance', async () => {
+    for (let i = 0; i < 5; i++) {
+      const ok = await run({ type: 'files', fileIds: ['f1'], recipients: [`pal+${i}@example.com`] });
+      expect(ok._getStatusCode()).toBe(200);
+    }
+    const res = await run({ type: 'files', fileIds: ['f1'], recipients: ['pal@example.com'] });
+    expect(res._getStatusCode()).toBe(429);
+    expect(Number(res.getHeader('Retry-After'))).toBeGreaterThan(0);
+    expect(mockSend).toHaveBeenCalledTimes(5);
   });
 
   it.each(['files', 'notebooks'] as const)('rejects outside %s recipients before any download or send', async type => {
@@ -266,16 +278,21 @@ describe('email send', () => {
 
   describe('limits', () => {
     const one = { type: 'files', fileIds: ['f1'], recipients: ['a@example.com'] };
-    const five = { ...one, recipients: Array.from({ length: 5 }, (_, i) => `u${i}@example.com`) };
+    let nextRecipient = 0;
+    // A fresh inbox per send keeps these cases on the per-user budget, not the per-recipient one.
+    const to = (count = 1) => ({
+      ...one,
+      recipients: Array.from({ length: count }, () => `r${nextRecipient++}@example.com`),
+    });
 
     it('caps the recipient list at 5', () => {
       expect(MAX_EMAIL_RECIPIENTS).toBe(5);
     });
 
     it('answers 429 with Retry-After once the hourly budget is spent', async () => {
-      for (let i = 0; i < 15; i++) expect((await run(one)).statusCode).toBe(200);
+      for (let i = 0; i < 15; i++) expect((await run(to())).statusCode).toBe(200);
       mockSend.mockClear();
-      const res = await run(one);
+      const res = await run(to());
       expect(res.statusCode).toBe(429);
       const retryAfter = Number(res.getHeader('Retry-After'));
       expect(retryAfter).toBeGreaterThan(0);
@@ -284,18 +301,18 @@ describe('email send', () => {
     });
 
     it('charges more for wider sends', async () => {
-      for (let i = 0; i < 5; i++) expect((await run(five)).statusCode).toBe(200);
-      expect((await run(five)).statusCode).toBe(429);
+      for (let i = 0; i < 5; i++) expect((await run(to(5))).statusCode).toBe(200);
+      expect((await run(to(5))).statusCode).toBe(429);
     });
 
     it('answers 429 on the daily budget after the hourly window rolls over', async () => {
       vi.useFakeTimers();
       try {
         for (let h = 0; h < 4; h++) {
-          for (let i = 0; i < 15; i++) await run(one);
+          for (let i = 0; i < 15; i++) await run(to());
           vi.advanceTimersByTime(3600 * 1000 + 1);
         }
-        const res = await run(one);
+        const res = await run(to());
         expect(res.statusCode).toBe(429);
         expect(Number(res.getHeader('Retry-After'))).toBeGreaterThan(3600);
       } finally {
@@ -304,8 +321,8 @@ describe('email send', () => {
     });
 
     it('counts each user separately', async () => {
-      for (let i = 0; i < 15; i++) await run(one);
-      expect((await run(one)).statusCode).toBe(429);
+      for (let i = 0; i < 15; i++) await run(to());
+      expect((await run(to())).statusCode).toBe(429);
       mockFindFile.mockResolvedValue({
         userId: 'u2',
         fileName: 'a.txt',
@@ -313,7 +330,7 @@ describe('email send', () => {
         mimeType: 'text/plain',
         moderationStatus: 'clean',
       });
-      expect((await run(one, 'Pat', {}, 'u2')).statusCode).toBe(200);
+      expect((await run(to(), 'Pat', {}, 'u2')).statusCode).toBe(200);
     });
 
     it('does not spend budget on an invalid body', async () => {

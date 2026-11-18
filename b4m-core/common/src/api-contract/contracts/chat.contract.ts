@@ -11,6 +11,7 @@ import {
   ChatWaitUnprocessableErrorSchema,
   ChatWaitUpstreamErrorSchema,
   ApiErrorSchema,
+  ChatForbiddenErrorSchema,
 } from '../../schemas/chat';
 
 /**
@@ -46,6 +47,10 @@ export const chatContract = defineEndpoint({
     'fires outside the process try/catch that would classify it onto a quest. A ' +
     'caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when ' +
     '`errorCode` is absent, and must not read `reply` as an answer without checking those first. ' +
+    'Organization-policy preflight refusals use 403 with `errorCode: "org_model_not_allowed"` ' +
+    'or `"org_tool_not_allowed"`. An explicit-model JWT request can instead be accepted and ' +
+    'refused during quest execution: that refusal appears on the 200 `wait: true` body or polled ' +
+    'quest as `type: "error"`, without a policy `errorCode`. Check the quest outcome as described above. ' +
     'Authenticate with an API key (`b4m_live_`) or a JWT. ' +
     'Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller ' +
     'that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, ' +
@@ -127,6 +132,14 @@ export const chatContract = defineEndpoint({
         'The request was rejected before a turn was created: a supplied `model` is unknown, disabled ' +
         'or not a chat model; or no usable default chat model is configured and none was supplied.',
       schema: ApiErrorSchema,
+    },
+    403: {
+      description:
+        'The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), ' +
+        'a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), ' +
+        'organization-policy preflight refuses the model (`errorCode: "org_model_not_allowed"`), or an API-key ' +
+        'caller named a built-in tool the organization does not allow (`errorCode: "org_tool_not_allowed"`).',
+      schema: ChatForbiddenErrorSchema,
     },
     404: { description: 'No notebook/session exists to attach the message to.', schema: ApiErrorSchema },
     422: {

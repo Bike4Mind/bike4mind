@@ -1,5 +1,10 @@
 import type { AxiosInstance } from 'axios';
-import { CompletionRunSchema, type CompletionRun } from '@bike4mind/common';
+import {
+  CompletionRunSchema,
+  CompletionRunUsageSchema,
+  type CompletionRun,
+  type CompletionRunUsage,
+} from '@bike4mind/common';
 
 /** Issues the run id an orchestration's completions are grouped under. Same base URL and auth as the app's other API calls. */
 export const COMPLETION_RUNS_PATH = '/api/v1/completion-runs';
@@ -67,4 +72,23 @@ export function createCompletionRunMinter(
     inFlight.set(key, minted);
     return minted;
   };
+}
+
+/** A read of a run's settled spend: the summary waits on it, so it is bounded like the mint. In ms. */
+const USAGE_TIMEOUT_MS = 10_000;
+
+export type CompletionRunUsageRead = { ok: true; usage: CompletionRunUsage } | { ok: false; reason: string };
+
+/** The server's settled spend for `runId`; a failure comes back as a reason, never a throw. */
+export async function readCompletionRunUsage(axios: AxiosInstance, runId: string): Promise<CompletionRunUsageRead> {
+  try {
+    const response = await axios.get<unknown>(`${COMPLETION_RUNS_PATH}/${encodeURIComponent(runId)}/usage`, {
+      timeout: USAGE_TIMEOUT_MS,
+    });
+    const parsed = CompletionRunUsageSchema.safeParse(response.data);
+    if (parsed.success) return { ok: true, usage: parsed.data };
+    return { ok: false, reason: `unexpected response: ${parsed.error.message}` };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
 }

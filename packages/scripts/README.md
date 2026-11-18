@@ -246,6 +246,35 @@ The `concurrent-cap` test aborts the 3 long-running parents as soon as the 4th's
 - **MongoDB inspection is out of scope.** The script prints the exact `db.agentExecutions.findOne(...)` queries to run for parent/child linkage and credit-rollup verification — these need direct DB access.
 - **MFA test users.** The script fails fast if the test user has MFA configured. Use a non-MFA account for automated testing.
 
+## Seed a PR preview's admin settings
+
+A fresh preview never receives sensitive admin settings from staging (the preview data sync skips
+them), so provider-key-gated tools start out unavailable. `preview:seed-settings` fills them in from
+your shell environment in one command:
+
+```bash
+pnpm --filter @bike4mind/scripts preview:seed-settings --pr 1234 --dry-run
+pnpm --filter @bike4mind/scripts preview:seed-settings --pr 1234
+```
+
+- **Target:** `--pr <N>` or `--stage pr<N>`. Anything that is not exactly `pr<N>` (staging, production,
+  a typo) is refused before any network call.
+- **Write path:** the admin `PUT /api/settings/update` route, so each value is schema-validated,
+  encrypted at rest, audited and cache-invalidated exactly as an admin save from the UI. It needs no
+  `sst shell`, AWS session or database access.
+- **Auth:** `B4M_PREVIEW_ADMIN_TOKEN` (an admin bearer token on that preview), or
+  `E2E_CLEANUP_SECRET`, with which the script mints a throwaway emailless `settings:manage` delegate
+  (`qa-settings-seed-*-e2e`) for the run.
+- **Values come only from env vars**, never from flags, and are never printed. `--help` lists the
+  env var -> setting table (for example `OPENAI_API_KEY -> openaiDemoKey`,
+  `FIRECRAWL_API_KEY -> FirecrawlApiKey`, `OPENWEATHER_API_KEY -> OpenWeatherKey`). An unset env var
+  is reported as `skipped`, not an error.
+- **Idempotent:** each setting reports `set`, `unchanged` or `skipped`. A secret counts as unchanged
+  when its stored last 4 characters match; pass `--force` to re-send secrets anyway. `--only` takes a
+  comma-separated list of setting keys.
+- Other Lambda instances cache settings for up to 5 minutes, so a new key can take that long to show
+  up everywhere.
+
 ## Signup baseline and census
 
 `report:signup-baseline` is a read-only operator query pack. It emits JSON with signup and

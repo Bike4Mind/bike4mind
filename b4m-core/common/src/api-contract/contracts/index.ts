@@ -6,13 +6,14 @@ import { sessionGetContract } from './sessionGet.contract';
 import { sessionDeleteContract } from './sessionDelete.contract';
 import { sessionCloneContract } from './sessionClone.contract';
 import { executeToolContract } from './tools.contract';
+import { searchWebContract, fetchWebPageContract, getCurrentWeatherContract } from './webTools.contract';
 import { createCompletionContract } from './completions.contract';
-import { createCompletionRunContract } from './completionRuns.contract';
+import { createCompletionRunContract, getCompletionRunUsageContract } from './completionRuns.contract';
 import { synthesizeSpeechContract } from './tts.contract';
 import { generateMusicContract } from './music.contract';
 import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
-import { getClientConfigContract } from './clientConfig.contract';
+import { getClientConfigContract, getPublicClientConfigContract } from './clientConfig.contract';
 import { approvePendingActionContract, denyPendingActionContract } from './pendingActions.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
 import { mintPersonaContract, deletePersonaContract } from './personas.contract';
@@ -70,6 +71,7 @@ import {
   removeDataLakeFileContract,
   searchDataLakeContract,
 } from './dataLakes.contract';
+import { listImageModelsContract } from './imageModels.contract';
 import {
   cancelVideoGenerationContract,
   createVideoGenerationContract,
@@ -154,13 +156,18 @@ export const CONTRACTS: readonly EndpointContract[] = [
   sessionDeleteContract,
   sessionCloneContract,
   executeToolContract,
+  searchWebContract,
+  fetchWebPageContract,
+  getCurrentWeatherContract,
   createCompletionContract,
   createCompletionRunContract,
+  getCompletionRunUsageContract,
   synthesizeSpeechContract,
   generateMusicContract,
   generateSoundEffectContract,
   getMeContract,
   getClientConfigContract,
+  getPublicClientConfigContract,
   approvePendingActionContract,
   denyPendingActionContract,
   registerPushTokenContract,
@@ -201,6 +208,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   addDataLakeFileContract,
   removeDataLakeFileContract,
   searchDataLakeContract,
+  listImageModelsContract,
   cancelVideoGenerationContract,
   createVideoGenerationContract,
   getVideoGenerationContract,

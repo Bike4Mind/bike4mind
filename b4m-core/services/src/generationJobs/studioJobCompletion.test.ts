@@ -165,6 +165,27 @@ describe('studioCompletionSubscriber', () => {
     expect(t.publish).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['speech', { request: { text: PROMPT, provider: 'openai' }, candidates: ['openai'], saveToFiles: true }],
+    [
+      'sound_effect',
+      { request: { text: PROMPT, provider: 'elevenlabs' }, providerId: 'elevenlabs', saveToFiles: true },
+    ],
+  ] as const)(
+    'stays silent for a saved Studio %s job, which finished while its requester waited',
+    async (kind, payload) => {
+      const t = setup();
+      const job = await t.create({
+        kind,
+        state: 'succeeded',
+        payload: payload as unknown as IGenerationJob['payload'],
+      });
+
+      expect(await t.announce(job)).toBe('no_audience');
+      expect(t.publish).not.toHaveBeenCalled();
+    }
+  );
+
   it('treats a video job as a group of one', async () => {
     const t = setup();
     const job = await t.create({ kind: 'video', state: 'succeeded', payload: videoPayload });
@@ -178,6 +199,19 @@ describe('studioCompletionSubscriber', () => {
       title: 'A lighthouse at dusk',
       link: `/studio/video?group=${job.id}`,
     });
+  });
+
+  it('titles a cutout for what it is, not by its internal prompt', async () => {
+    const t = setup();
+    const cutout = { ...(imagePayload(1) as object), purpose: 'cutout' } as unknown as IGenerationJob['payload'];
+    const [done] = await t.createGroup(['succeeded'], { payload: cutout });
+    await t.announce(done);
+    expect(t.published[0]).toMatchObject({ title: 'Background removed' });
+
+    const t2 = setup();
+    const [failed] = await t2.createGroup(['failed'], { payload: cutout });
+    await t2.announce(failed);
+    expect(t2.published[0]).toMatchObject({ title: 'Background removal' });
   });
 
   it('falls back to the stored members for an image group made before groupSize existed', async () => {

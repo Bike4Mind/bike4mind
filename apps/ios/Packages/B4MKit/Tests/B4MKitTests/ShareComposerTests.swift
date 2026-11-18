@@ -201,6 +201,28 @@ final class ShareComposerModelTests: XCTestCase {
     XCTAssertEqual(model.dismissButtonTitle, "Done")
   }
 
+  func testCapturedImageAndQuestionKeepTheRememberedDestinationWhileOffline() async {
+    let destination = CaptureDestination.session(id: "s1", name: "Trip")
+    let store = InMemoryDestinationStore(destination)
+    let submitter = RecordingSubmitter()
+    await submitter.setResultStage(.queued)
+    let image = ShareItem.image(
+      SharedFile(
+        fileURL: URL(fileURLWithPath: "/tmp/photo.jpg"), fileName: "Photo.jpg", mimeType: "image/jpeg", byteCount: 10))
+    let model = ShareComposerModel(
+      items: [image],
+      source: StubSource(lakeResult: .failure(APIError.offline), sessionResult: .failure(APIError.offline)),
+      submitter: submitter, store: store)
+    await model.load()
+    XCTAssertEqual(model.destination, destination)
+    model.note = "What is this?"
+    await model.submit()
+    let calls = await submitter.calls
+    XCTAssertEqual(calls, [.init(items: [image], destination: destination, note: "What is this?")])
+    XCTAssertEqual(model.phase, .sent)
+    XCTAssertEqual(store.lastDestination(), destination)
+  }
+
   func testTheDismissButtonStaysCancelAfterAFailedSend() async {
     let submitter = RecordingSubmitter()
     await submitter.setResultStage(.failed)

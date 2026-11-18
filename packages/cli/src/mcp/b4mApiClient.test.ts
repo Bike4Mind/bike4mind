@@ -1039,7 +1039,7 @@ describe('B4mApiClient publish', () => {
     expect(mockPut).not.toHaveBeenCalled();
     expect(globalFetch.mock.calls[0][1]).toEqual({
       method: 'PUT',
-      headers: { 'Content-Type': 'text/plain' },
+      headers: { 'Content-Type': 'text/plain', 'If-None-Match': '*' },
       body: Buffer.from('abc'),
     });
   });
@@ -1048,7 +1048,7 @@ describe('B4mApiClient publish', () => {
     mockPut.mockResolvedValue({ ok: true });
     await client.uploadFileBytes('/api/files/f1/upload', Buffer.from('abc'), 'text/plain');
     expect(mockPut).toHaveBeenCalledWith('/api/files/f1/upload', Buffer.from('abc'), {
-      headers: { 'Content-Type': 'text/plain' },
+      headers: { 'Content-Type': 'text/plain', 'If-None-Match': '*' },
     });
     await expect(client.uploadFileBytes('//evil.example/steal', Buffer.from('abc'), 'text/plain')).rejects.toThrow(
       'Unexpected'

@@ -1,11 +1,14 @@
 import {
+  toPublicAudioJobErrorCode,
   toPublicMusicJobErrorCode,
   toPublicVideoJobErrorCode,
+  type AudioJobOutput,
   type GenerationJobErrorCode,
   type GenerationJobSource,
   type GenerationJobState,
   type IGenerationJobDocument,
   type IGenerationJobDocumentOf,
+  type ImageJobOutput,
   type MusicJobOutput,
   type VideoJobOutput,
 } from '@bike4mind/common';
@@ -17,7 +20,14 @@ import {
   type SignedOutput,
   type StoredOutputRef,
 } from '@bike4mind/server-utils/generations/signedOutput';
-import { MUSIC_JOB_ERROR_COPY, VIDEO_JOB_ERROR_COPY, type GenerationJobErrorCopy } from './generationJobErrorCopy';
+import {
+  IMAGE_JOB_ERROR_COPY,
+  MUSIC_JOB_ERROR_COPY,
+  SOUND_EFFECT_JOB_ERROR_COPY,
+  SPEECH_JOB_ERROR_COPY,
+  VIDEO_JOB_ERROR_COPY,
+  type GenerationJobErrorCopy,
+} from './generationJobErrorCopy';
 
 type JobOutput = StoredOutputRef & { contentType: string };
 
@@ -114,6 +124,9 @@ export async function toPublicGenerationJob<
 
 type VideoJob = IGenerationJobDocumentOf<'video'>;
 type MusicJob = IGenerationJobDocumentOf<'music'>;
+type ImageJob = IGenerationJobDocumentOf<'image'>;
+type SpeechJob = IGenerationJobDocumentOf<'speech'>;
+type SoundEffectJob = IGenerationJobDocumentOf<'sound_effect'>;
 
 // Must stay in sync with VideoGenerationSchema (b4m-core/common/src/schemas/videoGenerations.ts), key order included.
 export const VIDEO_GENERATION_PROJECTION = {
@@ -127,6 +140,7 @@ export const VIDEO_GENERATION_PROJECTION = {
     duration_seconds: request.durationSeconds,
     aspect_ratio: request.aspectRatio,
     resolution: request.resolution,
+    ...(request.draft !== undefined && { draft: request.draft }),
   }),
   statusFields: (job: VideoJob) => ({ progress: job.progress ?? null }),
   outputOf: (job: VideoJob): VideoJobOutput | undefined => job.payload.output,
@@ -151,4 +165,57 @@ export const MUSIC_GENERATION_PROJECTION = {
     duration_seconds: output.durationSeconds,
     lyrics: output.lyrics ?? null,
   }),
+};
+
+const audioOutputFields = (output: AudioJobOutput) => ({ duration_seconds: output.durationSeconds ?? null });
+
+// Must stay in sync with SpeechGenerationSchema (b4m-core/common/src/schemas/audioGenerations.ts), key order included.
+export const SPEECH_GENERATION_PROJECTION = {
+  object: 'speech_generation' as const,
+  toPublicErrorCode: toPublicAudioJobErrorCode,
+  errorCopy: SPEECH_JOB_ERROR_COPY,
+  requestFields: ({ payload: { request } }: SpeechJob) => ({
+    text: request.text,
+    provider: request.provider,
+    model: request.model ?? null,
+    voice: request.voice ?? null,
+  }),
+  statusFields: () => ({}),
+  outputOf: (job: SpeechJob): AudioJobOutput | undefined => job.payload.output,
+  outputFields: audioOutputFields,
+};
+
+// Must stay in sync with SoundEffectGenerationSchema (b4m-core/common/src/schemas/audioGenerations.ts), key order
+// included.
+export const SOUND_EFFECT_GENERATION_PROJECTION = {
+  object: 'sound_effect_generation' as const,
+  toPublicErrorCode: toPublicAudioJobErrorCode,
+  errorCopy: SOUND_EFFECT_JOB_ERROR_COPY,
+  requestFields: ({ payload: { request } }: SoundEffectJob) => ({
+    text: request.text,
+    provider: request.provider,
+    duration_seconds: request.durationSeconds ?? null,
+  }),
+  statusFields: () => ({}),
+  outputOf: (job: SoundEffectJob): AudioJobOutput | undefined => job.payload.output,
+  outputFields: audioOutputFields,
+};
+
+/**
+ * The internal per-id image resource the chat job card reads (GET /api/image-jobs/[id]). Not published yet: the copy
+ * table covers every code, so nothing is folded.
+ */
+export const IMAGE_GENERATION_PROJECTION = {
+  object: 'image_generation' as const,
+  toPublicErrorCode: (code: GenerationJobErrorCode) => code,
+  errorCopy: IMAGE_JOB_ERROR_COPY,
+  requestFields: ({ payload: { request, groupId } }: ImageJob) => ({
+    model: request.model,
+    mode: request.mode,
+    prompt: request.prompt,
+    group_id: groupId ?? null,
+  }),
+  statusFields: () => ({}),
+  outputOf: (job: ImageJob): ImageJobOutput | undefined => job.payload.output,
+  outputFields: () => ({}),
 };

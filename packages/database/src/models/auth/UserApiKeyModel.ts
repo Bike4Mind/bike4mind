@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { softDeletePlugin } from '../../utils/mongo';
 import {
   ApiKeyCapPool,
+  type ApiKeyScopeValue,
   ApiKeyStoredSecret,
   ApiKeyStatus,
   isWellFormedApiKeyScope,
@@ -13,6 +14,7 @@ import {
   LegacyApiKeyCandidatePage,
   LegacyApiKeyCandidateQuery,
   OrgApiKeyGrant,
+  PAYER_STANDINGS,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 import { decryptAtRest, encryptAtRest } from '@bike4mind/utils/security';
@@ -159,6 +161,11 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
         },
       }
     );
+  }
+
+  /** Add or remove one scope in place. Admin flows only: it bypasses the mint-time scope rules. */
+  async setScopeHeld(id: string, scope: ApiKeyScopeValue, held: boolean) {
+    await this.model.updateOne({ _id: id }, held ? { $addToSet: { scopes: scope } } : { $pull: { scopes: scope } });
   }
 
   async resetSpend(id: string) {
@@ -592,6 +599,7 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
       createdByUserId: { type: String },
       // OAuth client that minted this key via the federated AI-token exchange. See IUserApiKeyMetadata.
       oauthClientId: { type: String },
+      payerStanding: { type: String, enum: [...PAYER_STANDINGS] },
       baseline: {
         avgRequestsPerHour: { type: Number },
         avgRequestsPerDay: { type: Number },

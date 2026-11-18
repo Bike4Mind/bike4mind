@@ -515,6 +515,16 @@ export interface IUser extends ICreditHolder {
   disputePending?: boolean;
   /** Set while a requested deletion is in its grace period (see IUserDeletion). */
   deletion?: IUserDeletion | null;
+  /** Private erasure retry state, including restored accounts with no deletion schedule. */
+  accountFilePurge?: {
+    startedAt?: Date;
+    leaseId?: string;
+    leaseExpiresAt?: Date;
+    initialized?: boolean;
+    throughAuditId?: string;
+    afterAuditId?: string;
+    complete?: boolean;
+  };
   /** Server-side lease preventing a data export from racing permanent account cleanup. */
   /** `jobId` names the export job holding it; leases taken before it was recorded have none. */
   accountDataExportLease?: { id: string; jobId?: string; expiresAt: Date };
@@ -960,6 +970,14 @@ export interface IUser extends ICreditHolder {
    * through the persona routes, and the expiry sweep disables them at `personaExpiresAt`.
    */
   isPersona?: boolean;
+
+  /**
+   * `'force'` makes this one account owe MFA enrollment as if the admin enforced MFA, with the
+   * stage-wide `enforceMFA` setting untouched, so e2e can drive the real enforcement path. Set only
+   * by POST /api/test/create-user; no signup, profile or admin update path writes it. Every reader
+   * goes through isMfaForcedForUser (common mfaEnforcement.ts).
+   */
+  mfaEnforcement?: 'force' | null;
 
   /** When the persona expiry sweep disables this persona account; set only on persona accounts. */
   personaExpiresAt?: Date | null;

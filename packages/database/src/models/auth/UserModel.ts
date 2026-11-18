@@ -1805,6 +1805,23 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     riskSignals: { type: [UserRiskSignalSchema], required: false, default: undefined },
     disputePending: { type: Boolean, required: false, default: false },
     deletion: { type: UserDeletionSchema, required: false, default: undefined },
+    accountFilePurge: {
+      type: new Schema(
+        {
+          startedAt: Date,
+          leaseId: String,
+          leaseExpiresAt: Date,
+          initialized: Boolean,
+          throughAuditId: String,
+          afterAuditId: String,
+          complete: Boolean,
+        },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
+      select: false,
+    },
     accountDataExportLease: {
       type: new Schema(
         {
@@ -2116,6 +2133,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // See IUser.isPersona. Written only by the persona mint route.
     isPersona: { type: Boolean, required: false },
     personaExpiresAt: { type: Date, required: false },
+    // See IUser.mfaEnforcement. Written only by the e2e create-user route.
+    mfaEnforcement: { type: String, enum: ['force'], required: false },
     personaName: { type: String, required: false },
     personaOwnerId: { type: String, required: false },
     personaLoginCodeHash: { type: String, required: false },

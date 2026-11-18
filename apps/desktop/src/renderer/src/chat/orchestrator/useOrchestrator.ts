@@ -5,10 +5,12 @@ import { bufferUntrackedActivity, foldActivity, type AgentActivity } from './act
 import {
   readAmbient,
   readDockOpen,
+  readFocus,
   readSurface,
   readView,
   writeAmbient,
   writeDockOpen,
+  writeFocus,
   writeSurface,
   writeView,
   type OrchestratorViewId,
@@ -121,6 +123,8 @@ interface OrchestratorPrefs {
   setDockOpen(open: boolean): void;
   ambient: boolean;
   setAmbient(on: boolean): void;
+  focus: boolean;
+  setFocus(on: boolean): void;
 }
 
 interface SessionPrefs {
@@ -135,11 +139,12 @@ function readSessionPrefs(sessionId: string | null): SessionPrefs {
     : { sessionId, surface: readSurface(sessionId), view: readView(sessionId) };
 }
 
-/** Per-session surface and view, plus the global dock and ambient flags. Setters update state and storage together. */
+/** Per-session surface and view, plus the global dock, ambient and focus flags. Setters update state and storage together. */
 export function useOrchestratorPrefs(sessionId: string | null): OrchestratorPrefs {
   const [prefs, setPrefs] = useState(() => readSessionPrefs(sessionId));
   const [dockOpen, setDockOpenState] = useState(readDockOpen);
   const [ambient, setAmbientState] = useState(readAmbient);
+  const [focus, setFocusState] = useState(readFocus);
 
   // Re-read during render rather than in an effect, so a session switch never paints the old session's mode.
   const current = prefs.sessionId === sessionId ? prefs : readSessionPrefs(sessionId);
@@ -173,6 +178,11 @@ export function useOrchestratorPrefs(sessionId: string | null): OrchestratorPref
     setAmbientState(on);
   }, []);
 
+  const setFocus = useCallback((on: boolean) => {
+    writeFocus(on);
+    setFocusState(on);
+  }, []);
+
   return {
     surface: current.surface,
     setSurface,
@@ -182,5 +192,7 @@ export function useOrchestratorPrefs(sessionId: string | null): OrchestratorPref
     setDockOpen,
     ambient,
     setAmbient,
+    focus,
+    setFocus,
   };
 }

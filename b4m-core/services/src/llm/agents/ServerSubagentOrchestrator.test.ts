@@ -7,6 +7,7 @@ import {
   getTextModelCost,
   getTurnsCost,
   type ModelInfo,
+  ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
 } from '@bike4mind/common';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
@@ -328,6 +329,26 @@ describe('ServerSubagentOrchestrator', () => {
         });
 
         expect(resolveBackend).toHaveBeenCalledWith(FREE_ID);
+        expect(resolveBackend).not.toHaveBeenCalledWith(PAID_ID);
+        expect(result.model).toBe(FREE_ID);
+      });
+
+      it('runs on an admitted fallback when the pinned model is not allowed by the organization', async () => {
+        const assert = vi.fn(async (modelId: string) => {
+          if (modelId === PAID_ID) {
+            throw new ForbiddenError(`Model "${modelId}" is not allowed by your organization`, {
+              errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+            });
+          }
+        });
+        const { orchestrator, resolveBackend } = makeOrchestrator(assert, [PAID_ID, FREE_ID]);
+
+        const result = await orchestrator.delegateToAgent({
+          task: 't',
+          agentDef: makeAgentDef({ model: PAID_ID, fallbackModels: [FREE_ID] }),
+          thoroughness: 'medium',
+        });
+
         expect(resolveBackend).not.toHaveBeenCalledWith(PAID_ID);
         expect(result.model).toBe(FREE_ID);
       });

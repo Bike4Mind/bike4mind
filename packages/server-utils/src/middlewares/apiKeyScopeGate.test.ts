@@ -13,6 +13,9 @@ import {
   shouldLogLegacyPass,
 } from './apiKeyScopeGate';
 
+const recordRefusal = vi.hoisted(() => vi.fn());
+vi.mock('../auth/sideAppRefusal', () => ({ recordSideAppRefusal: recordRefusal }));
+
 vi.mock('../premium-generated/premiumApiKeyScopes.generated', () => ({
   premiumApiKeyScopes: [
     { value: 'acme:read', label: 'Acme: Read', description: 'Read Acme records', endpoints: ['GET /api/acme'] },
@@ -492,5 +495,43 @@ describe('exchange keys', () => {
       expect(holdsApiKeyScope(exchange, [ApiKeyScope.READ_NOTEBOOKS])).toBe(false);
       expect(holdsApiKeyScope({ apiKeyInfo: { scopes: held } }, [ApiKeyScope.READ_NOTEBOOKS])).toBe(true);
     });
+  });
+});
+
+describe('side-app refusal recording', () => {
+  const exchange = {
+    apiKeyInfo: { keyId: 'k1', userId: 'u1', scopes: [ApiKeyScope.AI_GENERATE], oauthExchangeClientId: 'client-1' },
+  };
+
+  afterEach(() => recordRefusal.mockClear());
+
+  it('records an exchange key refused by assertApiKeyScope', () => {
+    expect(() => assertApiKeyScope(exchange, [ApiKeyScope.READ_NOTEBOOKS], 'nope')).toThrow('nope');
+    expect(recordRefusal).toHaveBeenCalledTimes(1);
+    expect(recordRefusal).toHaveBeenCalledWith({
+      verified: true,
+      clientId: 'client-1',
+      stage: 'use',
+      reason: 'insufficient_scope',
+      status: 403,
+      userId: 'u1',
+      keyId: 'k1',
+    });
+  });
+
+  it('does not record a personal key refused by assertApiKeyScope', () => {
+    const personal = { apiKeyInfo: { keyId: 'k2', scopes: [ApiKeyScope.AI_GENERATE] } };
+    expect(() => assertApiKeyScope(personal, [ApiKeyScope.READ_NOTEBOOKS], 'nope')).toThrow('nope');
+    expect(recordRefusal).not.toHaveBeenCalled();
+  });
+
+  it('does not record when assertApiKeyScope admits the key', () => {
+    assertApiKeyScope(exchange, [ApiKeyScope.AI_GENERATE], 'nope');
+    expect(recordRefusal).not.toHaveBeenCalled();
+  });
+
+  it('records nothing when holdsApiKeyScope returns false', () => {
+    expect(holdsApiKeyScope(exchange, [ApiKeyScope.READ_NOTEBOOKS])).toBe(false);
+    expect(recordRefusal).not.toHaveBeenCalled();
   });
 });

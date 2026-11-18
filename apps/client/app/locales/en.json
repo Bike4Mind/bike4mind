@@ -121,8 +121,14 @@
     "active_subscription": "Active Subscription",
     "no_subscription": "No Subscription",
     "payment_issue": "Payment Issue",
-    "team_plan": "Team Plan",
-    "no_active_plan": "No Active Plan",
+    "plan_states": {
+      "none": "No Active Plan",
+      "payment_issue": "Payment Issue",
+      "ending": "Team Plan (ending)",
+      "trialing": "Team Plan (trial)",
+      "granted": "Team Plan (granted)",
+      "active": "Team Plan"
+    },
     "x_members_one": "{{count}} member",
     "x_members_other": "{{count}} members",
     "x_credits_one": "{{amount}} credit",
@@ -166,8 +172,8 @@
     },
     "descriptions": {
       "domains": "Manage the email domains associated with your team.",
-      "overview": "Plan, credits and seat usage for this team.",
-      "members": "{{current}} of {{max}} seats used. Invite people and manage their roles.",
+      "overview": "Plan and credits for this team.",
+      "members": "Seats, pending invitations and roles for everyone on the team.",
       "library": "Shared definitions the team owns. They stay available when their author leaves.",
       "groups": "Appoint managers and organize members into groups.",
       "usage": "Credit spend across the team.",
@@ -199,12 +205,7 @@
       "canceling": "Canceling",
       "active": "Active",
       "next_billing": "Next Billing",
-      "not_available": "N/A",
-      "seats_utilization": "Seats Utilization",
-      "seats_utilization_label": "Seats utilization: {{current}} of {{max}} seats used",
-      "x_active": "{{count}} Active",
-      "x_pending": "{{count}} Pending",
-      "x_available": "{{count}} Available"
+      "not_available": "N/A"
     },
     "api_keys": {
       "member_keys": "Member API keys"
@@ -222,6 +223,7 @@
     "errors": {
       "notebookDeleted": "This notebook was deleted. Please create a new one.",
       "noPermission": "You do not have permission to access this notebook.",
+      "modelUnavailable": "This model is no longer available to you. Pick another model and send again.",
       "invalidRequest": "Invalid request. Please try again.",
       "tooManyRequests": "Too many requests. Please wait a moment and try again.",
       "dailyFreeLimitReached": "You have reached today's free-tier credit limit. It resets at midnight UTC, or upgrade your plan to keep going.",
@@ -468,6 +470,7 @@
     "pay_now_success": "Payment received. Your plan will be restored in a moment.",
     "pay_now_received": "Payment received",
     "upgrade": "Upgrade",
+    "seat_plan_via": "Included with your seat in {{organization}}",
     "credit_analytics": "Credit Analytics",
     "pricing": "Credits Pricing",
     "show_purchases": "Show Purchases",
@@ -498,6 +501,7 @@
     "free_plan": "Free",
     "free_plan_detail": "Pay as you go with credit packs",
     "low_org": "An organization admin can add credits to this account.",
+    "low_seat_plan": "A pack tops you up now. Your team's credits are on the {{organization}} account.",
     "low_with_plan": "Top up to keep working until your allowance renews.",
     "low_without_plan": "A plan adds credits every month; a pack tops you up now.",
     "payment_failed": "Payment failed",
@@ -513,6 +517,8 @@
     "plans_upgrade_sub": "Get a monthly credit allowance instead of topping up by hand.",
     "retry": "Retry",
     "see_plans": "See plans",
+    "seat_plan_detail": "Included with your seat in {{organization}}",
+    "seat_plan_notice": "Your team covers your plan, so there is nothing to upgrade here. Credit packs still top up your personal balance.",
     "team_no_plan": "No team plan",
     "team_no_plan_detail": "Credits are added by a team admin",
     "team_plan": "Team",
@@ -754,6 +760,8 @@
     "add_files_to_notebook_other": "Add {{count}} Files to Notebook",
     "add_files_to_project_one": "Add {{count}} File to Project",
     "add_files_to_project_other": "Add {{count}} Files to Project",
+    "add_files_to_production_one": "Add {{count}} File to Production",
+    "add_files_to_production_other": "Add {{count}} Files to Production",
     "in_project": "In Project"
   },
   "file_properties": {

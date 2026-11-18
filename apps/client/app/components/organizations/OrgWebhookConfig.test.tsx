@@ -200,3 +200,16 @@ describe('OrgWebhookConfig subscribed events', () => {
     }
   });
 });
+
+describe('OrgWebhookConfig icon buttons', () => {
+  it('gives every retained icon-only control an accessible name', () => {
+    renderConfig();
+    for (const name of ['Copy webhook URL', 'Show webhook secret', 'Rotate webhook secret'])
+      expect(screen.getByRole('button', { name })).toBeTruthy();
+  });
+});
+
+it('labels the webhook enabled switch for assistive technology', () => {
+  renderConfig();
+  expect(screen.getByRole('switch', { name: 'Webhook integration enabled' })).toBeInTheDocument();
+});

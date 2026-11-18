@@ -2,7 +2,8 @@ import { CreditHolderType } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { record, claim, markSettled, findSettlement, transaction, findUser, assertSpendCap } = vi.hoisted(() => ({
+const { record, claim, markSettled, findSettlement, transaction, findUser, assertSpendCap, warm } = vi.hoisted(() => ({
+  warm: vi.fn(),
   findUser: vi.fn(),
   assertSpendCap: vi.fn(),
   record: vi.fn(),
@@ -16,6 +17,7 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: transaction,
   userRepository: { findById: findUser },
   newAccountSpendCapAdapters: { name: 'spend-cap-adapters' },
+  warmExchangeAttribution: warm,
 }));
 vi.mock('@bike4mind/services', () => ({ creditService: { assertNewAccountSpendWithinCap: assertSpendCap } }));
 import { createCompletionCreditHolds } from './completionCreditHolds';
@@ -81,6 +83,18 @@ describe('new-account spend cap at reservation', () => {
 });
 
 describe('completion settlement commit recovery', () => {
+  it.each([
+    ['with a key', 'key-1' as string | undefined],
+    ['without a key', undefined],
+  ])('warms exchange attribution before the settle transaction %s', async (_label, keyId) => {
+    const lifecycle = createCompletionCreditHolds(new Logger({ metadata: { test: 'warm' } }), keyId);
+    await lifecycle.reserve(hold, async () => ({ id: 'user', currentCredits: 70 }));
+    await lifecycle.settle(10, async () => {});
+    expect(warm).toHaveBeenCalledTimes(1);
+    expect(warm).toHaveBeenCalledWith(keyId);
+    expect(warm.mock.invocationCallOrder[0]).toBeLessThan(transaction.mock.invocationCallOrder.at(-1) as number);
+  });
+
   it.each([0, 10])('recognizes the %s-credit receipt after a lost commit acknowledgement', async chargedCredits => {
     const lifecycle = createCompletionCreditHolds(new Logger({ metadata: { test: 'hold receipt' } }));
     await lifecycle.reserve(hold, async () => ({ id: 'user', currentCredits: 70 }));

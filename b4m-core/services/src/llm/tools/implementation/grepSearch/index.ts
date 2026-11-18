@@ -25,7 +25,7 @@ async function getRipgrepPath(): Promise<string> {
     ({ rgPath } = await import('@vscode/ripgrep'));
   } catch {
     throw new Error(
-      'ripgrep is not available. Install the optional dependency: pnpm add @vscode/ripgrep --filter @bike4mind/services'
+      'ripgrep is not available. Install the optional dependency: pnpm add @vscode/ripgrep --filter @bike4mind/services-core'
     );
   }
 

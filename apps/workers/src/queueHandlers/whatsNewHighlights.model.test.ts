@@ -1,9 +1,11 @@
 // any: vitest mock shapes; test files are not typechecked
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { dispatch } from './whatsNewHighlights';
+import { dispatch } from './whatsNewJob';
 import { AdminSettings, ModalModel, connectDB } from '@bike4mind/database';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
+
+vi.mock('./releaseNotes', () => ({ runReleaseNotesJob: vi.fn() }));
 
 vi.mock('@bike4mind/database', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
@@ -49,7 +51,7 @@ vi.mock('@bike4mind/server-utils/whatsNew/releaseNoteHighlights', () => ({
 describe('whatsNewHighlights configured model validation', () => {
   const context = {} as Parameters<typeof dispatch>[1];
   const event = {
-    Records: [{ body: JSON.stringify({ correlationId: 'c1', environment: 'dev' }) }],
+    Records: [{ body: JSON.stringify({ kind: 'highlights', correlationId: 'c1', environment: 'dev' }) }],
   } as unknown as Parameters<typeof dispatch>[0];
 
   beforeEach(() => {

@@ -94,8 +94,15 @@ describe('getUserEntitlements', () => {
     expect(findActive).toHaveBeenCalledWith('u1');
   });
 
+  it('revokes price-derived product access when the active subscription lapses', async () => {
+    findActive.mockResolvedValue([{ priceId: 'price_pro' }]);
+    await expect(getUserEntitlements(user)).resolves.toContain('someproduct:pro');
+    findActive.mockResolvedValue([]);
+    await expect(getUserEntitlements(user)).resolves.not.toContain('someproduct:pro');
+  });
+
   // The fixture price stands in for an org-owned row: this pins that org rows feed the same
-  // price-to-key resolution as owned rows. The real Team price has no key row today.
+  // price-to-key resolution as owned rows.
   it("confers an org row's price-derived keys on a seat member", async () => {
     findActive.mockResolvedValue([]);
     findPlanHolderOrgIds.mockResolvedValue(['org1']);
