@@ -437,6 +437,7 @@ describe('ALARM_CATALOG', () => {
       'llm-spend-rate': 'provider-spend',
       'llm-spend-hourly': 'provider-spend',
       'llm-spend-hourly-warn': 'provider-spend',
+      'refused-request-burst': 'refused-request-burst',
     });
     expect(ALARM_CATALOG['young-account-spend-rate'].action).toContain('listed above');
     expect(alarmCatalogEntry({ ...sample, AlarmName: 'bike4mind-dev-young-account-spend-rate' }, 'dev')?.detail).toBe(
