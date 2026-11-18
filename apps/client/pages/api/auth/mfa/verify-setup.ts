@@ -60,6 +60,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
         });
       }
 
+      // Before any write or the session mint, and outside the try: a lookup failure must leave no
+      // session behind and must not be booked as a failed MFA attempt.
+      const { roleAdminPermissions = [] } = await resolveRoleAdminPermissions({
+        adminRoleIds: freshUser.adminRoleIds,
+      });
+
       // With no factor configured, any passkey still on file is an orphan of an earlier MFA that a
       // failed cleanup left behind. Purge them so a fresh enrollment never revives them. A
       // passkey-only user adding an app keeps theirs. Orphans predate this app setup, so the purge
@@ -105,11 +111,14 @@ const handler = baseApi({ auth: 'jwtOnly' })
         });
       }
 
-      // Outside the try: a response-boundary or role-lookup failure is our bug and must not be
-      // booked as a failed MFA attempt by the catch above.
+      // Outside the try: a response-boundary failure is our bug and must not be booked as a failed
+      // MFA attempt by the catch above. The permissions were resolved above; this reattaches them to
+      // the post-enrollment user without a second role query.
       return respond(res, verifySetupResponseSchema, {
         ...setupBody,
-        user: redactUserSecretsForSelf(await resolveRoleAdminPermissions(enrolledUser)),
+        user: redactUserSecretsForSelf(
+          await resolveRoleAdminPermissions(enrolledUser, async () => [{ permissions: roleAdminPermissions }])
+        ),
       });
     })
   );
