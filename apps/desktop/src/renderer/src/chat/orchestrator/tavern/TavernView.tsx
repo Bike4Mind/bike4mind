@@ -419,6 +419,7 @@ function Sprite({
       component="button"
       type="button"
       data-testid={`orchestrator-tavern-agent-${agent.id}`}
+      data-agent-avatar={agent.id}
       aria-label={`${fullName}: ${AGENT_STATE_LABEL[agent.state]}`}
       aria-pressed={selected}
       data-innkeeper-visit={visited || undefined}

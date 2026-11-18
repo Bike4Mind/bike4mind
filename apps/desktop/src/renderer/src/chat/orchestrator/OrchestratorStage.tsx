@@ -21,6 +21,7 @@ import { SKIN_STAGE_VARIABLE } from './statePalette';
 import { useQuickApprovals } from './quickApprovals';
 import { runViewAction, toViewSnapshot } from './viewSnapshot';
 import { acceptViewAction, type ViewAction } from '@shared/viewSnapshot';
+import { useAvatarDetailsPosition } from './useAvatarDetailsPosition';
 
 export interface AgentActions {
   open(id: string): void;
@@ -235,13 +236,24 @@ export function OrchestratorStage({
 
   const detailsInScene =
     (view === 'tavern' || view === 'aquarium') && renderView !== undefined && agents.length > 0 && !focused;
+  const detailsPosition = useAvatarDetailsPosition(selected?.id, detailsInScene && !settled, view);
   const detailsOverlay = selected && (
     // Stay mounted while settled so waking restores the draft and selection.
     <Box
+      ref={detailsPosition}
       data-testid="orchestrator-peek-drawer-region"
       sx={{
         position: 'absolute',
-        inset: 12,
+        ...(detailsInScene
+          ? {
+              top: 12,
+              left: 12,
+              width: 320,
+              maxWidth: 'calc(100% - 24px)',
+              maxHeight: 'calc(100% - 24px)',
+              '& > [data-agent-details-panel]': { maxHeight: 'calc(100cqh - 24px)' },
+            }
+          : { inset: 12 }),
         zIndex: 400,
         display: settled ? 'none' : 'flex',
         justifyContent: 'flex-end',

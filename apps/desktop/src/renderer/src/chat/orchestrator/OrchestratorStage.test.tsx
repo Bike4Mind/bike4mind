@@ -259,7 +259,11 @@ describe('OrchestratorStage', () => {
       expect(el('scene-select')).toBe(scene);
       expect(getComputedStyle(viewport).position).toBe('relative');
       expect(getComputedStyle(region).position).toBe('absolute');
-      expect(getComputedStyle(region).inset).toBe('12px');
+      if (view === 'table') expect(getComputedStyle(region).inset).toBe('12px');
+      else {
+        expect(getComputedStyle(region).maxWidth).toBe('calc(100% - 24px)');
+        expect(getComputedStyle(region).maxHeight).toBe('calc(100% - 24px)');
+      }
       expect(getComputedStyle(region).pointerEvents).toBe('none');
       expect(getComputedStyle(el('orchestrator-peek-drawer')).pointerEvents).toBe('auto');
       expect(getComputedStyle(el('orchestrator-peek-drawer')).backgroundColor).toBe(

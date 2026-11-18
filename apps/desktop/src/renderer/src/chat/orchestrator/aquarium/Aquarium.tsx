@@ -121,6 +121,7 @@ function Fish({ placement, onAction }: { placement: FishPlacement; onAction(acti
         }}
       >
         <Box
+          data-agent-avatar={agent.id}
           sx={{
             width: '100%',
             height: '100%',
