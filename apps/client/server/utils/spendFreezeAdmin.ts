@@ -83,6 +83,7 @@ export const assertScopeExists = async (
     if (owner) assertCanActOnAdminTarget(admin, owner, 'change spend freezes for');
     return;
   }
+  // Admin rank belongs to users, so an organization has none to protect: credits:adjust alone authorizes it.
   if (!mustExist) return;
   if (!(await organizationRepository.findById(scope.scopeId))) throw new NotFoundError('Organization not found');
 };
