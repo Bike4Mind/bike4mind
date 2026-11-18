@@ -246,12 +246,31 @@ describe('DataLakeResearchPanel', () => {
       );
     });
 
+    const addRules = (conditions: string[]) => {
+      conditions.forEach((value, i) => {
+        fireEvent.click(screen.getByTestId('datalake-research-rule-add'));
+        fireEvent.change(screen.getByTestId(`datalake-research-rule-condition-${i}`), { target: { value } });
+      });
+    };
+
     it('disables adding at the maximum', () => {
       openNewForm();
-      for (let i = 0; i < RESEARCH_ITEM_RULES_MAX; i += 1) {
-        fireEvent.click(screen.getByTestId('datalake-research-rule-add'));
-      }
+      addRules(Array.from({ length: RESEARCH_ITEM_RULES_MAX }, (_, i) => `rule ${i}`));
       expect(screen.getByTestId('datalake-research-rule-add')).toBeDisabled();
+    });
+
+    it('does not count an invisible-only row toward the maximum', () => {
+      openNewForm();
+      addRules(['\u200B\u200B', ...Array.from({ length: RESEARCH_ITEM_RULES_MAX - 1 }, (_, i) => `rule ${i}`)]);
+      expect(screen.getByTestId('datalake-research-rule-add')).not.toBeDisabled();
+    });
+
+    it('flags a repeated rule, names the earlier row and blocks saving', () => {
+      openNewForm();
+      addRules(['it is a press release', 'other', 'It is a  press release\u200B']);
+      expect(screen.getByTestId('datalake-research-rule-error-2').textContent).toBe('Same as rule 1');
+      expect(screen.queryByTestId('datalake-research-rule-error-0')).toBeNull();
+      expect(screen.getByTestId('datalake-research-save-btn')).toBeDisabled();
     });
 
     it('blocks saving a rule over the length limit', () => {
