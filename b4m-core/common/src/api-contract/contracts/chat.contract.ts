@@ -41,10 +41,11 @@ export const chatContract = defineEndpoint({
     'signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); ' +
     '`errorCode` is an optional refinement present only when the failure is a classified billing ' +
     'reason. A recovered stuck quest is NOT in that list: one that still has renderable content ' +
-    'resolves as a success by design. `QUEST_ERROR_CODES` has two members, but only ' +
+    'resolves as a success by design. `QUEST_ERROR_CODES` has three members, but only ' +
     '`insufficient_credits` is raised as a quest errorCode by any current throw site on this ' +
     "endpoint - `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which " +
-    'fires outside the process try/catch that would classify it onto a quest. A ' +
+    'fires outside the process try/catch that would classify it onto a quest, and ' +
+    '`run_budget_exhausted` only by image generation. A ' +
     'caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when ' +
     '`errorCode` is absent, and must not read `reply` as an answer without checking those first. ' +
     'Organization-policy preflight refusals use 403 with `errorCode: "org_model_not_allowed"` ' +
@@ -105,10 +106,10 @@ export const chatContract = defineEndpoint({
           'optional refinement of `type: "error"`, present only for a classified billing failure; ' +
           'credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the ' +
           'synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use. ' +
-          '`QUEST_ERROR_CODES` publishes a second member, `spend_cap_exceeded`, but no current ' +
+          '`QUEST_ERROR_CODES` also publishes `spend_cap_exceeded`, but no current ' +
           'throw site on this endpoint raises it as a quest errorCode: its only one, the embed ' +
           "chat route's pre-flight 422, fires outside the process try/catch that would classify " +
-          'it onto the quest. Most `type: "error"` turns - an abort, a provider timeout or ' +
+          'it onto the quest; `run_budget_exhausted` is raised only by image generation. Most `type: "error"` turns - an abort, a provider timeout or ' +
           'overload - have NO `errorCode`; its absence does not mean success, only that the ' +
           'failure is unclassified. A recovered stuck quest that still has renderable content is ' +
           'not a failure at all: it keeps `type: "message"` even though it did not finish, so a ' +

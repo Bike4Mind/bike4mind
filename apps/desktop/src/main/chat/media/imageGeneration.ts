@@ -1,5 +1,6 @@
-import { GENERATED_IMAGE_EXTENSION_RE } from '@bike4mind/common';
+import { GENERATED_IMAGE_EXTENSION_RE, RUN_BUDGET_EXHAUSTED_ERROR_CODE } from '@bike4mind/common';
 import type { ChatMedia } from '@shared/chat';
+import { RunBudgetExhaustedError } from '../completions';
 import { isTerminalQuest, MediaToolError, type MediaApiClient, type QuestPoll } from './MediaApiClient';
 import type { MediaStore } from './MediaStore';
 
@@ -137,6 +138,10 @@ async function pollQuest(questId: string, deps: ImageGenerationDeps): Promise<Qu
       continue;
     }
 
+    // The worker's own claim on the run lost: pause the run like a refused POST would.
+    if (quest.type === 'error' && quest.errorCode === RUN_BUDGET_EXHAUSTED_ERROR_CODE) {
+      throw new RunBudgetExhaustedError(quest.reply);
+    }
     if (quest.type === 'error') {
       throw new MediaToolError(
         quest.reply || 'The image generation failed on the server.',

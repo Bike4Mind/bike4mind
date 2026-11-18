@@ -94,4 +94,10 @@ export type CreditHoldRecord = {
  * expired-hold sweep refunds. Settling claims that row, so settle and sweep can never both move
  * balance. Absent on records written before the row existed; those settle directly.
  */
-export type PersistedCreditHold = CreditHoldRecord & { pendingHoldId?: string };
+export type PersistedCreditHold = CreditHoldRecord & { pendingHoldId?: string; runClaim?: RunBudgetClaim };
+
+/**
+ * Credits a hold claimed from a completion run's budget, released with the hold: the unused part on
+ * settlement, all of it on a refund or the expired-hold sweep. See CompletionRunRepository.claimBudget.
+ */
+export type RunBudgetClaim = { runId: string; credits: number };

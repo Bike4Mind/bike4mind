@@ -44,6 +44,12 @@ const GenerationJobSchema = new Schema<IGenerationJobDocument>(
     deadlineAt: { type: Date, required: true },
     idempotencyKey: { type: String },
     creditHold: { type: Schema.Types.Mixed, default: null },
+    // Validated by CompletionRunAttributionSchema at the route; stored as sent for the settlement ledger row.
+    run: { type: Schema.Types.Mixed },
+    runClaim: new Schema(
+      { runId: { type: String, required: true }, credits: { type: Number, required: true } },
+      { _id: false }
+    ),
     settledCredits: { type: Number },
     error: new Schema(
       {

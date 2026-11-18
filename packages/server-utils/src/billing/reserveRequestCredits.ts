@@ -1,4 +1,11 @@
-import { CreditHolderType, IUserDocument, type CreditHoldRecord, type PersistedCreditHold } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  IUserDocument,
+  type CompletionRunAttribution,
+  type CreditHoldRecord,
+  type PersistedCreditHold,
+  type RunBudgetClaim,
+} from '@bike4mind/common';
 import {
   creditTransactionRepository,
   organizationRepository,
@@ -21,6 +28,7 @@ import { resolveRequestBillingOrgId } from './resolveRequestBillingOrgId';
 import { assertAiAccessAllowed } from '../auth/assertAiAccessAllowed';
 import { checkFreeTierDailySpendCap } from './freeTierDailyCapGate';
 import { observeCreditHold, recordSettlementAfterSweep } from './creditHoldTelemetry';
+import { claimPaidCallRunBudget, releaseRunBudgetClaim } from './runBudgetClaim';
 import type { ApiKeyInfo } from '../cli/auth';
 
 export { resolveRequestBillingOrgId } from './resolveRequestBillingOrgId';
@@ -86,6 +94,12 @@ type ReserveRequestCreditsParams = {
   billingOrganizationId?: string | null;
   /** How long the hold may stay unsettled before the sweep refunds it; defaults to CREDIT_HOLD_TTL_MS. */
   holdTtlMs?: number;
+  /**
+   * The completion run this call is made for, its owner already checked against the caller
+   * (resolvePaidCallRun). A budgeted run must fit the whole reservation or the request is refused
+   * with 422 `run_budget_exhausted`; the settled ledger row carries it as `metadata.run`.
+   */
+  run?: CompletionRunAttribution;
 };
 
 /**
@@ -112,6 +126,7 @@ export async function reserveRequestCredits({
   featureLabel,
   billingOrganizationId: explicitBillingOrgId,
   holdTtlMs = CREDIT_HOLD_TTL_MS,
+  run,
 }: ReserveRequestCreditsParams): Promise<CreditReservation> {
   if (!req.user) throw new BadRequestError('User not found');
   // Before the enforceCredits short-circuit: a moderated user is refused with credits on or off.
@@ -138,6 +153,8 @@ export async function reserveRequestCredits({
   // never exists for a balance that did not move.
   const { hold, pending } = await observeCreditHold({ ownerId, ownerType, featureLabel, lifecycle: 'request' }, () =>
     withTransaction(async () => {
+      // First, so a refused claim moves no balance; rolled back with the hold if anything below fails.
+      const runClaim = run ? await claimPaidCallRunBudget(run.runId, requiredCredits) : undefined;
       const hold = await creditService.holdCredits(
         {
           userId,
@@ -152,27 +169,36 @@ export async function reserveRequestCredits({
         holdAdapters
       );
       const expiresAt = new Date(Date.now() + holdTtlMs);
-      return { hold, pending: await pendingCreditHoldRepository.record(hold, featureLabel, expiresAt) };
+      return { hold, pending: await pendingCreditHoldRepository.record(hold, featureLabel, expiresAt, runClaim) };
     })
   );
+  const persisted: PersistedCreditHold = {
+    ...hold,
+    pendingHoldId: pending.id,
+    ...(pending.runClaim && { runClaim: pending.runClaim }),
+  };
 
   return {
     ownerId: hold.ownerId,
     ownerType: hold.ownerType,
     reservedCredits: hold.reservedCredits,
-    hold: { ...hold, pendingHoldId: pending.id },
-    refund: () => releaseHeldCredits({ ...hold, pendingHoldId: pending.id }, { featureLabel, logger: req.logger }),
+    hold: persisted,
+    refund: () => releaseHeldCredits(persisted, { featureLabel, logger: req.logger }),
     settle: (chargedCredits, entry) =>
-      settlePendingHold(hold, pending.id, chargedCredits, attributeToRequestApiKey(entry, req), {
-        featureLabel,
-        logger: req.logger,
-      }),
+      settlePendingHold(
+        hold,
+        pending.id,
+        chargedCredits,
+        attributeToRequestApiKey(run ? { ...entry, run } : entry, req),
+        { featureLabel, logger: req.logger },
+        pending.runClaim
+      ),
   };
 }
 
 /** Claim and refund together; a failed refund stays pending for the sweep. Never throws. */
 export async function releaseHeldCredits(
-  { pendingHoldId, ...hold }: PersistedCreditHold,
+  { pendingHoldId, runClaim: _runClaim, ...hold }: PersistedCreditHold,
   { featureLabel, logger }: { featureLabel: string; logger: ILogger }
 ): Promise<void> {
   try {
@@ -181,8 +207,11 @@ export async function releaseHeldCredits(
       return;
     }
     const refunded = await withTransaction(async () => {
-      if (!(await pendingCreditHoldRepository.claim(pendingHoldId))) return false;
+      // The row's own claim, not the caller's copy: whichever of refund and sweep claims the row releases it.
+      const claimed = await pendingCreditHoldRepository.claim(pendingHoldId);
+      if (!claimed) return false;
       await creditService.releaseCreditHold(hold, holdAdapters);
+      await releaseRunBudgetClaim(claimed.runClaim, 0);
       return true;
     });
     if (!refunded) {
@@ -220,7 +249,8 @@ async function settlePendingHold(
   pendingHoldId: string,
   chargedCredits: number,
   entry: CreditLedgerEntry,
-  { featureLabel, logger, throwOnUnconfirmed }: { featureLabel: string; logger: ILogger; throwOnUnconfirmed?: boolean }
+  { featureLabel, logger, throwOnUnconfirmed }: { featureLabel: string; logger: ILogger; throwOnUnconfirmed?: boolean },
+  runClaim?: RunBudgetClaim
 ): Promise<number> {
   const logHoldError = holdErrorLogger(logger, featureLabel, hold, pendingHoldId);
   const charged = Number.isFinite(chargedCredits)
@@ -242,6 +272,7 @@ async function settlePendingHold(
           { featureLabel, logger, throwOnWriteFailure: true },
           holdAdapters
         );
+        await releaseRunBudgetClaim(runClaim, settled);
         return { charged: settled, missing: false };
       });
       if (result.missing) {
@@ -282,8 +313,8 @@ export function settleHeldCredits(
     throwOnUnconfirmed?: boolean;
   }
 ): Promise<number> {
-  const { pendingHoldId, ...hold } = persisted;
+  const { pendingHoldId, runClaim, ...hold } = persisted;
   // Held before pending rows existed: nothing for the sweep to refund, so settle directly.
   if (!pendingHoldId) return creditService.settleCreditHold(hold, chargedCredits, entry, context, holdAdapters);
-  return settlePendingHold(hold, pendingHoldId, chargedCredits, entry, context);
+  return settlePendingHold(hold, pendingHoldId, chargedCredits, entry, context, runClaim);
 }

@@ -600,7 +600,7 @@ const CompletionSettledEventSchema = z.object({
 
 /**
  * Classifiers the completions `error` frame may carry: the persisted quest codes plus the two
- * provider codes. A separate tuple because QUEST_ERROR_CODES is stored on quests and must not widen.
+ * provider codes. A separate tuple because QUEST_ERROR_CODES is stored on quests, where provider codes never land.
  */
 export const COMPLETION_SSE_ERROR_CODES = [
   ...QUEST_ERROR_CODES,

@@ -1,5 +1,12 @@
-import type { IUserDocument } from '@bike4mind/common';
 import {
+  CreditHolderType,
+  getQuestErrorCode,
+  type CompletionRunAttribution,
+  type IUserDocument,
+} from '@bike4mind/common';
+import {
+  CompletionRunModel,
+  completionRunRepository,
   CreditTransaction,
   Organization,
   PendingCreditHoldModel,
@@ -51,6 +58,7 @@ beforeAll(async () => {
     Organization.createCollection(),
     PendingCreditHoldModel.createCollection(),
     CreditTransaction.createCollection(),
+    CompletionRunModel.createCollection(),
   ]);
 });
 
@@ -62,6 +70,7 @@ afterEach(async () => {
     Organization.collection.deleteMany({}),
     PendingCreditHoldModel.collection.deleteMany({}),
     CreditTransaction.collection.deleteMany({}),
+    CompletionRunModel.collection.deleteMany({}),
   ]);
 });
 
@@ -70,9 +79,9 @@ afterAll(async () => {
   await server?.stop();
 });
 
-async function caller() {
+async function caller(currentCredits = 100) {
   const id = new Types.ObjectId();
-  await User.collection.insertOne({ _id: id, currentCredits: 100 });
+  await User.collection.insertOne({ _id: id, currentCredits });
   const user = { id: id.toHexString(), organizationId: null } as IUserDocument;
   return {
     req: { user, logger },
@@ -230,5 +239,29 @@ describe('request credit hold transactions against a replica set', () => {
     expect(await balance()).toBe(100 - charged);
     expect(await CreditTransaction.countDocuments()).toBe(charged === 0 ? 0 : 1);
     expect(await PendingCreditHoldModel.countDocuments({ settledAt: { $exists: false } })).toBe(0);
+  });
+
+  it('rolls the run claim back when the balance hold is refused', async () => {
+    const { req, balance } = await caller(10);
+    const created = await completionRunRepository.create({
+      userId: req.user.id,
+      ownerType: CreditHolderType.User,
+      ownerId: req.user.id,
+      budgetCredits: 50,
+    });
+    const run: CompletionRunAttribution = { runId: created.runId, role: 'worker', purpose: 'tool' };
+
+    const refusal = await reserveRequestCredits({
+      req,
+      requiredCredits: 40,
+      enforceCredits: true,
+      featureLabel: 'test',
+      run,
+    }).catch((error: unknown) => error);
+
+    expect(getQuestErrorCode(refusal)).toBe('insufficient_credits');
+    expect(await balance()).toBe(10);
+    expect((await completionRunRepository.findById(created.runId))?.committedCredits).toBe(0);
+    expect(await PendingCreditHoldModel.countDocuments()).toBe(0);
   });
 });

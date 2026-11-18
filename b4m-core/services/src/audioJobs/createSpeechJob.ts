@@ -104,6 +104,7 @@ export async function createSpeechJob(
       user: input.user,
       requiredCredits: estimateTtsHoldCredits(vendor, request.model, text.length, candidates),
       featureLabel: 'text-to-speech',
+      ...(input.run && { run: input.run }),
     },
     deps
   );
@@ -133,6 +134,8 @@ export async function createSpeechJob(
       deadlineAt: new Date(now.getTime() + AUDIO_JOB_MAX_WALL_CLOCK_MS),
       idempotencyKey: input.idempotencyKey,
       creditHold: held.hold,
+      ...(input.run && { run: input.run }),
+      ...(held.runClaim && { runClaim: held.runClaim }),
       questId: input.questId,
     },
     deps

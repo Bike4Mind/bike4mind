@@ -96,6 +96,7 @@ export async function createSoundEffectJob(
       user: input.user,
       requiredCredits: estimateSoundCredits(provider, { durationSeconds: request.durationSeconds }).requiredCredits,
       featureLabel: 'sound generation',
+      ...(input.run && { run: input.run }),
     },
     deps
   );
@@ -124,6 +125,8 @@ export async function createSoundEffectJob(
       deadlineAt: new Date(now.getTime() + AUDIO_JOB_MAX_WALL_CLOCK_MS),
       idempotencyKey: input.idempotencyKey,
       creditHold: held.hold,
+      ...(input.run && { run: input.run }),
+      ...(held.runClaim && { runClaim: held.runClaim }),
       questId: input.questId,
     },
     deps

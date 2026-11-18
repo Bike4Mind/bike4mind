@@ -8,6 +8,7 @@ import { PROMPT_TEXT_MAX } from './schemas/briefcasePrompt';
 import { MAX_REFERENCE_IMAGES } from './utils/modelHelpers';
 import { GenerationCallbackUrlSchema } from './schemas/generationCallback';
 import { BillingOrganizationIdSchema } from './schemas/billingOrganization';
+import { CompletionRunAttributionSchema } from './schemas/cliCompletions';
 import { ChatToolModeSchema } from './schemas/promptMeta';
 
 // Re-export LLM tools for external use
@@ -193,6 +194,12 @@ export const GenerateImageRequestBodySchema = GenerateImageIvokeParamsSchema.omi
       '`"fresh"`, `promptWasEnhanced` is `false`, and a prior session image is carried forward only ' +
       'for models that cannot run without an input image. Use `"literal"` when the prompt is already ' +
       'self-contained, for example when an agent or pipeline builds it.'
+  ),
+  run: CompletionRunAttributionSchema.optional().describe(
+    "The completion run this call is made for. Its cost is claimed against that run's budget when the " +
+      'render is held, and the call is refused with 422 `run_budget_exhausted` when it does not fit: ' +
+      'synchronously when the run cannot cover even the cheapest form of the render, otherwise on the ' +
+      'polled quest (`type: "error"`, `errorCode: "run_budget_exhausted"`). The run bills its own account.'
   ),
 });
 export type GenerateImageRequestBody = z.infer<typeof GenerateImageRequestBodySchema>;
