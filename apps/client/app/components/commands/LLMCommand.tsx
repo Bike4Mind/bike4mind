@@ -25,6 +25,8 @@ import { SEND_REQUEST_TIMEOUT_MS } from '@client/app/utils/requestTimeouts';
 import { blankRapidReplies, terminalQuests } from '@client/app/hooks/chatCompletionState';
 import { getSurfaceChatContext } from '@client/app/utils/surfaceChatContext';
 import { MODEL_CONFIGURATIONS_QUERY_KEY } from '@client/app/hooks/data/modelAccessRevision';
+import { FREE_QUEST_LIMIT_REACHED_ERROR_CODE } from '@bike4mind/common';
+import { useQuestMasterUpgrade } from '../subscription/questMasterUpgrade';
 
 // modelAdmission's refusal of a model the caller's access entry does not admit (b4m-core/services/src/llm/modelAdmission.ts).
 const MODEL_ACCESS_REFUSAL = /^Model ".+" is not accessible\b/;
@@ -405,6 +407,8 @@ export async function handleLLMCommand(
 
       if (status === 404) {
         toast.error(i18n.t('session.errors.notebookDeleted'));
+      } else if (status === 403 && error.response?.data?.errorCode === FREE_QUEST_LIMIT_REACHED_ERROR_CODE) {
+        useQuestMasterUpgrade.getState().open();
       } else if (status === 403 && isModelAccessRefusal(error.response?.data)) {
         // An admin turned the model off after this picker loaded; refetch access so the picker drops it now
         // rather than when the access revision reaches this tab.
