@@ -16,6 +16,7 @@ import {
   directorClips,
   layoutShots,
   shotPicture,
+  shotsTooShortForVoice,
   withDirectorTracks,
   type ShotSlot,
 } from './layout';
@@ -179,6 +180,29 @@ describe('buildVoiceClips', () => {
       ['v2', 2200, 1800],
     ]);
     expect(buildVoiceClips([{ id: 'v3', fileId: FILE_C, durationMs: 500, slot: second }], 2100)).toEqual([]);
+  });
+});
+
+describe('shotsTooShortForVoice', () => {
+  const spoken = (id: string, durationMs: number): StudioShot => shot(id, { durationMs, voiceLine: `Line ${id}.` });
+  const shots = [spoken('a', 4000), spoken('b', 4000)];
+  const placed = (lineMs: Record<string, number>) =>
+    timelineWith([
+      track(
+        DIRECTOR_TRACK_IDS.voice,
+        'voice',
+        Object.entries(lineMs).map(([id, durationMs]) => audioClip(`${id}-voice`, 0, durationMs))
+      ),
+    ]);
+
+  it('gives a line followed by another spoken line the full length of its shot', () => {
+    expect(shotsTooShortForVoice(placed({ a: 4000, b: 3800 }), shots, shots)).toEqual([]);
+  });
+
+  it('takes the lead-in off the last spoken line, which the end of the cut caps', () => {
+    expect(shotsTooShortForVoice(placed({ a: 4000, b: 4000 }), shots, shots)).toEqual([
+      { id: 'b', lineMs: 4000, roomMs: 3800 },
+    ]);
   });
 });
 

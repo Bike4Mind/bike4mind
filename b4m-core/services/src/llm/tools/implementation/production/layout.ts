@@ -155,10 +155,10 @@ export function shotsTooShortForVoice(
     const lineMs = placed.get(`${shot.id}-voice`);
     if (!shot.voiceLine || shot.voiceLine !== previous[index]?.voiceLine || lineMs === undefined) return [];
     const nextSpoken = shots.findIndex((candidate, at) => at > index && candidate.voiceLine);
-    const roomMs =
-      shots
-        .slice(index, nextSpoken === -1 ? shots.length : nextSpoken)
-        .reduce((sum, candidate) => sum + (candidate.durationMs ?? DEFAULT_SHOT_DURATION_MS), 0) - VOICE_LEAD_IN_MS;
+    const spanMs = shots
+      .slice(index, nextSpoken === -1 ? shots.length : nextSpoken)
+      .reduce((sum, candidate) => sum + (candidate.durationMs ?? DEFAULT_SHOT_DURATION_MS), 0);
+    const roomMs = nextSpoken === -1 ? spanMs - VOICE_LEAD_IN_MS : spanMs;
     return lineMs > roomMs ? [{ id: shot.id, lineMs, roomMs }] : [];
   });
 }
