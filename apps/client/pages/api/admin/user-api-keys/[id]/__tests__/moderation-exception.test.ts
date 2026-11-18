@@ -67,7 +67,7 @@ const request = (overrides: Record<string, unknown> = {}) => ({
   method: 'PUT',
   query: { id: 'key-1' },
   user: { id: 'admin-1', isAdmin: true },
-  body: { categories: ['violence', 'violence/graphic'], reason: 'News pipeline key' },
+  body: { categories: ['violence', 'violence/graphic'], reason: 'Approved integration key' },
   logger: { warn: vi.fn() },
   ...overrides,
 });
@@ -108,7 +108,7 @@ describe('PUT /api/admin/user-api-keys/[id]/moderation-exception', () => {
     ['a non-array', 'violence'],
     ['a missing field', undefined],
   ])('rejects %s without writing', async (_label, categories) => {
-    const req = request({ body: { categories, reason: 'News pipeline key' } });
+    const req = request({ body: { categories, reason: 'Approved integration key' } });
     await expect(h.handler!(req, response())).rejects.toBeInstanceOf(BadRequestError);
     expect(h.findKey).not.toHaveBeenCalled();
     expect(h.setException).not.toHaveBeenCalled();
@@ -129,7 +129,7 @@ describe('PUT /api/admin/user-api-keys/[id]/moderation-exception', () => {
     expect(h.withTransaction).toHaveBeenCalledTimes(1);
     expect(h.setException).toHaveBeenCalledExactlyOnceWith('key-1', {
       categories: ['violence', 'violence/graphic'],
-      reason: 'News pipeline key',
+      reason: 'Approved integration key',
       setBy: 'admin-1',
       setAt: expect.any(Date),
     });
@@ -138,7 +138,7 @@ describe('PUT /api/admin/user-api-keys/[id]/moderation-exception', () => {
       expect.objectContaining({
         action: 'user.api_key.moderation_exception_updated',
         target: { kind: 'user', id: 'owner-1', displayName: 'owner@example.com' },
-        reason: 'News pipeline key',
+        reason: 'Approved integration key',
         changes: [{ field: 'moderationException.categories', before: [], after: ['violence', 'violence/graphic'] }],
         details: { keyId: 'key-1', keyPrefix: 'b4m_live_abc', keyName: 'Pipeline key' },
       })

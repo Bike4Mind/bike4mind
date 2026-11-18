@@ -40,7 +40,7 @@ const seedKey = async () => {
 const exception = (categories: string[]) =>
   ({
     categories,
-    reason: 'News pipeline key',
+    reason: 'Approved integration key',
     setBy: 'admin-1',
     setAt: new Date('2026-01-01T00:00:00.000Z'),
   }) as IUserApiKeyModerationException;
@@ -63,7 +63,7 @@ describe('UserApiKey moderation exception', () => {
       status: ApiKeyStatus.ACTIVE,
       moderationException: {
         categories: ['violence', 'violence/graphic'],
-        reason: 'News pipeline key',
+        reason: 'Approved integration key',
         setBy: 'admin-1',
       },
     });
@@ -75,7 +75,7 @@ describe('UserApiKey moderation exception', () => {
 
     const key = await userApiKeyRepository.findById(id);
     expect(key?.moderationException).toBeUndefined();
-    expect(JSON.stringify(key)).not.toContain('News pipeline key');
+    expect(JSON.stringify(key)).not.toContain('Approved integration key');
   });
 
   it.each([
