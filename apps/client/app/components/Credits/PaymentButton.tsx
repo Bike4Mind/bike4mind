@@ -227,9 +227,9 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({
 
       {termsConsentRequired && (
         <Modal open={termsOpen} onClose={() => setTermsOpen(false)}>
-          <ModalDialog data-testid="credits-terms-dialog" sx={{ maxWidth: 440, zIndex: 1400 }}>
+          <ModalDialog data-testid="credits-terms-dialog" sx={{ maxWidth: 440, zIndex: 1400, overflow: 'auto' }}>
             <DialogTitle>Before you buy</DialogTitle>
-            <DialogContent>
+            <DialogContent data-testid="credits-terms-content" sx={{ overflow: 'visible' }}>
               <Checkbox
                 data-testid="credits-terms-checkbox"
                 checked={termsChecked}

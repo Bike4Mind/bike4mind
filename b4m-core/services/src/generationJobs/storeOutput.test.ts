@@ -58,13 +58,24 @@ describe('storeGeneratedOutput', () => {
     expect(call).not.toHaveProperty('sessionId');
   });
 
-  it('falls back to the generated bucket when Files refuses the output', async () => {
+  it.each(['storage_limit', 'file_too_large'] as const)(
+    'falls back to the generated bucket when Files refuses the output (%s), carrying the reason',
+    async reason => {
+      const deps = setup({ saveToFiles: vi.fn(async () => ({ saved: false as const, reason })) });
+      expect(await storeGeneratedOutput(params(), deps)).toEqual({
+        stored: true,
+        location: { location: 'generated', s3Key: 'generated-things/o1/j1.png' },
+        filesSkipReason: reason,
+      });
+    }
+  );
+
+  it('logs a Files refusal', async () => {
     const deps = setup({
       saveToFiles: vi.fn(async () => ({ saved: false as const, reason: 'storage_limit' as const })),
     });
-    const result = await storeGeneratedOutput(params(), deps);
+    await storeGeneratedOutput(params(), deps);
 
-    expect(result).toEqual({ stored: true, location: { location: 'generated', s3Key: 'generated-things/o1/j1.png' } });
     expect(deps.logger.warn).toHaveBeenCalledWith('thing saved outside Files', {
       jobId: 'j1',
       reason: 'storage_limit',
@@ -75,7 +86,7 @@ describe('storeGeneratedOutput', () => {
     const error = new Error('down');
     const deps = setup({ saveToFiles: vi.fn(async () => Promise.reject(error)) });
     const result = await storeGeneratedOutput(params(), deps);
-    expect(result).toMatchObject({ stored: true, location: { location: 'generated' } });
+    expect(result).toMatchObject({ stored: true, location: { location: 'generated' }, filesSkipReason: 'error' });
     expect(deps.logger.warn).toHaveBeenCalledWith('thing save to Files threw; saving outside Files', {
       jobId: 'j1',
       error,

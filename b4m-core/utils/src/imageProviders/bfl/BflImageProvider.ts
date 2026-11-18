@@ -14,6 +14,8 @@ import {
   type BflTaskRequest,
   type BflTaskStatus,
 } from '../../imageGeneration/BFLImageService';
+import { ImageInputRejectedError } from '../../imageGeneration/imageGenerationErrors';
+import { withProviderMask } from '../editMask';
 import {
   ProviderSubmitError,
   type GenerationProviderJobHandle,
@@ -78,10 +80,12 @@ export class BflImageProvider implements AsyncImageProvider {
     const service = new BFLImageService(ctx.apiKey, ctx.logger);
     let taskRequest: BflTaskRequest;
     try {
-      taskRequest = this.toTaskRequest(service, request, inputs);
+      const prepared = request.mode === 'edit' ? await withProviderMask(inputs, 'white') : inputs;
+      taskRequest = this.toTaskRequest(service, request, prepared);
     } catch (error) {
       // Nothing was sent, and the same request would be refused again.
-      throw new ProviderSubmitError(error instanceof Error ? error.message : String(error), true, undefined, false);
+      const raw = error instanceof ImageInputRejectedError ? error.logContext : undefined;
+      throw new ProviderSubmitError(error instanceof Error ? error.message : String(error), true, raw, false);
     }
 
     let task: BflTask;

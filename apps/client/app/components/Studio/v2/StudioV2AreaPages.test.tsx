@@ -6,6 +6,7 @@ import { getThemeConfig } from '@client/app/utils/themes';
 
 const h = vi.hoisted(() => ({
   studioFeatures: {} as Record<string, boolean>,
+  productionsAccess: undefined as 'open' | 'upgrade' | 'closed' | undefined,
 }));
 
 vi.mock('@tanstack/react-router', async () => {
@@ -17,11 +18,19 @@ vi.mock('./StudioCreditsBalance', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: vi.fn() }));
 vi.mock('../useStudioFeature', () => ({
   useStudioFeature: (feature: string) => h.studioFeatures[feature] ?? false,
+  useStudioFeatureAccess: (feature: string) =>
+    feature === 'productions' && h.productionsAccess
+      ? h.productionsAccess
+      : h.studioFeatures[feature]
+        ? 'open'
+        : 'closed',
 }));
 // The Library's own browser is covered by StudioLibrary.test.tsx; this pins only that the page mounts it.
 vi.mock('@client/app/components/Files/StudioLibrary', () => ({
   StudioLibrary: () => <div data-testid="studio-library" />,
 }));
+// The list's own behavior is covered by ProductionsList.test.tsx; this pins only that the page mounts it.
+vi.mock('../productions/ProductionsList', () => ({ default: () => <div data-testid="productions-list" /> }));
 
 import StudioLibraryPage from './StudioLibraryPage';
 import StudioProductionsPage from './StudioProductionsPage';
@@ -35,14 +44,14 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
 beforeEach(() => {
   vi.clearAllMocks();
   h.studioFeatures = { createV2: true, productions: true };
+  h.productionsAccess = undefined;
 });
 
 describe('Studio Productions', () => {
-  it('is a coming-soon placeholder under the Productions area', () => {
+  it('mounts the productions list under the Productions area', () => {
     render(<StudioProductionsPage />, { wrapper: TestWrapper });
-    expect(screen.getByTestId('studio-productions-page')).toBeInTheDocument();
     expect(screen.getByTestId('studio-area-productions')).toHaveAttribute('aria-current', 'page');
-    expect(screen.getByTestId('studio-productions-coming-soon')).toHaveTextContent('coming soon');
+    expect(screen.getByTestId('studio-productions-page')).toContainElement(screen.getByTestId('productions-list'));
   });
 
   it('links back to Create on the Image medium when it is open, else Video', () => {
@@ -57,6 +66,26 @@ describe('Studio Productions', () => {
 });
 
 describe('Studio frame', () => {
+  const renderFrame = () =>
+    render(
+      <StudioV2Frame area="create" testId="studio-frame">
+        <div />
+      </StudioV2Frame>,
+      { wrapper: TestWrapper }
+    );
+
+  it.each(['open', 'upgrade'] as const)('shows the Productions tab when access is %s', access => {
+    h.productionsAccess = access;
+    renderFrame();
+    expect(screen.getByTestId('studio-area-productions')).toBeInTheDocument();
+  });
+
+  it('hides the Productions tab when access is closed', () => {
+    h.productionsAccess = 'closed';
+    renderFrame();
+    expect(screen.queryByTestId('studio-area-productions')).not.toBeInTheDocument();
+  });
+
   it('keeps the Create link on the current medium while in Create', () => {
     h.studioFeatures = { createV2: true, image: true };
     render(

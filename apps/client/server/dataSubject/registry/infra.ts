@@ -157,6 +157,44 @@ export const infraHolders = {
     kind: 'holder',
     references: [{ path: 'reviewer.userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['reviewer.name'] }],
   },
+  // Quarterly admin access review: who held admin access and who confirmed or revoked it.
+  AdminAccessReview: {
+    kind: 'holder',
+    references: [
+      {
+        path: 'decisions.userId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        identifies: ['decisions.email'],
+      },
+      {
+        path: 'decisions.reviewer.userId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        identifies: ['decisions.reviewer.name'],
+        exportScope: 'reference',
+      },
+      {
+        path: 'startedBy.userId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        identifies: ['startedBy.name'],
+        exportScope: 'reference',
+      },
+      {
+        path: 'completedBy.userId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        identifies: ['completedBy.name'],
+        exportScope: 'reference',
+      },
+    ],
+    unmatchedPaths: { 'decisions.email': 'The reviewed admin, kept with the decision; matched by decisions.userId.' },
+  },
   // Expires on its own (TTL index) once the admin's gated action has written its audit rows.
   AdminGateReservation: {
     kind: 'holder',
@@ -472,6 +510,7 @@ export const infraHolders = {
       },
     ],
   },
+  SecopsTriageRun: { kind: 'noUserData', note: 'Platform security triage run summary.' },
   SecretRotation: {
     kind: 'holder',
     references: [
@@ -515,6 +554,15 @@ export const infraHolders = {
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
     secretPaths: ['downloadUrl'],
     unrelatedPaths: ['includeUserNames'],
+  },
+  SlackFeedbackChannel: {
+    kind: 'holder',
+    references: [{ path: 'configuredBy', matchBy: 'userId', action: 'anonymize' }],
+  },
+  SlackFeedbackDelivery: {
+    kind: 'noUserData',
+    note: 'Organization delivery dedupe and audit. Reactor is an external Slack id, not a platform account id; no platform user mapping, message text or email is stored.',
+    unrelatedPaths: ['reactor'],
   },
   // `ownerUserId` is anonymized like an organization owner, so members keep the Space.
   Space: {

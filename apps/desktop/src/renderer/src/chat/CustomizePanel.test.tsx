@@ -176,7 +176,7 @@ describe('the Customize screen', () => {
     expect(isVisible(byTestId('mcp-settings'))).toBe(false);
 
     const cards = allByTestId('customize-plugin-card');
-    expect(cards.map(card => card.getAttribute('aria-label'))).toEqual(['DataLake', 'QuestMaster', 'Studio']);
+    expect(cards.map(card => card.getAttribute('aria-label'))).toEqual(['DataLake', 'QuestMaster']);
     act(() => pluginsTab.focus());
     for (const card of cards) {
       expect(card.tagName).toBe('ARTICLE');

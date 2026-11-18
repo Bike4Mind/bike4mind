@@ -451,6 +451,17 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('orchestrate-example-quests')).toBeNull();
   });
 
+  it("opens a new Code session on its project's last view", async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem('b4m.orchestrator.projectView./work/repo', 'table');
+    const code = { ...CODE, orchestrate: true } as ChatSessionSummary;
+    const agent = { ...CHILD, id: 'code-child', mode: 'code', origin: { parentSessionId: CODE.id, seedPrompt: 'x' } };
+    listed = [...SESSIONS, code, agent as ChatSessionSummary];
+    await openParent(CODE.title, 'code');
+    await enterOrchestrate();
+    expect(query('orchestrator-table-row-code-child')).not.toBeNull();
+  });
+
   it('shows the agents switch once the session spawns its first agent', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     const code = { ...CODE, orchestrate: true } as ChatSessionSummary;

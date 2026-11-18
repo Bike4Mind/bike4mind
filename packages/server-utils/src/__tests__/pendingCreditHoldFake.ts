@@ -13,6 +13,7 @@ export const pendingCreditHoldFake = {
   },
   cacheRepository: {},
   withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
+  warmExchangeAttribution: async () => undefined,
   newAccountSpendCapAdapters: {
     adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
     personalSpendSince: async () => [],

@@ -180,6 +180,11 @@ function projectGroupOf(project: ChatProject): { directory: string; name: string
   return { directory: repository, name: repository.split(/[\\/]/).filter(Boolean).pop() ?? repository };
 }
 
+/** The sidebar group directory a project belongs to: its repository when picked inside a Claude Code worktree. */
+export function projectGroupDirectory(project: ChatProject): string {
+  return projectGroupOf(project).directory;
+}
+
 /** The most recent session's project for a sidebar group, including grouped Claude worktrees. */
 export function projectForGroup(sessions: readonly ChatSessionSummary[], directory: string): ChatProject | undefined {
   return sessions.find(session => session.project && projectGroupOf(session.project).directory === directory)?.project;
