@@ -37,6 +37,22 @@ final class AppNavigatorTests: XCTestCase {
     XCTAssertEqual(navigator.sessionPath, [.brief(id: nil)])
   }
 
+  func testTheLatestBriefCountsAsShowingAnyBriefId() {
+    let navigator = AppNavigator()
+    navigator.openLatestBrief()
+    XCTAssertTrue(navigator.isShowing(.brief(id: "b2")))
+  }
+
+  func testPushSessionKeepsTheBriefBelowIt() {
+    let navigator = AppNavigator()
+    navigator.apply(.brief(id: "b1"))
+    navigator.pushSession(id: "s1")
+    XCTAssertEqual(navigator.sessionPath.count, 2)
+    XCTAssertEqual(navigator.sessionPath.last?.sessionID, "s1")
+    navigator.pushSession(id: "s1")
+    XCTAssertEqual(navigator.sessionPath.count, 2)
+  }
+
   func testSameSessionDoesNotStackTwice() {
     let navigator = AppNavigator()
     navigator.apply(.session(id: "s1"))

@@ -147,4 +147,50 @@ final class BriefViewModelTests: XCTestCase {
     await model.refresh()
     XCTAssertEqual(model.brief?.headline, "Updated")
   }
+
+  func testAPollFailureWhileComposingKeepsTheBriefAndStopsComposing() async {
+    let api = FakeBriefAPI()
+    await api.set(fetches: [.failure(.offline)])
+    let model = model(api)
+    await model.composeNow()
+    XCTAssertEqual(model.state, .failed(.offline))
+    XCTAssertEqual(model.brief?.status, .composing)
+    XCTAssertFalse(model.isComposing)
+  }
+
+  func testRefreshAfterATimeoutPollsAgainAndClearsTheTimeout() async {
+    let api = FakeBriefAPI()
+    await api.set(fetches: [.success(makeBrief(status: .composing))])
+    let model = model(api, id: "b1")
+    await model.load()
+    XCTAssertTrue(model.composeTimedOut)
+    await api.set(fetches: [.success(makeBrief(status: .ready))])
+    await model.refresh()
+    XCTAssertFalse(model.composeTimedOut)
+    XCTAssertEqual(model.brief?.status, .ready)
+  }
+
+  func testCancellingAComposeStopsPolling() async {
+    let api = FakeBriefAPI()
+    await api.set(fetches: [.success(makeBrief(status: .composing))])
+    let model = BriefViewModel(
+      api: api, sleep: { _ in try Task.checkCancellation() })
+    model.startCompose()
+    model.cancel()
+    for _ in 0..<50 { await Task.yield() }
+    XCTAssertFalse(model.isComposing)
+    let fetches = await api.fetchCount
+    XCTAssertEqual(fetches, 0)
+  }
+
+  func testAnUnknownStatusIsNotPolled() async {
+    let api = FakeBriefAPI()
+    await api.set(fetches: [.success(makeBrief(status: .unknown("archived")))])
+    let recorder = SleepRecorder()
+    let model = model(api, id: "b1", recorder: recorder)
+    await model.load()
+    XCTAssertEqual(model.brief?.status, .unknown("archived"))
+    let sleeps = await recorder.count
+    XCTAssertEqual(sleeps, 0)
+  }
 }

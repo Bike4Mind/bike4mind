@@ -19,7 +19,7 @@ public final class BriefViewModel {
   public private(set) var brief: Brief?
   /// Whether a compose request or a poll of a composing brief is in flight.
   public private(set) var isComposing = false
-  /// The poll gave up waiting. The brief may still finish: pulling to refresh looks again.
+  /// The poll gave up waiting. The brief may still finish: refreshing looks again.
   public private(set) var composeTimedOut = false
 
   @ObservationIgnored private let api: any BriefAPI
@@ -28,6 +28,8 @@ public final class BriefViewModel {
   @ObservationIgnored private let pollInterval: Duration
   @ObservationIgnored private let maxPolls: Int
   @ObservationIgnored private var composeTask: Task<Void, Never>?
+  /// One poll at a time: a second loop would clear `isComposing` out from under the first.
+  @ObservationIgnored private var isPolling = false
 
   public init(
     api: any BriefAPI, briefID: String? = nil, pollInterval: Duration = .seconds(2),
@@ -49,6 +51,7 @@ public final class BriefViewModel {
   }
 
   public func refresh() async {
+    composeTimedOut = false
     await fetch()
     await pollWhileComposing()
   }
@@ -86,6 +89,7 @@ public final class BriefViewModel {
         brief = try await api.brief(id: briefID)
       } else {
         let briefs = try await api.list()
+        // The newest ready brief wins over a newer one still composing or failed, so a re-open shows content.
         brief = briefs.first { $0.status == .ready } ?? briefs.first
       }
       state = .loaded
@@ -97,12 +101,18 @@ public final class BriefViewModel {
   }
 
   private func pollWhileComposing() async {
+    guard !isPolling else { return }
     guard brief?.status == .composing, case .loaded = state else {
       isComposing = false
       return
     }
+    isPolling = true
     isComposing = true
-    defer { isComposing = false }
+    composeTimedOut = false
+    defer {
+      isPolling = false
+      isComposing = false
+    }
     for _ in 0..<maxPolls {
       do {
         try await sleep(pollInterval)

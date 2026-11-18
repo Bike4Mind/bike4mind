@@ -118,6 +118,13 @@ public final class AppNavigator {
     sessionPath = [.brief(id: nil)]
   }
 
+  /// Pushes a conversation above the current screen (the brief's approval), so Back returns to that screen.
+  public func pushSession(id: String) {
+    isDrawerOpen = false
+    guard sessionPath.last?.sessionID != id else { return }
+    sessionPath.append(.session(.placeholder(id: id)))
+  }
+
   /// Pushes a session whose summary is already known (a drawer row), so it is titled at once.
   public func openSession(_ session: SessionSummary) {
     isDrawerOpen = false
@@ -171,7 +178,10 @@ public final class AppNavigator {
     case .settings: return sessionPath.last == .settings
     case .session(let id): return sessionPath.last?.sessionID == id
     case .media: return sessionPath.last == .studio
-    case .brief(let id): return sessionPath.last == .brief(id: id)
+    case .brief(let id):
+      // The drawer opens the latest brief with no id, which is whichever brief the push is about.
+      guard case .brief(let shownID)? = sessionPath.last else { return false }
+      return shownID == nil || shownID == id
     case .lakes, .lake, .web, .compose: return false
     }
   }

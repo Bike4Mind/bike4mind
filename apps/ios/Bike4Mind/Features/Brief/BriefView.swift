@@ -28,6 +28,15 @@ private struct BriefScreen: View {
       .task { await model.load() }
       .onDisappear { model.cancel() }
       .refreshable { await model.refresh() }
+      .toolbar {
+        if let brief = model.brief, brief.status == .ready, !brief.isEmpty {
+          ToolbarItem(placement: .topBarTrailing) {
+            Button("New brief", systemImage: "arrow.clockwise") { model.startCompose() }
+              .disabled(model.isComposing)
+              .accessibilityIdentifier("brief-new-btn")
+          }
+        }
+      }
   }
 
   @ViewBuilder
@@ -86,23 +95,42 @@ private struct BriefScreen: View {
     }
   }
 
+  /// Scrollable so pull-to-refresh works here, with an explicit button for the same reason: a poll that timed
+  /// out or failed must be recoverable without leaving the screen.
   private var composing: some View {
-    VStack(spacing: Tokens.Spacing.m) {
-      if model.composeTimedOut {
-        Label("Still working on it", systemImage: "clock")
-          .font(.headline)
-        Text("This is taking longer than usual. Pull down to check again.")
-          .font(Tokens.Typography.caption)
-          .foregroundStyle(Tokens.Palette.secondaryText)
-          .multilineTextAlignment(.center)
-      } else {
-        ProgressView("Putting your brief together")
+    ScrollView {
+      VStack(spacing: Tokens.Spacing.m) {
+        if case .failed(let error) = model.state {
+          Label("Couldn't check on the brief", systemImage: "wifi.exclamationmark")
+            .font(.headline)
+          Text(error.message)
+            .font(Tokens.Typography.caption)
+            .foregroundStyle(Tokens.Palette.secondaryText)
+            .multilineTextAlignment(.center)
+          checkAgainButton
+        } else if model.composeTimedOut {
+          Label("Still working on it", systemImage: "clock")
+            .font(.headline)
+          Text("This is taking longer than usual. Check again in a moment.")
+            .font(Tokens.Typography.caption)
+            .foregroundStyle(Tokens.Palette.secondaryText)
+            .multilineTextAlignment(.center)
+          checkAgainButton
+        } else {
+          ProgressView("Putting your brief together")
+        }
       }
+      .padding(Tokens.Spacing.m)
+      .frame(maxWidth: .infinity)
+      .containerRelativeFrame(.vertical)
     }
-    .padding(Tokens.Spacing.m)
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .accessibilityElement(children: .combine)
     .accessibilityIdentifier("brief-composing")
+  }
+
+  private var checkAgainButton: some View {
+    Button("Check again") { Task { await model.refresh() } }
+      .buttonStyle(.borderedProminent)
+      .accessibilityIdentifier("brief-check-again-btn")
   }
 
   @ViewBuilder
@@ -159,7 +187,7 @@ private struct BriefScreen: View {
               .font(Tokens.Typography.body)
               .foregroundStyle(Tokens.Palette.primaryText)
             if let approval = decision.approval {
-              Button("Open approval") { services.navigator.apply(.session(id: approval.sessionID)) }
+              Button("Open approval") { services.navigator.pushSession(id: approval.sessionID) }
                 .buttonStyle(.borderedProminent)
                 .accessibilityLabel("Open approval: \(decision.text)")
                 .accessibilityIdentifier("brief-open-approval-btn")
