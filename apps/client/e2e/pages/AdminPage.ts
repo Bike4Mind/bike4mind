@@ -101,9 +101,15 @@ export class AdminPage extends BasePage {
     return link;
   }
 
+  async navigateToAccessReview() {
+    await (await this.revealSidebarItem('admin-access-review-btn', 'trust')).click();
+    await expect(this.page.getByTestId('admin-access-review-table')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+  }
+
   async navigateToInviteCenter() {
     await this.expandUserOps();
-    await (await this.revealSidebarItem('admin-invite-center-tab-btn', 'people')).click();
+    await (await this.revealSidebarItem('admin-waitlist-tab-btn', 'people')).click();
+    await this.page.getByTestId('invite-center-sections-invites-btn').click();
     await expect(this.page.getByTestId('invite-center-codes-tab')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   }
 

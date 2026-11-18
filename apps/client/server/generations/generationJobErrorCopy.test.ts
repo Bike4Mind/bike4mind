@@ -4,6 +4,9 @@ import {
   generationJobErrorCopy,
   IMAGE_JOB_ERROR_COPY,
   MUSIC_JOB_ERROR_COPY,
+  SCENE_JOB_ERROR_COPY,
+  SOUND_EFFECT_JOB_ERROR_COPY,
+  SPEECH_JOB_ERROR_COPY,
   VIDEO_JOB_ERROR_COPY,
 } from './generationJobErrorCopy';
 
@@ -21,6 +24,7 @@ describe('generationJobErrorCopy', () => {
       enqueue_failed: 'The clip could not be started.',
       cancelled: 'The generation was cancelled.',
       account_blocked: 'This account cannot generate clips.',
+      unsupported_input: 'An input file could not be used for this clip.',
     });
   });
 
@@ -34,6 +38,9 @@ describe('generationJobErrorCopy', () => {
     ['video', VIDEO_JOB_ERROR_COPY],
     ['music', MUSIC_JOB_ERROR_COPY],
     ['image', IMAGE_JOB_ERROR_COPY],
+    ['scene', SCENE_JOB_ERROR_COPY],
+    ['speech', SPEECH_JOB_ERROR_COPY],
+    ['sound effect', SOUND_EFFECT_JOB_ERROR_COPY],
   ])('has non-empty %s copy for every code', (_kind, copy) => {
     for (const code of GENERATION_JOB_ERROR_CODES) expect(copy[code]).toMatch(/\S/);
   });
@@ -51,6 +58,7 @@ describe('generationJobErrorCopy', () => {
       enqueue_failed: 'The image could not be started.',
       cancelled: 'The generation was cancelled.',
       account_blocked: 'This account cannot generate images.',
+      unsupported_input: 'An input file could not be used for this image.',
     });
   });
 });

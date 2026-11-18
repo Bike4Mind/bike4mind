@@ -2,6 +2,7 @@ import { CreditHolderType } from '@bike4mind/common';
 import {
   pendingCreditHoldRepository,
   userRepository,
+  warmExchangeAttribution,
   withTransaction,
   type PendingCreditHold,
 } from '@bike4mind/database';
@@ -16,7 +17,7 @@ export const COMPLETION_CREDIT_HOLD_TTL_MS = 60 * 60_000;
 const SETTLEMENT_ATTEMPTS = 3;
 
 /** One instance per completion; inference always runs outside the billing transactions. */
-export function createCompletionCreditHolds(logger: Logger): CompletionCreditHolds {
+export function createCompletionCreditHolds(logger: Logger, apiKeyId?: string): CompletionCreditHolds {
   let pending: PendingCreditHold | undefined;
 
   return {
@@ -60,6 +61,7 @@ export function createCompletionCreditHolds(logger: Logger): CompletionCreditHol
     async settle(chargedCredits, settle) {
       if (!pending) return false;
       const holdId = pending.id;
+      await warmExchangeAttribution(apiKeyId);
       for (let attempt = 1; attempt <= SETTLEMENT_ATTEMPTS; attempt++) {
         try {
           const settled = await withTransaction(async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
-import { UnauthorizedError, NotFoundError } from '@bike4mind/utils';
+import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { Permission } from '@bike4mind/common';
 import { revoke } from './revoke';
 import { pushShareable } from './accept';
@@ -94,7 +94,7 @@ describe('sharingService - revoke', () => {
 
     await expect(
       revoke(attackerId, { id: documentId, type: 'files', userId: sharedUserId }, mockAdapters as any)
-    ).rejects.toThrow(UnauthorizedError);
+    ).rejects.toThrow(ForbiddenError);
 
     expect(mockAdapters.db.fabFiles.updateGuarded).not.toHaveBeenCalled();
   });
@@ -593,7 +593,7 @@ describe('sharingService - revoke on a project', () => {
     adapters.db.projects.shareable.findAccessibleById.mockResolvedValue(project);
 
     await expect(revoke(coMemberId, { id: projectId, type: 'projects', userId: memberId }, adapters)).rejects.toThrow(
-      UnauthorizedError
+      ForbiddenError
     );
     expect(adapters.db.projects.updateGuarded).not.toHaveBeenCalled();
   });

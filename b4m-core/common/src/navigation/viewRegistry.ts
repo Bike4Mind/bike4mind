@@ -814,11 +814,11 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'admin.secops_triage',
     section: 'admin',
-    label: 'SecOps triage',
+    label: 'Security scan issue filing',
     description:
-      'Configure the SecOps triage pipeline: enablement, dry-run, GitHub issue filing and Slack alerts for security findings',
+      'Security page, Scans view: GitHub issue filing status, recent filing runs and its settings (dry run, repository, Slack)',
     navigationType: 'tab',
-    target: '51', // AdminTab.SecOpsTriage
+    target: '51', // AdminTab.SecOpsTriage, retired: opens the Security page's Scans view
     keywords: ['secops', 'security triage', 'security alerts', 'vulnerabilities', 'security issues'],
     requiresAdmin: true,
   },
@@ -831,6 +831,28 @@ export const VIEW_REGISTRY: NavigableView[] = [
     navigationType: 'tab',
     target: '66', // AdminTab.AuditLog
     keywords: ['audit log', 'audit trail', 'who changed', 'change history', 'activity log', 'compliance'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.access_review',
+    section: 'admin',
+    label: 'Access review',
+    description:
+      'Quarterly review of who holds admin access: confirm or revoke each admin, flag dormant and no-MFA accounts, export the signed-off review as CSV',
+    navigationType: 'tab',
+    target: '81', // AdminTab.AccessReview
+    keywords: ['access review', 'quarterly review', 'admin access', 'dormant admins', 'least privilege', 'compliance'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.spend_explorer',
+    section: 'admin',
+    label: 'Spend explorer',
+    description:
+      'AI provider cost per day or hour with spikes against the rolling median, split by provider, model, feature or account type, and the accounts that drove any day',
+    navigationType: 'tab',
+    target: '82', // AdminTab.SpendExplorer
+    keywords: ['spend', 'ai cost', 'cost spike', 'provider cost', 'top spenders', 'cogs'],
     requiresAdmin: true,
   },
   {

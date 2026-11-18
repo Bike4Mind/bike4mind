@@ -372,6 +372,7 @@ export const SettingKeySchema = z.enum([
   'BedrockGuardrailVersion',
   'ImageModerationEnabled',
   'ImageModerationReviewerEmails',
+  'ImageModerationEscalationEmails',
   'tagLineMain',
   'tagLineSub',
   'defaultTags',
@@ -434,6 +435,7 @@ export const SettingKeySchema = z.enum([
   'EnableStudioCreateV2',
   'EnableStudioImage',
   'EnableStudioProductions',
+  'StudioProductionsAudience',
   'VectorThreshold',
   'bflApiKey',
   'EnableMCPServer',
@@ -782,6 +784,8 @@ export const SettingKeySchema = z.enum([
   'minimumClientVersions',
   // SERVED AT /.well-known/assetlinks.json (apps/client/pages/api/well-known/assetlinks.ts)
   'androidAppCertFingerprints',
+  // SERVED AT /.well-known/apple-app-site-association (apps/client/pages/api/well-known/apple-app-site-association.ts)
+  'iosAppTeamId',
   'fileUploadLimitFreePerHour',
   'fileUploadLimitPaidPerHour',
   'pendingUploadLimit',
@@ -828,6 +832,9 @@ export const SettingKeySchema = z.enum([
 
   // IMAGE GENERATION
   'agentImagesPerRun',
+  // AUDIO GENERATION (agent-mode caps)
+  'agentSpeechClipsPerRun',
+  'agentSoundEffectsPerRun',
 
   // MODEL DISCOVERY (live model registry)
   'enableModelDiscovery',
@@ -906,6 +913,7 @@ export const OrchestrationDefaultsSchema = z.object({
     'edit_image',
     // Only offered when the run gets a music config, which enforces agentMusicTracksPerRun.
     'music_generation',
+    // Speech and sound effects are capped per run by agentSpeechClipsPerRun / agentSoundEffectsPerRun.
     'audio_generation',
     'excel_generation',
     // Only offered when the run gets a video config, which enforces agentVideoClipsPerRun.
@@ -1251,6 +1259,10 @@ export function isCalendarDate(value: string): boolean {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
+/** Who Studio Productions opens to once enabled: admins only (the preview), or admins, developers and paid plans. */
+export const STUDIO_PRODUCTIONS_AUDIENCES = ['admins', 'paid'] as const;
+export type StudioProductionsAudience = (typeof STUDIO_PRODUCTIONS_AUDIENCES)[number];
+
 function makeStringSetting(
   config: {
     defaultValue: string | undefined;
@@ -1460,6 +1472,7 @@ function makeBooleanSetting({
 
 // A SHA-256 certificate fingerprint as Digital Asset Links expects it: 32 colon-separated uppercase hex bytes.
 const ANDROID_CERT_FINGERPRINT_RE = /^[0-9A-F]{2}(?::[0-9A-F]{2}){31}$/;
+const APPLE_TEAM_ID_RE = /^[A-Z0-9]{10}$/;
 const AndroidCertFingerprintsSchema = z
   .array(z.string().regex(ANDROID_CERT_FINGERPRINT_RE, 'Expected 32 colon-separated uppercase hex bytes'))
   .max(10);
@@ -1914,6 +1927,8 @@ export const SIGNUP_RISK_SIGNALS = [
   'quickApiKey',
   'fastSpend',
   'generatedLocalPart',
+  'wafAnonIp',
+  'wafBotSignal',
 ] as const;
 export type SignupRiskSignal = (typeof SIGNUP_RISK_SIGNALS)[number];
 
@@ -1934,6 +1949,9 @@ export const SignupRiskScoringSchema = z
         quickApiKey: signupRiskWeight(15),
         fastSpend: signupRiskWeight(20),
         generatedLocalPart: signupRiskWeight(10),
+        // Edge labels on signupMeta, recorded only where label forwarding is on. Off until a weight is set.
+        wafAnonIp: signupRiskWeight(0),
+        wafBotSignal: signupRiskWeight(0),
       })
       .strict()
       .prefault({}),
@@ -2789,6 +2807,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableStudioCreateV2', order: 300 },
       { key: 'EnableStudioImage', order: 301 },
       { key: 'EnableStudioProductions', order: 302 },
+      { key: 'StudioProductionsAudience', order: 303 },
     ],
   },
   NOTEBOOK: {
@@ -2823,9 +2842,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'blockedEmailDomains', order: 3 },
       { key: 'signupGrantRiskPolicy', order: 8 },
       { key: 'signupGrantUnprotectedMaxCredits', order: 8.1 },
-      { key: 'signupGrantActivityMinActiveSeconds', order: 11.5 },
-      { key: 'signupGrantActivityPreviewTestMode', order: 14.5 },
-      { key: 'signupUnlockPaymentHoldHours', order: 14.6 },
       { key: 'maxSignupsPerIpPerDay', order: 15 },
       { key: 'maxSignupsPerAsnPerHour', order: 16 },
       { key: 'newAccountSpendCapDays', order: 19.1 },
@@ -3179,6 +3195,7 @@ export const API_SERVICE_GROUPS = {
     settings: [
       { key: 'minimumClientVersions', order: 1 },
       { key: 'androidAppCertFingerprints', order: 2 },
+      { key: 'iosAppTeamId', order: 3 },
     ],
   },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
@@ -3961,6 +3978,16 @@ export const settingsMap = {
     // partitionEmailList.
     schema: z.array(z.string()),
   }),
+  ImageModerationEscalationEmails: makeObjectSetting<string[]>({
+    key: 'ImageModerationEscalationEmails',
+    name: 'Image Moderation Escalation Emails',
+    defaultValue: [],
+    description:
+      'Email addresses for the second review step, one per line: alerted when an image moderation incident is escalated, by a reviewer or automatically when it waits too long for a verdict. The email carries incident metadata and an admin link only, never the image or user content. Empty sends no escalation email.',
+    category: 'AI Moderation',
+    // Same shape and read rules as ImageModerationReviewerEmails.
+    schema: z.array(z.string()),
+  }),
   SkillMarketHighRiskTools: makeStringSetting({
     key: 'SkillMarketHighRiskTools',
     name: 'Skill Market High-Risk Tools',
@@ -4248,6 +4275,22 @@ export const settingsMap = {
     order: 2,
     schema: AndroidCertFingerprintsSchema,
   }),
+  // Read by apps/client/pages/api/well-known/apple-app-site-association.ts.
+  iosAppTeamId: {
+    ...makeStringSetting({
+      key: 'iosAppTeamId',
+      name: 'iOS App Team ID',
+      defaultValue: '',
+      description:
+        'Apple Developer Team ID (10 uppercase letters or digits, e.g. "AB12CD34EF") that signs the iOS app (bundle id com.bike4mind.app). Served in /.well-known/apple-app-site-association so iOS lets the app complete its https sign-in callback and open universal links. Empty means no app is associated and signed builds cannot sign in. Public by design, not a secret.',
+      category: 'Admin',
+      group: API_SERVICE_GROUPS.API_CLIENTS.id,
+      order: 3,
+    }),
+    schema: z.string().refine(value => value === '' || APPLE_TEAM_ID_RE.test(value), {
+      message: 'Use a 10-character Apple Team ID such as AB12CD34EF, or leave it empty.',
+    }),
+  },
   // Both read by apps/client/server/files/fileUploadBudget.ts.
   fileUploadLimitFreePerHour: makeNumberSetting({
     key: 'fileUploadLimitFreePerHour',
@@ -5660,7 +5703,6 @@ export const settingsMap = {
     userReadable: true,
     description:
       'Active time in a UTC day, counted from heartbeat pings while the app is open and in use, before the activity drip pays. Invalid values fall back to 60.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantActivityPreviewTestMode: makeBooleanSetting({
@@ -5670,7 +5712,6 @@ export const settingsMap = {
     description:
       'PR previews only: use five-minute earning windows instead of UTC days to test the activity drip. Each window still requires the configured active time; use a minimum below five minutes. Production, staging and personal environments always use UTC days. The platform daily budget is unchanged. Reload the test user tab after toggling this switch.',
     hideOnProductionStages: true,
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupUnlockPaymentHoldHours: makeNumberSetting({
@@ -5683,7 +5724,6 @@ export const settingsMap = {
     userReadable: true,
     description:
       'Hours a subscription, credit pack or card payment must settle before it releases the locked signup credits. A dispute, refund or early fraud warning in that window cancels the release. Zero releases them on payment.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantInitialCredits: makeNumberSetting({
@@ -6881,7 +6921,7 @@ export const settingsMap = {
     name: 'Enable Studio Create v2',
     defaultValue: false,
     description:
-      'Admin-only preview of the restructured Studio Create area. Non-admins never see it, whatever this is set to.',
+      'The restructured Studio Create area, for every user. Off, everyone gets the legacy Studio tabs; this is the kill switch.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 300,
@@ -6890,7 +6930,8 @@ export const settingsMap = {
     key: 'EnableStudioImage',
     name: 'Enable Image in Studio',
     defaultValue: false,
-    description: 'Admin-only preview of the Image tab in Studio. Non-admins never see it, whatever this is set to.',
+    description:
+      'The Image medium in Studio Create, for every user. Needs Enable Studio Create v2; off, the Image medium is hidden.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 301,
@@ -6901,11 +6942,23 @@ export const settingsMap = {
     name: 'Enable Studio Productions',
     defaultValue: false,
     description:
-      'Admin-only preview of Studio Productions (assembling many assets into one piece). Non-admins never see it, whatever this is set to.',
+      'Studio Productions (assembling many assets into one piece). Off, nobody sees it. On, who it opens to is set by Studio Productions Audience.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 302,
     dependsOn: 'EnableStudioCreateV2',
+  }),
+  StudioProductionsAudience: makeStringSetting({
+    key: 'StudioProductionsAudience',
+    name: 'Studio Productions Audience',
+    defaultValue: 'admins',
+    description:
+      "Who Studio Productions opens to once enabled. 'admins' is the preview. 'paid' opens it to admins, developer-tagged users and users on a paid plan; free users see an upgrade prompt.",
+    options: [...STUDIO_PRODUCTIONS_AUDIENCES],
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 303,
+    dependsOn: 'EnableStudioProductions',
   }),
   EnablePotionQuest: makeBooleanSetting({
     key: 'EnablePotionQuest',
@@ -8488,7 +8541,7 @@ export const settingsMap = {
     name: 'SecOps Triage Config',
     defaultValue: SecopsTriageConfigSchema.parse({}),
     description:
-      'Configuration for SecOps Triage — auto-creates GitHub issues for critical/high OWASP ZAP scan findings via the b4m-prod GitHub App. Disabled by default.',
+      'Configuration for SecOps triage: files a GitHub issue for each critical or high finding reported by a security scan through the system GitHub connection, and closes it when the finding is gone. Disabled by default.',
     category: 'SecOps',
     order: 131,
     schema: SecopsTriageConfigSchema,
@@ -8577,6 +8630,32 @@ export const settingsMap = {
     category: 'AI',
     order: 149,
     // Consumed by apps/workers/src/queueHandlers/agentExecutor.imageToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  agentSpeechClipsPerRun: makeNumberSetting({
+    key: 'agentSpeechClipsPerRun',
+    name: 'Agent Speech Clips Per Run',
+    defaultValue: 10,
+    min: 0,
+    int: true,
+    description:
+      'Most audio_generation speech clips one agent-mode run may start, counted across the run and all of its subagents. 0 refuses speech in agent mode. Each clip still holds and settles its own credits.',
+    category: 'AI',
+    order: 150,
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.audioToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  agentSoundEffectsPerRun: makeNumberSetting({
+    key: 'agentSoundEffectsPerRun',
+    name: 'Agent Sound Effects Per Run',
+    defaultValue: 10,
+    min: 0,
+    int: true,
+    description:
+      'Most audio_generation sound effects one agent-mode run may start, counted across the run and all of its subagents. 0 refuses sound effects in agent mode. Each effect still holds and settles its own credits.',
+    category: 'AI',
+    order: 151,
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.audioToolConfig.ts.
     scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   enableModelDiscovery: makeBooleanSetting({

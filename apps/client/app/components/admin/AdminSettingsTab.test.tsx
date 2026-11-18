@@ -352,15 +352,35 @@ describe('AdminSettingsTab Turnstile notice', () => {
   });
 });
 
-describe('AdminSettingsTab reviewer emails setting', () => {
-  it('renders the string-list editor with the stored reviewers and no generic card', () => {
-    serverSettings = [{ settingName: 'ImageModerationReviewerEmails', settingValue: '["reviewer@example.com"]' }];
+describe('AdminSettingsTab category headings', () => {
+  it('shows the SecOps category under a Security heading and keeps the stored category name', () => {
     renderSecurityTab();
 
-    const field = screen.getByTestId('string-list-setting-ImageModerationReviewerEmails');
-    expect(field.getAttribute('data-stored-value')).toContain('reviewer@example.com');
-    expect(screen.queryByTestId('generic-setting-ImageModerationReviewerEmails')).toBeNull();
+    const heading = screen.getByTestId('admin-settings-category-heading-SecOps');
+    expect(heading.textContent).toBe('Security');
+    expect(screen.queryByRole('heading', { name: 'SecOps' })).toBeNull();
+    expect(settingsMap.abuseAssessmentEnabled.category).toBe('SecOps');
   });
+
+  it('shows other categories under their own name', () => {
+    renderSecurityTab();
+
+    expect(screen.getByTestId('admin-settings-category-heading-AI Moderation').textContent).toBe('AI Moderation');
+  });
+});
+
+describe('AdminSettingsTab reviewer emails setting', () => {
+  it.each(['ImageModerationReviewerEmails', 'ImageModerationEscalationEmails'] as const)(
+    'renders the %s string-list editor with the stored reviewers and no generic card',
+    key => {
+      serverSettings = [{ settingName: key, settingValue: '["reviewer@example.com"]' }];
+      renderSecurityTab();
+
+      const field = screen.getByTestId(`string-list-setting-${key}`);
+      expect(field.getAttribute('data-stored-value')).toContain('reviewer@example.com');
+      expect(screen.queryByTestId(`generic-setting-${key}`)).toBeNull();
+    }
+  );
 
   it('gives the generic field to an object setting that defaults to an array', () => {
     // The editor belongs to the listed keys, not to every object setting that happens to hold a
@@ -514,6 +534,8 @@ describe('AdminSettingsTab Credits System group', () => {
     // 'drip' matches the drip cap's name; the audit log links a setting change as ?q=<key>.
     ['drip', 'invite-center-schedule', 'schedule'],
     ['signupGrantDripCap', 'invite-center-schedule', 'schedule'],
+    ['signupGrantActivityMinActiveSeconds', 'invite-center-schedule', 'schedule'],
+    ['signupUnlockPaymentHoldHours', 'invite-center-schedule', 'schedule'],
     ['freeTierDays2To7SpendCapCredits', 'invite-center-schedule', 'schedule'],
     ['ReferralHoldDays', 'invite-center-rewards', 'rewards'],
     ['gearRewardMinAccountAgeDays', 'invite-center-rewards', 'rewards'],
@@ -543,13 +565,13 @@ describe('AdminSettingsTab stage-hidden settings', () => {
     renderUsersTab();
 
     for (const key of stageGated) expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
-    expect(screen.getByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeTruthy();
+    expect(screen.queryByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeNull();
   });
 
-  it('shows them when the server hides nothing', () => {
+  it('leaves moved preview controls to Schedule even when the server hides nothing', () => {
     renderUsersTab();
 
-    for (const key of stageGated) expect(screen.getByTestId(`generic-setting-${key}`), key).toBeTruthy();
+    for (const key of stageGated) expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
   });
 
   it.each([
@@ -568,7 +590,7 @@ describe('AdminSettingsTab stage-hidden settings', () => {
     renderSettings();
     fireEvent.click(screen.getByRole('checkbox', { name: 'All Tabs' }));
 
-    expect(screen.getByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeTruthy();
+    expect(screen.queryByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeNull();
     for (const key of stageGated) expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
   });
 });

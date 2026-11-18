@@ -21,6 +21,10 @@ describe('PartnerSignupRuleModel', () => {
     expect(created.domain).toBe('partner.com');
   });
 
+  it('findByDomain returns null for an unknown domain', async () => {
+    expect(await partnerSignupRuleRepository.findByDomain('missing.com')).toBeNull();
+  });
+
   it('findByDomain matches case-insensitively and ignores whitespace', async () => {
     await partnerSignupRuleRepository.create({
       domain: 'partner.com',
@@ -158,5 +162,31 @@ describe('PartnerSignupRuleRepository.countByGrantPackage', () => {
   it('returns an empty map for no ids', async () => {
     await rule('a1.com', 'a');
     expect((await partnerSignupRuleRepository.countByGrantPackage([])).size).toBe(0);
+  });
+});
+
+describe('PartnerSignupRuleRepository.listByGrantPackage', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await PartnerSignupRule.deleteMany({});
+  });
+
+  const rule = (domain: string, grantPackageId: string | null) =>
+    partnerSignupRuleRepository.create({ domain, entitlements: [], signupCredits: 0, enabled: true, grantPackageId });
+
+  it('lists only the package rules, newest first, and flags more past the limit', async () => {
+    await rule('old.com', 'a');
+    await rule('mid.com', 'a');
+    await rule('new.com', 'a');
+    await rule('other.com', 'b');
+
+    const page = await partnerSignupRuleRepository.listByGrantPackage('a', 2);
+    expect(page.data.map(r => r.domain)).toEqual(['new.com', 'mid.com']);
+    expect(page.truncated).toBe(true);
+
+    const all = await partnerSignupRuleRepository.listByGrantPackage('a', 3);
+    expect(all.data).toHaveLength(3);
+    expect(all.truncated).toBe(false);
   });
 });

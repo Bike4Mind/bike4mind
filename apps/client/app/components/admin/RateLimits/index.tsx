@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Button, Typography, Tabs, TabList, Tab, TabPanel, Sheet, Stack, Table } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { AdminPageHeader, EmptyState, LoadingState, StatStrip, StatTile } from '../shared';
@@ -56,7 +56,7 @@ const RateLimitsTab: React.FC = () => {
     applied.patch({ dateFrom: '', dateTo: '', integration: '', throttledOnly: false });
   };
 
-  const chartData = processChartData(filteredSnapshots);
+  const chartData = useMemo(() => processChartData(filteredSnapshots), [filteredSnapshots]);
 
   const clearFiltersAction = (
     <Button size="sm" variant="outlined" onClick={handleClearFilters} data-testid="rate-limit-empty-clear-btn">

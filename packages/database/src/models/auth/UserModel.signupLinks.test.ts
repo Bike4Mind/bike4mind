@@ -83,3 +83,14 @@ describe('UserRepository.findSignupLinkCandidates', () => {
     ).toHaveLength(1);
   });
 });
+
+describe('UserRepository.findIdsBySignupIp', () => {
+  it('lists every account from the IP when no id is excluded, and leaves out the excluded one', async () => {
+    const first = await createUser('first@example.com', { 'signupMeta.ip': '198.51.100.7' });
+    const second = await createUser('second@example.com', { 'signupMeta.ip': '198.51.100.7' });
+    await createUser('elsewhere@example.com', { 'signupMeta.ip': '198.51.100.8' });
+    expect(await userRepository.findIdsBySignupIp('198.51.100.7', undefined, 10)).toEqual([second, first]);
+    expect(await userRepository.findIdsBySignupIp('198.51.100.7', first, 10)).toEqual([second]);
+    expect(await userRepository.findIdsBySignupIp('198.51.100.7', undefined, 1)).toEqual([second]);
+  });
+});

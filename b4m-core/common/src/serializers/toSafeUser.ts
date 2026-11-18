@@ -3,6 +3,7 @@ import type { IUser } from '../types/entities/UserTypes';
 // output type and the parsed response contract can never drift apart. It is exported
 // to the @bike4mind/common barrel from schemas/user, not re-exported here.
 import type { SafeUser } from '../schemas/user';
+import { canAdministerOrganization, type AdministrableOrg, type OrgAuthorityActor } from '../constants/organization';
 
 /**
  * Central boundary for serializing user records into API responses.
@@ -58,6 +59,7 @@ export const USER_SECRET_FIELDS = [
   'riskReviewAutoCheckedAt',
   'riskEvidence',
   'freeCreditClaimEmail',
+  'freeQuestStartId',
   'grantPackageId',
   'signupGrantAssessment',
   'userNotes',
@@ -105,14 +107,20 @@ export const SAFE_USER_LOOKUP_PROJECT: Record<string, 1> = {
   lastActiveAt: 1,
 };
 
-export type SafeUserScope = 'public' | 'same-org' | 'self';
+/**
+ * `org-member` is the names-only roster a plain org member sees: `public` plus `isBanned`, never email.
+ * `same-org` is the full roster for whoever may administer the org. Pick between them with
+ * `organizationRosterScope`, never by hand.
+ */
+export type SafeUserScope = 'public' | 'same-org' | 'org-member' | 'self';
 
 // Accept anything user-doc-shaped (Mongoose doc, toJSON()'d object, or lean result).
 type UserLike = (Partial<IUser> & { _id?: unknown }) | null | undefined;
 
 /**
  * Whitelist-serialize a user for exposure to ANOTHER user. `public` returns
- * name/username/photo only; `self` adds email; `same-org` adds email + isBanned.
+ * name/username/photo only; `self` adds email; `org-member` adds isBanned; `same-org` adds
+ * email + isBanned.
  * For a user's OWN full profile (integration status, preferences, etc.) do NOT
  * use this -- use `redactUserSecretsForSelf`.
  */
@@ -130,11 +138,23 @@ export function toSafeUser(user: UserLike, scope: SafeUserScope = 'public'): Saf
   if (scope === 'same-org' || scope === 'self') {
     safe.email = user.email ?? null;
   }
-  if (scope === 'same-org') {
+  if (scope === 'same-org' || scope === 'org-member') {
     // Org-member cards render a "Deactivated" chip from isBanned.
     safe.isBanned = user.isBanned ?? false;
   }
   return safe;
+}
+
+/**
+ * The scope an org roster is serialized with for this viewer: the full roster (with emails) for the
+ * owner, a current manager or a site admin (`canAdministerOrganization`), names only for anyone else.
+ * Mirrors the `userDetails` contact strip in `toSafeOrganization`.
+ */
+export function organizationRosterScope(
+  viewer: OrgAuthorityActor,
+  organization: AdministrableOrg
+): Extract<SafeUserScope, 'same-org' | 'org-member'> {
+  return canAdministerOrganization(viewer, organization) ? 'same-org' : 'org-member';
 }
 
 /** Array convenience; drops null/undefined entries. */

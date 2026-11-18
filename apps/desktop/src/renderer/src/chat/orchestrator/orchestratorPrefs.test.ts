@@ -29,13 +29,94 @@ describe('orchestratorPrefs', () => {
   beforeEach(() => window.localStorage.clear());
   afterEach(() => vi.restoreAllMocks());
 
-  it('lists the three views', () => {
-    expect(ORCHESTRATOR_VIEWS).toEqual(['tavern', 'board', 'table']);
+  it('lists the scenes, then the layouts', () => {
+    expect(ORCHESTRATOR_VIEWS).toEqual([
+      'tavern',
+      'aquarium',
+      'board',
+      'table',
+      'tile-wall',
+      'swimlanes',
+      'constellation',
+      'transit',
+    ]);
+  });
+
+  it('remembers each session its own view', () => {
+    writeView('s1', 'tile-wall');
+    writeView('s2', 'aquarium');
+    expect(readView('s1')).toBe('tile-wall');
+    expect(readView('s2')).toBe('aquarium');
+  });
+
+  describe('view fallback levels', () => {
+    const VIEW = 'b4m.orchestrator.view.';
+    const PROJECT = 'b4m.orchestrator.projectView.';
+    const LAST = 'b4m.orchestrator.lastView';
+
+    it('prefers the session, then its project, then the global last choice, then the Tavern', () => {
+      expect(readView('s1', '/p')).toBe('tavern');
+      window.localStorage.setItem(LAST, 'table');
+      expect(readView('s1', '/p')).toBe('table');
+      window.localStorage.setItem(PROJECT + '/p', 'board');
+      expect(readView('s1', '/p')).toBe('board');
+      window.localStorage.setItem(VIEW + 's1', 'aquarium');
+      expect(readView('s1', '/p')).toBe('aquarium');
+    });
+
+    it('skips the project level for a session without a project', () => {
+      window.localStorage.setItem(PROJECT + '/p', 'board');
+      window.localStorage.setItem(LAST, 'table');
+      expect(readView('s1')).toBe('table');
+      expect(readView('s1', '')).toBe('table');
+    });
+
+    it("does not use another project's choice", () => {
+      window.localStorage.setItem(PROJECT + '/p', 'board');
+      expect(readView('s1', '/other')).toBe('tavern');
+    });
+
+    it('falls through an unknown id at every level', () => {
+      window.localStorage.setItem(VIEW + 's1', 'koi-pond');
+      window.localStorage.setItem(PROJECT + '/p', 'koi-pond');
+      window.localStorage.setItem(LAST, 'koi-pond');
+      expect(readView('s1', '/p')).toBe('tavern');
+      window.localStorage.setItem(LAST, 'table');
+      expect(readView('s1', '/p')).toBe('table');
+      window.localStorage.setItem(PROJECT + '/p', 'board');
+      expect(readView('s1', '/p')).toBe('board');
+    });
+
+    it('writeView records the session, its project and the global choice', () => {
+      writeView('s1', 'board', '/p');
+      expect(window.localStorage.getItem(VIEW + 's1')).toBe('board');
+      expect(window.localStorage.getItem(PROJECT + '/p')).toBe('board');
+      expect(window.localStorage.getItem(LAST)).toBe('board');
+      expect(readView('s2', '/p')).toBe('board');
+      expect(readView('s3', '/other')).toBe('board');
+    });
+
+    it('writeView without a project leaves project choices alone', () => {
+      writeView('s1', 'board', '/p');
+      writeView('s2', 'table');
+      expect(readView('s3', '/p')).toBe('board');
+      expect(readView('s3')).toBe('table');
+    });
+
+    it('forgetSessionPrefs clears only the session level', () => {
+      writeView('s1', 'board', '/p');
+      forgetSessionPrefs('s1');
+      expect(window.localStorage.getItem(VIEW + 's1')).toBeNull();
+      expect(readView('s1', '/p')).toBe('board');
+      expect(window.localStorage.getItem(PROJECT + '/p')).toBe('board');
+      expect(window.localStorage.getItem(LAST)).toBe('board');
+    });
   });
 
   it('defaults when nothing is stored', () => {
     expect(readSurface('s1')).toBe('chat');
     expect(readView('s1')).toBe('tavern');
+    expect(readView('s1', '/p')).toBe('tavern');
     expect(readDockOpen()).toBe(true);
     expect(readIntroSeen()).toBe(false);
   });
@@ -57,7 +138,6 @@ describe('orchestratorPrefs', () => {
     expect(readSurface('s1')).toBe('orchestrate');
     expect(readSurface('s2')).toBe('chat');
     expect(readView('s1')).toBe('board');
-    expect(readView('s2')).toBe('tavern');
     expect(readDockOpen()).toBe(false);
     expect(readIntroSeen()).toBe(true);
     expect(window.localStorage.getItem('b4m.orchestrator.surface.s1')).toBe('orchestrate');
@@ -85,6 +165,7 @@ describe('orchestratorPrefs', () => {
     expect(() => {
       writeSurface('s1', 'orchestrate');
       writeView('s1', 'table');
+      writeView('s1', 'table', '/p');
       writeDockOpen(false);
       writeIntroSeen();
     }).not.toThrow();

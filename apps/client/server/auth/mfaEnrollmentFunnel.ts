@@ -1,5 +1,10 @@
 import type { Request } from 'express';
-import { MfaEnrollmentEvents, type IUserDocument, type MfaEnrollmentEventPayload } from '@bike4mind/common';
+import {
+  MfaEnrollmentEvents,
+  isMfaForcedForUser,
+  type IUserDocument,
+  type MfaEnrollmentEventPayload,
+} from '@bike4mind/common';
 import { mfaService } from '@bike4mind/services';
 import { readEnforceMfa } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
@@ -26,7 +31,8 @@ export async function forcedEnrollmentSurface(
     return null;
   }
   if (credential.mfaPending) return 'signin';
-  return (await readEnforceMfa({ skipCache: false })) ? 'session' : null;
+  const enforced = isMfaForcedForUser(user) || (await readEnforceMfa({ skipCache: false }));
+  return enforced ? 'session' : null;
 }
 
 /** One funnel event. Never throws: telemetry must not fail an auth request. */

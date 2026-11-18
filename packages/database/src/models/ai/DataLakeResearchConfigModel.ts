@@ -9,6 +9,7 @@ import type {
   UpdateDataLakeResearchConfigInput,
 } from '@bike4mind/common';
 import {
+  RESEARCH_ITEM_RULE_ACTIONS,
   RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
   RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
   RESEARCH_RUN_TRIGGERS,
@@ -35,6 +36,14 @@ const ResearchScheduleOutcomeSchema = new Schema(
     pendingProposals: { type: Number },
     reviewBacklogLimit: { type: Number },
     error: { type: String },
+  },
+  { _id: false }
+);
+
+export const ResearchItemRuleSchema = new Schema(
+  {
+    condition: { type: String, required: true },
+    action: { type: String, enum: RESEARCH_ITEM_RULE_ACTIONS, required: true },
   },
   { _id: false }
 );
@@ -94,6 +103,7 @@ const DataLakeResearchConfigSchema = new Schema<IDataLakeResearchConfigDocument>
     minRelevance: { type: Number, required: true },
     costCeilingMicroUsd: { type: Number, required: true },
     proposedTags: { type: [String], default: [] },
+    itemRules: { type: [ResearchItemRuleSchema], default: [] },
     trigger: { type: String, enum: RESEARCH_RUN_TRIGGERS, required: true },
     // Defaults rather than `required`, so configs saved before scheduling existed read as unscheduled.
     cadence: { type: String, enum: RESEARCH_SCHEDULE_CADENCES, default: 'off' },

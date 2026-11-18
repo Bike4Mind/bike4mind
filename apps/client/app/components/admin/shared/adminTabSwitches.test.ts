@@ -6,13 +6,13 @@ const at = (pathname: string, search: object) => ({ pathname, search });
 describe('leavesAdminSettingsPage', () => {
   it('leaves when the path changes, even with the same tab', () => {
     expect(
-      leavesAdminSettingsPage(at('/admin', { tab: 'sec-ops-triage' }), at('/new', { tab: 'sec-ops-triage' }))
+      leavesAdminSettingsPage(at('/admin', { tab: 'admin-settings' }), at('/new', { tab: 'admin-settings' }))
     ).toBe(true);
     expect(leavesAdminSettingsPage(at('/admin', {}), at('/new', {}))).toBe(true);
   });
 
   it('leaves when the admin tab changes, including to or from no tab', () => {
-    expect(leavesAdminSettingsPage(at('/admin', { tab: 'sec-ops-triage' }), at('/admin', { tab: 'users' }))).toBe(true);
+    expect(leavesAdminSettingsPage(at('/admin', { tab: 'admin-settings' }), at('/admin', { tab: 'users' }))).toBe(true);
     expect(leavesAdminSettingsPage(at('/admin', {}), at('/admin', { tab: 'users' }))).toBe(true);
   });
 

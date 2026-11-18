@@ -691,7 +691,8 @@ function unreadApproval(
 ): ApprovalPrompt {
   const namesDistro = process.platform === 'win32' && /wsl|\\\\|\/\//i.test(command);
   const mayReachDistro = ungranted.length > 0 || namesDistro || places.some(place => wslLocation(place) !== null);
-  // Not drawn on the card, which shows the command itself; the reason keeps the call off quick surfaces.
+  // Drawn on the card only in Full access (see fullAccessStopReasons in ChatService); the card otherwise
+  // shows the command itself. The reason keeps the call off quick surfaces.
   if (!mayReachDistro) {
     return {
       detail,

@@ -16,6 +16,8 @@ import {
 import type { JointDragFrame } from './jointDrag';
 import { enableShadows, ModelComposer, ModelStage } from './modelStage';
 import { applyTexture, boxProjectUvs } from './proceduralTextures';
+import { addInspection, type ModelInspection } from './inspection';
+import { keptBy } from './section';
 
 /**
  * three.js side of the model pane: meshes from the sandboxed engine become a scene, exports and
@@ -229,10 +231,20 @@ export function drivingJoint(object: THREE.Object3D): THREE.Object3D | null {
 }
 
 /** The first mesh of `root` under `ndc` (normalised device coordinates, -1 to 1), or null. */
-export function meshAt(root: THREE.Object3D, camera: THREE.Camera, ndc: THREE.Vector2): THREE.Intersection | null {
+export function meshAt(
+  root: THREE.Object3D,
+  camera: THREE.Camera,
+  ndc: THREE.Vector2,
+  clip: THREE.Plane | null = null
+): THREE.Intersection | null {
   const raycaster = new THREE.Raycaster();
   raycaster.setFromCamera(ndc, camera);
-  return raycaster.intersectObject(root, true).find(entry => entry.object instanceof THREE.Mesh) ?? null;
+  // With a section cut on, what it took away cannot be clicked: the ray goes on to what is drawn.
+  return (
+    raycaster
+      .intersectObject(root, true)
+      .find(entry => entry.object instanceof THREE.Mesh && keptBy(clip, entry.point)) ?? null
+  );
 }
 
 /** The joint a part's arrow-key nudge moves (see drivingJoint), by name; null for a fixed or unknown part. */
@@ -627,13 +639,14 @@ const TILE_SUPERSAMPLE = 2;
  * its own, so it works whether or not the pane is visible, and through the pane's stage and
  * composer (modelStage.ts), so the agent sees the lighting, shadows and AO the user does.
  * Joints are posed at `angles` (degrees by part name; the modelled pose when absent), not as the
- * pane shows them.
+ * pane shows them. `inspection` adds the pane's section cut and measurement (inspection.ts).
  */
 export async function renderContactSheet(
   root: THREE.Object3D,
   views: ModelView[],
   dark: boolean,
-  angles: Record<string, number> = {}
+  angles: Record<string, number> = {},
+  inspection: ModelInspection | null = null
 ): Promise<Uint8Array> {
   const columns = views.length <= 2 ? views.length : views.length <= 4 ? 2 : 3;
   const rows = Math.ceil(views.length / columns);
@@ -642,6 +655,9 @@ export async function renderContactSheet(
   const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
   const stage = new ModelStage(scene, renderer);
   const composer = new ModelComposer(renderer, scene, camera);
+  let removeInspection: (() => void) | null = null;
+  // A section cut is a per-material clip plane (sectionCut.ts), which three ignores without this.
+  renderer.localClippingEnabled = true;
   try {
     renderer.setPixelRatio(TILE_SUPERSAMPLE);
     renderer.setSize(TILE, TILE, false);
@@ -653,6 +669,7 @@ export async function renderContactSheet(
     // Fitted to the pose shown, so an open lid's shadow stays inside the shadow camera.
     stage.fit(subject, { dark, grid: false });
     composer.fit(stage.bounds);
+    if (inspection) removeInspection = addInspection(scene, subject, stage, composer, inspection, 1);
     const sheet = document.createElement('canvas');
     sheet.width = columns * TILE;
     sheet.height = rows * TILE;
@@ -673,6 +690,47 @@ export async function renderContactSheet(
     });
     const blob = await new Promise<Blob | null>(resolve => sheet.toBlob(resolve, 'image/png'));
     if (!blob) throw new Error('The screenshot could not be encoded.');
+    return new Uint8Array(await blob.arrayBuffer());
+  } finally {
+    removeInspection?.();
+    composer.dispose();
+    stage.dispose();
+    renderer.dispose();
+    renderer.forceContextLoss();
+  }
+}
+
+/** A version thumbnail's edge in CSS pixels; rendered at twice that and drawn down like a tile. */
+export const THUMBNAIL_SIZE = 192;
+
+/**
+ * One unlabelled 3/4 view of `root` posed at `angles`, as a small PNG: what the pane's version
+ * strip shows for each kept build. Rendered off screen like renderContactSheet.
+ */
+export async function renderThumbnail(
+  root: THREE.Object3D,
+  dark: boolean,
+  angles: Record<string, number> = {}
+): Promise<Uint8Array> {
+  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
+  const stage = new ModelStage(scene, renderer);
+  const composer = new ModelComposer(renderer, scene, camera);
+  try {
+    renderer.setPixelRatio(TILE_SUPERSAMPLE);
+    renderer.setSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE, false);
+    composer.setSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE, TILE_SUPERSAMPLE);
+    const subject = root.clone(true);
+    poseJoints(subject, angles);
+    enableShadows(subject);
+    scene.add(subject);
+    stage.fit(subject, { dark, grid: false });
+    composer.fit(stage.bounds);
+    frameCamera(camera, subject, VIEW_DIRECTIONS.iso);
+    composer.render();
+    const blob = await new Promise<Blob | null>(resolve => renderer.domElement.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('The thumbnail could not be encoded.');
     return new Uint8Array(await blob.arrayBuffer());
   } finally {
     composer.dispose();

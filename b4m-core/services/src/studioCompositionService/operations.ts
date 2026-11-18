@@ -2,6 +2,7 @@ import {
   NotFoundError,
   STUDIO_COMPOSITION_LIMITS,
   UnprocessableEntityError,
+  defaultStudioShots,
   defaultStudioTimeline,
   studioCompositionFileIds,
   studioFileMediaKind,
@@ -10,6 +11,7 @@ import {
   type IStudioCompositionSummary,
   type StudioCompositionContent,
   type StudioCompositionCreateInput,
+  type StudioCompositionReferences,
   type StudioCompositionUpdateInput,
 } from '@bike4mind/common';
 import type { StudioCompositionServiceAdapters } from './ports';
@@ -44,7 +46,7 @@ const assertProjectOwned = async (
 const assertContentValid = async (
   { db }: StudioCompositionServiceAdapters,
   userId: string,
-  content: Pick<StudioCompositionContent, 'brandKit' | 'shots' | 'timeline'>,
+  content: StudioCompositionReferences,
   previouslyReferenced: ReadonlySet<string>
 ): Promise<void> => {
   const fileIds = [...new Set(studioCompositionFileIds(content))];
@@ -63,6 +65,7 @@ export async function createComposition(
 ): Promise<IStudioCompositionDocument> {
   const content: StudioCompositionContent = {
     ...input,
+    shots: input.shots ?? defaultStudioShots(input.template),
     timeline: input.timeline ?? defaultStudioTimeline(input.template),
   };
   await assertProjectOwned(adapters, userId, content.projectId);
@@ -103,8 +106,9 @@ export async function updateComposition(
   if (patch.projectId && patch.projectId !== existing.projectId) {
     await assertProjectOwned(adapters, userId, patch.projectId);
   }
-  if (patch.brandKit || patch.shots || patch.timeline) {
+  if (patch.brief || patch.brandKit || patch.shots || patch.timeline) {
     const merged = {
+      brief: patch.brief ?? existing.brief,
       brandKit: patch.brandKit ?? existing.brandKit,
       shots: patch.shots ?? existing.shots,
       timeline: patch.timeline ?? existing.timeline,

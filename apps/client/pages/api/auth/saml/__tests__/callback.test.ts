@@ -231,3 +231,47 @@ describe('/api/auth/saml/callback - structured logging', () => {
     expect(everything).not.toContain('person@example.com');
   });
 });
+
+describe('/api/auth/saml/callback - callbacks naming no usable IdP', () => {
+  async function runWithQuery(query: Record<string, string | string[]>) {
+    const { req, res } = createMocks<NextApiRequest, NextApiResponse>({
+      method: 'GET',
+      query,
+      headers: { 'user-agent': 'UA/9' },
+    });
+    Object.assign(req, { ip: '203.0.113.7', logger });
+    await captured.handler!(req, res);
+    return res;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('redirects a repeated RelayState to the login page without an error log', async () => {
+    const res = await runWithQuery({ RelayState: ['a', 'b'] });
+
+    expect(res._getRedirectUrl()).toBe('/login?error=missing_idp_context');
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('redirects an unknown IdP to the login page without an error log', async () => {
+    const { identityProviderRepository } = await import('@bike4mind/database');
+    vi.mocked(identityProviderRepository.findByIdWithSecrets).mockResolvedValueOnce(null);
+
+    const res = await runWithQuery({ idp: 'not-an-idp' });
+
+    expect(res._getRedirectUrl()).toBe('/login?error=invalid_idp');
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('still logs an unexpected failure (DB) at error', async () => {
+    const { identityProviderRepository } = await import('@bike4mind/database');
+    vi.mocked(identityProviderRepository.findByIdWithSecrets).mockRejectedValueOnce(new Error('db down'));
+
+    const res = await runWithQuery({ idp: 'idp-1' });
+
+    expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
+    expect(logger.error).toHaveBeenCalledWith('SAML callback processing error', expect.anything());
+  });
+});

@@ -20,6 +20,8 @@ export default defineConfig({
     'src/generationJobs/index.ts',
     'src/videoJobs/index.ts',
     'src/musicJobs/index.ts',
+    'src/sceneJobs/index.ts',
+    'src/audioJobs/index.ts',
     'src/imageJobs/index.ts',
     'src/agentProactiveMessagingService/index.ts',
     'src/cliCompletions.ts',

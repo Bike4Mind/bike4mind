@@ -223,6 +223,7 @@ const RESEARCH_CONFIG_RESPONSE_FIELDS = {
   minRelevance: true,
   costCeilingMicroUsd: true,
   proposedTags: true,
+  itemRules: true,
 } as const satisfies Record<Exclude<keyof IDataLakeResearchConfigDocument, 'feedCursor'>, true>;
 
 /** One saved research configuration. */

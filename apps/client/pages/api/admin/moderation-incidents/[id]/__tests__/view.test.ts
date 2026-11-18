@@ -108,8 +108,12 @@ describe('admin/moderation-incidents/[id]/view', () => {
       ncmecReportId: null,
       alertedAt: INCIDENT.alertedAt,
       lastReminderAt: null,
+      escalatedAt: null,
+      escalationTrigger: null,
+      escalationAlertedAt: null,
       reportedAt: null,
       falsePositiveAt: null,
+      noActionAt: null,
       image: READY,
     });
   });
@@ -122,6 +126,38 @@ describe('admin/moderation-incidents/[id]/view', () => {
     const res = makeRes();
     await runHandler(makeReq(), res);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ lastReminderAt, reportedAt, falsePositiveAt }));
+  });
+
+  it('returns the time an incident was closed as correctly blocked, but not who closed it', async () => {
+    const noActionAt = new Date('2026-10-30T11:00:00Z');
+    m.findById.mockResolvedValue({
+      ...INCIDENT,
+      reviewStatus: 'no_action',
+      noActionAt,
+      noActionBy: 'ffffffffffffffffffffffff',
+    });
+    const res = makeRes();
+    await runHandler(makeReq(), res);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ reviewStatus: 'no_action', noActionAt }));
+    expect(JSON.stringify(vi.mocked(res.json as ReturnType<typeof vi.fn>).mock.calls)).not.toContain('ffffffff');
+  });
+
+  it('returns the escalation stamps but never who escalated', async () => {
+    const escalatedAt = new Date('2026-10-31T10:00:00Z');
+    const escalationAlertedAt = new Date('2026-10-31T10:00:02Z');
+    m.findById.mockResolvedValue({
+      ...INCIDENT,
+      escalatedAt,
+      escalatedBy: 'ffffffffffffffffffffffff',
+      escalationTrigger: 'manual',
+      escalationAlertedAt,
+    });
+    const res = makeRes();
+    await runHandler(makeReq(), res);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ escalatedAt, escalationTrigger: 'manual', escalationAlertedAt })
+    );
+    expect(JSON.stringify(vi.mocked(res.json as ReturnType<typeof vi.fn>).mock.calls)).not.toContain('ffffffff');
   });
 
   it('keeps the user id when the account is gone, and nulls what the incident never had', async () => {

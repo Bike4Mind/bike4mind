@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, FormControl, FormLabel, Input, Stack, Table, Typography } from '@mui/joy';
+import { Alert, Box, Button, FormControl, FormLabel, Input, Stack, Table, Typography } from '@mui/joy';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 
@@ -84,26 +84,29 @@ export default function OrganizationAuditSection({ organizationId }: { organizat
       {isPending ? (
         <Typography>Loading audit events...</Typography>
       ) : (
-        <Table data-testid="organization-audit-table">
-          <thead>
-            <tr>
-              <th>Time (UTC)</th>
-              <th>Actor ID</th>
-              <th>Event</th>
-              <th>Target ID</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data?.events.map(event => (
-              <tr key={event.id}>
-                <td>{new Date(event.occurredAt).toISOString()}</td>
-                <td>{event.actorUserId}</td>
-                <td>{event.action}</td>
-                <td>{event.targetId ?? ''}</td>
+        <Box sx={{ overflowX: 'auto' }} data-testid="organization-audit-table-scroll">
+          {/* Joy's fixed layout squeezes columns below their content; auto lets the table outgrow the box. */}
+          <Table data-testid="organization-audit-table" sx={{ tableLayout: 'auto', '& td': { whiteSpace: 'nowrap' } }}>
+            <thead>
+              <tr>
+                <th>Time (UTC)</th>
+                <th>Actor ID</th>
+                <th>Event</th>
+                <th>Target ID</th>
               </tr>
-            ))}
-          </tbody>
-        </Table>
+            </thead>
+            <tbody>
+              {data?.events.map(event => (
+                <tr key={event.id}>
+                  <td>{new Date(event.occurredAt).toISOString()}</td>
+                  <td>{event.actorUserId}</td>
+                  <td>{event.action}</td>
+                  <td>{event.targetId ?? ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </Box>
       )}
       {!isPending && !isError && !data?.events.length && <Typography>No matching audit events.</Typography>}
       <Stack direction="row" spacing={2}>

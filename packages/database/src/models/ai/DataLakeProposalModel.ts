@@ -45,6 +45,16 @@ const DataLakeProposalSchema = new Schema<IDataLakeProposalDocument>(
       feedUrl: { type: String, default: null },
       retrievedAt: { type: Date, required: true },
       sourceTier: { type: String, enum: ['trusted', 'review'] },
+      reviewReason: {
+        type: new Schema(
+          {
+            kind: { type: String, enum: ['rule_match', 'rule_undetermined', 'rule_check_failed'], required: true },
+            conditions: { type: [String], default: undefined },
+          },
+          { _id: false }
+        ),
+        default: undefined,
+      },
     },
     priorDisposition: { type: String, enum: DATA_LAKE_PROPOSAL_STATUSES, default: null },
     reviewedByUserId: { type: String, default: null },

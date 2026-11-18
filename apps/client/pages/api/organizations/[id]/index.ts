@@ -18,6 +18,7 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
 import { assertDataLakeShareScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { clearDeletedOrganizationReferences } from '@bike4mind/server-utils/organizations/clearDeletedOrganizationReferences';
 import { attachOrganizationLogos } from '@server/organizations/attachOrganizationLogos';
+import { recordOrganizationRead } from '@server/utils/orgReadAudit';
 import { endKeyRealtimeConnections } from '@server/utils/adminApiKeyActions';
 import { creditService, organizationService } from '@bike4mind/services';
 import {
@@ -128,6 +129,7 @@ const handler = baseApi()
           },
         }
       );
+      await recordOrganizationRead(req, [organization], { view: 'detail' });
 
       const [safeOrganization] = await attachOrganizationLogos([
         toSafeOrganization(organization, { userId: req.user!.id, isAdmin: req.user!.isAdmin }),

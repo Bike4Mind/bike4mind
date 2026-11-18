@@ -3,6 +3,7 @@ import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType } from './CreditHolderTypes';
 import { COMPLETION_SOURCES, CompletionSource } from '../analytics';
+import { PAYER_STANDINGS } from './UserApiKeyTypes';
 
 export enum CreditPurchaseStatus {
   Completed = 'completed',
@@ -37,6 +38,10 @@ const BaseCreditTransaction = z.object({
    * purchases/refunds) may not have it set. See CompletionSource in analytics.ts.
    */
   source: z.enum(COMPLETION_SOURCES).optional(),
+  /** Connected app whose exchange key made this charge; stamped by the ledger repository. */
+  oauthClientId: z.string().optional(),
+  /** Payer's standing when the exchange key was minted; set only when the key's owner paid the charge. */
+  payerStanding: z.enum(PAYER_STANDINGS).optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
