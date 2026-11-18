@@ -107,7 +107,8 @@ export const assistantBriefRepository = {
   async markReady(id: string, content: AssistantBriefContent, composedAt: Date): Promise<boolean> {
     const result = await AssistantBriefModel.updateOne(
       { _id: id, status: 'composing' },
-      { $set: { ...content, status: 'ready', composedAt } }
+      { $set: { ...content, status: 'ready', composedAt } },
+      { runValidators: true }
     );
     return result.modifiedCount === 1;
   },
@@ -115,7 +116,8 @@ export const assistantBriefRepository = {
   async markFailed(id: string, failureReason: string): Promise<boolean> {
     const result = await AssistantBriefModel.updateOne(
       { _id: id, status: 'composing' },
-      { $set: { status: 'failed', failureReason } }
+      { $set: { status: 'failed', failureReason } },
+      { runValidators: true }
     );
     return result.modifiedCount === 1;
   },
