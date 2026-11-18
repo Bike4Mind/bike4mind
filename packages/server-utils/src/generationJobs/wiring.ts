@@ -10,7 +10,6 @@ import {
   isImageServeable,
   isPlaceholderApiKey,
   isStorageLimitError,
-  SCENE_MAX_INPUT_BYTES,
   type IGenerationJobDocument,
   type IGenerationJobUpdatedAction,
   type ImageProviderId,
@@ -47,6 +46,7 @@ import { createMusicJobHandler, type CreateMusicJobDeps, type MusicJobDeps } fro
 import { createImageJobHandler, type CreateImageJobsDeps, type ImageJobDeps } from '@bike4mind/services/imageJobs';
 import {
   createSceneJobHandler,
+  SceneInputError,
   type CreateSceneCompositionJobDeps,
   type SceneJobDeps,
 } from '@bike4mind/services/sceneJobs';
@@ -372,7 +372,12 @@ export const loadSceneInputFile: SceneJobDeps['loadInputFile'] = async (userId, 
 };
 
 // Streamed to disk rather than buffered: the inputs together can reach SCENE_MAX_INPUT_BYTES.
-const downloadSceneInputFile: SceneJobDeps['downloadInputFile'] = async ({ s3Key, destinationPath, signal }) => {
+export const downloadSceneInputFile: SceneJobDeps['downloadInputFile'] = async ({
+  s3Key,
+  destinationPath,
+  maxBytes,
+  signal,
+}) => {
   const body = await getFilesStorage().getContent(s3Key);
   if (!(body instanceof Readable)) throw new Error(`unexpected S3 body type for ${s3Key}`);
   // The recorded size is metadata; cap what is actually written so /tmp cannot be filled whatever the row says.
@@ -380,14 +385,15 @@ const downloadSceneInputFile: SceneJobDeps['downloadInputFile'] = async ({ s3Key
   const capBytes = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
       written += chunk.byteLength;
-      if (written > SCENE_MAX_INPUT_BYTES) {
-        callback(new Error(`input ${s3Key} exceeds ${SCENE_MAX_INPUT_BYTES} bytes`));
+      if (written > maxBytes) {
+        callback(new SceneInputError('The input files total more than the size limit', 'unsupported_input'));
         return;
       }
       callback(null, chunk);
     },
   });
   await pipeline(body, capBytes, createWriteStream(destinationPath), { signal });
+  return { bytes: written };
 };
 
 export const saveToGeneratedBucket: VideoJobDeps['saveToGeneratedBucket'] = async ({

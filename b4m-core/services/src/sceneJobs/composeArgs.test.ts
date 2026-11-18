@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { buildSceneComposeArgs, parseFfmpegProbe, resolveSceneFades, type SceneComposeArgsInput } from './composeArgs';
+import {
+  buildSceneComposeArgs,
+  parseFfmpegProbe,
+  probeArgs,
+  resolveSceneFades,
+  SCENE_INPUT_FORMAT_WHITELIST,
+  type SceneComposeArgsInput,
+} from './composeArgs';
 
 const VIDEO_PROBE = `Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/tmp/x/video':
   Duration: 00:01:05.50, start: 0.000000, bitrate: 163 kb/s
@@ -51,6 +58,47 @@ const base: SceneComposeArgsInput = {
 
 const valueAfter = (args: string[], flag: string) => args[args.indexOf(flag) + 1];
 
+const whitelistedInput = (path: string) => [
+  '-protocol_whitelist',
+  'file',
+  '-format_whitelist',
+  SCENE_INPUT_FORMAT_WHITELIST,
+  '-i',
+  path,
+];
+
+const expectEveryInputWhitelisted = (args: string[]) => {
+  const inputs = args.flatMap((arg, index) => (arg === '-i' ? [index] : []));
+  expect(inputs.length).toBeGreaterThan(0);
+  for (const index of inputs) {
+    expect(args.slice(index - 4, index)).toEqual([
+      '-protocol_whitelist',
+      'file',
+      '-format_whitelist',
+      SCENE_INPUT_FORMAT_WHITELIST,
+    ]);
+  }
+};
+
+describe('probeArgs', () => {
+  it('restricts the protocol and demuxer before the input', () => {
+    const args = probeArgs('/w/video');
+    expectEveryInputWhitelisted(args);
+    expect(args.slice(-2)).toEqual(['-i', '/w/video']);
+  });
+});
+
+describe('input whitelist in buildSceneComposeArgs', () => {
+  it.each([
+    ['without a cover', undefined],
+    ['with a cover', '/w/cover'],
+  ])('precedes every -i %s', (_label, coverPath) => {
+    const args = buildSceneComposeArgs({ ...base, ...(coverPath && { coverPath }) });
+    expectEveryInputWhitelisted(args);
+    expect(args.filter(arg => arg === '-i')).toHaveLength(coverPath ? 3 : 2);
+  });
+});
+
 describe('buildSceneComposeArgs', () => {
   it('copies the video, re-encodes the trimmed audio to AAC and cuts to the video length', () => {
     expect(buildSceneComposeArgs(base)).toEqual([
@@ -59,10 +107,8 @@ describe('buildSceneComposeArgs', () => {
       '-loglevel',
       'error',
       '-y',
-      '-i',
-      '/w/video',
-      '-i',
-      '/w/audio',
+      ...whitelistedInput('/w/video'),
+      ...whitelistedInput('/w/audio'),
       '-filter_complex',
       '[1:a:0]atrim=end=10.000,afade=t=out:st=8.500:d=1.500[scene_audio]',
       '-map',
@@ -122,7 +168,9 @@ describe('buildSceneComposeArgs', () => {
   it('embeds the cover as the attached picture and passes the title as one argument', () => {
     const title = 'Sunrise; rm -rf / && echo "x"';
     const args = buildSceneComposeArgs({ ...base, coverPath: '/w/cover', title });
-    expect(args.slice(args.indexOf('/w/cover') - 1, args.indexOf('/w/cover') + 1)).toEqual(['-i', '/w/cover']);
+    expect(args.slice(args.indexOf('/w/cover') - 5, args.indexOf('/w/cover') + 1)).toEqual(
+      whitelistedInput('/w/cover')
+    );
     expect(args).toEqual(
       expect.arrayContaining(['-map', '2:v:0', '-c:v:1', 'mjpeg', '-disposition:v:1', 'attached_pic'])
     );

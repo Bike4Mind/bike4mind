@@ -38,7 +38,7 @@ const LINEAGE_ROLE: Record<SceneInputSlot, GeneratedAssetLineageRole> = {
 };
 
 /** A refusal the render cannot recover from by retrying: the inputs themselves are the problem. */
-class SceneInputError extends Error {
+export class SceneInputError extends Error {
   constructor(
     message: string,
     readonly code: Extract<GenerationJobErrorCode, 'unsupported_input' | 'provider_error' | 'output_too_large'>
@@ -93,8 +93,15 @@ export function createSceneJobHandler(deps: SceneJobDeps): GenerationJobHandler<
     if (totalBytes > SCENE_MAX_INPUT_BYTES) {
       throw new SceneInputError(`The input files total more than ${SCENE_MAX_INPUT_BYTES} bytes`, 'unsupported_input');
     }
+    let downloadedBytes = 0;
     for (const { file, path } of files) {
-      await deps.downloadInputFile({ s3Key: file.s3Key, destinationPath: path, signal });
+      const { bytes } = await deps.downloadInputFile({
+        s3Key: file.s3Key,
+        destinationPath: path,
+        maxBytes: SCENE_MAX_INPUT_BYTES - downloadedBytes,
+        signal,
+      });
+      downloadedBytes += bytes;
     }
     return files;
   };

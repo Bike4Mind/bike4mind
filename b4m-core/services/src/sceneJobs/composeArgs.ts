@@ -28,7 +28,31 @@ export function parseFfmpegProbe(stderr: string): MediaProbe {
   };
 }
 
-export const probeArgs = (inputPath: string): string[] => ['-hide_banner', '-nostdin', '-i', inputPath];
+// User uploads keep their declared mime type, so ffmpeg must not pick a playlist demuxer or open other protocols.
+export const SCENE_INPUT_FORMAT_WHITELIST = [
+  'mov,mp4,m4a,3gp,3g2,mj2',
+  'matroska,webm',
+  'mp3',
+  'aac',
+  'wav',
+  'ogg',
+  'flac',
+  'image2',
+  'png_pipe',
+  'jpeg_pipe',
+  'webp_pipe',
+].join(',');
+
+const inputArgs = (path: string): string[] => [
+  '-protocol_whitelist',
+  'file',
+  '-format_whitelist',
+  SCENE_INPUT_FORMAT_WHITELIST,
+  '-i',
+  path,
+];
+
+export const probeArgs = (inputPath: string): string[] => ['-hide_banner', '-nostdin', ...inputArgs(inputPath)];
 
 export type SceneComposeArgsInput = {
   videoPath: string;
@@ -95,11 +119,9 @@ export function buildSceneComposeArgs(input: SceneComposeArgsInput): string[] {
     '-loglevel',
     'error',
     '-y',
-    '-i',
-    input.videoPath,
-    '-i',
-    input.audioPath,
-    ...(input.coverPath ? ['-i', input.coverPath] : []),
+    ...inputArgs(input.videoPath),
+    ...inputArgs(input.audioPath),
+    ...(input.coverPath ? inputArgs(input.coverPath) : []),
     '-filter_complex',
     audioFilter,
     '-map',
