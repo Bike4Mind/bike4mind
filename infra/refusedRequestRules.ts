@@ -8,12 +8,12 @@
 /** The alarm's window. Must match REFUSED_REQUEST_WINDOW_SECONDS in apps/workers/src/events/refusedRequestBurstDetail.ts. */
 export const REFUSED_REQUEST_WINDOW_SECONDS = 900;
 
-/** One client IP's refused, signed-out requests in one window. See the PR for the baseline it was set against. */
+/** One client IP's refused requests with no resolved user in one window; the alarm's default threshold. */
 export const DEFAULT_REFUSED_REQUEST_THRESHOLD_PER_15MIN = 100;
 
 /**
- * 401-405 sent to a caller with no signed-in user. `In` only compares strings and `status` is a
- * JSON number, hence the range. 400 and 429 are left out: a 400 is a client sending a bad body,
+ * 401-405 sent to a caller with no resolved user (a signed-in caller's 405 or catch-all 404 can land
+ * here too). `In` only compares strings and `status` is a JSON number, hence the range. 400 and 429 are left out: a 400 is a client sending a bad body,
  * and a 429 is a caller the rate limiter already throttles.
  */
 const REFUSED_SIGNED_OUT_FILTERS = [

@@ -1,6 +1,7 @@
 /**
  * Alerts when one client IP collects a burst of refused, signed-out API requests in 15 minutes.
- * Alerting only: nothing here blocks a caller.
+ * Alerting only: nothing here blocks a caller. A volume-only complement to the API probe detector
+ * (apps/workers/src/cron/apiProbeDetector.ts), which scores what was probed.
  *
  * Source: the server function's `req-timing` lines, counted per IP by a Contributor Insights rule
  * (infra/refusedRequestRules.ts). The relay (apps/workers/src/events/refusedRequestBurstDetail.ts)

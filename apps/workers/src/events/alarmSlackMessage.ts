@@ -588,9 +588,9 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     category: 'security',
     unit: 'refused requests from the top IP',
     meaning:
-      'A single client IP sent many signed-out API requests in 15 minutes that were refused (401 to 405). Normal clients send a handful; a steady stream usually means a scripted client walking the API. Nothing is blocked automatically.',
+      'A single client IP sent many API requests in 15 minutes that were refused (401 to 405) and that carried no resolved user. Volume only: the API probe detector scores what was probed. Normal clients send a handful; a steady stream usually means a scripted client walking the API. Nothing is blocked automatically.',
     action:
-      'Look at the top IP, its paths and any accounts listed above. A signed-out client polling one or two session paths is a stale tab: acknowledge and move on. Many distinct paths, admin or internal routes, or a burst that repeats across windows is probing: hand the IP to the WAF owner and suspend any listed account that is clearly abusive.',
+      'Look at the top IP, its paths and any accounts listed above. A client polling one or two session paths is a stale tab: acknowledge and move on. Paths shown as /api/:unmatchedApiPath or /api/:type/:id are collapsed 404s, so a few of those can be many different guesses and count as probing. Many distinct paths, admin or internal routes, or a burst that repeats across windows is probing: hand the IP to the WAF owner and suspend any listed account that is clearly abusive.',
     links: ['waf-block-list'],
     detail: 'refused-request-burst',
   },
