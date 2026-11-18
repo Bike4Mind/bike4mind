@@ -964,7 +964,7 @@ export function ChatShell({
     if (sessionId === rootId) setDockOpen(true);
     else setNoticeFocus({ rootId, agentId: sessionId });
   };
-  useNeedsYouAlerts(sessions, statuses, statusesLoaded, openNotice);
+  useNeedsYouAlerts(sessions, statuses, statusesLoaded, openNotice, activeId);
   const clearNoticeFocus = useCallback(() => setNoticeFocus(null), []);
   const pickExampleQuest = useCallback(
     (prompt: string) => {

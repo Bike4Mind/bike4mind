@@ -73,7 +73,7 @@ beforeEach(() => {
   window.isFocused.mockReturnValue(false);
   setPlatform('darwin');
   windows.open = [window];
-  attention = registerAttention({ openWindow });
+  attention = registerAttention({ openWindow, notifyScopePath: '/nonexistent/attention-preferences.json' });
 });
 
 afterEach(() => setPlatform(originalPlatform));

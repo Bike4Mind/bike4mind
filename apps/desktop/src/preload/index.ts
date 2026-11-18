@@ -1,6 +1,6 @@
 import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from '@shared/orchestration';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import type { AttentionNotice, AttentionOpenEvent } from '@shared/attention';
+import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from '@shared/attention';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type {
@@ -617,6 +617,13 @@ const api: DesktopApi = {
       return () => ipcRenderer.removeListener(IPC_CHANNELS.attentionOpen, handler);
     },
     takePendingOpen: () => ipcRenderer.invoke(IPC_CHANNELS.attentionTakePendingOpen),
+    getNotifyScope: () => ipcRenderer.invoke(IPC_CHANNELS.attentionGetNotifyScope),
+    setNotifyScope: (scope: NotifyScope) => ipcRenderer.invoke(IPC_CHANNELS.attentionSetNotifyScope, scope),
+    onNotifyScope: listener => {
+      const handler = (_event: unknown, scope: NotifyScope) => listener(scope);
+      ipcRenderer.on(IPC_CHANNELS.attentionNotifyScope, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.attentionNotifyScope, handler);
+    },
   },
   watch: {
     getPreferences: () => ipcRenderer.invoke(IPC_CHANNELS.watchGetPreferences),

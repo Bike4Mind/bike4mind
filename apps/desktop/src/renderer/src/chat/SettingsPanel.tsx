@@ -46,6 +46,8 @@ import {
 } from './icons';
 import { nestedSessionsSummary, useNestedSessions } from './nestedSessions';
 import { useMenuBarSetting } from './menuBarSetting';
+import type { NotifyScope } from '@shared/attention';
+import { notifyScopeSummary, useNotifyScope } from './notifyScopeSetting';
 import { useOrchestratorSound } from './orchestrator/chime';
 import { columnStackSx, contentColumnSx, thinScrollbarSx } from './layout';
 import { useCostDisplayPreference } from './costDisplay';
@@ -214,6 +216,43 @@ function orchestratorSoundEntry(enabled: boolean, toggle: () => void): ConfigEnt
           input: { 'aria-label': 'Orchestrator sounds', 'data-testid': 'settings-orchestrator-sound-switch' },
         }}
       />
+    ),
+  };
+}
+
+const NOTIFY_SCOPE_LABEL: Record<NotifyScope, string> = { agents: 'Agents only', all: 'All sessions' };
+
+function notifyScopeEntry(scope: NotifyScope, setScope: (scope: NotifyScope) => void): ConfigEntry {
+  return {
+    id: 'notify-scope',
+    icon: null,
+    label: 'Notify me about',
+    summary: notifyScopeSummary(scope),
+    description:
+      'Which sessions send a notification, count on the dock badge and play the chime when they need your approval or answer.',
+    control: (
+      <ToggleButtonGroup
+        size="sm"
+        value={scope}
+        onChange={(_event, next) => {
+          if (next) setScope(next as NotifyScope);
+        }}
+        aria-label="Notify me about"
+        data-testid="settings-notify-scope-group"
+        sx={{
+          bgcolor: 'background.level1',
+          borderRadius: 'md',
+          p: 0.5,
+          gap: 0.5,
+          '& .MuiButton-root': { border: 0, borderRadius: 'sm' },
+        }}
+      >
+        {(['agents', 'all'] as const).map(option => (
+          <Button key={option} value={option} data-testid={`settings-notify-scope-${option}-btn`}>
+            {NOTIFY_SCOPE_LABEL[option]}
+          </Button>
+        ))}
+      </ToggleButtonGroup>
     ),
   };
 }
@@ -550,6 +589,7 @@ function useSettingsEntries(
   const [orchestratorSound, toggleOrchestratorSound] = useOrchestratorSound();
   const [autoFixAttempts, setAutoFixAttempts, autoFixAttemptsError] = useAutoFixAttempts();
   const [menuBar, toggleMenuBar] = useMenuBarSetting();
+  const [notifyScope, setNotifyScope] = useNotifyScope();
   const [localContext, setLocalContext, localContextError, localContextFit] = useLocalContextSetting();
   const [modelServers, setModelServers, modelServersError] = useModelServers();
   const curatedList = useCuratedListSettings();
@@ -562,6 +602,7 @@ function useSettingsEntries(
       autoFixAttemptsEntry(autoFixAttempts, next => void setAutoFixAttempts(next), autoFixAttemptsError),
       nestedSessionsEntry(nestedSessions, toggleNestedSessions),
       orchestratorSoundEntry(orchestratorSound, toggleOrchestratorSound),
+      notifyScopeEntry(notifyScope, setNotifyScope),
       menuBarEntry(menuBar, toggleMenuBar),
       {
         id: 'orchestration-policy',
@@ -625,7 +666,7 @@ const GENERAL_GROUPS = [
   {
     id: 'appearance',
     label: 'Appearance & feedback',
-    entries: ['appearance', 'orchestrator-sound', 'menu-bar', 'nested-sessions'],
+    entries: ['appearance', 'orchestrator-sound', 'notify-scope', 'menu-bar', 'nested-sessions'],
   },
   {
     id: 'conversations',
