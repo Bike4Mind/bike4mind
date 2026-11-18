@@ -84,6 +84,14 @@ export type ImageField = FieldBase & {
   kind: 'image';
   fileName: string | null;
   onPick: () => void;
+  // Shows the chosen file as a thumbnail beside its name.
+  previewFileId?: string;
+  // Overrides the "Choose image" / "Change image" button text.
+  pickLabel?: string;
+  // Offers a Remove button while a file is chosen.
+  onClear?: () => void;
+  // Small print under the control, e.g. what the image is used for.
+  hint?: string;
 };
 
 /** A background removal of a reference: the cutout (a transparent PNG in Files) is what gets sent once ready. */

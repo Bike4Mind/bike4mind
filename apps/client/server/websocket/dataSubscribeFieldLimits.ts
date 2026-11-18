@@ -88,6 +88,7 @@ export function resolveFieldLimits(
     // path withholds an admin's grant block without hiding the rest of signupGrant, which the credits UI reads.
     return {
       password: false,
+      freeQuestStartId: false,
       'signupGrant.blocked': false,
       stripeCustomerId: false,
       resetPasswordToken: false,

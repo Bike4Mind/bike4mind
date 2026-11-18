@@ -12,7 +12,7 @@ export interface paths {
     put?: never;
     /**
      * Send a chat message
-     * @description Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`; one whose reasoning model spends its whole output budget thinking is answered with a 422 or 502 (see those responses). Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: "error"`, since the ACK was already sent. A terminal `status: "stopped"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: "error"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure is a classified billing reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has three members. `insufficient_credits` and `spend_frozen` are raised as quest errorCodes on this endpoint: a spending pause in force when the request arrives is refused synchronously with a 403, and one that lands after the ACK reaches the quest. `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Organization-policy preflight refusals use 403 with `errorCode: "org_model_not_allowed"` or `"org_tool_not_allowed"`. An explicit-model JWT request can instead be accepted and refused during quest execution: that refusal appears on the 200 `wait: true` body or polled quest as `type: "error"`, without a policy `errorCode`. Check the quest outcome as described above. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.
+     * @description Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`; one whose reasoning model spends its whole output budget thinking is answered with a 422 or 502 (see those responses). Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: "error"`, since the ACK was already sent. A terminal `status: "stopped"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: "error"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure has a classified reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has four members: `insufficient_credits`, `spend_cap_exceeded`, `spend_frozen`, and `free_quest_limit_reached`. `insufficient_credits` and `spend_frozen` are raised as quest errorCodes on this endpoint: a spending pause in force when the request arrives is refused synchronously with a 403, and one that lands after the ACK reaches the quest. A new exhausted QuestMaster start is refused synchronously with 403 before a quest exists; an older queued start can instead settle as an error quest with `free_quest_limit_reached`. `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Organization-policy preflight refusals use 403 with `errorCode: "org_model_not_allowed"` or `"org_tool_not_allowed"`. An explicit-model JWT request can instead be accepted and refused during quest execution: that refusal appears on the 200 `wait: true` body or polled quest as `type: "error"`, without a policy `errorCode`. Check the quest outcome as described above. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.
      */
     post: operations['sendChatMessage'];
     delete?: never;
@@ -2278,7 +2278,7 @@ export interface components {
       name?: string;
     };
     /**
-     * @description Outcome fields of the quest polled at `GET /api/v1/quests/{id}` after this ACK. A finished turn that failed is `status: "done"` with `type: "error"` and the failure text in `reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check `type` first, and also treat a terminal `status: "stopped"` (a missing session, a user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an optional refinement of `type: "error"`, present only for a classified billing failure; credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use, and a spending pause that lands after the ACK arrives as `spend_frozen`. `QUEST_ERROR_CODES` publishes a third member, `spend_cap_exceeded`, but no current throw site on this endpoint raises it as a quest errorCode: its only one, the embed chat route's pre-flight 422, fires outside the process try/catch that would classify it onto the quest. Most `type: "error"` turns - an abort, a provider timeout or overload - have NO `errorCode`; its absence does not mean success, only that the failure is unclassified. A recovered stuck quest that still has renderable content is not a failure at all: it keeps `type: "message"` even though it did not finish, so a caller gets the content rather than an error. `fallbackInfo` is present only when the requested model failed and another model produced the reply: `fallbackModel` answered, `primaryModel` is what was asked for, and `reason` is the error from the first failed attempt on the requested model. The poll body carries further fields not modelled here, including `images`, `files`, `toolPayloads`, `promptMeta`, and the attachment report (`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.
+     * @description Outcome fields of the quest polled at `GET /api/v1/quests/{id}` after this ACK. A finished turn that failed is `status: "done"` with `type: "error"` and the failure text in `reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check `type` first, and also treat a terminal `status: "stopped"` (a missing session, a user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an optional refinement of `type: "error"`, present only for a classified failure; credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use, and a spending pause that lands after the ACK arrives as `spend_frozen`. An older queued QuestMaster start can instead settle with `free_quest_limit_reached`; new exhausted starts are refused synchronously with 403 before a quest exists. `QUEST_ERROR_CODES` has four members; its other code is `spend_cap_exceeded`, but no current throw site on this endpoint raises it as a quest errorCode: its only one, the embed chat route's pre-flight 422, fires outside the process try/catch that would classify it onto the quest. Most `type: "error"` turns - an abort, a provider timeout or overload - have NO `errorCode`; its absence does not mean success, only that the failure is unclassified. A recovered stuck quest that still has renderable content is not a failure at all: it keeps `type: "message"` even though it did not finish, so a caller gets the content rather than an error. `fallbackInfo` is present only when the requested model failed and another model produced the reply: `fallbackModel` answered, `primaryModel` is what was asked for, and `reason` is the error from the first failed attempt on the requested model. The poll body carries further fields not modelled here, including `images`, `files`, `toolPayloads`, `promptMeta`, and the attachment report (`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.
      * @example {
      *       "id": "664f1c2b9a1e4d0012ab34cd",
      *       "status": "done",
@@ -2294,7 +2294,7 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -2324,7 +2324,7 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -2356,7 +2356,7 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -2381,7 +2381,7 @@ export interface components {
           /** @enum {string} */
           type: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
           /** @enum {string} */
-          errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+          errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
           tools?: {
             /** @enum {string} */
             toolMode?: 'fast' | 'smart';
@@ -2443,7 +2443,7 @@ export interface components {
           /** @enum {string} */
           type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
           /** @enum {string} */
-          errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+          errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
           tools?: {
             /** @enum {string} */
             toolMode?: 'fast' | 'smart';
@@ -2469,6 +2469,7 @@ export interface components {
       errorCode?:
         | 'account_suspended'
         | 'model_requires_subscription'
+        | 'free_quest_limit_reached'
         | 'org_model_not_allowed'
         | 'org_tool_not_allowed'
         | 'spend_frozen';
@@ -2980,7 +2981,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -3045,7 +3046,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -3167,6 +3168,7 @@ export interface components {
             | 'insufficient_credits'
             | 'spend_cap_exceeded'
             | 'spend_frozen'
+            | 'free_quest_limit_reached'
             | 'invalid_request'
             | 'provider_error'
             | 'provider_rejected'
@@ -3249,7 +3251,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     createCompletionResponse503: {
       error: string;
@@ -4152,7 +4154,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -4326,7 +4328,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     generateSoundEffectResponse502: {
       error: string;
@@ -5353,7 +5355,7 @@ export interface components {
         /** @enum {string} */
         type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
         /** @enum {string} */
-        errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+        errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
         reply?: string | null;
         replies?: string[];
         fallbackInfo?: {
@@ -5559,7 +5561,7 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -6258,7 +6260,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     createTextRefinementResponse503: {
       error: string;
@@ -6710,7 +6712,7 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -6929,7 +6931,7 @@ export interface components {
          * @description Machine-readable failure class, present only on `type: "error"` turns that have one.
          * @enum {string}
          */
-        errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+        errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
         /**
          * Format: date-time
          * @description When the turn started; the sort key of the listing.
@@ -7131,7 +7133,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -7467,7 +7469,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     searchDataLakeResponse503: {
       error: string;
@@ -8696,7 +8698,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     createVoiceSessionResponse503: {
       error: string;
@@ -9341,7 +9343,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -9406,7 +9408,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     createTranscriptionResponse503: {
       error: string;
@@ -9859,7 +9861,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     /** @example {} */
     generateAgentAvatarRequest: {
@@ -9913,7 +9915,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     generateAgentSystemPromptResponse200: {
       /** @description The generated system prompt, already saved to the agent. */
@@ -9962,7 +9964,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     enhanceAgentFieldResponse200: {
       /** @description The enhanced text. It is returned, not saved to the agent. */
@@ -10011,7 +10013,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -10044,7 +10046,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -10121,7 +10123,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
     };
     /**
      * @example {
@@ -11289,7 +11291,7 @@ export interface operations {
       };
     };
     responses: {
-      /** @description Message accepted - NOT a completed turn. The default (async) path returns this queued ACK; the outcome arrives on `GET /api/v1/quests/{id}` (see the `sendChatMessage200PollResult` schema). With `wait: true` the body is instead the completed turn: the ACK fields plus the reply (`response`/`responses`), `toolPayloads`, `createdAt`, `performance` timings and, when requested, `promptDetails`/`promptText`. A turn that FAILS still resolves with `200`, never a 4xx, on both that `wait: true` body and the polled quest (`GET /api/v1/quests/{id}`) - the prose explaining why lands in `reply`/`response` like any other answer, so the reply text alone cannot tell a failure from an answer. `type` is the field that can: both surfaces carry it unconditionally, so match on `type: "error"` first - it covers credit exhaustion, a provider timeout or overload, and an in-process aborted turn; a real answer carries the turn's actual completion type instead (`"message"` for an ordinary reply). Two related states do NOT set `type: "error"`: a user-cancelled turn resolves as `status: "stopped"` with `type` left at `"message"`, and a recovered stuck quest that still has renderable content resolves as a success (`status: "done"`, no error) by design, to avoid destroying content to report a failure. The one exception is output-budget exhaustion: a `wait: true` request answers it with the 422 or 502 error envelope (plus `quest_id`) instead of this body. `errorCode` then names the failure reason, but only for the billing failures that have one - `"insufficient_credits"` or `"spend_frozen"`; it is absent on every other `type: "error"` turn, so never use its absence to infer success. On a real answer `errorCode` is absent from the `wait: true` body. The body also carries `sessionId`, the notebook the turn was recorded in - for an API-key caller that sent none (or any caller sending `newConversation: true`), that is the freshly created notebook's id; pass it back as the request's `sessionId` to continue. Contrast the tts/music/soundEffects contracts, which reject synchronously with a 422 carrying the same `errorCode` vocabulary. */
+      /** @description Message accepted - NOT a completed turn. The default (async) path returns this queued ACK; the outcome arrives on `GET /api/v1/quests/{id}` (see the `sendChatMessage200PollResult` schema). With `wait: true` the body is instead the completed turn: the ACK fields plus the reply (`response`/`responses`), `toolPayloads`, `createdAt`, `performance` timings and, when requested, `promptDetails`/`promptText`. A turn that FAILS still resolves with `200`, never a 4xx, on both that `wait: true` body and the polled quest (`GET /api/v1/quests/{id}`) - the prose explaining why lands in `reply`/`response` like any other answer, so the reply text alone cannot tell a failure from an answer. `type` is the field that can: both surfaces carry it unconditionally, so match on `type: "error"` first - it covers credit exhaustion, a provider timeout or overload, and an in-process aborted turn; a real answer carries the turn's actual completion type instead (`"message"` for an ordinary reply). Two related states do NOT set `type: "error"`: a user-cancelled turn resolves as `status: "stopped"` with `type` left at `"message"`, and a recovered stuck quest that still has renderable content resolves as a success (`status: "done"`, no error) by design, to avoid destroying content to report a failure. The one exception is output-budget exhaustion: a `wait: true` request answers it with the 422 or 502 error envelope (plus `quest_id`) instead of this body. `errorCode` names a classified failure: `insufficient_credits`, `spend_frozen` (a spending pause that landed after the ACK), or `free_quest_limit_reached` when an older queued QuestMaster start is refused during processing. A new exhausted start is refused synchronously with 403 before a quest exists. Other `type: "error"` turns may have no classifier, so never use its absence to infer success. On a real answer `errorCode` is absent from the `wait: true` body. The body also carries `sessionId`, the notebook the turn was recorded in - for an API-key caller that sent none (or any caller sending `newConversation: true`), that is the freshly created notebook's id; pass it back as the request's `sessionId` to continue. Contrast the tts/music/soundEffects contracts, which reject synchronously with a 422 carrying the same `errorCode` vocabulary. */
       200: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -11346,7 +11348,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), organization-policy preflight refuses the model (`errorCode: "org_model_not_allowed"`), or an API-key caller named a built-in tool the organization does not allow (`errorCode: "org_tool_not_allowed"`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
+      /** @description The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), a free account already started its QuestMaster quest (`errorCode: "free_quest_limit_reached"`), organization-policy preflight refuses the model (`errorCode: "org_model_not_allowed"`), or an API-key caller named a built-in tool the organization does not allow (`errorCode: "org_tool_not_allowed"`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

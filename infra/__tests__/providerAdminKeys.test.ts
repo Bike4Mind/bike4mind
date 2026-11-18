@@ -297,6 +297,7 @@ describe('spend cron access to the store', () => {
         DEFAULT_LAMBDA_ENVIRONMENT: { DEFAULT: 'env' },
         providerAdminKeyStore: storeExists ? providerAdminKeyStore : undefined,
         providerAdminKeyCronAccess,
+        modelPriceSnapshotAccess: { environment: {}, read: [] },
       });
       const fn = (name: string) => {
         const call = cron.mock.calls.find(([logicalName]) => logicalName === name);

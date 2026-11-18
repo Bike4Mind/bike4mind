@@ -265,6 +265,14 @@ jobs:
       - name: Update npm for trusted publishing
         run: npm install -g npm@latest
 
+      # A changeset is written on the PR branch, so one from a branch cut before
+      # the services package was renamed still names the old package, and
+      # `changeset version` aborts on a name that is not in the workspace.
+      - name: Point stale changesets at the renamed services package
+        run: |
+          grep -lE '^"?@bike4mind/services"?:' .changeset/*.md 2>/dev/null |
+            xargs -r sed -i -E 's|^("?)@bike4mind/services("?):|\1@bike4mind/services-core\2:|'
+
       # No NPM_TOKEN: changesets/action skips the .npmrc auth line when the env
       # var is absent, and npm authenticates via OIDC trusted publishing.
       - name: Create Release PR or Publish

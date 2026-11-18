@@ -52,6 +52,7 @@ export * from './CreditTransactionTypes';
 export * from './UsageEventTypes';
 export * from './UsagePatternSignalTypes';
 export * from './ModelPriceTypes';
+export * from './ModelPriceSnapshot';
 export * from './ModelCatalogTypes';
 export * from './ProviderInvoiceTypes';
 export * from './SpendReconciliationTypes';

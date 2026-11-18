@@ -513,5 +513,26 @@ describe('processQuest', () => {
       await expect(run()).rejects.toThrow('model down');
       expect(mockLiveActivityEnd.mock.calls).toEqual([['failed']]);
     }, 120_000);
+
+    it('settles a typed quest allowance refusal without retrying', async () => {
+      const { ForbiddenError } = await import('@bike4mind/common');
+      const { questRepository } = await import('@bike4mind/database');
+      const settle = vi.spyOn(questRepository, 'settleIfUnfinished').mockResolvedValue(true);
+      mockProcess.mockRejectedValueOnce(
+        new ForbiddenError('Free quest already started', {
+          errorCode: 'free_quest_limit_reached',
+        })
+      );
+      await expect(run()).resolves.toBeUndefined();
+      expect(settle).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          status: 'done',
+          type: 'error',
+          errorCode: 'free_quest_limit_reached',
+        })
+      );
+      settle.mockRestore();
+    });
   });
 });
