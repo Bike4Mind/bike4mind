@@ -62,8 +62,7 @@ const baseExecution = {
   id: 'exec-1',
   userId: 'user-1',
   sessionId: 'session-1',
-  status: 'awaiting_permission',
-  pendingPermission: { toolName: 'web_search', toolCallId: 'call-1' },
+  status: 'paused',
 };
 
 describe('container confidence resume', () => {

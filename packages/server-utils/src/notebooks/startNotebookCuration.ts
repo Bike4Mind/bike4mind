@@ -56,9 +56,9 @@ export async function startNotebookCuration(
       userId,
       batchJobId,
       batchTotal,
-      curationType: curationType || 'transcript',
+      curationType,
       artifactTypes: artifactTypes || 'all',
-      exportFormat: exportFormat || 'markdown',
+      exportFormat,
     });
 
     const sessions = await Promise.all(sessionIds.map(sessionId => sessionRepository.findById(sessionId)));

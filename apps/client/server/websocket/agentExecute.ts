@@ -47,7 +47,8 @@ import {
   PROMPT_TEXT_MAX,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { handleGateResponse, sendAgentEvent } from '@bike4mind/server-utils/agentExecution/gateResponse';
+import { handleGateResponse } from '@bike4mind/server-utils/agentExecution/gateResponse';
+import { sendAgentEvent } from '@bike4mind/server-utils/agentExecution/sendAgentEvent';
 
 // ---------------------------------------------------------------------------
 // Schemas

@@ -1,4 +1,3 @@
-import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import { adminSettingsRepository, agentExecutionRepository } from '@bike4mind/database';
 import type { AgentCheckpoint } from '@bike4mind/agents';
 import type { Logger } from '@bike4mind/observability';
@@ -12,6 +11,7 @@ import {
   resolveAgentExecutorTarget,
   AgentExecutorRejectedError,
 } from '../utils/dispatchAgentExecution';
+import { sendAgentEvent } from './sendAgentEvent';
 
 // The `agent_execute` WebSocket route (apps/client/server/websocket/agentExecute.ts) dispatches
 // `gate_response` messages here; passing its parsed GateResponseSchema value to handleGateResponse is
@@ -22,25 +22,6 @@ export type GateResponseCommand = {
   executionId: string;
   decision: 'continue' | 'stop';
 };
-
-/**
- * Send an untyped JSON payload to a WebSocket connection.
- * Agent execution events use their own action schema (not MessageDataToClient)
- * since they're consumed by dedicated client-side agent execution handlers.
- */
-export async function sendAgentEvent(
-  connectionId: string,
-  endpoint: string,
-  payload: Record<string, unknown>
-): Promise<void> {
-  const client = new ApiGatewayManagementApiClient({ endpoint });
-  await client.send(
-    new PostToConnectionCommand({
-      ConnectionId: connectionId,
-      Data: Buffer.from(JSON.stringify(payload)),
-    })
-  );
-}
 
 /**
  * Handle a client response to a confidence-gate pause. Two outcomes:
@@ -167,9 +148,10 @@ export async function handleGateResponse(
   }
   await agentExecutionRepository.updateStatus(cmd.executionId, 'continuing');
 
-  // Note: checkpointDepth is not carried here - same limitation as the permission_response
-  // path in apps/client/server/websocket/agentExecute.ts. Gate resumes are user-driven and cannot cause a runaway loop on their own, and
-  // are likewise bounded by the persisted `lambdaInvocationCount` guard (MAX_LAMBDA_HANDOFFS).
+  // Note: checkpointDepth is not carried here - same limitation as the permission_response path in
+  // apps/client/server/websocket/agentExecute.ts. Gate resumes are user-driven and cannot cause a
+  // runaway loop on their own, and are likewise bounded by the persisted `lambdaInvocationCount`
+  // guard (MAX_LAMBDA_HANDOFFS).
   try {
     await dispatchAgentExecution({ executionId: cmd.executionId, connectionId }, executorTarget);
   } catch (error) {
