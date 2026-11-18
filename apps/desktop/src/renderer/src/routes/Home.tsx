@@ -50,7 +50,7 @@ export function Home() {
         <ChatShell
           key={chatScope.current}
           auth={state}
-          updateNotice={() => <AppUpdateNotice controller={update} />}
+          updateNotice={<AppUpdateNotice controller={update} />}
           onOpenModelServers={() => void navigate({ to: '/settings', search: { section: 'servers' } })}
           onOpenImportSettings={focus => void navigate({ to: '/settings', search: { section: 'import', focus } })}
           account={status =>

@@ -258,7 +258,7 @@ export function ChatShell({
 }: {
   auth?: AuthState | null;
   account?: AccountStrip;
-  updateNotice?: (panelShown: boolean) => ReactNode;
+  updateNotice?: ReactNode;
   onOpenModelServers?: () => void;
   /** Settings > Import, scrolled to one source; the sidebar's sync hints are shown only with it. */
   onOpenImportSettings?: (focus: ClaudeImportKind) => void;
@@ -1561,7 +1561,7 @@ export function ChatShell({
         )}
       />
 
-      {screen !== 'conversation' && updateNotice?.(false)}
+      {screen !== 'conversation' && updateNotice}
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
       ) : screen === 'models' ? (
@@ -1836,7 +1836,7 @@ export function ChatShell({
                 />
               )}
               {/* A modal panel leaves no room for a second card; Home keeps the update controller mounted. */}
-              {(!panelShown || panelDocked) && updateNotice?.(panelShown)}
+              {(!panelShown || panelDocked) && updateNotice}
             </Box>
 
             {ambient.settled && (

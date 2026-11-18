@@ -7,7 +7,6 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { updateNoticeVersion, type UpdateState } from '@shared/update';
 import { CloseIcon } from './icons';
-import { SESSION_PANEL_SPACE } from './sessionPanelState';
 import { UpdateRestartConfirm } from './UpdateSettings';
 import type { AppUpdateController } from './useAppUpdate';
 
@@ -23,7 +22,6 @@ export interface UpdateNoticeProps {
   onDismiss: (version: string) => void;
   actions?: UpdateNoticeActions;
   contained?: boolean;
-  panelShown?: boolean;
 }
 
 const EDGE = 12;
@@ -38,14 +36,7 @@ function noticeTitle(state: UpdateState, inApp: boolean): string {
  * Given `actions` the card downloads and installs; which version it shows, if any,
  * is updateNoticeVersion's call.
  */
-export function UpdateNotice({
-  state,
-  onOpenRelease,
-  onDismiss,
-  actions,
-  contained = false,
-  panelShown = false,
-}: UpdateNoticeProps) {
+export function UpdateNotice({ state, onOpenRelease, onDismiss, actions, contained = false }: UpdateNoticeProps) {
   // A failed download outranks an earlier dismissal: the user has just asked for this version.
   const version =
     updateNoticeVersion(state) ??
@@ -62,7 +53,7 @@ export function UpdateNotice({
       sx={{
         position: contained ? 'absolute' : 'fixed',
         bottom: EDGE,
-        right: panelShown ? SESSION_PANEL_SPACE : EDGE,
+        right: EDGE,
         zIndex: 'snackbar',
         width: `min(280px, calc(100vw - ${2 * EDGE}px))`,
         p: 1.5,
@@ -178,21 +169,12 @@ function NoticeActions({ state, actions }: { state: UpdateState; actions: Update
 }
 
 /** The notice wired to main through `controller`, which the account label shares. */
-export function AppUpdateNotice({
-  controller,
-  contained,
-  panelShown,
-}: {
-  controller: AppUpdateController;
-  contained?: boolean;
-  panelShown?: boolean;
-}) {
+export function AppUpdateNotice({ controller, contained }: { controller: AppUpdateController; contained?: boolean }) {
   return (
     <UpdateNotice
       state={controller.state}
       actions={controller}
       contained={contained}
-      panelShown={panelShown}
       onOpenRelease={url => void window.b4m.shell.openExternal(url)}
       onDismiss={controller.dismiss}
     />
