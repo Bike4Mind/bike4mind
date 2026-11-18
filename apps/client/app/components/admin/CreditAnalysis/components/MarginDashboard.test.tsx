@@ -69,6 +69,7 @@ function setResponses(overrides: Partial<Record<string, unknown>> = {}) {
     'view=settlement': { targetCreditsPerUsd: 1200, rows: SETTLEMENT_ROWS },
     'view=funding-cohort': { targetCreditsPerUsd: 1200, rows: [] },
     'provider-invoices': { invoices: [] },
+    'spend-reconciliation': { reconciliations: [] },
     ...overrides,
   };
   mockGet.mockImplementation((url: string) => {
@@ -454,5 +455,89 @@ describe('MarginDashboard loading cost', () => {
 
     const table = await screen.findByTestId('margin-user-table');
     await waitFor(() => expect(within(table).getAllByRole('row').slice(1)).toHaveLength(25));
+  });
+
+  it('renders one page of a large model-by-day list, not every row', async () => {
+    setResponses({
+      'view=model-day': {
+        targetCreditsPerUsd: 1200,
+        rows: Array.from({ length: 60 }, (_, index) => ({
+          day: '2026-06-01',
+          provider: 'openai',
+          model: `model-${index}`,
+          requests: 1,
+          cogsUsd: 1,
+          creditsCharged: 1,
+        })),
+      },
+    });
+    renderDashboard();
+
+    const table = await screen.findByTestId('margin-model-day-table');
+    await waitFor(() => expect(within(table).getAllByRole('row').slice(1)).toHaveLength(25));
+  });
+
+  it('returns the by-user table to the first page when the search changes', async () => {
+    setResponses({
+      'view=user': {
+        targetCreditsPerUsd: 1200,
+        rows: Array.from({ length: 60 }, (_, index) => ({
+          userId: `u${index}`,
+          userName: `User ${index}`,
+          requests: 1,
+          cogsUsd: 1,
+          creditsCharged: 1,
+        })),
+      },
+    });
+    renderDashboard();
+
+    await screen.findByText(/1 to 25 of 60/);
+    fireEvent.click(screen.getByRole('button', { name: /next/i }));
+    expect(await screen.findByText(/26 to 50 of 60/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('margin-user-search'), { target: { value: 'user' } });
+    expect(await screen.findByText(/1 to 25 of 60/)).toBeInTheDocument();
+  });
+});
+
+describe('MarginDashboard reconciliation banner', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders a chip per provider from the latest reconciliation', async () => {
+    setResponses({
+      'spend-reconciliation': {
+        reconciliations: [
+          {
+            month: '2026-06',
+            provider: 'openai',
+            providerUsd: 100,
+            internalUsd: 99,
+            deltaUsd: -1,
+            deltaPct: 1,
+          },
+        ],
+      },
+    });
+    renderDashboard();
+    expect(await screen.findByTestId('reconciliation-chip-openai')).toBeInTheDocument();
+  });
+
+  it('shows its own error with a retry and keeps the margin sections', async () => {
+    setResponses();
+    const respond = mockGet.getMockImplementation()!;
+    let failing = true;
+    mockGet.mockImplementation((url: string) =>
+      failing && url.includes('spend-reconciliation') ? Promise.reject(new Error('boom')) : respond(url)
+    );
+    renderDashboard();
+    expect(await screen.findByTestId('reconciliation-banner-error')).toHaveTextContent('boom');
+    expect(await screen.findByTestId('margin-invoice-enter-2026-06-openai')).toBeEnabled();
+
+    failing = false;
+    fireEvent.click(screen.getByTestId('reconciliation-banner-retry'));
+    await waitFor(() => expect(screen.queryByTestId('reconciliation-banner-error')).not.toBeInTheDocument());
   });
 });

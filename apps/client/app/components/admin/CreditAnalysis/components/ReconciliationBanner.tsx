@@ -12,6 +12,8 @@ import {
   SPEND_RECONCILIATION_DRIFT_WARN_PCT,
 } from '@bike4mind/common';
 
+const RECONCILIATION_STALE_TIME_MS = 5 * 60 * 1000;
+
 const signedUsd = (value: number) => `${value < 0 ? '-' : '+'}$${Math.abs(value).toFixed(2)}`;
 
 const statusFromDelta = (deltaPct: number): { color: 'success' | 'warning' | 'danger'; Icon: React.ElementType } => {
@@ -26,7 +28,7 @@ export const ReconciliationBanner: React.FC = () => {
     queryFn: async () =>
       (await api.get<{ reconciliations: ISpendReconciliation[] }>('/api/admin/spend-reconciliation?view=latest')).data
         .reconciliations,
-    staleTime: 5 * 60 * 1000,
+    staleTime: RECONCILIATION_STALE_TIME_MS,
   });
   const rows = query.data ?? null;
   const isLoading = query.isFetching;
@@ -40,7 +42,23 @@ export const ReconciliationBanner: React.FC = () => {
 
   if (error) {
     return (
-      <Alert color="danger" size="sm" data-testid="reconciliation-banner-error">
+      <Alert
+        color="danger"
+        size="sm"
+        data-testid="reconciliation-banner-error"
+        endDecorator={
+          <IconButton
+            size="sm"
+            variant="plain"
+            color="danger"
+            onClick={fetchReconciliation}
+            disabled={isLoading}
+            data-testid="reconciliation-banner-retry"
+          >
+            <RefreshIcon fontSize="small" />
+          </IconButton>
+        }
+      >
         Reconciliation: {error}
       </Alert>
     );

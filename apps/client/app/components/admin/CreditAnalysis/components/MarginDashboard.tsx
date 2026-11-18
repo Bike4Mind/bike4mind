@@ -277,6 +277,7 @@ export const MarginDashboard: React.FC = () => {
             <DataTable
               label="By model by day"
               testId="margin-model-day-table"
+              pageResetKey={providerFilter}
               rows={modelDayRows}
               getRowId={row =>
                 `${row.day}-${row.provider}-${row.model}-${row.executedProvider ?? row.provider}-${row.executedModel ?? row.model}`
@@ -322,6 +323,7 @@ export const MarginDashboard: React.FC = () => {
             <DataTable
               label="By user"
               testId="margin-user-table"
+              pageResetKey={`${providerFilter}-${userSearch}`}
               rows={userRows}
               getRowId={row => row.userId}
               onRetry={() => void fetchAll()}
