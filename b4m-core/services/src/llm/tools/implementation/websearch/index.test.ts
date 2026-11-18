@@ -1151,3 +1151,48 @@ describe('validateWebSearchResult', () => {
     expect(validateWebSearchResult("Here's what I found from searching the web:\n\n1. A hit")).toBeUndefined();
   });
 });
+
+describe('performWebSearch - Google redirect sources', () => {
+  const goto = 'https://www.google.com/goto?url=CAESbQHEIkXX';
+
+  beforeEach(() => {
+    mockGetProvider.mockReset().mockResolvedValue('serpapi');
+    mockGetSerperKey.mockReset().mockResolvedValue('serp-key');
+    mockGetSearxngUrl.mockReset().mockResolvedValue(null);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          organic_results: [
+            { title: 'Redirected', link: goto, displayed_link: 'https://massive.com \u203a blog', snippet: 's' },
+            {
+              title: 'Direct',
+              link: 'https://example.com/a',
+              displayed_link: 'https://example.com \u203a a',
+              snippet: 's',
+            },
+          ],
+        }),
+      }))
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the redirect as the citable url and carries the destination host in metadata', async () => {
+    const result = await performWebSearch(mockAdapters, { query: 'q', num_results: 2 });
+
+    expect(result.citables[0]).toMatchObject({ url: goto, metadata: { displayHost: 'massive.com' } });
+    expect(result.citables[1].metadata).not.toHaveProperty('displayHost');
+  });
+
+  it('names the destination host in the Source line the model sees', async () => {
+    const result = await performWebSearch(mockAdapters, { query: 'q', num_results: 2 });
+
+    expect(result.formattedResults).toContain(`Source: [massive.com](${goto})`);
+    expect(result.formattedResults).toContain('Source: [example.com](https://example.com/a)');
+  });
+});
