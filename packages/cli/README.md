@@ -84,6 +84,11 @@ are available as plain JSON text below the message body. Session persistence is
 unchanged. As with other terminal applications, a forced kill cannot run cleanup.
 Command help and diagnostics are retained separately in the fullscreen history
 browser (most recent 64K characters); they do not become conversation messages.
+Retained diagnostics are printed after the original screen is restored on exit,
+so initialization failures and restart hints remain available in shell history.
+While a permission prompt is active, PageUp/PageDown scrolls its complete pending
+arguments and preview. Paging never approves or denies; use the displayed
+decision keys explicitly.
 
 ### Chat without signing in
 

@@ -289,184 +289,211 @@ export function App({
         <Box flexDirection="column" paddingX={1}>
           <McpViewer config={config} mcpManager={mcpManager} onClose={() => setShowMcpViewer(false)} />
         </Box>
-      ) : fullscreen && browsingHistory && !promptKey ? (
-        <FullscreenHistory messages={historyMessages} rows={terminalRows} columns={terminalCols} />
       ) : (
         <>
-          {/* HISTORY MESSAGES — rendered via <Static> so each message is
+          {fullscreen && browsingHistory && !promptKey && (
+            <FullscreenHistory messages={historyMessages} rows={terminalRows} columns={terminalCols} />
+          )}
+          {fullscreen && permissionPrompt && (
+            <PermissionPrompt
+              key={permissionPrompt.id}
+              viewport={{ rows: terminalRows, columns: terminalCols }}
+              toolName={permissionPrompt.toolName}
+              args={permissionPrompt.args}
+              preview={permissionPrompt.preview}
+              canBeTrusted={permissionPrompt.canBeTrusted}
+              sessionScope={permissionPrompt.sessionScope}
+              kind={permissionPrompt.kind}
+              onResponse={response => onPermissionResponse(response, permissionPrompt.id)}
+            />
+          )}
+          <Box
+            flexDirection="column"
+            display={fullscreen && ((browsingHistory && !promptKey) || permissionPrompt) ? 'none' : 'flex'}
+          >
+            {/* HISTORY MESSAGES - rendered via <Static> so each message is
               written to terminal scrollback once and never re-rendered.
               The user gets native terminal mouse-wheel scrollback for
               free. Trade-off: Ink 7.0.1 has a known resize-render bug
               where widening the terminal can leave ghost frames in
               scrollback. Re-evaluate when upgrading Ink. */}
-          {!fullscreen && (
-            <Static items={messages}>
-              {message => (
-                <Box key={message.id} flexDirection="column">
-                  <MessageItem message={message} showThoughts={showThoughts} />
-                </Box>
-              )}
-            </Static>
-          )}
-          {fullscreen && (
-            <Text dimColor wrap="truncate">
-              Ctrl+O: history ({messages.length} messages{fullscreenOutput ? ', command output' : ''})
-            </Text>
-          )}
-          {fullscreen && fullscreenOutput && (
-            <Text wrap="truncate">{fullscreenOutput.slice(fullscreenOutput.lastIndexOf('\n') + 1)}</Text>
-          )}
-
-          <Box flexDirection="column">
-            {/* PENDING MESSAGES - Dynamic rendering (updates in real-time) */}
-            <Box flexDirection="column">
-              {pendingMessages.map(message => (
-                <Box key={message.id} flexDirection="column">
-                  <MessageItem message={message} showThoughts={showThoughts} liveRows={liveRows} />
-                </Box>
-              ))}
-            </Box>
-
-            <Box ref={promptRef} flexDirection="column">
-              {/* Permission Prompt - rendered alongside messages, not instead of them */}
-              {/* Key forces React to unmount/remount when switching between queued prompts,
-                  ensuring SelectInput re-initializes keyboard handling for each new prompt */}
-              {permissionPrompt && (
-                <Box key={permissionPrompt.id} flexDirection="column" paddingX={1}>
-                  <PermissionPrompt
-                    toolName={permissionPrompt.toolName}
-                    args={permissionPrompt.args}
-                    preview={permissionPrompt.preview}
-                    canBeTrusted={permissionPrompt.canBeTrusted}
-                    sessionScope={permissionPrompt.sessionScope}
-                    kind={permissionPrompt.kind}
-                    // Capture the id at render time so the response carries the
-                    // prompt it was rendered against - closes the tavern/Ink race
-                    // where a buffered keypress for the active prompt could land
-                    // after the tavern dequeued it and made the next prompt active.
-                    onResponse={response => onPermissionResponse(response, permissionPrompt.id)}
-                  />
-                </Box>
-              )}
-
-              {/* User question prompt */}
-              {userQuestionPrompt && (
-                <Box key={userQuestionPrompt.id} flexDirection="column" paddingX={1}>
-                  <UserQuestionPrompt
-                    payload={userQuestionPrompt.payload}
-                    onResponse={response => onUserQuestionResponse(response, userQuestionPrompt.id)}
-                  />
-                </Box>
-              )}
-
-              {/* Review gate prompt */}
-              {reviewGatePrompt && (
-                <Box key={reviewGatePrompt.id} flexDirection="column" paddingX={1}>
-                  <ReviewGatePrompt
-                    description={reviewGatePrompt.description}
-                    options={reviewGatePrompt.options}
-                    recommendation={reviewGatePrompt.recommendation}
-                    onResponse={response => onReviewGateResponse(response, reviewGatePrompt.id)}
-                  />
-                </Box>
-              )}
-
-              {/* Exit-time handoff prompt */}
-              {exitHandoffPrompt && (
-                <Box key={exitHandoffPrompt.id} flexDirection="column" paddingX={1}>
-                  <ExitHandoffPrompt
-                    onResponse={generate => {
-                      const target = exitHandoffPrompt;
-                      setExitHandoffPrompt(null);
-                      target.resolve(generate);
-                    }}
-                  />
-                </Box>
-              )}
-            </Box>
-
-            {/* Agent thinking display - hidden when an interactive prompt is active */}
-            {!permissionPrompt && !userQuestionPrompt && !reviewGatePrompt && !exitHandoffPrompt && <AgentThinking />}
-
-            {/* Background agent status */}
-            <BackgroundAgentStatus />
-
-            {/* Background shell session status (bash_execute run_in_background) */}
-            <BackgroundShellStatus />
-
-            {/* Completed group notifications - shown when all agents in a group finish */}
-            <CompletedGroupNotification />
-
-            {/* Exit warning */}
-            {exitRequested && (
-              <Box paddingX={1} marginBottom={1}>
-                <Text color="yellow" bold>
-                  Press Ctrl+C again to exit
-                </Text>
-              </Box>
+            {!fullscreen && (
+              <Static items={messages}>
+                {message => (
+                  <Box key={message.id} flexDirection="column">
+                    <MessageItem message={message} showThoughts={showThoughts} />
+                  </Box>
+                )}
+              </Static>
             )}
-          </Box>
+            {fullscreen && (
+              <Text dimColor wrap="truncate">
+                Ctrl+O: history ({messages.length} messages{fullscreenOutput ? ', command output' : ''})
+              </Text>
+            )}
+            {fullscreen && fullscreenOutput && (
+              <Text wrap="truncate">
+                {fullscreenOutput.trimEnd().slice(fullscreenOutput.trimEnd().lastIndexOf('\n') + 1)}
+              </Text>
+            )}
 
-          {/* FIXED INPUT AREA - stays at bottom, doesn't scroll */}
-          <Box flexDirection="column" flexShrink={0}>
-            {/* Queued user messages, shown above the input box while a turn
+            <Box flexDirection="column">
+              {/* PENDING MESSAGES - Dynamic rendering (updates in real-time) */}
+              <Box flexDirection="column">
+                {pendingMessages.map(message => (
+                  <Box key={message.id} flexDirection="column">
+                    <MessageItem message={message} showThoughts={showThoughts} liveRows={liveRows} />
+                  </Box>
+                ))}
+              </Box>
+
+              <Box ref={promptRef} flexDirection="column">
+                {/* Permission Prompt - rendered alongside messages, not instead of them */}
+                {/* Key forces React to unmount/remount when switching between queued prompts,
+                  ensuring SelectInput re-initializes keyboard handling for each new prompt */}
+                {permissionPrompt && !fullscreen && (
+                  <Box key={permissionPrompt.id} flexDirection="column" paddingX={1}>
+                    <PermissionPrompt
+                      toolName={permissionPrompt.toolName}
+                      args={permissionPrompt.args}
+                      preview={permissionPrompt.preview}
+                      canBeTrusted={permissionPrompt.canBeTrusted}
+                      sessionScope={permissionPrompt.sessionScope}
+                      kind={permissionPrompt.kind}
+                      // Capture the id at render time so the response carries the
+                      // prompt it was rendered against - closes the tavern/Ink race
+                      // where a buffered keypress for the active prompt could land
+                      // after the tavern dequeued it and made the next prompt active.
+                      onResponse={response => onPermissionResponse(response, permissionPrompt.id)}
+                    />
+                  </Box>
+                )}
+
+                {/* User question prompt */}
+                {userQuestionPrompt && (
+                  <Box key={userQuestionPrompt.id} flexDirection="column" paddingX={1}>
+                    <UserQuestionPrompt
+                      payload={userQuestionPrompt.payload}
+                      onResponse={response => onUserQuestionResponse(response, userQuestionPrompt.id)}
+                    />
+                  </Box>
+                )}
+
+                {/* Review gate prompt */}
+                {reviewGatePrompt && (
+                  <Box key={reviewGatePrompt.id} flexDirection="column" paddingX={1}>
+                    <ReviewGatePrompt
+                      description={reviewGatePrompt.description}
+                      options={reviewGatePrompt.options}
+                      recommendation={reviewGatePrompt.recommendation}
+                      onResponse={response => onReviewGateResponse(response, reviewGatePrompt.id)}
+                    />
+                  </Box>
+                )}
+
+                {/* Exit-time handoff prompt */}
+                {exitHandoffPrompt && (
+                  <Box key={exitHandoffPrompt.id} flexDirection="column" paddingX={1}>
+                    <ExitHandoffPrompt
+                      onResponse={generate => {
+                        const target = exitHandoffPrompt;
+                        setExitHandoffPrompt(null);
+                        target.resolve(generate);
+                      }}
+                    />
+                  </Box>
+                )}
+              </Box>
+
+              {/* Agent thinking display - hidden when an interactive prompt is active */}
+              {!permissionPrompt && !userQuestionPrompt && !reviewGatePrompt && !exitHandoffPrompt && <AgentThinking />}
+
+              {/* Background agent status */}
+              <BackgroundAgentStatus />
+
+              {/* Background shell session status (bash_execute run_in_background) */}
+              <BackgroundShellStatus />
+
+              {/* Completed group notifications - shown when all agents in a group finish */}
+              <CompletedGroupNotification />
+
+              {/* Exit warning */}
+              {exitRequested && (
+                <Box paddingX={1} marginBottom={1}>
+                  <Text color="yellow" bold>
+                    Press Ctrl+C again to exit
+                  </Text>
+                </Box>
+              )}
+            </Box>
+
+            {/* FIXED INPUT AREA - stays at bottom, doesn't scroll */}
+            <Box flexDirection="column" flexShrink={0}>
+              {/* Queued user messages, shown above the input box while a turn
                 runs. A steer leaves the list when it is injected into the
                 running turn; follow-ups (and any undelivered steer) leave when
                 the next turn starts. Gray bg + white text reads as "pending",
                 distinct from the whiteBright bg of sent prompts; rows are
                 padded to terminal width so the bg fills the row, matching the
                 sent-prompt highlight in MessageItem.tsx. */}
-            {messageQueue.length > 0 && (
-              <Box flexDirection="column" paddingX={1} marginBottom={1}>
-                {messageQueue.map((queuedMessage, idx) => {
-                  const label = queuedMessage.kind === 'followUp' ? '[next turn] ' : '';
-                  const [firstLine, ...moreLines] = (queuedMessage.typed ?? queuedMessage.text).split('\n');
-                  const rowText = `\u276F ${label}${firstLine}${moreLines.length > 0 ? ' ...' : ''}`;
-                  const padded = rowText.length >= terminalCols - 2 ? rowText : rowText.padEnd(terminalCols - 2);
-                  return (
-                    <Text key={idx} backgroundColor="gray" color="white" wrap="truncate-end">
-                      {padded}
-                    </Text>
-                  );
-                })}
-                <Text dimColor wrap="truncate-end">
-                  {peerTurnActive ? PEER_QUEUE_HINT : QUEUE_HINT}
-                </Text>
-              </Box>
-            )}
+              {messageQueue.length > 0 && (
+                <Box flexDirection="column" paddingX={1} marginBottom={1}>
+                  {messageQueue.map((queuedMessage, idx) => {
+                    const label = queuedMessage.kind === 'followUp' ? '[next turn] ' : '';
+                    const [firstLine, ...moreLines] = (queuedMessage.typed ?? queuedMessage.text).split('\n');
+                    const rowText = `\u276F ${label}${firstLine}${moreLines.length > 0 ? ' ...' : ''}`;
+                    const padded = rowText.length >= terminalCols - 2 ? rowText : rowText.padEnd(terminalCols - 2);
+                    return (
+                      <Text key={idx} backgroundColor="gray" color="white" wrap="truncate-end">
+                        {padded}
+                      </Text>
+                    );
+                  })}
+                  <Text dimColor wrap="truncate-end">
+                    {peerTurnActive ? PEER_QUEUE_HINT : QUEUE_HINT}
+                  </Text>
+                </Box>
+              )}
 
-            {/* Input prompt */}
-            <Box
-              borderStyle="single"
-              borderColor={isBashMode ? 'yellow' : 'cyan'}
-              borderTop
-              borderBottom
-              borderLeft={false}
-              borderRight={false}
-            >
-              <InputPrompt
-                onSubmit={handleSubmit}
-                onBashCommand={onBashCommand}
-                onImageDetected={onImageDetected}
-                disabled={!!permissionPrompt || !!userQuestionPrompt || !!reviewGatePrompt || !!exitHandoffPrompt}
-                history={commandHistory}
-                onHistoryEntry={onHistoryEntry}
-                commands={commands}
-                prefillInput={prefillInput}
-                onPrefillConsumed={onPrefillConsumed}
-                onBashModeChange={setIsBashMode}
+              {/* Input prompt */}
+              <Box
+                borderStyle="single"
+                borderColor={isBashMode ? 'yellow' : 'cyan'}
+                borderTop
+                borderBottom
+                borderLeft={false}
+                borderRight={false}
+              >
+                <InputPrompt
+                  onSubmit={handleSubmit}
+                  onBashCommand={onBashCommand}
+                  onImageDetected={onImageDetected}
+                  disabled={
+                    (fullscreen && browsingHistory) ||
+                    !!permissionPrompt ||
+                    !!userQuestionPrompt ||
+                    !!reviewGatePrompt ||
+                    !!exitHandoffPrompt
+                  }
+                  history={commandHistory}
+                  onHistoryEntry={onHistoryEntry}
+                  commands={commands}
+                  prefillInput={prefillInput}
+                  onPrefillConsumed={onPrefillConsumed}
+                  onBashModeChange={setIsBashMode}
+                />
+              </Box>
+              {/* Status bar - below input prompt */}
+              <StatusBar
+                isBashMode={isBashMode}
+                model={currentModel}
+                tokenUsage={totalTokens}
+                creditsUsage={totalCredits}
+                subagentTokenUsage={subagentTokens}
+                subagentCreditsUsage={subagentCost}
+                subagentActive={subagentActive}
               />
             </Box>
-            {/* Status bar - below input prompt */}
-            <StatusBar
-              isBashMode={isBashMode}
-              model={currentModel}
-              tokenUsage={totalTokens}
-              creditsUsage={totalCredits}
-              subagentTokenUsage={subagentTokens}
-              subagentCreditsUsage={subagentCost}
-              subagentActive={subagentActive}
-            />
           </Box>
         </>
       )}

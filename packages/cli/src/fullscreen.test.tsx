@@ -38,12 +38,17 @@ function ExitProbe() {
   useInput((input, key) => {
     if (key.ctrl && input === 'c') exit();
     if (input === 'e') exit(new Error('expected exit'));
+    if (input === 'f') {
+      console.error('FATAL_INITIALIZATION_SENTINEL');
+      console.error('RESTART_HINT_SENTINEL');
+      exit();
+    }
   });
   return <Text>Exit probe</Text>;
 }
 
 async function harness(thinking = false, exitProbe = false) {
-  const terminal = new xterm.Terminal({ cols: 100, rows: 24, scrollback: 1000, allowProposedApi: true });
+  const terminal = new xterm.Terminal({ cols: 100, rows: 24, scrollback: 10000, allowProposedApi: true });
   const stdout = new Output();
   const stdin = new Input();
   let bytes = '';
@@ -60,16 +65,18 @@ async function harness(thinking = false, exitProbe = false) {
   const shell = bufferText(terminal.buffer.normal);
   useCliStore.setState({ isThinking: thinking });
   const onMessage = vi.fn(asyncNoop);
+  const onPermissionResponse = vi.fn();
   const instance = renderFullscreen(
     exitProbe ? (
       <ExitProbe />
     ) : (
       <App
         fullscreen
+        commandHistory={['PRIOR_SENTINEL']}
         onMessage={onMessage}
         onCommand={asyncNoop}
         onBashCommand={noop}
-        onPermissionResponse={noop}
+        onPermissionResponse={onPermissionResponse}
         onUserQuestionResponse={noop}
         onReviewGateResponse={noop}
       />
@@ -77,6 +84,7 @@ async function harness(thinking = false, exitProbe = false) {
     stdout as unknown as NodeJS.WriteStream,
     stdin as unknown as NodeJS.ReadStream
   );
+  const exitResult = instance.waitUntilExit();
   const flush = async () => {
     await instance.waitUntilRenderFlush();
     await flushTerminal();
@@ -87,6 +95,7 @@ async function harness(thinking = false, exitProbe = false) {
     stdout,
     stdin,
     onMessage,
+    onPermissionResponse,
     instance,
     flush,
     bufferText,
@@ -101,13 +110,15 @@ async function harness(thinking = false, exitProbe = false) {
       stdin.write(key);
       await flush();
     },
-    async close(error?: string) {
+    async close(error?: string, diagnostics = false) {
       instance.unmount();
-      if (error) await expect(instance.waitUntilExit()).rejects.toThrow(error);
-      else await instance.waitUntilExit();
+      if (error) await expect(exitResult).rejects.toThrow(error);
+      else await exitResult;
       await flushTerminal();
       expect(terminal.buffer.active.type).toBe('normal');
-      expect(bufferText(terminal.buffer.normal)).toBe(shell);
+      if (diagnostics) {
+        expect(bufferText(terminal.buffer.normal).match(/SHELL_\d+/g)).toHaveLength(40);
+      } else expect(bufferText(terminal.buffer.normal)).toBe(shell);
       expect(stdin.raw).toBe(false);
       expect(stdout.listenerCount('resize')).toBe(0);
       expect(bytes).not.toContain('\u001b[3J');
@@ -173,6 +184,70 @@ describe('explicit fullscreen', () => {
     if (kind === 'error') await expect(h.instance.waitUntilExit()).rejects.toThrow('expected exit');
     else await h.instance.waitUntilExit();
     await h.close(kind === 'error' ? 'expected exit' : undefined);
+  });
+
+  it('keeps fatal initialization diagnostics on the restored shell without mounting App', async () => {
+    const originalError = console.error;
+    const h = await harness(false, true);
+    await h.press('f');
+    expect(h.terminal.buffer.active.type).toBe('normal');
+    expect(h.bufferText()).toContain('FATAL_INITIALIZATION_SENTINEL');
+    expect(h.bufferText()).toContain('RESTART_HINT_SENTINEL');
+    expect(console.error).toBe(originalError);
+    await h.close(undefined, true);
+  });
+
+  it('restores the input draft after history navigation and a browser round trip', async () => {
+    const h = await harness();
+    try {
+      await h.press('DRAFT_SENTINEL');
+      await h.press('\u001b[A');
+      expect(useCliStore.getState().inputValue).toBe('PRIOR_SENTINEL');
+      await h.press('\u000f');
+      await h.press('\u000f');
+      await h.press('\u001b[B');
+      expect(useCliStore.getState().inputValue).toBe('DRAFT_SENTINEL');
+    } finally {
+      await h.close();
+    }
+  });
+
+  it.each(['y', 'n'])('pages every pending preview line before explicit %s decision', async decision => {
+    useCliStore.setState({
+      permissionPrompt: {
+        id: 'preview',
+        toolName: 'edit_local_file',
+        args: {},
+        preview: Array.from({ length: 45 }, (_, i) => `PREVIEW_LINE_${i}_END`).join('\n'),
+        canBeTrusted: true,
+        resolve: noop,
+      },
+    });
+    const h = await harness();
+    try {
+      await h.resize(80, 24);
+      expect(h.bufferText()).toContain('Tool: edit_local_file');
+      const seen = new Set<number>();
+      for (let page = 0; page < 6; page++) {
+        for (const match of h.bufferText().matchAll(/PREVIEW_LINE_(\d+)_END/g)) seen.add(Number(match[1]));
+        expect(h.bufferText()).toContain('Permission Required');
+        expect(h.bufferText()).toContain('Allow once');
+        await h.press('\u001b[6~');
+      }
+      expect(seen.size).toBe(45);
+      expect(h.onPermissionResponse).not.toHaveBeenCalled();
+      await h.resize(40, 12);
+      expect(h.bufferText()).toContain('Permission Required');
+      expect(h.bufferText()).toContain('Allow once');
+      await h.press('\u001b[5~');
+      await h.press(decision);
+      expect(h.onPermissionResponse).toHaveBeenCalledExactlyOnceWith(
+        decision === 'y' ? 'allow-once' : 'deny',
+        'preview'
+      );
+    } finally {
+      await h.close();
+    }
   });
 
   it.each([false, true])('keeps a single live frame across bounded resizes (thinking=%s)', async thinking => {
@@ -242,7 +317,7 @@ describe('explicit fullscreen', () => {
       await h.flush();
       await h.press('\u001b[6~');
     } finally {
-      await h.close();
+      await h.close(undefined, true);
     }
     expect(console.log).toBe(originalLog);
   });
