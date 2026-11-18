@@ -276,6 +276,21 @@ describe('cleanResearchItemRuleCondition', () => {
     }
   });
 
+  it('strips interlinear annotation, Egyptian format controls and the Khitan filler', () => {
+    expect(cleanResearchItemRuleCondition('\uFFF9\uFFFA\uFFFB')).toBe('');
+    expect(cleanResearchItemRuleCondition('\u{13430}\u{13431}')).toBe('');
+    expect(cleanResearchItemRuleCondition('\u{16FE4}')).toBe('');
+  });
+
+  it('keys composed and decomposed accents identically and stores the NFC form', () => {
+    const composed = 'caf\u00E9 article';
+    const decomposed = 'cafe\u0301 article';
+    expect(researchItemRuleKey({ condition: composed, action: 'block' })).toBe(
+      researchItemRuleKey({ condition: decomposed, action: 'block' })
+    );
+    expect(cleanResearchItemRuleCondition(decomposed)).toBe(composed);
+  });
+
   it('strips the ZWJ inside an emoji sequence (accepted)', () => {
     expect(cleanResearchItemRuleCondition('\u{1F468}\u200D\u{1F469}')).toBe('\u{1F468}\u{1F469}');
   });
