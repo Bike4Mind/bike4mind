@@ -49,7 +49,7 @@ Needs a stack with the E2E endpoints enabled (local dev or a PR preview) and a m
 ```bash
 ADMIN_EVAL_BASE_URL=https://<stage-host> ADMIN_EVAL_MODEL=<model id> E2E_CLEANUP_SECRET=... \
 ADMIN_EVAL_REPORT_PATH=<scratch>/admin-eval.json \
-  pnpm --filter @bike4mind/services test adminAssistant/run.live
+  pnpm --filter @bike4mind/services-core test adminAssistant/run.live
 ```
 
 | Variable                 | Meaning                                                     |

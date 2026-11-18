@@ -42,6 +42,7 @@ describe('restoreImageForm', () => {
         prompt: 'a cat on a windowsill',
         count: 1,
         intent: {
+          mode: 'generate',
           size: '1024x1024',
           aspectRatio: '16:9',
           quality: 'high',
@@ -87,7 +88,7 @@ describe('restoreImageForm', () => {
     expect(flux.notices).toEqual([]);
   });
 
-  it('brings an edit source back as a reference and names what Create cannot take', () => {
+  it('reopens an edit in edit mode with its source and mask in their own slots', () => {
     const { value, notices } = restoreImageForm(
       restoreOf(
         {
@@ -106,12 +107,14 @@ describe('restoreImageForm', () => {
       MODELS
     );
 
-    expect(value.form.intent.references).toEqual([{ fileId: CAT, fileName: 'cat.png' }]);
-    expect(notices).toEqual([
-      'Create makes new images rather than edits, so the edit source comes back as a reference image.',
-      "Create does not take a mask, so the take's was left out.",
-      "Create does not set the seed, output format, so the model's defaults are used.",
-    ]);
+    expect(value.form.intent).toMatchObject({
+      mode: 'edit',
+      editSource: { fileId: CAT, fileName: 'cat.png' },
+      mask: { fileId: DOG, fileName: 'mask.png' },
+      references: [],
+    });
+    expect(value.modelId).toBe(ImageModels.GPT_IMAGE_2);
+    expect(notices).toEqual(["Create does not set the seed, output format, so the model's defaults are used."]);
   });
 
   it('leaves out an input the user can no longer read, and names one outside the trail by its role', () => {
@@ -167,11 +170,15 @@ describe('restoreImageForm', () => {
     expect(value.form).toEqual({
       prompt: 'paint it gold',
       count: 3,
-      intent: { aspectRatio: '3:2', references: [{ fileId: CAT, fileName: 'cat.png' }] },
+      intent: {
+        mode: 'edit',
+        aspectRatio: '3:2',
+        editSource: { fileId: CAT, fileName: 'cat.png' },
+        mask: { fileId: DOG, fileName: 'Mask' },
+        references: [],
+      },
     });
     expect(notices).toEqual([
-      'Create makes new images rather than edits, so the edit source comes back as a reference image.',
-      "Create does not take a mask, so the take's was left out.",
       "Create does not set the output format, safety tolerance, so the model's defaults are used.",
     ]);
   });

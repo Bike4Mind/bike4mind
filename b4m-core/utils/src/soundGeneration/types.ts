@@ -5,6 +5,8 @@ export interface SoundGenerationOptions {
   promptInfluence?: number;
   /** Provider-specific output encoding token (e.g. ElevenLabs `mp3_44100_128`). */
   format?: string;
+  /** Aborts the provider call in addition to the generator's own deadline. */
+  signal?: AbortSignal;
 }
 
 export interface GeneratedSound {

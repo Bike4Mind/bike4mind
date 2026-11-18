@@ -352,15 +352,35 @@ describe('AdminSettingsTab Turnstile notice', () => {
   });
 });
 
-describe('AdminSettingsTab reviewer emails setting', () => {
-  it('renders the string-list editor with the stored reviewers and no generic card', () => {
-    serverSettings = [{ settingName: 'ImageModerationReviewerEmails', settingValue: '["reviewer@example.com"]' }];
+describe('AdminSettingsTab category headings', () => {
+  it('shows the SecOps category under a Security heading and keeps the stored category name', () => {
     renderSecurityTab();
 
-    const field = screen.getByTestId('string-list-setting-ImageModerationReviewerEmails');
-    expect(field.getAttribute('data-stored-value')).toContain('reviewer@example.com');
-    expect(screen.queryByTestId('generic-setting-ImageModerationReviewerEmails')).toBeNull();
+    const heading = screen.getByTestId('admin-settings-category-heading-SecOps');
+    expect(heading.textContent).toBe('Security');
+    expect(screen.queryByRole('heading', { name: 'SecOps' })).toBeNull();
+    expect(settingsMap.abuseAssessmentEnabled.category).toBe('SecOps');
   });
+
+  it('shows other categories under their own name', () => {
+    renderSecurityTab();
+
+    expect(screen.getByTestId('admin-settings-category-heading-AI Moderation').textContent).toBe('AI Moderation');
+  });
+});
+
+describe('AdminSettingsTab reviewer emails setting', () => {
+  it.each(['ImageModerationReviewerEmails', 'ImageModerationEscalationEmails'] as const)(
+    'renders the %s string-list editor with the stored reviewers and no generic card',
+    key => {
+      serverSettings = [{ settingName: key, settingValue: '["reviewer@example.com"]' }];
+      renderSecurityTab();
+
+      const field = screen.getByTestId(`string-list-setting-${key}`);
+      expect(field.getAttribute('data-stored-value')).toContain('reviewer@example.com');
+      expect(screen.queryByTestId(`generic-setting-${key}`)).toBeNull();
+    }
+  );
 
   it('gives the generic field to an object setting that defaults to an array', () => {
     // The editor belongs to the listed keys, not to every object setting that happens to hold a

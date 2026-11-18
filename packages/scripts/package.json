@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/scripts",
-  "version": "0.1.103",
+  "version": "0.1.104",
   "private": true,
   "type": "module",
   "main": "index.ts",
@@ -15,6 +15,7 @@
   "scripts": {
     "feedback-notes:scrub": "tsx src/scrubLegacyFeedbackNotes.ts",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "typecheck:native": "tsgo --noEmit --types node",
     "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
@@ -96,6 +97,7 @@
     "report:access-review": "tsx src/access-review.ts",
     "migrate:signup-grant-schedule": "tsx src/migrate-signup-grant-schedule.ts",
     "tavern:upload-icons": "tsx src/uploadTavernIcons.ts",
+    "preview:seed-settings": "tsx src/seed-preview-settings.ts",
     "count-tokens-probe": "tsx count-tokens-probe.ts",
     "retrieval:recall-probe": "tsx retrieval/recall-probe.ts",
     "retrieval:supersession-probe": "tsx retrieval/supersession-probe.ts",
@@ -105,7 +107,8 @@
     "curated:publish": "tsx src/curatedCatalog/publishCurated.ts",
     "curated:schema": "tsx src/curatedCatalog/curatedSchema.ts",
     "curated:v2": "tsx src/curatedCatalog/curatedV2.ts",
-    "curated:check-build": "tsx src/curatedCatalog/checkDesktopBuild.ts"
+    "curated:check-build": "tsx src/curatedCatalog/checkDesktopBuild.ts",
+    "mobile-release": "tsx src/mobileRelease/main.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
@@ -123,7 +126,7 @@
     "@bike4mind/local-models": "workspace:*",
     "@bike4mind/observability": "workspace:*",
     "@bike4mind/resource": "workspace:*",
-    "@bike4mind/services": "workspace:*",
+    "@bike4mind/services": "workspace:@bike4mind/services-core@*",
     "@bike4mind/server-utils": "workspace:*",
     "@bike4mind/utils": "workspace:*",
     "@inquirer/prompts": "^8.5.2",
@@ -132,7 +135,7 @@
     "csv-parser": "^3.2.1",
     "dayjs": "^1.11.23",
     "dotenv": "^17.4.2",
-    "glob": "^13.0.6",
+    "glob": "^14.0.2",
     "gray-matter": "^4.0.3",
     "mongoose": "^8.24.7",
     "p-limit": "^7.3.2",
@@ -147,6 +150,7 @@
     "@types/mailparser": "^3.9.0",
     "@types/speakeasy": "^2.0.10",
     "@types/yargs": "^17.0.35",
+    "@vitest/coverage-v8": "^4.1.12",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "aws-sdk-client-mock": "^4.1.0",
@@ -155,6 +159,7 @@
     "prettier": "^3.9.6",
     "speakeasy": "^2.0.0",
     "tsx": "^4.23.0",
-    "vitest": "^4.1.12"
+    "vitest": "^4.1.12",
+    "yaml": "^2.9.1"
   }
 }

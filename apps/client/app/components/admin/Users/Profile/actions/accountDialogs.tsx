@@ -342,6 +342,48 @@ export const InternalAccountDialog: React.FC<ProfileDialogProps> = ({ user, onCl
   );
 };
 
+/**
+ * Marks the account as a partner's, or stops marking it (`accountSegment`): Spend explorer then
+ * counts its cost as partner spend. Internal is a separate mark (`isInternal`) and wins over this.
+ */
+export const PartnerAccountDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onAudit }) => {
+  const post = useAdminUserPost(user.id, 'The partner mark was not changed.');
+  const showUndo = useUndoToast();
+  const marking = user.accountSegment !== 'partner';
+  const label = (partner: boolean) => (partner ? 'Partner' : 'Customer');
+
+  const handleConfirm = async (reason: string) => {
+    await post('segment', { accountSegment: marking ? 'partner' : 'customer', reason });
+    onClose();
+    showUndo({
+      message: marking ? 'Marked as a partner' : 'No longer marked as a partner',
+      onUndo: async () => {
+        await post('segment', { accountSegment: marking ? 'customer' : 'partner', reason: undoAdminReason(reason) });
+      },
+      onViewAudit: onAudit,
+    });
+  };
+
+  return (
+    <ActionDialog
+      open
+      onClose={onClose}
+      title={marking ? 'Mark as a partner account' : 'Stop marking as a partner'}
+      description={
+        marking
+          ? 'Their AI cost is counted as partner spend in Spend explorer. Nothing about their access changes.'
+          : "Their AI cost counts as a customer's again in Spend explorer."
+      }
+      reasonPresets={ADMIN_REASON_PRESETS.partnerAccount}
+      confirmLabel={marking ? 'Mark partner' : 'Stop marking'}
+      onConfirm={handleConfirm}
+      data-testid="partner-account-dialog"
+    >
+      <ChangePreview before={label(!marking)} after={label(marking)} data-testid="partner-account-dialog-preview" />
+    </ActionDialog>
+  );
+};
+
 /** No undo: the user re-enrols their authenticator. */
 export const ResetMfaDialog: React.FC<ProfileDialogProps> = ({ user, onClose }) => {
   const resetMfa = useForceResetMFA();

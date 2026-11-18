@@ -181,7 +181,7 @@ export function BackgroundSection({
             }}
             data-testid="session-panel-finished-toggle-btn"
           >
-            <Typography level="body-xs" textColor="inherit" fontWeight="lg">
+            <Typography level="body-xs" textColor="inherit" fontWeight="sm">
               {`Finished ${finishedCount}`}
             </Typography>
             <DisclosureIcon open={finishedOpen} />

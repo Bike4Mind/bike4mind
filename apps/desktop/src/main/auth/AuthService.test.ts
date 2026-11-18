@@ -927,3 +927,100 @@ describe('AuthService token refresh', () => {
     service.dispose();
   });
 });
+
+describe('AuthService captured Studio sessions', () => {
+  async function signedIn() {
+    process.env[BAKED] = HOSTED;
+    const refreshToken = vi.fn();
+    const harness = buildWithSharedClient({ refreshToken });
+    const initial = { ...storedTokens(0, 30 * 60_000), accessToken: fakeAccessToken('user-1') };
+    harness.accepted.add(initial.accessToken);
+    await harness.vault.setTokens(HOSTED, initial);
+    await harness.service.initialize();
+    expect(harness.service.getState().status).toBe('signed-in');
+    return { ...harness, refreshToken };
+  }
+
+  it('does not replay a captured paid request with another stored account', async () => {
+    const { service, vault, refreshToken } = await signedIn();
+    try {
+      const captured = service.getSessionBoundApiClient()!;
+      const entered = Promise.withResolvers<InternalAxiosRequestConfig>();
+      const ack = Promise.withResolvers<AxiosResponse>();
+      const dispatch = vi.fn<AxiosAdapter>(async config => {
+        entered.resolve(config);
+        return ack.promise;
+      });
+      captured.getAxiosInstance().defaults.adapter = dispatch;
+      const outcome = captured.post('/api/studio/image-jobs', { prompt: 'account-a' }).catch((error: unknown) => error);
+      const sent = await entered.promise;
+      const accountB = { ...storedTokens(2, 30 * 60_000), userId: 'user-2', accessToken: fakeAccessToken('user-2') };
+      await vault.setTokens(HOSTED, accountB);
+      ack.reject(httpError(401, sent));
+      expect(await outcome).toMatchObject({ name: 'SessionChangedError', beforeRequest: false });
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(refreshToken).not.toHaveBeenCalled();
+      expect(await vault.reloadTokens(HOSTED)).toEqual(accountB);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it('invalidates a captured client as soon as a new sign-in starts', async () => {
+    const { service, device } = await signedIn();
+    const grant = Promise.withResolvers<Awaited<ReturnType<DeviceFlowClient['waitForAuthorization']>>>();
+    vi.mocked(device.waitForAuthorization).mockImplementation(() => grant.promise);
+    try {
+      const captured = service.getSessionBoundApiClient()!;
+      const dispatch = vi.fn<AxiosAdapter>(async config => ({
+        data: {},
+        status: 202,
+        statusText: 'Accepted',
+        headers: {},
+        config,
+      }));
+      captured.getAxiosInstance().defaults.adapter = dispatch;
+      const signingIn = service.signIn();
+      await expect(captured.post('/api/studio/image-jobs', {})).rejects.toMatchObject({
+        name: 'SessionChangedError',
+        beforeRequest: true,
+      });
+      expect(dispatch).not.toHaveBeenCalled();
+      service.cancelSignIn();
+      grant.resolve({
+        access_token: fakeAccessToken('user-1'),
+        refresh_token: 'new-refresh',
+        token_type: 'Bearer',
+        expires_in: 1800,
+      });
+      await signingIn;
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it('keeps automatic refresh available within the same captured account', async () => {
+    const { service, refreshToken } = await signedIn();
+    try {
+      const captured = service.getSessionBoundApiClient()!;
+      const refreshed = fakeAccessToken('user-1');
+      refreshToken.mockResolvedValue({
+        access_token: refreshed,
+        refresh_token: 'new-refresh',
+        token_type: 'Bearer',
+        expires_in: 1800,
+      });
+      const dispatch = vi.fn<AxiosAdapter>(async config => {
+        if (dispatch.mock.calls.length === 1) throw httpError(401, config);
+        return { data: { id: 'job' }, status: 202, statusText: 'Accepted', headers: {}, config };
+      });
+      captured.getAxiosInstance().defaults.adapter = dispatch;
+      expect(await captured.post('/api/studio/image-jobs', {})).toEqual({ id: 'job' });
+      expect(refreshToken).toHaveBeenCalledTimes(1);
+      expect(dispatch).toHaveBeenCalledTimes(2);
+      expect(service.getState().status).toBe('signed-in');
+    } finally {
+      service.dispose();
+    }
+  });
+});

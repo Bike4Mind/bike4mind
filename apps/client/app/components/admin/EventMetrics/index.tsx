@@ -1,4 +1,4 @@
-import React, { useState, type ReactNode } from 'react';
+import React, { useMemo, useState, type ReactNode } from 'react';
 import { Button, Stack, Tab, TabList, TabPanel, Tabs } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 
@@ -68,7 +68,7 @@ const EventMetricsPanel: React.FC<{ viewSwitch: ReactNode }> = ({ viewSwitch }) 
     forceRefresh();
   };
 
-  const chartData = processChartData(filteredAndSortedMetrics);
+  const chartData = useMemo(() => processChartData(filteredAndSortedMetrics), [filteredAndSortedMetrics]);
   const errorState = isError && (
     <ErrorState
       message={`Event metrics failed to load. ${error instanceof Error ? error.message : ''}`.trim()}

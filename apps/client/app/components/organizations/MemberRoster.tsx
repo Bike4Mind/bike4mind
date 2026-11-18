@@ -35,7 +35,6 @@ import {
   RosterSortKey,
   SortDirection,
   sortMembers,
-  StatusFilter,
 } from './memberRosterView';
 
 /** Names listed in the bulk-remove confirmation before it summarises the rest as a count. */
@@ -50,13 +49,14 @@ interface MemberRosterProps {
   isError: boolean;
   onRetry: () => void;
   currentUserId: string | undefined;
-  canInviteMembers: boolean;
   /** Coarse flag (`canAdministerOrganization`): whether the roster has a selection column at all. */
   canRevokeMembers: boolean;
   /** Per-target gate (`canRevokeOrgMember`), which also depends on who is being removed. */
   canRevokeMember: (userId: string) => boolean;
   canManageCreditBudgets: boolean;
   canManageManagers: boolean;
+  /** Owner, manager or site admin (`canAdministerOrganization`); plain members get a names-only roster. */
+  showEmails: boolean;
 }
 
 const MemberRoster: FC<MemberRosterProps> = ({
@@ -66,17 +66,16 @@ const MemberRoster: FC<MemberRosterProps> = ({
   isError,
   onRetry,
   currentUserId,
-  canInviteMembers,
   canRevokeMembers,
   canRevokeMember,
   canManageCreditBudgets,
   canManageManagers,
+  showEmails,
 }) => {
   const { t } = useTranslation();
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [role, setRole] = useState<RoleFilter>('all');
-  const [status, setStatus] = useState<StatusFilter>('all');
   const [sortKey, setSortKey] = useState<RosterSortKey>('name');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [page, setPage] = useState(1);
@@ -101,16 +100,13 @@ const MemberRoster: FC<MemberRosterProps> = ({
   useEffect(() => () => debouncedSearch.cancel(), [debouncedSearch]);
 
   const visible = useMemo(
-    () => sortMembers(filterMembers(members, { search, role, status }), sortKey, sortDirection),
-    [members, search, role, status, sortKey, sortDirection]
+    () => sortMembers(filterMembers(members, { search, role }), sortKey, sortDirection),
+    [members, search, role, sortKey, sortDirection]
   );
   const current = useMemo(() => paginate(visible, page), [visible, page]);
 
   const isRemovable = (member: OrganizationRosterRow) =>
-    member.status === 'accepted' &&
-    member.role !== 'owner' &&
-    member.id !== currentUserId &&
-    canRevokeMember(member.id);
+    member.role !== 'owner' && member.id !== currentUserId && canRevokeMember(member.id);
   const pageRemovable = current.items.filter(isRemovable);
   const allOnPageSelected = pageRemovable.length > 0 && pageRemovable.every(m => selectedIds.has(m.id));
   const someOnPageSelected = pageRemovable.some(m => selectedIds.has(m.id));
@@ -138,7 +134,6 @@ const MemberRoster: FC<MemberRosterProps> = ({
     setSearchInput('');
     setSearch('');
     setRole('all');
-    setStatus('all');
     resetView();
   };
 
@@ -235,11 +230,11 @@ const MemberRoster: FC<MemberRosterProps> = ({
         key={member.id}
         organization={organization}
         user={member}
-        canInviteMembers={canInviteMembers}
         canRevokeMembers={canRevokeMember(member.id)}
         canManageCreditBudgets={canManageCreditBudgets}
         canManageManagers={canManageManagers}
         selectable={canRevokeMembers}
+        showEmails={showEmails}
         selected={selectedIds.has(member.id)}
         onToggleSelect={isRemovable(member) ? () => toggleOne(member.id) : undefined}
       />
@@ -250,18 +245,17 @@ const MemberRoster: FC<MemberRosterProps> = ({
     <Stack
       spacing={1.5}
       flexGrow={1}
-      mx={{ xs: 0, sm: '20px' }}
       minHeight={0}
       sx={{ minWidth: 0, containerType: 'inline-size', containerName: 'organization-members-roster' }}
     >
       <Input
         className="organization-members-search-input"
-        placeholder="Search by name or email"
+        placeholder={showEmails ? 'Search by name or email' : 'Search by name'}
         value={searchInput}
         slotProps={{
           input: {
             'data-testid': 'organization-members-search-input',
-            'aria-label': 'Search members by name or email',
+            'aria-label': showEmails ? 'Search members by name or email' : 'Search members by name',
           },
         }}
         onChange={e => {
@@ -282,21 +276,6 @@ const MemberRoster: FC<MemberRosterProps> = ({
         >
           {selectOption('role', 'all', 'All roles')}
           {MEMBER_ROLES.map(key => selectOption('role', key, t(`organization.roles.${key}`)))}
-        </Select>
-        <Select
-          size="sm"
-          value={status}
-          onChange={(_e, value) => {
-            setStatus(value as StatusFilter);
-            resetView();
-          }}
-          slotProps={{
-            button: { 'aria-label': 'Filter by status', 'data-testid': 'organization-members-status-filter' },
-          }}
-        >
-          {selectOption('status', 'all', 'All statuses')}
-          {selectOption('status', 'accepted', 'Active')}
-          {selectOption('status', 'pending', 'Pending')}
         </Select>
         <Select
           size="sm"
@@ -342,21 +321,27 @@ const MemberRoster: FC<MemberRosterProps> = ({
         </Stack>
       )}
 
-      <Stack className="organization-members-list-container" flexGrow={1} sx={{ overflow: 'auto' }} gap="10px">
+      <Stack
+        className="organization-members-list-container"
+        flexGrow={1}
+        sx={{ overflow: 'auto', border: '1px solid', borderColor: 'divider', borderRadius: 'lg' }}
+      >
         <Box
           className="organization-members-list-header"
           data-testid="organization-members-list-header"
           sx={{
             display: { xs: 'none', sm: 'grid' },
             gridTemplateColumns: `${canRevokeMembers ? '32px ' : ''}minmax(0, 1fr)`,
-            [ROSTER_TABLE_QUERY]: { gridTemplateColumns: rosterGridColumns(canRevokeMembers) },
+            [ROSTER_TABLE_QUERY]: {
+              gridTemplateColumns: rosterGridColumns({ selectable: canRevokeMembers, showEmails }),
+            },
             columnGap: '12px',
             alignItems: 'center',
             borderBottom: '1px solid',
             borderColor: 'divider',
             color: 'text.secondary',
             fontSize: '14px',
-            pb: '12px',
+            py: '10px',
             px: '16px',
           }}
         >
@@ -376,7 +361,14 @@ const MemberRoster: FC<MemberRosterProps> = ({
             />
           )}
           <Box>Name</Box>
-          <Box sx={{ display: 'none', [ROSTER_TABLE_QUERY]: { display: 'block' } }}>Email</Box>
+          {showEmails && (
+            <Box
+              data-testid="organization-members-header-email"
+              sx={{ display: 'none', [ROSTER_TABLE_QUERY]: { display: 'block' } }}
+            >
+              Email
+            </Box>
+          )}
           <Box sx={{ display: 'none', [ROSTER_TABLE_QUERY]: { display: 'block' } }}>Role</Box>
           <Box
             data-testid="organization-members-header-credits"

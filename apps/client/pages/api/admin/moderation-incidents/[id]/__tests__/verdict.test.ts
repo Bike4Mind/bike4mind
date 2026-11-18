@@ -15,6 +15,7 @@ const mockSubmitNcmecReport = vi.fn();
 const mockFinishNcmecReport = vi.fn();
 const mockUserFindById = vi.fn();
 const audit = vi.hoisted(() => ({ record: vi.fn(), inTransaction: [] as boolean[], txActive: false }));
+const mockRequireStepUp = vi.hoisted(() => vi.fn());
 
 vi.mock('@bike4mind/database', () => ({
   imageModerationIncidentRepository: {
@@ -36,7 +37,10 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mockRequireStepUp }));
+
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: audit.record,
   userAuditTarget: async (id: string) => {
     const user = await mockUserFindById(id);
@@ -107,11 +111,15 @@ const makeRes = () => {
   return res;
 };
 
+// The verdicts the review page sends carry a reviewer reason; the helper adds one unless a test sets its own.
+const REASONED_VERDICTS = new Set(['no_action', 'false_positive', 'record_manual_report']);
+const REASON = 'Reviewed against the content policy';
+
 const makeReq = (body: Record<string, unknown>, id = 'inc-1') => ({
   method: 'POST',
   user: { isAdmin: true, id: 'admin-1' },
   query: { id },
-  body,
+  body: REASONED_VERDICTS.has(String(body.verdict)) && !('reason' in body) ? { ...body, reason: REASON } : body,
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 });
 
@@ -142,6 +150,50 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       return null;
     });
     audit.inTransaction = [];
+    mockRequireStepUp.mockReset().mockResolvedValue(undefined);
+  });
+
+  const SIDE_EFFECTS = [
+    mockMarkNoAction,
+    mockFindById,
+    mockClaimForNcmecSubmission,
+    mockUpdateReviewStatus,
+    mockResolveConfirmedCsam,
+    mockSetNcmecReportId,
+    mockRecordManualReport,
+    mockSubmitNcmecReport,
+    mockFinishNcmecReport,
+    audit.record,
+  ];
+
+  it.each(['no_action', 'false_positive', 'record_manual_report', 'confirmed_csam', 'requeue'])(
+    'requires a recent step-up before %s has any side effect',
+    async verdict => {
+      const stepUpRequired = Object.assign(new Error('Recent verification required'), {
+        statusCode: 403,
+        code: 'step_up_required',
+      });
+      mockRequireStepUp.mockRejectedValue(stepUpRequired);
+      const req = makeReq({ verdict, ncmecReportId: '123456' });
+
+      await expect(runHandler(req, makeRes())).rejects.toBe(stepUpRequired);
+
+      expect(mockRequireStepUp).toHaveBeenCalledWith(req);
+      for (const mock of SIDE_EFFECTS) expect(mock).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ['no_action', {}],
+    ['false_positive', {}],
+    ['record_manual_report', { ncmecReportId: '123456' }],
+  ])('refuses %s with a 400 and no side effects when the reason is missing or too short', async (verdict, extra) => {
+    for (const reason of [undefined, '', 'ok']) {
+      await expect(runHandler(makeReq({ verdict, ...extra, reason }), makeRes())).rejects.toMatchObject({
+        statusCode: 400,
+      });
+    }
+    for (const mock of SIDE_EFFECTS) expect(mock).not.toHaveBeenCalled();
   });
 
   it('admits a moderation delegate and attributes its verdict', async () => {
@@ -163,18 +215,7 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       await expect(runHandler({ ...makeReq({ verdict: 'no_action' }), user }, makeRes())).rejects.toMatchObject({
         statusCode: 403,
       });
-      for (const mock of [
-        mockMarkNoAction,
-        mockFindById,
-        mockClaimForNcmecSubmission,
-        mockUpdateReviewStatus,
-        mockResolveConfirmedCsam,
-        mockSetNcmecReportId,
-        mockRecordManualReport,
-        mockSubmitNcmecReport,
-        mockFinishNcmecReport,
-        audit.record,
-      ]) {
+      for (const mock of SIDE_EFFECTS) {
         expect(mock).not.toHaveBeenCalled();
       }
     }
@@ -752,6 +793,7 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
           target: { kind: 'user', id: 'user-suspect-1', displayName: 'suspect@example.com' },
           details: { incidentId: 'inc-1', verdict },
         });
+        expect(audit.record.mock.calls[0][1].reason).toBe(REASONED_VERDICTS.has(verdict) ? REASON : undefined);
         expect(audit.inTransaction).toEqual([true]);
         expect(primaryWrite[verdict]().mock.invocationCallOrder[0]).toBeLessThan(
           audit.record.mock.invocationCallOrder[0]

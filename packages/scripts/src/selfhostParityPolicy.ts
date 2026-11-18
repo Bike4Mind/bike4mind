@@ -261,19 +261,19 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'eventRule:infra/providerSpend.ts:ProviderAdminKeyChangeRule',
-    'e328076166277ffd3a5b0f613c21a58d4b0702f4c234dbc8d4e7084195eb07ff',
+    '010acb373b11052609e99fc37aeabc317d999e82e76f70bbddf984af22e54b3f',
     'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
     ['cloudwatch:PutMetricData']
   ),
   hostedOnly(
     'eventRule:infra/providerSpend.ts:ProviderAdminKeyKmsChangeRule',
-    '05121631419d2d44923ae27f0802b510498356aed77bd5d4e460434b6cbe5a36',
+    '7eedf24bd67a72237d112a9b37f58cc772c38164af7ef0b3db6cb8ec2ce94d24',
     'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
     ['cloudwatch:PutMetricData']
   ),
   hostedOnly(
     'eventRule:infra/providerSpend.ts:ProviderAdminKeyReadRule',
-    '196fb966bed4c123fe7b1412bd0ac904b73d0d475c71f7b3da99be9b65d654dd',
+    '4b2696a1e72b34fc676d0bc764d02cb7ed429ee59bc5d1683426894023e2a9db',
     'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
     ['cloudwatch:PutMetricData']
   ),
@@ -543,7 +543,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   broker('queue:infra/queues.ts:generationJobDLQ', '0eb29387a6952921e713298ba6acf3cd1aef5f60d84e67cffe177843b714f38f'),
   wired(
     'queue:infra/queues.ts:generationJobQueue',
-    'e268e038c95b3f6efaf73e354b37ec08c8a36793111d0336bcc9a0d53c3f3a1c',
+    '6f1c037210641aa0733f7b07b7c1c47c7520e464d14954c6085b2866707daaf9',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:generationJobQueue',
@@ -1052,7 +1052,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'schedule:infra/cron.ts:modelDiscoveryCron',
-    '7f2b05bafc0342ba49618e79c8141efeb1def7b2ef88a4c2a76fbcc1f7b16fb8',
+    '7f54c87d76d28adbb51b23f078e98f3a064f2d7fca9c4017ced0b640f4c018bf',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'schedule:modelDiscovery',
@@ -1081,7 +1081,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/cron.ts:providerUsagePoll',
-    '5f00804579eaf0eb3b4ed3b5dca53ece8b19f8457fd8604091d1432f4066eac0',
+    'cf9858cd4ac206f993b34bf8e0c940d4f5c441daf7ef4f66dc5c21b823be76da',
     'Publishes provider-reported spend to hosted CloudWatch alarms on monitored stages; no local metric or alarm destination is configured.',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
@@ -1216,12 +1216,14 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'schedule:infra/cron.ts:accountDeletionSweep',
-    '055111c892156bfadeb720f0e77946ffb31b0335b77f7fdd1687f177750bf0b0',
+    'fd1bd4913d85e990fa3bc7b7e2f4895a2bdb1e04b1c6a2a73fe327d0e1e0ba5d',
     {
       source: 'apps/workers/src/selfhost/accountDeletionSweep.ts',
       symbol: 'registerAccountDeletionSweep',
-      fingerprint: 'd47912b4a94290136beeaa4844ae281be958dd0985d89d5eb766e6cae67971e6',
-    }
+      fingerprint: '066c963d8fc050105d384918d3f371392af41fbf65dcc1bc653ed65e72023146',
+    },
+    // Hosted-only overdue-deletion metric; the self-host runner passes emitMetrics: false.
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
   wired(
     'schedule:infra/cron.ts:signupGrantHeldRelease',
@@ -1264,7 +1266,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'fb9427f9a234d8c335c1f021c0cc7a9b7d2a21f5fd24e3e0ff8b8b896217e78f',
+    'cf34cc039fc0de71bf1daaabf43f40deef92126f55e00be9c3025645c1769cfb',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gap('service:infra/searxng.ts:Searxng', 'fef5f4ce5e094d32525bb4a13828a34b67ba75a38ab72c70e526ba908c31f049'),
@@ -1278,8 +1280,8 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:DlqAlarmTopic',
-    'f27b400cd1e2f5fddc61613dde994f0a4e04898c9aa66282bde4c2c6d96fab1c',
-    ['cloudwatch:DescribeAlarms', 'ssm:GetParameter']
+    '88b055402e66c2942f661c8c6dce9385b5568ee29f63058aaa54ece2f69f8854',
+    ['cloudwatch:DescribeAlarms', 'cloudwatch:GetInsightRuleReport', 'ssm:GetParameter']
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:OobAlarmTopicEmailSub',

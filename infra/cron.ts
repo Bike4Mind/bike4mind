@@ -22,6 +22,7 @@ import {
   riskEvidenceQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
+import { BLOCK_ALL_PUBLIC_ACCESS, encryptBucketAtRest } from './bucketSecurity';
 import { appUrlForLambdaEnv, router, routerDistributionId } from './router';
 import {
   fabFileBucket,
@@ -268,6 +269,7 @@ const accountDeletionSweep =
           },
           permissions: [
             accountDeletionSweepDeadLetter.sendPermission,
+            { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
             {
               actions: ['s3:ListBucketVersions', 's3:DeleteObjectVersion'],
               resources: [
@@ -944,6 +946,35 @@ const attackSimulationCron = runsScheduledJobs
     })
   : undefined;
 
+function createModelPriceSnapshotBucket() {
+  const modelPriceSnapshotBucket = new sst.aws.Bucket('modelPriceSnapshotBucket', {
+    versioning: false,
+    transform: { publicAccessBlock: BLOCK_ALL_PUBLIC_ACCESS },
+  });
+  encryptBucketAtRest('modelPriceSnapshotBucket', modelPriceSnapshotBucket);
+  return modelPriceSnapshotBucket;
+}
+
+// Hand-off from model discovery (has Mongo) to the provider usage poll (has none); the poller's
+// own cron exists only where scheduled jobs run, and so does this.
+const modelPriceSnapshotBucket = runsScheduledJobs ? createModelPriceSnapshotBucket() : undefined;
+// Must match MODEL_PRICE_SNAPSHOT_KEY in @bike4mind/common.
+const MODEL_PRICE_SNAPSHOT_KEY = 'model-prices/per-token.json';
+const modelPriceSnapshotObjectArn = modelPriceSnapshotBucket
+  ? $interpolate`${modelPriceSnapshotBucket.arn}/${MODEL_PRICE_SNAPSHOT_KEY}`
+  : undefined;
+// Discovery writes the object, the poller reads it; each gets only that one key.
+interface ModelPriceSnapshotAccess {
+  environment: Record<string, $util.Output<string>>;
+  write: { actions: string[]; resources: $util.Output<string>[] }[];
+  read: { actions: string[]; resources: $util.Output<string>[] }[];
+}
+const modelPriceSnapshotAccess: ModelPriceSnapshotAccess = {
+  environment: modelPriceSnapshotBucket ? { MODEL_PRICE_SNAPSHOT_BUCKET: modelPriceSnapshotBucket.name } : {},
+  write: modelPriceSnapshotObjectArn ? [{ actions: ['s3:PutObject'], resources: [modelPriceSnapshotObjectArn] }] : [],
+  read: modelPriceSnapshotObjectArn ? [{ actions: ['s3:GetObject'], resources: [modelPriceSnapshotObjectArn] }] : [],
+};
+
 /**
  * Model Discovery
  *
@@ -968,12 +999,14 @@ const modelDiscoveryFunction = new sst.aws.Function('modelDiscoveryFunction', {
   link: [...allSecrets],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    ...modelPriceSnapshotAccess.environment,
   },
   permissions: [
     {
       actions: ['cloudwatch:PutMetricData'],
       resources: ['*'],
     },
+    ...modelPriceSnapshotAccess.write,
     {
       actions: ['bedrock:ListFoundationModels', 'bedrock:GetFoundationModelAvailability'],
       resources: ['*'],
@@ -1261,7 +1294,8 @@ const spendReconciliationCron = runsScheduledJobs
 // Provider Usage Poll - reads the previous complete hour from the Anthropic and OpenAI admin usage
 // reports, prices it with our model rates and publishes ProviderReportedUsd per provider; alarmed in
 // infra/providerSpend.ts. Minute 7 leaves room for the providers' ingestion lag. Enabled: production + dev.
-// No VPC, unlike its neighbours: it reaches only the provider APIs and CloudWatch, never Mongo.
+// No VPC, unlike its neighbours: it reaches only the provider APIs, CloudWatch and S3, never Mongo.
+// ModelPrice rows reach it as the snapshot model discovery writes to modelPriceSnapshotBucket.
 const providerUsagePollCron = runsScheduledJobs
   ? new sst.aws.Cron('providerUsagePoll', {
       schedule: 'cron(7 * * * ? *)',
@@ -1275,12 +1309,14 @@ const providerUsagePollCron = runsScheduledJobs
         environment: {
           ...DEFAULT_LAMBDA_ENVIRONMENT,
           ...providerAdminKeyAccess.environment,
+          ...modelPriceSnapshotAccess.environment,
         },
         permissions: [
           {
             actions: ['cloudwatch:PutMetricData'],
             resources: ['*'],
           },
+          ...modelPriceSnapshotAccess.read,
           ...providerAdminKeyAccess.permissions,
         ],
       },

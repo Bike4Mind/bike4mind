@@ -163,7 +163,7 @@ describe('the Customize screen', () => {
     expect(tab?.getAttribute('aria-selected')).toBe('true');
   });
 
-  it('selects Plugins and shows exactly four unavailable, inert cards', () => {
+  it('selects Plugins and shows exactly three unavailable, inert cards', () => {
     const onClose = vi.fn();
     const onOpenSkillMarket = vi.fn();
     renderNode(<CustomizeScreen onClose={onClose} onOpenSkillMarket={onOpenSkillMarket} />);
@@ -176,7 +176,7 @@ describe('the Customize screen', () => {
     expect(isVisible(byTestId('mcp-settings'))).toBe(false);
 
     const cards = allByTestId('customize-plugin-card');
-    expect(cards.map(card => card.getAttribute('aria-label'))).toEqual(['DataLake', 'QuestMaster', 'Tavern', 'Studio']);
+    expect(cards.map(card => card.getAttribute('aria-label'))).toEqual(['DataLake', 'QuestMaster']);
     act(() => pluginsTab.focus());
     for (const card of cards) {
       expect(card.tagName).toBe('ARTICLE');

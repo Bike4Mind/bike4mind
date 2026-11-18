@@ -73,7 +73,7 @@ export function holdsDataLakeReadScope(req: ScopedRequest): boolean {
 }
 
 /** The slice of `req.apiKeyInfo` the lake-tool gate and run attribution read. */
-export type ApiKeyCredential = Pick<ApiKeyInfo, 'keyId' | 'scopes'>;
+export type ApiKeyCredential = Pick<ApiKeyInfo, 'keyId' | 'scopes' | 'oauthExchangeClientId'>;
 
 /**
  * The chat tools a caller may not be offered on this request: the data-lake write tools when an
@@ -95,11 +95,13 @@ export function dataLakeToolsDeniedFor(req: ScopedRequest): string[] {
 export function credentialExecutionFields(apiKeyInfo: ApiKeyCredential | undefined): TurnAuth & {
   scopeDeniedTools?: string[];
   adminRoleWithheld?: boolean;
+  oauthClientId?: string;
 } {
   const scopeDeniedTools = dataLakeToolsDeniedFor({ apiKeyInfo });
   return {
     ...(scopeDeniedTools.length ? { scopeDeniedTools } : {}),
     ...(adminRoleWithheldFor(apiKeyInfo) ? { adminRoleWithheld: true } : {}),
+    ...(apiKeyInfo?.oauthExchangeClientId ? { oauthClientId: apiKeyInfo.oauthExchangeClientId } : {}),
     ...requestTurnAuth({ apiKeyInfo }),
   };
 }

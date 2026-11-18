@@ -349,9 +349,15 @@ export class ChatPage extends BasePage {
 
   /**
    * Asserts the generated image rendered. Call ONLY after
-   * {@link sendImageMessageAndWaitForResponse} - by then streaming is done and the
-   * <img> is mounted from messageData.images. This does NOT recover from WS drops on
+   * {@link sendImageMessageAndWaitForResponse}. This does NOT recover from WS drops on
    * its own; if invoked after a plain {@link sendMessage}, the resilience is lost.
+   *
+   * A generated image reaches the reply by one of two renderers, both inside the response
+   * container: `ai-response-image` (ImageContainer, from messageData.images - an image model
+   * answering directly) or `image-job-card-image` (ImageJobCard - the chat image_generation /
+   * edit_image tools, which run as image jobs since #7694). An image job finishes after the
+   * stream ends (the card shows its progress state meanwhile), so the visibility wait below is
+   * what covers the render time, not the send.
    *
    * Anchors on `aiResponseRoot.last()`: the newest response container. We deliberately
    * do NOT anchor on a pre-send index - navigateToNewChat does not await the prior
@@ -363,11 +369,14 @@ export class ChatPage extends BasePage {
   async waitForImageResponse(timeout: number = TIMEOUTS.IMAGE_GENERATION) {
     // The <img> lives inside the AI response container, so waiting on it
     // implicitly waits for the container too.
-    const img = this.aiResponseRoot.last().getByTestId('ai-response-image').first();
+    const reply = this.aiResponseRoot.last();
+    const img = reply.getByTestId('ai-response-image').or(reply.getByTestId('image-job-card-image')).first();
 
-    // Streaming has already completed by the time this is called, so the <img>
-    // should be mounted (PromptReplies renders it from messageData.images).
     await expect(img).toBeVisible({ timeout });
+
+    // The job card's <img> is loading="lazy": once the reply text below it streams in, the card
+    // can sit above the viewport and never fetch, leaving naturalWidth at 0. Bring it into view.
+    await img.scrollIntoViewIfNeeded();
 
     // Wait for the image to fully load (naturalWidth > 0).
     await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth), { timeout }).toBeGreaterThan(0);

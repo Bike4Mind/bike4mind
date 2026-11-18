@@ -152,7 +152,8 @@ const nextConfig = {
   // apps/client/scripts/check-standalone-tree.mjs. Globs resolve against this package.
   // Deliberately NOT public/**: server/help/retrieval.ts reads public/help-content per request.
   outputFileTracingExcludes: {
-    '**/*': ['e2e/**', '**/*.test.ts?(x)'],
+    // The ffmpeg binary belongs to the generation-job worker only; never ship it in the Next server.
+    '**/*': ['e2e/**', '**/*.test.ts?(x)', '**/ffmpeg-static/**', '**/node_modules/.pnpm/ffmpeg-static*/**'],
   },
 
   transpilePackages: [
