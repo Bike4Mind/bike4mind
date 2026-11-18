@@ -13,6 +13,9 @@ describe('modManifestSchema', () => {
     ['an uppercase id', { id: 'Nightglass' }],
     ['an id with a path in it', { id: '../other' }],
     ['a one-character id', { id: 'n' }],
+    ['an all-digit id', { id: '42' }],
+    ['a longer all-digit id', { id: '1234' }],
+    ['a hex-looking id', { id: '0x1f' }],
     ['a non-semver version', { version: 'v1' }],
     ['an unknown kind', { kind: 'theme' }],
     ['a fractional contract', { contract: 1.5 }],
@@ -22,6 +25,10 @@ describe('modManifestSchema', () => {
     ['manifest version 2', { manifest: 2 }],
   ])('rejects %s', (_label, patch) => {
     expect(modManifestSchema.safeParse({ ...manifestFixture, ...patch }).success).toBe(false);
+  });
+
+  it.each(['nightglass', 'a1', '2d-skin'])('accepts the id %s', id => {
+    expect(modManifestSchema.safeParse({ ...manifestFixture, id }).success).toBe(true);
   });
 
   it('lets a view carry an entry document', () => {

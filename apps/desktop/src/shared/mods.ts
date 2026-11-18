@@ -7,14 +7,15 @@ import { z } from 'zod';
  */
 
 /** Also the folder name under userData/mods and the asset URL host, so lowercase only. */
-export const MOD_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
+// A letter is required and a 0x prefix refused: Chromium canonicalises numeric and hex hosts to IPv4.
+export const MOD_ID_PATTERN = /^(?=[a-z0-9-]*[a-z])(?!0x)[a-z0-9][a-z0-9-]{1,62}$/;
 
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
 export const modManifestSchema = z
   .strictObject({
     manifest: z.literal(1),
-    id: z.string().regex(MOD_ID_PATTERN, 'must be 2-63 lowercase letters, digits or dashes'),
+    id: z.string().regex(MOD_ID_PATTERN, 'must be 2-63 lowercase letters, digits or dashes, contain a letter and not start with 0x'),
     name: z.string().min(1).max(60),
     version: z.string().regex(SEMVER, 'must be a semantic version like 1.0.0'),
     kind: z.enum(['skin', 'layout', 'view']),
