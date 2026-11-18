@@ -4,12 +4,13 @@ import { useBillingView } from '@client/app/components/subscription/BillingDeepL
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { StudioPanel } from '../design/StudioPanel';
 import StudioPrimaryAction from '../design/StudioPrimaryAction';
+import ProductionsShowcase from './ProductionsShowcase';
 import StudioV2Frame from './StudioV2Frame';
 
 const COPY: Partial<Record<StudioFeature, { title: string; body: string }>> = {
   productions: {
     title: 'Productions is a paid feature',
-    body: 'Assemble your assets into ads and films on a timeline. Upgrade your plan to open Productions.',
+    body: 'Assemble your assets into ads and films on a timeline. Explore the sample below, then upgrade to create, edit and export your own.',
   },
 };
 
@@ -38,6 +39,7 @@ const StudioUpgradePrompt = ({ feature }: { feature: StudioFeature }) => {
           </div>
         )}
       </StudioPanel>
+      {feature === 'productions' && <ProductionsShowcase />}
     </StudioV2Frame>
   );
 };
