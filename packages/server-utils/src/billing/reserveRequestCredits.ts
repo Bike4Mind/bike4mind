@@ -5,6 +5,7 @@ import {
   pendingCreditHoldRepository,
   usageEventRepository,
   userRepository,
+  warmExchangeAttribution,
   withTransaction,
 } from '@bike4mind/database';
 import { newAccountSpendCapAdaptersWithAlert } from './newAccountSpendCapWithAlert';
@@ -225,6 +226,7 @@ async function settlePendingHold(
   const charged = Number.isFinite(chargedCredits)
     ? Math.min(Math.max(chargedCredits, 0), hold.reservedCredits)
     : hold.reservedCredits;
+  await warmExchangeAttribution((entry as { apiKeyId?: string }).apiKeyId);
   for (let attempt = 1; ; attempt++) {
     try {
       // A process death or failed write leaves either the original refundable hold or the completed settlement.

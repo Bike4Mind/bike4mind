@@ -3,6 +3,7 @@ import {
   completionRunRepository,
   pendingCreditHoldRepository,
   userRepository,
+  warmExchangeAttribution,
   withTransaction,
   type PendingCreditHold,
 } from '@bike4mind/database';
@@ -29,7 +30,7 @@ export function runBudgetExhaustedMessage(budgetCredits: number, committedCredit
  * attributed to a budgeted run claims its run budget in the same transaction as its balance hold, and
  * every terminal outcome of the hold (settle, refund, expired-hold sweep) releases that claim with it.
  */
-export function createCompletionCreditHolds(logger: Logger): CompletionCreditHolds {
+export function createCompletionCreditHolds(logger: Logger, apiKeyId?: string): CompletionCreditHolds {
   let pending: PendingCreditHold | undefined;
 
   return {
@@ -78,6 +79,7 @@ export function createCompletionCreditHolds(logger: Logger): CompletionCreditHol
     async settle(chargedCredits, settle) {
       if (!pending) return false;
       const holdId = pending.id;
+      await warmExchangeAttribution(apiKeyId);
       for (let attempt = 1; attempt <= SETTLEMENT_ATTEMPTS; attempt++) {
         try {
           const settled = await withTransaction(async () => {

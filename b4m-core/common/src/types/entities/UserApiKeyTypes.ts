@@ -333,6 +333,10 @@ export interface IUserApiKeyBaseline {
   lastCalculatedAt: Date;
 }
 
+/** Whether a key owner held paid standing when an exchange key was minted. */
+export const PAYER_STANDINGS = ['paid', 'unpaid'] as const;
+export type PayerStanding = (typeof PAYER_STANDINGS)[number];
+
 export interface IUserApiKeyMetadata {
   clientIP?: string;
   userAgent?: string;
@@ -348,6 +352,8 @@ export interface IUserApiKeyMetadata {
    * once a client had >20 concurrent federated users.
    */
   oauthClientId?: string;
+  /** Owner's paid standing at mint, exchange keys only. Absent when the standing read failed. */
+  payerStanding?: PayerStanding;
   baseline?: IUserApiKeyBaseline;
 }
 

@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1210 routes: 106 contracted, 11 aliases of another route, 311 with no static caller in `apps/client/app`.
+1215 routes: 106 contracted, 11 aliases of another route, 316 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -137,7 +137,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | skills | 22 | 0 | 3 | 19 | 0 | 0 | 0 |
 | sky-greeting | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | slack | 16 | 0 | 7 | 1 | 0 | 8 | 8 |
-| spaces | 8 | 0 | 0 | 8 | 0 | 0 | 8 |
+| spaces | 13 | 0 | 0 | 13 | 0 | 0 | 13 |
 | sre | 12 | 0 | 11 | 0 | 0 | 1 | 1 |
 | stripe | 5 | 0 | 2 | 2 | 0 | 1 | 1 |
 | studio | 5 | 0 | 0 | 5 | 0 | 0 | 0 |
@@ -1623,12 +1623,17 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `/api/spaces` | GET, POST | jwt | - | - | no | - | 0 |
 | `/api/spaces/[id]` | GET, PATCH, DELETE | jwt | - | - | no | - | 0 |
+| `/api/spaces/[id]/domain-join` | POST | jwt | - | - | no | - | 0 |
+| `/api/spaces/[id]/domains` | GET, POST | jwt | - | - | no | - | 0 |
+| `/api/spaces/[id]/domains/[claimId]` | PATCH, DELETE | jwt | - | - | no | - | 0 |
+| `/api/spaces/[id]/domains/[claimId]/verify` | POST | jwt | - | - | no | - | 0 |
 | `/api/spaces/[id]/invite-links` | GET, POST | jwt | - | - | no | - | 0 |
 | `/api/spaces/[id]/invite-links/[inviteId]` | DELETE | jwt | - | - | no | - | 0 |
 | `/api/spaces/[id]/invites` | GET, POST | jwt | - | - | no | - | 0 |
 | `/api/spaces/[id]/leave` | POST | jwt | - | - | no | - | 0 |
 | `/api/spaces/[id]/members/[userId]` | PATCH, DELETE | jwt | - | - | no | - | 0 |
 | `/api/spaces/[id]/transfer-ownership` | POST | jwt | - | - | no | - | 0 |
+| `/api/spaces/domain-suggestions` | GET | jwt | - | - | no | - | 0 |
 
 ### sre
 
