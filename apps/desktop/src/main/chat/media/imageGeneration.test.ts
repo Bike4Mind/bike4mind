@@ -287,4 +287,26 @@ describe('generateImage', () => {
     expect(await promise).toMatchObject({ message: expect.stringMatching(/stopped/) });
     expect(h.cancelImageJob).toHaveBeenCalledWith('job1');
   });
+
+  it.each([
+    ['quietly accepts a refused cancel (409)', 409, false],
+    ['logs any other cancel failure, since the stopped job keeps running', 500, true],
+  ])('%s', async (_name, status, logged) => {
+    const controller = new AbortController();
+    const h = await harness([RUNNING]);
+    const refusal = new MediaToolError('Cancelling the image failed');
+    refusal.status = status;
+    h.cancelImageJob.mockRejectedValue(refusal);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const promise = generateImage(REQUEST, { ...h.deps, signal: controller.signal }).then(
+      value => value,
+      error => error as Error
+    );
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    controller.abort();
+    expect(await promise).toMatchObject({ message: expect.stringMatching(/stopped/) });
+    expect(warn).toHaveBeenCalledTimes(logged ? 1 : 0);
+    warn.mockRestore();
+  });
 });

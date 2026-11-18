@@ -6354,7 +6354,7 @@ export interface components {
     };
     /**
      * @example {
-     *       "group_id": "664f1c2b9a1e4d0012ab34ee",
+     *       "group_id": "664f1c2b9a1e4d0012ab34ff",
      *       "data": [
      *         {
      *           "id": "664f1c2b9a1e4d0012ab34cd",
@@ -6363,7 +6363,7 @@ export interface components {
      *           "model": "gpt-image-1",
      *           "mode": "generate",
      *           "prompt": "A watercolor lighthouse at dusk",
-     *           "group_id": "664f1c2b9a1e4d0012ab34ee",
+     *           "group_id": "664f1c2b9a1e4d0012ab34ff",
      *           "source": "api",
      *           "error": null,
      *           "output": null,
@@ -6578,7 +6578,7 @@ export interface components {
      *       "model": "gpt-image-1",
      *       "mode": "generate",
      *       "prompt": "A watercolor lighthouse at dusk",
-     *       "group_id": "664f1c2b9a1e4d0012ab34ee",
+     *       "group_id": "664f1c2b9a1e4d0012ab34ff",
      *       "source": "api",
      *       "error": null,
      *       "output": null,
@@ -6695,7 +6695,7 @@ export interface components {
      *       "model": "gpt-image-1",
      *       "mode": "generate",
      *       "prompt": "A watercolor lighthouse at dusk",
-     *       "group_id": "664f1c2b9a1e4d0012ab34ee",
+     *       "group_id": "664f1c2b9a1e4d0012ab34ff",
      *       "source": "api",
      *       "error": null,
      *       "output": null,

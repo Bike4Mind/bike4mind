@@ -53,7 +53,11 @@ const toDomainRequest = (body: CreateImageJobBody): ImageJobRequest => {
   };
 };
 
-const toErrorCode = (refusal: Extract<CreateImageJobsResult, { ok: false }>): ImageJobApiErrorCode => {
+type CreateRefusal = Extract<CreateImageJobsResult, { ok: false }>;
+// toHttpError answers the storage refusal itself; every other refusal carries an ImageJobApiErrorCode.
+type CodedRefusal = Exclude<CreateRefusal, { code: 'storage_quota_exceeded' }>;
+
+const toErrorCode = (refusal: CodedRefusal): ImageJobApiErrorCode => {
   if (refusal.code === 'unsupported_by_model') return refusal.failures[0].code;
   // The contract bounds count, so this only means the service cap moved without IMAGE_JOB_COUNT_MAX.
   if (refusal.code === 'invalid_count') return 'invalid_request';
@@ -62,7 +66,7 @@ const toErrorCode = (refusal: Extract<CreateImageJobsResult, { ok: false }>): Im
 
 // The storage refusal is a 400 like the Files routes' storage_limit_exceeded; every other refusal is a 422 (no
 // 402), matching video- and music-generations.
-const toHttpError = (refusal: Extract<CreateImageJobsResult, { ok: false }>) => {
+const toHttpError = (refusal: CreateRefusal) => {
   if (refusal.code === 'storage_quota_exceeded') return new StorageLimitError(refusal.message, refusal.storage);
   const message =
     refusal.code === 'unsupported_by_model'
@@ -89,7 +93,8 @@ const createRouter = nextRouteForContract(createImageJobContract, {
       source,
       apiKeyId: req.apiKeyInfo?.keyId,
       // The namespace is shared on purpose with the Studio image route (`studio:image:<user>:<key>`): for a JWT caller
-      // it is the same user and the same createImageJobs, so a retry across the two replays rather than double-bills.
+      // that omits organization_id it is the same user, owner and createImageJobs, so a retry across the two replays
+      // rather than double-bills. Naming organization_id bills another owner, and keys are scoped per owner.
       ...(idempotencyKey && { idempotencyKey: `${source}:image:${req.user.id}:${idempotencyKey}` }),
     },
     getCreateImageJobsDeps()

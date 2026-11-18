@@ -175,8 +175,21 @@ async function pollForOutput(jobId: string, deps: ImageGenerationDeps): Promise<
       progress(`Generating... ${Math.round((Date.now() - startedAt) / 1000)}s`);
     }
   } catch (error) {
-    if (signal.aborted) await client.cancelImageJob(jobId).catch(() => undefined);
+    if (signal.aborted) await cancelAfterAbort(client, jobId);
     throw error;
+  }
+}
+
+/**
+ * A 409 means the job already started and will finish server-side, which the docblock above expects.
+ * Anything else (auth, network, 5xx) leaves a job running that the user stopped, so it is logged.
+ */
+async function cancelAfterAbort(client: MediaApiClient, jobId: string): Promise<void> {
+  try {
+    await client.cancelImageJob(jobId);
+  } catch (error) {
+    if (error instanceof MediaToolError && error.status === 409) return;
+    console.warn(`Could not cancel image job ${jobId} after the user stopped it: ${String(error)}`);
   }
 }
 

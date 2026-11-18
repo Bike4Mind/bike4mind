@@ -1293,13 +1293,14 @@ describe('generateImage', () => {
     expect(cancelImageJob).toHaveBeenCalledWith('job1');
   });
 
-  it('ignores a refused cancel and still rethrows the abort', async () => {
+  const abortWithCancelFailure = async (cancelError: unknown) => {
     const controller = new AbortController();
     const getImageJob = vi.fn(async () => {
       controller.abort(new Error('cancelled by client'));
       return { ...pendingJob, state: 'running' };
     });
-    const cancelImageJob = vi.fn().mockRejectedValue(new Error('409 not_cancellable'));
+    const cancelImageJob = vi.fn().mockRejectedValue(cancelError);
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
 
     await expect(
       generateImage(
@@ -1309,6 +1310,21 @@ describe('generateImage', () => {
       )
     ).rejects.toThrow('cancelled by client');
     expect(cancelImageJob).toHaveBeenCalledWith('job1');
+    return warn;
+  };
+
+  it('quietly accepts a refused cancel (409) and still rethrows the abort', async () => {
+    const warn = await abortWithCancelFailure(
+      new B4mApiError(409, { error: 'running', errorCode: 'not_cancellable' }, new Headers())
+    );
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('logs any other cancel failure, since the aborted job keeps running', async () => {
+    const warn = await abortWithCancelFailure(new B4mApiError(500, { error: 'boom' }, new Headers()));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('cancelling the aborted image job failed'));
+    warn.mockRestore();
   });
 
   it('does not cancel when the poll merely times out', async () => {

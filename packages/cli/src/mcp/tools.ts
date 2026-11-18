@@ -25,6 +25,7 @@ import {
   type PublicImageJob,
 } from '@bike4mind/common';
 import { resolveSupportedMimeType } from '@bike4mind/utils';
+import { B4mApiError } from '@bike4mind/sdk';
 import {
   apiErrorCode,
   apiErrorRetryAfterSeconds,
@@ -741,6 +742,21 @@ const chatPollInterval = (elapsedMs: number, intervalMs: number) =>
 
 // A failed dispatch (ChatCompletionInvoke) writes `type: 'error'` without touching `status`, which
 // stays 'running', so the type check is what ends the poll on it.
+/**
+ * Only a cancel stops the job. A running one refuses with a 409 and finishes, which is expected; any other failure
+ * leaves a job running that the caller aborted, so it is logged.
+ */
+async function cancelImageJobAfterAbort(client: B4mApiClient, jobId: string, ref: string): Promise<void> {
+  try {
+    await client.cancelImageJob(jobId);
+  } catch (err) {
+    if (err instanceof B4mApiError && err.status === 409) return;
+    logger.warn(
+      `mcp: cancelling the aborted image job failed (${ref}): ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
 const isSettled = (q: QuestResponse) => q.status === 'done' || q.status === 'stopped' || q.type === 'error';
 
 // Derived here rather than read from the poll's `reply` because older servers return the stored
@@ -888,8 +904,7 @@ export async function generateImage(
       { ...poll, timeoutMs, interval: () => intervalMs }
     );
   } catch (err) {
-    // Only a cancel stops the job: a running one refuses (409) and finishes, so a failed cancel is expected.
-    if (poll.signal?.aborted) await client.cancelImageJob(created.id).catch(() => undefined);
+    if (poll.signal?.aborted) await cancelImageJobAfterAbort(client, created.id, ref);
     throw err;
   }
   if (!outcome.finished) {
