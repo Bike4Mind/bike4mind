@@ -64,9 +64,34 @@ beforeEach(() => {
 });
 
 describe('GET /api/admin/spend-explorer/accounts', () => {
-  it('is admin-gated with the admin API-key scope', () => {
-    const config = (handler as unknown as { _config: { requiredScopes: string[] } })._config;
+  it('is admin-gated, first-party JWT only, with the admin API-key scope', () => {
+    const config = (handler as unknown as { _config: { requiredScopes: string[]; auth: string } })._config;
     expect(config.requiredScopes).toEqual([ApiKeyScope.ADMIN]);
+    expect(config.auth).toBe('jwtOnly');
+  });
+
+  it('lets a support:read delegate in and keeps a settings:manage-only delegate out', async () => {
+    m.spendBreakdown.mockResolvedValue(breakdown([]));
+    const query = { from: '2026-11-10T00:00:00Z', to: '2026-11-11T00:00:00Z' };
+    const allowed = await runGet(handler, query, { isAdmin: false, id: 'd-1', adminPermissions: ['support:read'] });
+    expect(allowed.thrown).toBeUndefined();
+
+    const denied = await runGet(handler, query, { isAdmin: false, id: 'd-2', adminPermissions: ['settings:manage'] });
+    expect(denied.thrown).toMatchObject({ statusCode: 403 });
+  });
+
+  it('keys the cache by range, limit and comparison window, and passes recache through', async () => {
+    m.spendBreakdown.mockResolvedValue(breakdown([]));
+    const base = { from: '2026-11-10T00:00:00Z', to: '2026-11-11T00:00:00Z' };
+    await get(base);
+    await get({ ...base, limit: '5' });
+    await get({ ...base, compareFrom: '2026-11-09T00:00:00Z', compareTo: '2026-11-10T00:00:00Z' });
+    await get({ ...base, recache: 'true' });
+    const calls = m.getCachedData.mock.calls;
+    expect(new Set(calls.slice(0, 3).map(call => call[0])).size).toBe(3);
+    expect(calls[3][0]).toBe(calls[0][0]);
+    expect(calls[0][2]).toMatchObject({ recache: false });
+    expect(calls[3][2]).toMatchObject({ recache: true });
   });
 
   const personal = (userId: string, costUsd: number) => [
@@ -156,6 +181,14 @@ describe('GET /api/admin/spend-explorer/accounts', () => {
 
   it.each([
     [{ from: '2026-11-10T00:00:00Z' }],
+    [
+      {
+        from: '2026-11-10T00:00:00Z',
+        to: '2026-11-11T00:00:00Z',
+        compareFrom: '2000-01-01T00:00:00Z',
+        compareTo: '2026-11-10T00:00:00Z',
+      },
+    ],
     [{ from: '2026-11-11T00:00:00Z', to: '2026-11-10T00:00:00Z' }],
     [{ from: '2026-11-10T00:00:00Z', to: '2026-11-11T00:00:00Z', limit: '500' }],
     [{ from: '2026-11-10T00:00:00Z', to: '2026-11-11T00:00:00Z', compareFrom: '2026-11-03T00:00:00Z' }],

@@ -179,8 +179,6 @@ apps/client/pages/api/admin/slack-audit-logs/index.ts
 apps/client/pages/api/admin/slack-workspaces.ts
 apps/client/pages/api/admin/spend-reconciliation.ts
 apps/client/pages/api/admin/spend.ts
-apps/client/pages/api/admin/spend-explorer/accounts.ts  # deliberately accepts ADMIN-scoped API keys, like the admin spend handler above
-apps/client/pages/api/admin/spend-explorer/timeline.ts  # deliberately accepts ADMIN-scoped API keys, like the admin spend handler above
 apps/client/pages/api/admin/system-health.ts
 apps/client/pages/api/admin/system-health/integration-health.ts
 apps/client/pages/api/admin/system-health/test-database.ts

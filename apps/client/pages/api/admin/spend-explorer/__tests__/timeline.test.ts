@@ -23,6 +23,7 @@ vi.mock('@bike4mind/services', () => ({
   cacheService: { getCachedData: (...a: unknown[]) => m.getCachedData(...(a as [string, () => unknown])) },
 }));
 
+import { SUSPEND_ACTIONS } from '@server/security/accountStatusAuditActions';
 import handler from '../timeline';
 import { findReturning, NON_ADMIN_USER, runGet } from '@server/admin/spendExplorer/__tests__/routeTestHarness';
 
@@ -37,9 +38,10 @@ beforeEach(() => {
 });
 
 describe('GET /api/admin/spend-explorer/timeline', () => {
-  it('is admin-gated with the admin API-key scope', () => {
-    const config = (handler as unknown as { _config: { requiredScopes: string[] } })._config;
+  it('is admin-gated, first-party JWT only, with the admin API-key scope', () => {
+    const config = (handler as unknown as { _config: { requiredScopes: string[]; auth: string } })._config;
     expect(config.requiredScopes).toEqual([ApiKeyScope.ADMIN]);
+    expect(config.auth).toBe('jwtOnly');
   });
 
   it('defaults to daily buckets, snaps the range to whole UTC days and reaches back for the baseline', async () => {
@@ -78,7 +80,9 @@ describe('GET /api/admin/spend-explorer/timeline', () => {
     expect(m.spendTimeline).toHaveBeenCalledWith(
       expect.objectContaining({ segmentIds: { internal: ['u-int'], partner: ['o-partner'] }, actorUserId: 'u-1' })
     );
-    expect(m.auditFind).toHaveBeenCalledWith(expect.objectContaining({ 'target.id': 'u-1' }));
+    expect(m.auditFind).toHaveBeenCalledWith(
+      expect.objectContaining({ 'target.id': 'u-1', action: { $in: SUSPEND_ACTIONS } })
+    );
   });
 
   it('refuses a caller without admin access', async () => {
@@ -89,6 +93,38 @@ describe('GET /api/admin/spend-explorer/timeline', () => {
     );
     expect(thrown).toMatchObject({ statusCode: 403 });
     expect(m.spendTimeline).not.toHaveBeenCalled();
+  });
+
+  it('lets a support:read delegate in and keeps a settings:manage-only delegate out', async () => {
+    const query = { from: '2026-11-01T00:00:00Z', to: '2026-11-10T00:00:00Z' };
+    const allowed = await runGet(handler, query, { isAdmin: false, id: 'd-1', adminPermissions: ['support:read'] });
+    expect(allowed.thrown).toBeUndefined();
+
+    const denied = await runGet(handler, query, { isAdmin: false, id: 'd-2', adminPermissions: ['settings:manage'] });
+    expect(denied.thrown).toMatchObject({ statusCode: 403 });
+  });
+
+  it('accepts an unaligned 400-day range and rejects one past the cap', async () => {
+    const ok = await get({ from: '2025-10-01T10:00:00Z', to: '2026-11-05T10:00:00Z' });
+    expect(ok.thrown).toBeUndefined();
+    expect(ok.body?.buckets).toHaveLength(401);
+
+    const tooWide = await get({ from: '2025-10-01T10:00:00Z', to: '2026-11-06T10:00:00Z' });
+    expect(tooWide.thrown).toMatchObject({ statusCode: 400 });
+  });
+
+  it('keys the cache by user and split, and defaults recache to false', async () => {
+    const base = { from: '2026-11-01T00:00:00Z', to: '2026-11-10T00:00:00Z' };
+    await get(base);
+    await get({ ...base, userId: 'u-1' });
+    await get({ ...base, splitBy: 'model' });
+    const keys = m.getCachedData.mock.calls.map(call => call[0]);
+    expect(new Set(keys).size).toBe(3);
+    expect(m.getCachedData).toHaveBeenCalledWith(
+      keys[0],
+      expect.any(Function),
+      expect.objectContaining({ recache: false })
+    );
   });
 
   it.each([

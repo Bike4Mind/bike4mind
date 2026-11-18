@@ -12,7 +12,11 @@ import { AccountsQuerySchema, SPEND_EXPLORER_CACHE_MS, spendExplorerCacheKey } f
  * name, segment, share and age. With compareFrom/compareTo, flags accounts in this
  * window's top 10 that were not in the comparison window's.
  */
-const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(
   async (req, res) => {
     const parsed = AccountsQuerySchema.safeParse(req.query);
     if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'Invalid query');

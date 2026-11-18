@@ -12,7 +12,11 @@ import { SPEND_EXPLORER_CACHE_MS, TimelineQuerySchema, spendExplorerCacheKey } f
  * flags, the previous period's totals and suspension markers. Optional
  * userId narrows it to the calls one user ran, whoever paid for them. Aggregated server-side; never ships rows.
  */
-const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(
   async (req, res) => {
     const parsed = TimelineQuerySchema.safeParse(req.query);
     if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'Invalid query');
