@@ -167,12 +167,9 @@ describe('redactForPresenter', () => {
 
   it("drops the desk's reply text and keeps its controls", () => {
     const desk: { [K in keyof Required<InnkeeperDesk>]: InnkeeperDesk[K] } = {
-      send: () => undefined,
       reply: { id: 'reply-1', snippet: `${SECRET} reply` },
       onReadReply: () => undefined,
-      onOpenConversation: () => undefined,
       conversationHidden: true,
-      openRequest: { seq: 2, seed: 'h' },
     };
     expect(sortedKeys(DESK_FIELD_REDACTION)).toEqual(sortedKeys(desk));
     const shown = redactForPresenter({ agents: [], parent: {}, approvals: [], desk }, new Map()).desk;

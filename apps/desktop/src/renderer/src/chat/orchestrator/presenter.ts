@@ -65,13 +65,9 @@ export const APPROVAL_FIELD_REDACTION = {
 } as const satisfies Record<keyof ViewApproval, FieldRedaction>;
 
 export const DESK_FIELD_REDACTION = {
-  send: 'keep',
   reply: 'drop',
   onReadReply: 'keep',
-  onOpenConversation: 'keep',
   conversationHidden: 'keep',
-  // The one character the user typed to open the slip: their own input, not the work's.
-  openRequest: 'keep',
 } as const satisfies Record<keyof InnkeeperDesk, FieldRedaction>;
 
 /** Ids and timing stay, so answering still reaches the real decision; every word is replaced, by position. */
@@ -117,11 +113,8 @@ function redactAgent(agent: AgentView, number: number): AgentView {
 
 function redactDesk(desk: InnkeeperDesk): InnkeeperDesk {
   return {
-    send: desk.send,
     onReadReply: desk.onReadReply,
-    onOpenConversation: desk.onOpenConversation,
     conversationHidden: desk.conversationHidden,
-    ...(desk.openRequest && { openRequest: desk.openRequest }),
   };
 }
 
