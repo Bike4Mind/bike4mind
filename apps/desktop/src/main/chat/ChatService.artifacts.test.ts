@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatArtifact, ChatStreamEvent } from '@shared/chat';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
@@ -23,60 +23,119 @@ const HTML_ARTIFACT =
   '<!DOCTYPE html><html><body><button>0</button></body></html>' +
   '</artifact>';
 
+const cleanups: (() => void)[] = [];
+
+async function createFixture() {
+  const store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-artifacts-')), 'test-model');
+  const events: ChatStreamEvent[] = [];
+  const streams: PassThrough[] = [];
+  const responses: PassThrough[] = [];
+  function enqueueResponse() {
+    const response = new PassThrough();
+    streams.push(response);
+    responses.push(response);
+    return response;
+  }
+  const initialStream = enqueueResponse();
+  const artifactSave = { reject: false };
+  const post = vi.fn().mockImplementation((endpoint: string) => {
+    if (endpoint === '/api/artifacts') {
+      return artifactSave.reject
+        ? Promise.reject(new Error('network down'))
+        : Promise.resolve({ status: 201, data: {} });
+    }
+    const response = responses.shift();
+    if (!response) throw new Error('No completion response configured for this fixture');
+    return Promise.resolve({ data: response, status: 200 });
+  });
+  const get = vi.fn(async () => ({ sseCompletionsUrl: '' }));
+  const refreshArtifacts = vi.fn<(sessionId: string, artifacts: readonly ChatArtifact[]) => void>();
+  const apiClient = {
+    get,
+    getAxiosInstance: () => ({ post }),
+  } as unknown as AuthenticatedApiClient;
+  const service = new ChatService({
+    store,
+    access: { list: async () => [] } as unknown as AccessStore,
+    logger: { debug: vi.fn(), warn: vi.fn() },
+    artifacts: new ArtifactPublisher(() => apiClient, { debug: vi.fn() }),
+    browser: { context: vi.fn(), closeSession: vi.fn(async () => undefined), refreshArtifacts },
+    getApiClient: () => apiClient,
+    getEnvironmentUrl: () => 'http://localhost:3000',
+    emit: event => events.push(event),
+  });
+  cleanups.push(() => {
+    service.dispose();
+    for (const response of streams) response.destroy();
+  });
+  return { service, events, stream: initialStream, post, get, refreshArtifacts, artifactSave, enqueueResponse };
+}
+
+type Fixture = Awaited<ReturnType<typeof createFixture>>;
+let fixture: Fixture;
+
+async function waitForRequest(target: Fixture, count = 1) {
+  await vi.waitUntil(() => target.post.mock.calls.filter(call => call[0] !== '/api/artifacts').length === count, {
+    timeout: 2000,
+    interval: 5,
+  });
+}
+
 describe('ChatService artifacts', () => {
-  let store: SessionStore;
   let service: ChatService;
   let events: ChatStreamEvent[];
-  let stream: PassThrough;
   let post: ReturnType<typeof vi.fn>;
-  let refreshArtifacts: ReturnType<typeof vi.fn<(sessionId: string, artifacts: readonly ChatArtifact[]) => void>>;
+  let refreshArtifacts: Fixture['refreshArtifacts'];
 
   beforeEach(async () => {
-    store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-artifacts-')), 'test-model');
-    // Bound per test: a previous service replying late must not push into this test's events.
-    const emitted: ChatStreamEvent[] = [];
-    events = emitted;
-    stream = new PassThrough();
-    // One axios instance serves both the completion stream and the artifact create; they are
-    // told apart by endpoint, exactly as they are in the app.
-    const boundPost = vi.fn().mockImplementation((endpoint: string) => {
-      if (endpoint === '/api/artifacts') return Promise.resolve({ status: 201, data: {} });
-      return Promise.resolve({ data: stream, status: 200 });
-    });
-    post = boundPost;
-    refreshArtifacts = vi.fn();
-
-    const apiClient = {
-      get: vi.fn().mockResolvedValue({ sseCompletionsUrl: '' }),
-      getAxiosInstance: () => ({ post: boundPost }),
-    } as unknown as AuthenticatedApiClient;
-
-    service = new ChatService({
-      store,
-      access: { list: async () => [] } as unknown as AccessStore,
-      logger: { debug: vi.fn(), warn: vi.fn() },
-      artifacts: new ArtifactPublisher(() => apiClient, { debug: vi.fn() }),
-      browser: { context: vi.fn(), closeSession: vi.fn(async () => undefined), refreshArtifacts },
-      getApiClient: () => apiClient,
-      getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => emitted.push(event),
-    });
+    fixture = await createFixture();
+    service = fixture.service;
+    events = fixture.events;
+    post = fixture.post;
+    refreshArtifacts = fixture.refreshArtifacts;
+  });
+  afterEach(() => {
+    for (const cleanup of cleanups.splice(0)) cleanup();
   });
 
   /** Runs one turn, feeding the model's reply in as a single content frame. */
-  async function reply(text: string): Promise<string> {
-    const { id } = await service.createSession();
-    await service.send(id, 'build me something');
-    await waitFor(events, 'start');
-    stream.write(frame({ type: 'content', text, stopReason: 'end_turn' }));
-    stream.write(frame('[DONE]'));
-    await waitFor(events, 'done');
+  async function reply(text: string, target = fixture): Promise<string> {
+    const { id } = await target.service.createSession();
+    await target.service.send(id, 'build me something');
+    await waitFor(target.events, 'start');
+    await waitForRequest(target);
+    target.stream.write(frame({ type: 'content', text, stopReason: 'end_turn' }));
+    target.stream.write(frame('[DONE]'));
+    await waitFor(target.events, 'done');
     return id;
   }
 
   function createCalls(): Record<string, unknown>[] {
     return post.mock.calls.filter(call => call[0] === '/api/artifacts').map(call => call[1]);
   }
+
+  it('keeps a delayed prior turn bound to its own response when another fixture starts', async () => {
+    const prior = fixture;
+    const configuration = Promise.withResolvers<{ sseCompletionsUrl: string }>();
+    prior.get.mockReturnValue(configuration.promise);
+    const { id } = await prior.service.createSession();
+    await prior.service.send(id, 'prior turn');
+    await waitFor(prior.events, 'start');
+    const next = await createFixture();
+    // Simulate the next beforeEach while the prior request is still in preflight.
+    fixture = next;
+    configuration.resolve({ sseCompletionsUrl: '' });
+    await waitForRequest(prior);
+    const result = prior.post.mock.results[0];
+    if (result?.type !== 'return') throw new Error('Prior completion POST did not return a response');
+    expect((await result.value).data).toBe(prior.stream);
+    prior.stream.write(frame({ type: 'content', text: 'PRIOR_REPLY', stopReason: 'end_turn' }));
+    prior.stream.write(frame('[DONE]'));
+    await waitFor(prior.events, 'done');
+    expect(prior.events.find(event => event.type === 'done')).toMatchObject({ content: 'PRIOR_REPLY' });
+    expect(next.events).toEqual([]);
+    expect(next.stream.destroyed).toBe(false);
+  });
 
   it('leaves a reply with no artifact alone and posts nothing', async () => {
     const id = await reply('Here is the answer, in prose.');
@@ -137,10 +196,7 @@ describe('ChatService artifacts', () => {
   });
 
   it('keeps the artifact locally when the server refuses to store it', async () => {
-    post.mockImplementation((endpoint: string) => {
-      if (endpoint === '/api/artifacts') return Promise.reject(new Error('network down'));
-      return Promise.resolve({ data: stream, status: 200 });
-    });
+    fixture.artifactSave.reject = true;
 
     const id = await reply(`Here.\n${HTML_ARTIFACT}`);
 
@@ -155,12 +211,9 @@ describe('ChatService artifacts', () => {
   it('gives the artifact back to the model on the next turn', async () => {
     const id = await reply(`Here.\n${HTML_ARTIFACT}`);
 
-    stream = new PassThrough();
+    fixture.enqueueResponse();
     await service.send(id, 'make the button blue');
-    await vi.waitUntil(() => post.mock.calls.filter(call => call[0] !== '/api/artifacts').length === 2, {
-      timeout: 2000,
-      interval: 5,
-    });
+    await waitForRequest(fixture, 2);
 
     const secondRequest = post.mock.calls.filter(call => call[0] !== '/api/artifacts')[1][1];
     const assistantTurn = secondRequest.messages.find((message: { role: string }) => message.role === 'assistant') as {
