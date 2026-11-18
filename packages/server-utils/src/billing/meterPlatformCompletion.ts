@@ -321,6 +321,8 @@ type CompletionMeterOptions = {
   systemModel?: boolean;
   /** The UserApiKey behind queued work that has no request; ledger attribution only, never the billing owner. */
   apiKeyId?: string;
+  /** Org policy snapshot the caller already loaded; skips the meter's own org lookup. Explicit null is unrestricted. */
+  orgModelPolicy?: ReadOrgModelPolicy;
 };
 
 /**
@@ -352,7 +354,10 @@ export function createRequestCompletionMeter(
   return async (modelInfo, messages, maxTokens, models, turns = 1, tools = []) => {
     const organizationId = opts.systemModel ? null : resolveRequestBillingOrgId(req, opts.organizationId);
     await (
-      await createModelAdmission(req.user!, models ?? [modelInfo], opts.systemModel, { organizationId })
+      await createModelAdmission(req.user!, models ?? [modelInfo], opts.systemModel, {
+        organizationId,
+        orgModelPolicy: opts.orgModelPolicy,
+      })
     ).assert(modelInfo.id);
     const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens, false, tools);
     const reservation = await reserveCompletionCredits(req, ceilingUsd * turns, featureLabel, {

@@ -7,7 +7,12 @@
  * real here (not mocked) - only its inputs (the session doc) are controlled per test.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ForbiddenError, insufficientCreditsError, TooManyRequestsError } from '@bike4mind/common';
+import {
+  ForbiddenError,
+  insufficientCreditsError,
+  ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+  TooManyRequestsError,
+} from '@bike4mind/common';
 import { ACCOUNT_BANNED_MESSAGE } from '@bike4mind/services/userService/accountState';
 
 vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: h.getUserEntitlements }));
@@ -29,6 +34,7 @@ const h = vi.hoisted(() => ({
   createCompletionMeter: vi.fn(),
   getUserEntitlements: vi.fn(async (_user: unknown) => ['plan:paid']),
   publishPushNotification: vi.fn(async () => undefined),
+  orgFindById: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -41,7 +47,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   imageModerationIncidentRepository: {},
   usageEventRepository: {},
-  organizationRepository: {},
+  organizationRepository: { findById: h.orgFindById },
   scopedSettingsRepository: {},
   Connection: { find: vi.fn(), deleteOne: vi.fn() },
 }));
@@ -217,6 +223,45 @@ describe('agentProactiveMessage consumer', () => {
 
     await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
     expect(h.sendToClient).not.toHaveBeenCalled();
+  });
+
+  describe('org model policy', () => {
+    const modelPolicy = { allowedProviders: null, allowedModels: ['claude'], allowedTools: ['web_search'] };
+
+    it('hands the meter the policy of the org seat it bills, loading the org once', async () => {
+      h.userFindById.mockResolvedValue({ id: 'editor', groups: [], organizationId: 'org-1' });
+      h.orgFindById.mockResolvedValue({ id: 'org-1', modelPolicy });
+      await dispatch(makeEvent(payload), {} as never, logger);
+
+      expect(h.orgFindById).toHaveBeenCalledExactlyOnceWith('org-1');
+      const meterOpts = h.createCompletionMeter.mock.calls[0][3];
+      expect(meterOpts.orgModelPolicy).toMatchObject({ allowedModels: ['claude'], allowedTools: ['web_search'] });
+    });
+
+    it('passes an unrestricted (null) policy without a lookup when the user has no org seat', async () => {
+      await dispatch(makeEvent(payload), {} as never, logger);
+
+      expect(h.orgFindById).not.toHaveBeenCalled();
+      expect(h.createCompletionMeter.mock.calls[0][3]).toMatchObject({ orgModelPolicy: null });
+    });
+
+    it('treats a missing org document as unrestricted', async () => {
+      h.userFindById.mockResolvedValue({ id: 'editor', groups: [], organizationId: 'org-gone' });
+      h.orgFindById.mockResolvedValue(null);
+      await dispatch(makeEvent(payload), {} as never, logger);
+
+      expect(h.createCompletionMeter.mock.calls[0][3]).toMatchObject({ orgModelPolicy: null });
+    });
+
+    it('skips without retrying or notifying when the org does not allow the model', async () => {
+      h.generateAndSendProactiveMessage.mockRejectedValue(
+        new ForbiddenError('Model not allowed', { errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE })
+      );
+
+      await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
+      expect(h.sendToClient).not.toHaveBeenCalled();
+      expect(h.publishPushNotification).not.toHaveBeenCalled();
+    });
   });
 
   it('still rethrows an unrelated forbidden error', async () => {
