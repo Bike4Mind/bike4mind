@@ -46,10 +46,25 @@ describe('SidebarNav', () => {
         item.badge !== undefined && item.badge !== 'newSubscriptions'
     );
 
-    it('gives every standalone counted queue a sidebar item', () => {
-      expect(countedItems.map(item => item.badge).sort()).toEqual(
-        ADMIN_ACTION_COUNT_KEYS.filter(key => key !== 'heldSignupGrants').sort()
+    it('gives every counted queue a sidebar item, or a delegate badge on one', () => {
+      const delegateKeys = SIDEBAR_SECTIONS.flatMap(section => section.items).flatMap(item =>
+        item.delegateBadge ? [item.delegateBadge] : []
       );
+      expect([...countedItems.map(item => item.badge), ...delegateKeys].sort()).toEqual(
+        [...ADMIN_ACTION_COUNT_KEYS].sort()
+      );
+    });
+
+    it('shows a delegated admin the held grants count in place of the waitlist count', () => {
+      renderNav({ isFullAdmin: false, actionCounts: { heldSignupGrants: 4, waitingSubscribers: 9 } });
+      expect(screen.getByTestId('admin-sidebar-heldSignupGrants-badge')).toHaveTextContent('4');
+      expect(screen.queryByTestId('admin-sidebar-waitingSubscribers-badge')).toBeNull();
+    });
+
+    it('shows a full admin the waitlist count and not the held grants count', () => {
+      renderNav({ actionCounts: { heldSignupGrants: 4, waitingSubscribers: 9 } });
+      expect(screen.getByTestId('admin-sidebar-waitingSubscribers-badge')).toHaveTextContent('9');
+      expect(screen.queryByTestId('admin-sidebar-heldSignupGrants-badge')).toBeNull();
     });
 
     it.each(countedItems.map(item => [item.badge, item.tab] as const))(

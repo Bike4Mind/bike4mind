@@ -19,6 +19,7 @@ import {
   filterSidebarSections,
   findSectionKeyForTab,
   splitSectionItems,
+  type SidebarBadge,
   type SidebarGate,
   type SidebarItem,
 } from './adminSidebarConfig';
@@ -42,6 +43,8 @@ export type SidebarNavProps = {
   actionCounts?: AdminActionCounts;
   /** A Stripe-billed subscription started since this browser last opened the Subscriptions tab. */
   newSubscriptions?: boolean;
+  /** False for a delegated admin, whose items show `delegateBadge` where one is set. Omit for a full admin. */
+  isFullAdmin?: boolean;
   hiddenNotifications: string[];
   /** Hides the tabs this user may not open (a delegated admin's permissions). Omit to list all. */
   canOpenTab?: (tab: AdminTab) => boolean;
@@ -309,6 +312,7 @@ export const SidebarNav = ({
   showLiveOpsTriageTab,
   actionCounts,
   newSubscriptions = false,
+  isFullAdmin: fullAdmin = true,
   hiddenNotifications,
   canOpenTab,
   onTabSelect,
@@ -354,15 +358,19 @@ export const SidebarNav = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [collapsed]);
 
+  const badgeOf = (item: SidebarItem): SidebarBadge | undefined =>
+    fullAdmin ? item.badge : (item.delegateBadge ?? item.badge);
   const pendingCount = (item: SidebarItem): number => {
-    if (!item.badge || item.badge === 'newSubscriptions') return 0;
-    if (item.badge === 'waitingSubscribers' && hiddenNotifications.includes('waiting-subscribers')) return 0;
-    return actionCounts?.[item.badge] ?? 0;
+    const badge = badgeOf(item);
+    if (!badge || badge === 'newSubscriptions') return 0;
+    if (badge === 'waitingSubscribers' && hiddenNotifications.includes('waiting-subscribers')) return 0;
+    return actionCounts?.[badge] ?? 0;
   };
   const hasWaitingWork = (item: SidebarItem) => pendingCount(item) > 0;
 
   const itemBadge = (item: SidebarItem): ReactNode => {
-    if (item.badge === 'newSubscriptions') {
+    const badge = badgeOf(item);
+    if (badge === 'newSubscriptions') {
       return newSubscriptions ? (
         <Box
           component="span"
@@ -374,12 +382,12 @@ export const SidebarNav = ({
       ) : null;
     }
     const count = pendingCount(item);
-    if (!item.badge || count <= 0) return null;
+    if (!badge || badge === 'newSubscriptions' || count <= 0) return null;
     return (
       <CountPill
         count={count}
-        label={ADMIN_ACTION_COUNT_LABELS[item.badge]}
-        testId={`admin-sidebar-${item.badge}-badge`}
+        label={ADMIN_ACTION_COUNT_LABELS[badge]}
+        testId={`admin-sidebar-${badge}-badge`}
       />
     );
   };

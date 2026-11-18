@@ -104,10 +104,8 @@ describe('SIDEBAR_SECTIONS', () => {
   });
 
   it('badges each counted queue once, and Subscriptions with its dot', () => {
-    const badges = allItems.flatMap(item => (item.badge ? [item.badge] : []));
-    expect(badges.sort()).toEqual(
-      [...ADMIN_ACTION_COUNT_KEYS.filter(key => key !== 'heldSignupGrants'), 'newSubscriptions'].sort()
-    );
+    const badges = allItems.flatMap(item => [item.badge, item.delegateBadge].filter(Boolean));
+    expect(badges.sort()).toEqual([...ADMIN_ACTION_COUNT_KEYS, 'newSubscriptions'].sort());
     expect(allItems.find(item => item.badge === 'newSubscriptions')?.tab).toBe(AdminTab.Subscriptions);
   });
 });

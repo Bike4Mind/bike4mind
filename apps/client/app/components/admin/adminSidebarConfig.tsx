@@ -180,6 +180,8 @@ export type SidebarItem = {
   testid?: string;
   gate?: SidebarGate;
   badge?: SidebarBadge;
+  /** The count a delegated admin sees in place of `badge`. */
+  delegateBadge?: AdminActionCountKey;
 };
 
 export type SidebarSection = {
@@ -224,6 +226,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         aliases: ['Waitlist'],
         testid: 'admin-waitlist-tab-btn',
         badge: 'waitingSubscribers',
+        delegateBadge: 'heldSignupGrants',
       },
       { Icon: Megaphone, tab: AdminTab.EmailMarketing, label: 'Email marketing' },
       { Icon: UsersRound, tab: AdminTab.Team, label: 'Team' },
