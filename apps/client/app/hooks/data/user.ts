@@ -198,7 +198,11 @@ export function useDeleteUser() {
     },
     onSuccess: data => {
       if (isApprovalPending(data)) return notifyApprovalSubmitted(queryClient);
-      toast.success('Deletion started');
+      if (data?.queued === false) {
+        toast.warning('Deletion started, but the erasure could not be queued and will run with the daily sweep');
+      } else {
+        toast.success('Deletion started');
+      }
       queryClient.invalidateQueries({ queryKey: ['users'] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
     },

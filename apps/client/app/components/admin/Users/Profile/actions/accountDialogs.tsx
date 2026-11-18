@@ -439,7 +439,7 @@ export const DeleteUserDialog: React.FC<ProfileDialogProps & { onDeleted: () => 
       open
       onClose={onClose}
       title={`Delete ${displayName(user)}`}
-      description="Locks and signs this user out now, then permanently erases their account and all their data (notebooks, files, memories, billing details) within minutes. Their live Stripe subscriptions are canceled with no refund. Owners of shared organizations must transfer them first. There is no undo; suspend them instead if you might need to restore access."
+      description="Locks and signs this user out now, then permanently erases their account and all their data (notebooks, files, memories, billing details) within minutes. Their live Stripe subscriptions, including those of organizations they own, are canceled with no refund, and organizations they own alone are deleted. Owners of shared organizations must transfer them first. There is no undo; suspend them instead if you might need to restore access."
       reasonPresets={ADMIN_REASON_PRESETS.userDeletion}
       typedConfirm={
         user.email ? { expected: user.email, noun: 'email address' } : { expected: user.id, noun: 'user ID' }

@@ -7,11 +7,12 @@ import {
   ADMIN_SESSION_EXPIRED,
   ADMIN_SESSION_VALIDATION_FAILED,
   useGetIdentify,
+  useDeleteUser,
   useUpdateUser,
 } from './user';
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { get: vi.fn() },
+  api: { get: vi.fn(), delete: vi.fn() },
 }));
 
 vi.mock('sonner', () => ({
@@ -41,6 +42,7 @@ vi.mock('@client/app/utils/stepUpInterceptor', () => ({
 const { useUser } = await import('@client/app/contexts/UserContext');
 const { useAccessToken } = await import('../useAccessToken');
 const { toast } = await import('sonner');
+const { api } = await import('@client/app/contexts/ApiContext');
 const { updateUserToServer } = await import('@client/app/utils/userAPICalls');
 
 describe('useGetIdentify', () => {
@@ -192,5 +194,25 @@ describe('useUpdateUser', () => {
     await fail(new Error('boom'));
 
     expect(toast.error).toHaveBeenCalledWith('Failed to update Profile.');
+  });
+});
+
+describe('useDeleteUser', () => {
+  const wrapper = ({ children }: { children: React.ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: new QueryClient() }, children);
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    [true, 'success'],
+    [false, 'warning'],
+  ] as const)('toasts queued=%s as a %s', async (queued, kind) => {
+    vi.mocked(api.delete).mockResolvedValue({ data: { id: 'u1', queued } });
+    const { result } = renderHook(() => useDeleteUser(), { wrapper });
+
+    result.current.mutate({ id: 'u1', reason: 'Confirmed duplicate account' });
+
+    await waitFor(() => expect(toast[kind]).toHaveBeenCalledOnce());
+    expect(toast[kind === 'success' ? 'warning' : 'success']).not.toHaveBeenCalled();
   });
 });

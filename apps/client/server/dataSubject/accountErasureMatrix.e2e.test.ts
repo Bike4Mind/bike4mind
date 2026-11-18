@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ADMIN_ERASURE_COMPLETED_ACTION } from '@bike4mind/common';
-import { mongoose } from '@bike4mind/database';
+import { adminAuditLogRepository, mongoose } from '@bike4mind/database';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 // Registered outside the `@bike4mind/database` barrel, so they register only when imported.
 import '@bike4mind/server-utils/models/Subscription';
@@ -574,5 +574,36 @@ describe.each(['self', 'admin', 'delete'] as const)('account erasure matrix, %s 
       SUBJECT_STRIPE_CUSTOMER,
       SUBJECT_STRIPE_CUSTOMER,
     ]);
+  });
+});
+
+describe('admin Delete stamp transaction', () => {
+  it('stamps nothing and queues nothing when the user.deleted write fails', async () => {
+    const userId = new ObjectId();
+    const adminId = new ObjectId();
+    await raw('User').insertOne({ _id: userId, email: 'subject@example.test', username: 'subject', tokenVersion: 3 });
+    await raw('User').insertOne({
+      _id: adminId,
+      name: 'Admin',
+      email: 'admin@example.test',
+      username: 'admin',
+      isAdmin: true,
+    });
+    const req = {
+      user: { id: String(adminId), name: 'Admin', isAdmin: true },
+      logger,
+      headers: {},
+      socket: {},
+      url: '/',
+    } as unknown as Request;
+    const append = vi.spyOn(adminAuditLogRepository, 'append').mockRejectedValueOnce(new Error('audit down'));
+
+    await expect(deleteUserAsAdmin(req, String(userId), 'Confirmed duplicate account')).rejects.toThrow('audit down');
+    append.mockRestore();
+
+    const after = await raw('User').findOne({ _id: userId });
+    expect(after?.deletion ?? null).toBeNull();
+    expect(after?.tokenVersion).toBe(3);
+    expect(effects.sendToQueue).not.toHaveBeenCalled();
   });
 });
