@@ -330,7 +330,7 @@ describe('production director tools', () => {
     expect(harness.composition().shots.map(shot => shot.fileIds.length > 0)).toEqual([true, false, true]);
   });
 
-  it('keeps takes and clips on a re-time, and drops a clip its shot outgrows only with replace', async () => {
+  it('keeps takes and clips on a re-time, and refuses to grow a shot past its clip even with replace', async () => {
     await run(productionStoryboardTool, harness, STORYBOARD);
     await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID });
     const before = harness.composition().shots;
@@ -346,11 +346,16 @@ describe('production director tools', () => {
     expect(refused).toMatch(/^Error: shot-1 would run longer than its clip/);
     expect(harness.composition().shots).toEqual(before);
 
-    const result = JSON.parse(await run(productionStoryboardTool, harness, { ...retimed, replace: true }));
-    expect(result.clipsDropped).toEqual(['shot-1']);
+    expect(await run(productionStoryboardTool, harness, { ...retimed, replace: true })).toMatch(
+      /^Error: shot-1 would run longer than its clip/
+    );
+    expect(harness.composition().shots).toEqual(before);
+
+    const kept = { ...retimed, shots: retimed.shots.map((shot, index) => (index === 0 ? STORYBOARD.shots[0]! : shot)) };
+    await run(productionStoryboardTool, harness, kept);
     const after = harness.composition().shots;
     expect(after.map(shot => shot.chosenFileId)).toEqual(before.map(shot => shot.chosenFileId));
-    expect(after.map(shot => shot.clipFileId)).toEqual([undefined, before[1]!.clipFileId, before[2]!.clipFileId]);
+    expect(after.map(shot => shot.clipFileId)).toEqual(before.map(shot => shot.clipFileId));
     expect(after.every(shot => shot.voiceLine === 'Shorter.' || shot.id === 'shot-1')).toBe(true);
   });
 

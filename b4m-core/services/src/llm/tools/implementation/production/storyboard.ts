@@ -57,16 +57,16 @@ const schema = z.object({
     .boolean()
     .optional()
     .describe(
-      'Set true to change the prompt of, or remove, shots that already have takes, or to lengthen a shot past its ' +
-        'clip. Their takes stay in Files.'
+      'Set true to change the prompt of, or remove, shots that already have takes (their takes stay in Files), or ' +
+        'to cut voice lines that a re-time leaves without room. It never lengthens a shot past its clip.'
     ),
 });
 type StoryboardArgs = z.infer<typeof schema>;
 
 const description =
   'Write the storyboard of a Studio production: the shots in order, each with an image prompt, its length and its ' +
-  'voiceover line. Replaces the shot list; a shot whose prompt is unchanged keeps its takes and clip, and cannot ' +
-  'grow past its clip. Plan about 4 shots for a 15 second ad (hook, product, benefit, call to action). Then call ' +
+  'voiceover line. Replaces the shot list; a shot whose prompt is unchanged keeps its takes and clip, and a shot ' +
+  'with a clip cannot grow past it. Plan about 4 shots for a 15 second ad (hook, product, benefit, call to action). Then call ' +
   'production_generate_shot.';
 
 const toShot = (shot: StoryboardArgs['shots'][number], index: number): StudioShot => ({
@@ -125,12 +125,14 @@ export const productionStoryboardTool: ToolDefinition = {
                 'takes; otherwise ask the user before replacing them, then pass replace: true.'
             );
           }
+          // generate_shot cuts a shot to its clip, so a longer shot would play a still or spend another clip from
+          // the run's cap; replace does not allow it.
           const outgrown = kept.filter(({ clipDropped }) => clipDropped).map(({ shot }) => shot.id);
-          if (!args.replace && outgrown.length > 0) {
+          if (outgrown.length > 0) {
             throw new ProductionToolError(
-              `${outgrown.join(', ')} would run longer than its clip, which would drop the clip and need a new one. ` +
-                'Keep those shots at their length: to fit a long voice line, spread it over two shots or shorten it. ' +
-                'Pass replace: true only to make the new clips anyway.'
+              `${outgrown.join(', ')} would run longer than its clip, which a shot with a clip cannot do. Keep it at ` +
+                'its length: to fit a long voice line, move part of it to a neighbouring shot or shorten it. If the ' +
+                'line must stay word for word and does not fit, tell the user and ask which part to shorten.'
             );
           }
           const tooShort = shotsTooShortForVoice(current.timeline, current.shots, shots);
@@ -166,7 +168,6 @@ export const productionStoryboardTool: ToolDefinition = {
                 },
               }),
           });
-          const clipsDropped = kept.filter(({ clipDropped }) => clipDropped).map(({ shot }) => shot.id);
           return JSON.stringify({
             shots: shots.map(shot => ({
               id: shot.id,
@@ -175,7 +176,6 @@ export const productionStoryboardTool: ToolDefinition = {
               ...(shot.fileIds.length > 0 && { takesKept: true }),
             })),
             totalSeconds: totalMs / 1000,
-            ...(clipsDropped.length > 0 && { clipsDropped }),
             next:
               'Call production_generate_shot to make the takes and clips; a shot that kept its takes is skipped ' +
               'unless it needs a clip.',
