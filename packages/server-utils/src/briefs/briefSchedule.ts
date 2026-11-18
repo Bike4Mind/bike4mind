@@ -16,10 +16,18 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_WINDOW_MS = DAY_MS;
 const MAX_WINDOW_MS = 7 * DAY_MS;
 
+// Keyed by the lowercased name: Intl matches zone names case-insensitively and rejects unknown ones
+// before anything is cached, so the cache is bounded by the runtime's zone list.
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
+/** Number of cached zone formatters; exported for tests. */
+export function cachedFormatterCount(): number {
+  return formatters.size;
+}
+
 function formatterFor(timeZone: string): Intl.DateTimeFormat {
-  let formatter = formatters.get(timeZone);
+  const key = timeZone.toLowerCase();
+  let formatter = formatters.get(key);
   if (!formatter) {
     formatter = new Intl.DateTimeFormat('en-US', {
       timeZone,
@@ -31,7 +39,7 @@ function formatterFor(timeZone: string): Intl.DateTimeFormat {
       minute: 'numeric',
       second: 'numeric',
     });
-    formatters.set(timeZone, formatter);
+    formatters.set(key, formatter);
   }
   return formatter;
 }

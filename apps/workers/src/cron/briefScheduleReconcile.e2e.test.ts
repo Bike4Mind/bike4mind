@@ -11,7 +11,7 @@ import {
 import { startScheduledBrief } from '@bike4mind/server-utils/briefs/startBriefComposition';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { runBriefScheduleReconcile } from './briefScheduleReconcile';
+import { RETRY_WINDOW_MS, runBriefScheduleReconcile } from './briefScheduleReconcile';
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
@@ -122,6 +122,53 @@ describe('runBriefScheduleReconcile', () => {
 
     expect((await run()).unscheduled).toBe(1);
     expect(await nextBriefAtOf(userId)).toBeNull();
+    expect(publishCompose).not.toHaveBeenCalled();
+  });
+
+  it('hands a slot back when the start throws, so the next run starts it', async () => {
+    const due = minutesAgo(2);
+    const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: due });
+    await insertRun(userId);
+    publishCompose.mockRejectedValueOnce(new Error('event bus unavailable'));
+
+    expect((await run()).failed).toBe(1);
+    expect(await nextBriefAtOf(userId)).toEqual(due);
+
+    // The first attempt left a composing row; once it is stale the retry goes through.
+    await AssistantBriefModel.collection.updateMany({}, { $set: { createdAt: minutesAgo(30) } });
+    const retried = await run();
+    expect(retried.enqueued).toBe(1);
+    expect((await nextBriefAtOf(userId))!.getTime()).toBeGreaterThan(now.getTime());
+  });
+
+  it('keeps the advanced slot when a start throws past the retry window', async () => {
+    const due = new Date(now.getTime() - RETRY_WINDOW_MS - 60_000);
+    const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: due });
+
+    const result = await runBriefScheduleReconcile(
+      {
+        users: userRepository,
+        startScheduledBrief: async () => {
+          throw new Error('event bus unavailable');
+        },
+        outOfTime: () => false,
+      },
+      now
+    );
+
+    expect(result.failed).toBe(1);
+    expect((await nextBriefAtOf(userId))!.getTime()).toBeGreaterThan(now.getTime());
+  });
+
+  it('clears the due time of a stored schedule whose zone cannot be computed, so it stops blocking the batch', async () => {
+    const userId = await insertUser({
+      preferences: { briefSchedule: { ...schedule, timeZone: 'Not/AZone' } },
+      nextBriefAt: minutesAgo(2),
+    });
+
+    expect((await run()).failed).toBe(1);
+    expect(await nextBriefAtOf(userId)).toBeNull();
+    expect((await run()).due).toBe(0);
     expect(publishCompose).not.toHaveBeenCalled();
   });
 });

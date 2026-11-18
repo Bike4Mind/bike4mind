@@ -15,7 +15,10 @@ const getRoute = nextRouteForContract(getBriefScheduleContract, {
   recordsActivity: false,
 }).get(async (req, res) => {
   const { schedule, nextBriefAt } = await userRepository.getBriefSchedule(req.user.id);
-  return res.json({ schedule, nextBriefAt: nextBriefAt?.toISOString() ?? null });
+  // A general preferences write can drop or revert the schedule without touching `nextBriefAt`; the
+  // reconciler clears the stale due time when it comes up, so report it only for an enabled schedule.
+  const due = schedule?.enabled ? (nextBriefAt?.toISOString() ?? null) : null;
+  return res.json({ schedule, nextBriefAt: due });
 });
 
 const putRoute = nextRouteForContract(putBriefScheduleContract, {

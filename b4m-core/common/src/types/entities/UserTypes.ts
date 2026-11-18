@@ -265,7 +265,11 @@ export interface IUserPreferences {
   promptCacheTtl?: '5m' | '1h';
   /** Per-category push opt-outs for first-party native clients; a missing key means on (see isPushCategoryEnabled). */
   pushNotifications?: PushNotificationPreferences;
-  /** Written only through `PUT /api/v1/briefs/schedule`, which keeps the top-level `nextBriefAt` in step. */
+  /**
+   * Set through `PUT /api/v1/briefs/schedule`, which also sets the top-level `nextBriefAt`. A general
+   * preferences write can still revert or clear it without touching `nextBriefAt`; the reconciler and
+   * the GET route treat a missing or disabled schedule as off.
+   */
   briefSchedule?: BriefSchedule;
 }
 

@@ -217,6 +217,19 @@ describe('composeBrief', () => {
     expect(deps.push).not.toHaveBeenCalled();
   });
 
+  it.each(['insufficient_credits', 'ai_access_held'] as const)(
+    'discards a scheduled brief, leaving no failed row, when the gate answers %s',
+    async gate => {
+      const deps = makeDeps({ canCompose: vi.fn().mockResolvedValue(gate) });
+      await composeBrief(deps, { briefId: 'b1', userId: 'u1', scheduled: true });
+
+      expect(deps.briefs.discardComposing).toHaveBeenCalledWith('b1');
+      expect(deps.briefs.markFailed).not.toHaveBeenCalled();
+      expect(deps.complete).not.toHaveBeenCalled();
+      expect(deps.push).not.toHaveBeenCalled();
+    }
+  );
+
   it('fails the brief on a malformed model reply', async () => {
     const deps = makeDeps({ complete: vi.fn().mockResolvedValue('not json') });
     await composeBrief(deps, { briefId: 'b1', userId: 'u1' });

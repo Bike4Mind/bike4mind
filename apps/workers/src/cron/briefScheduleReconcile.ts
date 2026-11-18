@@ -2,7 +2,8 @@
  * Starts the scheduled briefs that have come due. Each due user is claimed by moving `nextBriefAt` to its
  * next slot with a compare-and-set, so overlapping runs (at-least-once delivery, or the self-host twin
  * next to a hosted run) start a slot once. The next slot is computed from now, not from the missed one,
- * so an outage yields one brief rather than a backlog. The brief itself rides the existing `brief.compose`
+ * so an outage yields one brief rather than a backlog. A start that throws hands the slot back, so later
+ * runs retry it for up to RETRY_WINDOW_MS after it fell due. The brief itself rides the existing `brief.compose`
  * event; startScheduledBrief skips users with brief pushes off and windows with no agent runs.
  *
  * Schedule: rate(5 minutes). Self-host twin: apps/workers/src/selfhost/briefScheduleReconcile.ts.
@@ -21,6 +22,8 @@ const logger = new Logger({ metadata: { service: 'briefScheduleReconcile' } });
 export const BRIEF_SCHEDULE_BATCH_LIMIT = 100;
 // Headroom left on the Lambda clock when the run stops claiming new users (ms).
 const STOP_BEFORE_TIMEOUT_MS = 30_000;
+// How long after its due time a slot whose start failed is still retried by later runs (ms).
+export const RETRY_WINDOW_MS = 60 * 60 * 1000;
 
 export type BriefScheduleReconcileDeps = {
   users: Pick<typeof userRepository, 'findDueBriefSchedules' | 'advanceNextBriefAt'>;
@@ -55,22 +58,57 @@ export async function runBriefScheduleReconcile(
 
   for (const user of due) {
     if (deps.outOfTime()) break;
+    let next: Date | null = null;
+    let invalidSchedule = false;
     try {
-      const next = user.schedule ? computeNextBriefAt(user.schedule, now) : null;
-      const claimed = await deps.users.advanceNextBriefAt(user.id, user.nextBriefAt, next);
-      if (!claimed) {
-        result.claimedElsewhere++;
-        continue;
-      }
-      // A schedule turned off (or missing) only clears its stale due time.
-      if (!user.schedule?.enabled) {
-        result.unscheduled++;
-        continue;
-      }
+      next = user.schedule ? computeNextBriefAt(user.schedule, now) : null;
+    } catch (err) {
+      // A stored schedule that cannot be computed (an unknown zone) is cleared rather than left at the
+      // head of the earliest-first batch, where it would fail every run.
+      invalidSchedule = true;
+      logger.error('[briefScheduleReconcile] stored brief schedule is invalid; clearing its due time', {
+        userId: user.id,
+        err,
+      });
+    }
+
+    let claimed = false;
+    try {
+      claimed = await deps.users.advanceNextBriefAt(user.id, user.nextBriefAt, next);
+    } catch (err) {
+      result.failed++;
+      logger.error('[briefScheduleReconcile] failed to claim a scheduled brief', { userId: user.id, err });
+      continue;
+    }
+    if (!claimed) {
+      result.claimedElsewhere++;
+      continue;
+    }
+    if (invalidSchedule) {
+      result.failed++;
+      continue;
+    }
+    // A schedule turned off (or missing) only clears its stale due time.
+    if (!user.schedule?.enabled) {
+      result.unscheduled++;
+      continue;
+    }
+
+    try {
       result[await deps.startScheduledBrief(user.id)]++;
     } catch (err) {
       result.failed++;
-      logger.error('[briefScheduleReconcile] failed to start a scheduled brief', { userId: user.id, err });
+      // Hand the slot back so the next run retries it, until the slot is RETRY_WINDOW_MS old.
+      const retry = next !== null && now.getTime() - user.nextBriefAt.getTime() < RETRY_WINDOW_MS;
+      logger.error('[briefScheduleReconcile] failed to start a scheduled brief', { userId: user.id, retry, err });
+      if (retry && next) {
+        await deps.users.advanceNextBriefAt(user.id, next, user.nextBriefAt).catch((releaseErr: unknown) => {
+          logger.error('[briefScheduleReconcile] failed to release a claimed slot for retry', {
+            userId: user.id,
+            err: releaseErr,
+          });
+        });
+      }
     }
   }
 
@@ -88,7 +126,7 @@ export async function handler(_event: unknown, context?: Pick<Context, 'getRemai
     startScheduledBrief: userId => startScheduledBrief(userId),
     outOfTime: () => (context ? context.getRemainingTimeInMillis() < STOP_BEFORE_TIMEOUT_MS : false),
   });
-  // Throwing surfaces the run in the LambdaErrors alarm; the claimed users keep their advanced slot.
+  // Throwing surfaces the run in the LambdaErrors alarm; failed starts were handed back for retry above.
   if (result.failed > 0) throw new Error(`Failed to start ${result.failed} scheduled brief(s)`);
   return result;
 }
