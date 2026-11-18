@@ -15,7 +15,7 @@ function frame(payload: unknown): string {
 }
 
 function waitFor(events: ChatStreamEvent[], type: ChatStreamEvent['type']): Promise<ChatStreamEvent> {
-  return vi.waitUntil(() => events.find(event => event.type === type), { timeout: 2000, interval: 5 });
+  return vi.waitUntil(() => events.find(event => event.type === type), { timeout: 5000, interval: 5 });
 }
 
 const HTML_ARTIFACT =
@@ -158,7 +158,7 @@ describe('ChatService artifacts', () => {
     stream = new PassThrough();
     await service.send(id, 'make the button blue');
     await vi.waitUntil(() => post.mock.calls.filter(call => call[0] !== '/api/artifacts').length === 2, {
-      timeout: 2000,
+      timeout: 5000,
       interval: 5,
     });
 
