@@ -52,6 +52,25 @@ describe('userRepository brief schedule', () => {
     expect(raw?.preferences.briefSchedule).toEqual({ ...schedule, enabled: false });
   });
 
+  it('the due scan is served by the partial index', async () => {
+    await User.syncIndexes();
+    let filter: Record<string, unknown> | undefined;
+    mongoose.set('debug', (_collection: string, method: string, query: Record<string, unknown>) => {
+      if (method === 'find') filter = query;
+    });
+    try {
+      await userRepository.findDueBriefSchedules(DUE, 10);
+    } finally {
+      mongoose.set('debug', false);
+    }
+
+    expect(filter).toBeDefined();
+    const plan = await User.find(filter).sort({ nextBriefAt: 1 }).explain('queryPlanner');
+    const winning = JSON.stringify((plan as { queryPlanner: { winningPlan: unknown } }).queryPlanner.winningPlan);
+    expect(winning).toContain('user_nextBriefAt');
+    expect(winning).not.toContain('COLLSCAN');
+  });
+
   it('declares the partial due-time index', () => {
     expect(User.schema.indexes()).toContainEqual([
       { nextBriefAt: 1 },
