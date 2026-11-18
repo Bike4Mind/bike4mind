@@ -470,7 +470,7 @@ export async function performWebSearch(
         return (
           `${resultLabel(index)} **${stripNewlines(result.title)}**\n${stripNewlines(result.snippet)}\n` +
           imageLine +
-          `Source: [${result.displayHost ?? safeHostname(result.url)}](${result.url})\n`
+          `Source: [${stripNewlines(result.displayHost ?? safeHostname(result.url))}](${result.url})\n`
         );
       })
       .join('\n');
