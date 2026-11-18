@@ -60,7 +60,7 @@ describe('applyPlanStorageLimit', () => {
     expect(mockSetPlanStorageLimit).not.toHaveBeenCalled();
   });
 
-  it.each([{}, { storageLimitMb: 'invalid' }])(
+  it.each<Record<string, string>>([{}, { storageLimitMb: 'invalid' }])(
     'does not change an org pool for unusable metadata %j',
     async metadata => {
       await applyPlanStorageLimit(

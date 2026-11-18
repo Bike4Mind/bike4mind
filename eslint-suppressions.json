@@ -3636,7 +3636,7 @@
   },
   "apps/workers/src/events/stripe/customerSubscriptionUpdated.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 81
+      "count": 80
     }
   },
   "apps/workers/src/events/stripe/invoicePaymentSucceeded.test.ts": {

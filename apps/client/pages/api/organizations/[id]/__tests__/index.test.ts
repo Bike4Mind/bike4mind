@@ -50,7 +50,7 @@ const get = vi.hoisted(() =>
   }))
 );
 const update = vi.hoisted(() =>
-  vi.fn(async () => ({
+  vi.fn(async (_user: unknown, _params: { id: string; name?: string; storageLimit?: number | null }) => ({
     id: 'org1',
     userId: 'owner1',
     name: 'Acme',

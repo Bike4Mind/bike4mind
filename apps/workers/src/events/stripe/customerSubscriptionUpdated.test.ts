@@ -6,7 +6,7 @@ import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { voidOpenSubscriptionInvoices } from '@bike4mind/server-utils/integrations/stripe/dunning';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
-import { handler } from './customerSubscriptionUpdated';
+import { handler as wrappedHandler } from './customerSubscriptionUpdated';
 
 vi.mock('@bike4mind/database', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
@@ -96,7 +96,7 @@ vi.mock('sst', () => ({
 }));
 
 vi.mock('@workers/utils/eventContext', () => ({
-  withEventContext: (h: any) => h,
+  withEventContext: (handler: unknown) => handler,
 }));
 
 const logger = {
@@ -105,6 +105,12 @@ const logger = {
   error: vi.fn(),
   debug: vi.fn(),
 };
+
+// The mock exposes the inner handler without the EventBridge logging/DB wrapper.
+const handler = wrappedHandler as unknown as (
+  event: { properties: { subscriptionId: string } },
+  eventLogger: typeof logger
+) => Promise<void>;
 
 const buildStripeSub = (quantity: number) => ({
   id: 'sub_stripe_a',
