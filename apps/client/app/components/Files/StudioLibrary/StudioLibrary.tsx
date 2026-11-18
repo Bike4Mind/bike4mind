@@ -11,9 +11,10 @@ export type StudioLibraryProps = {
 };
 
 /**
- * The Studio Library: the user's files, generated and uploaded, inline, with source, type, model and starred
- * filters and a star on each tile. No source lock, so it lists the same files the production picker
- * (Studio/productions/ProductionEditor.tsx) offers, uploads included.
+ * The Studio Library: the file browser's default scope inline (own files, generated and uploaded, plus shared and
+ * data-lake files, every type; see server/files/searchFilesForRequest.ts), with a Generated toggle, type, model and
+ * starred filters and a star on each tile. No source lock, so uploads list as in the production picker
+ * (Studio/productions/ProductionEditor.tsx), which adds a per-track type lock.
  */
 export const StudioLibrary: FC<StudioLibraryProps> = ({ initialFilters, onAdd }) => (
   <InlineFileBrowser
