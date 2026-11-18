@@ -42,7 +42,7 @@
           "solidBg": "#1E7A20",
           "outlinedColor": "#34d399",
           "outlinedBorder": "#34d399",
-          "mainChannel": "#D3DFE8",
+          "mainChannel": "211 223 232",
           "softBg": "rgba(52, 211, 153, 0.15)",
           "softHoverBg": "rgba(52, 211, 153, 0.22)",
           "softActiveBg": "rgba(52, 211, 153, 0.28)",
@@ -58,7 +58,7 @@
           "softHoverBg": "rgba(239, 68, 68, 0.22)",
           "softActiveBg": "rgba(239, 68, 68, 0.28)",
           "softColor": "#f87171",
-          "mainChannel": "#ef4444"
+          "mainChannel": "239 68 68"
         },
         "warning": {
           "solidBg": "#FFA500",
@@ -486,7 +486,7 @@
         "success": {
           "solidBg": "#1FB84B",
           "outlinedColor": "#0A3D50",
-          "mainChannel": "#0A3D50"
+          "mainChannel": "10 61 80"
         },
         "danger": {
           "solidBg": "#DA3131",
@@ -496,7 +496,7 @@
           "outlinedBorder": "#DA3131",
           "softBg": "#ffebee",
           "softColor": "#DA3131",
-          "mainChannel": "#DA3131"
+          "mainChannel": "218 49 49"
         },
         "warning": {
           "solidBg": "#FFA500",

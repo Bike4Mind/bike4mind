@@ -1,0 +1,129 @@
+import mongoose, { Schema } from 'mongoose';
+import type { BriefDecision, BriefItem, BriefStatus } from '@bike4mind/common';
+
+/**
+ * An assistant brief: what happened, what was handled and what needs a decision, composed for one user
+ * by apps/workers/src/events/briefCompose.ts. The wire shape is `BriefSchema` in @bike4mind/common.
+ */
+export type IAssistantBrief = {
+  _id: mongoose.Types.ObjectId;
+  userId: string;
+  status: BriefStatus;
+  periodStart: Date;
+  periodEnd: Date;
+  headline: string | null;
+  happened: BriefItem[];
+  handled: BriefItem[];
+  decisions: BriefDecision[];
+  composedAt: Date | null;
+  failureReason: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type AssistantBriefContent = Pick<IAssistantBrief, 'headline' | 'happened' | 'handled' | 'decisions'>;
+
+const itemSchema = new Schema(
+  { id: { type: String, required: true }, text: { type: String, required: true } },
+  { _id: false }
+);
+const decisionSchema = new Schema(
+  {
+    id: { type: String, required: true },
+    text: { type: String, required: true },
+    approval: {
+      type: new Schema(
+        {
+          questId: { type: String, required: true },
+          sessionId: { type: String, required: true },
+          pendingActionTs: { type: Number, required: true },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
+  },
+  { _id: false }
+);
+
+const schema = new Schema<IAssistantBrief>(
+  {
+    userId: { type: String, required: true },
+    status: { type: String, enum: ['composing', 'ready', 'failed'], required: true, default: 'composing' },
+    periodStart: { type: Date, required: true },
+    periodEnd: { type: Date, required: true },
+    headline: { type: String, default: null },
+    happened: { type: [itemSchema], default: [] },
+    handled: { type: [itemSchema], default: [] },
+    decisions: { type: [decisionSchema], default: [] },
+    composedAt: { type: Date, default: null },
+    failureReason: { type: String, default: null },
+  },
+  { timestamps: true, versionKey: false, collection: 'AssistantBrief' }
+);
+
+schema.index({ userId: 1, createdAt: -1 });
+
+export const AssistantBriefModel =
+  (mongoose.models.AssistantBrief as mongoose.Model<IAssistantBrief> | undefined) ??
+  mongoose.model<IAssistantBrief>('AssistantBrief', schema);
+
+/** A brief still composing after this long is treated as abandoned, so a lost event cannot block composing for good. */
+export const BRIEF_COMPOSING_STALE_MS = 5 * 60 * 1000;
+
+export const assistantBriefRepository = {
+  async createComposing(input: { userId: string; periodStart: Date; periodEnd: Date }): Promise<IAssistantBrief> {
+    const created = await AssistantBriefModel.create({ ...input, status: 'composing' });
+    return created.toObject();
+  },
+
+  /** The user's in-flight brief, if one was started recently enough to still be composing. */
+  async findActiveComposing(userId: string, now: Date = new Date()): Promise<IAssistantBrief | null> {
+    return AssistantBriefModel.findOne({
+      userId,
+      status: 'composing',
+      createdAt: { $gt: new Date(now.getTime() - BRIEF_COMPOSING_STALE_MS) },
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+  },
+
+  /** Scoped to the owner: another user's id reads as missing. A malformed id is missing too. */
+  async findByIdForUser(id: string, userId: string): Promise<IAssistantBrief | null> {
+    if (!mongoose.isValidObjectId(id)) return null;
+    return AssistantBriefModel.findOne({ _id: id, userId }).lean();
+  },
+
+  async listByUser(userId: string, limit: number): Promise<IAssistantBrief[]> {
+    return AssistantBriefModel.find({ userId }).sort({ createdAt: -1 }).limit(limit).lean();
+  },
+
+  /** The end of the previous brief's window, which the next brief starts from. */
+  async findLatestReady(userId: string): Promise<IAssistantBrief | null> {
+    return AssistantBriefModel.findOne({ userId, status: 'ready' }).sort({ createdAt: -1 }).lean();
+  },
+
+  /** Only a `composing` brief can be settled, so a redelivered event never overwrites a finished one. */
+  async markReady(id: string, content: AssistantBriefContent, composedAt: Date): Promise<boolean> {
+    const result = await AssistantBriefModel.updateOne(
+      { _id: id, status: 'composing' },
+      { $set: { ...content, status: 'ready', composedAt } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  },
+
+  async markFailed(id: string, failureReason: string): Promise<boolean> {
+    const result = await AssistantBriefModel.updateOne(
+      { _id: id, status: 'composing' },
+      { $set: { status: 'failed', failureReason } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  },
+
+  async findById(id: string): Promise<IAssistantBrief | null> {
+    if (!mongoose.isValidObjectId(id)) return null;
+    return AssistantBriefModel.findById(id).lean();
+  },
+};

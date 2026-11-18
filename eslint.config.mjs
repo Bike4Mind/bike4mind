@@ -10,6 +10,7 @@ import noRawEntityResponse from './eslint-rules/no-raw-entity-response.mjs';
 import noRawAdminJoy from './eslint-rules/no-raw-admin-joy.mjs';
 import noContentInLogMessage from './eslint-rules/no-content-in-log-message.mjs';
 import noWorkersServerBridge from './eslint-rules/no-workers-server-bridge.mjs';
+import requireUpdateValidators from './eslint-rules/require-update-validators.mjs';
 
 /**
  * ESLint Flat Config for Bike4Mind Monorepo
@@ -389,6 +390,7 @@ const localRuleSources = [
   './eslint-rules/admin-joy-legacy-imports.mjs',
   './eslint-rules/no-content-in-log-message.mjs',
   './eslint-rules/no-workers-server-bridge.mjs',
+  './eslint-rules/require-update-validators.mjs',
 ];
 const localRulesPlugin = {
   meta: {
@@ -403,6 +405,7 @@ const localRulesPlugin = {
     'no-raw-admin-joy': noRawAdminJoy,
     'no-content-in-log-message': noContentInLogMessage,
     'no-workers-server-bridge': noWorkersServerBridge,
+    'require-update-validators': requireUpdateValidators,
   },
 };
 
@@ -878,6 +881,15 @@ export default defineConfig([
     rules: {
       'b4m/no-raw-entity-response': 'error',
     },
+  },
+
+  // Syntax-only: these database method names also cover native-driver writes, which need a
+  // reasoned opt-out. Existing production calls are frozen by per-file bulk suppressions.
+  {
+    files: ['**/*.{ts,tsx,js,jsx,mjs,cjs}', 'apps/client/**/*.{mts,cts}', 'packages/server-utils/**/*.{mts,cts}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx,js,mjs}', '**/__tests__/**', '**/__test__/**'],
+    plugins: { b4m: localRulesPlugin },
+    rules: { 'b4m/require-update-validators': 'error' },
   },
 
   // Server log lines stay free of prompts, queries and model output; see eslint-rules/no-content-in-log-message.mjs.

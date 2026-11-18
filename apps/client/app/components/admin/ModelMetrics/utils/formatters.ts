@@ -28,10 +28,7 @@ export const formatTtfvt = (firstTokenTime?: number, firstChunkTime?: number): s
  * colouring `unknown` red too would paint every media generation and every pre-fields row as
  * a frozen turn, which is the opposite of a signal.
  *
- * Returns a palette TOKEN PATH for `sx`, not a value for Joy's `color` prop. This theme replaces
- * `mainChannel` with a raw hex on several palettes, which breaks the channel arithmetic the `color`
- * prop resolves through - the element then inherits its parent's colour instead, silently. The
- * palettes that are not overridden (primary, neutral) resolved fine, which is what hid it.
+ * Returns a palette TOKEN PATH for `sx`, not a value for Joy's `color` prop.
  */
 export const ttfvtColor = (firstTokenTime?: number, firstChunkTime?: number): string => {
   switch (ttfvtState(firstTokenTime, firstChunkTime)) {

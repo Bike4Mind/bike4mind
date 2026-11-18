@@ -48,6 +48,8 @@ export const SIGNAL_LABELS: Record<SignupRiskSignal, string> = {
   quickApiKey: 'Quick API key',
   fastSpend: 'Fast spend',
   generatedLocalPart: 'Generated address',
+  wafAnonIp: 'Anonymous IP',
+  wafBotSignal: 'Bot traffic',
 };
 
 // Every row is at or above the review threshold, so the split is only between "look" and "look first":

@@ -1,30 +1,12 @@
 import Box from '@mui/joy/Box';
-import Button from '@mui/joy/Button';
-import IconButton from '@mui/joy/IconButton';
-import Textarea from '@mui/joy/Textarea';
-import Typography from '@mui/joy/Typography';
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { QUEST_BOARD } from './scene';
 
 export const INNKEEPER_GREETING = "What'll it be?";
 
-/** The quick orders on the slip: `send` goes at once, otherwise the text starts a draft to finish. */
-const QUICK_ORDERS: readonly { label: string; text: string; send: boolean }[] = [
-  {
-    label: 'Status report',
-    text: 'Give me a short status report: what each agent is doing, what is done, and what is left.',
-    send: true,
-  },
-  { label: 'Ask a question', text: 'Quick question: ', send: false },
-  { label: 'Post a quest', text: 'New quest: ', send: false },
-];
-
-const SLIP_WIDTH = 'clamp(290px, 31%, 380px)';
 const PARCHMENT = 'rgba(255, 250, 240, 0.96)';
 const INK = '#2a1d10';
 const WOOD = '#6b4523';
 const WOOD_DARK = '#4a2e14';
-const STORYBOOK = 'ui-serif, Georgia, "Times New Roman", serif';
 
 /** A border of whole pixels with notched corners, the pixel-art way, plus a hard drop shadow; no radius. */
 const pixelFrame = (width: number) =>
@@ -41,7 +23,7 @@ const inkTint = (alpha: number) => `rgba(42, 29, 16, ${alpha})`;
 
 /**
  * Joy reads every variant colour through a `--variant-*` var before the theme's palette, so setting
- * them on the slip gives its controls ink-on-parchment rest, hover, press and disabled states in both
+ * them on parchment gives its controls ink-on-parchment rest, hover, press and disabled states in both
  * colour schemes. The focus ring is the theme's `palette-focusVisible`, retinted to wood the same way.
  */
 export const PARCHMENT_CONTROLS = {
@@ -68,190 +50,6 @@ export const PARCHMENT_CONTROLS = {
   '--variant-solidDisabledColor': inkTint(0.45),
   '--variant-solidDisabledBg': inkTint(0.12),
 } as const;
-
-/**
- * The order slip at the bar: a short message to the orchestrating conversation, the same thread the
- * composer writes to. Long drafts and attachments stay with the composer. Escape and a send close it.
- */
-export function OrderSlip({
-  seed,
-  onSend,
-  onClose,
-  onOpenConversation,
-}: {
-  seed: string;
-  onSend(text: string): void;
-  onClose(): void;
-  onOpenConversation(): void;
-}) {
-  const [text, setText] = useState(seed);
-  const input = useRef<HTMLTextAreaElement | null>(null);
-
-  useEffect(() => {
-    // Back to whoever opened it (the Innkeeper, usually) once it closes.
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const field = input.current;
-    field?.focus();
-    field?.setSelectionRange(field.value.length, field.value.length);
-    return () => {
-      if (opener?.isConnected) opener.focus();
-    };
-  }, []);
-
-  const send = (order: string) => {
-    const trimmed = order.trim();
-    if (!trimmed) return;
-    onSend(trimmed);
-    onClose();
-  };
-
-  const startDraft = (draft: string) => {
-    setText(draft);
-    window.requestAnimationFrame(() => {
-      const field = input.current;
-      if (!field) return;
-      field.focus();
-      field.setSelectionRange(draft.length, draft.length);
-    });
-  };
-
-  const onFieldKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
-    event.preventDefault();
-    send(text);
-  };
-
-  const onSlipKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== 'Escape' || event.nativeEvent.isComposing) return;
-    // Claimed, so the docked conversation (ThreadDock) does not close on the same key.
-    event.preventDefault();
-    onClose();
-  };
-
-  return (
-    <Box
-      role="dialog"
-      aria-label="Order for the Innkeeper"
-      data-testid="orchestrator-tavern-order-slip"
-      // Holds the Tavern's chrome up while open (ambient.ts).
-      data-ambient-hold
-      onKeyDown={onSlipKeyDown}
-      sx={{
-        position: 'absolute',
-        top: '3%',
-        // Just right of the Innkeeper behind the bar (INNKEEPER_POINT), so he stays in view; on a
-        // scene too narrow for that, as far right as it fits.
-        left: `min(67%, calc(98% - ${SLIP_WIDTH}))`,
-        zIndex: 300,
-        width: SLIP_WIDTH,
-        maxHeight: '94%',
-        overflowY: 'auto',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 1,
-        p: 1.25,
-        pt: 1.75,
-        bgcolor: PARCHMENT,
-        color: INK,
-        ...PARCHMENT_CONTROLS,
-        boxShadow: pixelFrame(2),
-        // The ticket is pinned to the bar with a nail.
-        '&::before': {
-          content: '""',
-          position: 'absolute',
-          top: 5,
-          left: '50%',
-          width: 8,
-          height: 8,
-          transform: 'translateX(-50%)',
-          borderRadius: '50%',
-          background: 'radial-gradient(circle at 35% 35%, #d8d2c8, #5a544c 70%)',
-          boxShadow: '0 1px 1px rgba(0, 0, 0, 0.4)',
-        },
-      }}
-    >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <Typography level="title-md" sx={{ flex: 1, color: INK, fontFamily: STORYBOOK, fontStyle: 'italic' }}>
-          {INNKEEPER_GREETING}
-        </Typography>
-        <IconButton
-          size="sm"
-          variant="plain"
-          color="neutral"
-          aria-label="Close the order slip"
-          title="Close (Esc)"
-          onClick={onClose}
-          data-testid="orchestrator-tavern-order-close-btn"
-          sx={{ borderRadius: 0 }}
-        >
-          {'×'}
-        </IconButton>
-      </Box>
-      <Textarea
-        size="sm"
-        minRows={2}
-        maxRows={5}
-        value={text}
-        placeholder="Tell the Innkeeper what you need"
-        onChange={event => setText(event.target.value)}
-        onKeyDown={onFieldKeyDown}
-        variant="plain"
-        sx={{
-          bgcolor: 'rgba(255, 255, 255, 0.55)',
-          color: INK,
-          borderRadius: 0,
-          boxShadow: `inset 0 0 0 1px rgba(42, 29, 16, 0.35)`,
-          '--Textarea-focusedHighlight': WOOD,
-          '--_Textarea-focusedHighlight': WOOD,
-          '& textarea::placeholder': { color: 'rgba(42, 29, 16, 0.55)' },
-        }}
-        slotProps={{ textarea: { ref: input, 'data-testid': 'orchestrator-tavern-order-input' } }}
-      />
-      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-        {QUICK_ORDERS.map(order => (
-          <Button
-            key={order.label}
-            size="sm"
-            variant="outlined"
-            color="neutral"
-            onClick={() => (order.send ? send(order.text) : startDraft(order.text))}
-            sx={{ borderRadius: 0 }}
-            data-testid={`orchestrator-tavern-order-chip-${order.label.toLowerCase().replace(/\s+/g, '-')}`}
-          >
-            {order.label}
-          </Button>
-        ))}
-      </Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <Button
-          size="sm"
-          variant="plain"
-          color="neutral"
-          onClick={onOpenConversation}
-          data-testid="orchestrator-tavern-order-open-conversation-btn"
-          sx={{ mr: 'auto', px: 0.75, borderRadius: 0, whiteSpace: 'nowrap', textDecoration: 'underline' }}
-        >
-          Open conversation
-        </Button>
-        <Button
-          size="sm"
-          disabled={!text.trim()}
-          onClick={() => send(text)}
-          data-testid="orchestrator-tavern-order-send-btn"
-          sx={{
-            borderRadius: 0,
-            boxShadow: `0 2px 0 ${WOOD_DARK}`,
-            // Pressed in: the ledge goes and the key sinks onto it.
-            '&:active': { boxShadow: 'none', transform: 'translateY(2px)' },
-            '&.Mui-disabled': { boxShadow: 'none' },
-          }}
-        >
-          Send
-        </Button>
-      </Box>
-    </Box>
-  );
-}
 
 /**
  * The Innkeeper's latest reply as a speech bubble beside the bar, for while the conversation is out

@@ -25,7 +25,7 @@ import {
   type ParentView,
 } from '../roster';
 import type { AgentPersona } from '@shared/agentPersona';
-import { INNKEEPER_GREETING, OrderSlip, ReplyBubble } from './InnkeeperDesk';
+import { INNKEEPER_GREETING, ReplyBubble } from './InnkeeperDesk';
 import { useAgentAnnouncements } from './announcements';
 import { innkeeperAct, innkeeperBubble } from './innkeeper';
 import { NeedsYouBubble } from './NeedsYouBubble';
@@ -419,6 +419,7 @@ function Sprite({
       component="button"
       type="button"
       data-testid={`orchestrator-tavern-agent-${agent.id}`}
+      data-agent-avatar={agent.id}
       aria-label={`${fullName}: ${AGENT_STATE_LABEL[agent.state]}`}
       aria-pressed={selected}
       data-innkeeper-visit={visited || undefined}
@@ -569,6 +570,7 @@ function Innkeeper({
       data-behind-counter={hidden > 0 || undefined}
       tabIndex={onSelect ? undefined : -1}
       data-testid="orchestrator-tavern-innkeeper"
+      data-conversation-toggle
       data-pose={pose}
       aria-label={`${INNKEEPER_NAME}: ${INNKEEPER_POSE_LABEL[pose]}`}
       title={`${INNKEEPER_NAME}: the conversation that posts the quests`}
@@ -639,6 +641,7 @@ export function TavernView({
   onInnkeeperSelect,
   celebrating = false,
   sceneOverlay,
+  agentDetailsOverlay,
   desk,
   settled = false,
   pause,
@@ -713,31 +716,18 @@ export function TavernView({
   // steps aside while it is up; pointing at the Innkeeper still shows it (LIFTED).
   const barCalling = visible.some(({ agent, placement }) => placement.zone === 'bar' && needsYou.has(agent.id));
   const innkeeperLabel = labels.get(INNKEEPER_KEY) ?? HIDDEN_LABEL;
-  const [slip, setSlip] = useState<{ key: number; seed: string } | null>(null);
   const [dismissedReply, setDismissedReply] = useState<string | undefined>(undefined);
-  // Starts at the request already pending, so a remount (a view switch) never reopens an old slip.
-  const lastOpenRequest = useRef(desk?.openRequest?.seq);
-  const openRequest = desk?.openRequest;
-  useEffect(() => {
-    if (!openRequest || openRequest.seq === lastOpenRequest.current) return;
-    lastOpenRequest.current = openRequest.seq;
-    setSlip({ key: openRequest.seq, seed: openRequest.seed });
-  }, [openRequest]);
   const statusBubble = innkeeperBubble(parent);
   // Only while the conversation is hidden: with the dock open the reply is already in plain sight.
   const reply =
     desk?.reply &&
     desk.conversationHidden &&
-    !slip &&
     !statusBubble &&
     // An answerable bubble at the bar sits where the reply would; the reply waits until it is answered.
     !(barCalling && answerBubbles.size > 0) &&
     desk.reply.id !== dismissedReply
       ? desk.reply
       : undefined;
-  const selectInnkeeper = desk
-    ? () => setSlip(open => (open ? null : { key: Date.now(), seed: '' }))
-    : onInnkeeperSelect;
 
   const visitedPoint = visit === undefined ? undefined : placements.get(visit)?.point;
   const innkeeperPoint = visitedPoint && !reducedMotion && arrived ? standBeside(visitedPoint) : INNKEEPER_POINT;
@@ -801,6 +791,7 @@ export function TavernView({
         sx={{
           position: 'relative',
           width: 'min(100cqw, 100cqh * 16 / 9)',
+          anchorName: '--orchestrator-scene',
           aspectRatio: '16 / 9',
           containerType: 'size',
           overflow: 'hidden',
@@ -869,22 +860,9 @@ export function TavernView({
           bubble={statusBubble}
           urgent={parent.status === 'needs-action'}
           label={barCalling ? { ...innkeeperLabel, shown: false } : innkeeperLabel}
-          // A first-timer is told outright that he takes orders; after that it is a hover hint.
-          greeting={!desk || slip || reply ? undefined : agents.length === 0 ? 'always' : 'hover'}
-          onSelect={selectInnkeeper}
+          greeting={!desk || reply ? undefined : agents.length === 0 ? 'always' : 'hover'}
+          onSelect={onInnkeeperSelect}
         />
-        {desk && slip && (
-          <OrderSlip
-            key={slip.key}
-            seed={slip.seed}
-            onSend={desk.send}
-            onClose={() => setSlip(null)}
-            onOpenConversation={() => {
-              setSlip(null);
-              desk.onOpenConversation();
-            }}
-          />
-        )}
         {desk && reply && (
           <ReplyBubble
             snippet={reply.snippet}
@@ -906,6 +884,7 @@ export function TavernView({
           />
         ))}
         {sceneOverlay}
+        {agentDetailsOverlay}
       </Box>
     </Box>
   );

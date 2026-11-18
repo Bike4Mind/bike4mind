@@ -28,6 +28,11 @@ const handler = adminApi({
       action === 'oauth_client.updated' ? 'updated the OAuth client' : `${action.split('.')[1]} the OAuth client`,
     changes: [
       { field: 'redirectUris', before: before.redirectUris, after: after.redirectUris },
+      {
+        field: 'postLogoutRedirectUris',
+        before: before.postLogoutRedirectUris,
+        after: after.postLogoutRedirectUris,
+      },
       { field: 'isActive', before: before.isActive, after: after.isActive },
       { field: 'allowedScopes', before: before.allowedScopes, after: after.allowedScopes },
       { field: 'federatedIdp', before: before.federatedIdp ?? null, after: after.federatedIdp ?? null },
