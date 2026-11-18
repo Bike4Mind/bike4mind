@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { acceptViewAction, viewSnapshotSchema, type ViewApproval } from '@shared/viewSnapshot';
 import { agentFixture } from './testUtils';
 import { runViewAction, toViewSnapshot } from './viewSnapshot';
@@ -198,9 +198,13 @@ describe('acceptViewAction', () => {
 describe('runViewAction', () => {
   const chat = { answerTaskDecision: vi.fn(async () => undefined), respondToApproval: vi.fn(async () => undefined) };
   const host = { openAgent: vi.fn(), openRoot: vi.fn(), stop: vi.fn() };
-  (window as unknown as { b4m: unknown }).b4m = { chat };
+
+  beforeEach(() => {
+    (window as unknown as { b4m: unknown }).b4m = { chat };
+  });
 
   afterEach(() => {
+    delete (window as unknown as { b4m?: unknown }).b4m;
     for (const mock of [...Object.values(chat), ...Object.values(host)]) mock.mockClear();
   });
 
@@ -222,6 +226,12 @@ describe('runViewAction', () => {
     expect(host.openAgent).toHaveBeenCalledWith('a');
     expect(host.openRoot).toHaveBeenCalled();
     expect(host.stop).toHaveBeenCalledWith('busy');
+  });
+
+  it('rejects a stop when the host has none', async () => {
+    await expect(
+      runViewAction({ kind: 'stop', agentId: 'busy' }, { openAgent: host.openAgent, openRoot: host.openRoot })
+    ).rejects.toThrow('Stop is not available here');
   });
 
   it('passes on a refusal from main', async () => {

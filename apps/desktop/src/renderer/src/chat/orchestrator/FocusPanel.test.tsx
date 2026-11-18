@@ -130,6 +130,36 @@ describe('FocusPanel', () => {
     expect(all('orchestrator-focus-allow-once-btn')).toHaveLength(1);
   });
 
+  it('brings an answer or a Stop back when main refuses it', async () => {
+    const agent = agentFixture('ask', 'needs-you', { decision: decision(['Postgres', 'Mongo']) });
+    const busy = agentFixture('busy', 'working');
+    await themed.render(<FocusPanel snapshot={toViewSnapshot('root', [agent, busy], {})} onAction={onAction} />);
+    onAction.mockRejectedValueOnce(new Error('no longer pending'));
+    await click(all('orchestrator-focus-option-btn')[0]);
+    expect(el('orchestrator-focus-error').textContent).toBe('no longer pending');
+    expect(all('orchestrator-focus-option-btn')).toHaveLength(2);
+
+    onAction.mockRejectedValueOnce(new Error('could not stop'));
+    const stop = () => el('orchestrator-focus-working-row').querySelector<HTMLElement>('button')!;
+    await click(stop());
+    expect(stop().hasAttribute('disabled')).toBe(false);
+  });
+
+  it('offers Stop again once the agent has moved on', async () => {
+    const render = (updatedAt: string) =>
+      themed.render(
+        <FocusPanel
+          snapshot={toViewSnapshot('root', [agentFixture('busy', 'working', { updatedAt })], {})}
+          onAction={onAction}
+        />
+      );
+    await render('2026-10-01T00:00:00.000Z');
+    await click(el('orchestrator-focus-stop-btn'));
+    expect(el('orchestrator-focus-stop-btn').hasAttribute('disabled')).toBe(true);
+    await render('2026-10-01T00:05:00.000Z');
+    expect(el('orchestrator-focus-stop-btn').hasAttribute('disabled')).toBe(false);
+  });
+
   it('stops a working agent from its row, and a waiting one from its item', async () => {
     const snapshot = toViewSnapshot(
       'root',
