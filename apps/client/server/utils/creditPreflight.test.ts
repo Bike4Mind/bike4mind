@@ -18,6 +18,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   organizationRepository: {},
   creditTransactionRepository: {},
+  spendFreezeRepository: { findActiveForSubject: async () => null },
   userRepository: { findById: (...a: unknown[]) => mocks.findById(...a) },
   organizationRepository: { findById: (...a: unknown[]) => mocks.orgFindById(...a) },
   // No samples and no settings rows: the spend cap reads defaults and never refuses here.

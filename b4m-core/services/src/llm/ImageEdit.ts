@@ -19,6 +19,7 @@ import {
   ICreditTransactionRepository,
   IUsageEventRepository,
   CreditHolderType,
+  type ApiKeyBillingOwnerType,
   IOrganizationRepository,
   ImageModerationIncident as ImageModerationIncidentInput,
   ImageOutputFormatSchema,
@@ -26,6 +27,7 @@ import {
   IFabFileDocument,
   usdToCreditsStochastic,
   type PersistedCreditHold,
+  type ISpendFreezeRepository,
 } from '@bike4mind/common';
 import {
   isImageServeable,
@@ -71,6 +73,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
 import type { ImageCreditHolds } from './imageCreditHolds';
+import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
+import { spendFreezeSubjectForHold } from '../spendFreezeService/spendFreezeSubjectForHold';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
@@ -116,6 +120,11 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   adminRoleWithheld: z.boolean().optional(),
   /** The UserApiKey that authenticated the request; recorded on the settled ledger row. */
   apiKeyId: z.string().optional(),
+  /**
+   * Whether that key bills its owner or an organization. No longer read by the spend freeze check, which keeps
+   * the acting user for every key.
+   */
+  apiKeyBillingOwnerType: z.enum([CreditHolderType.User, CreditHolderType.Organization]).optional(),
   // `n` is inherited from OpenAIImageGenerationInput (1-10, the range generation honors) and
   // deliberately left alone: editing renders IMAGES_PER_EDIT_REQUEST whatever it says, so it is
   // accepted and ignored, never billed. Narrowing it to 1 here would 400 an API-key caller whose
@@ -153,6 +162,8 @@ interface IImageEditServiceOptions {
     usageEvents?: IUsageEventRepository;
     organizations: IOrganizationRepository;
     imageModerationIncidents?: { record(input: ImageModerationIncidentInput): Promise<unknown> };
+    /** Checked before the provider call when credits are off; the credit hold checks it otherwise. */
+    spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
   } & GetEffectiveApiKeyAdapters['db'];
   startImageEditProcess: (body: ImageEditBody) => Promise<void>;
   /** Reserves the estimate before the provider call. Required so the app factory cannot drop the hold. */
@@ -235,9 +246,11 @@ export class ImageEditService {
     userId,
     adminRoleWithheld,
     apiKeyId,
+    apiKeyBillingOwnerType,
   }: {
     adminRoleWithheld?: boolean;
     apiKeyId?: string;
+    apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
     body: z.infer<typeof EditImageRequestBodySchema>;
     userId: string;
   }) {
@@ -348,6 +361,7 @@ export class ImageEditService {
           generationId: uuidv4(),
           adminRoleWithheld,
           apiKeyId,
+          apiKeyBillingOwnerType,
         })
       );
     } catch (error) {
@@ -493,6 +507,7 @@ export class ImageEditService {
       userId,
       adminRoleWithheld,
       apiKeyId,
+      apiKeyBillingOwnerType,
       prompt,
       model: requestedModel,
       safety_tolerance,
@@ -665,9 +680,20 @@ export class ImageEditService {
           requiredCredits,
           featureLabel: IMAGE_EDIT_FEATURE_LABEL,
           logger,
+          apiKeyId,
+          apiKeyBillingOwnerType,
         });
         quest.creditsUsed = requiredCredits;
         usageCostUsd = usdCost;
+      } else {
+        await assertSpendNotFrozen(
+          spendFreezeSubjectForHold({
+            userId,
+            organizationId: organization ? organization.id : null,
+            apiKeyId,
+          }),
+          { db: { spendFreezes: this.db.spendFreezes } }
+        );
       }
 
       // Encode the prompt to tokens

@@ -109,6 +109,7 @@ export type SessionProps = {
 export const QUEST_ERROR_CODES = [
   'insufficient_credits',
   'spend_cap_exceeded',
+  'spend_frozen',
   'free_quest_limit_reached',
 ] as const satisfies readonly ApiErrorCode[];
 export type QuestErrorCode = (typeof QUEST_ERROR_CODES)[number];

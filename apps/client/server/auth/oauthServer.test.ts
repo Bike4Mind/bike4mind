@@ -10,7 +10,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { OAUTH_RSA_PRIVATE_KEY: undefined } }));
 
-import { generateIdToken, releasedIdentityClaims, verifyPkce } from './oauthServer';
+import { generateIdToken, releasedIdentityClaims, verifyIdTokenHint, verifyPkce } from './oauthServer';
 
 beforeAll(() => {
   process.env.APP_URL = process.env.APP_URL || 'https://app.test';
@@ -143,5 +143,63 @@ describe('verifyPkce (RFC 7636 grammar + S256 match)', () => {
 
   it('rejects a well-formed but non-matching verifier/challenge pair', () => {
     expect(verifyPkce('a'.repeat(43), challengeFor('b'.repeat(43)))).toBe(false);
+  });
+});
+
+describe('verifyIdTokenHint', () => {
+  const idToken = (overrides: Partial<typeof base> = {}) =>
+    generateIdToken({ ...base, ...overrides, scopes: ['openid'], scopeLimited: true });
+
+  it('returns the subject of an id_token we issued to this client', () => {
+    expect(verifyIdTokenHint(idToken(), 'c1')).toEqual({ sub: 'u1', clientId: 'c1' });
+  });
+
+  it('takes the client from the audience when none is given', () => {
+    expect(verifyIdTokenHint(idToken({ clientId: 'c2' }))).toEqual({ sub: 'u1', clientId: 'c2' });
+  });
+
+  it('rejects a token whose audience is not a single client when none is given', () => {
+    const multiAudience = idToken({ clientId: ['c1', 'c2'] as unknown as string });
+    expect(verifyIdTokenHint(multiAudience)).toBeNull();
+    expect(verifyIdTokenHint(multiAudience, 'c1')).toEqual({ sub: 'u1', clientId: 'c1' });
+  });
+
+  it('accepts an expired id_token', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() - 24 * 60 * 60 * 1000);
+      const stale = idToken();
+      vi.useRealTimers();
+      expect(verifyIdTokenHint(stale, 'c1')).toEqual({ sub: 'u1', clientId: 'c1' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects another client's id_token", () => {
+    expect(verifyIdTokenHint(idToken({ clientId: 'c2' }), 'c1')).toBeNull();
+  });
+
+  it('rejects a token from another issuer', () => {
+    const token = idToken();
+    const previous = process.env.APP_URL;
+    process.env.APP_URL = 'https://other-issuer.test';
+    try {
+      expect(verifyIdTokenHint(token, 'c1')).toBeNull();
+    } finally {
+      process.env.APP_URL = previous;
+    }
+  });
+
+  it('rejects a token signed with any other key or algorithm', () => {
+    const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const claims = { iss: process.env.APP_URL, aud: 'c1', sub: 'u1' };
+    expect(verifyIdTokenHint(jwt.sign(claims, privateKey, { algorithm: 'RS256' }), 'c1')).toBeNull();
+    expect(verifyIdTokenHint(jwt.sign(claims, 'shared-secret', { algorithm: 'HS256' }), 'c1')).toBeNull();
+    expect(verifyIdTokenHint('not-a-jwt', 'c1')).toBeNull();
+  });
+
+  it('rejects a token without a subject', () => {
+    expect(verifyIdTokenHint(idToken({ userId: '' }), 'c1')).toBeNull();
   });
 });

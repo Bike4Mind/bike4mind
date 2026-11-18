@@ -7,6 +7,7 @@ import {
   dataLakeResearchConfigRepository,
   dataLakeResearchRunRepository,
   organizationRepository,
+  spendFreezeRepository,
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
@@ -87,6 +88,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
             dataLakeResearchRuns: dataLakeResearchRunRepository,
             users: userRepository,
             organizations: organizationRepository,
+            spendFreezes: spendFreezeRepository,
             ...lakeConfigAuditDb,
           },
           logger: req.logger,

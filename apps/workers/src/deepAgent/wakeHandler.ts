@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isSpendFrozenError } from '@bike4mind/common';
 import { randomUUID } from 'crypto';
 import type { Logger } from '@bike4mind/observability';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
@@ -27,6 +28,7 @@ import {
   isInsufficientCredits,
   MISSION_MODEL_REFUSED_BLOCKER,
   MISSION_NEEDS_CREDITS_BLOCKER,
+  MISSION_SPEND_FROZEN_BLOCKER,
   MissionModelRefusedError,
   missionWakeMeter,
   ownerAiAccessDenial,
@@ -141,7 +143,11 @@ export async function processWake(
       await deferWakeForAccountStanding(deps.store, payload.agentId, logger);
       return;
     }
-    // Neither clears on retry, so pause instead of letting the cron re-claim the wake forever.
+    if (isSpendFrozenError(err)) {
+      await deferWakeForAccountStanding(deps.store, payload.agentId, logger, MISSION_SPEND_FROZEN_BLOCKER);
+      return;
+    }
+    // None clears on retry, so pause instead of letting the cron re-claim the wake forever.
     const blocker = isInsufficientCredits(err)
       ? MISSION_NEEDS_CREDITS_BLOCKER
       : err instanceof MissionModelRefusedError

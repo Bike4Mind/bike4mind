@@ -81,9 +81,13 @@ Some actions have no delegated permission yet and require full admin access:
 - Reviewing new signups and exporting the full user list from the user list API.
 - Reading admin-only help articles, in the help center and in help chat.
 
+## Admin roles
+
+An admin role is a named set of delegated permissions that you give to several admins at once. An admin's effective permissions are their direct permissions plus the permissions of every role they hold; roles only add access and never include full admin. See [Admin Roles](./admin-roles.md) for templates, management rules and how roles appear in the access review.
+
 ## Granting permissions
 
-To grant or revoke delegated permissions, open the user's profile. On **Overview**, the **Access** card lists the user's **Admin permissions**. Choose **Edit**, select the permissions the user should hold, enter a reason, and confirm. You may be asked to verify your identity again before the change is saved.
+To grant or revoke delegated permissions or [admin roles](./admin-roles.md), open the user's profile. On **Overview**, the **Access** card lists the user's **Admin permissions**. Choose **Edit**, select the permissions the user should hold, enter a reason, and confirm. You may be asked to verify your identity again before the change is saved.
 
 - Only a full administrator can change delegated permissions. Holding `settings:manage` does not let a delegate grant permissions.
 - You cannot change your own permissions.

@@ -346,6 +346,7 @@ describe('ChatCompletionProcess', () => {
       creditTransactions: {},
       agents: {},
       projects: { findById: vi.fn() },
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
     };
     service = new ChatCompletionProcess(baseOptions as any);
     service.db = mockDb;
@@ -6288,6 +6289,131 @@ describe('ChatCompletionProcess', () => {
         'text_generation_usage',
         expect.objectContaining({ apiKeyId: 'key-1' })
       );
+    });
+
+    describe('spend freeze', () => {
+      const freezeRecord = (scopeType: 'User' | 'Organization' | 'apiKey') => ({
+        scopeType,
+        frozenAt: new Date('2026-11-16T00:00:00.000Z'),
+        reason: 'admin review',
+      });
+
+      it.each([
+        ['user', { userId: 'user1', organizationId: 'org1', apiKeyId: undefined }, 'User' as const],
+        ['organization', { userId: 'user1', organizationId: 'org1', apiKeyId: undefined }, 'Organization' as const],
+        ['api key', { userId: 'user1', organizationId: 'org1', apiKeyId: 'key-1' }, 'apiKey' as const],
+      ])(
+        'settles the quest as spend_frozen for a frozen %s, with no hold and no provider call',
+        async (_label, subject, scopeType) => {
+          const { complete } = reservationOrgSetup();
+          fundedOrg();
+          mockQuest.sessionId = 'session1';
+          mockDb.users.incrementCredits = vi.fn();
+          mockDb.spendFreezes.findActiveForSubject.mockResolvedValue(freezeRecord(scopeType));
+
+          await service.process({
+            body: {
+              ...reservationBody(),
+              ...(subject.apiKeyId ? { authOrigin: 'apiKey', apiKeyId: subject.apiKeyId } : {}),
+            },
+            logger: mockLogger,
+          });
+
+          expect(mockDb.spendFreezes.findActiveForSubject).toHaveBeenCalledWith(
+            expect.objectContaining({ userId: 'user1', organizationId: 'org1', apiKeyId: subject.apiKeyId })
+          );
+          expect(mockQuest.type).toBe('error');
+          expect(mockQuest.errorCode).toBe('spend_frozen');
+          expect(JSON.stringify(mockQuest.replies)).not.toContain('admin review');
+          expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
+          expect(mockDb.users.incrementCredits).not.toHaveBeenCalled();
+          expect(complete).not.toHaveBeenCalled();
+        }
+      );
+
+      it('keeps the acting user in the subject of an org-billed key turn', async () => {
+        reservationOrgSetup();
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        mockDb.spendFreezes.findActiveForSubject.mockResolvedValue(freezeRecord('apiKey'));
+
+        await service.process({
+          body: {
+            ...reservationBody(),
+            authOrigin: 'apiKey',
+            apiKeyId: 'key-1',
+            apiKeyBillingOwnerType: CreditHolderType.Organization,
+          },
+          logger: mockLogger,
+        });
+
+        expect(mockDb.spendFreezes.findActiveForSubject).toHaveBeenCalledWith({
+          userId: 'user1',
+          organizationId: 'org1',
+          apiKeyId: 'key-1',
+        });
+      });
+
+      // A JWT voice turn carries the caller's home org as `organizationId` and reserves against it, so the
+      // freeze subject must be that org, never a separately computed one.
+      const frozenOnlyFor = (frozenOrgId: string) =>
+        mockDb.spendFreezes.findActiveForSubject.mockImplementation(
+          async ({ organizationId }: { organizationId: string | null }) =>
+            organizationId === frozenOrgId ? freezeRecord('Organization') : null
+        );
+
+      it('refuses a turn billed to a frozen home org with spend_frozen, before any hold', async () => {
+        const { complete } = reservationOrgSetup();
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        frozenOnlyFor('org1');
+
+        await service.process({ body: reservationBody(), logger: mockLogger });
+
+        expect(mockDb.spendFreezes.findActiveForSubject).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: 'user1', organizationId: 'org1' })
+        );
+        expect(mockQuest.errorCode).toBe('spend_frozen');
+        expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
+        expect(complete).not.toHaveBeenCalled();
+      });
+
+      it('lets the turn through when only an unrelated org is frozen', async () => {
+        const { complete } = reservationOrgSetup();
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        frozenOnlyFor('other-org');
+
+        await service.process({ body: reservationBody(), logger: mockLogger });
+
+        expect(mockQuest.errorCode).toBeUndefined();
+        expect(mockDb.organizations.incrementCredits).toHaveBeenCalled();
+        expect(complete).toHaveBeenCalled();
+      });
+
+      it('checks the billed org even when a queued body still carries the retired spendFreezeOrganizationId', async () => {
+        reservationOrgSetup();
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        frozenOnlyFor('org1');
+
+        await service.process({
+          body: { ...reservationBody(), spendFreezeOrganizationId: null } as ReturnType<typeof reservationBody>,
+          logger: mockLogger,
+        });
+
+        expect(mockQuest.errorCode).toBe('spend_frozen');
+      });
+
+      it('propagates a freeze lookup failure instead of treating the subject as unfrozen', async () => {
+        const { complete } = reservationOrgSetup();
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        mockDb.spendFreezes.findActiveForSubject.mockRejectedValue(new Error('mongo down'));
+
+        await expect(service.process({ body: reservationBody(), logger: mockLogger })).rejects.toThrow('mongo down');
+        expect(complete).not.toHaveBeenCalled();
+      });
     });
 
     it('refunds the whole hold when a tool call is refused for credits before anything was spent', async () => {
@@ -15423,6 +15549,7 @@ describe('prompt moderation', () => {
       creditTransactions: {},
       agents: {},
       projects: { findById: vi.fn() },
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
     };
     mockLogger = {
       log: vi.fn(),

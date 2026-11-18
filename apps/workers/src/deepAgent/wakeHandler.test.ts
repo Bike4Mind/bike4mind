@@ -14,13 +14,20 @@ import {
   type WakeDeps,
   type WakeSteps,
 } from '@bike4mind/agents';
-import { ForbiddenError, insufficientCreditsError, TooManyRequestsError, type ModelInfo } from '@bike4mind/common';
+import {
+  ForbiddenError,
+  insufficientCreditsError,
+  spendFrozenError,
+  TooManyRequestsError,
+  type ModelInfo,
+} from '@bike4mind/common';
 import { meterCompletionBackend } from '@bike4mind/services';
 import { processWake, WakePayloadSchema } from './wakeHandler';
 import {
   MISSION_MODEL_REFUSED_BLOCKER,
   MISSION_NEEDS_CREDITS_BLOCKER,
   MISSION_OWNER_RESTRICTED_BLOCKER,
+  MISSION_SPEND_FROZEN_BLOCKER,
   MissionModelRefusedError,
 } from '@bike4mind/server-utils/deepAgent/wakeMetering';
 
@@ -237,6 +244,63 @@ describe('processWake', () => {
     const handoff = store.handoffs.get('agent-1')!;
     expect(handoff.nextWakeIntervalMs).toBeUndefined();
     expect(handoff.openBlockers).toEqual([MISSION_MODEL_REFUSED_BLOCKER]);
+  });
+
+  describe('when spending is frozen for the owner', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    const seedStore = (openBlockers: string[] = []) => {
+      const store = new FakeStore();
+      store.charters.set('agent-1', charter());
+      store.handoffs.set('agent-1', {
+        agentId: 'agent-1',
+        wakeCount: 3,
+        lastWakeAt: ISO,
+        lastActionSummary: 'did a thing',
+        nextIntendedAction: 'next',
+        nextWakeIntervalMs: 60_000,
+        openBlockers,
+        updatedAt: ISO,
+      });
+      return store;
+    };
+
+    it('defers the wake with the spend freeze blocker instead of pausing the mission', async () => {
+      const release = vi.spyOn(deepAgentHandoffRepository, 'releaseWakeClaim').mockResolvedValue(undefined as never);
+      const store = seedStore();
+      const steps: WakeSteps = {
+        ...STEPS,
+        async orient() {
+          throw spendFrozenError({ scopeType: 'User', frozenAt: new Date(ISO) });
+        },
+      };
+      const before = Date.now();
+
+      await processWake({ agentId: 'agent-1' }, new Logger(), { deps: { ...fakeDeps(store), steps } });
+
+      const handoff = store.handoffs.get('agent-1')!;
+      expect(handoff.nextWakeIntervalMs).toBe(60_000);
+      expect(handoff.openBlockers).toEqual([MISSION_SPEND_FROZEN_BLOCKER]);
+      expect(store.episodes).toHaveLength(0);
+      const [agentId, resumeAt] = release.mock.calls[0];
+      expect(agentId).toBe('agent-1');
+      expect((resumeAt as Date).getTime()).toBeGreaterThanOrEqual(before + 3_600_000);
+    });
+
+    it('clears the spend freeze blocker and wakes once spending is resumed', async () => {
+      const store = seedStore([MISSION_SPEND_FROZEN_BLOCKER, 'other blocker']);
+      const lease = new Date(Date.now() + 15 * 60 * 1000);
+      vi.spyOn(deepAgentHandoffRepository, 'findByAgentId').mockResolvedValue({ nextWakeAt: lease } as never);
+      const release = vi.spyOn(deepAgentHandoffRepository, 'releaseWakeClaim').mockResolvedValue(undefined as never);
+
+      await processWake({ agentId: 'agent-1' }, new Logger(), { deps: fakeDeps(store) });
+
+      expect(store.episodes).toHaveLength(1);
+      expect(store.handoffs.get('agent-1')!.openBlockers).not.toContain(MISSION_SPEND_FROZEN_BLOCKER);
+      expect(release).toHaveBeenCalledWith('agent-1', lease);
+    });
   });
 
   describe('when the owner hits the free-tier daily cap', () => {
