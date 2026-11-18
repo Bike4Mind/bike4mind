@@ -18,6 +18,9 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
+// Legacy stored metadata can contain malformed values for fields added to the typed schema later.
+const unvalidatedStoredMetadata = (metadata: Record<string, unknown>): CitableSource['metadata'] => metadata;
+
 const baseCitable: CitableSource = {
   id: 'https://example.com/doc',
   type: 'web_url',
@@ -166,7 +169,7 @@ describe('CitableSources cited-passage anchor', () => {
   });
 
   it('hands an internal chip to onInternalCitationClick instead of navigating or writing the anchor', () => {
-    const onInternalCitationClick = vi.fn(() => true);
+    const onInternalCitationClick = vi.fn<(source: CitableSource) => boolean>(() => true);
     render(
       <TestWrapper>
         <CitationInteractionProvider value={{ onInternalCitationClick }}>
@@ -210,7 +213,7 @@ describe('CitableSources cited-passage anchor', () => {
 
   it('lets onCitationClick win over onInternalCitationClick for an internal chip', () => {
     const onCitationClick = vi.fn();
-    const onInternalCitationClick = vi.fn(() => true);
+    const onInternalCitationClick = vi.fn<(source: CitableSource) => boolean>(() => true);
     render(
       <TestWrapper>
         <CitationInteractionProvider value={{ onCitationClick, onInternalCitationClick }}>
@@ -226,7 +229,7 @@ describe('CitableSources cited-passage anchor', () => {
   });
 
   it('leaves an external chip as a plain link when only onInternalCitationClick is provided', () => {
-    const onInternalCitationClick = vi.fn(() => true);
+    const onInternalCitationClick = vi.fn<(source: CitableSource) => boolean>(() => true);
     render(
       <TestWrapper>
         <CitationInteractionProvider value={{ onInternalCitationClick }}>
@@ -256,7 +259,10 @@ describe('CitableSources conflict badge', () => {
     title,
     url: `/opti?mode=datalake&article=${id}`,
     status: 'complete',
-    metadata: { sourceSystem: 'knowledge_base', ...(conflictsWith === undefined ? {} : { conflictsWith }) },
+    metadata: unvalidatedStoredMetadata({
+      sourceSystem: 'knowledge_base',
+      ...(conflictsWith === undefined ? {} : { conflictsWith }),
+    }),
   });
 
   const renderChips = (citables: CitableSource[]) =>
@@ -373,7 +379,10 @@ describe('CitableSources badge tooltip placement', () => {
     title,
     url: `/opti?mode=datalake&article=${id}`,
     status: 'complete',
-    metadata: { sourceSystem: 'knowledge_base', ...(conflictsWith === undefined ? {} : { conflictsWith }) },
+    metadata: unvalidatedStoredMetadata({
+      sourceSystem: 'knowledge_base',
+      ...(conflictsWith === undefined ? {} : { conflictsWith }),
+    }),
   });
 
   const renderChips = (citables: CitableSource[], reply?: string) =>
@@ -555,7 +564,10 @@ describe('conflictPlacementOf', () => {
     type: 'document',
     title: `${id}.md`,
     status: 'complete',
-    metadata: { sourceSystem: 'knowledge_base', ...(conflictsWith === undefined ? {} : { conflictsWith }) },
+    metadata: unvalidatedStoredMetadata({
+      sourceSystem: 'knowledge_base',
+      ...(conflictsWith === undefined ? {} : { conflictsWith }),
+    }),
   });
 
   it('opens bottom only when the chip above is a partner and the one below is not', () => {
@@ -595,7 +607,10 @@ describe('CitableSources origin label', () => {
     title: `${id}.md`,
     url: `/opti?mode=datalake&article=${id}`,
     status: 'complete',
-    metadata: { sourceSystem: 'knowledge_base', ...(sourceOrigin === undefined ? {} : { sourceOrigin }) },
+    metadata: unvalidatedStoredMetadata({
+      sourceSystem: 'knowledge_base',
+      ...(sourceOrigin === undefined ? {} : { sourceOrigin }),
+    }),
   });
 
   const labelsOf = (citables: CitableSource[]) => {

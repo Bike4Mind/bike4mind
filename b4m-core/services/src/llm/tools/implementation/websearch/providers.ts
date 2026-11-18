@@ -279,8 +279,8 @@ function dedupeImages(values: (string | undefined)[]): string[] {
 interface SerpApiOrganicResult {
   title?: string;
   link?: string;
-  displayed_link?: string;
-  source?: string;
+  displayed_link?: unknown;
+  source?: unknown;
   snippet?: string;
   thumbnail?: string;
 }
@@ -289,8 +289,8 @@ interface SerpApiOrganicResult {
 const GOOGLE_HOSTS: ReadonlySet<string> = new Set(['google.com', 'www.google.com']);
 
 /** Host of a breadcrumb-style `displayed_link` ("https://host > a > b"), or undefined when it is not a URL. */
-function breadcrumbHost(displayedLink: string | undefined): string | undefined {
-  if (!displayedLink) return undefined;
+function breadcrumbHost(displayedLink: unknown): string | undefined {
+  if (typeof displayedLink !== 'string' || !displayedLink) return undefined;
   try {
     const shown = new URL(displayedLink.trim().split(/[\s\u203a]/)[0]);
     const isWeb = shown.protocol === 'https:' || shown.protocol === 'http:';
@@ -303,11 +303,12 @@ function breadcrumbHost(displayedLink: string | undefined): string | undefined {
 const MAX_PLATFORM_NAME_CHARS = 40;
 
 /** Platform name from SerpAPI's `source` ("Reddit \u00b7 r/investing" -> "Reddit"), never a Google name. */
-function sourcePlatformName(source: string | undefined): string | undefined {
+function sourcePlatformName(source: unknown): string | undefined {
+  if (typeof source !== 'string') return undefined;
   // Brackets and parentheses would break the `[label](url)` link web_search writes for the model,
   // and a raw newline could forge an extra line in it.
   const name = source
-    ?.split(/\s\u00b7\s/)[0]
+    .split(/\s\u00b7\s/)[0]
     ?.replace(/[[\]()\r\n]/g, '')
     .trim();
   return name && !/^google\b/i.test(name) ? name.slice(0, MAX_PLATFORM_NAME_CHARS) : undefined;
@@ -321,11 +322,7 @@ function sourcePlatformName(source: string | undefined): string | undefined {
  * read from the breadcrumb: its path follows the site's own breadcrumb names, not its URL path, and
  * is cut short with an ellipsis when long, while the host always comes first and survives both.
  */
-function googleRedirectDisplayHost(
-  link: string,
-  displayedLink: string | undefined,
-  source: string | undefined
-): string | undefined {
+function googleRedirectDisplayHost(link: string, displayedLink: unknown, source: unknown): string | undefined {
   try {
     const parsed = new URL(link);
     if (!GOOGLE_HOSTS.has(parsed.hostname) || !/^\/(goto|url)$/.test(parsed.pathname)) return undefined;

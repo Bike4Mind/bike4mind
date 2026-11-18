@@ -153,6 +153,46 @@ describe('createSerpApiProvider', () => {
       return createSerpApiProvider(adapters).search('q', 3);
     };
 
+    const malformedLabelValues: ReadonlyArray<{ label: string; value: unknown }> = [
+      { label: 'a number', value: 42 },
+      { label: 'zero', value: 0 },
+      { label: 'false', value: false },
+      { label: 'true', value: true },
+      { label: 'an object', value: {} },
+      { label: 'an array', value: [] },
+      { label: 'null', value: null },
+      { label: 'undefined', value: undefined },
+      { label: 'an empty string', value: '' },
+    ];
+
+    it.each(malformedLabelValues)('keeps valid hits when optional source is $label', async ({ value }) => {
+      const direct = 'https://example.com/healthy?original=1';
+      mockGetSerperKey.mockResolvedValue('serp-key');
+      fetchMock.mockResolvedValue(
+        jsonRes({
+          organic_results: [
+            { title: 'Redirect', link: goto, displayed_link: '10+ comments', source: value },
+            { title: 'Healthy sibling', link: direct },
+          ],
+        })
+      );
+
+      const results = await createSerpApiProvider(adapters).search('q', 3);
+
+      expect(results.map(result => result.url)).toEqual([goto, direct]);
+      expect(results[0]).not.toHaveProperty('displayHost');
+      expect(results[1].title).toBe('Healthy sibling');
+    });
+
+    it.each(malformedLabelValues)(
+      'retains the platform fallback when optional breadcrumb is $label',
+      async ({ value }) => {
+        const results = await searchWith({ link: goto, displayed_link: value, source: 'Reddit \u00b7 r/investing' });
+
+        expect(results[0]).toMatchObject({ url: goto, displayHost: 'Reddit' });
+      }
+    );
+
     it('keeps the redirect as url and carries the destination host from the breadcrumb', async () => {
       const results = await searchWith({
         link: goto,
@@ -405,7 +445,7 @@ describe('createSerpApiProvider', () => {
     });
 
     it('returns nothing when no key is configured', async () => {
-      mockGetSerperKey.mockResolvedValue(null);
+      mockGetSerperKey.mockResolvedValue(undefined);
 
       await expect(createSerpApiProvider(adapters).searchImages!('q')).resolves.toEqual([]);
       expect(fetchMock).not.toHaveBeenCalled();
@@ -483,7 +523,7 @@ describe('outgoing search request logging', () => {
 
   const loggedRequest = (spy: ReturnType<typeof vi.spyOn>, message: string) =>
     (
-      spy.mock.calls.find(([msg]) => String(msg).includes(message))?.[1] as
+      spy.mock.calls.find(([msg]: readonly unknown[]) => String(msg).includes(message))?.[1] as
         { request?: Record<string, string> } | undefined
     )?.request;
   const allLoggedText = () => JSON.stringify([...logSpy.mock.calls, ...warnSpy.mock.calls, ...errorSpy.mock.calls]);
@@ -671,7 +711,7 @@ describe('resolveWebSearchProvider precedence', () => {
   it('forces SearXNG when the admin choice is searxng and a URL is set', async () => {
     mockGetProvider.mockResolvedValue('searxng');
     mockGetSearxngUrl.mockResolvedValue('http://searxng:8080');
-    mockGetSerperKey.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue(undefined);
     expect((await resolveWebSearchProvider(adapters))?.name).toBe('searxng');
   });
 
@@ -691,7 +731,7 @@ describe('resolveWebSearchProvider precedence', () => {
 
   it('returns null when serpapi is forced but no key is configured', async () => {
     mockGetProvider.mockResolvedValue('serpapi');
-    mockGetSerperKey.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue(undefined);
     mockGetSearxngUrl.mockResolvedValue('http://searxng:8080');
     expect(await resolveWebSearchProvider(adapters)).toBeNull();
   });
@@ -706,7 +746,7 @@ describe('resolveWebSearchProvider precedence', () => {
   it('auto: falls back to SearXNG when only a URL is configured', async () => {
     mockGetProvider.mockResolvedValue('auto');
     mockGetSearxngUrl.mockResolvedValue('http://searxng:8080');
-    mockGetSerperKey.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue(undefined);
     expect((await resolveWebSearchProvider(adapters))?.name).toBe('searxng');
   });
 
@@ -720,7 +760,7 @@ describe('resolveWebSearchProvider precedence', () => {
   it('auto: returns null when neither is configured', async () => {
     mockGetProvider.mockResolvedValue(null);
     mockGetSearxngUrl.mockResolvedValue(null);
-    mockGetSerperKey.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue(undefined);
     expect(await resolveWebSearchProvider(adapters)).toBeNull();
   });
 });
@@ -1101,7 +1141,7 @@ describe('resolveWebSearchProviders lead and backup', () => {
   });
 
   it.each([
-    ['auto: SearXNG only', null, ['searxng', null]],
+    ['auto: SearXNG only', undefined, ['searxng', null]],
     ['auto: Serper key only', 'serp-key', ['serpapi', null]],
   ])('%s leads with the configured provider and has no backup', async (_label, serperKey, order) => {
     mockGetProvider.mockResolvedValue('auto');

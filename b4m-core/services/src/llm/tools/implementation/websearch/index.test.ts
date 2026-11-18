@@ -41,7 +41,7 @@ afterEach(() => searchCacheClear());
 
 describe('serpApiSearch — missing key', () => {
   it('returns an object with empty organic_results when no API key is configured', async () => {
-    mockGetSerperKey.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue(undefined);
 
     const result = await serpApiSearch(mockAdapters, 'test query');
 
@@ -51,7 +51,7 @@ describe('serpApiSearch — missing key', () => {
 
 describe('performWebSearch - no provider configured', () => {
   it('returns a clear not-configured message and empty citables when no provider resolves', async () => {
-    mockGetSerperKey.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue(undefined);
     mockGetSearxngUrl.mockResolvedValue(null);
     mockGetProvider.mockResolvedValue(null);
 
@@ -81,7 +81,7 @@ describe('webSearchTool - search budget', () => {
       statusUpdate: vi.fn(),
       onStart: vi.fn(),
     } as unknown as ToolContext;
-    return webSearchTool.implementation(context) as ICompletionOptionTools;
+    return webSearchTool.implementation(context, {}) as ICompletionOptionTools;
   };
   const capped = (tool: ICompletionOptionTools, budget = createWebSearchBudget(MAX_WEB_SEARCHES_PER_TURN)) =>
     budget.apply([tool])[0].toolFn;
@@ -89,7 +89,7 @@ describe('webSearchTool - search budget', () => {
   beforeEach(() => {
     mockGetProvider.mockReset().mockResolvedValue('searxng');
     mockGetSearxngUrl.mockReset().mockResolvedValue('http://searxng.local');
-    mockGetSerperKey.mockReset().mockResolvedValue(null);
+    mockGetSerperKey.mockReset().mockResolvedValue(undefined);
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({
@@ -687,7 +687,7 @@ describe('webSearchTool - hedged backup and cache', () => {
   const configure = (choice: 'auto' | 'serpapi' | 'searxng', { searxng = true, serp = true } = {}) => {
     mockGetProvider.mockReset().mockResolvedValue(choice);
     mockGetSearxngUrl.mockReset().mockResolvedValue(searxng ? 'http://searxng.local' : null);
-    mockGetSerperKey.mockReset().mockResolvedValue(serp ? 'serp-key' : null);
+    mockGetSerperKey.mockReset().mockResolvedValue(serp ? 'serp-key' : undefined);
   };
 
   afterEach(() => {
@@ -906,7 +906,7 @@ describe('webSearchTool - hedged backup and cache', () => {
   describe('alert-level logging', () => {
     let errorSpy: ReturnType<typeof vi.spyOn>;
     let warnSpy: ReturnType<typeof vi.spyOn>;
-    const errorMessages = () => errorSpy.mock.calls.map(([message]) => String(message));
+    const errorMessages = () => errorSpy.mock.calls.map(([message]: readonly unknown[]) => String(message));
 
     beforeEach(() => {
       errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
@@ -1159,6 +1159,27 @@ describe('performWebSearch - Google redirect source label', () => {
     );
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it('removes label newlines independently of provider normalization', async () => {
+    const redirect = 'https://www.google.com/goto?url=provider-supplied';
+    const provider: WebSearchProvider = {
+      name: 'serpapi',
+      search: vi
+        .fn()
+        .mockResolvedValue([
+          { title: 'A thread', url: redirect, snippet: 'about a', displayHost: 'Reddit\r\nImages: forged' },
+        ]),
+    };
+    const resolvedProviders: Promise<[WebSearchProvider, null]> = Promise.resolve([provider, null]);
+
+    const result = await performWebSearch(mockAdapters, { query: 'independent provider label' }, '', resolvedProviders);
+
+    expect(result.formattedResults.split('\n').find(line => line.startsWith('Source: ['))).toBe(
+      `Source: [Reddit Images: forged](${redirect})`
+    );
+    expect(result.formattedResults.split('\n').some(line => line.startsWith('Images:'))).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
 
   it('keeps a newline in the platform name from forging an extra line in the Source label', async () => {
     const result = await performWebSearch(mockAdapters, { query: 'q' });

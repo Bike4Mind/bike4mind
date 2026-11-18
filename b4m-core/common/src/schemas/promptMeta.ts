@@ -342,7 +342,7 @@ export const CitableSourceSchema = z.object({
       chunkId: z.string().optional(),
       relevanceScore: z.number().optional(),
       fullContext: z.string().optional(),
-      /** web_search: the destination's hostname when `url` is a redirect that hides it. */
+      /** web_search: the destination host or platform name when `url` is a redirect that hides it. */
       displayHost: z.string().optional(),
       /** web_search's own thumbnail/image cluster for this source, gated on `withImages`. */
       thumbnail: z.string().optional(),
