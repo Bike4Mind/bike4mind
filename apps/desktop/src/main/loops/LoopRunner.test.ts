@@ -391,6 +391,17 @@ describe('LoopRunner runs', () => {
     expect(h.client.claim).toHaveBeenCalledTimes(1);
   });
 
+  it('shows Out of credits when the cap ends the run during its final progress flush', async () => {
+    vi.mocked(h.client.progress).mockRejectedValue(new LeaseLost('run-1', 'credit_cap'));
+    await h.runner.tick();
+    h.emit({ type: 'delta', sessionId: 's1', messageId: 'm', text: 'x' });
+    h.done();
+    await h.settled();
+    expect(h.runner.state().error).toMatch(/Out of credits/);
+    await h.runner.tick();
+    expect(h.client.claim).toHaveBeenCalledTimes(1);
+  });
+
   it('releases the claim when the session cannot be set up', async () => {
     h.chat.setApprovalMode.mockRejectedValueOnce(new Error('store locked'));
     await h.runner.tick();

@@ -504,8 +504,9 @@ export class LoopRunner {
    * without reporting, since a complete would only get another 410.
    */
   private async abandon(lane: Lane, reason: string): Promise<void> {
-    if (lane.finished) return;
+    // Recorded even when the lane is already finishing: its final flush is often what learns of the cap.
     if (reason === 'credit_cap') this.creditStop(lane.claim.ticket.loopId);
+    if (lane.finished) return;
     lane.finished = true;
     clearInterval(lane.heartbeat);
     lane.batcher.dispose();
