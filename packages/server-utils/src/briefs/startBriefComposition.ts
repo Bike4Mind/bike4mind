@@ -70,9 +70,9 @@ const defaultScheduledDeps: ScheduledBriefDeps = {
 };
 
 /**
- * The scheduled path into the composer: skips users who turned brief pushes off and windows with no agent
- * runs (the worker derives approvals from those runs' sessions, so no runs means nothing to report), so
- * neither costs a model call or leaves a row behind.
+ * The scheduled path into the composer: skips users whose schedule is now off, users who turned brief
+ * pushes off, and windows with no agent runs (the worker derives approvals from those runs' sessions, so
+ * no runs means nothing to report), so none of them costs a model call or leaves a row behind.
  */
 export async function startScheduledBrief(
   userId: string,
