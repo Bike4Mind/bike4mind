@@ -40,6 +40,7 @@ interface AgentPeekDrawerProps {
   onClose(): void;
   actions: AgentActions;
   skin?: AgentDetailsSkin;
+  visible?: boolean;
 }
 
 function roleLabel(role: string): string {
@@ -262,9 +263,13 @@ function ReplyBox({ agentId, actionButton }: { agentId: string; actionButton: Re
   );
 }
 
-export function AgentPeekDrawer({ agent, persona, onClose, actions, skin }: AgentPeekDrawerProps) {
+export function AgentPeekDrawer({ agent, persona, onClose, actions, skin, visible = true }: AgentPeekDrawerProps) {
   const mode = useTheme().palette.mode;
   const palette = skin?.[mode];
+  const [actionsOpen, setActionsOpen] = useState(false);
+  useEffect(() => {
+    if (!visible) setActionsOpen(false);
+  }, [visible]);
   const { messages, loadError } = useSessionMessages(agent.id, refreshKeyOf(agent));
   // The snapshot can trail the status push, so the state decides whether anything is still waiting.
   const pending = agent.state === 'needs-you' ? pendingCallsIn(messages) : [];
@@ -384,7 +389,7 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions, skin }: Agen
       <ReplyBox
         agentId={agent.id}
         actionButton={
-          <Dropdown>
+          <Dropdown open={visible && actionsOpen} onOpenChange={(_event, open) => setActionsOpen(visible && open)}>
             <ButtonGroup size="sm" variant="outlined" color="neutral" data-testid="orchestrator-peek-actions">
               <Button data-testid="orchestrator-peek-open-btn" onClick={() => actions.open(agent.id)}>
                 Open
