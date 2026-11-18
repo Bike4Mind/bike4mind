@@ -17,10 +17,10 @@ function propertyName(node) {
   return undefined;
 }
 
-function validatorSetting(node) {
+function validatorSetting(node, previous) {
   node = unwrap(node);
   if (node?.type !== 'ObjectExpression') return undefined;
-  let setting;
+  let setting = previous;
   for (const property of node.properties) {
     if (property.type === 'SpreadElement') {
       setting = undefined;
@@ -79,7 +79,7 @@ export default {
             outer = parent.parent;
             if (propertyName(parent) === 'setOptions') {
               // A later setOptions can override an earlier explicit validator setting.
-              enabled = validatorSetting(outer.arguments[0]);
+              enabled = validatorSetting(outer.arguments[0], enabled);
             }
           } else {
             break;
