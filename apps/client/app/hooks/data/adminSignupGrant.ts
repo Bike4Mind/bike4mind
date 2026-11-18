@@ -66,6 +66,7 @@ export type PendingListFilters = {
   heldReason?: 'budget_exhausted' | 'risk_review';
   source?: 'default' | 'package';
   invite?: 'invited' | 'uninvited';
+  activeDays?: string;
   sort: 'oldest' | 'remaining';
 };
 

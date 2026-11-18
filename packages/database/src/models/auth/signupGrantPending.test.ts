@@ -345,6 +345,16 @@ describe('signupGrantPendingRepository.summarizePending', () => {
       expect(summary.activeAccounts).toBe(2);
       expect(summary.activeRemaining).toBe(remainingOf('dueActive') + remainingOf('nearCap'));
     });
+
+    it('lists activity at the boundary and combines it with the status filter', async () => {
+      const rows = await listAll({ activeSince });
+      expect(rows.map(row => row.id)).toEqual(
+        edges.filter(edge => ['dueActive', 'blockedDue', 'nearCap'].includes(edge.key)).map(edge => String(edge._id))
+      );
+      expect((await listAll({ activeSince, status: 'blocked' })).map(row => row.id)).toEqual([
+        String(edges.find(edge => edge.key === 'blockedDue')!._id),
+      ]);
+    });
   });
 
   it('counts the held queue as the rows the list labels held, of either reason', async () => {

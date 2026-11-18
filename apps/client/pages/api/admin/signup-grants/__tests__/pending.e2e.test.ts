@@ -183,6 +183,27 @@ describe('GET /api/admin/signup-grants/pending', () => {
     expect(data.map(row => row.remaining)).toEqual([...data.map(row => row.remaining)].sort((a, b) => b - a));
   });
 
+  it('filters recent activity inclusively, combines filters and pages only matching accounts', async () => {
+    const now = new Date('2026-11-10T12:00:00Z').getTime();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      await User.collection.updateOne({ _id: oid(3) }, { $set: { lastActiveAt: new Date(now) } });
+      await User.collection.updateOne({ _id: oid(6) }, { $set: { lastActiveAt: new Date(now - 7 * 86400000) } });
+      await User.collection.updateOne({ _id: oid(7) }, { $set: { lastActiveAt: new Date(now - 7 * 86400000 - 1) } });
+      expect(await ids({ activeDays: '7' })).toEqual(['dripping', 'invited'].map(idOf));
+      expect(await ids({ activeDays: '1' })).toEqual([idOf('dripping')]);
+      expect(await ids({ activeDays: '30', source: 'package' })).toEqual([idOf('package')]);
+      expect(await ids({ activeDays: '7', invite: 'invited' })).toEqual([idOf('invited')]);
+      const first = await call({ activeDays: '7', limit: '1' });
+      const second = await call({ activeDays: '7', limit: '1', cursor: first.nextCursor! });
+      expect([...first.data, ...second.data].map(row => row.id)).toEqual(['dripping', 'invited'].map(idOf));
+      expect(second.nextCursor).toBeNull();
+    } finally {
+      clock.mockRestore();
+      await User.collection.updateMany({}, { $unset: { lastActiveAt: '' } });
+    }
+  });
+
   it.each(['oldest', 'remaining'])('pages disjointly through a cursor (%s)', async sort => {
     const first = await call({ sort, limit: '3' });
     expect(first.data).toHaveLength(3);
@@ -217,6 +238,10 @@ describe('GET /api/admin/signup-grants/pending', () => {
       { limit: 'abc' },
       { status: 'everything' },
       { invite: 'maybe' },
+      { activeDays: '0' },
+      { activeDays: '91' },
+      { activeDays: '2.5' },
+      { activeDays: 'week' },
     ]) {
       await expect(call(query), JSON.stringify(query)).rejects.toMatchObject({ name: 'BadRequestError' });
     }

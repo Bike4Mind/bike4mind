@@ -9,6 +9,7 @@ import {
 } from '@client/app/hooks/data/adminSignupGrant';
 import { AdminTab } from '../../adminSidebarConfig';
 import {
+  PENDING_ACTIVE_DAYS,
   PENDING_HELD_REASONS,
   PENDING_INVITES,
   PENDING_SEARCH_KEYS,
@@ -67,6 +68,11 @@ const FILTERS: readonly AdminFilter[] = [
   { id: 'heldReason', label: 'Held reason', options: options(REASON_LABEL) },
   { id: 'source', label: 'Source', options: options(SOURCE_LABEL) },
   { id: 'invite', label: 'Invite', options: options(INVITE_LABEL) },
+  {
+    id: 'activeDays',
+    label: 'Activity',
+    options: PENDING_ACTIVE_DAYS.map(value => ({ value, label: `Active in last ${value} days` })),
+  },
   { id: 'sort', label: 'Sort', options: options(SORT_LABEL) },
 ];
 
@@ -81,11 +87,8 @@ const SECTION_LINKS = [
   { label: 'Open Risk review queue', tab: AdminTab.SignupRiskReview, testId: 'pending-open-risk-review-btn' },
 ] as const;
 
-/** The activity window the header counts over; the route accepts 1 to 90. */
-const PENDING_ACTIVE_DAYS = 7;
-
-const PendingHeader = () => {
-  const { data, isError } = useAdminSignupGrantPendingSummary(PENDING_ACTIVE_DAYS);
+const PendingHeader = ({ activeDays }: { activeDays: number }) => {
+  const { data, isError } = useAdminSignupGrantPendingSummary(activeDays);
   const exposure = data?.exposure;
   const trickle = data?.trickle;
   const queue = data?.queue;
@@ -105,7 +108,7 @@ const PendingHeader = () => {
         comparison={exposure ? `${credits(exposure.totalRemaining)} left in all grants` : undefined}
       />
       <StatTile
-        label={`Active in last ${PENDING_ACTIVE_DAYS} days`}
+        label={`Active in last ${activeDays} days`}
         value={activity ? activity.accounts : activity === null ? UNAVAILABLE : blank}
         comparison={activity ? `${credits(activity.remaining)} left in their grants` : undefined}
       />
@@ -162,11 +165,14 @@ export function PendingSection() {
     heldReason: pick(PENDING_HELD_REASONS, listState.filters.heldReason),
     source: pick(PENDING_SOURCES, listState.filters.source),
     invite: pick(PENDING_INVITES, listState.filters.invite),
+    activeDays: pick(PENDING_ACTIVE_DAYS, listState.filters.activeDays),
     sort: pick(PENDING_SORTS, listState.filters.sort) ?? 'oldest',
   };
   const list = useAdminSignupGrantPendingList(filters);
   const rows = list.data?.pages.flatMap(page => page.data) ?? [];
-  const filtered = Boolean(filters.status || filters.heldReason || filters.source || filters.invite);
+  const filtered = Boolean(
+    filters.status || filters.heldReason || filters.source || filters.invite || filters.activeDays
+  );
   const canRelease = list.data?.pages[0]?.viewer.canRelease === true;
   const [selection, setSelection] = useState<AdminSelection>(NO_SELECTION);
   const [dialog, setDialog] = useState<PendingBulkKind | null>(null);
@@ -274,7 +280,9 @@ export function PendingSection() {
           color="neutral"
           size="sm"
           data-testid="pending-clear-filters-btn"
-          onClick={() => updateList({ filters: { status: '', heldReason: '', source: '', invite: '', sort: '' } })}
+          onClick={() =>
+            updateList({ filters: { status: '', heldReason: '', source: '', invite: '', activeDays: '', sort: '' } })
+          }
         >
           Clear filters
         </Button>
@@ -304,7 +312,7 @@ export function PendingSection() {
           </Button>
         ))}
       </Stack>
-      <PendingHeader />
+      <PendingHeader activeDays={Number(filters.activeDays ?? 7)} />
       <FilterBar state={listState} filters={FILTERS} onChange={updateList} search={false} />
       {failed.length > 0 && (
         <Alert color="warning" variant="soft" data-testid="pending-bulk-failed">
