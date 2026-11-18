@@ -107,6 +107,11 @@ export interface CitableSource {
     relevanceScore?: number;
     fullContext?: string; // For text-based sources (RAG, web search)
     /**
+     * The destination's own hostname, set by web_search only when `url` is a search-engine redirect
+     * that hides it. Chips label the source with this instead of the redirect's host.
+     */
+    displayHost?: string;
+    /**
      * Primary image for the source, same as `images[0]`. Set by web_search whenever the provider
      * supplied one - NOT a signal that the user asked for a visual answer, and not currently read
      * by any renderer. Absent means the provider gave no picture.
