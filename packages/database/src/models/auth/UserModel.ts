@@ -1668,13 +1668,18 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       { _id: userId },
       nextBriefAt
         ? { $set: { 'preferences.briefSchedule': schedule, nextBriefAt } }
-        : { $set: { 'preferences.briefSchedule': schedule }, $unset: { nextBriefAt: 1 } }
+        : { $set: { 'preferences.briefSchedule': schedule }, $unset: { nextBriefAt: 1 } },
+      { runValidators: true }
     );
   }
 
   /** A dotted `$set` under `preferences` fails while the field is null (its schema default). */
   private async ensurePreferencesObject(userId: string): Promise<void> {
-    await this.model.updateOne({ _id: userId, preferences: null }, { $set: { preferences: {} } });
+    await this.model.updateOne(
+      { _id: userId, preferences: null },
+      { $set: { preferences: {} } },
+      { runValidators: true }
+    );
   }
 
   async getBriefSchedule(userId: string): Promise<{ schedule: BriefSchedule | null; nextBriefAt: Date | null }> {
@@ -1711,7 +1716,8 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   async advanceNextBriefAt(userId: string, expected: Date, next: Date | null): Promise<boolean> {
     const result = await this.model.updateOne(
       { _id: userId, nextBriefAt: expected },
-      next ? { $set: { nextBriefAt: next } } : { $unset: { nextBriefAt: 1 } }
+      next ? { $set: { nextBriefAt: next } } : { $unset: { nextBriefAt: 1 } },
+      { runValidators: true }
     );
     return result.modifiedCount === 1;
   }

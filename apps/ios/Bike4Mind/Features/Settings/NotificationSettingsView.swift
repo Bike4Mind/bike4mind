@@ -107,7 +107,7 @@ private struct NotificationSettingsContent: View {
           get: { brief.schedule.enabled },
           set: { isOn in Task { await brief.setEnabled(isOn) } })
       )
-      .disabled(!brief.isLoaded)
+      .disabled(!brief.isLoaded || brief.isSaving)
       .accessibilityIdentifier("settings-brief-schedule-toggle")
 
       if brief.schedule.enabled {
@@ -118,6 +118,7 @@ private struct NotificationSettingsContent: View {
             set: { date in Task { await brief.setTime(date) } }),
           displayedComponents: .hourAndMinute
         )
+        .disabled(brief.isSaving)
         .accessibilityIdentifier("settings-brief-schedule-time")
 
         HStack(spacing: Tokens.Spacing.xs) {
@@ -148,6 +149,7 @@ private struct NotificationSettingsContent: View {
         .foregroundStyle(isSelected ? Color.white : Color.accentColor)
     }
     .buttonStyle(.plain)
+    .disabled(brief.isSaving)
     .accessibilityLabel(name)
     .accessibilityAddTraits(isSelected ? .isSelected : [])
     .accessibilityIdentifier("settings-brief-schedule-day-\(day.id)")

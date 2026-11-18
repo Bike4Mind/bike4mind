@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { IAssistantBrief } from '@bike4mind/database';
-import { startBriefComposition } from './startBriefComposition';
+import { BriefComposeStartError, startBriefComposition } from './startBriefComposition';
+import { BriefComposeRejectedError } from './publishBriefCompose';
 
 const now = new Date('2026-11-17T12:00:00Z');
 const stored = (overrides: Partial<IAssistantBrief> = {}) =>
@@ -40,11 +41,42 @@ describe('startBriefComposition', () => {
     expect(deps.publishCompose).toHaveBeenCalledWith({ briefId: 'b1', userId: 'u1' });
   });
 
-  it('drops the created row and rethrows when the compose event cannot be published', async () => {
+  it('drops the created row only after definitive non-acceptance', async () => {
     const deps = makeDeps();
-    deps.publishCompose.mockRejectedValue(new Error('PutEvents failed'));
-    await expect(startBriefComposition('u1', deps)).rejects.toThrow('PutEvents failed');
+    const cause = new BriefComposeRejectedError();
+    deps.publishCompose.mockRejectedValue(cause);
+    await expect(startBriefComposition('u1', deps)).rejects.toMatchObject({
+      briefId: 'b1',
+      retrySafe: true,
+      cause,
+    });
     expect(deps.briefs.discardComposing).toHaveBeenCalledWith('b1');
+  });
+
+  it('retains the row and original error when acceptance is unknown', async () => {
+    const deps = makeDeps();
+    const cause = new Error('transport timed out');
+    deps.publishCompose.mockRejectedValue(cause);
+    await expect(startBriefComposition('u1', deps)).rejects.toMatchObject({
+      briefId: 'b1',
+      retrySafe: false,
+      cause,
+    });
+    expect(deps.briefs.discardComposing).not.toHaveBeenCalled();
+  });
+
+  it.each(['false', 'throw'])('prevents retry when rejected-row cleanup returns %s', async failure => {
+    const deps = makeDeps();
+    const cause = new BriefComposeRejectedError();
+    deps.publishCompose.mockRejectedValue(cause);
+    if (failure === 'false') deps.briefs.discardComposing.mockResolvedValue(false);
+    else deps.briefs.discardComposing.mockRejectedValue(new Error('database unavailable'));
+    await expect(startBriefComposition('u1', deps)).rejects.toMatchObject({
+      name: BriefComposeStartError.name,
+      briefId: 'b1',
+      retrySafe: false,
+      cause,
+    });
   });
 
   it('defaults to the last day with no prior brief and caps a stale one at a week', async () => {
