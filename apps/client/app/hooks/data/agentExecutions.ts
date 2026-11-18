@@ -26,6 +26,8 @@ export interface AgentExecutionTrace {
   answer: string | null;
   /** Caller-safe failure text; null unless the run failed. */
   error: string | null;
+  /** Why the run stopped: set for a failed run, and `blocked` for a loop run that handed its ticket back. */
+  failureReason?: string;
   steps: IAgentStep[];
   totalIterations: number | null;
   model?: string;
