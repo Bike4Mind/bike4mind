@@ -1,8 +1,6 @@
 import { assistantBriefRepository, type IAssistantBrief } from '@bike4mind/database';
+import { briefWindow } from '@bike4mind/server-utils/briefs/briefSchedule';
 import { BriefEvents } from '@bike4mind/server-utils/utils/eventBus';
-
-const DEFAULT_WINDOW_MS = 24 * 60 * 60 * 1000;
-const MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 type Deps = {
   briefs: Pick<typeof assistantBriefRepository, 'findActiveComposing' | 'findLatestReady' | 'createComposing'>;
@@ -24,11 +22,8 @@ export async function startBriefComposition(userId: string, deps: Deps = default
   const inFlight = await deps.briefs.findActiveComposing(userId, deps.now());
   if (inFlight) return inFlight;
 
-  const periodEnd = deps.now();
   const latest = await deps.briefs.findLatestReady(userId);
-  const earliest = new Date(periodEnd.getTime() - MAX_WINDOW_MS);
-  const defaultStart = new Date(periodEnd.getTime() - DEFAULT_WINDOW_MS);
-  const periodStart = latest ? new Date(Math.max(latest.periodEnd.getTime(), earliest.getTime())) : defaultStart;
+  const { periodStart, periodEnd } = briefWindow(latest?.periodEnd, deps.now());
 
   const brief = await deps.briefs.createComposing({ userId, periodStart, periodEnd });
   await deps.publishCompose({ briefId: brief._id.toString(), userId });
