@@ -147,7 +147,7 @@ describe('AgentPeekDrawer', () => {
     const context = el('orchestrator-peek-context') as HTMLDetailsElement;
     expect(context.open).toBe(false);
     expect(el('orchestrator-peek-context-toggle').tagName).toBe('SUMMARY');
-    for (const action of ['reply-input', 'send-btn', 'open-btn', 'stop-btn', 'archive-btn', 'close-btn']) {
+    for (const action of ['reply-input', 'send-btn', 'open-btn', 'actions-menu-btn', 'close-btn']) {
       expect(context.contains(el(`orchestrator-peek-${action}`))).toBe(false);
     }
     act(() => el('orchestrator-peek-context-toggle').click());
@@ -179,7 +179,7 @@ describe('AgentPeekDrawer', () => {
       'orchestrator-peek-pending',
       'orchestrator-peek-reply-input',
       'orchestrator-peek-open-btn',
-      'orchestrator-peek-archive-btn',
+      'orchestrator-peek-actions-menu-btn',
     ]) {
       expect(details.contains(el(id))).toBe(false);
     }
@@ -332,18 +332,37 @@ describe('AgentPeekDrawer', () => {
 
   it('hides Stop for a finished agent but offers it while working', async () => {
     await renderDrawer(agentFixture('a1', 'done'));
+    await act(async () => el('orchestrator-peek-actions-menu-btn').click());
     expect(query('orchestrator-peek-stop-btn')).toBeNull();
     themed.unmount();
     await renderDrawer(agentFixture('a1', 'working'));
+    await act(async () => el('orchestrator-peek-actions-menu-btn').click());
     await act(async () => el('orchestrator-peek-stop-btn').click());
     expect(actions.stop).toHaveBeenCalledWith('a1');
   });
 
   it('archives then closes', async () => {
     await renderDrawer(agentFixture('a1'));
+    await act(async () => el('orchestrator-peek-actions-menu-btn').click());
     await act(async () => el('orchestrator-peek-archive-btn').click());
     expect(actions.archive).toHaveBeenCalledWith('a1');
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('aligns the split action left and Send right in one row, keeping Open as the primary action', async () => {
+    await renderDrawer(agentFixture('a1'));
+    const row = el('orchestrator-peek-action-row');
+    expect(row.firstElementChild).toBe(el('orchestrator-peek-actions'));
+    expect(row.lastElementChild).toBe(el('orchestrator-peek-send-btn'));
+    expect(getComputedStyle(row).display).toBe('flex');
+    expect(getComputedStyle(row).justifyContent).toBe('space-between');
+    expect(query('orchestrator-peek-archive-btn')).toBeNull();
+    await act(async () => el('orchestrator-peek-open-btn').click());
+    expect(actions.open).toHaveBeenCalledWith('a1');
+    await act(async () => el('orchestrator-peek-actions-menu-btn').click());
+    expect(el('orchestrator-peek-actions-menu-btn').getAttribute('aria-expanded')).toBe('true');
+    expect(el('orchestrator-peek-stop-btn').textContent).toBe('Stop');
+    expect(el('orchestrator-peek-archive-btn').textContent).toBe('Archive');
   });
 
   describe('pending requests', () => {

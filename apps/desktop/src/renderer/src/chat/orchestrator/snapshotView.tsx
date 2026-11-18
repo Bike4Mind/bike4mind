@@ -1,5 +1,5 @@
 import Box from '@mui/joy/Box';
-import { useMemo, type ComponentType } from 'react';
+import { useMemo, type ComponentType, type ReactNode } from 'react';
 import { acceptViewAction, type ViewAction, type ViewSnapshot } from '@shared/viewSnapshot';
 import type { OrchestratorViewProps } from './OrchestratorStage';
 import { useScenePause, type ScenePauseOptions } from './tavern/useScenePause';
@@ -9,6 +9,7 @@ import { runViewAction, toViewSnapshot } from './viewSnapshot';
 export interface SnapshotViewProps {
   snapshot: ViewSnapshot;
   onAction(action: ViewAction): void;
+  agentDetailsOverlay?: ReactNode;
 }
 
 /** Stands in for the root's id when the stage was not given one; the root is only ever opened, never looked up. */
@@ -25,7 +26,14 @@ export function snapshotView(
   View: ComponentType<SnapshotViewProps>,
   { displayName, pause }: { displayName: string; pause?: ScenePauseOptions }
 ) {
-  function SnapshotHost({ agents, parent, rootId, onSelect, onInnkeeperSelect }: OrchestratorViewProps) {
+  function SnapshotHost({
+    agents,
+    parent,
+    rootId,
+    onSelect,
+    onInnkeeperSelect,
+    agentDetailsOverlay,
+  }: OrchestratorViewProps) {
     const snapshot = useMemo(
       () => toViewSnapshot(rootId ?? UNNAMED_ROOT, agents, parent ?? NO_PARENT),
       [rootId, agents, parent]
@@ -53,7 +61,7 @@ export function snapshotView(
           },
         }}
       >
-        <View snapshot={snapshot} onAction={onAction} />
+        <View snapshot={snapshot} onAction={onAction} agentDetailsOverlay={agentDetailsOverlay} />
       </Box>
     );
   }

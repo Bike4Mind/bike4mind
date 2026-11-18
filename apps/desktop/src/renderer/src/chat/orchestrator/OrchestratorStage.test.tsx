@@ -6,6 +6,8 @@ import { OrchestratorStage, type OrchestratorViewProps } from './OrchestratorSta
 import { EXAMPLE_QUESTS } from './exampleQuests';
 import type { AgentView } from './roster';
 import { TavernView } from './tavern/TavernView';
+import { Aquarium } from './aquarium/Aquarium';
+import { snapshotView } from './snapshotView';
 import { agentFixture, createThemedMount, el, query, typeInto } from './testUtils';
 
 const FIXTURE = [
@@ -230,7 +232,7 @@ describe('OrchestratorStage', () => {
       await act(async () => scene.click());
       const region = el('orchestrator-peek-drawer-region');
       expect(viewport.contains(region)).toBe(true);
-      expect(el('scene-artwork').contains(region)).toBe(view === 'tavern');
+      expect(el('scene-artwork').contains(region)).toBe(view !== 'table');
       expect(el('scene-select')).toBe(scene);
       expect(getComputedStyle(viewport).position).toBe('relative');
       expect(getComputedStyle(region).position).toBe('absolute');
@@ -238,7 +240,11 @@ describe('OrchestratorStage', () => {
       expect(getComputedStyle(region).pointerEvents).toBe('none');
       expect(getComputedStyle(el('orchestrator-peek-drawer')).pointerEvents).toBe('auto');
       expect(getComputedStyle(el('orchestrator-peek-drawer')).backgroundColor).toBe(
-        view === 'tavern' ? 'rgb(242, 236, 225)' : 'var(--joy-palette-background-surface)'
+        view === 'tavern'
+          ? 'rgb(242, 236, 225)'
+          : view === 'aquarium'
+            ? 'rgb(231, 239, 240)'
+            : 'var(--joy-palette-background-surface)'
       );
     }
   );
@@ -258,6 +264,28 @@ describe('OrchestratorStage', () => {
     await act(async () => el('orchestrator-needs-you-pill').click());
     expect(el('orchestrator-peek-drawer-region').parentElement).toBe(artwork);
     expect(el('orchestrator-tavern')).toBe(artwork);
+  });
+
+  it('opens compact details inside the Aquarium through its snapshot host', async () => {
+    const AquariumView = snapshotView(Aquarium, { displayName: 'Aquarium' });
+    await themed.render(
+      <OrchestratorStage
+        agents={FIXTURE}
+        view="aquarium"
+        onViewChange={onViewChange}
+        actions={actions}
+        introPlaying={false}
+        renderView={(_id, props) => <AquariumView {...props} />}
+      />
+    );
+    const tank = el('orchestrator-aquarium');
+    await act(async () => el('orchestrator-fish-w1').click());
+    expect(el('orchestrator-peek-drawer-region').parentElement).toBe(tank);
+    expect(el('orchestrator-aquarium')).toBe(tank);
+    expect(el('orchestrator-peek-actions').parentElement).toBe(el('orchestrator-peek-action-row'));
+    expect(document.activeElement).toBe(el('orchestrator-peek-drawer'));
+    await pressEscape();
+    expect(query('orchestrator-peek-drawer')).toBeNull();
   });
 
   it('claims the Escape that closes the drawer, so the docked conversation stays open', async () => {
