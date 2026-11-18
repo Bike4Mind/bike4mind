@@ -15677,6 +15677,37 @@ describe('prompt moderation', () => {
       await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
         FlaggedContentError
       );
+
+      await vi.waitFor(() =>
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('Failed to send the escalation alert'),
+          expect.objectContaining({ message: 'not wired' })
+        )
+      );
+    });
+
+    it('does not wait for a notifier that never settles', async () => {
+      blockWith(['sexual/minors']);
+      const notify = vi.fn().mockReturnValue(new Promise(() => undefined));
+      service.notifyModerationEscalation = notify;
+
+      await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
+        FlaggedContentError
+      );
+
+      expect(notify).toHaveBeenCalledTimes(1);
+    });
+
+    it('runs without a notifier and does not warn about one', async () => {
+      blockWith(['sexual/minors']);
+      service.notifyModerationEscalation = undefined;
+
+      await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
+        FlaggedContentError
+      );
+
+      expect(applyModerationHit).toHaveBeenCalled();
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('escalation alert'), expect.anything());
     });
   });
 
