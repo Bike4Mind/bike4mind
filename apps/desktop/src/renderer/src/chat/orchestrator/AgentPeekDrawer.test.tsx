@@ -95,6 +95,23 @@ describe('AgentPeekDrawer', () => {
     expect(text).toContain('message 4');
   });
 
+  it('starts compact with expandable context and leaves reply and task actions outside it', async () => {
+    await renderDrawer(agentFixture('a1', 'working'));
+    const context = el('orchestrator-peek-context') as HTMLDetailsElement;
+    expect(context.open).toBe(false);
+    expect(el('orchestrator-peek-context-toggle').tagName).toBe('SUMMARY');
+    for (const action of ['reply-input', 'send-btn', 'open-btn', 'stop-btn', 'archive-btn', 'close-btn']) {
+      expect(context.contains(el(`orchestrator-peek-${action}`))).toBe(false);
+    }
+    act(() => el('orchestrator-peek-context-toggle').click());
+    expect(context.open).toBe(true);
+    expect(context.textContent).toContain('message 4');
+    const style = getComputedStyle(el('orchestrator-peek-drawer'));
+    expect(style.maxWidth).toBe('100%');
+    expect(style.maxHeight).toBe('100%');
+    expect(style.overflowY).toBe('auto');
+  });
+
   it('refetches when the agent updatedAt changes', async () => {
     await renderDrawer(agentFixture('a1'));
     expect(chat.getSession).toHaveBeenCalledTimes(1);
