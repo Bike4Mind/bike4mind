@@ -1,4 +1,6 @@
-import type { DataHolderRegistry } from '../types';
+import { premiumDataSubjectRegistries } from '@server/premium-generated/premiumDataSubjectRegistry.generated';
+import { CONTRIBUTED_DATA_HOLDER_KINDS } from '../types';
+import type { ContributedDataHolderRegistry, DataHolderRegistry } from '../types';
 import { aiHolders } from './ai';
 import { analyticsHolders } from './analytics';
 import { authHolders } from './auth';
@@ -33,8 +35,29 @@ export function mergeRegistries(registries: readonly DataHolderRegistry[]): Data
   return merged;
 }
 
-/** Keyed by Mongoose model name (`mongoose.modelNames()`), not collection name. */
-export const DATA_HOLDER_REGISTRY: DataHolderRegistry = mergeRegistries(DOMAIN_REGISTRIES);
+/** Rejects what a JS overlay can get past the types: a core-only kind, or a hook name core never resolved. */
+export function assertContributedRegistry(registry: ContributedDataHolderRegistry): DataHolderRegistry {
+  for (const [modelName, holder] of Object.entries(registry)) {
+    const kind: string = holder.kind;
+    if (!(CONTRIBUTED_DATA_HOLDER_KINDS as readonly string[]).includes(kind)) {
+      throw new Error(`Contributed data holder "${modelName}" has kind "${kind}", which an overlay may not use`);
+    }
+    if ('beforeErasure' in holder) {
+      throw new Error(`Contributed data holder "${modelName}" may not declare beforeErasure`);
+    }
+  }
+  return registry;
+}
+
+/**
+ * Keyed by Mongoose model name (`mongoose.modelNames()`), not collection name. Importing the
+ * contributed registry also registers the overlays' models, so every process that loads this module
+ * has them before it classifies.
+ */
+export const DATA_HOLDER_REGISTRY: DataHolderRegistry = mergeRegistries([
+  ...DOMAIN_REGISTRIES,
+  ...premiumDataSubjectRegistries.map(assertContributedRegistry),
+]);
 
 /**
  * Models registered in this process that the registry does not classify. Some models register only

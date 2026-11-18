@@ -211,3 +211,14 @@ export type DataHolder =
   | { kind: 'noUserData'; note: string; unrelatedPaths?: readonly string[] };
 
 export type DataHolderRegistry = Readonly<Record<string, DataHolder>>;
+
+/** Kinds a premium overlay may classify its own models as; the rest describe core's own models. */
+export const CONTRIBUTED_DATA_HOLDER_KINDS = ['holder', 'viaParent', 'pseudonymous', 'noUserData'] as const;
+
+/** A model an overlay registers. It cannot name a `beforeErasure` hook: those resolve from a static core list. */
+export type ContributedDataHolder =
+  | Omit<Extract<DataHolder, { kind: 'holder' }>, 'beforeErasure'>
+  | Extract<DataHolder, { kind: 'viaParent' | 'pseudonymous' | 'noUserData' }>;
+
+/** What an overlay's `dataSubjectRegistryExport` module exports as `dataSubjectRegistry`. */
+export type ContributedDataHolderRegistry = Readonly<Record<string, ContributedDataHolder>>;
