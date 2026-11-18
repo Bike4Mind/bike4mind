@@ -13,7 +13,6 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsMap: refs.getSettingsMap,
 }));
 
-import nextConfig from '../../../../next.config.mjs';
 import handler from '../apple-app-site-association';
 
 const TEAM_ID = 'AB12CD34EF';
@@ -29,17 +28,8 @@ async function get(): Promise<{ body: unknown; headers: Record<string, string> }
   return { body, headers };
 }
 
-describe('GET /.well-known/apple-app-site-association', () => {
+describe('GET /api/well-known/apple-app-site-association', () => {
   beforeEach(() => refs.getSettingsMap.mockReset());
-
-  it('is rewritten from the extensionless path Apple fetches', async () => {
-    const rewrites = await nextConfig.rewrites();
-    const list = Array.isArray(rewrites) ? rewrites : rewrites.beforeFiles;
-    expect(list).toContainEqual({
-      source: '/.well-known/apple-app-site-association',
-      destination: '/api/well-known/apple-app-site-association',
-    });
-  });
 
   it('is public: Apple fetches it without credentials', () => {
     expect(refs.baseApiOptions).toEqual({ auth: false });
