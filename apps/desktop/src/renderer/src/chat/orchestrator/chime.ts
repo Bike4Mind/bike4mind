@@ -52,6 +52,7 @@ export function useOrchestratorSound(): [boolean, () => void] {
 }
 
 let context: AudioContext | null = null;
+let finale: HTMLAudioElement | null = null;
 
 /**
  * Plays the chime if the setting is on. Synthesised, so the app ships no audio file. `soundUrl` is a
@@ -60,9 +61,13 @@ let context: AudioContext | null = null;
  */
 export function playChime(soundUrl?: string): void {
   if (!enabled) return;
+  // A long finale must not drown out the next chime, so any one still playing is cut off first.
+  finale?.pause();
+  finale = null;
   if (soundUrl && typeof Audio === 'function') {
     const audio = new Audio(soundUrl);
     audio.volume = 0.6;
+    finale = audio;
     audio.play().catch(() => playTones());
     return;
   }

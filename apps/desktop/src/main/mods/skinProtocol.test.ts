@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -54,6 +54,18 @@ describe('serveSkinAsset', () => {
   ])('answers 404 for %s', async (_label, url) => {
     if (url.includes('unused')) await writeFile(join(folder, 'sprites/unused.png'), PNG_BYTES);
     expect((await serveSkinAsset(skins, url)).status).toBe(404);
+  });
+
+  it.skipIf(process.platform === 'win32')('refuses a sprites folder swapped for a link after the scan', async () => {
+    const outside = await mkdtemp(join(tmpdir(), 'skin-outside-'));
+    try {
+      await writeFile(join(outside, 'tank.png'), PNG_BYTES);
+      await rm(join(folder, 'sprites'), { recursive: true });
+      await symlink(outside, join(folder, 'sprites'));
+      expect((await serveSkinAsset(skins, 'b4m-skin://nightglass/sprites/tank.png')).status).toBe(404);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 
   it('refuses a file replaced on disk by something that is no longer its type', async () => {

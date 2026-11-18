@@ -75,6 +75,27 @@ describe('loadSkin', () => {
     expectRejected(await loadSkin(modsRoot, 'nightglass'), reason);
   });
 
+  it('rejects folders nested deeper than three levels', async () => {
+    const folder = await installSampleSkin(modsRoot);
+    await mkdir(join(folder, 'a/b/c/d'), { recursive: true });
+    expectRejected(await loadSkin(modsRoot, 'nightglass'), /nested too deep/);
+  });
+
+  it('rejects a skin with more than 200 files', async () => {
+    const folder = await installSampleSkin(modsRoot);
+    await mkdir(join(folder, 'extra'));
+    await Promise.all(Array.from({ length: 201 }, (_, i) => writeFile(join(folder, `extra/f${i}.png`), 'x')));
+    expectRejected(await loadSkin(modsRoot, 'nightglass'), /more than 200 files/);
+  });
+
+  it('rejects a skin over 20 MB in total even when every file is under its cap', async () => {
+    const folder = await installSampleSkin(modsRoot);
+    await mkdir(join(folder, 'extra'));
+    const full = Buffer.alloc(2 * 1024 * 1024);
+    await Promise.all(Array.from({ length: 11 }, (_, i) => writeFile(join(folder, `extra/big${i}.png`), full)));
+    expectRejected(await loadSkin(modsRoot, 'nightglass'), /in total/);
+  });
+
   it('rejects a sprite symlinked to a file outside the skin folder', async () => {
     const folder = await installSampleSkin(modsRoot);
     await writeFile(join(outside, 'secret.png'), PNG_BYTES);

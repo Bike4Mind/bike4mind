@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { open } from 'node:fs/promises';
+import { open, realpath } from 'node:fs/promises';
 import { protocol } from 'electron';
 import { SKIN_FILE_TYPES, SKIN_SCHEME } from '@shared/mods';
 import { matchesSignature, type LoadedSkin } from './skinFolder';
@@ -41,6 +41,8 @@ export async function serveSkinAsset(skins: ReadonlyMap<string, LoadedSkin>, url
   const { maxBytes, mimeType } = SKIN_FILE_TYPES[asset.type];
   let body: Buffer;
   try {
+    // O_NOFOLLOW covers only the last component; a parent directory swapped for a link since the scan shows up here.
+    if ((await realpath(asset.absolutePath)) !== asset.absolutePath) return NOT_FOUND();
     // O_NOFOLLOW: a file swapped for a link since the scan is refused, not followed (no-op on Windows).
     const handle = await open(asset.absolutePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     try {

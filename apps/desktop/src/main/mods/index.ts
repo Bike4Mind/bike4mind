@@ -20,13 +20,18 @@ export function registerSkins(): void {
   const modsRoot = join(app.getPath('userData'), 'mods');
   let loaded = new Map<string, LoadedSkin>();
   let latest: SkinSummary[] = [];
+  let generation = 0;
 
   registerSkinProtocol(() => loaded);
 
   const scan = async (): Promise<SkinSummary[]> => {
+    const mine = ++generation;
     const results = await loadSkins(modsRoot);
-    loaded = new Map(results.flatMap(result => (result.ok ? [[result.skin.manifest.id, result.skin] as const] : [])));
-    latest = results.map(toSummary);
+    // An older scan can finish after a newer one; only the newest may publish.
+    if (mine === generation) {
+      loaded = new Map(results.flatMap(result => (result.ok ? [[result.skin.manifest.id, result.skin] as const] : [])));
+      latest = results.map(toSummary);
+    }
     for (const result of results) {
       if (!result.ok) console.warn(`SKINS: ${result.id} rejected: ${result.error}`);
     }
