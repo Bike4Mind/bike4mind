@@ -191,8 +191,8 @@ function MoreNotes({
                 sx={{
                   width: 8,
                   height: 8,
-                  bgcolor: note.done ? '#7ed07a' : stateLampColor(note.agent.state),
-                  boxShadow: `0 0 4px ${note.done ? '#7ed07a' : stateLampColor(note.agent.state)}`,
+                  bgcolor: stateLampColor(note.done ? 'done' : note.agent.state),
+                  boxShadow: `0 0 4px ${stateLampColor(note.done ? 'done' : note.agent.state)}`,
                 }}
               />
             </ListItemDecorator>

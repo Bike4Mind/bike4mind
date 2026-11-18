@@ -206,7 +206,7 @@ function Bubble({
         py: '0.25em',
         borderRadius: '6px',
         border: '2px solid #2a1d10',
-        bgcolor: urgent ? '#f5c542' : 'rgba(255, 250, 240, 0.94)',
+        bgcolor: urgent ? stateLampColor('needs-you') : 'rgba(255, 250, 240, 0.94)',
         color: '#2a1d10',
         fontSize: urgent ? 'clamp(11px, 2.8cqh, 18px)' : 'clamp(9px, 2.1cqh, 13px)',
         fontWeight: urgent ? 700 : 500,

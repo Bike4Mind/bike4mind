@@ -132,7 +132,7 @@ export function OverflowStack({
           sx={{
             px: '0.5em',
             borderRadius: '999px',
-            bgcolor: urgent ? '#f5c542' : 'rgba(20, 12, 6, 0.85)',
+            bgcolor: urgent ? stateLampColor('needs-you') : 'rgba(20, 12, 6, 0.85)',
             color: urgent ? '#2a1d10' : '#fbe9c8',
             outline: holdsSelection ? '2px solid #f5c542' : 'none',
             fontWeight: 700,
