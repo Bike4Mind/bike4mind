@@ -7563,7 +7563,22 @@ export class ChatService {
     const askedReasons = [askedByRule, stuck ? LOOP_ASK_REASON : null, outsideReason].filter(
       (reason): reason is string => !!reason
     );
-    const askedBecause = askedReasons.join(' ') || undefined;
+    // Full access asks only at its own stops; naming the stop keeps such a card from reading as
+    // a mode that never applied. The card gains only a stop the tool's detail does not already say.
+    const fullAccessStops = mode === 'full' ? fullAccessStopReasons(prompt) : [];
+    const unshownStops = fullAccessStops.filter(reason => !asked.prompt.detail.includes(reason));
+    const fullAccessExplanation = fullAccessStops.join(' ');
+    // A tool's reasons can include context that does not itself stop Full access. Name the
+    // every-mode floor separately instead of attributing that floor to every tool check.
+    const loggedFullAccessExplanation =
+      prompt.askInFull && !prompt.irreversible && prompt.reasons?.length
+        ? `This tool asks in every mode. Tool checks: ${fullAccessExplanation}`
+        : fullAccessExplanation;
+    const askedBecause =
+      [
+        ...askedReasons,
+        ...(fullAccessStops.length > 0 ? [`${FULL_ACCESS_ASK_PREFIX} ${loggedFullAccessExplanation}`] : []),
+      ].join(' ') || undefined;
     // The tool's reasons plus this gate's own, so no reason to ask leaves the call looking quick.
     const approvalReasons = [...(asked.prompt.reasons ?? []), ...askedReasons];
     let requestedAt: string | undefined;
@@ -7597,7 +7612,9 @@ export class ChatService {
             ...call,
             status: 'awaiting-approval',
             approvalId,
-            approvalDetail: outsideReason ? `${asked.prompt.detail}\n\n${outsideReason}` : asked.prompt.detail,
+            approvalDetail: [asked.prompt.detail, ...unshownStops, ...(outsideReason ? [outsideReason] : [])].join(
+              '\n\n'
+            ),
             ...(approvalReasons.length > 0 ? { approvalReasons } : {}),
             ...(asked.parts ? { approvalParts: asked.parts } : {}),
             ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
@@ -9365,6 +9382,19 @@ interface ApprovalOutcome {
 }
 
 const LOOP_ASK_REASON = `Asked because the same call was repeated ${LOOP_THRESHOLD} times in a row.`;
+
+/** Leads `askedBecause` for a card Full access showed; approvalSummary's reasonLabel matches on it. */
+const FULL_ACCESS_ASK_PREFIX = 'Asked in Full access because:';
+
+/**
+ * Why Full access stops for a call it would otherwise run: the same two flags `autoApproves`
+ * checks before any mode, with the tool's own words for them.
+ */
+function fullAccessStopReasons(prompt: ApprovalPrompt): string[] {
+  if (prompt.irreversible) return ['It cannot be undone, so it is asked every time.'];
+  if (!prompt.askInFull) return [];
+  return prompt.reasons?.length ? [...prompt.reasons] : ['This tool asks in every mode, Full access included.'];
+}
 
 function approvalRecord(
   outcome: ChatToolApproval['outcome'],
