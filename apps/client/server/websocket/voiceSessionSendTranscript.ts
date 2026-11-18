@@ -3,6 +3,7 @@ import { Session as SessionModel } from '@bike4mind/database/auth';
 import { ApiKeyScope, Permission, VoiceSessionSendTranscriptAction } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import ability from '@bike4mind/server-utils/auth/ability';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { connectionHoldsScope } from '@server/websocket/connectionScope';
 import { withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
@@ -39,6 +40,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
   const user = await userRepository.findById(userId);
   if (!user) throw new NotFoundError('User not found');
+  await resolveRoleAdminPermissions(user);
 
   // Write access, not read access. Read-accessibility admits a sharee holding only [read, share],
   // and this handler inserts and overwrites turns in the notebook - the same `Permission.update`
