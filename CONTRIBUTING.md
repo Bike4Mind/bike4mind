@@ -143,7 +143,7 @@ pnpm i -r
 pnpm turbo:core:build
 
 # 5. Verify your environment works before changing anything
-pnpm turbo:typecheck   # TypeScript across all packages
+pnpm turbo:typecheck:fast   # TypeScript across all packages
 pnpm turbo:test        # all test suites (MongoDB tests use mongodb-memory-server — no local DB needed)
 pnpm lint:check        # ESLint, error severity only (mirrors the CI gate)
 ```
@@ -281,7 +281,7 @@ All of these are required and blocking:
 | **Lockfile Integrity** | No integrity-less tarballs, and no [overlay paths](#premium-overlays-and-the-tracked-lockfile), in `pnpm-lock.yaml` | `bash scripts/check-no-overlay-lockfile.sh` |
 | **CLA** | You've signed the CLA | one-time, via bot |
 
-Run typecheck, lint, and tests locally before pushing — it's dramatically faster than round-tripping through CI. `pnpm verify` does all three for just what your branch changed.
+Run typecheck, lint, and tests locally before pushing - it's dramatically faster than round-tripping through CI. `pnpm verify` does all three for just what your branch changed.
 
 Two notes specific to fork PRs:
 

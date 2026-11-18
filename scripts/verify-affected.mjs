@@ -79,8 +79,10 @@ export function parseArgs(argv) {
   const options = { tasks: DEFAULT_TASKS, lint: true, dry: false, turboArgs: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === '--tasks') options.tasks = argv[++i].split(',').filter(Boolean);
-    else if (arg.startsWith('--tasks=')) options.tasks = arg.slice('--tasks='.length).split(',').filter(Boolean);
+    if (arg === '--tasks') {
+      if (i + 1 >= argv.length) throw new Error('verify: --tasks needs a value, e.g. --tasks typecheck:fast,test');
+      options.tasks = argv[++i].split(',').filter(Boolean);
+    } else if (arg.startsWith('--tasks=')) options.tasks = arg.slice('--tasks='.length).split(',').filter(Boolean);
     else if (arg === '--no-lint') options.lint = false;
     else if (arg === '--dry') options.dry = true;
     else options.turboArgs.push(arg);
@@ -93,18 +95,26 @@ function git(args) {
 }
 
 function changedFilesSince(mergeBase) {
-  // Deleted files count: removing a client file can break the workers typecheck.
-  const tracked = git(['diff', '--name-only', mergeBase]);
+  // Deleted files count: removing a client file can break the workers typecheck. --no-renames
+  // keeps the old path of a move, which rename detection would otherwise drop.
+  const tracked = git(['diff', '--no-renames', '--name-only', mergeBase]);
   const untracked = git(['ls-files', '--others', '--exclude-standard']);
   return [...new Set([...tracked, ...untracked])];
 }
 
 function readPackageDirs() {
-  const out = execFileSync('pnpm', ['exec', 'turbo', 'ls', '--output=json'], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-  });
+  let out;
+  try {
+    out = execFileSync('pnpm', ['exec', 'turbo', 'ls', '--output=json'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    const reason = String(error.stderr ?? '').trim() || error.message;
+    console.error(`verify: \`turbo ls\` failed (is \`pnpm install\` done?)\n${reason}`);
+    process.exit(1);
+  }
   const { packages } = JSON.parse(out.slice(out.indexOf('{')));
   return Object.fromEntries(packages.items.map(({ name, path }) => [name, path]));
 }

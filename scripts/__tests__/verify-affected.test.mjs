@@ -92,4 +92,8 @@ describe('parseArgs', () => {
       turboArgs: ['--concurrency=4'],
     });
   });
+
+  it('rejects --tasks with no value', () => {
+    expect(() => parseArgs(['--tasks'])).toThrow(/--tasks needs a value/);
+  });
 });
