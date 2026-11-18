@@ -4,6 +4,7 @@ import type { ChatMessage, ChatQueueEvent, ChatQueuedMessage, ChatToolCall } fro
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
 import type { AgentView } from './roster';
+import type { WorkerTask } from '@shared/orchestration';
 import { assignPersonas } from '@shared/agentPersona';
 import { agentFixture, createThemedMount, el, query, typeInto } from './testUtils';
 
@@ -19,6 +20,8 @@ const chat = {
   cancelQueuedMessage: vi.fn(),
   sendQueuedMessageNow: vi.fn(),
   respondToApproval: vi.fn(),
+  listModels: vi.fn(async () => ({ models: [] })),
+  taskAction: vi.fn(),
 };
 const actions = { open: vi.fn(), stop: vi.fn(), archive: vi.fn() };
 const onClose = vi.fn();
@@ -52,6 +55,50 @@ const sessionWithMessages = (...messages: Array<Partial<ChatMessage>>) => ({
 });
 
 const input = () => el('orchestrator-peek-reply-input') as HTMLTextAreaElement;
+
+const longTask = (): WorkerTask => ({
+  version: 1,
+  contract: {
+    version: 1,
+    outcome: 'Verify a bounded scene change with detailed acceptance evidence.',
+    rationale: 'Keep lengthy task reports from overwhelming the scene.',
+    role: 'implementation',
+    paths: ['apps/desktop'],
+    contextReferences: [],
+    ownedChanges: ['Scene layout'],
+    coordinationConstraints: [],
+    nonGoals: [],
+    acceptanceCriteria: Array.from(
+      { length: 8 },
+      (_, index) =>
+        `Criterion ${index}: preserve scene geometry, keyboard navigation, task actions and readable evidence.`
+    ),
+    verification: ['Focused tests'],
+    assumptions: [],
+    escalationConditions: [],
+  },
+  automaticUpgrades: 0,
+  resolvedDecisions: [],
+  attempts: Array.from({ length: 3 }, (_, index) => ({
+    id: `attempt-${index}`,
+    model: 'worker',
+    startedAt: '2026-10-01T00:00:00.000Z',
+    trigger: 'initial' as const,
+  })),
+  state: {
+    status: 'completed',
+    accepted: false,
+    changedPaths: ['apps/desktop/scene.tsx'],
+    verification: Array.from({ length: 8 }, (_, index) => ({
+      criterion: `Criterion ${index}`,
+      command: 'pnpm test',
+      outcome: 'passed' as const,
+      evidence: 'Measured artwork bounds before and after selection and checked every action in a narrow pane.',
+    })),
+    unmetCriteria: [],
+    handoff: 'Detailed handoff with all verification results and observations.',
+  },
+});
 
 async function typeAndSend(text: string) {
   await typeInto(input(), text);
@@ -110,6 +157,38 @@ describe('AgentPeekDrawer', () => {
     expect(style.maxWidth).toBe('100%');
     expect(style.maxHeight).toBe('100%');
     expect(style.overflowY).toBe('auto');
+  });
+
+  it('collapses a long structured report but keeps status, approvals and assessment actions accessible', async () => {
+    const workerTask = longTask();
+    chat.getSession.mockResolvedValue(sessionWithMessages({ toolCalls: [awaitingCall('urgent', 'pnpm test')] }));
+    chat.taskAction.mockResolvedValue({ workerTask });
+    await renderDrawer(agentFixture('a1', 'needs-you', { workerTask }));
+    const details = el('agent-task-details') as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain(workerTask.contract.acceptanceCriteria[7]);
+    expect(details.textContent).toContain('Attempts: worker (initial), worker (initial), worker (initial)');
+    expect(details.textContent).toContain('Measured artwork bounds');
+    expect(el('agent-task-state').textContent).toContain('awaiting assessment');
+    for (const id of [
+      'agent-task-state',
+      'agent-task-note',
+      'agent-task-accept-btn',
+      'agent-task-revise-btn',
+      'agent-task-cancel-btn',
+      'orchestrator-peek-pending',
+      'orchestrator-peek-reply-input',
+      'orchestrator-peek-open-btn',
+      'orchestrator-peek-archive-btn',
+    ]) {
+      expect(details.contains(el(id))).toBe(false);
+    }
+    await typeInto(el('agent-task-note').querySelector('textarea') as HTMLTextAreaElement, 'Evidence reviewed');
+    await act(async () => el('agent-task-accept-btn').click());
+    expect(chat.taskAction).toHaveBeenCalledWith('a1', { kind: 'accept', assessment: 'Evidence reviewed' });
+    expect(details.open).toBe(false);
+    act(() => el('agent-task-details-toggle').click());
+    expect(details.open).toBe(true);
   });
 
   it('refetches when the agent updatedAt changes', async () => {
