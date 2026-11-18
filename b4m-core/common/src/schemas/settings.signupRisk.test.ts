@@ -10,6 +10,14 @@ describe('signupRiskScoring setting', () => {
     expect(SignupRiskScoringSchema.parse({})).toEqual(entry.defaultValue);
   });
 
+  it('ships the edge label signals at weight 0 and accepts a stored weight for them', () => {
+    expect(entry.defaultValue.weights).toMatchObject({ wafAnonIp: 0, wafBotSignal: 0 });
+    expect(entry.schema.parse(JSON.stringify({ weights: { wafBotSignal: 20 } })).weights).toEqual({
+      ...entry.defaultValue.weights,
+      wafBotSignal: 20,
+    });
+  });
+
   it('fills the rest from the defaults when the stored JSON sets only some values', () => {
     const parsed = entry.schema.parse(JSON.stringify({ weights: { burstCohort: 60 }, reviewThreshold: 70 }));
 

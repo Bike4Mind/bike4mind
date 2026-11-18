@@ -8,7 +8,7 @@ import {
   IUserShare,
   RepositoryUpdate,
 } from '@bike4mind/common';
-import { NotFoundError, secureParameters, UnauthorizedError } from '@bike4mind/utils';
+import { ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { grantWrite } from './grantWrite';
 
@@ -59,7 +59,7 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
   const isOwner = (document as { userId?: string }).userId === userId;
   const isSelfRevoke = userId === userIdToRevoke;
   if (!isOwner && !isSelfRevoke) {
-    throw new UnauthorizedError('Only the document owner or the shared user themselves can revoke sharing');
+    throw new ForbiddenError('Only the document owner or the shared user themselves can revoke sharing');
   }
 
   // Matches the TARGET user's entries and nobody else's. The project-scoped arm used

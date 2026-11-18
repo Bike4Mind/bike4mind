@@ -22,6 +22,7 @@ import {
   integrationsRoute,
   newRoute,
   notebooksIndexRoute,
+  oauthLogoutRoute,
   router,
   studioRoute,
   subscriptionsIndexRoute,
@@ -32,6 +33,13 @@ import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 // The consent guard bootstraps a session over the network; the redirect tests below are about what
 // adminRoute does after it, so it passes here.
 vi.mock('./utils/consentGuard', () => ({ enforceConsentRedirect: async () => undefined }));
+
+// Pass-through, so a test can stub one bootstrap without changing the guards the other tests run.
+vi.mock('./utils/sessionBootstrap', async importOriginal => {
+  const actual = await importOriginal<typeof import('./utils/sessionBootstrap')>();
+  return { ...actual, bootstrapSession: vi.fn(actual.bootstrapSession) };
+});
+vi.mock('./routes/oauth/logout', () => ({ default: () => <div data-testid="oauth-logout-page-stub" /> }));
 
 // Hoisted: router.tsx calls startPageBeacon() while it is being imported.
 const pageBeacon = vi.hoisted(() => ({ startPageBeacon: vi.fn(), beaconPage: vi.fn() }));
@@ -97,6 +105,51 @@ describe('adminRoute validateSearch', () => {
 // validateSearch is what makes a bare /feedback/rollup URL load at all (see the route's own
 // comment) - rollup.test.tsx mocks '@client/app/router' wholesale, so this is the only place the
 // fallback branches actually run.
+describe('oauthLogoutRoute (RP-Initiated Logout)', () => {
+  it('renders outside the notebook layout', () => {
+    const ids = router.matchRoutes('/oauth/logout', {}).map(m => m.routeId);
+    expect(ids).toContain('/oauth/logout');
+    expect(ids).not.toContain('/layout');
+  });
+
+  it('keeps the four logout params as strings and drops anything else', () => {
+    expect(
+      oauthLogoutRoute.options.validateSearch({
+        client_id: 'b4m_example_rp_00000000',
+        post_logout_redirect_uri: 'https://rp.example.test/signed-out',
+        state: 's1',
+        id_token_hint: 'a.b.c',
+        redirect_uri: 'https://evil.example.test/',
+      })
+    ).toEqual({
+      client_id: 'b4m_example_rp_00000000',
+      post_logout_redirect_uri: 'https://rp.example.test/signed-out',
+      state: 's1',
+      id_token_hint: 'a.b.c',
+    });
+    expect(oauthLogoutRoute.options.validateSearch({ client_id: 42 })).toEqual({
+      client_id: '42',
+      post_logout_redirect_uri: undefined,
+      state: undefined,
+      id_token_hint: undefined,
+    });
+  });
+
+  it('restores the session before the page loads, without the consent redirect', async () => {
+    const { bootstrapSession } = await import('./utils/sessionBootstrap');
+    vi.mocked(bootstrapSession).mockResolvedValueOnce(undefined);
+    const beforeLoad = oauthLogoutRoute.options.beforeLoad as unknown as () => Promise<void>;
+    await beforeLoad();
+    expect(bootstrapSession).toHaveBeenCalled();
+  });
+
+  it('lazy-loads the logout page', async () => {
+    const Page = oauthLogoutRoute.options.component as unknown as () => JSX.Element;
+    render(<Page />);
+    expect(await screen.findByTestId('oauth-logout-page-stub')).toBeTruthy();
+  });
+});
+
 describe('feedbackRollupRoute validateSearch', () => {
   it('fills both bounds from the default window when the search is empty', () => {
     const fallback = defaultFeedbackRollupWindow();

@@ -1,15 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockFindById, mockFindMembershipOrgIds, mockProjectExists, mockSessionExists, mockIsLegacy } = vi.hoisted(
-  () => ({
-    mockIsLegacy: vi.fn(),
-    mockFindById: vi.fn(),
-    mockFindMembershipOrgIds: vi.fn(),
-    mockProjectExists: vi.fn(),
-    mockSessionExists: vi.fn(),
-  })
-);
+const {
+  mockFindById,
+  mockFindMembershipOrgIds,
+  mockFindAccessibleById,
+  mockProjectExists,
+  mockSessionExists,
+  mockIsLegacy,
+} = vi.hoisted(() => ({
+  mockIsLegacy: vi.fn(),
+  mockFindById: vi.fn(),
+  mockFindMembershipOrgIds: vi.fn(),
+  mockFindAccessibleById: vi.fn(),
+  mockProjectExists: vi.fn(),
+  mockSessionExists: vi.fn(),
+}));
 
 vi.mock('@bike4mind/database', () => ({
   User: {
@@ -17,7 +23,10 @@ vi.mock('@bike4mind/database', () => ({
   },
   Project: { exists: mockProjectExists },
   Session: { exists: mockSessionExists },
-  organizationRepository: { findMembershipOrgIds: mockFindMembershipOrgIds },
+  organizationRepository: {
+    findMembershipOrgIds: mockFindMembershipOrgIds,
+    shareable: { findAccessibleById: mockFindAccessibleById },
+  },
   readAccessArms: (user: { id: string }) => [{ userId: user.id }],
 }));
 
@@ -171,5 +180,76 @@ describe('GET /api/users/[id] restricted-tier fields', () => {
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().throttle).toMatchObject({ tier: 'shadow' });
     });
+  });
+});
+
+describe('GET /api/users/[id] home organization', () => {
+  const homeOrg = {
+    id: 'org-1',
+    userId: 'owner-9',
+    name: 'Acme',
+    stripeCustomerId: 'cus_secret',
+    billingContact: 'billing@acme.example',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindMembershipOrgIds.mockResolvedValue([]);
+    mockFindById.mockResolvedValue({
+      _id: SUBJECT_ID,
+      id: SUBJECT_ID,
+      username: 'subject',
+      groups: ['g-acme'],
+      isAdmin: false,
+      organizationId: homeOrg,
+      toObject() {
+        const { toObject: _t, ...rest } = this as Record<string, unknown>;
+        return rest;
+      },
+    });
+  });
+
+  it('serves the home org, billing identifiers stripped, while the subject is still a member', async () => {
+    mockFindAccessibleById.mockResolvedValue({ id: 'org-1' });
+
+    const body = await run({ id: SUBJECT_ID, isAdmin: false });
+
+    expect(body.organizationId).toMatchObject({ id: 'org-1', name: 'Acme' });
+    expect(body.organizationId).not.toHaveProperty('stripeCustomerId');
+    expect(mockFindAccessibleById).toHaveBeenCalledWith({ id: SUBJECT_ID, groups: ['g-acme'] }, 'org-1');
+  });
+
+  it('serves no organization once the subject has left it', async () => {
+    mockFindAccessibleById.mockResolvedValue(null);
+
+    const body = await run({ id: SUBJECT_ID, isAdmin: false });
+
+    expect(body.organizationId).toBeNull();
+  });
+
+  it("checks the subject's membership, not the admin viewer's", async () => {
+    mockFindAccessibleById.mockResolvedValue(null);
+
+    const body = await run({ id: 'admin-1', isAdmin: true });
+
+    expect(body.organizationId).toBeNull();
+    expect(mockFindAccessibleById).toHaveBeenCalledWith({ id: SUBJECT_ID, groups: ['g-acme'] }, 'org-1');
+  });
+
+  it('leaves a profile with no home org untouched and runs no membership check', async () => {
+    mockFindById.mockResolvedValue({
+      _id: SUBJECT_ID,
+      id: SUBJECT_ID,
+      username: 'subject',
+      toObject() {
+        const { toObject: _t, ...rest } = this as Record<string, unknown>;
+        return rest;
+      },
+    });
+
+    const body = await run({ id: SUBJECT_ID, isAdmin: false });
+
+    expect(body).not.toHaveProperty('organizationId');
+    expect(mockFindAccessibleById).not.toHaveBeenCalled();
   });
 });
