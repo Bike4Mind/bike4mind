@@ -25,6 +25,8 @@ const fixtureModels: Record<string, Record<string, unknown>> = {
   FixtureUniqueNote: { ownerId: String, handle: { type: String, unique: true } },
   FixtureScalarNote: { ownerId: String, label: String },
   FixtureArrayNote: { ownerId: String, members: [String] },
+  FixtureKindNote: { ownerId: String, kind: { type: String, enum: ['a', 'b'] }, label: String },
+  FixtureOrgNote: { ownerId: String, organizationId: String },
 };
 
 const loadRegistry = async (registries: unknown[]) => {
@@ -37,12 +39,34 @@ const loadRegistry = async (registries: unknown[]) => {
   return import('./index');
 };
 
+const lateModels: Record<string, Record<string, unknown>> = { FixtureLateParent: { ownerId: String, key: String } };
+
 const ownerRef = { path: 'ownerId', matchBy: 'userId', action: 'deleteDocument' } as const;
 const parentHolder = { kind: 'holder', references: [ownerRef] } as const;
 
 afterEach(() => {
   h.registries = [];
 });
+
+const brokenEntries: [string, unknown[], RegExp][] = [
+  ['a collision with a core model', [{ User: { kind: 'noUserData', note: 'x' } }], /"User" is classified twice/],
+  ['a collision between two overlays', [fixture, fixture], /"FixtureOverlayNote" is classified twice/],
+  [
+    'a disallowed kind',
+    [{ FixtureOverlayNote: { kind: 'subject', secretPaths: [], references: [] } }],
+    /"FixtureOverlayNote" has kind "subject", which an overlay may not use/,
+  ],
+  [
+    'a beforeErasure hook',
+    [{ FixtureOverlayNote: { ...fixture.FixtureOverlayNote, beforeErasure: ['purgeUserPublishedArtifacts'] } }],
+    /"FixtureOverlayNote" may not declare beforeErasure/,
+  ],
+  [
+    'a missing parent',
+    [{ FixtureChild: { kind: 'viaParent', parent: 'FixtureParent', foreignKey: 'parentId' } }],
+    /"FixtureChild".*"FixtureParent" is not in the registry/,
+  ],
+];
 
 describe('contributed data holder registry', () => {
   it('classifies a contributed model so the coverage assertion passes', async () => {
@@ -57,63 +81,100 @@ describe('contributed data holder registry', () => {
     expect(findUnclassifiedModels(['FixtureOverlayNote'])).toEqual(['FixtureOverlayNote']);
   });
 
-  it('equals the core-only registry when nothing contributes', async () => {
-    const { DATA_HOLDER_REGISTRY: empty } = await loadRegistry([]);
-    const { DATA_HOLDER_REGISTRY: withFixture } = await loadRegistry([fixture]);
-    expect(Object.keys(withFixture).filter(name => !(name in empty))).toEqual(['FixtureOverlayNote']);
-    expect({ ...withFixture, FixtureOverlayNote: undefined }).toEqual({ ...empty, FixtureOverlayNote: undefined });
+  it('equals the core-only registry when nothing contributes, and the first-use check passes', async () => {
+    const empty = await loadRegistry([]);
+    expect(() => empty.assertContributedRegistryValid()).not.toThrow();
+    const { DATA_HOLDER_REGISTRY: withFixture, assertContributedRegistryValid } = await loadRegistry([fixture]);
+    expect(() => assertContributedRegistryValid()).not.toThrow();
+    expect(Object.keys(withFixture).filter(name => !(name in empty.DATA_HOLDER_REGISTRY))).toEqual([
+      'FixtureOverlayNote',
+    ]);
+    expect({ ...withFixture, FixtureOverlayNote: undefined }).toEqual({
+      ...empty.DATA_HOLDER_REGISTRY,
+      FixtureOverlayNote: undefined,
+    });
   });
 
-  it('throws when a contributed model collides with a core one', async () => {
-    await expect(loadRegistry([{ User: { kind: 'noUserData', note: 'x' } }])).rejects.toThrow(
-      /"User" is classified twice/
+  describe('a broken contribution', () => {
+    it.each(brokenEntries)(
+      'does not throw at load for %s, and throws on first use',
+      async (_name, registries, message) => {
+        const { assertContributedRegistryValid } = await loadRegistry(registries);
+        expect(() => assertContributedRegistryValid()).toThrow(message);
+      }
     );
+
+    it.each(brokenEntries)('refuses erasure, audit and the export check for %s', async (_name, registries, message) => {
+      await loadRegistry(registries);
+      const { erasureRegistry } = await import('../erasureRegistry');
+      const { assertEveryModelClassified } = await import('../subjectMatcher');
+      const subject = { userId: 'u', email: null };
+      await expect(erasureRegistry.erase(subject, async () => {}, undefined)).rejects.toThrow(message);
+      await expect(erasureRegistry.audit(subject)).rejects.toThrow(message);
+      expect(() => assertEveryModelClassified([])).toThrow(message);
+    });
+
+    it('keeps the core entry on a collision', async () => {
+      const core = await loadRegistry([]);
+      const { DATA_HOLDER_REGISTRY } = await loadRegistry([{ User: { kind: 'noUserData', note: 'x' } }]);
+      expect(DATA_HOLDER_REGISTRY.User).toEqual(core.DATA_HOLDER_REGISTRY.User);
+    });
+
+    it('lists every problem in one error', async () => {
+      const { assertContributedRegistryValid } = await loadRegistry([
+        { User: { kind: 'noUserData', note: 'x' }, FixtureOverlayNote: { kind: 'discriminator', base: 'User' } },
+      ]);
+      expect(() => assertContributedRegistryValid()).toThrow(/"User" is classified twice[\s\S]*"FixtureOverlayNote"/);
+    });
   });
 
-  it('throws when two overlays classify the same model', async () => {
-    await expect(loadRegistry([fixture, fixture])).rejects.toThrow(/"FixtureOverlayNote" is classified twice/);
+  it('passes once a parent model registers after the module loaded, with no stale failure', async () => {
+    const lateChild = { kind: 'viaParent', parent: 'FixtureLateParent', foreignKey: 'parentId' } as const;
+    const { assertContributedRegistryValid } = await loadRegistry([
+      { FixtureLateParent: parentHolder, FixtureChild: lateChild },
+    ]);
+    expect(() => assertContributedRegistryValid()).toThrow(/"FixtureLateParent".*not a registered Mongoose model/);
+    const { mongoose } = await import('@bike4mind/database');
+    mongoose.model('FixtureLateParent', new mongoose.Schema(lateModels.FixtureLateParent));
+    expect(() => assertContributedRegistryValid()).not.toThrow();
+    expect(() => assertContributedRegistryValid()).not.toThrow();
   });
 
-  it.each([
-    ['subject', { kind: 'subject', secretPaths: [], references: [] }],
-    ['discriminator', { kind: 'discriminator', base: 'User' }],
-  ])('rejects a contributed %s entry', async (kind, entry) => {
-    await expect(loadRegistry([{ FixtureOverlayNote: entry }])).rejects.toThrow(
-      new RegExp(`kind "${kind}", which an overlay may not use`)
-    );
-  });
-
-  it('rejects a contributed entry that names a beforeErasure hook', async () => {
-    const entry = { ...fixture.FixtureOverlayNote, beforeErasure: ['purgeUserPublishedArtifacts'] };
-    await expect(loadRegistry([{ FixtureOverlayNote: entry }])).rejects.toThrow(/may not declare beforeErasure/);
-  });
-
-  it('returns a frozen copy the overlay cannot change after validation', async () => {
-    const { assertContributedRegistry } = await loadRegistry([]);
-    const source = { FixtureOverlayNote: { ...fixture.FixtureOverlayNote } } as ContributedDataHolderRegistry;
-    const result = assertContributedRegistry(source);
-    expect(result).not.toBe(source);
-    expect(Object.isFrozen(result)).toBe(true);
-    expect(Object.isFrozen(result.FixtureOverlayNote)).toBe(true);
+  it('deep-freezes a contributed entry and copies it away from the overlay object', async () => {
+    const source = {
+      FixtureOverlayNote: { kind: 'holder', references: [{ ...ownerRef }] },
+    } as ContributedDataHolderRegistry;
+    const { DATA_HOLDER_REGISTRY } = await loadRegistry([source]);
+    const entry = DATA_HOLDER_REGISTRY.FixtureOverlayNote as { kind: string; references: { action: string }[] };
+    expect(entry).not.toBe(source.FixtureOverlayNote);
+    expect(entry).toEqual(source.FixtureOverlayNote);
     expect(() => {
-      (result as Record<string, unknown>).Other = {};
+      entry.kind = 'noUserData';
     }).toThrow();
     expect(() => {
-      (result.FixtureOverlayNote as { kind: string }).kind = 'noUserData';
+      entry.references.push({ action: 'x' });
     }).toThrow();
-    expect(result.FixtureOverlayNote).toEqual(source.FixtureOverlayNote);
+    expect(() => {
+      entry.references[0].action = 'anonymize';
+    }).toThrow();
+    (source.FixtureOverlayNote as { references: { action: string }[] }).references[0].action = 'anonymize';
+    expect(entry.references[0].action).toBe('deleteDocument');
   });
 
   describe('structure', () => {
     const child = { kind: 'viaParent', parent: 'FixtureParent', foreignKey: 'parentId' } as const;
+    const validates = async (registries: unknown[]) => {
+      const { assertContributedRegistryValid } = await loadRegistry(registries);
+      assertContributedRegistryValid();
+    };
 
     it('accepts a viaParent under a contributed holder', async () => {
-      await expect(loadRegistry([{ FixtureParent: parentHolder, FixtureChild: child }])).resolves.toBeDefined();
+      await expect(validates([{ FixtureParent: parentHolder, FixtureChild: child }])).resolves.toBeUndefined();
     });
 
     it('accepts a viaParent under a core holder', async () => {
       const entry = { kind: 'viaParent', parent: 'Annotation', foreignKey: 'parentId' };
-      await expect(loadRegistry([{ FixtureChild: entry }])).resolves.toBeDefined();
+      await expect(validates([{ FixtureChild: entry }])).resolves.toBeUndefined();
     });
 
     it.each([
@@ -170,8 +231,72 @@ describe('contributed data holder registry', () => {
         },
         /"FixtureScalarNote".*pullFromArray path "label"/,
       ],
+      [
+        'exportScope on a non-retain reference',
+        {
+          FixtureScalarNote: {
+            kind: 'holder',
+            references: [{ path: 'ownerId', matchBy: 'userId', action: 'anonymize', exportScope: 'reference' }],
+          },
+        },
+        /"FixtureScalarNote".*exportScope or identifies set on non-retain references: ownerId/,
+      ],
+      [
+        'identifies on a non-retain reference',
+        {
+          FixtureScalarNote: {
+            kind: 'holder',
+            references: [{ path: 'ownerId', matchBy: 'userId', action: 'deleteDocument', identifies: ['label'] }],
+          },
+        },
+        /"FixtureScalarNote".*exportScope or identifies set on non-retain references: ownerId/,
+      ],
+      [
+        'a where value the schema does not allow',
+        {
+          FixtureKindNote: {
+            kind: 'holder',
+            references: [{ ...ownerRef, where: { kind: 'c' } }],
+          },
+        },
+        /"FixtureKindNote".*where value rejected: FixtureKindNote.kind does not allow c/,
+      ],
+      [
+        'a where value on a path with no enum',
+        {
+          FixtureKindNote: {
+            kind: 'holder',
+            references: [{ ...ownerRef, where: { label: 'x' } }],
+          },
+        },
+        /"FixtureKindNote".*FixtureKindNote.label has no enum to check x against/,
+      ],
+      [
+        'a personal-scoped reference with no unscoped anonymize',
+        {
+          FixtureOrgNote: {
+            kind: 'holder',
+            references: [{ ...ownerRef, scope: 'personal' }],
+          },
+        },
+        /"FixtureOrgNote".*personal-scoped reference "ownerId" has no unscoped anonymize/,
+      ],
     ])('rejects %s', async (_name, registry, message) => {
-      await expect(loadRegistry([registry])).rejects.toThrow(message);
+      await expect(validates([registry])).rejects.toThrow(message);
+    });
+
+    it('accepts a where value the schema allows and a personal scope with its fallback', async () => {
+      const registry = {
+        FixtureKindNote: { kind: 'holder', references: [{ ...ownerRef, where: { kind: 'a' } }] },
+        FixtureOrgNote: {
+          kind: 'holder',
+          references: [
+            { ...ownerRef, scope: 'personal' },
+            { path: 'ownerId', matchBy: 'userId', action: 'anonymize' },
+          ],
+        },
+      };
+      await expect(validates([registry])).resolves.toBeUndefined();
     });
 
     it('accepts pullFromArray on an array path', async () => {
@@ -179,11 +304,11 @@ describe('contributed data holder registry', () => {
         kind: 'holder',
         references: [{ path: 'members', matchBy: 'userId', action: 'pullFromArray' }],
       };
-      await expect(loadRegistry([{ FixtureArrayNote: entry }])).resolves.toBeDefined();
+      await expect(validates([{ FixtureArrayNote: entry }])).resolves.toBeUndefined();
     });
 
     it('rejects a contributed model that is not registered with mongoose', async () => {
-      await expect(loadRegistry([{ FixtureUnregistered: parentHolder }])).rejects.toThrow(
+      await expect(validates([{ FixtureUnregistered: parentHolder }])).rejects.toThrow(
         /"FixtureUnregistered".*not a registered Mongoose model/
       );
     });

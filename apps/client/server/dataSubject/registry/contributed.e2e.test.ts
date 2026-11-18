@@ -22,7 +22,7 @@ const h = vi.hoisted(() => ({
   },
 }));
 
-// The registry module validates contributed models on import, so they must be registered by then.
+// Registered before the registry module loads, so the first-use check finds them.
 vi.mock('@server/premium-generated/premiumDataSubjectRegistry.generated', async () => {
   const { mongoose: db } = await import('@bike4mind/database');
   const { Schema: S } = await import('mongoose');

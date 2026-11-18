@@ -77,6 +77,49 @@ export function walkParentChain(modelName: string, registry: DataHolderRegistry)
   return seen;
 }
 
+// `where` targets whose schema declares no enum, so the value cannot be checked against it.
+export const WHERE_WITHOUT_ENUM: readonly string[] = [
+  // Written as a Mongoose model name (`User.modelName`) by ActivityRepository callers.
+  'Activity.ownerType',
+  // Plain strings; every writer passes CreditHolderType, whose user member is 'User'.
+  'CreditTransaction.recipientType',
+  'CreditTransaction.senderType',
+  // No writer in the repo; typed string, mirrors CreditTransaction.ownerType (CreditHolderType).
+  'FailedRefund.ownerType',
+];
+
+/** `exportScope` and `identifies` only mean something on a `retain` reference. */
+export function hasMisplacedExportFields(reference: UserReference): boolean {
+  return reference.action !== 'retain' && Boolean(reference.exportScope || reference.identifies);
+}
+
+/** Why a `where` value cannot match on this model, or undefined when the schema allows it. */
+export function whereValueProblem(modelName: string, key: string, value: unknown): string | undefined {
+  const schemaPath = mongoose.model(modelName).schema.path(key) as
+    { enumValues?: unknown[]; isRequired?: boolean } | undefined;
+  if (value === null) {
+    // Matching an absent field is only meaningful on a declared path that may be absent.
+    if (!schemaPath) return `${modelName}.${key} is not a schema path`;
+    if (schemaPath.isRequired === true) return `${modelName}.${key} is required, so it is never absent`;
+    return undefined;
+  }
+  const enumValues = schemaPath?.enumValues;
+  if (!enumValues?.length) {
+    return WHERE_WITHOUT_ENUM.includes(`${modelName}.${key}`)
+      ? undefined
+      : `${modelName}.${key} has no enum to check ${String(value)} against`;
+  }
+  return enumValues.includes(value) ? undefined : `${modelName}.${key} does not allow ${String(value)}`;
+}
+
+/** Without the unscoped anonymize, the person's id would survive on every row their organization owns. */
+export function hasUnscopedAnonymizeFallback(holder: DataHolder, reference: UserReference): boolean {
+  return referencesOf(holder).some(
+    candidate =>
+      candidate.path === reference.path && candidate.action === 'anonymize' && !candidate.scope && !candidate.where
+  );
+}
+
 /** Throws a message naming the model and the rule an entry breaks. */
 export function assertEntryStructure(modelName: string, registry: DataHolderRegistry): void {
   const fail = (rule: string): never => {
@@ -116,4 +159,16 @@ export function assertEntryStructure(modelName: string, registry: DataHolderRegi
   const unique = uniqueIndexPaths(schema);
   const collisions = references.flatMap(reference => alsoRedactOf(reference).filter(path => unique.has(path)));
   if (collisions.length) fail(`alsoRedact paths carry a unique index: ${collisions.join(', ')}`);
+
+  const misplaced = references.filter(hasMisplacedExportFields).map(reference => reference.path);
+  if (misplaced.length) fail(`exportScope or identifies set on non-retain references: ${misplaced.join(', ')}`);
+  for (const reference of references) {
+    for (const [key, value] of Object.entries(reference.where ?? {})) {
+      const problem = whereValueProblem(modelName, key, value);
+      if (problem) fail(`where value rejected: ${problem}`);
+    }
+    if (reference.scope === 'personal' && !hasUnscopedAnonymizeFallback(holder, reference)) {
+      fail(`personal-scoped reference "${reference.path}" has no unscoped anonymize for organization rows`);
+    }
+  }
 }

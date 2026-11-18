@@ -13,7 +13,16 @@ import {
 } from './schemaPaths';
 import type { DataHolder } from './types';
 import { uniqueIndexPaths } from './placeholder';
-import { alsoRedactOf, declaredPathsOf, isArrayOrArrayKey, referencesOf, walkParentChain } from './registryStructure';
+import {
+  alsoRedactOf,
+  declaredPathsOf,
+  hasMisplacedExportFields,
+  hasUnscopedAnonymizeFallback,
+  isArrayOrArrayKey,
+  referencesOf,
+  walkParentChain,
+  whereValueProblem,
+} from './registryStructure';
 
 const registeredModels = mongoose.modelNames().sort();
 const classifiedModels = Object.keys(DATA_HOLDER_REGISTRY).sort();
@@ -51,17 +60,6 @@ function isExported(holder: DataHolder): boolean {
 function baseModelNameOf(modelName: string): string | undefined {
   return (mongoose.model(modelName) as { baseModelName?: string }).baseModelName;
 }
-
-// `where` targets whose schema declares no enum, so the value cannot be checked against it.
-const WHERE_WITHOUT_ENUM: readonly string[] = [
-  // Written as a Mongoose model name (`User.modelName`) by ActivityRepository callers.
-  'Activity.ownerType',
-  // Plain strings; every writer passes CreditHolderType, whose user member is 'User'.
-  'CreditTransaction.recipientType',
-  'CreditTransaction.senderType',
-  // No writer in the repo; typed string, mirrors CreditTransaction.ownerType (CreditHolderType).
-  'FailedRefund.ownerType',
-];
 
 describe('data holder registry', () => {
   it('sanity: the model barrels registered a realistic number of models', () => {
@@ -178,7 +176,7 @@ describe('data holder registry', () => {
     // erasure clears those fields; the two export-only fields would silently mean nothing there.
     const misplaced = classifiedModels.flatMap(name =>
       referencesOf(DATA_HOLDER_REGISTRY[name])
-        .filter(reference => reference.action !== 'retain' && (reference.exportScope || reference.identifies))
+        .filter(hasMisplacedExportFields)
         .map(reference => `${name}.${reference.path}`)
     );
     expect(misplaced).toEqual([]);
@@ -207,22 +205,7 @@ describe('data holder registry', () => {
       )
     )
   )('%s: where %s = %s is a value the schema allows', (modelName, key, value) => {
-    const schemaPath = mongoose.model(modelName).schema.path(key) as
-      { enumValues?: unknown[]; isRequired?: boolean } | undefined;
-    if (value === null) {
-      // Matching an absent field is only meaningful on a declared path that may be absent.
-      expect(schemaPath, `${modelName}.${key} is not a schema path`).toBeDefined();
-      expect(schemaPath?.isRequired).not.toBe(true);
-      return;
-    }
-    const enumValues = schemaPath?.enumValues;
-    if (!enumValues?.length) {
-      expect(WHERE_WITHOUT_ENUM, `${modelName}.${key} has no enum to check ${value} against`).toContain(
-        `${modelName}.${key}`
-      );
-      return;
-    }
-    expect(enumValues).toContain(value);
+    expect(whereValueProblem(modelName, key, value)).toBeUndefined();
   });
 
   it.each(
@@ -232,12 +215,11 @@ describe('data holder registry', () => {
         .map(reference => [name, reference.path, reference.action] as const)
     )
   )('%s: personal-scoped %s %s has an unscoped anonymize for organization rows', (modelName, referencePath) => {
-    // Without the fallback, the person's id would survive on every row their organization owns.
-    const fallback = referencesOf(DATA_HOLDER_REGISTRY[modelName]).find(
-      reference =>
-        reference.path === referencePath && reference.action === 'anonymize' && !reference.scope && !reference.where
+    const holder = DATA_HOLDER_REGISTRY[modelName];
+    const reference = referencesOf(holder).find(
+      candidate => candidate.path === referencePath && candidate.scope === 'personal'
     );
-    expect(fallback).toBeDefined();
+    expect(reference && hasUnscopedAnonymizeFallback(holder, reference)).toBe(true);
   });
 
   it.each(

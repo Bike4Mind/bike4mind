@@ -2,7 +2,7 @@ import { mongoose } from '@bike4mind/database';
 import { retainDeletedSignupTraces } from '@bike4mind/server-utils/auth/signupNetworkLimits';
 import { purgeUserPublishedArtifacts } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import type { ErasureRegistry, ErasureStage } from '@bike4mind/server-utils/users/completeAccountDeletion';
-import { DATA_HOLDER_REGISTRY, findUnclassifiedModels } from './registry';
+import { DATA_HOLDER_REGISTRY, assertContributedRegistryValid, findUnclassifiedModels } from './registry';
 import type { DataHolder, DataHolderRegistry } from './types';
 import { SubjectErasureExecutor } from './subjectErasureExecutor';
 import { SubjectErasurePlan, unerased } from './subjectErasurePlan';
@@ -49,6 +49,7 @@ export const erasureRegistry: ErasureRegistry = {
   // No classification check here: it would block self-serve deletion on a deploy that registers
   // models outside this registry. Only registry holders are walked; audit lists the rest as unclassified.
   async erase(subject, assertLease, stage, session) {
+    assertContributedRegistryValid();
     if (stage === 'afterDelete') {
       await new SubjectErasureExecutor(subject, assertLease, registryForStage(stage), session).run();
       return;
@@ -63,6 +64,7 @@ export const erasureRegistry: ErasureRegistry = {
     await new SubjectErasureExecutor(subject, assertLease, registry).run();
   },
   async audit(subject) {
+    assertContributedRegistryValid();
     // A model the registry does not classify was not checked, so it is listed rather than passed over.
     const unclassified = findUnclassifiedModels(mongoose.modelNames());
     const remaining = unerased(await new SubjectErasurePlan(subject).collections());

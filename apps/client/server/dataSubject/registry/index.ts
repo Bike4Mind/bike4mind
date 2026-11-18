@@ -36,46 +36,80 @@ export function mergeRegistries(registries: readonly DataHolderRegistry[]): Data
   return merged;
 }
 
-/**
- * Rejects what a JS overlay can get past the types: a core-only kind, or a hook name core never
- * resolved. Returns a frozen copy so the overlay's own object cannot change after this check.
- */
-export function assertContributedRegistry(registry: ContributedDataHolderRegistry): DataHolderRegistry {
-  const copy: Record<string, DataHolderRegistry[string]> = {};
-  for (const [modelName, holder] of Object.entries(registry)) {
-    const kind: string = holder.kind;
-    if (!(CONTRIBUTED_DATA_HOLDER_KINDS as readonly string[]).includes(kind)) {
-      throw new Error(`Contributed data holder "${modelName}" has kind "${kind}", which an overlay may not use`);
-    }
-    if ('beforeErasure' in holder) {
-      throw new Error(`Contributed data holder "${modelName}" may not declare beforeErasure`);
-    }
-    copy[modelName] = Object.freeze({ ...holder });
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
   }
-  return Object.freeze(copy);
+  return value;
 }
 
-/** Runs the structural rules the coverage test applies to core entries on each contributed model. */
-export function assertContributedStructure(registry: DataHolderRegistry, contributedNames: readonly string[]): void {
-  for (const modelName of contributedNames) assertEntryStructure(modelName, registry);
-}
+export type ContributedMerge = {
+  registry: DataHolderRegistry;
+  /** Contributed model names that entered `registry`. */
+  accepted: string[];
+  /** Problems found while merging; reported on first use, not thrown at load. */
+  problems: string[];
+};
 
 /**
- * Keyed by Mongoose model name (`mongoose.modelNames()`), not collection name. Importing the
- * contributed registry also registers the overlays' models, so every process that loads this module
- * has them before it classifies.
+ * Merges the contributed registries into `core` without throwing. An entry a JS overlay got past
+ * the types (a core-only kind, a hook name, a collision) is recorded and left out, so the core
+ * entry or the first contribution wins. Accepted entries are deep copies, deep frozen.
  */
-const CONTRIBUTED_REGISTRIES = premiumDataSubjectRegistries.map(assertContributedRegistry);
+export function mergeContributed(
+  core: DataHolderRegistry,
+  contributed: readonly ContributedDataHolderRegistry[]
+): ContributedMerge {
+  const registry: Record<string, DataHolderRegistry[string]> = { ...core };
+  const accepted: string[] = [];
+  const problems: string[] = [];
+  for (const source of contributed) {
+    for (const [modelName, holder] of Object.entries(source)) {
+      const kind: string = holder.kind;
+      if (Object.hasOwn(registry, modelName)) {
+        problems.push(`Data holder "${modelName}" is classified twice`);
+      } else if (!(CONTRIBUTED_DATA_HOLDER_KINDS as readonly string[]).includes(kind)) {
+        problems.push(`Contributed data holder "${modelName}" has kind "${kind}", which an overlay may not use`);
+      } else if ('beforeErasure' in holder) {
+        problems.push(`Contributed data holder "${modelName}" may not declare beforeErasure`);
+      } else {
+        registry[modelName] = deepFreeze(structuredClone(holder));
+        accepted.push(modelName);
+      }
+    }
+  }
+  return { registry, accepted, problems };
+}
 
-export const DATA_HOLDER_REGISTRY: DataHolderRegistry = mergeRegistries([
-  ...DOMAIN_REGISTRIES,
-  ...CONTRIBUTED_REGISTRIES,
-]);
+const CORE_REGISTRY = mergeRegistries(DOMAIN_REGISTRIES);
+const CONTRIBUTED = mergeContributed(CORE_REGISTRY, premiumDataSubjectRegistries);
 
-assertContributedStructure(
-  DATA_HOLDER_REGISTRY,
-  CONTRIBUTED_REGISTRIES.flatMap(registry => Object.keys(registry))
-);
+/** Keyed by Mongoose model name (`mongoose.modelNames()`), not collection name. */
+export const DATA_HOLDER_REGISTRY: DataHolderRegistry = CONTRIBUTED.registry;
+
+let contributedValid = false;
+
+/**
+ * Throws one error listing every problem with a contributed entry. Validation waits for first use
+ * because a parent model may register after this module loads, and a bad contribution must not
+ * take down a process that never erases or exports. Success is cached; a failure is re-checked.
+ */
+export function assertContributedRegistryValid(): void {
+  if (contributedValid) return;
+  const problems = [...CONTRIBUTED.problems];
+  for (const modelName of CONTRIBUTED.accepted) {
+    try {
+      assertEntryStructure(modelName, DATA_HOLDER_REGISTRY);
+    } catch (error) {
+      problems.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (problems.length > 0) {
+    throw new Error(`Contributed data holder registry is invalid:\n- ${problems.join('\n- ')}`);
+  }
+  contributedValid = true;
+}
 
 /**
  * Models registered in this process that the registry does not classify. Some models register only
