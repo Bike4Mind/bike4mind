@@ -710,15 +710,21 @@ export function SettingsScreen({
   return (
     <Stack sx={{ height: '100vh', bgcolor: 'background.body' }} data-testid="settings-panel">
       {/* ProfileScreen's header, with its column set over the page beside the nav rather than the
-          whole window, so the back button and title line up with the page below them. */}
+          whole window, so the back button lines up with the page below it: same max width and padding as the page column. */}
       <Box sx={{ borderBottom: '1px solid', borderColor: 'divider', pl: `${SETTINGS_NAV_WIDTH}px`, ...columnStackSx }}>
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ ...contentColumnSx, py: 1.25 }}>
+        <Stack
+          direction="row"
+          alignItems="center"
+          spacing={1}
+          sx={{ ...contentColumnSx, maxWidth: 1040, boxSizing: 'border-box', px: { xs: 3, md: 5 }, py: 1.25 }}
+        >
           <IconButton
             size="sm"
             variant="plain"
             color="neutral"
             aria-label="Back to conversations"
             onClick={onClose}
+            sx={{ ml: -0.75 }}
             data-testid="settings-close-btn"
           >
             <ArrowLeftIcon />
