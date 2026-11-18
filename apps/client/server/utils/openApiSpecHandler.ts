@@ -13,11 +13,6 @@ const HOST_CHARSET = /^[A-Za-z0-9._\-:[\]]+$/;
 // excess-property checking.
 export type OpenApiSpecInput = { servers?: ReadonlyArray<{ url?: string } & Record<string, unknown>> };
 
-// The type of the generated deploymentOpenApi.generated.ts. Both of its emitters
-// (generate-premium-glue.mjs and common's generateDeployment.ts) import it by name
-// rather than spelling the shape out, so the three cannot drift.
-export type DeploymentOpenApiSpec = OpenApiSpecInput & Record<string, unknown>;
-
 function specForRequest(req: NextApiRequest, specJson: string, placeholderUrl: string): string {
   const host = req.headers.host;
   if (!host || !placeholderUrl) return specJson;

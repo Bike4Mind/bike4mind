@@ -2,6 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { Box, Text, useInput } from 'ink';
 import type { PermissionPromptKind } from '../tools/gateway/gatewayTypes.js';
 import { escapeTerminalControlChars } from '../utils/sanitizeTerminalText.js';
+import wrapAnsi from 'wrap-ansi';
 
 export type PermissionResponse = 'allow-once' | 'allow-session' | 'allow-always' | 'deny';
 
@@ -65,6 +66,7 @@ function renderDiffPreview(preview: string): React.ReactNode {
 }
 
 export interface PermissionPromptProps {
+  viewport?: { rows: number; columns: number };
   toolName: string;
   toolDescription?: string;
   args: unknown;
@@ -98,6 +100,7 @@ function withSessionScope(items: PromptItem[], scope: string[] | null): PromptIt
  * Waits indefinitely for user response (like Claude Code).
  */
 export function PermissionPrompt({
+  viewport,
   toolName,
   toolDescription,
   args,
@@ -133,6 +136,25 @@ export function PermissionPrompt({
 
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [responded, setResponded] = useState(false);
+  const [previewOffset, setPreviewOffset] = useState(0);
+  const details = viewport
+    ? wrapAnsi(
+        escapeTerminalControlChars(
+          [
+            `Tool: ${toolName}`,
+            toolDescription,
+            `Arguments: ${typeof args === 'string' ? args : JSON.stringify(args, null, 2)}`,
+            preview ? `Preview:\n${preview}` : '',
+          ]
+            .filter(Boolean)
+            .join('\n')
+        ),
+        Math.max(1, viewport.columns),
+        { hard: true }
+      ).split('\n')
+    : [];
+  const detailRows = Math.max(1, (viewport?.rows ?? 24) - items.length - 4);
+  const detailStart = Math.min(previewOffset, Math.max(0, details.length - detailRows));
 
   const handleSelect = useCallback(() => {
     if (responded) return;
@@ -154,6 +176,12 @@ export function PermissionPrompt({
   useInput(
     (input, key) => {
       if (responded) return;
+      if (viewport && (key.pageUp || key.pageDown)) {
+        setPreviewOffset(
+          Math.max(0, Math.min(details.length - detailRows, detailStart + (key.pageUp ? -detailRows : detailRows)))
+        );
+        return;
+      }
 
       // Number key shortcuts (1-based)
       const num = parseInt(input, 10);
@@ -195,6 +223,32 @@ export function PermissionPrompt({
   const borderColor = isSandboxBlock ? 'red' : 'yellow';
   const headerColor = isSandboxBlock ? 'red' : 'yellow';
   const headerText = isSandboxBlock ? '🛑 Sandbox Blocked' : '⚠️ Permission Required';
+
+  if (viewport) {
+    return (
+      <Box flexDirection="column">
+        <Text bold color={headerColor} wrap="truncate">
+          Permission Required: {escapeTerminalControlChars(toolName)}
+        </Text>
+        <Text dimColor wrap="truncate">
+          PgUp/PgDn: details {detailStart + 1}-{Math.min(details.length, detailStart + detailRows)}/{details.length}
+        </Text>
+        {details.slice(detailStart, detailStart + detailRows).map((line, index) => (
+          <Text key={index} wrap="truncate">
+            {line || ' '}
+          </Text>
+        ))}
+        {items.map((item, index) => (
+          <Text key={item.value} wrap="truncate" color={index === selectedIndex ? 'cyan' : undefined}>
+            {index + 1}. {item.label}
+          </Text>
+        ))}
+        <Text dimColor wrap="truncate">
+          1-{items.length}, y/n, or Up/Down + Enter: decide
+        </Text>
+      </Box>
+    );
+  }
 
   return (
     <Box flexDirection="column" borderStyle="bold" borderColor={borderColor} padding={1} marginY={1}>
