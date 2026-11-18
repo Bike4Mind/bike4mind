@@ -15,7 +15,7 @@ import type { OrchestratorViewId } from './orchestratorPrefs';
 import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
-import { ViewSwitcher } from './ViewSwitcher';
+import { ORCHESTRATOR_VIEW_INFO, ViewSwitcher } from './ViewSwitcher';
 import { useQuickApprovals } from './quickApprovals';
 import { runViewAction, toViewSnapshot } from './viewSnapshot';
 import { acceptViewAction, type ViewAction } from '@shared/viewSnapshot';
@@ -318,7 +318,10 @@ export function OrchestratorStage({
           {dockControl}
         </Box>
       )}
-      <Box sx={{ display: 'flex', flex: 1, minHeight: 0 }}>
+      <Box
+        data-testid="orchestrator-scene-viewport"
+        sx={{ position: 'relative', isolation: 'isolate', display: 'flex', flex: 1, minWidth: 0, minHeight: 0 }}
+      >
         <Box
           sx={{
             position: 'relative',
@@ -348,13 +351,26 @@ export function OrchestratorStage({
         {selected && (
           // Settles out with the rest of the chrome but stays mounted, selection and all, so waking
           // brings it back where it was (ambient.ts gives focus back to it too).
-          <Box data-testid="orchestrator-peek-drawer-region" sx={{ display: settled ? 'none' : 'contents' }}>
+          <Box
+            data-testid="orchestrator-peek-drawer-region"
+            sx={{
+              position: 'absolute',
+              inset: 12,
+              zIndex: 400,
+              display: settled ? 'none' : 'flex',
+              justifyContent: 'flex-end',
+              alignItems: 'flex-start',
+              pointerEvents: 'none',
+              overflow: 'hidden',
+            }}
+          >
             <AgentPeekDrawer
               key={selected.id}
               agent={selected}
               persona={personas.get(selected.id)}
               onClose={() => setSelectedId(null)}
               actions={actions}
+              skin={focused ? undefined : ORCHESTRATOR_VIEW_INFO[view].detailsSkin}
             />
           </Box>
         )}

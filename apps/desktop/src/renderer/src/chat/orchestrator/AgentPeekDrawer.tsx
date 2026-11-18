@@ -5,6 +5,7 @@ import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
 import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
+import { useTheme } from '@mui/joy/styles';
 import { snippetOf } from '@shared/agentOutcome';
 import { isStoppableState } from '@shared/agentState';
 import type { ChatApprovalAnswer, ChatMessage, ChatQueuedMessage, ChatToolCall } from '@shared/chat';
@@ -22,11 +23,17 @@ const RECENT_MESSAGES = 3;
 const MESSAGE_SNIPPET_MAX = 280;
 const QUEUED_NOTE = 'Queued - it will send when this agent finishes its current step.';
 
+export interface AgentDetailsSkin {
+  light: { background: string; border: string };
+  dark: { background: string; border: string };
+}
+
 interface AgentPeekDrawerProps {
   agent: AgentView;
   persona: AgentPersona | undefined;
   onClose(): void;
   actions: AgentActions;
+  skin?: AgentDetailsSkin;
 }
 
 function roleLabel(role: string): string {
@@ -195,7 +202,7 @@ function ReplyBox({ agentId }: { agentId: string }) {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       <Textarea
-        minRows={2}
+        minRows={1}
         maxRows={6}
         placeholder="Reply to this agent"
         value={text}
@@ -236,6 +243,7 @@ function ReplyBox({ agentId }: { agentId: string }) {
         disabled={!text.trim() || sending}
         data-testid="orchestrator-peek-send-btn"
         onClick={() => void send()}
+        sx={{ alignSelf: 'flex-end' }}
       >
         Send
       </Button>
@@ -243,7 +251,9 @@ function ReplyBox({ agentId }: { agentId: string }) {
   );
 }
 
-export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekDrawerProps) {
+export function AgentPeekDrawer({ agent, persona, onClose, actions, skin }: AgentPeekDrawerProps) {
+  const mode = useTheme().palette.mode;
+  const palette = skin?.[mode];
   const { messages, loadError } = useSessionMessages(agent.id, refreshKeyOf(agent));
   // The snapshot can trail the status push, so the state decides whether anything is still waiting.
   const pending = agent.state === 'needs-you' ? pendingCallsIn(messages) : [];
@@ -274,7 +284,11 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
       data-testid="orchestrator-peek-drawer"
       sx={{
         outline: 'none',
-        width: 340,
+        width: 320,
+        maxWidth: '100%',
+        maxHeight: '100%',
+        boxSizing: 'border-box',
+        pointerEvents: 'auto',
         flexShrink: 0,
         overflowY: 'auto',
         overflowX: 'hidden',
@@ -282,17 +296,20 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
         overflowWrap: 'anywhere',
         display: 'flex',
         flexDirection: 'column',
-        gap: 1.5,
-        p: 1.5,
-        borderLeft: '1px solid',
-        borderColor: 'divider',
-        bgcolor: 'background.surface',
+        gap: 1,
+        p: 1.25,
+        border: '1px solid',
+        borderRadius: 'md',
+        borderColor: palette?.border ?? 'divider',
+        bgcolor: palette?.background ?? 'background.surface',
+        boxShadow: 'md',
+        '& > *': { flexShrink: 0 },
       }}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography
-            level="title-md"
+            level="title-sm"
             sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
             title={agent.title}
           >
@@ -324,30 +341,33 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
       <TaskDecisionPanel agent={agent} />
       {pending.length > 0 && <PendingRequests calls={pending} />}
 
-      <Typography
-        level="body-xs"
-        sx={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
-      >
-        {agent.seedPrompt}
-      </Typography>
-
       {agent.activity && (
         <Typography level="body-sm" color="primary" data-testid="orchestrator-peek-activity">
           {activityLabel(agent.activity)}
         </Typography>
       )}
 
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-        {loadError && (
-          <Typography level="body-xs" color="danger" data-testid="orchestrator-peek-load-error">
-            {loadError}
-          </Typography>
-        )}
-        {recent.map(message => (
-          <Typography key={message.id} level="body-xs" data-testid="orchestrator-peek-message">
-            <b>{roleLabel(message.role)}</b>: {message.line}
-          </Typography>
-        ))}
+      {loadError && (
+        <Typography level="body-xs" color="danger" data-testid="orchestrator-peek-load-error">
+          {loadError}
+        </Typography>
+      )}
+      <Box component="details" data-testid="orchestrator-peek-context">
+        <Box
+          component="summary"
+          data-testid="orchestrator-peek-context-toggle"
+          sx={{ cursor: 'pointer', fontFamily: 'body', fontSize: 'xs', color: 'text.secondary', py: 0.5 }}
+        >
+          Task and recent messages
+        </Box>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, pt: 0.75 }}>
+          <Typography level="body-xs">{agent.seedPrompt}</Typography>
+          {recent.map(message => (
+            <Typography key={message.id} level="body-xs" data-testid="orchestrator-peek-message">
+              <b>{roleLabel(message.role)}</b>: {message.line}
+            </Typography>
+          ))}
+        </Box>
       </Box>
 
       <ReplyBox agentId={agent.id} />

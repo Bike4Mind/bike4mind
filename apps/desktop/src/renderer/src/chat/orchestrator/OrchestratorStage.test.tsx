@@ -207,6 +207,36 @@ describe('OrchestratorStage', () => {
     expect(query('orchestrator-peek-drawer')).not.toBeNull();
   });
 
+  it.each(['tavern', 'aquarium', 'table'] as const)(
+    'overlays details within the %s viewport without adding a layout column',
+    async view => {
+      await themed.render(
+        <OrchestratorStage
+          agents={FIXTURE}
+          view={view}
+          onViewChange={onViewChange}
+          actions={actions}
+          introPlaying={false}
+          renderView={(_id, props) => <button data-testid="scene-select" onClick={() => props.onSelect('w1')} />}
+        />
+      );
+      const scene = el('scene-select');
+      const viewport = el('orchestrator-scene-viewport');
+      await act(async () => scene.click());
+      const region = el('orchestrator-peek-drawer-region');
+      expect(viewport.contains(region)).toBe(true);
+      expect(el('scene-select')).toBe(scene);
+      expect(getComputedStyle(viewport).position).toBe('relative');
+      expect(getComputedStyle(region).position).toBe('absolute');
+      expect(getComputedStyle(region).inset).toBe('12px');
+      expect(getComputedStyle(region).pointerEvents).toBe('none');
+      expect(getComputedStyle(el('orchestrator-peek-drawer')).pointerEvents).toBe('auto');
+      expect(getComputedStyle(el('orchestrator-peek-drawer')).backgroundColor).toBe(
+        view === 'tavern' ? 'rgb(242, 236, 225)' : 'var(--joy-palette-background-surface)'
+      );
+    }
+  );
+
   it('claims the Escape that closes the drawer, so the docked conversation stays open', async () => {
     await renderStage(FIXTURE);
     await act(async () => el('orchestrator-needs-you-pill').click());
