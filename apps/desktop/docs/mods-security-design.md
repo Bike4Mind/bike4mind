@@ -270,7 +270,7 @@ the schema, so a projected snapshot is still a valid one).
 | `read:cost` | per agent `usdCost`, `credits` | Spend is sensitive in some organisations. |
 | `act:open` | actions `open-agent`, `open-root` | Navigation only. |
 | `act:answer` | action `answer` (#7855); also the `decision.id` it names | Requires `read:snippets` (the manifest is rejected otherwise): a mod must not answer a question it cannot show. |
-| `act:approve` | action `approve` with `once` or `deny`, for quick approvals only (#7855); the quick approval's id | Requires `read:snippets` (the manifest is rejected otherwise): the quick approval's one-line detail is shown to the mod as `decision.question`, and a mod must not approve what it cannot show. Never `always`, matching `isWatchDecision`. Quick is `isQuickApproval` in `src/shared/watch.ts`. |
+| `act:approve` | action `approve` with `once` or `deny`, for quick approvals only (#7855); the quick approval's id | Requires `read:snippets` (the manifest is rejected otherwise): #7855 adds the quick approval to the snapshot's `decision` (its `approvalId`, with `approvalSummary` as `question`), gated by `read:snippets`, and a mod must not approve what it cannot show. Never `always`, matching `isWatchDecision`. Quick is `isQuickApproval` in `src/shared/watch.ts`. |
 | `act:stop` | action `stop` (#7855) | |
 
 The draft plan listed `act:open` and `act:stop` but not answer or approve. This design splits them
@@ -359,7 +359,7 @@ permissions unavailable until hosting moves to H2.
 | `contract` | The `VIEW_SNAPSHOT_CONTRACT` the mod was written for. A mod whose contract the app does not support is installed but disabled, with the reason shown. |
 | `entry` | A relative path to an `.html` file inside the mod. |
 | `author`, `description` | Free text, length-capped, shown as plain text and labelled as unverified. |
-| `permissions` | A set of the strings in 5.3. `act:answer` without `read:snippets` is rejected. |
+| `permissions` | A set of the strings in 5.3. `act:answer` or `act:approve` without `read:snippets` is rejected. |
 
 ## 8. Install, update and the review sheet
 
