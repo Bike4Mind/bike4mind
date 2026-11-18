@@ -29,6 +29,7 @@ import {
 import { BadRequestError, checkStorageLimitForOwner, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { dataLakeService } from '@bike4mind/services';
 import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import {
   assertConnectorLakeWrite,
   createLakeIngestRetirer,
@@ -636,6 +637,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await releaseClaim(null);
       return;
     }
+    await resolveRoleAdminPermissions(user);
     const ability = defineAbilitiesFor(user as unknown as IUserDocument);
 
     // A revoked/expired grant reaches this run at one of two token resolutions - the fetch below or the
