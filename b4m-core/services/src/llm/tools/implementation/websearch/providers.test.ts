@@ -144,6 +144,62 @@ describe('createSerpApiProvider', () => {
     expect(String(fetchMock.mock.calls[0][0])).toContain('serpapi.com/search');
   });
 
+  describe('Google redirect links', () => {
+    const goto = 'https://www.google.com/goto?url=CAESbQHEIkXXfkdQfUOcj3jCcCrbU_Q9Sm6KNCsW3U00gfIe4yo0ZAllFg';
+
+    const searchWith = async (entry: Record<string, unknown>) => {
+      mockGetSerperKey.mockResolvedValue('serp-key');
+      fetchMock.mockResolvedValue(jsonRes({ organic_results: [{ title: 'T', snippet: 's', ...entry }] }));
+      return createSerpApiProvider(adapters).search('q', 3);
+    };
+
+    it('rebuilds the page URL from the breadcrumb displayed_link', async () => {
+      const results = await searchWith({
+        link: goto,
+        displayed_link: 'https://massive.com \u203a blog \u203a polygon-is-now-massive',
+      });
+
+      expect(results[0].url).toBe('https://massive.com/blog/polygon-is-now-massive');
+    });
+
+    it('rebuilds a bare-host displayed_link and a /url redirect', async () => {
+      const results = await searchWith({
+        link: 'https://www.google.com/url?sa=t&url=CAESVQ',
+        displayed_link: 'https://massive.com',
+      });
+
+      expect(results[0].url).toBe('https://massive.com/');
+    });
+
+    it.each([
+      ['a truncated breadcrumb', 'https://massive.com \u203a docs \u203a rest \u203a stocks \u203a \u2026'],
+      ['a three-dot truncation', 'https://massive.com \u203a docs...'],
+      ['a non-URL such as a video view count', '920+ views'],
+      ['a breadcrumb that is itself a Google host', 'https://www.google.com \u203a search'],
+      ['no displayed_link', undefined],
+    ])('keeps the redirect link for %s', async (_label, displayed_link) => {
+      const results = await searchWith({ link: goto, displayed_link });
+
+      expect(results[0].url).toBe(goto);
+    });
+
+    it('leaves a /goto link on a non-Google host untouched', async () => {
+      const lookalike = 'https://google.evil.com/goto?url=CAESbQ';
+      const results = await searchWith({ link: lookalike, displayed_link: 'https://massive.com' });
+
+      expect(results[0].url).toBe(lookalike);
+    });
+
+    it('leaves a direct link untouched even when displayed_link differs', async () => {
+      const results = await searchWith({
+        link: 'https://x.com/a?b=1',
+        displayed_link: 'https://other.com \u203a a',
+      });
+
+      expect(results[0].url).toBe('https://x.com/a?b=1');
+    });
+  });
+
   it('carries organic thumbnails through as thumbnail + images', async () => {
     mockGetSerperKey.mockResolvedValue('serp-key');
     fetchMock.mockResolvedValue(
