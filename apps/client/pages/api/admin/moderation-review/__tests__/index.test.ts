@@ -2,23 +2,30 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Request, Response } from 'express';
 
-const m = vi.hoisted(() => ({ findModerationReviewQueue: vi.fn() }));
+const m = vi.hoisted(() => ({ findModerationReviewQueue: vi.fn(), baseApiOptions: vi.fn() }));
 
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findModerationReviewQueue: m.findModerationReviewQueue },
 }));
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    use: (guard: (req: Request, res: Response, next: () => void) => void) => ({
-      get: (h: (req: Request, res: Response) => unknown) => async (req: Request, res: Response) => {
-        guard(req, res, () => {});
-        return h(req, res);
-      },
-    }),
-  }),
+  baseApi: (options: unknown) => {
+    m.baseApiOptions(options);
+    return {
+      use: (guard: (req: Request, res: Response, next: () => void) => void) => ({
+        get: (h: (req: Request, res: Response) => unknown) => async (req: Request, res: Response) => {
+          guard(req, res, () => {});
+          return h(req, res);
+        },
+      }),
+    };
+  },
 }));
 
+import { ForbiddenError } from '@bike4mind/common';
 import handler from '../index';
+
+// Captured at import: the route is built once, when the module loads.
+const baseApiOptions = m.baseApiOptions.mock.calls[0]?.[0];
 
 const runHandler = handler as unknown as (req: unknown, res: unknown) => Promise<void>;
 
@@ -58,22 +65,29 @@ describe('admin/moderation-review', () => {
 
   it('refuses a delegate without a moderation read permission', async () => {
     const res = makeRes();
-    await expect(runHandler(makeReq({ isAdmin: false, adminPermissions: ['credits:adjust'] }), res)).rejects.toThrow();
+    await expect(runHandler(makeReq({ isAdmin: false, adminPermissions: ['credits:adjust'] }), res)).rejects.toThrow(
+      ForbiddenError
+    );
     expect(m.findModerationReviewQueue).not.toHaveBeenCalled();
   });
 
-  it('refuses an API key without the admin scope', async () => {
-    const res = makeRes();
-    const req = { ...makeReq({ isAdmin: true }), apiKeyInfo: { scopes: ['chat'] } };
-    await expect(runHandler(req, res)).rejects.toThrow('Insufficient API key permissions');
-    expect(m.findModerationReviewQueue).not.toHaveBeenCalled();
+  // API keys are refused by baseApi's auth, not by this handler's own check.
+  it('is built for JWT sessions only', () => {
+    expect(baseApiOptions).toMatchObject({ auth: 'jwtOnly', allowedMethods: ['GET'] });
   });
 
-  it('rejects an out-of-range limit', async () => {
+  it.each(['1000', '0', 'abc', '1.5'])('rejects the limit %s', async limit => {
     const res = makeRes();
-    await runHandler(makeReq({ isAdmin: true }, { limit: '1000' }), res);
+    await runHandler(makeReq({ isAdmin: true }, { limit }), res);
 
     expect(res.status).toHaveBeenCalledWith(400);
     expect(m.findModerationReviewQueue).not.toHaveBeenCalled();
+  });
+
+  it('passes a valid limit through', async () => {
+    const res = makeRes();
+    await runHandler(makeReq({ isAdmin: true }, { limit: '25' }), res);
+
+    expect(m.findModerationReviewQueue).toHaveBeenCalledWith(25);
   });
 });

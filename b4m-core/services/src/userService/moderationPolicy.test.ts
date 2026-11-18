@@ -84,7 +84,7 @@ describe('moderationPolicy - applyModerationHit', () => {
 
     expect(users.recordModerationHit).toHaveBeenCalledWith('user-1', hit);
     expect(users.setModerationStatus).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ action: 'none', status: 'active' });
+    expect(result).toMatchObject({ action: 'none', status: 'active', transitionedTo: null });
   });
 
   it('auto-throttles at the throttle threshold with a throttledUntil deadline', async () => {
@@ -96,7 +96,7 @@ describe('moderationPolicy - applyModerationHit', () => {
       automatic: true,
       throttledUntil: new Date(NOW.getTime() + MODERATION_POLICY.throttleDurationMs),
     });
-    expect(result).toMatchObject({ action: 'throttle', status: 'throttled' });
+    expect(result).toMatchObject({ action: 'throttle', status: 'throttled', transitionedTo: 'throttled' });
   });
 
   it('flags for suspension at the suspend threshold (no throttledUntil)', async () => {
@@ -108,7 +108,11 @@ describe('moderationPolicy - applyModerationHit', () => {
       automatic: true,
       throttledUntil: null,
     });
-    expect(result).toMatchObject({ action: 'suspend_pending', status: 'suspend_pending' });
+    expect(result).toMatchObject({
+      action: 'suspend_pending',
+      status: 'suspend_pending',
+      transitionedTo: 'suspend_pending',
+    });
   });
 
   it('does not re-arm a throttle that is still active (avoids resetting the window on every hit)', async () => {
@@ -119,7 +123,7 @@ describe('moderationPolicy - applyModerationHit', () => {
     const result = await applyModerationHit({ users, userId: 'user-1', hit, now: NOW });
 
     expect(users.setModerationStatus).not.toHaveBeenCalled();
-    expect(result.status).toBe('throttled');
+    expect(result).toMatchObject({ status: 'throttled', transitionedTo: null });
   });
 
   it('re-arms an expired throttle on a repeat offense in a new window', async () => {
