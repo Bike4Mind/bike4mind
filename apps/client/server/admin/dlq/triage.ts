@@ -51,6 +51,7 @@ export async function triageDlqMessage(
     sourceQueueName?: string | null;
     sourceQueueUrl?: string | null;
     entityPresent?: boolean;
+    logFallbackDeadline?: number;
   } = {}
 ): Promise<AdminAiSuggestionItem | null> {
   const startedAt = new Date();
@@ -95,7 +96,7 @@ export async function triageDlqMessage(
     owner: entry.owner,
     logFallback: failure
       ? { status: 'not-needed', sampledEvents: 0 }
-      : await sampleDlqConsumerLogs(facts.sourceQueueUrl, messageId, facts.sentTimestamp),
+      : await sampleDlqConsumerLogs(facts.sourceQueueUrl, messageId, facts.sentTimestamp, facts.logFallbackDeadline),
   });
   const key = {
     feature: 'dlqTriage' as const,

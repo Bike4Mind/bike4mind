@@ -10,6 +10,7 @@ import {
 import { dlqTriageDeliveryRepository } from '@bike4mind/database';
 import { connectDB } from '@bike4mind/db-core';
 import { Logger } from '@bike4mind/observability';
+import { resolveConsumerLogs, settleWithinBudget } from '@bike4mind/server-utils/utils/dlqConsumerLogs';
 import { describeDlqMessage, getDlqByLabel } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { triageDlqMessage, loadDlqTriageConfig } from '@server/admin/dlq/triage';
 import { Resource } from 'sst';
@@ -66,6 +67,14 @@ async function collect(alarmName: string, appUrl: string | undefined, deadline: 
     }),
     request()
   );
+  if (sourceQueueUrl) {
+    await settleWithinBudget(
+      [resolveConsumerLogs(sourceQueueUrl)],
+      Math.min(1_000, Math.max(0, deadline - Date.now()))
+    );
+  }
+  // Spend at most half the remaining budget on log fallbacks so later messages still get sampled.
+  const logFallbackDeadline = Date.now() + Math.max(0, deadline - Date.now()) / 2;
   const suggestions = new Map<string, NonNullable<Awaited<ReturnType<typeof triageDlqMessage>>>>();
   const seen = new Set<string>();
   // Visibility stays zero: triage must not reserve work or delay an admin action.
@@ -93,6 +102,7 @@ async function collect(alarmName: string, appUrl: string | undefined, deadline: 
         sourceQueueName,
         sourceQueueUrl,
         entityPresent: describeDlqMessage(entry, message.Body) !== null,
+        logFallbackDeadline,
       });
       if (suggestion?.status === 'pending') suggestions.set(message.MessageId, suggestion);
     }

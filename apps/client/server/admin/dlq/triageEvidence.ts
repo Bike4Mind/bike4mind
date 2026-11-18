@@ -10,17 +10,22 @@ import {
 export async function sampleDlqConsumerLogs(
   sourceQueueUrl: string | null | undefined,
   messageId: string,
-  sentTimestamp?: string
+  sentTimestamp?: string,
+  deadline?: number
 ): Promise<DlqTriageEvidence['logFallback']> {
   const unavailable = { status: 'unavailable', sampledEvents: 0 } as const;
   // Only SQS-generated UUIDs may enter the log filter; never use message body text.
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId)) return unavailable;
   if (!sourceQueueUrl) return unavailable;
+  const budgetMs = deadline === undefined ? 500 : Math.min(500, deadline - Date.now());
+  if (budgetMs <= 0) return unavailable;
   try {
-    const [logs] = await settleWithinBudget([resolveConsumerLogs(sourceQueueUrl)], 500);
+    const [logs] = await settleWithinBudget([resolveConsumerLogs(sourceQueueUrl)], budgetMs);
     if (!logs || logs.logGroups.length !== 1 || !sentTimestamp?.trim()) return unavailable;
     const window = messageLogWindow(Number(sentTimestamp), logs.retryWindowMs);
     if (!window) return unavailable;
+    const remainingMs = deadline === undefined ? 500 : Math.min(500, deadline - Date.now());
+    if (remainingMs <= 0) return unavailable;
     const response = await new CloudWatchLogsClient({ region: logs.region, maxAttempts: 1 }).send(
       new FilterLogEventsCommand({
         logGroupName: logs.logGroups[0],
@@ -29,7 +34,7 @@ export async function sampleDlqConsumerLogs(
         endTime: window.end,
         limit: 20,
       }),
-      { abortSignal: AbortSignal.timeout(500) }
+      { abortSignal: AbortSignal.timeout(remainingMs) }
     );
     const sampledEvents = Math.min(20, response.events?.length ?? 0);
     return { status: sampledEvents ? 'sampled-matches' : 'no-sampled-match', sampledEvents };

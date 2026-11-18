@@ -95,4 +95,12 @@ describe('bounded consumer log fallback', () => {
     h.send.mockRejectedValue(new Error('AccessDenied'));
     expect((await sampleDlqConsumerLogs('https://example.test/source', id, String(now))).status).toBe('unavailable');
   });
+  it('returns unavailable without any lookup once the fallback deadline has passed', async () => {
+    expect(await sampleDlqConsumerLogs('https://example.test/source', id, String(now), Date.now() - 1)).toEqual({
+      status: 'unavailable',
+      sampledEvents: 0,
+    });
+    expect(h.logs).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
+  });
 });

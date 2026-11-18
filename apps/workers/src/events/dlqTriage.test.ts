@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   claim: vi.fn(),
   delivered: vi.fn(),
   release: vi.fn(),
+  logs: vi.fn(),
 }));
 vi.mock('@aws-sdk/client-cloudwatch', () => ({
   CloudWatchClient: class {
@@ -32,6 +33,13 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
   getDlqByLabel: () => ({ label: 'fixture' }),
   describeDlqMessage: () => null,
+}));
+vi.mock('@bike4mind/server-utils/utils/dlqConsumerLogs', () => ({
+  resolveConsumerLogs: h.logs,
+  settleWithinBudget: (values: Promise<unknown>[], budgetMs: number) =>
+    Promise.all(
+      values.map(value => Promise.race([value, new Promise(resolve => setTimeout(() => resolve(null), budgetMs))]))
+    ),
 }));
 vi.mock('@server/admin/dlq/triage', () => ({ triageDlqMessage: h.triage, loadDlqTriageConfig: h.config }));
 vi.mock('sst', () => ({ Resource: { App: { name: 'app', stage: 'test' }, MONGODB_URI: { value: 'fixture' } } }));
@@ -60,6 +68,30 @@ beforeEach(() => {
 });
 
 describe('DLQ triage collection', () => {
+  it('warms the consumer-log cache once and bounds per-message log fallbacks inside the run deadline', async () => {
+    h.logs.mockResolvedValue(null);
+    const runDeadline = Date.now() + 10_000;
+    await collectDlqTriage('app-test-dlq-fixture-messages', undefined, runDeadline);
+    expect(h.logs).toHaveBeenCalledTimes(1);
+    expect(h.logs).toHaveBeenCalledWith('https://example.test/source');
+    expect(h.triage).toHaveBeenCalledTimes(10);
+    for (const call of h.triage.mock.calls) {
+      expect(call[2].logFallbackDeadline).toEqual(expect.any(Number));
+      expect(call[2].logFallbackDeadline).toBeLessThanOrEqual(runDeadline);
+    }
+  });
+  it('finishes collection when the consumer-log lookup never resolves', async () => {
+    vi.useFakeTimers();
+    try {
+      h.logs.mockReturnValue(new Promise(() => {}));
+      const pending = collectDlqTriage('app-test-dlq-fixture-messages');
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(await pending).not.toBeNull();
+      expect(h.triage).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('bounds Slack content before claiming and explicitly reports partial sampling', async () => {
     const result = await collectDlqTriage('app-test-dlq-fixture-messages', 'https://example.test');
     expect(result?.section).toContain('Sampled 10 unique messages');
