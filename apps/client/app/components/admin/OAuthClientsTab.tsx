@@ -73,6 +73,7 @@ type FederatedForm = {
 type CreateForm = {
   name: string;
   redirectUris: string;
+  postLogoutRedirectUris: string;
   firstParty: boolean;
   federated: FederatedForm;
   unpaidAccountsAllowed: boolean;
@@ -81,6 +82,7 @@ type CreateForm = {
 const emptyCreateForm: CreateForm = {
   name: '',
   redirectUris: '',
+  postLogoutRedirectUris: '',
   firstParty: false,
   federated: { enabled: false, subjectSource: 'sub', issuer: '', audience: '', providerName: '', jwksUri: '' },
   unpaidAccountsAllowed: true,
@@ -103,9 +105,11 @@ const federatedInput = (f: FederatedForm): OAuthFederatedIdpInput => ({
 });
 
 export function buildCreatePayload(form: CreateForm): CreateOAuthClientInput {
+  const postLogoutRedirectUris = parseUris(form.postLogoutRedirectUris);
   return {
     name: form.name,
     redirectUris: parseUris(form.redirectUris),
+    ...(postLogoutRedirectUris.length ? { postLogoutRedirectUris } : {}),
     clientType: form.firstParty ? 'first-party' : 'relying-party',
     ...(form.federated.enabled ? { federatedIdp: federatedInput(form.federated) } : {}),
     ...(form.federated.enabled && !form.unpaidAccountsAllowed ? { unpaidAccountsAllowed: false } : {}),
@@ -114,6 +118,7 @@ export function buildCreatePayload(form: CreateForm): CreateOAuthClientInput {
 
 type EditForm = {
   redirectUris: string;
+  postLogoutRedirectUris: string;
   scopes: string[];
   federated: FederatedForm;
   overwatchProductId: string;
@@ -135,6 +140,7 @@ export function federatedFormFromClient(client: OAuthClientView): FederatedForm 
 
 export const editFormFromClient = (client: OAuthClientView): EditForm => ({
   redirectUris: client.redirectUris.join('\n'),
+  postLogoutRedirectUris: (client.postLogoutRedirectUris ?? []).join('\n'),
   scopes: client.allowedScopes,
   federated: federatedFormFromClient(client),
   overwatchProductId: client.overwatchProductId ?? '',
@@ -147,6 +153,10 @@ export function buildEditPayload(client: OAuthClientView, form: EditForm): Updat
 
   const uris = parseUris(form.redirectUris);
   if (JSON.stringify(uris) !== JSON.stringify(client.redirectUris)) payload.redirectUris = uris;
+  const logoutUris = parseUris(form.postLogoutRedirectUris);
+  if (JSON.stringify(logoutUris) !== JSON.stringify(client.postLogoutRedirectUris ?? [])) {
+    payload.postLogoutRedirectUris = logoutUris;
+  }
 
   const stored = new Set(client.allowedScopes);
   const wanted = new Set(form.scopes);
@@ -713,6 +723,20 @@ export default function OAuthClientsTab() {
               </FormHelperText>
             </FormControl>
 
+            <FormControl>
+              <FormLabel>Post-logout redirect URIs</FormLabel>
+              <Textarea
+                minRows={1}
+                placeholder="https://app.example.com/signed-out"
+                value={createForm.postLogoutRedirectUris}
+                onChange={e => setCreateForm(f => ({ ...f, postLogoutRedirectUris: e.target.value }))}
+                slotProps={{ textarea: { 'data-testid': 'oauth-client-post-logout-uris-input' } }}
+              />
+              <FormHelperText>
+                Optional. Where the app may return users after signing them out of Bike4Mind.
+              </FormHelperText>
+            </FormControl>
+
             <Checkbox
               label="First-party client (B4M-owned; receives a full session instead of a scoped token)"
               checked={createForm.firstParty}
@@ -798,6 +822,17 @@ export default function OAuthClientsTab() {
                   slotProps={{ textarea: { 'data-testid': 'oauth-client-edit-uris-input' } }}
                 />
                 <FormHelperText>One absolute URL per line, matched exactly.</FormHelperText>
+              </FormControl>
+
+              <FormControl>
+                <FormLabel>Post-logout redirect URIs</FormLabel>
+                <Textarea
+                  minRows={1}
+                  value={editForm.postLogoutRedirectUris}
+                  onChange={e => setEditForm(f => f && { ...f, postLogoutRedirectUris: e.target.value })}
+                  slotProps={{ textarea: { 'data-testid': 'oauth-client-edit-post-logout-uris-input' } }}
+                />
+                <FormHelperText>Optional. Same rules as redirect URIs.</FormHelperText>
               </FormControl>
 
               <FormControl>
