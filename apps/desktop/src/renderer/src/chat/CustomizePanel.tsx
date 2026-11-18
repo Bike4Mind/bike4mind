@@ -340,6 +340,7 @@ function SkillsSettings({
   return (
     <Tabs defaultValue="mine" data-testid="skills-settings" sx={{ bgcolor: 'transparent' }}>
       <TabList
+        aria-label="Skills view"
         variant="plain"
         size="sm"
         sx={{
@@ -351,13 +352,13 @@ function SkillsSettings({
         }}
       >
         <Tab value="mine" data-testid="skills-your-tab">
-          Your skills
+          Installed
         </Tab>
         <Tab value="discover" data-testid="skills-discover-tab">
           Discover
         </Tab>
       </TabList>
-      <TabPanel value="mine" sx={{ p: 0 }}>
+      <TabPanel value="mine" keepMounted sx={{ p: 0 }}>
         <Stack spacing={2.5}>
           {/* Collapse all sits beside the filter because it covers the Bike4Mind group above Your skills too. */}
           <Stack direction="row" spacing={1} alignItems="center">
@@ -436,24 +437,24 @@ function SkillsSettings({
           </Box>
         </Stack>
       </TabPanel>
-      <TabPanel value="discover" sx={{ p: 0 }}>
+      <TabPanel value="discover" keepMounted sx={{ p: 0 }}>
         <Stack spacing={1.5} data-testid="skills-discover">
           {upload.error && (
             <Alert color="danger" data-testid="skill-upload-pick-error">
               {upload.error}
             </Alert>
           )}
-          <Sheet variant="outlined" sx={{ borderRadius: 'lg', p: 2, bgcolor: 'background.level1' }}>
-            <Typography level="title-md">Skill Market</Typography>
-            <Typography level="body-sm" textColor="text.tertiary" sx={{ mt: 0.5, mb: 1.5 }}>
-              Browse skills shared by the community and import them into your own.
-            </Typography>
-            {onOpenSkillMarket && (
+          {onOpenSkillMarket && (
+            <Sheet variant="outlined" sx={{ borderRadius: 'lg', p: 2, bgcolor: 'background.level1' }}>
+              <Typography level="title-md">Skill Market</Typography>
+              <Typography level="body-sm" textColor="text.tertiary" sx={{ mt: 0.5, mb: 1.5 }}>
+                Browse skills shared by the community and import them into your own.
+              </Typography>
               <Button variant="solid" onClick={() => onOpenSkillMarket()} data-testid="customize-skill-market-btn">
                 Browse Skill Market
               </Button>
-            )}
-          </Sheet>
+            </Sheet>
+          )}
           <Sheet variant="outlined" sx={{ borderRadius: 'lg', p: 2, bgcolor: 'background.level1' }}>
             <Typography level="title-md">Share your own</Typography>
             <Typography level="body-sm" textColor="text.tertiary" sx={{ mt: 0.5, mb: 1.5 }}>
