@@ -54,6 +54,7 @@ const handler = baseApi().get(async (req: Request<{ id: string }>, res) => {
     escalated: trace.escalated,
     loopRunKind: trace.loopRunKind,
     loopReflection: trace.loopReflection,
+    failureReason: trace.failureReason,
     children,
   });
 });

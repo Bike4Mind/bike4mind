@@ -34,6 +34,8 @@ export type AgentExecutionTrace = {
   escalated?: boolean;
   loopRunKind?: IAgentExecution['loopRunKind'];
   loopReflection?: IAgentExecution['loopReflection'];
+  /** Why the run stopped; a blocked loop runner run is `completed` with `blocked` here. */
+  failureReason?: IAgentExecution['failureReason'];
   createdAt: Date;
   updatedAt: Date;
 };
@@ -109,6 +111,7 @@ export async function loadAgentExecutionTrace(id: string, userId: string): Promi
     ...(execution.escalated && { escalated: true }),
     ...(execution.loopRunKind && { loopRunKind: execution.loopRunKind }),
     ...(execution.loopReflection && { loopReflection: execution.loopReflection }),
+    ...(execution.failureReason && { failureReason: execution.failureReason }),
     createdAt: execution.createdAt,
     updatedAt: execution.updatedAt,
   };

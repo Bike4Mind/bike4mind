@@ -1225,6 +1225,16 @@ describe('subscribe / unsubscribe commands', () => {
     });
   });
 
+  it("sends a blocked runner run's reason with its completed status", async () => {
+    const run = { ...baseExecution, status: 'completed', failureReason: 'blocked' };
+    mockFindById.mockResolvedValueOnce(run).mockResolvedValueOnce(run);
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(sentPayloads()[0]).toMatchObject({ found: true, status: 'completed', failureReason: 'blocked' });
+    expect(sentPayloads()[0]).not.toHaveProperty('errorMessage');
+  });
+
   it('removes this connection on unsubscribe', async () => {
     await invoke(wsEvent({ command: 'unsubscribe', executionId: 'exec-1' }), {}, noopLogger);
     expect(mockRemoveViewer).toHaveBeenCalledWith('exec-1', 'viewer-conn');

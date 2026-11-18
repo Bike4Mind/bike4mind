@@ -1158,6 +1158,10 @@ async function sendExecutionSnapshot(
           errorMessage: toCallerSafeError(execution.error) ?? undefined,
         }
       : {}),
+    // A blocked loop runner run is stored as completed; the run view labels it Blocked from this.
+    ...(withOutcome && execution.status === 'completed' && execution.failureReason === 'blocked'
+      ? { failureReason: execution.failureReason }
+      : {}),
     ...(childSnapshots.length === 0
       ? {}
       : includeChildrenInline
