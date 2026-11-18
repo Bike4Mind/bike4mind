@@ -3,6 +3,7 @@ import { Button, ListDivider, MenuItem, Stack, Typography } from '@mui/joy';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   MODERATION_SEVERE_CATEGORIES,
+  MODERATION_SOURCE_LABELS,
   adminUserProfilePath,
   type IModerationHit,
   type UserModerationStatus,
@@ -38,12 +39,6 @@ const STATUS_LABELS: Record<UserModerationStatus, { label: string; tone: AdminSt
   throttled: { label: 'Throttled', tone: 'warn' },
   suspend_pending: { label: 'Suspension pending', tone: 'warn' },
   suspended: { label: 'Suspended', tone: 'bad' },
-};
-
-const SOURCE_LABELS: Record<IModerationHit['source'], string> = {
-  openai: 'OpenAI moderation',
-  bedrock: 'Bedrock guardrail',
-  provider: 'Provider refusal',
 };
 
 type Decision = 'suspended' | 'active' | 'throttled';
@@ -107,7 +102,7 @@ const HitList: React.FC<{ hits: IModerationHit[]; now: number }> = ({ hits, now 
               {hit.categories.length > 0 ? hit.categories.join(', ') : 'No categories'}
             </Typography>
             {' - '}
-            {SOURCE_LABELS[hit.source] ?? hit.source}
+            {MODERATION_SOURCE_LABELS[hit.source] ?? hit.source}
           </Typography>
         );
       })}

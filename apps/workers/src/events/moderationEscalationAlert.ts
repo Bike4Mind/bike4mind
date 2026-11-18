@@ -1,5 +1,10 @@
 import type { EventBridgeEvent } from 'aws-lambda';
-import { adminTextModerationReviewPath, escapeSlackText, toAbsoluteUrl } from '@bike4mind/common';
+import {
+  adminTextModerationReviewPath,
+  escapeSlackText,
+  MODERATION_SOURCE_LABELS,
+  toAbsoluteUrl,
+} from '@bike4mind/common';
 import { spendRollupRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { ModerationEvents } from '@bike4mind/server-utils/utils/eventBus';
@@ -30,12 +35,6 @@ export type ModerationEscalation = z.infer<typeof ModerationEvents.Escalation.sc
 /** The account lookup never holds the alert back longer than this (ms). */
 const ACCOUNT_CONTEXT_TIMEOUT_MS = 5_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-const SOURCE_LABELS: Record<ModerationEscalation['source'], string> = {
-  openai: 'OpenAI moderation',
-  bedrock: 'Bedrock guardrail',
-  provider: 'provider refusal',
-};
 
 export type ModerationEscalationMessageInput = {
   alert: ModerationEscalation;
@@ -84,7 +83,7 @@ export function buildModerationEscalationMessage(input: ModerationEscalationMess
       `*Categories*\n${escapeSlackText(categories)}`,
       `*Hits in 24h*\n${alert.hitsInWindow}`,
       `*Account*\n${escapeSlackText(accountLine)}`,
-      `*Flagged by*\n${SOURCE_LABELS[alert.source]}`,
+      `*Flagged by*\n${MODERATION_SOURCE_LABELS[alert.source]}`,
     ],
     sections: [escapeSlackText(action)],
     buttons,
