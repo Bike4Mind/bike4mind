@@ -2243,6 +2243,7 @@ export function ChatShell({
           conversation={studioContainer}
           historyEnabled={!opening && conversation.session ? conversation.session.historyEnabled === true : null}
           onHistory={onHistory}
+          agentTurn={turnOpen}
         />
       )}
     </Box>

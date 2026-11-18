@@ -93,7 +93,7 @@ function flushFrames() {
   });
 }
 
-function mount() {
+function mount(agentTurn = false) {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
@@ -106,6 +106,7 @@ function mount() {
           conversation={conversation}
           historyEnabled={null}
           onHistory={() => undefined}
+          agentTurn={agentTurn}
         />
       </CssVarsProvider>
     )
@@ -489,6 +490,44 @@ describe('the browser pane tab strip', () => {
     });
     expect(plain.defaultPrevented).toBe(false);
     expect(tab).toHaveBeenCalledTimes(4);
+  });
+
+  const menuAction = (target: HTMLElement, testId: string) => {
+    act(() => {
+      target.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 })
+      );
+    });
+    act(() => document.querySelector<HTMLElement>(`[data-testid="${testId}"]`)?.click());
+  };
+
+  it('closes every tab from the right-click menu, the active one last', async () => {
+    mount();
+    await settled();
+
+    menuAction(tabs()[1], 'browser-tab-menu-close-all-btn');
+    await settled();
+
+    expect(tab.mock.calls.map(([request]) => request)).toEqual([
+      { sessionId: 's1', action: 'close', tabId: 4 },
+      { sessionId: 's1', action: 'close', tabId: 1 },
+    ]);
+  });
+
+  it('asks before closing a tab the agent is using in the running reply', async () => {
+    setPane.mockResolvedValue({ ...PAGE, tabs: [{ ...PAGE.tabs[0], agentUsedAt: 5 }, PAGE.tabs[1]] });
+    mount(true);
+    await settled();
+
+    menuAction(tabs()[1], 'browser-tab-menu-close-others-btn');
+    expect(tab).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-testid="browser-tab-close-confirm-item"]')?.textContent).toBe(
+      'Example Domain (the agent is using this page)'
+    );
+
+    act(() => document.querySelector<HTMLElement>('[data-testid="browser-tab-close-confirm-btn"]')?.click());
+    await settled();
+    expect(tab).toHaveBeenCalledExactlyOnceWith({ sessionId: 's1', action: 'close', tabId: 1 });
   });
 
   it('says the conversation has no tabs once the last one closed', async () => {

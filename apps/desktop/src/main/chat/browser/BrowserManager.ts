@@ -162,6 +162,8 @@ class ElectronPage implements BrowserPage {
   /** Agent steps running in this page right now; a popup opened during one is the agent's. */
   private acting = 0;
   private actedAt = 0;
+  /** When an agent tool last took this tab, so the strip can tell a tab the model is using. */
+  private agentUsedAt = 0;
   inflight = 0;
   lastNetworkAt = 0;
 
@@ -385,7 +387,12 @@ class ElectronPage implements BrowserPage {
       title: this.title(),
       url: hasContent(url) ? url : '',
       loading: !this.webContents.isDestroyed() && this.webContents.isLoading(),
+      agentUsedAt: this.agentUsedAt,
     };
+  }
+
+  markAgentUse(): void {
+    this.agentUsedAt = Date.now();
   }
 
   /** Load without waiting, for a tab opened from a popup: its failures arrive as state and events. */
@@ -731,17 +738,26 @@ export class BrowserManager implements BrowserProvider {
     sessionId: string,
     keepScreenshot: (bytes: Buffer, caption: string) => Promise<ChatMedia | undefined>
   ): BrowserContext {
+    // Every agent tool reaches a tab through here, so this is where a tab becomes one in use.
+    const used = (tab: ElectronPage): ElectronPage => {
+      tab.markAgentUse();
+      this.push(sessionId);
+      return tab;
+    };
     const named = (id: number): ElectronPage => {
       const tab = this.sessions.get(sessionId)?.list.find(candidate => candidate.id === id);
       if (!tab) throw new Error(`There is no tab ${id}. browser_tabs with action "list" shows the open ones.`);
       return tab;
     };
     return {
-      page: async () => this.activeTab(sessionId),
+      page: async () => used(this.activeTab(sessionId)),
       tabs: () => this.tabInfo(sessionId),
-      newTab: async () => this.openTab(sessionId, true) ?? null,
+      newTab: async () => {
+        const tab = this.openTab(sessionId, true);
+        return tab ? used(tab) : null;
+      },
       selectTab: async id => {
-        const tab = named(id);
+        const tab = used(named(id));
         this.activate(sessionId, tab);
         return this.infoOf(sessionId, tab);
       },

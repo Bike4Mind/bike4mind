@@ -33,6 +33,7 @@ export function TabStrip<Id extends string | number>({
   onSelect,
   onClose,
   onNew,
+  onContextMenu,
   trailing,
 }: {
   tabs: readonly StripTab<Id>[];
@@ -44,6 +45,8 @@ export function TabStrip<Id extends string | number>({
   onSelect: (id: Id) => void;
   onClose: (id: Id) => void;
   onNew: () => void;
+  /** Right-click, Shift+F10 or the context-menu key on a tab, at the point to open a menu. */
+  onContextMenu?: (id: Id, at: { x: number; y: number }) => void;
   trailing?: ReactNode;
 }) {
   return (
@@ -71,8 +74,25 @@ export function TabStrip<Id extends string | number>({
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault();
                   onSelect(tab.id);
+                } else if (onContextMenu && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) {
+                  event.preventDefault();
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  onContextMenu(tab.id, { x: rect.left, y: rect.bottom });
                 }
               }}
+              onContextMenu={
+                onContextMenu &&
+                (event => {
+                  event.preventDefault();
+                  // A contextmenu raised from the keyboard reports no pointer position.
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  const fromKeyboard = event.clientX === 0 && event.clientY === 0;
+                  onContextMenu(
+                    tab.id,
+                    fromKeyboard ? { x: rect.left, y: rect.bottom } : { x: event.clientX, y: event.clientY }
+                  );
+                })
+              }
               // Middle-click closes, as in every browser. The press is swallowed so it does not
               // start the platform's autoscroll first.
               onMouseDown={event => {
