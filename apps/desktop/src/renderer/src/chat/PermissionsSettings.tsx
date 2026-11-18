@@ -32,6 +32,7 @@ import {
   type PermissionsState,
 } from '@shared/permissions';
 import { ChevronIcon } from './icons';
+import { thinScrollbarSx } from './layout';
 
 const LIST_LABEL: Record<PermissionList, string> = { allow: 'Allow', ask: 'Ask', deny: 'Deny' };
 const LIST_COLOR: Record<PermissionList, 'success' | 'warning' | 'danger'> = {
@@ -512,7 +513,7 @@ export function PermissionsSettings({
                   No matching rules. Try another search or filter.
                 </Typography>
               ) : (
-                <Stack spacing={0.75}>
+                <Stack spacing={0.75} sx={{ maxHeight: 480, overflowY: 'auto', pr: 0.5, ...thinScrollbarSx }}>
                   {filteredRules.map(view => (
                     <RuleRow
                       key={`${view.list}:${view.rule}`}
