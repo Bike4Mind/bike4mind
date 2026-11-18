@@ -29,7 +29,7 @@ const ALLOWED = new Set(['.next', 'app', 'node_modules', 'package.json', 'public
 // `app` cannot be allowlisted wholesale: in the source tree it is the SPA root, the largest
 // directory in the package, so a sweep landing inside it would sit under an allowed entry and
 // pass. Only one thing under it is read at runtime - server/help/retrieval.ts resolves
-// app/generated/help-embeddings.json and help-index.json against cwd on each request - so the
+// app/generated/help-embeddings.json/.bin and help-index.json against cwd on each request - so the
 // standalone copy is pinned a level deeper here rather than trusted as a unit.
 const ALLOWED_UNDER_APP = new Set(['generated']);
 

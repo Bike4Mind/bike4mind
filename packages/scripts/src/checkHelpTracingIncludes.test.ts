@@ -42,6 +42,7 @@ const ADMIN_GLOB = './app/generated/help-content-admin/**/*';
 
 const INDEX_ENTRY = './app/generated/help-index.json';
 const EMBEDDINGS_ENTRY = './app/generated/help-embeddings.json';
+const EMBEDDINGS_VECTORS_ENTRY = './app/generated/help-embeddings.bin';
 
 /** The routes that read help content off disk at request time. Both need BOTH roots. */
 const HELP_ROUTES = ['/api/help/content', '/api/help/chat'];
@@ -56,7 +57,7 @@ const HELP_ROUTES = ['/api/help/content', '/api/help/chat'];
  */
 const ARTIFACT_ROUTES: ReadonlyArray<[route: string, entries: string[]]> = [
   ['/api/help', [INDEX_ENTRY]],
-  ['/api/help/chat', [INDEX_ENTRY, EMBEDDINGS_ENTRY]],
+  ['/api/help/chat', [INDEX_ENTRY, EMBEDDINGS_ENTRY, EMBEDDINGS_VECTORS_ENTRY]],
 ];
 
 /**
@@ -75,6 +76,7 @@ const ARTIFACT_READERS: ReadonlyArray<[file: string, literal: string]> = [
   ['apps/client/pages/api/help/index.ts', 'app/generated/help-index.json'],
   ['apps/client/server/help/retrieval.ts', 'app/generated/help-index.json'],
   ['apps/client/server/help/retrieval.ts', 'app/generated/help-embeddings.json'],
+  ['apps/client/server/help/retrieval.ts', 'app/generated/help-embeddings.bin'],
 ];
 
 /** Every route that can construct a REPL sandbox; each needs the isolated-vm prebuild. */

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -146,6 +146,44 @@ describe('searchHelpContext keyword fallback', () => {
     expect(result.context).toContain('PUBLIC_BODY_MARKER');
     expect(result.context).not.toContain('ADMIN_ONLY_BODY_MARKER');
     expect(result.relevantArticles.map(a => a.slug)).not.toContain('admin/runbook');
+  });
+});
+
+describe('searchHelpContext embeddings artifacts', () => {
+  afterEach(() => {
+    fs.rmSync(path.join(generatedDir(), 'help-embeddings.json'), { force: true });
+    fs.rmSync(path.join(generatedDir(), 'help-embeddings.bin'), { force: true });
+  });
+
+  const generatedDir = () => path.join(tmpDir, 'app/generated');
+  const writeMetadata = (dimensions: number) =>
+    writeFile(
+      path.join(generatedDir(), 'help-embeddings.json'),
+      JSON.stringify({
+        chunks: [
+          { slug: 'guides/widget', title: 'Widget Guide', sectionPath: 'Intro', tokenCount: 5, accessLevel: 'public' },
+        ],
+        model: 'text-embedding-3-small',
+        dimensions,
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        sourceArticleCount: 1,
+      })
+    );
+
+  it('falls back to keywords, with a warning, when the binary does not match the metadata', async () => {
+    writeMetadata(4);
+    fs.writeFileSync(path.join(generatedDir(), 'help-embeddings.bin'), Buffer.alloc(3));
+    logger.warn.mockClear();
+
+    const result = await searchHelpContext({
+      question: 'how do I configure the widget',
+      isAdmin: false,
+      apiKeys: null,
+      logger,
+    });
+
+    expect(result.method).toBe('keyword');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('embeddings unavailable'), expect.any(Error));
   });
 });
 
