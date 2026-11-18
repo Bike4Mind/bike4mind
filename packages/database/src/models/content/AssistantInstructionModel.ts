@@ -38,10 +38,6 @@ export const assistantInstructionRepository = {
     return AssistantInstructionModel.find({ userId }).sort({ createdAt: 1, _id: 1 }).lean();
   },
 
-  async countByUser(userId: string): Promise<number> {
-    return AssistantInstructionModel.countDocuments({ userId });
-  },
-
   async create(input: { userId: string; text: string }): Promise<IAssistantInstruction> {
     const created = await AssistantInstructionModel.create(input);
     return created.toObject();

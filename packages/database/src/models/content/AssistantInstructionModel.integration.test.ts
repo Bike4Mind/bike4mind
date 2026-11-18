@@ -5,6 +5,8 @@ import { AssistantInstructionModel, assistantInstructionRepository as repo } fro
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
+const countByUser = (userId: string) => AssistantInstructionModel.countDocuments({ userId });
+
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 
 beforeAll(async () => {
@@ -29,20 +31,20 @@ describe('assistantInstructionRepository', () => {
 
     const listed = await repo.listByUser('u1');
     expect(listed.map(i => i.text)).toEqual(['first', 'second']);
-    expect(await repo.countByUser('u1')).toBe(2);
-    expect(await repo.countByUser('nobody')).toBe(0);
+    expect(await countByUser('u1')).toBe(2);
+    expect(await countByUser('nobody')).toBe(0);
   });
 
   it('deletes an owned instruction and reports it', async () => {
     const created = await repo.create({ userId: 'u1', text: 'drop me' });
     expect(await repo.deleteOwned('u1', created._id.toString())).toBe(true);
-    expect(await repo.countByUser('u1')).toBe(0);
+    expect(await countByUser('u1')).toBe(0);
   });
 
   it('leaves another user instruction in place and reports it missing', async () => {
     const created = await repo.create({ userId: 'u1', text: 'mine' });
     expect(await repo.deleteOwned('u2', created._id.toString())).toBe(false);
-    expect(await repo.countByUser('u1')).toBe(1);
+    expect(await countByUser('u1')).toBe(1);
   });
 
   it('treats a malformed or unknown id as missing without throwing', async () => {
@@ -64,7 +66,7 @@ describe('assistantInstructionRepository', () => {
       Array.from({ length: 8 }, (_, i) => repo.createWithinCap({ userId: 'u1', text: `race-${i}` }, 20))
     );
     expect(results.filter(Boolean)).toHaveLength(1);
-    expect(await repo.countByUser('u1')).toBe(20);
+    expect(await countByUser('u1')).toBe(20);
     expect(await repo.listByUser('u1')).toHaveLength(20);
   });
 
