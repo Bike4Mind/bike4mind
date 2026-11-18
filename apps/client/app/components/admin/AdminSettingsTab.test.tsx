@@ -352,6 +352,23 @@ describe('AdminSettingsTab Turnstile notice', () => {
   });
 });
 
+describe('AdminSettingsTab category headings', () => {
+  it('shows the SecOps category under a Security heading and keeps the stored category name', () => {
+    renderSecurityTab();
+
+    const heading = screen.getByTestId('admin-settings-category-heading-SecOps');
+    expect(heading.textContent).toBe('Security');
+    expect(screen.queryByRole('heading', { name: 'SecOps' })).toBeNull();
+    expect(settingsMap.abuseAssessmentEnabled.category).toBe('SecOps');
+  });
+
+  it('shows other categories under their own name', () => {
+    renderSecurityTab();
+
+    expect(screen.getByTestId('admin-settings-category-heading-AI Moderation').textContent).toBe('AI Moderation');
+  });
+});
+
 describe('AdminSettingsTab reviewer emails setting', () => {
   it.each(['ImageModerationReviewerEmails', 'ImageModerationEscalationEmails'] as const)(
     'renders the %s string-list editor with the stored reviewers and no generic card',

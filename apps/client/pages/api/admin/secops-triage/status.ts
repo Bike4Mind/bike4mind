@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { SecopsTriageConfigSchema } from '@bike4mind/common';
+import { SecopsTriageConfigFieldsSchema, SecopsTriageConfigSchema, type SecopsTriageConfig } from '@bike4mind/common';
 import { AdminSettings, secopsTriageRunRepository, type SecopsTriageRunItem } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { adminApi } from '@server/middlewares/adminApi';
@@ -19,6 +19,9 @@ export type SecopsTriageRunSummary = Omit<SecopsTriageRunItem, 'id' | 'stage' | 
 export interface SecopsTriageStatusResponse {
   stage: string;
   enabled: boolean;
+  dryRun: boolean;
+  severityThreshold: SecopsTriageConfig['severityThreshold'];
+  maxIssuesPerScan: number;
   github: {
     connected: boolean;
     repo: string;
@@ -28,12 +31,19 @@ export interface SecopsTriageStatusResponse {
   };
   /** Newest first. */
   recentRuns: SecopsTriageRunSummary[];
+  /** The newest run of each scan source on this stage, newest first. */
+  latestRunPerSource: SecopsTriageRunSummary[];
 }
 
 const savedField = (value: unknown, key: string): unknown =>
   value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined;
 
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+const toSummary = ({ id, stage, startedAt, ...run }: SecopsTriageRunItem): SecopsTriageRunSummary => ({
+  ...run,
+  startedAt: startedAt.toISOString(),
+});
 
 /** What the SecOps triage worker will find with the saved configuration, plus its recent runs on this stage. */
 const handler = adminApi<Request, Response>({
@@ -50,6 +60,10 @@ const handler = adminApi<Request, Response>({
   const enabled = parsed.success ? parsed.data.enabled : savedField(saved, 'enabled') === true;
   const savedRepo = savedField(saved, 'githubRepo');
   const repo = parsed.success ? parsed.data.githubRepo : typeof savedRepo === 'string' ? savedRepo : '';
+  const fields = SecopsTriageConfigFieldsSchema.safeParse(saved);
+  const { dryRun, severityThreshold, maxIssuesPerScan } = fields.success
+    ? fields.data
+    : SecopsTriageConfigFieldsSchema.parse({});
 
   // A failed GitHub lookup is reported as `checkError` rather than failing the whole status.
   let github: SecopsTriageStatusResponse['github'];
@@ -70,13 +84,21 @@ const handler = adminApi<Request, Response>({
     }
   }
 
-  const runs = await secopsTriageRunRepository.findRecentByStage(stage, RECENT_RUN_LIMIT);
-  const recentRuns: SecopsTriageRunSummary[] = runs.map(({ id, stage: runStage, startedAt, ...run }) => ({
-    ...run,
-    startedAt: startedAt.toISOString(),
-  }));
+  const [runs, latestRuns] = await Promise.all([
+    secopsTriageRunRepository.findRecentByStage(stage, RECENT_RUN_LIMIT),
+    secopsTriageRunRepository.findLatestPerSourceByStage(stage),
+  ]);
 
-  const body: SecopsTriageStatusResponse = { stage, enabled, github, recentRuns };
+  const body: SecopsTriageStatusResponse = {
+    stage,
+    enabled,
+    dryRun,
+    severityThreshold,
+    maxIssuesPerScan,
+    github,
+    recentRuns: runs.map(toSummary),
+    latestRunPerSource: latestRuns.map(toSummary),
+  };
   res.setHeader('Cache-Control', 'private, no-store');
   return res.status(200).json(body);
 });

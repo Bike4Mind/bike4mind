@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { PipelineStage } from 'mongoose';
 import { setupMongoTest } from '../../../__test__/utils';
 import {
   SecopsTriageRunModel,
@@ -69,6 +70,54 @@ describe('SecopsTriageRunRepository', () => {
     expect(latestTwo.map(run => run.findingCount)).toEqual([11, 10]);
 
     expect(await repository.findRecentByStage('staging')).toEqual([]);
+  });
+
+  describe('findLatestPerSourceByStage', () => {
+    const at = (minutes: number) => new Date(BASE.getTime() + minutes * MINUTE_MS);
+
+    it('returns the newest run of each scan source on the stage, newest first', async () => {
+      await repository.record(input({ scanSource: 'web-owasp', startedAt: at(0), findingCount: 1 }));
+      await repository.record(input({ scanSource: 'web-owasp', startedAt: at(5), findingCount: 2 }));
+      await repository.record(
+        input({ scanSource: 'cloud', status: 'skipped', reason: 'disabled', startedAt: at(3), findingCount: 0 })
+      );
+      await repository.record(input({ scanSource: 'cloud', startedAt: at(1), findingCount: 4 }));
+      await repository.record(input({ scanSource: 'active-defense', startedAt: at(2), findingCount: 5 }));
+      await repository.record(input({ stage: 'prod', scanSource: 'secrets', startedAt: at(9) }));
+
+      const latest = await repository.findLatestPerSourceByStage('dev');
+
+      expect(latest.map(run => [run.scanSource, run.findingCount])).toEqual([
+        ['web-owasp', 2],
+        ['cloud', 0],
+        ['active-defense', 5],
+      ]);
+      expect(latest[1]).toEqual({
+        id: expect.any(String),
+        stage: 'dev',
+        scanSource: 'cloud',
+        status: 'skipped',
+        reason: 'disabled',
+        dryRun: false,
+        findingCount: 0,
+        startedAt: at(3),
+      });
+      expect(await repository.findLatestPerSourceByStage('staging')).toEqual([]);
+    });
+
+    it('reads through the stage and startedAt index', async () => {
+      await SecopsTriageRunModel.createIndexes();
+      await repository.record(input());
+      const aggregate = vi.spyOn(SecopsTriageRunModel, 'aggregate');
+
+      await repository.findLatestPerSourceByStage('dev');
+      const pipeline = aggregate.mock.calls[0][0] as PipelineStage[];
+      aggregate.mockRestore();
+
+      const plan = JSON.stringify(await SecopsTriageRunModel.aggregate(pipeline).explain());
+      expect(plan).toContain('stage_1_startedAt_-1');
+      expect(plan).not.toContain('COLLSCAN');
+    });
   });
 
   it('declares the stage lookup index and a 90-day TTL on startedAt', () => {
