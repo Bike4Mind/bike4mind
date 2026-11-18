@@ -68,6 +68,20 @@ server whose `FCM_SERVICE_ACCOUNT` secret belongs to the same Firebase project.
 - [ ] A refused message (for example out of credits) shows the server's reason and keeps the draft box usable.
 - [ ] Rotation and process death keep the open chat and the draft.
 
+## Brief
+
+Needs a server with the briefs API (`/api/v1/briefs`) and a user with some recent agent activity.
+
+- [ ] "Brief" on the chats list opens the latest brief, or "No brief yet" with "Compose a brief".
+- [ ] "Compose a brief" shows "Putting your brief together", then the brief (usually under a minute); "Refresh" after
+      "Still working on it" picks it up once it is ready.
+- [ ] A ready brief lists "What needs you" first, then "Handled" and "What happened"; empty sections are hidden.
+- [ ] A decision with "Open approval" opens that chat, where the existing approval card answers it.
+- [ ] Tapping a `brief_ready` push opens that brief: from the system tray with the app backgrounded, from a cold start,
+      and from the notification the app shows while in the foreground. Signed out, the tap opens the brief after sign-in.
+- [ ] With the `brief_ready` category switched off for the user (`preferences.pushNotifications.brief_ready: false`,
+      set from web or iOS), no brief push arrives; the brief is still reachable from the chats list.
+
 ## Upgrade required
 
 - [ ] With the minimum version above the build's, any request shows the update screen with the required version.

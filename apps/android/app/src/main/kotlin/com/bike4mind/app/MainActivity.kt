@@ -17,12 +17,14 @@ import androidx.core.content.edit
 import androidx.lifecycle.lifecycleScope
 import com.bike4mind.app.ui.AppRoot
 import com.bike4mind.app.ui.B4MTheme
+import com.bike4mind.kit.push.NotificationRoute
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val signInError = MutableStateFlow<String?>(null)
+    private val pushRoute = MutableStateFlow<NotificationRoute?>(null)
 
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { syncNotificationPermission() }
@@ -35,11 +37,11 @@ class MainActivity : ComponentActivity() {
             B4MTheme {
                 // Exposes Compose test tags as resource ids, which is how the shared Maestro flows address elements.
                 Box(Modifier.semantics { testTagsAsResourceId = true }) {
-                    AppRoot(app = app, signInError = signInError, onSignedIn = ::askForNotificationsOnce)
+                    AppRoot(app = app, signInError = signInError, pushRoute = pushRoute, onSignedIn = ::askForNotificationsOnce)
                 }
             }
         }
-        if (savedInstanceState == null) handleCallback(intent)
+        if (savedInstanceState == null) handleIntent(intent)
     }
 
     override fun onResume() {
@@ -50,7 +52,21 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        handlePushTap(intent)
         handleCallback(intent)
+    }
+
+    /**
+     * A tapped push: the system tray hands FCM's `data` over as the launch intent's extras, and the foreground
+     * notification (PushNotifications.show) copies them the same way. AppRoot opens the route once signed in.
+     */
+    private fun handlePushTap(intent: Intent?) {
+        val extras = intent?.extras ?: return
+        NotificationRoute.from { extras.getString(it) }?.let { pushRoute.value = it }
     }
 
     private fun syncNotificationPermission() {
