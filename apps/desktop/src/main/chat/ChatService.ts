@@ -4400,6 +4400,7 @@ export class ChatService {
         // seeded rounds were stripped before they were stored - so the earlier artifacts are
         // carried across rather than parsed again, and none of them is published twice.
         const artifacts = [...(resume?.artifacts ?? []), ...published];
+        if (published.length > 0) this.deps.browser?.refreshArtifacts?.(sessionId, published);
 
         const rounds = [
           ...(resume?.rounds ?? []),
@@ -5237,6 +5238,7 @@ export class ChatService {
     return {
       bytes: attachment => this.deps.attachments?.read(sessionId, attachment.id) ?? Promise.resolve(null),
       pdfText: attachment => this.deps.attachments?.readPdfText(sessionId, attachment.id) ?? Promise.resolve(null),
+      path: attachment => this.deps.attachments?.locate(sessionId, attachment.id) ?? Promise.resolve(null),
     };
   }
 
@@ -10116,10 +10118,16 @@ function automaticDisplay(automatic: ChatAutomaticOrigin): string {
   }
 }
 
+function imageLocationNote(attachment: ChatAttachment, path: string): string {
+  return `<attached-image-file name="${attachment.name}" media-type="${attachment.mediaType}" path="${path}" />`;
+}
+
 /** Reads one attachment's stored content; null when the file is gone or, for a PDF, unreadable. */
 interface AttachmentReader {
   bytes(attachment: ChatAttachment): Promise<Buffer | null>;
   pdfText(attachment: ChatAttachment): Promise<PdfPromptText | null>;
+  /** Where the stored bytes sit on disk, so a tool-using agent can hand the file to another service. */
+  path?(attachment: ChatAttachment): Promise<string | null>;
 }
 
 /**
@@ -10163,6 +10171,9 @@ async function toAttachedContent(
         type: 'image',
         source: { type: 'base64', media_type: attachment.mediaType, data: bytes.toString('base64') },
       });
+      // The stored file has no extension, so the name and type are given for whoever copies it out.
+      const stored = await readAttachment.path?.(attachment);
+      if (stored) sections.push(imageLocationNote(attachment, stored));
       continue;
     }
 

@@ -127,6 +127,7 @@ const McpOAuthCallbackPage = lazy(() => import('./routes/integrations/mcp-oauth-
 const AtlassianSelectSitePage = lazy(() => import('./routes/integrations/atlassian/select-site'));
 const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
+const OAuthLogoutPage = lazy(() => import('./routes/oauth/logout'));
 const BedrockNewsClaimPage = lazy(() => import('./routes/partners/bedrocknews-claim'));
 const PersonaRedeemPage = lazy(() => import('./routes/personas/redeem'));
 const HudPage = lazy(() => import('./routes/hud'));
@@ -1468,6 +1469,32 @@ const oauthAuthorizeRoute = createRoute({
   }),
 });
 
+// OIDC RP-Initiated Logout (end_session_endpoint) - no layout, public. No consent redirect: signing
+// out must not wait on accepting the policies.
+export const oauthLogoutRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/oauth/logout',
+  beforeLoad: () => bootstrapSession(),
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <OAuthLogoutPage />
+    </Suspense>
+  ),
+  validateSearch: (
+    search: Record<string, unknown>
+  ): {
+    client_id?: string;
+    post_logout_redirect_uri?: string;
+    state?: string;
+    id_token_hint?: string;
+  } => ({
+    client_id: optionalStringParam(search, 'client_id'),
+    post_logout_redirect_uri: optionalStringParam(search, 'post_logout_redirect_uri'),
+    state: optionalStringParam(search, 'state'),
+    id_token_hint: optionalStringParam(search, 'id_token_hint'),
+  }),
+});
+
 // Create the route tree
 const routeTree = rootRoute.addChildren([
   // Layout-wrapped routes (main app)
@@ -1558,6 +1585,7 @@ const routeTree = rootRoute.addChildren([
   atlassianSelectSiteRoute,
   // OAuth Authorization endpoint
   oauthAuthorizeRoute,
+  oauthLogoutRoute,
   bedrockNewsClaimRoute,
   personaRedeemRoute,
 ]);

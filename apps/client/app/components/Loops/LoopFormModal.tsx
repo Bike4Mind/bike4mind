@@ -41,6 +41,7 @@ import {
 import { PICKABLE_TOOLS } from '@client/app/components/Agent/OrchestrationSection';
 import { getToolDisplayName } from '@client/app/utils/toolMapping';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
+import { useComposerMcpConnections } from '@client/app/hooks/useComposerMcpConnections';
 import { useGetAgents } from '@client/app/hooks/data/agents';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetSkills } from '@client/app/hooks/data/skills';
@@ -382,6 +383,7 @@ export default function LoopFormModal({ open, onClose, loop, template }: LoopFor
   const [errors, setErrors] = useState<LoopFormErrors>({});
   const [newStage, setNewStage] = useState('');
   const { data: mcpServers = [] } = useMcpServers();
+  const { offered: customConnections } = useComposerMcpConnections();
   const { currentUser } = useUser();
   // The list includes agents shared with the owner, which a loop may not run (isAgentUsableBy); the save rejects them.
   const agents = (useGetAgents().data ?? []).filter(agent => !agent.userId || agent.userId === currentUser?.id);
@@ -423,16 +425,37 @@ export default function LoopFormModal({ open, onClose, loop, template }: LoopFor
     }));
 
   // The executor names MCP tools `<lowercased server>__<tool>` (toolGenerators generateMcpToolsFromCache).
-  const mcpGroups = mcpServers
-    .filter(server => server.enabled && server.tools.length > 0)
-    .map(server => ({
-      name: server.name,
-      prefix: server.name.toLowerCase(),
-      tools: server.tools.map(tool => ({
-        value: `${server.name.toLowerCase()}__${tool}`,
-        label: `${server.name}: ${tool}`,
+  const mcpGroups = [
+    ...mcpServers
+      .filter(server => server.enabled)
+      .map(server => ({
+        name: server.name,
+        prefix: server.name.toLowerCase(),
+        tools: server.tools.map(tool => ({
+          value: `${server.name.toLowerCase()}__${tool}`,
+          label: `${server.name}: ${tool}`,
+        })),
       })),
-    }));
+    // Ids match customMcpToolId (services customMcpTools.ts). always_ask tools are left out because
+    // withAutoApprovedCustomTools never pre-approves them; org allowWriteTools and the connector's
+    // requireApprovalForAll are applied server-side only.
+    // ponytail: ids over 64 chars get a server-side hash suffix, so they're skipped (a saved one shows as unavailable).
+    ...customConnections.map(connection => ({
+      name: connection.displayName,
+      prefix: connection.slug,
+      tools: connection.tools
+        .filter(tool => tool.enabled && tool.state === 'active' && tool.approval !== 'always_ask')
+        .map(tool => ({
+          value: `${connection.slug}__${tool.name}`,
+          label: `${connection.displayName}: ${tool.name}`,
+        }))
+        .filter(tool => tool.value.length <= 64),
+    })),
+  ].filter(server => server.tools.length > 0);
+  const listedTools = new Set<string>([
+    ...PICKABLE_TOOLS,
+    ...mcpGroups.flatMap(server => server.tools.map(t => t.value)),
+  ]);
   // Shared by the loop and per-stage tools pickers so both always offer the same list. "All" adds the server's
   // tools as they are now, by name: a tool the server gains later stays off until picked (see newToolsHint).
   const toolOptions = (selected: string[], onChange: (tools: string[]) => void) => [
@@ -442,6 +465,14 @@ export default function LoopFormModal({ open, onClose, loop, template }: LoopFor
         {missingTools.includes(tool) && ' (unavailable)'}
       </Option>
     )),
+    // A saved name nothing offers now (custom tool, disconnected server, removed tool) stays selectable, so Save keeps it.
+    ...[...new Set(selected)]
+      .filter(tool => !listedTools.has(tool))
+      .map(tool => (
+        <Option key={tool} value={tool} data-testid={`loop-form-tools-unlisted-${tool}`}>
+          {tool} (unavailable)
+        </Option>
+      )),
     ...mcpGroups.flatMap(server => [
       <ListSubheader key={`server-${server.prefix}`} sx={{ justifyContent: 'space-between' }}>
         {server.name}

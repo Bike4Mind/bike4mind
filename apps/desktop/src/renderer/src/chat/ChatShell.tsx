@@ -566,7 +566,7 @@ export function ChatShell({
     [activeId, showBrowserPane]
   );
   const openArtifactInBrowserPane = useCallback(
-    (artifact: Pick<ChatArtifact, 'title' | 'content'>) =>
+    (artifact: Pick<ChatArtifact, 'title' | 'content' | 'identifier'>) =>
       openArtifactInSessionBrowser(artifact, activeId, showBrowserPane),
     [activeId, showBrowserPane]
   );
