@@ -167,7 +167,7 @@ export async function triageEmail(
           error: error instanceof Error ? error.message : String(error),
         });
       }
-      deps.logger.info('Email deleted during triage; dropped its triage item', { emailId: email.id });
+      deps.logger.info('Email deleted during triage; cleaned up its derived items', { emailId: email.id });
       return 'email_deleted';
     }
     deps.logger.info('Email triaged', { emailId: email.id, kind: triage.kind, created });
