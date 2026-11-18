@@ -5,6 +5,11 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import QuestMasterUpgradePrompt from './QuestMasterUpgradePrompt';
 import { useQuestMasterUpgrade } from './questMasterUpgrade';
 
+const mocks = vi.hoisted(() => ({ setLLM: vi.fn() }));
+vi.mock('@client/app/contexts/LLMContext', () => ({
+  useLLM: (selector: (s: { setLLM: typeof mocks.setLLM }) => unknown) => selector({ setLLM: mocks.setLLM }),
+}));
+
 const theme = extendTheme({ ...getThemeConfig() });
 const renderPrompt = (onUpgrade = vi.fn()) => {
   render(
@@ -16,7 +21,10 @@ const renderPrompt = (onUpgrade = vi.fn()) => {
 };
 
 describe('QuestMasterUpgradePrompt', () => {
-  beforeEach(() => useQuestMasterUpgrade.getState().close());
+  beforeEach(() => {
+    mocks.setLLM.mockClear();
+    useQuestMasterUpgrade.getState().close();
+  });
 
   it('opens on demand and routes the upgrade action to plans', () => {
     const onUpgrade = renderPrompt();
@@ -24,7 +32,7 @@ describe('QuestMasterUpgradePrompt', () => {
 
     act(() => useQuestMasterUpgrade.getState().open());
     expect(screen.getByTestId('questmaster-upgrade-prompt')).toHaveTextContent(
-      'Questmaster is included with every paid plan.'
+      'Questmaster is included with every paid plan'
     );
     fireEvent.click(screen.getByTestId('questmaster-upgrade-plans-btn'));
     expect(onUpgrade).toHaveBeenCalledOnce();
@@ -48,5 +56,16 @@ describe('QuestMasterUpgradePrompt', () => {
     );
     expect(screen.getByTestId('questmaster-upgrade-prompt')).toBeInTheDocument();
     expect(screen.queryByTestId('questmaster-upgrade-plans-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('questmaster-upgrade-prompt')).toHaveTextContent('Ask your administrator');
+    expect(screen.getByTestId('questmaster-upgrade-disable-btn')).toBeInTheDocument();
+  });
+
+  it('turns Questmaster off and closes without opening plans', () => {
+    useQuestMasterUpgrade.getState().open();
+    const onUpgrade = renderPrompt();
+    fireEvent.click(screen.getByTestId('questmaster-upgrade-disable-btn'));
+    expect(mocks.setLLM).toHaveBeenCalledWith({ isQuestMasterEnabled: false });
+    expect(onUpgrade).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('questmaster-upgrade-prompt')).not.toBeInTheDocument();
   });
 });
