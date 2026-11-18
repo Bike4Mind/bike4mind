@@ -16,6 +16,7 @@ const RULES: Record<string, RegExp> = {
   holdCredits: /(?<!function )\bholdCredits\(/g,
   imageCreditHolds: /\bcreditHolds\.hold\(/g,
   reserveRequestCredits: /(?<!function )\breserveRequestCredits\(/g,
+  holdPreflightCredits: /(?<!function )\bholdPreflightCredits\(/g,
   recordOperationalUsage: /(?<!function )\brecordOperationalUsage\(/g,
   subtractCredits: /(?<!function )\bsubtractCredits\(/g,
   assertOwnerHasCredits: /(?<!function )\bassertOwnerHasCredits\(/g,
@@ -38,6 +39,9 @@ const TRANSFER = "transfer between the user's own balances, not metered spend";
 const CLAWBACK = 'clawback of granted credits, not metered spend';
 
 const SITES: Record<string, Array<[call: string, why: string]>> = {
+  'apps/client/pages/api/ai/test-realtime-voice.ts': [
+    ['holdPreflightCredits(', 'UNGATED when credits are off (runs only inside isCreditsEnforced) - review'],
+  ],
   'apps/client/pages/api/ai/music.ts': [['reserveRequestCredits(', VIA_RESERVE]],
   'apps/client/pages/api/blog/generate-featured-image.ts': [['reserveRequestCredits(', VIA_RESERVE]],
   'apps/client/pages/api/help/chat.ts': [
@@ -61,6 +65,9 @@ const SITES: Record<string, Array<[call: string, why: string]>> = {
     ['recordOperationalUsage(', 'gated-by assertSpendNotFrozen earlier in the search'],
   ],
   'apps/client/server/utils/creditPreflight.ts': [['reserveRequestCredits(', VIA_RESERVE]],
+  'apps/client/server/utils/transcriptionCost.ts': [
+    ['holdPreflightCredits(', `${VIA_RESERVE}; passes the key as spendFreezeApiKey`],
+  ],
   'apps/client/server/websocket/voiceSessionEnded.ts': [
     ['incrementCredits(payerId, -credits', SETTLEMENT],
     ['incrementCredits(payerId, delta', SETTLEMENT],
