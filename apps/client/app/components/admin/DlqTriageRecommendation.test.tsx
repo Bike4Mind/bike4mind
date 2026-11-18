@@ -133,6 +133,11 @@ describe('DLQ triage decisions', () => {
     setup();
     const evidence = await screen.findByTestId('dlq-triage-evidence-m1');
     expect(evidence).toHaveTextContent('Partial SQS sample; not an inventory');
+    expect(evidence).toHaveTextContent('Failure: Recorded');
+    expect(evidence).toHaveTextContent('Entity context: Present (ID withheld)');
+    expect(evidence).toHaveTextContent('Consumer logs: Not needed');
+    expect(evidence).toHaveTextContent('Expiry: Within 24 hours');
+    expect(evidence).not.toHaveTextContent('present-id-withheld');
     expect(evidence).toHaveTextContent('Registered owner: Accounts');
     expect(evidence).toHaveTextContent('no fix has been verified');
     expect(screen.getByTestId('dlq-triage-draft-m1')).toHaveTextContent('Fix relationship unavailable');
@@ -155,6 +160,10 @@ describe('DLQ triage decisions', () => {
     const execution = await screen.findByTestId('dlq-triage-execution-m1');
     expect(execution).toHaveTextContent(text);
     expect(execution).toHaveTextContent('Operation warning recorded');
+    expect(screen.getByText(/^Recorded .* ago$|^Recorded (now|yesterday)$/)).toHaveAttribute(
+      'datetime',
+      '2026-11-17T00:00:00.000Z'
+    );
     expect(screen.getByTestId('dlq-triage-m1')).toHaveTextContent('Authorized');
   });
 });
