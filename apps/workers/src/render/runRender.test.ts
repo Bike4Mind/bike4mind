@@ -123,7 +123,11 @@ describe('runRender', () => {
   it('downloads, encodes, uploads, writes succeeded and wakes the engine', async () => {
     const { deps, statuses } = makeDeps();
 
-    await expect(runRender(JOB_ID, deps)).resolves.toEqual({ outcome: 'succeeded', bytes: 123_456, durationSeconds: 4 });
+    await expect(runRender(JOB_ID, deps)).resolves.toEqual({
+      outcome: 'succeeded',
+      bytes: 123_456,
+      durationSeconds: 4,
+    });
 
     expect(deps.findReadableFiles).toHaveBeenCalledWith([VIDEO_ID, AUDIO_ID], 'user-1');
     expect(deps.downloadSource).toHaveBeenCalledWith('files/video.mp4', '/work/source-0', expect.any(AbortSignal));
@@ -177,6 +181,13 @@ describe('runRender', () => {
     expect(statuses.at(-1)).toMatchObject({ state: 'failed' });
     expect(deps.enqueueStep).toHaveBeenCalledWith(JOB_ID);
     expect(deps.removeWorkDir).toHaveBeenCalledWith('/work');
+  });
+
+  it('downloads nothing when a clip file is no longer readable', async () => {
+    const { deps } = makeDeps({ findReadableFiles: vi.fn(async () => [readableFiles[1]]) });
+
+    await expect(runRender(JOB_ID, deps)).resolves.toMatchObject({ outcome: 'failed' });
+    expect(deps.downloadSource).not.toHaveBeenCalled();
   });
 
   it('refuses a clip that has not cleared moderation', async () => {
@@ -254,7 +265,10 @@ describe('runRender', () => {
       ),
     });
 
-    await expect(runRender(JOB_ID, deps, { signal: controller.signal })).resolves.toEqual({ outcome: 'aborted' });
+    await expect(runRender(JOB_ID, deps, { signal: controller.signal })).resolves.toEqual({
+      outcome: 'aborted',
+      released: true,
+    });
     expect(statuses.map(status => status.state)).toEqual(['running', 'running']);
     // An epoch heartbeat is never fresh, so the redelivered message is not taken for a live duplicate.
     expect(statuses[1]).toMatchObject({ updatedAt: new Date(0).toISOString() });
@@ -262,8 +276,34 @@ describe('runRender', () => {
     expect(deps.removeWorkDir).toHaveBeenCalledWith('/work');
   });
 
+  it('reports the release as failed when the shutdown status write rejects', async () => {
+    const controller = new AbortController();
+    const writeStatus = vi.fn(async (_id: string, status: { updatedAt: string }) => {
+      if (status.updatedAt === new Date(0).toISOString()) throw new Error('mongo down');
+    });
+    const { deps } = makeDeps({
+      writeStatus,
+      runFfmpeg: vi.fn(
+        ({ signal }: FfmpegRun) =>
+          new Promise<void>((_resolve, reject) => {
+            signal.addEventListener('abort', () => reject(new Error('killed')));
+            controller.abort();
+          })
+      ),
+    });
+
+    await expect(runRender(JOB_ID, deps, { signal: controller.signal })).resolves.toEqual({
+      outcome: 'aborted',
+      released: false,
+    });
+  });
+
   describe('duplicate deliveries', () => {
-    const runningAt = (updatedAt: Date) => ({ state: 'running' as const, progress: 0.4, updatedAt: updatedAt.toISOString() });
+    const runningAt = (updatedAt: Date) => ({
+      state: 'running' as const,
+      progress: 0.4,
+      updatedAt: updatedAt.toISOString(),
+    });
 
     it('drops a delivery while another task holds a fresh running status', async () => {
       const { deps } = makeDeps({ readStatus: vi.fn(async () => runningAt(new Date(NOW.getTime() - 10_000))) });

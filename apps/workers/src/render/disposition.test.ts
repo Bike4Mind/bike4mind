@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { RUNNING_STATUS_FRESH_MS } from './runRender';
 import { renderMessageDisposition, type RenderMessageResult, type RenderMessageDisposition } from './disposition';
 
 describe('renderMessageDisposition', () => {
@@ -15,7 +16,14 @@ describe('renderMessageDisposition', () => {
     [{ outcome: 'succeeded', bytes: 10, durationSeconds: 4 }, { action: 'delete' }],
     [{ outcome: 'failed', message: 'boom' }, { action: 'delete' }],
     [{ outcome: 'not_yet_running' }, { action: 'change_visibility', seconds: 20 }],
-    [{ outcome: 'aborted' }, { action: 'change_visibility', seconds: 0 }],
+    [
+      { outcome: 'aborted', released: true },
+      { action: 'change_visibility', seconds: 0 },
+    ],
+    [
+      { outcome: 'aborted', released: false },
+      { action: 'change_visibility', seconds: Math.ceil(RUNNING_STATUS_FRESH_MS / 1000) + 5 },
+    ],
     [{ outcome: 'shutting_down' }, { action: 'change_visibility', seconds: 0 }],
     [{ outcome: 'errored' }, { action: 'leave' }],
   ])('%j -> %j', (result, disposition) => {

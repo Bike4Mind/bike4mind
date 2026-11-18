@@ -76,8 +76,8 @@ export type RunRenderOutcome =
   | { outcome: 'failed'; message: string }
   /** The job was cancelled or ended mid-encode: the encode is killed and no status is written. */
   | { outcome: 'cancelled' }
-  /** Stopped by the caller (the task is shutting down): the status is released, so the redelivered message retries. */
-  | { outcome: 'aborted' };
+  /** Stopped by the caller (the task is shutting down); `released` is whether the status write that lets a redelivery retry landed. */
+  | { outcome: 'aborted'; released: boolean };
 
 /** Room left under the job's deadline to upload, write the status and let the engine store before it expires. */
 export const DEADLINE_MARGIN_MS = 5 * 60_000;
@@ -368,12 +368,14 @@ export const runRender = async (
     if (!deadline.timedOut() && cancel.signal.aborted) return { outcome: 'cancelled' };
     if (!deadline.timedOut() && external.aborted) {
       deps.logger.warn('render aborted by shutdown; leaving the message for redelivery', { jobId });
+      let released = true;
       await statusWriter
         .final({ state: 'running', progress: tracker.latest, updatedAt: RELEASED_UPDATED_AT })
         .catch(releaseError => {
+          released = false;
           deps.logger.warn('render status release failed', { jobId, error: errorMessage(releaseError) });
         });
-      return { outcome: 'aborted' };
+      return { outcome: 'aborted', released };
     }
     const message = deadline.timedOut() ? TIMEOUT_FAILURE : userMessageOf(error);
     deps.logger.error('render failed', { jobId, message, error: errorMessage(error) });

@@ -69,7 +69,7 @@ export async function publishGenerationJobReadyPush(
       title: JOB_TITLES[job.kind],
       body: generationPushBody(pushTextOf(job), `Your ${JOB_NOUNS[job.kind]} is ready.`),
       deepLink: sessionId ? deps.sessionDeepLink(sessionId) : deps.appRootDeepLink(),
-      collapseId: `generation:${job.id}`,
+      collapseId: job.kind === 'render' ? `generation:${job.payload.groupId}` : `generation:${job.id}`,
       ...(job.questId && { questId: job.questId }),
       ...(sessionId && { sessionId }),
     });

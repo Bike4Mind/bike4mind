@@ -1,4 +1,4 @@
-import type { RunRenderOutcome } from './runRender';
+import { RUNNING_STATUS_FRESH_MS, type RunRenderOutcome } from './runRender';
 
 /** What happened to one received render queue message, including the cases where runRender never ran or threw. */
 export type RenderMessageResult =
@@ -18,6 +18,9 @@ export type RenderMessageDisposition =
 // Each redelivery counts toward the queue's DLQ receive limit (3), so two retries must outlast the engine's submit commit.
 export const SUBMIT_IN_FLIGHT_RETRY_SECONDS = 20;
 
+// Used when the release write failed: the redelivery must land after the last heartbeat has gone stale.
+const UNRELEASED_RETRY_SECONDS = Math.ceil(RUNNING_STATUS_FRESH_MS / 1000) + 5;
+
 export const renderMessageDisposition = (result: RenderMessageResult): RenderMessageDisposition => {
   switch (result.outcome) {
     case 'malformed':
@@ -30,6 +33,8 @@ export const renderMessageDisposition = (result: RenderMessageResult): RenderMes
     case 'not_yet_running':
       return { action: 'change_visibility', seconds: SUBMIT_IN_FLIGHT_RETRY_SECONDS };
     case 'aborted':
+      if (!result.released) return { action: 'change_visibility', seconds: UNRELEASED_RETRY_SECONDS };
+      return { action: 'change_visibility', seconds: 0 };
     case 'shutting_down':
       // Hand the job straight to another task instead of waiting out the visibility timeout.
       return { action: 'change_visibility', seconds: 0 };
