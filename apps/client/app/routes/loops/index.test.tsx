@@ -38,6 +38,7 @@ vi.mock('@client/app/hooks/data/loops', () => ({
   useUpdateLoop: () => mutations.update,
   useRunLoop: () => mutations.run,
   useDeleteLoop: () => mutations.remove,
+  useDesktopLoopMirror: () => ({ data: [], dataUpdatedAt: 0 }),
 }));
 
 import LoopsPage from './index';
