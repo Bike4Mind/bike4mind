@@ -27,6 +27,8 @@ export function RevokeAccessDialog({ admin, dormantDays, onClose }: RevokeAccess
   const updateRole = useAdminUserRoleUpdate(admin.userId);
   const decision = useAccessReviewDecision();
   const label = admin.email ?? admin.username ?? admin.userId;
+  const roleNames = admin.roles.map(role => role.name ?? 'a deleted role');
+  const rolesNote = roleNames.length > 0 ? ` Roles removed: ${roleNames.join(', ')}.` : '';
 
   const removeAccess = async (reason: string) => {
     if (admin.fullAdmin) await updateRole({ isAdmin: false, reason });
@@ -74,8 +76,8 @@ export function RevokeAccessDialog({ admin, dormantDays, onClose }: RevokeAccess
       title={`Revoke admin access for ${label}`}
       description={
         admin.fullAdmin
-          ? 'This removes the Super Admin role and any delegated admin permissions.'
-          : 'This removes every delegated admin permission and admin role.'
+          ? `This removes the Super Admin role and any delegated admin permissions.${rolesNote}`
+          : `This removes every delegated admin permission and admin role.${rolesNote}`
       }
       reasonPresets={REASON_PRESETS}
       reasonRequired={removalState === 'pending'}
