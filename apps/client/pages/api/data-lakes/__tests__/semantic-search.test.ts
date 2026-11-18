@@ -94,6 +94,7 @@ vi.mock('@bike4mind/database', () => ({
   // Identifiable marker rather than a stub repo: the budget assertions below check that the route
   // wires the overlay store through, which is half of what #2709 fixed.
   scopedSettingsRepository: 'SCOPED_SETTINGS_REPO_MARKER',
+  spendFreezeRepository: { findActiveForSubject: async () => null },
 }));
 // The report helpers are the REAL ones: the wording and snake_case mapping are what these tests
 // check, so a reimplementation here would prove nothing. Imported from source because the module

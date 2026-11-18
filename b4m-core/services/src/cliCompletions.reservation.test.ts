@@ -190,6 +190,7 @@ function buildDb(org?: Record<string, unknown>) {
       creditTransactions: {} as any,
       users: users as any,
       usageEvents: { record: vi.fn().mockResolvedValue(undefined) } as any,
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
       organizations: organizations as any,
     },
     users,

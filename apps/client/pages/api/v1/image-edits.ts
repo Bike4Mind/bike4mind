@@ -54,6 +54,7 @@ const handler = nextRouteForContract(editImageContract).post(async (req, res) =>
   const quest = await getImageEdit().invoke({
     adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
     apiKeyId: req.apiKeyInfo?.keyId,
+    apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
     userId: req.user.id,
     body: {
       ...body,

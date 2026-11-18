@@ -4,6 +4,8 @@ import {
   estimateTtsHoldCredits,
   ModelBackend,
   insufficientCreditsError,
+  isSpendFrozenError,
+  type ISpendFreeze,
   TTS_DEFAULT_MODEL,
   type StorageLimitErrorInfo,
 } from '@bike4mind/common';
@@ -34,7 +36,11 @@ const fakeHold = (params: { userId: string; requiredCredits: number }): CreditHo
 });
 
 // creditHold is module-mocked, so the adapters are never touched.
-const unusedCredits = {} as CreditHoldAdapters;
+// Only the spend freeze adapter is read: holdCredits is mocked, and credits-off jobs check the freeze directly.
+const unusedCredits = {
+  spendFreezes: { findActiveForSubject: vi.fn(async (): Promise<ISpendFreeze | null> => null) },
+} as unknown as CreditHoldAdapters;
+const frozenKey = { scopeType: 'apiKey', frozenAt: new Date('2026-11-16T00:00:00Z') } as ISpendFreeze;
 
 const now = new Date('2026-10-13T00:00:00Z');
 
@@ -394,6 +400,21 @@ describe('createSpeechJob', () => {
         job: { creditHold: null },
       });
       expect(holdCredits).not.toHaveBeenCalled();
+    });
+
+    it('refuses a frozen API key while credits are not enforced', async () => {
+      const { deps } = makeDeps({ getSettings: async () => ({ enforceCredits: false }) });
+      vi.mocked(unusedCredits.spendFreezes.findActiveForSubject).mockResolvedValueOnce(frozenKey);
+      const error = await createSpeechJob({ user, request: validRequest, source: 'api', apiKeyId: 'k1' }, deps).catch(
+        (err: unknown) => err
+      );
+      expect(isSpendFrozenError(error)).toBe(true);
+      expect(unusedCredits.spendFreezes.findActiveForSubject).toHaveBeenCalledWith({
+        userId: 'u1',
+        organizationId: null,
+        apiKeyId: 'k1',
+      });
+      expect(deps.enqueue).not.toHaveBeenCalled();
     });
 
     it('holds enough for the costliest candidate, at the requested model for the requested vendor', async () => {

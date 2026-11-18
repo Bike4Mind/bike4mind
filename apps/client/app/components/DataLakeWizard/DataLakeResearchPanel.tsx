@@ -573,6 +573,7 @@ const SCHEDULE_SKIP_LABEL: Partial<Record<ResearchScheduleSkipReason, string>> =
   daily_cap: 'the lake reached its daily run limit',
   insufficient_credits: 'the lake owner did not have enough credits',
   lake_inactive: 'the data lake is not active',
+  spend_frozen: 'spending is paused for the lake owner',
 };
 
 /**
