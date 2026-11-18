@@ -228,7 +228,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ]),
   gap(
     'schedule:infra/imageModerationReviewSweep.ts:imageModerationReviewSweep',
-    'efe33b9933a43713e7431275d8ad017b36a52e0055494e11877cbf3d48a2d708',
+    '569003b9ffd16f37eaccf17a98cb33a5fcfb2a8bbd1bfae56f83160efc9e6798',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
   broker(
