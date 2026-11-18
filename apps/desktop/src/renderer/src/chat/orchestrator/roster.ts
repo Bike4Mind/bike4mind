@@ -53,6 +53,11 @@ export interface AgentView {
   credits?: number;
   pr?: PrSummary;
   branch?: string;
+  /**
+   * A Presenter mode copy (presenter.ts): its words are placeholders. Anything that would look this agent
+   * up past the roster (its transcript, its messages) shows nothing from there instead.
+   */
+  redacted?: true;
 }
 
 /** The orchestrating (root) session itself, as the stage sees it: no roster entry, just what it is doing. */
