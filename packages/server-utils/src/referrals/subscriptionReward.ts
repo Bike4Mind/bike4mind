@@ -274,7 +274,8 @@ export async function releaseDueSubscriptionRewards({
                   invoiceId: claimed.invoiceId,
                 },
               },
-              buildCreditRewardAdapters({ inTransaction: true, duplicateTransactionId: 'throw' })
+              buildCreditRewardAdapters({ inTransaction: true, duplicateTransactionId: 'throw' }),
+              { now }
             );
             if (paid.outcome === 'blocked') throw new InviterRefusedError();
             return paid.outcome === 'paid' ? paid.creditTransactionId : '';
