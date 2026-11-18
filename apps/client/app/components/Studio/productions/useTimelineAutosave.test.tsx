@@ -54,7 +54,7 @@ const unprocessable = () =>
     },
   } as AxiosResponse);
 
-const stored = defaultStudioTimeline('blank');
+const stored = { ...defaultStudioTimeline('blank'), tracks: [] };
 const withCaption = (text: string) => addCaptionClip(stored, text).timeline;
 
 const renderAutosave = () => {
