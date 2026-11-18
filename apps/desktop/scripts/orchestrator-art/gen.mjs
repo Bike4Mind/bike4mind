@@ -67,7 +67,9 @@ async function main() {
     mode: 'generate',
     count: 1,
     ...(args.size ? { size: args.size } : {}),
-    ...(args.background === 'transparent' ? { transparent_background: true } : {}),
+    ...(args.background === 'transparent' || args.background === 'opaque'
+      ? { transparent_background: args.background === 'transparent' }
+      : {}),
     ...(args.quality ? { quality: args.quality } : {}),
   };
   const ack = await api(auth, 'POST', '/api/v1/image-jobs', body, { 'idempotency-key': randomUUID() });

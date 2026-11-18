@@ -875,16 +875,23 @@ export async function generateImage(
 ) {
   const created = await client.createImageJob(args, randomUUID());
   const ref = `image job ${created.id}`;
-  const outcome = await pollUntil(
-    {
-      read: () => client.getImageJob(created.id),
-      ref,
-      task: 'image generation',
-      isFinished: isImageJobSettled,
-      describeError: err => mapApiError(err, baseURL, 'ai:generate'),
-    },
-    { ...poll, timeoutMs, interval: () => intervalMs }
-  );
+  let outcome: Awaited<ReturnType<typeof pollUntil<PublicImageJob>>>;
+  try {
+    outcome = await pollUntil(
+      {
+        read: () => client.getImageJob(created.id),
+        ref,
+        task: 'image generation',
+        isFinished: isImageJobSettled,
+        describeError: err => mapApiError(err, baseURL, 'ai:generate'),
+      },
+      { ...poll, timeoutMs, interval: () => intervalMs }
+    );
+  } catch (err) {
+    // Only a cancel stops the job: a running one refuses (409) and finishes, so a failed cancel is expected.
+    if (poll.signal?.aborted) await client.cancelImageJob(created.id).catch(() => undefined);
+    throw err;
+  }
   if (!outcome.finished) {
     throw new Error(`image generation did not finish within ${Math.round(timeoutMs / 1000)}s (${ref})`);
   }

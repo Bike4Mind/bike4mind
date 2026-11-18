@@ -1274,6 +1274,57 @@ describe('generateImage', () => {
     expect(getImageJob).toHaveBeenCalledTimes(1);
   });
 
+  it('cancels the job when the call is aborted, and still rethrows the abort', async () => {
+    const controller = new AbortController();
+    const getImageJob = vi.fn(async () => {
+      controller.abort(new Error('cancelled by client'));
+      return { ...pendingJob, state: 'running' };
+    });
+    const cancelImageJob = vi.fn().mockResolvedValue({ ...pendingJob, state: 'cancelled' });
+
+    await expect(
+      generateImage(
+        mockClient({ createImageJob: vi.fn().mockResolvedValue(pendingJob), getImageJob, cancelImageJob }),
+        { prompt: 'p', model: 'gpt-image-1' },
+        { ...noSleep, signal: controller.signal }
+      )
+    ).rejects.toThrow('cancelled by client');
+    expect(cancelImageJob).toHaveBeenCalledTimes(1);
+    expect(cancelImageJob).toHaveBeenCalledWith('job1');
+  });
+
+  it('ignores a refused cancel and still rethrows the abort', async () => {
+    const controller = new AbortController();
+    const getImageJob = vi.fn(async () => {
+      controller.abort(new Error('cancelled by client'));
+      return { ...pendingJob, state: 'running' };
+    });
+    const cancelImageJob = vi.fn().mockRejectedValue(new Error('409 not_cancellable'));
+
+    await expect(
+      generateImage(
+        mockClient({ createImageJob: vi.fn().mockResolvedValue(pendingJob), getImageJob, cancelImageJob }),
+        { prompt: 'p', model: 'gpt-image-1' },
+        { ...noSleep, signal: controller.signal }
+      )
+    ).rejects.toThrow('cancelled by client');
+    expect(cancelImageJob).toHaveBeenCalledWith('job1');
+  });
+
+  it('does not cancel when the poll merely times out', async () => {
+    const cancelImageJob = vi.fn();
+    const getImageJob = vi.fn().mockResolvedValue({ ...pendingJob, state: 'running' });
+
+    await expect(
+      generateImage(
+        mockClient({ createImageJob: vi.fn().mockResolvedValue(pendingJob), getImageJob, cancelImageJob }),
+        { prompt: 'p', model: 'gpt-image-1' },
+        { ...noSleep, timeoutMs: 0 }
+      )
+    ).rejects.toThrow('did not finish');
+    expect(cancelImageJob).not.toHaveBeenCalled();
+  });
+
   it('gives up once the poll timeout elapses', async () => {
     const getImageJob = vi.fn().mockResolvedValue({ ...pendingJob, state: 'running' });
 

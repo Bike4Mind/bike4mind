@@ -111,6 +111,7 @@ describe('generateImage', () => {
       expect.stringMatching(/^[0-9a-f-]{36}$/)
     );
     expect(h.getImageJob).toHaveBeenCalledTimes(3);
+    expect(h.getImageJob).toHaveBeenCalledWith('job1', expect.any(AbortSignal));
     expect(h.fetchGenerated).toHaveBeenCalledWith('https://cdn.example/generated/a.png');
     expect(outcome.media).toHaveLength(1);
     expect(outcome.media[0]).toMatchObject({ kind: 'image', mimeType: 'image/png', caption: 'a bicycle' });
@@ -184,7 +185,67 @@ describe('generateImage', () => {
     const failing = await harness([DONE]);
     failing.getImageJob.mockReset();
     failing.getImageJob.mockRejectedValue(new Error('gone'));
-    expect(await settle(generateImage(REQUEST, failing.deps), 10_000)).toMatchObject({ message: 'gone' });
+    expect(await settle(generateImage(REQUEST, failing.deps), 10_000)).toMatchObject({
+      message: expect.stringMatching(/Lost contact[\s\S]*gone[\s\S]*\(job1\)/),
+    });
+  });
+
+  it('waits out a 429 without counting it as a failed read', async () => {
+    const h = await harness([DONE]);
+    h.getImageJob.mockReset();
+    const limited = Object.assign(new MediaToolError('slow down'), { status: 429, retryAfterMs: 20_000 });
+    h.getImageJob
+      .mockRejectedValueOnce(limited)
+      .mockRejectedValueOnce(limited)
+      .mockRejectedValueOnce(limited)
+      .mockResolvedValueOnce(DONE);
+
+    const promise = generateImage(REQUEST, h.deps);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.getImageJob).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(100_000);
+
+    await expect(promise).resolves.toMatchObject({ media: [{ kind: 'image' }] });
+    expect(h.getImageJob).toHaveBeenCalledTimes(4);
+  });
+
+  it('keeps a 429 bounded by the deadline', async () => {
+    const h = await harness([DONE]);
+    h.getImageJob.mockReset();
+    h.getImageJob.mockRejectedValue(Object.assign(new MediaToolError('slow down'), { status: 429 }));
+
+    expect(await settle(generateImage(REQUEST, h.deps), 400_000)).toMatchObject({
+      message: expect.stringMatching(/still generating after 180s/),
+    });
+  });
+
+  it('fails fast on a succeeded job that has no output', async () => {
+    const h = await harness([{ ...DONE, output: null }]);
+
+    expect(await settle(generateImage(REQUEST, h.deps), 5_000)).toMatchObject({
+      message: expect.stringMatching(/not stored/),
+    });
+    expect(h.getImageJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('says the file is being scanned when the deadline lands during a scan', async () => {
+    const scanning: PublicImageJob = {
+      ...DONE,
+      output: { ...DONE.output!, availability: 'pending_scan', url: null },
+    };
+    const h = await harness([scanning]);
+
+    expect(await settle(generateImage(REQUEST, h.deps), 200_000)).toMatchObject({
+      message: expect.stringMatching(/being scanned[\s\S]*job job1/),
+    });
+  });
+
+  it('carries the stored file id onto the media', async () => {
+    const h = await harness([{ ...DONE, output: { ...DONE.output!, file_id: 'file9' } }]);
+    const promise = generateImage(REQUEST, h.deps);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await expect(promise).resolves.toMatchObject({ media: [{ kind: 'image', fabFileId: 'file9' }] });
   });
 
   it('gives up on a job that never settles, naming it so it can be found later', async () => {
@@ -192,6 +253,25 @@ describe('generateImage', () => {
     expect(await settle(generateImage(REQUEST, h.deps), 200_000)).toMatchObject({
       message: expect.stringMatching(/still generating after 180s[\s\S]*job job1/),
     });
+    expect(h.cancelImageJob).not.toHaveBeenCalled();
+  });
+
+  it('cancels the created job when the turn is aborted while the create is in flight', async () => {
+    const controller = new AbortController();
+    const h = await harness([RUNNING]);
+    h.createImageJob.mockImplementation(async () => {
+      controller.abort();
+      return [JOB];
+    });
+
+    const outcome = await generateImage(REQUEST, { ...h.deps, signal: controller.signal }).then(
+      value => value,
+      error => error as Error
+    );
+
+    expect(outcome).toMatchObject({ message: expect.stringMatching(/stopped/) });
+    expect(h.cancelImageJob).toHaveBeenCalledWith('job1');
+    expect(h.getImageJob).not.toHaveBeenCalled();
   });
 
   it('stops and cancels the job when the turn is aborted mid-poll', async () => {

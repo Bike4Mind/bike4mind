@@ -82,8 +82,8 @@ export function infoDescription(scopes: readonly string[] = PUBLIC_DOC_API_KEY_S
       'opens its event stream. ' +
       '`GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/image-models`, ' +
       '`GET /api/v1/video-models`, ' +
-      '`GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations` ' +
-      'and `/api/v1/music-generations`, and the poll endpoints listed under ' +
+      '`GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations`, ' +
+      '`/api/v1/music-generations` and `/api/v1/image-jobs`, and the poll endpoints listed under ' +
       'Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute ' +
       'limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches ' +
       'the limiter and carries no rate-limit headers.',

@@ -271,6 +271,13 @@ describe('B4mApiClient', () => {
     expect(sent()).toMatchObject({ url: 'http://localhost:3000/api/v1/image-jobs/j1', method: 'GET' });
   });
 
+  it('cancels an image job by POSTing to its cancel path', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ id: 'x' }));
+
+    await expect(client.cancelImageJob('j1')).rejects.toThrow();
+    expect(sent()).toMatchObject({ url: 'http://localhost:3000/api/v1/image-jobs/j1/cancel', method: 'POST' });
+  });
+
   it('forwards dataLakeId on create only when set', async () => {
     mockFetch.mockResolvedValue(jsonResponse({ id: 'n1' }));
     await client.createNotebook({ name: 'My NB', dataLakeId: 'lake-1' });

@@ -88,7 +88,8 @@ const createRouter = nextRouteForContract(createImageJobContract, {
       count: req.validated.count ?? 1,
       source,
       apiKeyId: req.apiKeyInfo?.keyId,
-      // Scoped by kind too: the Studio image route keys `studio:image:<user>:<key>`, so the two never collide.
+      // The namespace is shared on purpose with the Studio image route (`studio:image:<user>:<key>`): for a JWT caller
+      // it is the same user and the same createImageJobs, so a retry across the two replays rather than double-bills.
       ...(idempotencyKey && { idempotencyKey: `${source}:image:${req.user.id}:${idempotencyKey}` }),
     },
     getCreateImageJobsDeps()

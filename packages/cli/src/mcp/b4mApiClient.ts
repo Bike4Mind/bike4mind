@@ -540,6 +540,11 @@ export class B4mApiClient {
     return ImageJobSchema.parse(await this.sdk.call('getImageJob', { params: { id: jobId } }));
   }
 
+  /** Ask the server to cancel a job. A running job refuses (409) and finishes, so callers treat this as best effort. */
+  async cancelImageJob(jobId: string): Promise<PublicImageJob> {
+    return ImageJobSchema.parse(await this.sdk.call('cancelImageJob', { params: { id: jobId } }));
+  }
+
   async listProjects(args: {
     search?: string;
     limit: number;

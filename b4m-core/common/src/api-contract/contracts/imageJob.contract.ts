@@ -74,7 +74,9 @@ export const createImageJobContract = defineEndpoint({
     'image before it was rejected and billed it: then `credits.settled` shows the charge. ' +
     'Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with ' +
     'the same key and body returns the original jobs, and the same key with a different body is a 422 ' +
-    '`idempotency_key_reused`. Set `organization_id` to bill an organization you belong to, or `null` to bill ' +
+    '`idempotency_key_reused`. Keys are scoped to the billed account and to `count`, so the same key sent ' +
+    'with a different `count` or `organization_id` starts new jobs, which are charged. Set `organization_id` ' +
+    'to bill an organization you belong to, or `null` to bill ' +
     'your personal credits; omitted, the jobs bill your home organization (or your personal credits if you ' +
     'have none). An organization-billed API key always bills its own organization (see `organization_id`). ' +
     'This replaces `POST /api/v1/image-generations` and `POST /api/v1/image-edits`.',

@@ -23,7 +23,7 @@ import { PaginationQuerySchema, paginatedResponseSchema } from './pagination';
 // Public wire shapes for /api/v1/image-jobs, mirroring musicGenerations.ts and videoGenerations.ts.
 // snake_case per CONVENTIONS.md; the domain request (ImageJobRequestSchema) stays camelCase.
 
-// Must stay in sync with createImageJobs' batch cap (IMAGE_JOB_BATCH_MAX in @bike4mind/services/imageJobs).
+// Also the batch cap createImageJobs enforces (IMAGE_JOB_BATCH_MAX in @bike4mind/services/imageJobs).
 export const IMAGE_JOB_COUNT_MAX = 4;
 
 export const IMAGE_JOB_API_ERROR_CODES = [
