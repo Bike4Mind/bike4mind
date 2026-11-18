@@ -30,6 +30,7 @@ async function rejectsAfterTimers(pending: Promise<unknown>, message: string) {
 describe('spend GET retry', () => {
   it.each([
     ['retry-after', '2', 2000],
+    ['retry-after-ms', '2500', 2500],
     ['retry-after', 'Wed, 01 Jul 2026 00:00:03 GMT', 3000],
     ['x-ratelimit-reset-requests', '1m2s', 62000],
     ['anthropic-ratelimit-requests-reset', '2026-07-01T00:00:04Z', 4000],
@@ -49,15 +50,90 @@ describe('spend GET retry', () => {
   });
   it('uses jittered exponential fallback and bounds attempts', async () => {
     vi.mocked(Math.random).mockReturnValue(0.5);
-    const fetchFn = vi.fn().mockResolvedValue(rateLimited());
+    const fetchFn = vi.fn().mockResolvedValue(new Response('unavailable', { status: 503 }));
+    const diagnostics: ProviderSpendDiagnostic[] = [];
+    await rejectsAfterTimers(
+      request(fetchFn, { onDiagnostic: (value: ProviderSpendDiagnostic) => diagnostics.push(value) }),
+      '503'
+    );
+    expect(fetchFn).toHaveBeenCalledTimes(4);
+    expect(diagnostics.map(value => value.delayMs)).toEqual([750, 1500, 3000, undefined]);
+    expect(diagnostics[3].event).toBe('failure');
+  });
+  it('backs off a rate limit without a wait header on a longer, capped schedule', async () => {
+    vi.mocked(Math.random).mockReturnValue(0.5);
+    const fetchFn = vi.fn(async () => rateLimited());
+    const diagnostics: ProviderSpendDiagnostic[] = [];
+    await rejectsAfterTimers(
+      request(fetchFn, { onDiagnostic: (value: ProviderSpendDiagnostic) => diagnostics.push(value) }),
+      'OpenAI API 429: http (attempt 6)'
+    );
+    expect(fetchFn).toHaveBeenCalledTimes(6);
+    expect(diagnostics.map(value => value.delayMs)).toEqual([3000, 6000, 12000, 24000, 30000, undefined]);
+    expect(diagnostics[5].event).toBe('failure');
+  });
+  it('waits at least a minute in total before giving up on a rate limit', async () => {
+    const fetchFn = vi.fn(async () => rateLimited());
     const diagnostics: ProviderSpendDiagnostic[] = [];
     await rejectsAfterTimers(
       request(fetchFn, { onDiagnostic: (value: ProviderSpendDiagnostic) => diagnostics.push(value) }),
       '429'
     );
-    expect(fetchFn).toHaveBeenCalledTimes(4);
-    expect(diagnostics.map(value => value.delayMs)).toEqual([750, 1500, 3000, undefined]);
-    expect(diagnostics[3].event).toBe('failure');
+    expect(diagnostics.reduce((total, value) => total + (value.delayMs ?? 0), 0)).toBe(60_000);
+  });
+  it('recovers from a rate limit that lasts 30 seconds and sends no wait header', async () => {
+    const startedAt = Date.now();
+    const fetchFn = vi.fn(async () => (Date.now() - startedAt < 30_000 ? rateLimited() : success()));
+    const pending = request(fetchFn);
+    await vi.runAllTimersAsync();
+    expect(await pending).toEqual({ total: 12 });
+    expect(fetchFn).toHaveBeenCalledTimes(5);
+  });
+  it('keeps the short schedule when a rate limit names its own wait', async () => {
+    vi.mocked(Math.random).mockReturnValue(0.5);
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(rateLimited({ 'retry-after': '1' }))
+      .mockResolvedValueOnce(success());
+    const diagnostics: ProviderSpendDiagnostic[] = [];
+    const pending = request(fetchFn, { onDiagnostic: (value: ProviderSpendDiagnostic) => diagnostics.push(value) });
+    await vi.runAllTimersAsync();
+    expect(await pending).toEqual({ total: 12 });
+    expect(diagnostics[0].delayMs).toBe(1000);
+  });
+  it('fails a rate limit on the deadline rather than waiting past it', async () => {
+    const fetchFn = vi.fn(async () => rateLimited());
+    const diagnostics: ProviderSpendDiagnostic[] = [];
+    await rejectsAfterTimers(
+      request(fetchFn, {
+        deadlineMs: Date.now() + 10_000,
+        onDiagnostic: (value: ProviderSpendDiagnostic) => diagnostics.push(value),
+      }),
+      'OpenAI API 429: deadline (attempt 3)'
+    );
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+    expect(diagnostics.map(value => value.delayMs)).toEqual([2000, 4000, undefined]);
+  });
+  it('reports the request limit headers of a rate limit without waiting on them', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        rateLimited({
+          'x-ratelimit-limit-requests': '30',
+          'x-ratelimit-remaining-requests': '0',
+          'anthropic-ratelimit-requests-limit': 'private contents',
+        })
+      )
+      .mockResolvedValueOnce(success());
+    const diagnostics: ProviderSpendDiagnostic[] = [];
+    const pending = request(fetchFn, { onDiagnostic: (value: ProviderSpendDiagnostic) => diagnostics.push(value) });
+    await vi.runAllTimersAsync();
+    await pending;
+    expect(diagnostics[0].rateLimitHeaders).toEqual({
+      'x-ratelimit-limit-requests': '30',
+      'x-ratelimit-remaining-requests': '0',
+    });
+    expect(diagnostics[0].delayMs).toBe(2000);
   });
   it.each([400, 401, 403])('does not retry HTTP %s', async status => {
     const fetchFn = vi.fn().mockResolvedValue(new Response('sensitive response', { status }));
@@ -161,6 +237,7 @@ describe('spend GET retry', () => {
       rateLimited({
         'request-id': 'test-admin-key',
         'retry-after': 'test-admin-key',
+        'retry-after-ms': 'Wed, 01 Jul 2026 00:00:03 GMT',
         'x-secret': 'test-admin-key',
         'x-ratelimit-reset-tokens': 'private contents',
       })
