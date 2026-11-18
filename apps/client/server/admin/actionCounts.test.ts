@@ -8,6 +8,7 @@ const m = vi.hoisted(() => ({
   countHeld: vi.fn(),
   countPendingHolds: vi.fn(),
   countPendingRiskReviews: vi.fn(),
+  countModerationReviewQueue: vi.fn(),
   countDecidable: vi.fn(),
   countReported: vi.fn(),
   countAdminResolvable: vi.fn(),
@@ -25,7 +26,10 @@ vi.mock('@bike4mind/database', () => ({
   imageModerationIncidentRepository: { countPendingReview: m.countPendingReview },
   signupGrantReleaseRepository: { countHeld: m.countHeld },
   signupDomainHoldListRepository: { countPending: m.countPendingHolds },
-  userRepository: { countPendingRiskReviews: m.countPendingRiskReviews },
+  userRepository: {
+    countPendingRiskReviews: m.countPendingRiskReviews,
+    countModerationReviewQueue: m.countModerationReviewQueue,
+  },
   adminApprovalRepository: { countDecidable: m.countDecidable },
   publishedArtifactRepository: { countReported: m.countReported },
   stripeDisputeRepository: { countAdminResolvable: m.countAdminResolvable },
@@ -60,6 +64,7 @@ beforeEach(() => {
     m.countHeld,
     m.countPendingHolds,
     m.countPendingRiskReviews,
+    m.countModerationReviewQueue,
     m.countDecidable,
     m.countReported,
     m.countAdminResolvable,
@@ -128,6 +133,7 @@ describe('computeAdminActionCounts access gating', () => {
         'signupRiskReview',
         'sreAgent',
         'stripeDisputes',
+        'textModerationReview',
         'waitingSubscribers',
       ].sort()
     );
@@ -165,6 +171,7 @@ describe('computeAdminActionCounts failures and caps', () => {
     expect(m.countHeld).toHaveBeenCalledWith(undefined, limit);
     expect(m.countPendingHolds).toHaveBeenCalledWith(limit);
     expect(m.countPendingRiskReviews).toHaveBeenCalledWith(limit);
+    expect(m.countModerationReviewQueue).toHaveBeenCalledWith(limit);
     expect(m.countReported).toHaveBeenCalledWith(limit);
     expect(m.countAdminResolvable).toHaveBeenCalledWith(limit);
     expect(m.countPendingSuggestions).toHaveBeenCalledWith(limit);

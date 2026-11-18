@@ -324,6 +324,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         tab: AdminTab.TextModerationReview,
         label: 'Text moderation review',
         testid: 'admin-text-moderation-review-btn',
+        badge: 'textModerationReview',
       },
       {
         Icon: ScrollText,

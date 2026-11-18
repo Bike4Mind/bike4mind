@@ -186,4 +186,17 @@ describe('UserModel - findModerationReviewQueue', () => {
 
     expect(queue.map(row => row.id)).toEqual([ids[2], ids[1]]);
   });
+
+  it('counts the same users the list shows, up to the limit', async () => {
+    for (const index of [0, 1, 2]) {
+      const user = await User.create({ username: `rq-count-${index}`, name: `Count ${index}` });
+      await userRepository.recordModerationHit(user.id, hit({ at: minutesAgo(5) }));
+      await userRepository.setModerationStatus(user.id, 'suspend_pending');
+    }
+    const quiet = await User.create({ username: 'rq-count-quiet', name: 'Quiet' });
+    await userRepository.recordModerationHit(quiet.id, hit({ at: minutesAgo(1) }));
+
+    expect(await userRepository.countModerationReviewQueue()).toBe(3);
+    expect(await userRepository.countModerationReviewQueue({ limit: 2 })).toBe(2);
+  });
 });

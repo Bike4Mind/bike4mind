@@ -1297,6 +1297,8 @@ export interface IUserRepository
    * users with a severe-category hit newer than their last status change. Most recent hit first.
    */
   findModerationReviewQueue: (limit: number) => Promise<ModerationReviewUser[]>;
+  /** How many users {@link findModerationReviewQueue} would list, counting stops at `limit`. */
+  countModerationReviewQueue: (options?: { limit?: number }) => Promise<number>;
   /**
    * Transition a user's moderation escalation state. Leaves `isModerated` alone. Returns the
    * updated user. `automatic` marks a policy-driven transition: it does not stamp

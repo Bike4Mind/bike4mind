@@ -23,6 +23,7 @@ import { RowActionsMenu } from './shared/RowActionsMenu';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { useAdminUserUpdate } from './Users/Profile/actions/useAdminUserUpdate';
+import { adminActionCountsQueryKey } from '@client/app/hooks/data/adminActionCounts';
 import {
   TEXT_MODERATION_REVIEW_QUERY_KEY,
   useTextModerationReview,
@@ -162,7 +163,10 @@ const DecisionDialog: React.FC<{
       tone={config.tone}
       onConfirm={async reason => {
         await update({ moderationStatus: decision, statusChangeReason: reason });
-        await queryClient.invalidateQueries({ queryKey: TEXT_MODERATION_REVIEW_QUERY_KEY });
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: TEXT_MODERATION_REVIEW_QUERY_KEY }),
+          queryClient.invalidateQueries({ queryKey: adminActionCountsQueryKey }),
+        ]);
         onClose();
       }}
       data-testid={`text-moderation-${decision}-dialog`}

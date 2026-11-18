@@ -74,6 +74,7 @@ describe('TextModerationReviewTab', () => {
       statusChangeReason: expect.any(String),
     });
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin-text-moderation-review'] }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'action-counts'] });
     await waitFor(() => expect(screen.queryByTestId('text-moderation-suspended-dialog')).not.toBeInTheDocument());
   });
 
