@@ -245,10 +245,8 @@ export async function payCreditReward(
   const [own] = await adapters.heldRewards.findByTransactionIds([reward.transactionId]);
   // A voided row was refused at release; answering 'duplicate' would read as claimed and loop the user.
   if (own) {
-    if (own.status === 'held' && rewardExpired(own, now)) {
-      await adapters.heldRewards.settle(reward.transactionId, 'void');
-      return { outcome: 'blocked' };
-    }
+    // releaseHeldCreditRewards voids a held row past its deadline.
+    if (own.status === 'held' && rewardExpired(own, now)) return { outcome: 'blocked' };
     if (own.status === 'held') return { outcome: 'queued' };
     return { outcome: own.status === 'void' || own.status === 'paused' ? 'blocked' : 'duplicate' };
   }
