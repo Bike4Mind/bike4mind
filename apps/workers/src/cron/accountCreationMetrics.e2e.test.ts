@@ -153,12 +153,28 @@ describe('account creation census', () => {
     expect(data.map(m => m.MetricName)).toContain('CensusCompleted');
   });
 
-  it('reads the pool-day of the hour boundary, so a redelivered event hits the same counter', async () => {
+  it('reads the pool-day of the window start, so the 00:05 run publishes the day that just closed', async () => {
     mocks.maxTimeMS.mockReset().mockResolvedValue(3);
-    const midnight = { time: '2026-01-03T00:05:00Z' } as ScheduledEvent;
-    await handler(midnight);
-    await handler(midnight);
-    expect(mocks.getSpent).toHaveBeenCalledWith('signup:2026-01-03');
+    await handler({ time: '2026-01-03T00:05:00Z' } as ScheduledEvent);
+    expect(mocks.getSpent).toHaveBeenCalledWith('signup:2026-01-02');
+    expect(mocks.getSpent).toHaveBeenCalledWith('trickle:2026-01-02');
+    expect(mocks.getSpent).not.toHaveBeenCalledWith('signup:2026-01-03');
+    expect(mocks.send.mock.calls[0][0].input.MetricData).toContainEqual(
+      expect.objectContaining({ MetricName: 'SignupGrantPoolSpent', Timestamp: new Date('2026-01-03T00:00:00Z') })
+    );
+  });
+
+  it('reads the same pool-day counter when the same scheduled event is redelivered', async () => {
+    mocks.maxTimeMS.mockReset().mockResolvedValue(3);
+    const redelivered = { time: '2026-01-03T00:05:00Z' } as ScheduledEvent;
+    await handler(redelivered);
+    await handler(redelivered);
+    expect(mocks.getSpent.mock.calls.map(call => call[0])).toEqual([
+      'signup:2026-01-02',
+      'trickle:2026-01-02',
+      'signup:2026-01-02',
+      'trickle:2026-01-02',
+    ]);
     expect(mocks.send.mock.calls[0][0].input).toEqual(mocks.send.mock.calls[1][0].input);
   });
 
