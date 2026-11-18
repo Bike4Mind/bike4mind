@@ -11,7 +11,7 @@ import {
   isSpaceManager,
   isSpaceMember,
 } from '@bike4mind/common';
-import { ForbiddenError, UnauthorizedError } from '@bike4mind/utils';
+import { ForbiddenError } from '@bike4mind/utils';
 import { assertCanManageOrgGroups } from '../organizationService/groupMembership';
 
 export interface InviteTypeAuthAdapters {
@@ -80,5 +80,5 @@ export const authorizeByInviteType = async (
     }
   }
 
-  if (!authorized) throw new UnauthorizedError('Unauthorized');
+  if (!authorized) throw new ForbiddenError('Forbidden');
 };

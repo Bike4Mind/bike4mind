@@ -81,6 +81,7 @@ function buildDb() {
       creditTransactions: {} as any,
       users: users as any,
       usageEvents: { record: vi.fn().mockResolvedValue(undefined) } as any,
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
       organizations: {} as any,
     },
   };

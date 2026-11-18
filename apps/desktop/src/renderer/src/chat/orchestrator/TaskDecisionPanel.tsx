@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import Box from '@mui/joy/Box';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import Button from '@mui/joy/Button';
@@ -9,7 +10,25 @@ import type { TaskAction } from '@shared/orchestration';
 import type { ChatModelOption } from '@shared/chat';
 import type { AgentView } from './roster';
 
-export function TaskDecisionPanel({ agent }: { agent: AgentView }) {
+function TaskDetails({ compact, children }: { compact: boolean; children: ReactNode }) {
+  if (!compact) return children;
+  return (
+    <Box component="details" data-testid="agent-task-details">
+      <Box
+        component="summary"
+        data-testid="agent-task-details-toggle"
+        sx={{ cursor: 'pointer', fontFamily: 'body', fontSize: 'xs', color: 'text.secondary', py: 0.5 }}
+      >
+        Criteria, attempts and evidence
+      </Box>
+      <Stack spacing={1} sx={{ pt: 0.75 }}>
+        {children}
+      </Stack>
+    </Box>
+  );
+}
+
+export function TaskDecisionPanel({ agent, compact = false }: { agent: AgentView; compact?: boolean }) {
   const [models, setModels] = useState<ChatModelOption[]>([]);
   const [task, setTask] = useState(agent.workerTask);
   const [note, setNote] = useState('');
@@ -75,44 +94,46 @@ export function TaskDecisionPanel({ agent }: { agent: AgentView }) {
             Task: {state.status}
             {state.status === 'completed' ? (state.accepted ? ' - accepted' : ' - awaiting assessment') : ''}
           </Typography>
-          <Typography level="body-sm">{task.contract.outcome}</Typography>
-          <Typography level="body-xs">
-            Attempts: {task.attempts.map(attempt => `${name(attempt.model)} (${attempt.trigger})`).join(', ')}
-          </Typography>
-          {task.contract.acceptanceCriteria.map(criterion => (
-            <Typography key={criterion} level="body-xs">
-              Criterion: {criterion}
-            </Typography>
-          ))}
           {'reason' in state && <Typography level="body-sm">{state.reason}</Typography>}
           {state.status === 'canceled' && (
             <Typography level="body-xs" data-testid="agent-task-closed-note">
               This task is closed. You can still chat in this conversation; follow-ups do not reopen the task.
             </Typography>
           )}
-          {'evidence' in state &&
-            state.evidence.map((evidence, index) => (
-              <Typography key={index} level="body-xs">
-                {evidence}
+          <TaskDetails compact={compact}>
+            <Typography level="body-sm">{task.contract.outcome}</Typography>
+            <Typography level="body-xs">
+              Attempts: {task.attempts.map(attempt => `${name(attempt.model)} (${attempt.trigger})`).join(', ')}
+            </Typography>
+            {task.contract.acceptanceCriteria.map(criterion => (
+              <Typography key={criterion} level="body-xs">
+                Criterion: {criterion}
               </Typography>
             ))}
-          {state.status === 'completed' && (
-            <>
-              <Typography level="body-sm">{state.handoff}</Typography>
-              <Typography level="body-xs">Changed paths: {state.changedPaths.join(', ') || '(none)'}</Typography>
-              {state.verification.map((check, index) => (
-                <Typography key={index} level="body-xs" color={check.outcome === 'passed' ? 'success' : 'danger'}>
-                  {check.criterion}: {check.outcome} - {check.command}: {check.evidence}
+            {'evidence' in state &&
+              state.evidence.map((evidence, index) => (
+                <Typography key={index} level="body-xs">
+                  {evidence}
                 </Typography>
               ))}
-              {state.unmetCriteria.map(criterion => (
-                <Typography key={criterion} color="danger">
-                  Unmet: {criterion}
-                </Typography>
-              ))}
-              {state.assessment && <Typography level="body-xs">Assessment: {state.assessment}</Typography>}
-            </>
-          )}
+            {state.status === 'completed' && (
+              <>
+                <Typography level="body-sm">{state.handoff}</Typography>
+                <Typography level="body-xs">Changed paths: {state.changedPaths.join(', ') || '(none)'}</Typography>
+                {state.verification.map((check, index) => (
+                  <Typography key={index} level="body-xs" color={check.outcome === 'passed' ? 'success' : 'danger'}>
+                    {check.criterion}: {check.outcome} - {check.command}: {check.evidence}
+                  </Typography>
+                ))}
+                {state.unmetCriteria.map(criterion => (
+                  <Typography key={criterion} color="danger">
+                    Unmet: {criterion}
+                  </Typography>
+                ))}
+                {state.assessment && <Typography level="body-xs">Assessment: {state.assessment}</Typography>}
+              </>
+            )}
+          </TaskDetails>
           {state.status !== 'canceled' && !(state.status === 'completed' && state.accepted) && (
             <>
               <Textarea

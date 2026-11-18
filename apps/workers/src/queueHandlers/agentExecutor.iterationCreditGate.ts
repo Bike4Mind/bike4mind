@@ -1,5 +1,5 @@
 import type { AgentStep } from '@bike4mind/agents';
-import type { ModelInfo } from '@bike4mind/common';
+import { SPEND_FROZEN_ERROR_CODE, type ModelInfo } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { nextIterationCredits, uncoveredIterationCredits } from './agentExecutor.billing';
 import type { AggregationGraceReason } from './agentExecutorUtils/truncatedReply';
@@ -153,6 +153,40 @@ export async function stopBlockedAccountIteration(
   const { steps } = args.snapshot();
   await deps.markFailed(args.executionId, { message: denial });
   await deps.sendWs('failed', { executionId: args.executionId, reason: 'account_blocked', partialResult: steps });
+  await deps.persistRunAsQuest(args.executionId, `Stopped: ${denial}`);
+  return true;
+}
+
+/** The `failed` event reason (and subagent error) for a run stopped by a spend freeze. */
+export const SPEND_FROZEN_STOP_REASON = SPEND_FROZEN_ERROR_CODE;
+
+export interface IterationSpendFreezeArgs {
+  executionId: string;
+  /** The freeze refusal for the run's user, org or API key, re-read per iteration; null when none applies. */
+  readFreezeDenial: () => Promise<string | null>;
+  snapshot: () => { steps: AgentStep[]; partialAnswer: string | undefined };
+}
+
+/**
+ * Stops the run when an admin froze its user, organization or API key after the run was admitted. Terminal, like
+ * an unfunded iteration: the run is not parked for resumption. Independent of enforceCredits. Returns true when
+ * it stopped.
+ */
+export async function stopSpendFrozenIteration(
+  args: IterationSpendFreezeArgs,
+  deps: IterationCreditGateDeps
+): Promise<boolean> {
+  const denial = await args.readFreezeDenial();
+  if (!denial) return false;
+
+  deps.logger.warn('[SpendFreeze] Spend is frozen; stopping execution', { executionId: args.executionId });
+  const { steps } = args.snapshot();
+  await deps.markFailed(args.executionId, { message: denial });
+  await deps.sendWs('failed', {
+    executionId: args.executionId,
+    reason: SPEND_FROZEN_STOP_REASON,
+    partialResult: steps,
+  });
   await deps.persistRunAsQuest(args.executionId, `Stopped: ${denial}`);
   return true;
 }
