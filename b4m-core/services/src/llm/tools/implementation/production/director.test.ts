@@ -335,6 +335,31 @@ describe('production director tools', () => {
     expect(assembled.stills).toEqual(['shot-1', 'shot-2', 'shot-3']);
   });
 
+  it('keeps each voice line on its shot and reports a line too long for it', async () => {
+    const adapter = vi.mocked(createProductionAudio)(harness.config.audio!);
+    let calls = 0;
+    vi.mocked(createProductionAudio).mockReturnValue({
+      ...adapter,
+      speech: async request => {
+        const result = await adapter.speech(request);
+        return result.ok && calls++ === 0 ? { ...result, durationMs: 5000 } : result;
+      },
+    });
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID });
+
+    const result = JSON.parse(
+      await run(productionAddAudioTool, harness, { compositionId: COMPOSITION_ID, voiceover: true })
+    );
+    expect(result.notes.join(' ')).toContain('the voice line for shot-1 runs 5000 ms');
+    const voice = harness.composition().timeline.tracks.find(track => track.kind === 'voice');
+    expect(voice?.clips.map(clip => [clip.startMs, clip.durationMs])).toEqual([
+      [200, 3000],
+      [3200, 1500],
+      [7200, 1500],
+    ]);
+  });
+
   it('keeps an existing audio part unless it is named in replace', async () => {
     await run(productionStoryboardTool, harness, STORYBOARD);
     await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID });

@@ -92,19 +92,20 @@ export function buildCaptionClips(slots: readonly ShotSlot[]): StudioCaptionClip
 export type PlacedAudio = { id: string; fileId: string; durationMs: number };
 
 /**
- * One voice line per shot, each starting just after its shot does. A line longer than its shot runs on into the
- * next, so the following line waits for it rather than overlapping; a line past the end is cut at the end.
+ * One voice line per shot, each starting just after its shot does, so a line stays in sync with its shot's
+ * caption. A line longer than the gap to the next line is cut where the next one starts, and a line past the end
+ * is cut at the end; `makeVoiceover` reports each cut so the assistant can shorten the line.
  */
 export function buildVoiceClips(
   lines: readonly (PlacedAudio & { slot: ShotSlot })[],
   timelineMs: number
 ): StudioAudioClip[] {
-  let previousEnd = 0;
-  return lines.flatMap(({ id, fileId, durationMs, slot }) => {
-    const startMs = Math.max(slot.startMs + VOICE_LEAD_IN_MS, previousEnd);
-    const length = Math.min(durationMs, timelineMs - startMs);
+  const starts = lines.map(({ slot }) => slot.startMs + VOICE_LEAD_IN_MS);
+  return lines.flatMap(({ id, fileId, durationMs }, index) => {
+    const startMs = starts[index] as number;
+    const nextStartMs = starts[index + 1] ?? timelineMs;
+    const length = Math.min(durationMs, nextStartMs - startMs, timelineMs - startMs);
     if (length <= 0) return [];
-    previousEnd = startMs + length;
     return [{ id, startMs, durationMs: length, fileId, trimStartMs: 0, volume: 1, fadeInMs: 0, fadeOutMs: 0 }];
   });
 }
