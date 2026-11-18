@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { AdminAiConfigSchema, AdminAiStoredConfigSchema, type AdminAiSuggestionItem } from '@bike4mind/common';
 import { adminAiSuggestionRepository, adminSettingsRepository, dlqFailureRepository } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { getDlqByLabel, getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { getAdminAiClassReadiness } from '@server/admin/ai/readiness';
@@ -80,7 +81,10 @@ export async function triageDlqMessage(
         ? new URL(getSourceQueueUrl(entry.sourceQueue)).pathname.split('/').pop()
         : undefined;
   const failures = sourceName
-    ? await dlqFailureRepository.findForMessages(sourceName, [messageId]).catch(() => [])
+    ? await dlqFailureRepository.findForMessages(sourceName, [messageId]).catch(() => {
+        Logger.warn('[DLQ Triage] Could not load recorded failures');
+        return [];
+      })
     : [];
   const failure = failures[0];
   const action = recommendDlqAction({
