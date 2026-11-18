@@ -277,6 +277,7 @@ export const dispatch: SQSHandler = dispatchWithLogger(async (event: SQSEvent, c
       {
         enabled: async () => Boolean(await adminSettingsRepository.getSettingsValue('EnableEmailTriage')),
         items: emailTriageItemRepository,
+        emailExists: async emailId => (await ingestedEmailRepository.findById(emailId)) !== null,
         complete: async prompt => {
           let reply = '';
           let tokensUsed: number | null = null;

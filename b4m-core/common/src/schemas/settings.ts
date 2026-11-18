@@ -8088,7 +8088,7 @@ export const settingsMap = {
       'After an ingested email is analyzed, sort it into needs-a-decision, handled or FYI and draft a reply for ' +
       "decisions, for the owner's next assistant brief. Drafts are never sent. Runs only when analysis runs.",
     category: 'AI',
-    order: 201,
+    order: 205,
   }),
   EmailAnalysisModel: makeStringSetting({
     key: 'EmailAnalysisModel',

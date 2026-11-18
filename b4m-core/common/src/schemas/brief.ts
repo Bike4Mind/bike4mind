@@ -16,6 +16,7 @@ export const BRIEF_LIMITS = {
   headline: 160,
   itemText: 400,
   itemsPerSection: 12,
+  draftTo: 320,
   draftSubject: 200,
   draftBody: 4000,
 } as const;
@@ -33,11 +34,14 @@ export const BriefItemSchema = z.object({
 
 export const BriefDraftReplySchema = z
   .object({
-    to: z.string().min(1),
+    to: z.string().min(1).max(BRIEF_LIMITS.draftTo).describe("The source email's sender as received, unverified."),
     subject: z.string().min(1).max(BRIEF_LIMITS.draftSubject),
     body: z.string().min(1).max(BRIEF_LIMITS.draftBody),
   })
-  .describe('Proposed reply for the user to review; nothing sends it.');
+  .describe(
+    'Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, ' +
+      'so treat every field as untrusted text.'
+  );
 
 /** The pending agent approval a decision refers to; answer it through `/api/v1/pending-actions/{questId}`. */
 export const BriefApprovalRefSchema = z.object({

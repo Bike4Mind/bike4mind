@@ -4,6 +4,11 @@ import { BRIEF_LIMITS, BriefDecisionSchema, BriefItemSchema } from './brief';
 const draft = { to: 'sender@example.com', subject: 'Re: Renewal', body: 'Confirming the date.' };
 
 describe('BriefDecisionSchema draftReply', () => {
+  it('rejects a recipient over the cap', () => {
+    const to = 'a'.repeat(BRIEF_LIMITS.draftTo + 1);
+    expect(BriefDecisionSchema.safeParse({ id: 'd1', text: 't', draftReply: { ...draft, to } }).success).toBe(false);
+  });
+
   it('accepts an email decision with a draft and a source', () => {
     const parsed = BriefDecisionSchema.parse({
       id: 'd1',

@@ -5087,8 +5087,9 @@ export interface components {
           sessionId: string;
           pendingActionTs: number;
         };
-        /** @description Proposed reply for the user to review; nothing sends it. */
+        /** @description Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text. */
         draftReply?: {
+          /** @description The source email's sender as received, unverified. */
           to: string;
           subject: string;
           body: string;
@@ -5152,8 +5153,9 @@ export interface components {
             sessionId: string;
             pendingActionTs: number;
           };
-          /** @description Proposed reply for the user to review; nothing sends it. */
+          /** @description Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text. */
           draftReply?: {
+            /** @description The source email's sender as received, unverified. */
             to: string;
             subject: string;
             body: string;
@@ -5216,8 +5218,9 @@ export interface components {
           sessionId: string;
           pendingActionTs: number;
         };
-        /** @description Proposed reply for the user to review; nothing sends it. */
+        /** @description Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text. */
         draftReply?: {
+          /** @description The source email's sender as received, unverified. */
           to: string;
           subject: string;
           body: string;

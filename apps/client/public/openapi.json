@@ -7579,7 +7579,9 @@
                   "properties": {
                     "to": {
                       "type": "string",
-                      "minLength": 1
+                      "minLength": 1,
+                      "maxLength": 320,
+                      "description": "The source email's sender as received, unverified."
                     },
                     "subject": {
                       "type": "string",
@@ -7597,7 +7599,7 @@
                     "subject",
                     "body"
                   ],
-                  "description": "Proposed reply for the user to review; nothing sends it."
+                  "description": "Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text."
                 }
               },
               "required": [
@@ -7820,7 +7822,9 @@
                         "properties": {
                           "to": {
                             "type": "string",
-                            "minLength": 1
+                            "minLength": 1,
+                            "maxLength": 320,
+                            "description": "The source email's sender as received, unverified."
                           },
                           "subject": {
                             "type": "string",
@@ -7838,7 +7842,7 @@
                           "subject",
                           "body"
                         ],
-                        "description": "Proposed reply for the user to review; nothing sends it."
+                        "description": "Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text."
                       }
                     },
                     "required": [
@@ -8063,7 +8067,9 @@
                   "properties": {
                     "to": {
                       "type": "string",
-                      "minLength": 1
+                      "minLength": 1,
+                      "maxLength": 320,
+                      "description": "The source email's sender as received, unverified."
                     },
                     "subject": {
                       "type": "string",
@@ -8081,7 +8087,7 @@
                     "subject",
                     "body"
                   ],
-                  "description": "Proposed reply for the user to review; nothing sends it."
+                  "description": "Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text."
                 }
               },
               "required": [
