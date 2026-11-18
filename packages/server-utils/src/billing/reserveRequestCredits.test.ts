@@ -748,7 +748,7 @@ describe('reserveRequestCredits', () => {
       await expect(reserveForRun()).rejects.toMatchObject({
         statusCode: 422,
         additionalInfo: { errorCode: 'run_budget_exhausted' },
-        message: expect.stringContaining('8 of its 10 credits'),
+        message: expect.stringContaining('needs 3 credits, but this run has 2 of its 10 credits left'),
       });
       expect(userIncrement).not.toHaveBeenCalled();
       expect(recordHold).not.toHaveBeenCalled();
