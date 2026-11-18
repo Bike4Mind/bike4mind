@@ -173,9 +173,11 @@ async function makeClips(
       durationSeconds: videoDurationFor(VIDEO_MODEL_CATALOG[model], shotMs),
       aspectRatio,
     });
+    const report = { ...reports.get(shot.id), id: shot.id };
     if (submitted.ok) started.set(shot.id, submitted.jobIds[0] as string);
-    else
-      reports.set(shot.id, { ...reports.get(shot.id), id: shot.id, problem: `clip not started: ${submitted.message}` });
+    else if (submitted.notReady)
+      reports.set(shot.id, { ...report, pending: [...(report.pending ?? []), `clip: ${submitted.message}`] });
+    else reports.set(shot.id, { ...report, problem: `clip not started: ${submitted.message}` });
   }
   if (started.size === 0) return undefined;
 
