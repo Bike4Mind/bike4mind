@@ -58,7 +58,6 @@ import { UpdateSettings } from './UpdateSettings';
 import { useAppUpdate, type AppUpdateController } from './useAppUpdate';
 import { useWorktreeByDefault, worktreeDefaultSummary } from './worktreeDefault';
 
-/** What the General page is for, said on the page so it does not have to be inferred from a name. */
 const settingsColumnSx = {
   ...contentColumnSx,
   maxWidth: 1040,
@@ -66,6 +65,7 @@ const settingsColumnSx = {
   px: { xs: 3, md: 5 },
 } as const;
 
+/** What the General page is for, said on the page so it does not have to be inferred from a name. */
 const SETTINGS_INTRO = 'How the app looks, behaves, connects, and keeps itself up to date.';
 
 const THEME_MODE_LABEL: Record<ThemeMode, string> = { system: 'System', light: 'Light', dark: 'Dark' };
