@@ -93,10 +93,16 @@ vi.mock('sst', () => ({
   ),
 }));
 
-import { dispatch } from './agentProactiveMessage';
+import { dispatch as wrappedDispatch } from './agentProactiveMessage';
 
-const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
-const makeEvent = (body: unknown) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+const makeEvent = (body: unknown) => ({ Records: [{ body: JSON.stringify(body) }] });
+// The mocked wrapper exposes the inner event/context/logger callback.
+const dispatch = wrappedDispatch as unknown as (
+  event: ReturnType<typeof makeEvent>,
+  context: unknown,
+  eventLogger: typeof logger
+) => Promise<void>;
 const payload = { sessionAgentConfigId: 'config-1' };
 
 const CONFIG = {
@@ -129,7 +135,7 @@ describe('agentProactiveMessage consumer', () => {
   });
 
   it('passes a lazy entitlement resolver for the executing owner', async () => {
-    await dispatch(makeEvent(payload), {} as never, logger);
+    await dispatch(makeEvent(payload), {}, logger);
     const adapters = h.generateAndSendProactiveMessage.mock.calls[0][0] as {
       getEntitlements: () => Promise<string[]>;
     };
@@ -139,7 +145,7 @@ describe('agentProactiveMessage consumer', () => {
   });
 
   it('executes when config.userId still has write access to the session and can still reach the agent', async () => {
-    await dispatch(makeEvent(payload), {} as never, logger);
+    await dispatch(makeEvent(payload), {}, logger);
 
     expect(h.generateAndSendProactiveMessage).toHaveBeenCalledTimes(1);
     expect(h.sendToClient).toHaveBeenCalledTimes(2);
@@ -149,7 +155,7 @@ describe('agentProactiveMessage consumer', () => {
     h.agentFindAccessibleById.mockResolvedValue({ id: 'agent-1', name: 'Scout' });
     h.sessionFindById.mockResolvedValue({ ...SESSION_EDITOR_HAS_WRITE, name: 'Roadmap' });
 
-    await dispatch(makeEvent(payload), {} as never, logger);
+    await dispatch(makeEvent(payload), {}, logger);
 
     expect(h.publishPushNotification).toHaveBeenCalledExactlyOnceWith(
       {
@@ -168,7 +174,7 @@ describe('agentProactiveMessage consumer', () => {
   it('skips without executing when config.userId no longer has write access to the session (revoked session grant)', async () => {
     h.sessionFindById.mockResolvedValue(SESSION_EDITOR_REVOKED);
 
-    await dispatch(makeEvent(payload), {} as never, logger);
+    await dispatch(makeEvent(payload), {}, logger);
 
     expect(h.agentFindAccessibleById).not.toHaveBeenCalled();
     expect(h.getEffectiveLLMApiKeys).not.toHaveBeenCalled();
@@ -179,7 +185,7 @@ describe('agentProactiveMessage consumer', () => {
   it('skips without executing when config.userId no longer has access to the agent (revoked agent grant)', async () => {
     h.agentFindAccessibleById.mockResolvedValue(null);
 
-    await dispatch(makeEvent(payload), {} as never, logger);
+    await dispatch(makeEvent(payload), {}, logger);
 
     expect(h.getEffectiveLLMApiKeys).not.toHaveBeenCalled();
     expect(h.generateAndSendProactiveMessage).not.toHaveBeenCalled();
@@ -189,7 +195,7 @@ describe('agentProactiveMessage consumer', () => {
   it('bills the message to config.userId through a completion meter', async () => {
     const meter = vi.fn();
     h.createCompletionMeter.mockReturnValue(meter);
-    await dispatch(makeEvent(payload), {} as never, logger);
+    await dispatch(makeEvent(payload), {}, logger);
 
     expect(h.createCompletionMeter).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'editor' }),
@@ -203,7 +209,7 @@ describe('agentProactiveMessage consumer', () => {
   it('skips without retrying or notifying when the owner has insufficient credits', async () => {
     h.generateAndSendProactiveMessage.mockRejectedValue(insufficientCreditsError('Insufficient credits'));
 
-    await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
+    await expect(dispatch(makeEvent(payload), {}, logger)).resolves.toBeUndefined();
     expect(h.sendToClient).not.toHaveBeenCalled();
     expect(h.publishPushNotification).not.toHaveBeenCalled();
   });
@@ -216,14 +222,14 @@ describe('agentProactiveMessage consumer', () => {
       })
     );
 
-    await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
+    await expect(dispatch(makeEvent(payload), {}, logger)).resolves.toBeUndefined();
     expect(h.sendToClient).not.toHaveBeenCalled();
   });
 
   it('skips without retrying or notifying when the owner account is suspended', async () => {
     h.generateAndSendProactiveMessage.mockRejectedValue(new ForbiddenError(ACCOUNT_BANNED_MESSAGE));
 
-    await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
+    await expect(dispatch(makeEvent(payload), {}, logger)).resolves.toBeUndefined();
     expect(h.sendToClient).not.toHaveBeenCalled();
   });
 
@@ -233,7 +239,7 @@ describe('agentProactiveMessage consumer', () => {
     it('hands the meter the policy of the org seat it bills, loading the org once', async () => {
       h.userFindById.mockResolvedValue({ id: 'editor', groups: [], organizationId: 'org-1' });
       h.orgFindById.mockResolvedValue({ id: 'org-1', modelPolicy });
-      await dispatch(makeEvent(payload), {} as never, logger);
+      await dispatch(makeEvent(payload), {}, logger);
 
       expect(h.orgFindById).toHaveBeenCalledExactlyOnceWith('org-1');
       const meterOpts = h.createCompletionMeter.mock.calls[0][3];
@@ -243,7 +249,7 @@ describe('agentProactiveMessage consumer', () => {
     });
 
     it('passes an unrestricted (null) policy without a lookup when the user has no org seat', async () => {
-      await dispatch(makeEvent(payload), {} as never, logger);
+      await dispatch(makeEvent(payload), {}, logger);
 
       expect(h.orgFindById).not.toHaveBeenCalled();
       expect(h.createCompletionMeter.mock.calls[0][3]).toMatchObject({ orgModelPolicy: null });
@@ -253,7 +259,7 @@ describe('agentProactiveMessage consumer', () => {
     it('treats a missing org document as unrestricted', async () => {
       h.userFindById.mockResolvedValue({ id: 'editor', groups: [], organizationId: 'org-gone' });
       h.orgFindById.mockResolvedValue(null);
-      await dispatch(makeEvent(payload), {} as never, logger);
+      await dispatch(makeEvent(payload), {}, logger);
 
       expect(h.createCompletionMeter.mock.calls[0][3]).toMatchObject({ orgModelPolicy: null });
     });
@@ -263,7 +269,7 @@ describe('agentProactiveMessage consumer', () => {
         new ForbiddenError('Model not allowed', { errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE })
       );
 
-      await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
+      await expect(dispatch(makeEvent(payload), {}, logger)).resolves.toBeUndefined();
       expect(h.sendToClient).not.toHaveBeenCalled();
       expect(h.publishPushNotification).not.toHaveBeenCalled();
     });
@@ -272,12 +278,12 @@ describe('agentProactiveMessage consumer', () => {
   it('still rethrows an unrelated forbidden error', async () => {
     h.generateAndSendProactiveMessage.mockRejectedValue(new ForbiddenError('Unauthorized. Admin access required.'));
 
-    await expect(dispatch(makeEvent(payload), {} as never, logger)).rejects.toThrow('Unauthorized');
+    await expect(dispatch(makeEvent(payload), {}, logger)).rejects.toThrow('Unauthorized');
   });
 
   it('still rethrows an unrelated generation failure', async () => {
     h.generateAndSendProactiveMessage.mockRejectedValue(new Error('provider exploded'));
 
-    await expect(dispatch(makeEvent(payload), {} as never, logger)).rejects.toThrow('provider exploded');
+    await expect(dispatch(makeEvent(payload), {}, logger)).rejects.toThrow('provider exploded');
   });
 });
