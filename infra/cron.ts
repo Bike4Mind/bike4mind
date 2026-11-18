@@ -269,6 +269,7 @@ const accountDeletionSweep =
           },
           permissions: [
             accountDeletionSweepDeadLetter.sendPermission,
+            { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
             {
               actions: ['s3:ListBucketVersions', 's3:DeleteObjectVersion'],
               resources: [

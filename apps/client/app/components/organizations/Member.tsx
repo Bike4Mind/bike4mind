@@ -151,6 +151,8 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
   // also depends on the target; this coarse flag only decides whether the seats card and the
   // roster's selection column show.
   const canRevokeMembers = !!currentUser && canAdministerOrganization(currentUser, organization);
+  // Mirrors organizationRosterScope on the members route: everyone else gets names only, with no emails.
+  const canSeeMemberEmails = canRevokeMembers;
 
   // Mirrors the server gate on the credit-budget routes.
   const canManageCreditBudgets = !!currentUser && canManageMemberCreditBudgets(currentUser, organization);
@@ -402,6 +404,7 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
         canRevokeMember={userId => !!currentUser && canRevokeOrgMember(currentUser, organization, userId)}
         canManageCreditBudgets={canManageCreditBudgets}
         canManageManagers={canManageManagers}
+        showEmails={canSeeMemberEmails}
       />
 
       {showPolicies && (

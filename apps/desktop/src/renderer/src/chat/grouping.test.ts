@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatProject, ChatSessionSummary } from '@shared/chat';
-import { descendantsOf, groupSessions, orderedSessions, projectForGroup } from './grouping';
+import { descendantsOf, groupSessions, orderedSessions, projectForGroup, projectGroupDirectory } from './grouping';
 
 function project(directory: string, name: string): ChatProject {
   return {
@@ -254,6 +254,14 @@ describe('Claude Code worktrees', () => {
       ['/work/repo', 'repo', ['root', 'tree']],
       ['/work/repo/.manifold/worktrees/run', 'run', ['other']],
     ]);
+  });
+
+  it('names the sidebar group directory of a project', () => {
+    expect(projectGroupDirectory(project('/work/repo/.claude/worktrees/wt', 'wt'))).toBe('/work/repo');
+    expect(projectGroupDirectory(project('/work/repo', 'repo'))).toBe('/work/repo');
+    expect(projectGroupDirectory(project('/work/repo/.manifold/worktrees/run', 'run'))).toBe(
+      '/work/repo/.manifold/worktrees/run'
+    );
   });
 });
 

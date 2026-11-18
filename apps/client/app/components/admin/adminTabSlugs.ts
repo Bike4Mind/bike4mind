@@ -6,6 +6,7 @@ import {
   ADMIN_USERS_TAB_SLUG,
 } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
+import { ADMIN_SPEND_EXPLORER_TAB_SLUG } from './SpendExplorer/spendExplorerSearch';
 import {
   ADMIN_ANALYTICS_TAB_SLUG,
   ADMIN_EVENTS_TAB_SLUG,
@@ -110,6 +111,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<Exclude<AdminTab, RetiredTab>, string>>
   [AdminTab.IntegrationDemand]: ADMIN_INTEGRATION_DEMAND_TAB_SLUG,
   [AdminTab.AuditLog]: ADMIN_AUDIT_LOG_TAB_SLUG,
   [AdminTab.AccessReview]: 'access-review',
+  [AdminTab.SpendExplorer]: ADMIN_SPEND_EXPLORER_TAB_SLUG,
   [AdminTab.Approvals]: 'approvals',
   [AdminTab.Tutorials]: 'tutorials',
   [AdminTab.AiOperations]: 'ai-operations',

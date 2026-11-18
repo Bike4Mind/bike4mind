@@ -22,10 +22,13 @@ import { Permission } from '../types/entities/ShareableDocumentTypes';
  * - `billingContact` goes only to a viewer whose role holds `manageBilling`, or a site admin.
  * - `budgetAlerts` and colleagues' credit fields go only to viewers `canViewOrgMemberCredits`
  *   admits (managePolicies or viewUsage, or a site admin); everyone keeps their own row's.
+ * - Colleagues' contact fields go only to the owner, current managers and site admins: a plain
+ *   member sees colleagues' names, not their emails.
  *
  * The websocket data-subscribe projection (apps/client/server/websocket/dataSubscribeFieldLimits.ts)
- * excludes ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS for every subscriber who is not the owner, a
- * manager or a site admin; keep the lists and that projection in sync.
+ * excludes ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS, ORGANIZATION_MEMBER_CREDIT_FIELDS and
+ * ORGANIZATION_MEMBER_CONTACT_FIELDS for every subscriber who is not the owner, a manager or a site
+ * admin; keep the lists and that projection in sync.
  *
  * Callers pass a hydrated Mongoose doc (normalized via toJSON here) or a plain object.
  */
@@ -44,6 +47,12 @@ export const ORGANIZATION_MEMBER_CREDIT_FIELDS = [
   'userDetails.lastCreditUsedAt',
   'userDetails.periodStart',
 ] as const;
+/**
+ * Per-member contact paths: a viewer who is not an owner, current manager or site admin sees them on
+ * their own row only (the websocket projection, which cannot keep one row, drops them on every row).
+ * The roster route applies the same rule through `organizationRosterScope` (serializers/toSafeUser.ts).
+ */
+export const ORGANIZATION_MEMBER_CONTACT_FIELDS = ['userDetails.email'] as const;
 
 type OrganizationField = keyof IOrganizationDocument;
 
@@ -78,6 +87,7 @@ export const ORGANIZATION_MEMBER_VISIBLE_FIELDS = [
 /** Withheld from plain members; the websocket projection excludes these by name. */
 export const ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS = [
   'allowedGroupTypes',
+  'accountSegment',
   'systemPrompt',
   'storageLimit',
   'currentStorageSize',
@@ -158,12 +168,19 @@ export function toSafeOrganization(org: OrgLike, viewer: OrgViewer): Record<stri
     for (const f of ORGANIZATION_OWNER_ONLY_FIELDS) delete o[f];
   }
   if (!canViewMemberCredits) delete o.budgetAlerts;
-  if (!canViewMemberCredits && Array.isArray(o.userDetails)) {
+  if ((!canViewMemberCredits || !administers) && Array.isArray(o.userDetails)) {
+    // Credit fields follow canViewOrgMemberCredits; colleagues' emails stay with the administrators.
+    const hiddenPaths = [
+      ...(canViewMemberCredits ? [] : ORGANIZATION_MEMBER_CREDIT_FIELDS),
+      ...(administers ? [] : ORGANIZATION_MEMBER_CONTACT_FIELDS),
+    ];
     o.userDetails = o.userDetails.map(details => {
       // A member keeps their own row: the budget warning reads it from this response.
       if (viewer?.userId != null && String(details.id) === viewer.userId) return details;
       const row = { ...details };
-      for (const path of ORGANIZATION_MEMBER_CREDIT_FIELDS) delete row[path.slice('userDetails.'.length)];
+      for (const path of hiddenPaths) {
+        delete row[path.slice('userDetails.'.length)];
+      }
       return row;
     });
   }

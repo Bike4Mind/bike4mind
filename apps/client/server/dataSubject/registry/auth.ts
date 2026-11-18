@@ -2,6 +2,14 @@ import type { DataHolderRegistry } from '../types';
 import { ADMIN_NOTE, FINANCIAL_RECORD, expiresAfterTtl } from './retention';
 
 export const authHolders = {
+  AccountDeletionNotice: {
+    kind: 'holder',
+    // Transient outbox for the post-deletion confirmation email; removed on send, after the bounded
+    // retries, or by its TTL. Keyed by the erasure hash, not the person's id.
+    references: [{ path: 'email', matchBy: 'email', action: 'deleteDocument' }],
+    secretPaths: ['leaseToken'],
+    unrelatedPaths: ['idHash'],
+  },
   // Notes about the person go with them: the account purge removes them through the raw collection,
   // past the model's immutability hooks. A note this person wrote or edited as an admin about someone
   // else is that other account's record, and its identity fields are required and immutable, so it stays.

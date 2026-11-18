@@ -1220,6 +1220,15 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     memory: '2048 MB',
+    // Scene (compose) jobs download up to 200 MB of inputs and write the rendered MP4 under /tmp.
+    storage: '2 GB',
+    nodejs: {
+      // ffmpeg-static resolves its binary relative to its own package dir, so it cannot be bundled; install runs
+      // npm for the Lambda's linux platform, so its postinstall downloads the matching static ffmpeg into the zip.
+      // Registered by apps/workers/src/queueHandlers/generationJob.ts, never imported by server-utils.
+      install: ['ffmpeg-static'],
+      esbuild: { external: ['ffmpeg-static'] },
+    },
     vpc: lambdaVpc,
     link: [
       ...allSecrets,

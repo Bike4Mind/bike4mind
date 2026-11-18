@@ -612,6 +612,50 @@ describe('OrchestratorStage', () => {
     expect(query('orchestrator-table-row-w1')).not.toBeNull();
   });
 
+  it('carries Focus actions out: Allow once and Stop through the stage, and a refusal from main back to the panel', async () => {
+    const respondToApproval = vi.fn().mockResolvedValue(undefined);
+    const chat = (window as unknown as { b4m: { chat: Record<string, unknown> } }).b4m.chat;
+    chat.respondToApproval = respondToApproval;
+    chat.getSession = vi.fn().mockResolvedValue({
+      messages: [
+        {
+          id: 'm1',
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            {
+              id: 'c1',
+              name: 'bash_execute',
+              input: { command: 'touch x' },
+              status: 'awaiting-approval',
+              approvalId: 'p1',
+              approvalDetail: '$ touch x',
+            },
+          ],
+        },
+      ],
+    });
+    await themed.render(
+      <OrchestratorStage
+        agents={[agentFixture('w1', 'working')]}
+        parent={{ status: 'needs-action' }}
+        rootId="root"
+        view="table"
+        onViewChange={onViewChange}
+        actions={actions}
+        introPlaying={false}
+        focus={{ on: true, onToggle: vi.fn() }}
+      />
+    );
+    await act(async () => el('orchestrator-focus-stop-btn').click());
+    expect(actions.stop).toHaveBeenCalledWith('w1');
+
+    respondToApproval.mockRejectedValueOnce(new Error('Already answered'));
+    await act(async () => el('orchestrator-focus-allow-once-btn').click());
+    expect(respondToApproval).toHaveBeenCalledWith('p1', { decision: 'once' });
+    expect(el('orchestrator-focus-error').textContent).toBe('Already answered');
+  });
+
   it('opens the agent a notice asked for, once, and says it was taken', async () => {
     const onFocusAgentConsumed = vi.fn();
     const renderFocus = (focusAgent: string | null) =>

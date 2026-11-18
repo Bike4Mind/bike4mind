@@ -1709,6 +1709,7 @@ async function runExecution(
           ...executionTurnAuth(execution),
           ...(execution.scopeDeniedTools?.length && { scopeDeniedTools: execution.scopeDeniedTools }),
           ...(execution.adminRoleWithheld && { adminRoleWithheld: true }),
+          ...(execution.oauthClientId && { oauthClientId: execution.oauthClientId }),
           query: info.task,
           model: visibleModelId(info.model),
           // Snapshot of the parent's lists: a Lambda-dispatched child rebuilds its tool gate
@@ -1982,6 +1983,7 @@ async function runExecution(
         ...executionTurnAuth(execution),
         scopeDeniedTools: execution.scopeDeniedTools,
         adminRoleWithheld: execution.adminRoleWithheld,
+        oauthClientId: execution.oauthClientId,
         approvedTools: approvedToolsForDispatch,
         deniedTools,
         spawnedByExecutionId: executionId,

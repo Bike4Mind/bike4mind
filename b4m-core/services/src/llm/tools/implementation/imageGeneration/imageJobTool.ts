@@ -4,16 +4,19 @@ import {
   ImageModels,
   isBflImageModel,
   isGeminiImageModel,
+  parseSizeEdges,
   rejectsTransparentBackground,
   resolveLegacyImageModel,
   validateImageRequest,
   type GenerateImageToolCall,
   type ImageJobInput,
   type ImageMode,
+  type ImageModelCatalogEntry,
   type ImageOutputFormat,
   type ImageRequestField,
   type OpenAIImageBackground,
   type OpenAIImageQuality,
+  reduceAspectRatio,
 } from '@bike4mind/common';
 import { resolveBilledImageQuality } from '../../../../imageCost';
 import {
@@ -93,19 +96,40 @@ const pick = <T>(tool: T | null | undefined, selection: T | null | undefined) =>
 const isDefaultedField = (field: ImageRequestField): field is DefaultedField =>
   (SELECTION_DEFAULTED_FIELDS as readonly string[]).includes(field);
 
+/** An unknown model has no catalog entry; refusing it is createImageJobs' job. */
+const catalogEntryOf = (model: string): ImageModelCatalogEntry | undefined => {
+  const parsed = ImageJobRequestSchema.shape.model.safeParse(model);
+  return parsed.success ? getImageModelCatalogEntry(parsed.data) : undefined;
+};
+
+/** The shape of a WxH size as a reduced ratio (1536x1024 -> 3:2); undefined for a size that does not parse. */
+function sizeAsAspectRatio(size: string): string | undefined {
+  const edges = parseSizeEdges(size);
+  if (!edges) return undefined;
+  return reduceAspectRatio(edges.width, edges.height);
+}
+
 /**
- * A selection value is a saved default for whichever model the user last used, so one the model cannot take is
- * dropped rather than refused. A value the tool call supplied is left in, so createImageJobs reports it to the model.
+ * Tool fields the tool schema calls advisory (imageGeneration/index.ts): `size` is ignored by a model that cannot
+ * produce it, `quality` applies to GPT-image models only, and `aspectRatio` is only ever derived from a tool size.
  */
-function dropUnsupportedSelectionFields(draft: ImageJobRequestDraft, sources: FieldSources): ImageJobRequestDraft {
-  const model = ImageJobRequestSchema.shape.model.safeParse(draft.model);
-  // An unknown model is createImageJobs' to refuse; there is no catalog entry to check against.
-  if (!model.success) return draft;
-  const validation = validateImageRequest({ ...draft, count: 1 }, getImageModelCatalogEntry(model.data));
+const ADVISORY_FIELDS: readonly DefaultedField[] = ['size', 'aspectRatio', 'quality'];
+
+/**
+ * A selection value is a saved default for whichever model the user last used, and an advisory tool value is a hint,
+ * so either one the model cannot take is dropped rather than refused. Any other value the tool call supplied is left
+ * in, so createImageJobs reports it to the model.
+ */
+function dropUnsupportedFields(draft: ImageJobRequestDraft, sources: FieldSources): ImageJobRequestDraft {
+  const entry = catalogEntryOf(draft.model);
+  if (!entry) return draft;
+  const validation = validateImageRequest({ ...draft, count: 1 }, entry);
   if (validation.ok) return draft;
   const kept = { ...draft };
   for (const { field } of validation.failures) {
-    if (isDefaultedField(field) && sources[field] === 'selection') delete kept[field];
+    if (isDefaultedField(field) && (sources[field] === 'selection' || ADVISORY_FIELDS.includes(field))) {
+      delete kept[field];
+    }
   }
   return kept;
 }
@@ -128,13 +152,22 @@ function buildDraft(
   const sources: FieldSources = {};
   const draft: ImageJobRequestDraft = { ...base };
   const size = pick(isPriceableImageSize(args.size) ? args.size : undefined, selectionSize(selection));
-  if (size) {
+  // A model sized by aspect ratio (FLUX Ultra) refuses any size, so a tool size reaches it as its shape, behind the
+  // user's saved ratio. A saved selection size is left to dropUnsupportedFields.
+  const toolAspectRatio =
+    size?.from === 'tool' && catalogEntryOf(base.model)?.sizing.kind === 'aspectRatio'
+      ? sizeAsAspectRatio(size.value)
+      : undefined;
+  if (size && !toolAspectRatio) {
     draft.size = size.value;
     sources.size = size.from;
   }
   if (selection?.aspect_ratio) {
     draft.aspectRatio = selection.aspect_ratio;
     sources.aspectRatio = 'selection';
+  } else if (toolAspectRatio) {
+    draft.aspectRatio = toolAspectRatio;
+    sources.aspectRatio = 'tool';
   }
   const quality = pick(args.quality, selection?.quality);
   const billedQuality = quality && resolveBilledImageQuality(base.model, quality.value);
@@ -157,7 +190,7 @@ function buildDraft(
     draft.seed = seed;
     sources.seed = 'selection';
   }
-  return dropUnsupportedSelectionFields(draft, sources);
+  return dropUnsupportedFields(draft, sources);
 }
 
 const wantsTransparent = (selection: GenerateImageToolCall | undefined, args: ImageJobToolArgs) =>
@@ -178,10 +211,8 @@ export function buildGenerateJobRequest(
   return buildDraft({ model, mode: 'generate', prompt }, selection, args);
 }
 
-const editModeRequiresMask = (model: string): boolean => {
-  const parsed = ImageJobRequestSchema.shape.model.safeParse(model);
-  return parsed.success && getImageModelCatalogEntry(parsed.data).modes.edit?.inputs.mask?.required === true;
-};
+const editModeRequiresMask = (model: string): boolean =>
+  catalogEntryOf(model)?.modes.edit?.inputs.mask?.required === true;
 
 /**
  * The selection's edit model, else a default by the generation model's provider (as the in-process edit picks).
