@@ -142,6 +142,7 @@ const DELETED_ROLE_ID = 'c'.repeat(24);
 
 describe('POST /api/auth/mfa/verify - role-held admin permissions', () => {
   const loginWith = async (adminRoleIds: unknown[]) => {
+    mockFindWithSecrets.mockResolvedValue({ id: 'u1', adminRoleIds, mfa: { totpEnabled: true } });
     mockVerifyMFA.mockResolvedValue({ user: { id: 'u1', adminRoleIds } });
     mockCompleteMfaLogin.mockResolvedValue({ accessToken: 'tok', deviceRemembered: false });
     const { res, promise } = run();
@@ -187,15 +188,18 @@ describe('POST /api/auth/mfa/verify - role-held admin permissions', () => {
     expect(hasAdminPermission(user, 'support:read')).toBe(false);
   });
 
-  it('does not book a failed MFA attempt when the role lookup fails', async () => {
+  it('mints no session and books no failed MFA attempt when the role lookup fails', async () => {
     mockRecordFailed.mockReset();
     mockFindRoles.mockRejectedValue(new Error('roles unavailable'));
+    mockFindWithSecrets.mockResolvedValue({ id: 'u1', adminRoleIds: [ROLE_ID], mfa: { totpEnabled: true } });
     mockVerifyMFA.mockResolvedValue({ user: { id: 'u1', adminRoleIds: [ROLE_ID] } });
     mockCompleteMfaLogin.mockResolvedValue({ accessToken: 'tok', deviceRemembered: false });
     const { res, promise } = run();
 
     await expect(promise).rejects.toThrow('roles unavailable');
 
+    expect(mockCompleteMfaLogin).not.toHaveBeenCalled();
+    expect(mockVerifyMFA).not.toHaveBeenCalled();
     expect(mockRecordFailed).not.toHaveBeenCalled();
     expect(res._isEndCalled()).toBe(false);
   });
