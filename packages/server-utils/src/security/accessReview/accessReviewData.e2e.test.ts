@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Logger } from '@bike4mind/observability';
+import { hasAdminPermission } from '@bike4mind/common';
+import { resolveRoleAdminPermissions } from '../../auth/adminRoles';
 import mongoose from 'mongoose';
 import {
   AdminAuditLogModel,
@@ -590,6 +592,56 @@ describe('collectAccessReview admin roles', () => {
     } finally {
       await User.collection.deleteMany({ _id: { $in: [roleHolder, rootWithRole, deadOnly] } });
       await AdminRoleModel.collection.deleteMany({});
+    }
+  });
+});
+
+describe('legacy role identity parity', () => {
+  it('matches authorization for a raw uppercase role reference and deduplicates aliases', async () => {
+    const roleId = 'abcdef000000000000000001';
+    const roleObjectId = new mongoose.Types.ObjectId(roleId);
+    const holder = id();
+    await AdminRoleModel.collection.insertOne({
+      _id: roleObjectId,
+      name: 'Legacy billing',
+      description: '',
+      permissions: ['credits:adjust'],
+    });
+    await User.collection.insertOne({
+      _id: holder,
+      username: 'legacy-holder',
+      isAdmin: false,
+      adminPermissions: [],
+      adminRoleIds: [roleId.toUpperCase()],
+    });
+    try {
+      const authorized = await User.findById(holder);
+      if (!authorized) throw new Error('Missing legacy role holder');
+      await resolveRoleAdminPermissions(authorized);
+      expect(hasAdminPermission(authorized, 'credits:adjust')).toBe(true);
+      const snapshot = await collectAccessReview({ now });
+      const row = snapshot.admins.find(admin => admin.userId === String(holder));
+      expect(row).toMatchObject({
+        permissions: ['credits:adjust'],
+        roles: [{ id: roleId, name: 'Legacy billing', deleted: false }],
+        permissionSources: [
+          { permission: 'credits:adjust', direct: false, roles: [{ id: roleId, name: 'Legacy billing' }] },
+        ],
+      });
+      await User.collection.updateOne(
+        { _id: holder },
+        { $set: { adminRoleIds: [roleId.toUpperCase(), roleObjectId] } }
+      );
+      const aliases = await collectAccessReview({ now });
+      expect(aliases.admins.find(admin => admin.userId === String(holder))?.roles).toEqual([
+        { id: roleId, name: 'Legacy billing', deleted: false },
+      ]);
+      expect(aliases.roles.find(role => role.id === roleId)?.members.map(member => member.userId)).toEqual([
+        String(holder),
+      ]);
+    } finally {
+      await User.collection.deleteOne({ _id: holder });
+      await AdminRoleModel.collection.deleteOne({ _id: roleObjectId });
     }
   });
 });

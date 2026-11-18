@@ -103,6 +103,7 @@ const rolesCell = (row: ReviewRow): ReactNode => {
             size="sm"
             variant="soft"
             color="neutral"
+            title={role.name ?? undefined}
             data-testid={`admin-access-review-role-chip-${role.id}`}
           >
             {role.name}

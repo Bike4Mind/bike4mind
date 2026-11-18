@@ -16,6 +16,7 @@ import {
 } from '@bike4mind/database';
 import {
   STALE_API_KEY_DAYS,
+  normalizeAccessReviewRoleIds,
   formatAccessReviewSlackMessage,
   reviewQuarter,
   type AccessReviewAdmin,
@@ -159,7 +160,7 @@ async function roleAccessOf(
   const roleOf = (id: string): AdminRole | undefined => (OBJECT_ID_RE.test(id) ? rolesById.get(id) : undefined);
   const byDoc = new Map<AdminDoc, AdminRoleAccess>();
   docs.forEach((doc, index) => {
-    const heldIds = [...new Set((doc.adminRoleIds ?? []).map(String))];
+    const heldIds = normalizeAccessReviewRoleIds(doc.adminRoleIds ?? []);
     const held = heldIds.flatMap(id => roleOf(id) ?? []);
     for (const role of held) {
       members.get(role.id)?.push({

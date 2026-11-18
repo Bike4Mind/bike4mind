@@ -223,7 +223,7 @@ describe('formatAccessReviewMarkdown', () => {
       '| one | one@example.org | active | - | full admin | 2026-12-30 | 2 | 1 | 1 | 0 | 0 | 1 |  |  |'
     );
     expect(markdown).toContain(
-      '| u2 | - | banned | Support \\| &lt;ops&gt;, deleted role r-dead | support:read (direct + Support \\| &lt;ops&gt;), users:moderate (Support \\| &lt;ops&gt;), keys:revoke (direct) | - | 0 | 0 | 0 | 0 | 0 | 0 |  |  |'
+      '| u2 | - | banned | Support \\| &lt;ops&gt;, deleted role r-dead | support:read (direct + role "Support \\| &lt;ops&gt;"), users:moderate (role "Support \\| &lt;ops&gt;"), keys:revoke (direct) | - | 0 | 0 | 0 | 0 | 0 | 0 |  |  |'
     );
     expect(markdown).toContain('## Admin roles (2)');
     expect(markdown).toContain('| Support \\| &lt;ops&gt; | support:read, users:moderate | u2 |');

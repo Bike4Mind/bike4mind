@@ -62,7 +62,8 @@ const deferred = () => {
   };
 };
 const request = (url: string, body: unknown = {}) => {
-  const mocks = createMocks({ method: 'PUT', url, query: { userId: TARGET }, body });
+  const mocks = createMocks({ method: 'PUT', url, query: { userId: TARGET } });
+  mocks.req.body = body;
   return {
     req: Object.assign(mocks.req, { user: actor }) as unknown as Request,
     res: mocks.res as unknown as Response,

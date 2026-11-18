@@ -177,8 +177,8 @@ describe('AccessReviewTab', () => {
   it('shows each permission with its direct grant and roles, and the roles the admin holds', () => {
     renderWithTheme(<AccessReviewTab />);
     const delegate = rowOf(DELEGATE);
-    expect(within(delegate).getByText('users:moderate - direct + Support agent')).toBeInTheDocument();
-    expect(within(delegate).getByText('settings:manage - Support agent')).toBeInTheDocument();
+    expect(within(delegate).getByText('users:moderate - direct + role "Support agent"')).toBeInTheDocument();
+    expect(within(delegate).getByText('settings:manage - role "Support agent"')).toBeInTheDocument();
     expect(within(delegate).getByTestId('admin-access-review-role-chip-support')).toHaveTextContent('Support agent');
     expect(within(rowOf(ME)).getByText('Full admin')).toBeInTheDocument();
     expect(within(rowOf(ME)).queryByTestId('admin-access-review-permission-sources')).toBeNull();
@@ -255,6 +255,31 @@ describe('AccessReviewTab', () => {
       before: ['users:moderate'],
       adminPermissions: [],
       beforeAdminRoleIds: ['support'],
+      adminRoleIds: [],
+      reason: 'left the team',
+    });
+    expect(mocks.updateRole).not.toHaveBeenCalled();
+  });
+
+  it('normalizes duplicate role ID aliases before revocation without changing authority or action order', async () => {
+    const roleId = 'abcdef000000000000000001';
+    mocks.report = report([
+      row({
+        userId: DELEGATE,
+        fullAdmin: false,
+        permissions: ['credits:adjust'],
+        directPermissions: [],
+        adminRoleIds: [roleId.toUpperCase(), roleId],
+        roles: [{ id: roleId, name: 'Billing', deleted: false }],
+      }),
+    ]);
+    renderWithTheme(<AccessReviewTab />);
+    await revoke(DELEGATE);
+    await waitFor(() => expect(mocks.calls).toEqual(['permissions', 'decision:revoked']));
+    expect(mocks.updatePermissions).toHaveBeenCalledWith({
+      before: [],
+      adminPermissions: [],
+      beforeAdminRoleIds: [roleId],
       adminRoleIds: [],
       reason: 'left the team',
     });

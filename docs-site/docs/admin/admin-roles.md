@@ -22,13 +22,13 @@ An admin's effective permissions are their direct permissions plus the permissio
 
 Open **Admin > Roles** and choose **Create from a template** to start from one of these. Creating a role from a template copies the template's name, description and permissions into an ordinary role that you can edit freely.
 
-| Template | Permissions |
-|----------|-------------|
-| Support (read-only) | `support:read` |
-| Support agent | `support:read`, `users:moderate` |
-| Billing | `support:read`, `credits:adjust` |
-| Trust & Safety | `support:read`, `users:moderate`, `keys:revoke` |
-| Platform settings | `settings:manage`, `models:curate` |
+| Template            | Permissions                                     |
+| ------------------- | ----------------------------------------------- |
+| Support (read-only) | `support:read`                                  |
+| Support agent       | `support:read`, `users:moderate`                |
+| Billing             | `support:read`, `credits:adjust`                |
+| Trust & Safety      | `support:read`, `users:moderate`, `keys:revoke` |
+| Platform settings   | `settings:manage`, `models:curate`              |
 
 `users:delete`, `users:impersonate` and `users:export` are in no template. Grant them directly, or add them to a custom role, only when an admin needs them.
 
@@ -44,7 +44,7 @@ Open **Admin > Roles** and choose **Create from a template** to start from one o
 The quarterly access review (**Admin > Access review**) shows where each admin's access comes from:
 
 - A **Roles** column lists the roles each admin holds. A deleted role still listed on an account shows as **Deleted role**.
-- The **Permissions** column lists each effective permission with its source, for example `users:moderate - direct + Support agent`.
+- The **Permissions** column lists each effective permission with its source, for example `users:moderate - direct + role "Support agent"`.
 - An **Admin roles** table lists every role with its permissions and members, including roles with no members.
 - The CSV export adds `directPermissions`, `roles` and `permissionSources` columns to each admin row. After a blank row, a role section lists each role with its permissions and members. A past quarter's export leaves out the role section, because today's roles would not describe that quarter.
 

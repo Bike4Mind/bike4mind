@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   AccessReviewDecisionSchema,
+  AdminRoleIdSchema,
   BadRequestError,
   ConflictError,
   ForbiddenError,
@@ -19,6 +20,7 @@ import {
 } from '@bike4mind/database';
 import {
   ACCESS_REVIEW_DEFAULT_DORMANT_DAYS,
+  normalizeAccessReviewRoleIds,
   quarterStart,
   reviewQuarter,
 } from '@bike4mind/server-utils/security/accessReview/accessReview';
@@ -32,6 +34,8 @@ import {
 import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { assertAccessReviewer } from '@server/admin/accessReview';
+
+const validRoleIds = (ids: readonly string[]) => ids.filter(id => AdminRoleIdSchema.safeParse(id).success);
 
 type TargetDoc = {
   email?: string | null;
@@ -129,13 +133,15 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'settings:
         if (!holdsAdminAccess(target)) {
           throw new ConflictError('This account no longer holds admin access. Reload the review.');
         }
-        const roles = await adminRoleRepository.findByIds((target.adminRoleIds ?? []).map(String));
+        const heldIds = normalizeAccessReviewRoleIds(target.adminRoleIds ?? []);
+        const roles = await adminRoleRepository.findByIds(validRoleIds(heldIds));
+        const roleNames = new Map(roles.map(role => [role.id, role.name]));
         entry = {
           userId,
           email: target.email ?? null,
           fullAdmin: target.isAdmin === true,
           permissions: adminPermissionSources(target.adminPermissions ?? [], roles).map(source => source.permission),
-          roles: roles.map(role => ({ id: role.id, name: role.name })),
+          roles: heldIds.map(id => ({ id, name: roleNames.get(id) ?? null })),
           decision,
           reviewer,
           decidedAt: now,
@@ -189,14 +195,19 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'settings:
             })
             .filter(role => removal.roleIds.includes(role.roleId));
         });
-        const unnamed = removedRoles.filter(role => !role.nameKnown).map(role => role.roleId);
+        const unnamed = validRoleIds(
+          normalizeAccessReviewRoleIds(removedRoles.filter(role => !role.nameKnown).map(role => role.roleId))
+        );
         const currentNames = new Map(
           unnamed.length > 0 ? (await adminRoleRepository.findByIds(unnamed)).map(role => [role.id, role.name]) : []
         );
         const roleRefs = new Map(
           removedRoles.map(role => [
             role.roleId,
-            { id: role.roleId, name: role.nameKnown ? role.name : (currentNames.get(role.roleId) ?? null) },
+            {
+              id: role.roleId,
+              name: role.nameKnown ? role.name : (currentNames.get(role.roleId.toLowerCase()) ?? null),
+            },
           ])
         );
         entry = {

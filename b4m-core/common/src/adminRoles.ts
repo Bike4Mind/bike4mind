@@ -139,7 +139,9 @@ export function adminPermissionSources(
   });
 }
 
-/** "direct", "Support agent", or "direct + Billing + Support agent". */
+/** Distinguishes direct grants from quoted role names, including roles named "direct". */
 export function formatAdminPermissionSource(source: Pick<AdminPermissionSource, 'direct' | 'roles'>): string {
-  return [...(source.direct ? ['direct'] : []), ...source.roles.map(role => role.name)].join(' + ');
+  return [...(source.direct ? ['direct'] : []), ...source.roles.map(role => `role ${JSON.stringify(role.name)}`)].join(
+    ' + '
+  );
 }

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 import { createMocks } from 'node-mocks-http';
+import { Types } from 'mongoose';
 
 type Handler = (req: Request, res: Response) => Promise<unknown>;
 type Guard = (req: Request, res: Response, next: () => void) => void;
@@ -127,7 +128,8 @@ const call = async (
     actor = FULL_ADMIN as Record<string, unknown>,
   }: { body?: unknown; query?: Record<string, string>; actor?: Record<string, unknown> } = {}
 ) => {
-  const { req, res } = createMocks({ method, body, query });
+  const { req, res } = createMocks({ method, query });
+  req.body = body;
   const request = Object.assign(req, { user: actor }) as unknown as Request;
   for (const guard of route.guards) guard(request, res as unknown as Response, () => {});
   await route.handlers[method](request, res as unknown as Response);
@@ -307,6 +309,61 @@ describe('POST decisions', () => {
     );
   });
 
+  it.each(['660000000000000000000002', 'not-an-id'])(
+    'preserves held missing role %s when confirming and exporting decision history',
+    async missingId => {
+      const liveId = '660000000000000000000001';
+      target({ isAdmin: false, adminPermissions: ['support:read'], adminRoleIds: [liveId, missingId, liveId] });
+      mocks.findRoles.mockImplementation(async (ids: readonly string[]) => {
+        ids.forEach(id => new Types.ObjectId(id));
+        return [{ id: liveId, name: 'Billing', permissions: ['credits:adjust'] }];
+      });
+      const response = await call(decisions, 'POST', { body: { userId: OTHER, decision: 'confirmed' } });
+      expect(response._getStatusCode()).toBe(200);
+      const saved = mocks.recordDecision.mock.calls[0]?.[3];
+      expect(saved).toMatchObject({
+        permissions: ['support:read', 'credits:adjust'],
+        roles: [
+          { id: liveId, name: 'Billing' },
+          { id: missingId, name: null },
+        ],
+      });
+      expect(mocks.findRoles).toHaveBeenCalledWith(missingId === 'not-an-id' ? [liveId] : [liveId, missingId]);
+      mocks.collect.mockResolvedValue({
+        generatedAt: NOW.toISOString(),
+        admins: [],
+        roles: [],
+        apiKeys: [],
+        supportAccess: [],
+        impersonation: [],
+      });
+      mocks.findByQuarter.mockResolvedValue(record({ decisions: [saved] }));
+      const exported = await call(exportRoute, 'GET');
+      expect(exported._getData()).toContain(`deleted-role:${missingId}`);
+      expect(exported._getData()).toContain('"confirmed"');
+    }
+  );
+
+  it('confirms canonical role identity across uppercase and lowercase stored aliases', async () => {
+    const roleId = 'abcdef000000000000000001';
+    target({ isAdmin: false, adminPermissions: [], adminRoleIds: [roleId.toUpperCase(), roleId] });
+    mocks.findRoles.mockImplementation(async (ids: readonly string[]) => {
+      ids.forEach(id => new Types.ObjectId(id));
+      return [{ id: roleId, name: 'Billing', permissions: ['credits:adjust'] }];
+    });
+    await call(decisions, 'POST', { body: { userId: OTHER, decision: 'confirmed' } });
+    expect(mocks.findRoles).toHaveBeenCalledWith([roleId]);
+    expect(mocks.recordDecision).toHaveBeenCalledWith(
+      QUARTER,
+      90,
+      expect.anything(),
+      expect.objectContaining({
+        permissions: ['credits:adjust'],
+        roles: [{ id: roleId, name: 'Billing' }],
+      })
+    );
+  });
+
   it('confirms a current admin with a snapshot of their access and an audit entry', async () => {
     const res = await call(decisions, 'POST', { body: { userId: OTHER, decision: 'confirmed' } });
     expect(res._getStatusCode()).toBe(200);
@@ -455,8 +512,10 @@ describe('POST decisions', () => {
     ['its current name without a removal-time name', {}, 'Billing', 'Billing'],
     ['null once the role is gone without a removal-time name', {}, undefined, null],
     ['its current name when the removal-time names are malformed', { rolesRemoved: [7] }, 'Billing', 'Billing'],
+    ['its current name for an uppercase alias', {}, 'Billing', 'Billing'],
   ])('names a removed role from an audit without a role name by %s', async (_case, extra, current, name) => {
-    const roleId = '660000000000000000000001';
+    const roleId =
+      _case === 'its current name for an uppercase alias' ? 'ABCDEF000000000000000001' : '660000000000000000000001';
     target({ isAdmin: false, adminPermissions: [], adminRoleIds: [] });
     auditRows([
       {
@@ -465,17 +524,45 @@ describe('POST decisions', () => {
       },
     ]);
     mocks.findRoles.mockResolvedValue(
-      current === undefined ? [] : [{ id: roleId, name: current ?? 'Renamed', permissions: ['users:moderate'] }]
+      current === undefined
+        ? []
+        : [{ id: roleId.toLowerCase(), name: current ?? 'Renamed', permissions: ['users:moderate'] }]
     );
     await call(decisions, 'POST', { body: { userId: OTHER, decision: 'revoked' } });
     if ('rolesRemoved' in extra && typeof extra.rolesRemoved[0] === 'string')
       expect(mocks.findRoles).not.toHaveBeenCalled();
-    else expect(mocks.findRoles).toHaveBeenCalledWith([roleId]);
+    else expect(mocks.findRoles).toHaveBeenCalledWith([roleId.toLowerCase()]);
     expect(mocks.recordDecision).toHaveBeenCalledWith(
       QUARTER,
       90,
       expect.anything(),
       expect.objectContaining({ permissions: ['credits:adjust'], roles: [{ id: roleId, name }] })
+    );
+  });
+
+  it('keeps a verified malformed legacy role reference without querying it as an ObjectId', async () => {
+    const roleId = 'not-an-id';
+    target({ isAdmin: false, adminPermissions: [], adminRoleIds: [] });
+    auditRows([
+      {
+        ...permissionsChange('audit-legacy', [{ field: 'adminRoleIds', before: [roleId], after: [] }]),
+        details: { removedRolePermissions: [{ roleId, permissions: ['credits:adjust'] }] },
+      },
+    ]);
+    mocks.findRoles.mockImplementation(async (ids: readonly string[]) => {
+      ids.forEach(id => new Types.ObjectId(id));
+      return [];
+    });
+    await call(decisions, 'POST', { body: { userId: OTHER, decision: 'revoked' } });
+    expect(mocks.findRoles).not.toHaveBeenCalled();
+    expect(mocks.recordDecision).toHaveBeenCalledWith(
+      QUARTER,
+      90,
+      expect.anything(),
+      expect.objectContaining({
+        permissions: ['credits:adjust'],
+        roles: [{ id: roleId, name: null }],
+      })
     );
   });
 
@@ -659,9 +746,8 @@ describe('GET export', () => {
     );
     expect(rows).toHaveLength(6);
     expect(rows[0]).toContain(`"'=HYPERLINK(""http://evil.example"")"`);
-    expect(rows[0]).toMatch(
-      /,"support:read","'=Support, ""ops"";deleted-role:660000000000000000000002","support:read=direct \+ =Support, ""ops"""$/
-    );
+    expect(rows[0]).toContain(',"support:read","\'=Support, ""ops"";deleted-role:660000000000000000000002",');
+    expect(rows[0].endsWith('"support:read=direct + role ""=Support, \\""ops\\"""""')).toBe(true);
     expect(rows[1]).toContain('"revoked"');
     expect(rows[1]).toMatch(/,"","Billing;deleted-role:660000000000000000000005",""$/);
     expect(rows[2]).toBe('');

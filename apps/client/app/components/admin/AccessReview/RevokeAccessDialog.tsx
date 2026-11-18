@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { isAxiosError } from 'axios';
 import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 import { Alert } from '@mui/joy';
-import { sortAdminPermissions } from '@bike4mind/common';
+import { sortAdminPermissions, sortAdminRoleIds } from '@bike4mind/common';
 import { useAccessReviewDecision, type AccessReviewRow } from '@client/app/hooks/data/adminAccessReview';
 import { ActionDialog } from '../shared';
 import { useAdminUserPermissionsUpdate } from '../Users/Profile/actions/useAdminUserPermissionsUpdate';
@@ -37,7 +37,7 @@ export function RevokeAccessDialog({ admin, dormantDays, onClose }: RevokeAccess
         // The permissions route compares the cleaned set and its schema rejects an id no longer listed.
         before: sortAdminPermissions(admin.directPermissions),
         adminPermissions: [],
-        beforeAdminRoleIds: admin.adminRoleIds,
+        beforeAdminRoleIds: sortAdminRoleIds(admin.adminRoleIds),
         adminRoleIds: [],
         reason,
       });

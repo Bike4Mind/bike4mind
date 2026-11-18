@@ -1,4 +1,4 @@
-import { formatAdminPermissionSource, type AdminPermissionSource } from '@bike4mind/common';
+import { AdminRoleIdSchema, formatAdminPermissionSource, type AdminPermissionSource } from '@bike4mind/common';
 import { z } from 'zod';
 
 /**
@@ -8,6 +8,18 @@ import { z } from 'zod';
 
 export const ACCESS_REVIEW_RUNBOOK = 'docs/security/quarterly-access-review.md';
 export const STALE_API_KEY_DAYS = 90;
+
+/** Canonical role identities for review reads; malformed stored references remain visible unchanged. */
+export function normalizeAccessReviewRoleIds(values: readonly unknown[]): string[] {
+  return [
+    ...new Set(
+      values.map(value => {
+        const id = String(value);
+        return AdminRoleIdSchema.safeParse(id).success ? id.toLowerCase() : id;
+      })
+    ),
+  ];
+}
 
 export type AccessReviewAccountStatus = 'active' | 'banned' | 'deleted';
 
