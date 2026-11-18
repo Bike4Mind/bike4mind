@@ -60,6 +60,7 @@ export function toOAuthClientView(doc: IOAuthClientDocument): OAuthClientView {
     clientType: doc.clientType,
     tokenEndpointAuthMethod: doc.tokenEndpointAuthMethod,
     redirectUris: [...(doc.redirectUris ?? [])],
+    postLogoutRedirectUris: [...(doc.postLogoutRedirectUris ?? [])],
     allowedScopes: [...(doc.allowedScopes ?? [])],
     isActive: doc.isActive,
     ...(doc.federatedIdp
@@ -115,6 +116,7 @@ export async function createOAuthClient(input: CreateOAuthClientInput): Promise<
     clientSecretHash: await bcrypt.hash(clientSecret, OAUTH_CLIENT_SECRET_BCRYPT_ROUNDS),
     name: data.name,
     redirectUris: data.redirectUris,
+    postLogoutRedirectUris: data.postLogoutRedirectUris ?? [],
     allowedScopes: federatedIdp ? FEDERATED_SCOPES : IDENTITY_SCOPES,
     // Always confidential: the client is handed a secret, so it must present it at /token.
     tokenEndpointAuthMethod: 'client_secret_post',
@@ -204,6 +206,7 @@ export async function updateOAuthClient(
 
   const $set: Record<string, unknown> = {
     ...(data.redirectUris ? { redirectUris: data.redirectUris } : {}),
+    ...(data.postLogoutRedirectUris ? { postLogoutRedirectUris: data.postLogoutRedirectUris } : {}),
     ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
     ...(data.allowedScopes ? { allowedScopes: data.allowedScopes } : {}),
     ...(federatedIdp ? { federatedIdp } : {}),

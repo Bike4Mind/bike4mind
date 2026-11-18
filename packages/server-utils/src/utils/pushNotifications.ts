@@ -102,3 +102,8 @@ export function generationPushBody(prompt: string | undefined, fallback: string)
   const collapsed = prompt?.replace(/\s+/g, ' ').trim();
   return collapsed ? truncateForPush(collapsed, GENERATION_PUSH_BODY_MAX_CHARS) : fallback;
 }
+
+/** The brief route (`/briefs/$id`), which first-party clients resolve to the brief view. */
+export function briefDeepLink(briefId: string): string {
+  return appPathDeepLink(`/briefs/${encodeURIComponent(briefId)}`);
+}

@@ -56,6 +56,8 @@ export interface IOAuthClientDocument extends IMongoDocument {
   clientSecretHash: string;
   name: string; // e.g. "VibesWire", "VibesTrader"
   redirectUris: string[];
+  /** Exact-match targets for OIDC RP-Initiated Logout (`post_logout_redirect_uri`). */
+  postLogoutRedirectUris: string[];
   allowedScopes: string[];
   /**
    * How the client authenticates at the token endpoint (RFC 8414 metadata) and,
@@ -127,6 +129,7 @@ const OAuthClientSchema = new Schema<IOAuthClientDocument>(
     clientSecretHash: { type: String, required: true },
     name: { type: String, required: true },
     redirectUris: [{ type: String, required: true }],
+    postLogoutRedirectUris: { type: [String], default: [] },
     allowedScopes: { type: [String], default: ['openid', 'email', 'profile'] },
     tokenEndpointAuthMethod: { type: String, enum: ['none', 'client_secret_post'], default: 'none' },
     clientType: { type: String, enum: [...OAUTH_CLIENT_TYPES], default: 'first-party' },

@@ -23,6 +23,7 @@ const handler = adminApi({
         clientId: result.client.clientId,
         clientType: result.client.clientType,
         redirectUris: result.client.redirectUris,
+        postLogoutRedirectUris: result.client.postLogoutRedirectUris,
         federated: !!result.client.federatedIdp,
       },
     });
