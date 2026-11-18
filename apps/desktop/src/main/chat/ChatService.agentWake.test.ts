@@ -159,11 +159,14 @@ describe('ChatService waking an Orchestrate parent', () => {
   it('wakes an idle parent exactly once, when the last of its agents settles', async () => {
     const parent = await idleParentWithAgents(2);
 
-    const request = (prompt: string, round: number) =>
-      post.mock.calls[streamIndexesOf(prompt)[round]][1] as {
+    const request = (prompt: string, round: number) => {
+      const index = streamIndexesOf(prompt)[round];
+      expect(index, `${prompt} round ${round}`).toBeDefined();
+      return post.mock.calls[index][1] as {
         messages: CompletionMessage[];
         options: { tools: WireTool[] };
       };
+    };
     const footprint = (prompt: string, round: number) => {
       const body = request(prompt, round);
       const system = body.messages[0].content;
@@ -177,7 +180,7 @@ describe('ChatService waking an Orchestrate parent', () => {
     await nthStreamOf('task a-0', 1);
     await nthStreamOf('task a-1', 1);
     const workers = [footprint('task a-0', 0), footprint('task a-1', 0)];
-    expect(changedPromptBlocks(workers[0], workers[1])).toContain('history');
+    expect(changedPromptBlocks(workers[0], workers[1])).toEqual(['system', 'history']);
     for (const title of ['a-0', 'a-1']) {
       const child = await store.get(await childId(title));
       expect(child?.origin?.parentSessionId).toBe(parent.id);
