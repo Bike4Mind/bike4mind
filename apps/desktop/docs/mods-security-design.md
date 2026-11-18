@@ -184,8 +184,8 @@ Differences from the artifact sandbox, and why:
   `onerror` attribute from it. The SDK documentation will still tell authors to use `textContent`.
 - **Inline style is allowed**, as for artifacts: it cannot run code, and views animate by setting
   styles.
-- **`connect-src 'none'`** is the exfiltration control: no fetch, XHR, WebSocket, EventSource or
-  beacon. With `img-src` limited to the mod's own origin plus `data:`/`blob:`, an image URL cannot be
+- **`connect-src 'none'`** is the exfiltration control for requests: no fetch, XHR, WebSocket,
+  EventSource or beacon. Navigation is closed separately (section 4.6). With `img-src` limited to the mod's own origin plus `data:`/`blob:`, an image URL cannot be
   used as a side channel either.
 - **`worker-src 'none'`.** Workers are a way to burn CPU outside the heartbeat's reach (section 11)
   for no rendering benefit. Revisit if a real mod needs one.
@@ -210,6 +210,16 @@ check and cancels every download, as `BrowserManager.session()` does for the age
 | `allow-forms` | Nowhere to submit to. |
 | `allow-downloads` | No file leaves a mod. |
 | `allow-pointer-lock`, `allow-orientation-lock`, `allow-presentation`, `allow-storage-access-by-user-activation` | No use in a view, and each is a way to take something from the user. |
+
+### 4.6 Navigation lock (H2)
+
+CSP and `sandbox allow-scripts` do not stop a top-level document navigating itself, and a navigation
+carries data out in its URL. Under H2, every mod `webContents`:
+
+- denies `will-navigate`, `will-redirect` and `will-frame-navigate` except to its own
+  `b4m-mod://<id>/`, and denies every `setWindowOpenHandler` request;
+- sits on the `mods` partition, whose `webRequest.onBeforeRequest` cancels any URL whose scheme is
+  not `b4m-mod:`, so a missed navigation path still reaches no network.
 
 ## 5. The data channel
 
@@ -260,7 +270,7 @@ the schema, so a projected snapshot is still a valid one).
 | `read:cost` | per agent `usdCost`, `credits` | Spend is sensitive in some organisations. |
 | `act:open` | actions `open-agent`, `open-root` | Navigation only. |
 | `act:answer` | action `answer` (#7855); also the `decision.id` it names | Requires `read:snippets` (the manifest is rejected otherwise): a mod must not answer a question it cannot show. |
-| `act:approve` | action `approve` with `once` or `deny`, for quick approvals only (#7855); the quick approval's id | Never `always`, matching `isWatchDecision`. Quick is `isQuickApproval` in `src/shared/watch.ts`. |
+| `act:approve` | action `approve` with `once` or `deny`, for quick approvals only (#7855); the quick approval's id | Requires `read:snippets` (the manifest is rejected otherwise): the quick approval's one-line detail is shown to the mod as `decision.question`, and a mod must not approve what it cannot show. Never `always`, matching `isWatchDecision`. Quick is `isQuickApproval` in `src/shared/watch.ts`. |
 | `act:stop` | action `stop` (#7855) | |
 
 The draft plan listed `act:open` and `act:stop` but not answer or approve. This design splits them
@@ -419,10 +429,12 @@ mods/
   `hashes` before serving it. A file that changed on disk after install is not served, and the mod
   shows as modified, with Reinstall offered.
 - Agent shell commands already cannot write the userData folder (`alwaysDenied` in
-  `src/main/chat/tools/sandbox.ts`, macOS `sandbox-exec`). The hash check covers platforms where that
-  wrapper does not run.
-- Only the active version and the last good one are kept; older directories are deleted after a
-  successful switch.
+  `src/main/chat/tools/sandbox.ts`, macOS `sandbox-exec`). On other platforms that wrapper does not
+  run, so an agent shell has the local user's file access and can rewrite the version files and
+  `state.json` together; the hash check does not defend against that, and it is out of scope
+  (section 3). The hash check catches corruption and partial edits.
+- Only the active version, the last good one and at most one failed version pending retry are kept;
+  older directories are deleted after a successful switch.
 
 ### 9.2 Last-good-version
 
@@ -482,7 +494,10 @@ Enforcement:
   test fails if the mod frame component is imported anywhere but the stage and the mini route, as
   `viewRegistry.tsx` keeps view components out of the stage today. `Sec-Fetch-Dest` refuses
   top-level loads (4.3).
-- Both: `will-navigate` and `setWindowOpenHandler` already deny every app window leaving its page.
+- H1: `will-navigate` and `setWindowOpenHandler` already deny the app window leaving its page.
+- H2: those handlers are per window (`src/main/index.ts`, `src/main/watch/miniWindow.ts`) and a new
+  view gets none of them, so main installs the same denials on every mod `webContents` itself
+  (section 4.6).
 
 ## 11. Resource limits
 
@@ -619,7 +634,8 @@ The Tier 3 runtime splits into these issues. Order matters where noted.
    `projectSnapshot`, the permission table, and the test that a new snapshot field is ungranted by
    default. Pure code, can start now.
 3. **`b4m-mod:` scheme and handler:** registration, per-mod host, path and type guards, hash check,
-   CSP and `Permissions-Policy` headers, permission and download denial.
+   CSP and `Permissions-Policy` headers, permission and download denial, and (H2) the navigation
+   lock of section 4.6 with a test that a mod cannot navigate or open a window to any other URL.
 4. **Mod host and data channel:** the stage host (frame or view), handshake, port or preload, the
    message schemas, snapshot coalescing, pause.
 5. **Action bridge:** host-side and main-side checks, the `mods:act` channel (H1) or sender-gated
