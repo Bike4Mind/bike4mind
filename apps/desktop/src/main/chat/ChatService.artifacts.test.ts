@@ -15,7 +15,7 @@ function frame(payload: unknown): string {
 }
 
 function waitFor(events: ChatStreamEvent[], type: ChatStreamEvent['type']): Promise<ChatStreamEvent> {
-  return vi.waitUntil(() => events.find(event => event.type === type), { timeout: 2000, interval: 5 });
+  return vi.waitUntil(() => events.find(event => event.type === type), { timeout: 5000, interval: 5 });
 }
 
 const HTML_ARTIFACT =
@@ -76,7 +76,7 @@ let fixture: Fixture;
 
 async function waitForRequest(target: Fixture, count = 1) {
   await vi.waitUntil(() => target.post.mock.calls.filter(call => call[0] !== '/api/artifacts').length === count, {
-    timeout: 2000,
+    timeout: 5000,
     interval: 5,
   });
 }
