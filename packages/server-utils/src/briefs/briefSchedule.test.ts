@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { briefWindow, cachedFormatterCount, computeNextBriefAt, type BriefScheduleTiming } from './briefSchedule';
 
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
@@ -88,9 +88,8 @@ const cases: Array<[string, Partial<BriefScheduleTiming>, string, string | null]
 ];
 
 describe('computeNextBriefAt', () => {
-  const originalTz = process.env.TZ;
   afterEach(() => {
-    process.env.TZ = originalTz;
+    vi.unstubAllEnvs();
   });
 
   it.each(cases)('%s', (_label, overrides, after, expected) => {
@@ -101,7 +100,7 @@ describe('computeNextBriefAt', () => {
     const run = () =>
       cases.map(([, overrides, after]) => computeNextBriefAt(schedule(overrides), new Date(after))?.getTime());
     const baseline = run();
-    process.env.TZ = 'Pacific/Auckland';
+    vi.stubEnv('TZ', 'Pacific/Auckland');
     expect(run()).toEqual(baseline);
   });
 });

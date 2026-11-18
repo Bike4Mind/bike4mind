@@ -53,6 +53,7 @@ export async function runBriefScheduleReconcile(
     in_flight: 0,
     no_activity: 0,
     push_off: 0,
+    schedule_off: 0,
     user_missing: 0,
   };
 

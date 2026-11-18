@@ -34,11 +34,13 @@ beforeEach(async () => {
   ]);
 });
 
-const insertUser = async (pushNotifications?: Record<string, boolean>) => {
+const schedule = { enabled: true, timeOfDay: '08:00', days: [0, 1, 2, 3, 4, 5, 6], timeZone: 'America/Los_Angeles' };
+
+const insertUser = async (pushNotifications?: Record<string, boolean>, briefSchedule: object = schedule) => {
   const { insertedId } = await User.collection.insertOne({
     username: 'u',
     email: 'u@example.com',
-    preferences: pushNotifications ? { pushNotifications } : undefined,
+    preferences: { briefSchedule, ...(pushNotifications ? { pushNotifications } : {}) },
   });
   return insertedId.toString();
 };
@@ -94,6 +96,16 @@ describe('startScheduledBrief', () => {
     const { deps } = makeDeps();
 
     expect(await startScheduledBrief(userId, deps)).toBe('no_activity');
+  });
+
+  it('skips a user whose schedule was disabled after the claim', async () => {
+    const userId = await insertUser(undefined, { ...schedule, enabled: false });
+    await insertRun(userId, hoursAgo(6));
+    const { deps, publishCompose } = makeDeps();
+
+    expect(await startScheduledBrief(userId, deps)).toBe('schedule_off');
+    expect(await AssistantBriefModel.countDocuments({ userId })).toBe(0);
+    expect(publishCompose).not.toHaveBeenCalled();
   });
 
   it('skips a user who turned brief pushes off', async () => {
