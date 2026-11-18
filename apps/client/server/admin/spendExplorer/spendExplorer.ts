@@ -11,6 +11,7 @@ import {
   type SpendTimelineMarker,
   type SpendTimelineResponse,
 } from '@bike4mind/common';
+import { SUSPEND_ACTIONS } from '@server/security/accountStatusAuditActions';
 import { lookbackStart, normalizeProvider, shapeTimeline } from './shapeTimeline';
 
 const MAX_TIME_MS = 20_000;
@@ -53,7 +54,7 @@ const segmentOf = (id: string, ids: SpendSegmentIds): AccountSegment =>
 
 /** Admin suspensions in the window (from the audit log), as timeline markers. */
 async function loadSuspensionMarkers(from: Date, to: Date, userId?: string): Promise<SpendTimelineMarker[]> {
-  const filter: Record<string, unknown> = { action: 'user.suspended', occurredAt: { $gte: from, $lt: to } };
+  const filter: Record<string, unknown> = { action: { $in: SUSPEND_ACTIONS }, occurredAt: { $gte: from, $lt: to } };
   if (userId) filter['target.id'] = userId;
   const rows = await AdminAuditLogModel.find(filter)
     .select('occurredAt')
