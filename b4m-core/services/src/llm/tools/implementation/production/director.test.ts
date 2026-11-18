@@ -380,7 +380,7 @@ describe('production director tools', () => {
     };
 
     const refused = await run(productionStoryboardTool, harness, squeezed);
-    expect(refused).toMatch(/^Error: shot-1's voice line runs 1500 ms but would have 800 ms/);
+    expect(refused).toMatch(/^Error: shot-1's voice line runs 1500 ms but would have 1000 ms/);
 
     const rewritten = {
       ...squeezed,
