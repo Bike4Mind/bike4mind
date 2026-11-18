@@ -354,7 +354,8 @@ describe('releaseDueSubscriptionRewards', () => {
         lotRef: 'referral-subscription:inviter1:in_1',
         metadata: { step: 'first_payment', referredUserId: 'friend1', invoiceId: 'in_1' },
       }),
-      { builtWith: { inTransaction: true, duplicateTransactionId: 'throw' } }
+      { builtWith: { inTransaction: true, duplicateTransactionId: 'throw' } },
+      { now: NOW }
     );
     expect(mockAlert).toHaveBeenCalledWith('tx1', 50);
   });
