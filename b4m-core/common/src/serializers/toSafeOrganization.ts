@@ -18,11 +18,13 @@ import { Permission } from '../types/entities/ShareableDocumentTypes';
  *   the client's orgTabAccess.ts), so they also get the settings fields, but not `budgetAlerts` or
  *   colleagues' credit fields.
  * - Any other viewer gets only ORGANIZATION_MEMBER_VISIBLE_FIELDS.
- * - Outside the full view, only the viewer's own `userDetails` row keeps its credit fields.
+ * - Outside the full view, only the viewer's own `userDetails` row keeps its credit and contact
+ *   fields: a plain member sees colleagues' names, not their emails.
  *
  * The websocket data-subscribe projection (apps/client/server/websocket/dataSubscribeFieldLimits.ts)
- * excludes ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS for every subscriber who is not the owner, a
- * manager or a site admin; keep the lists and that projection in sync.
+ * excludes ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS, ORGANIZATION_MEMBER_CREDIT_FIELDS and
+ * ORGANIZATION_MEMBER_CONTACT_FIELDS for every subscriber who is not the owner, a manager or a site
+ * admin; keep the lists and that projection in sync.
  *
  * Callers pass a hydrated Mongoose doc (normalized via toJSON here) or a plain object.
  */
@@ -40,6 +42,12 @@ export const ORGANIZATION_MEMBER_CREDIT_FIELDS = [
   'userDetails.lastCreditUsedAt',
   'userDetails.periodStart',
 ] as const;
+/**
+ * Per-member contact paths: a viewer who is not an owner, current manager or site admin sees them on
+ * their own row only (the websocket projection, which cannot keep one row, drops them on every row).
+ * The roster route applies the same rule through `organizationRosterScope` (serializers/toSafeUser.ts).
+ */
+export const ORGANIZATION_MEMBER_CONTACT_FIELDS = ['userDetails.email'] as const;
 
 type OrganizationField = keyof IOrganizationDocument;
 
@@ -145,7 +153,9 @@ export function toSafeOrganization(org: OrgLike, viewer: OrgViewer): Record<stri
       // A member keeps their own row: the budget warning reads it from this response.
       if (viewer?.userId != null && String(details.id) === viewer.userId) return details;
       const row = { ...details };
-      for (const path of ORGANIZATION_MEMBER_CREDIT_FIELDS) delete row[path.slice('userDetails.'.length)];
+      for (const path of [...ORGANIZATION_MEMBER_CREDIT_FIELDS, ...ORGANIZATION_MEMBER_CONTACT_FIELDS]) {
+        delete row[path.slice('userDetails.'.length)];
+      }
       return row;
     });
   }

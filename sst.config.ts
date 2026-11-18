@@ -251,6 +251,15 @@ export default $config({
         : {}),
     });
 
+    // Same generated-glue pattern as the overlays above: a no-op when the overlay is absent.
+    const { contributeInfra: contributeSentinelInfra } =
+      await import('./infra/premium-generated/sentinel-infra.generated');
+    contributeSentinelInfra({
+      lambdaVpc,
+      allSecrets,
+      defaultLambdaEnvironment: DEFAULT_LAMBDA_ENVIRONMENT,
+    });
+
     return {
       appName: $app.name,
       stage: $app.stage,

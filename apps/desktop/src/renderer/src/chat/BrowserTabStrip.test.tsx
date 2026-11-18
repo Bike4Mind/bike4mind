@@ -21,6 +21,8 @@ const render = (tabs: BrowserTabSummary[], activeTabId: number | null) =>
         onSelect={() => undefined}
         onClose={() => undefined}
         onNew={() => undefined}
+        inUse={() => null}
+        onCloseTabs={() => undefined}
       />
     </CssVarsProvider>
   );

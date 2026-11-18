@@ -11,6 +11,7 @@ export {
   AuthenticatedApiClient,
   NotAuthenticatedError,
   SessionRevokedError,
+  SessionChangedError,
   type AuthenticatedApiClientOptions,
   type ReauthMessages,
   type RefreshingOAuthClient,
