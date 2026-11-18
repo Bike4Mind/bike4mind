@@ -69,6 +69,7 @@ const FULL_AGENT: { [K in keyof Required<AgentView>]: AgentView[K] } = {
   credits: 1234,
   pr: { number: 4242, state: 'open', repo: `${SECRET}/repo` },
   branch: `${SECRET}-branch`,
+  oneClickDecision: true,
   redacted: true,
 };
 
@@ -135,6 +136,26 @@ describe('redactForPresenter', () => {
     });
   });
 
+  it.each([
+    ['a safe choice', ['Keep it', 'Skip'], undefined, true],
+    ['a destructive option', ['Keep it', 'Delete the branch'], undefined, false],
+    ['a long option', ['Yes', 'Rewrite the whole billing module from scratch'], undefined, false],
+    ['a multi-select', ['A', 'B'], true, false],
+  ])('decides one-click from the real labels of %s, not the placeholders', (_case, labels, multiSelect, oneClick) => {
+    const question = {
+      question: 'q',
+      header: 'h',
+      options: labels.map(label => ({ label, description: '' })),
+      multiSelect,
+    };
+    const agent = { ...FULL_AGENT, oneClickDecision: undefined, decision: { ...FULL_AGENT.decision!, question } };
+    const [shown] = presentOne(agent).agents;
+    expect(shown.oneClickDecision).toBe(oneClick);
+    const snapshot = toViewSnapshot('root', [shown], FULL_PARENT);
+    expect(snapshot.agents[0].decision?.oneClick).toBe(oneClick);
+    expect(snapshot.agents[0].decision?.options).toEqual(labels.map((_, index) => `Option ${index + 1}`));
+  });
+
   it('keeps the parent state, drops its activity and relabels approvals by position', () => {
     const shown = presentOne();
     expectFieldByField(PARENT_FIELD_REDACTION, FULL_PARENT, shown.parent);
@@ -199,6 +220,8 @@ const SNAPSHOT_DECISION_FIELDS = {
   question: 'replace',
   options: 'replace',
   multiSelect: 'keep',
+  // Decided on the real labels before they were replaced, so it matches the real snapshot.
+  oneClick: 'keep',
 } as const satisfies Record<keyof NonNullable<ViewAgent['decision']>, FieldRedaction>;
 
 describe('the snapshot built from the redacted roster', () => {

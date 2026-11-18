@@ -67,10 +67,10 @@ beforeEach(() => {
 });
 afterEach(() => themed.unmount());
 
-const renderStage = (view: OrchestratorViewId, { focus = false, settled = false } = {}) =>
+const renderStage = (view: OrchestratorViewId, { focus = false, settled = false, agents = ROSTER } = {}) =>
   themed.render(
     <OrchestratorStage
-      agents={ROSTER}
+      agents={agents}
       parent={{ status: 'processing', activity: { kind: 'tool', tool: 'bash', detail: `${SECRET} root command` } }}
       rootId="root"
       view={view}
@@ -106,6 +106,24 @@ describe('Presenter mode on every view', () => {
       status: 'answered',
       answers: [{ selected: [`${SECRET} no`] }],
     });
+  });
+
+  /** The asking agent, waiting on a choice whose real labels Focus mode must not offer one click each. */
+  const askingWith = (labels: string[]): AgentView[] => {
+    const [asking, ...rest] = ROSTER;
+    const question = { ...asking.decision!.question, options: labels.map(label => ({ label, description: label })) };
+    return [{ ...asking, decision: { ...asking.decision!, question } }, ...rest];
+  };
+
+  it.each([
+    ['a destructive option', ['Keep it', 'Delete the branch']],
+    ['a long option', ['Yes', 'Rewrite the whole billing module from scratch']],
+  ])('Focus mode sends %s to Open instead of one-click placeholders', async (_case, labels) => {
+    await renderStage('board', { focus: true, agents: askingWith(labels) });
+    expect(document.querySelectorAll('[data-testid="orchestrator-focus-option-btn"]')).toHaveLength(0);
+    expect(query('orchestrator-focus-open-btn')).not.toBeNull();
+    expect(document.body.textContent).not.toContain('Option 2');
+    expect(answerTaskDecision).not.toHaveBeenCalled();
   });
 
   it('the settled stage keeps the badge and sends the request to the drawer instead of showing it', async () => {

@@ -2,6 +2,7 @@ import type { PendingDecision } from '@shared/orchestration';
 import type { ViewAction, ViewApproval } from '@shared/viewSnapshot';
 import type { InnkeeperDesk } from './OrchestratorStage';
 import type { AgentView, ParentView } from './roster';
+import { isOneClickDecision } from './tavern/bubbleAnswer';
 
 /*
  * Presenter mode: the Orchestrate stage with every word that came from the work itself replaced, so the
@@ -37,6 +38,8 @@ export const AGENT_FIELD_REDACTION = {
   // The task contract carries the outcome, rationale and paths in prose, and past decisions with their answers.
   workerTask: 'drop',
   decision: 'replace',
+  // Decided from the real labels: placeholders would make a destructive or long choice one click.
+  oneClickDecision: 'replace',
   orchestrationPolicy: 'keep',
   state: 'keep',
   preparing: 'keep',
@@ -97,7 +100,13 @@ function redactAgent(agent: AgentView, number: number): AgentView {
     updatedAt: agent.updatedAt,
     model: agent.model,
     ...(agent.workerSelection && { workerSelection: agent.workerSelection }),
-    ...(agent.decision && { decision: redactDecision(agent.decision) }),
+    ...(agent.decision && {
+      decision: redactDecision(agent.decision),
+      oneClickDecision: isOneClickDecision(
+        agent.decision.question.options.map(option => option.label),
+        agent.decision.question.multiSelect
+      ),
+    }),
     ...(agent.orchestrationPolicy && { orchestrationPolicy: agent.orchestrationPolicy }),
     state: agent.state,
     ...(agent.preparing && { preparing: agent.preparing }),

@@ -31,6 +31,11 @@ const viewDecisionSchema = z.strictObject({
   question: z.string(),
   options: z.array(z.string().min(1).max(MAX_LABEL_CHARS)).min(1).max(MAX_OPTIONS),
   multiSelect: z.boolean().optional(),
+  /**
+   * Whether a view may offer each option as a one-click answer. The host decides it from the real labels,
+   * so it holds when the labels shown are placeholders; absent or false sends the user to the full card.
+   */
+  oneClick: z.boolean().optional(),
 });
 
 const viewAgentSchema = z.strictObject({
