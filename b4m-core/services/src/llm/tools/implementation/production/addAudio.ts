@@ -55,11 +55,12 @@ const description =
 
 type Outcome<T> = { clips: T; notes: string[] };
 
-// A clip sets its shot's length, so lengthening that shot would drop the clip and spend another one.
+// A clip sets its shot's length, and production_storyboard refuses to lengthen a shot past its clip.
 const fitAdvice = (shot: StudioShot): string =>
   shot.clipFileId
     ? 'Shorten the line, or move part of it to the next shot, in production_storyboard (same prompts and lengths, so ' +
-      'the takes and clips are kept), then replace the voiceover.'
+      'the takes and clips are kept), then replace the voiceover. A shot with a clip cannot be lengthened; if the ' +
+      'line must stay word for word, tell the user it does not fit and ask which part to shorten.'
     : 'Shorten the line or lengthen the shot in production_storyboard (same prompts, so the takes are kept), then ' +
       'replace the voiceover.';
 
