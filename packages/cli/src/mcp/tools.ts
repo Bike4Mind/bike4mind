@@ -740,8 +740,6 @@ const defaultSleep = (ms: number) => new Promise<void>(resolve => setTimeout(res
 const chatPollInterval = (elapsedMs: number, intervalMs: number) =>
   elapsedMs < CHAT_POLL_FAST_WINDOW_MS ? intervalMs : Math.max(intervalMs, CHAT_POLL_SLOW_INTERVAL_MS);
 
-// A failed dispatch (ChatCompletionInvoke) writes `type: 'error'` without touching `status`, which
-// stays 'running', so the type check is what ends the poll on it.
 /**
  * Only a cancel stops the job. A running one refuses with a 409 and finishes, which is expected; any other failure
  * leaves a job running that the caller aborted, so it is logged.
@@ -757,6 +755,8 @@ async function cancelImageJobAfterAbort(client: B4mApiClient, jobId: string, ref
   }
 }
 
+// A failed dispatch (ChatCompletionInvoke) writes `type: 'error'` without touching `status`, which
+// stays 'running', so the type check is what ends the poll on it.
 const isSettled = (q: QuestResponse) => q.status === 'done' || q.status === 'stopped' || q.type === 'error';
 
 // Derived here rather than read from the poll's `reply` because older servers return the stored
