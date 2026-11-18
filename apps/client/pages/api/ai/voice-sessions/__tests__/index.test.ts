@@ -35,6 +35,7 @@ vi.mock('axios', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  warmExchangeAttribution: async () => undefined,
   withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
   creditTransactionRepository: { createTransaction: async (_type: string, row: object) => ({ id: 'tx', ...row }) },
   adminSettingsRepository: {},

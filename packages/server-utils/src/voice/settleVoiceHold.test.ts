@@ -13,6 +13,7 @@ const { findActiveForSubject, claimVoiceHold, openVoiceHold, incrementCredits, c
   }));
 vi.mock('@bike4mind/database', () => ({
   withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
+  warmExchangeAttribution: async () => undefined,
   sessionRepository: { claimVoiceHold, openVoiceHold },
   // A user without createdAt predates the new-account spend cap, so reserveVoiceHold's cap check passes.
   userRepository: { incrementCredits, findById: async (id: string) => ({ id }) },

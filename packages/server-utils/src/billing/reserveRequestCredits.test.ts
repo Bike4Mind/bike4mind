@@ -48,6 +48,7 @@ vi.mock('@bike4mind/database', () => ({
   usageEventRepository: {},
   spendFreezeRepository: { findActiveForSubject: findActiveFreeze },
   withTransaction,
+  warmExchangeAttribution: async () => undefined,
   // No samples and no settings rows: the spend cap reads defaults and never refuses here.
   newAccountSpendCapAdapters: {
     adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },

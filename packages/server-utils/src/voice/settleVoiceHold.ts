@@ -4,6 +4,7 @@ import {
   newAccountSpendCapAdapters,
   sessionRepository,
   userRepository,
+  warmExchangeAttribution,
   withTransaction,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
@@ -82,6 +83,8 @@ export type VoiceHold = {
   voiceSessionStartedAt: Date;
   voiceConnectedAt?: Date | null;
   voiceLastActivityAt?: Date | null;
+  /** The key that opened the hold, so its attribution can be cached before the settlement transaction. */
+  voiceHoldApiKeyId?: string | null;
 };
 
 export type VoiceHoldSettlementSource = 'end' | 'sweep' | 'bootstrap';
@@ -118,6 +121,7 @@ export async function settleVoiceHold(
 ): Promise<VoiceHoldSettlement> {
   const reserved = hold.voiceReservedCredits;
   let settlement: VoiceHoldSettlement;
+  await warmExchangeAttribution(hold.voiceHoldApiKeyId);
   try {
     settlement = await withTransaction(async (): Promise<VoiceHoldSettlement> => {
       const claimed = await sessionRepository.claimVoiceHold(hold.id, hold.voiceSessionStartedAt);
@@ -263,6 +267,7 @@ export async function settlePriorVoiceHold(session: {
   voiceSessionStartedAt?: Date | null;
   voiceConnectedAt?: Date | null;
   voiceLastActivityAt?: Date | null;
+  voiceHoldApiKeyId?: string | null;
 }): Promise<VoiceHoldSettlement> {
   if (session.voiceReservedCredits == null || session.voiceSessionStartedAt == null) return { settled: false };
   const hold: VoiceHold = {
@@ -272,6 +277,7 @@ export async function settlePriorVoiceHold(session: {
     voiceSessionStartedAt: new Date(session.voiceSessionStartedAt),
     voiceConnectedAt: session.voiceConnectedAt ?? null,
     voiceLastActivityAt: session.voiceLastActivityAt ?? null,
+    voiceHoldApiKeyId: session.voiceHoldApiKeyId ?? null,
   };
   return settleVoiceHold(hold, lastSeenAt(hold), 'bootstrap');
 }

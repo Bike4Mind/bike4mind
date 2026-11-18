@@ -404,7 +404,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       await executeCompletion({
         getEntitlements: getUserEntitlements,
         getThinkingVisibility: resolveThinkingVisibility,
-        creditHolds: createCompletionCreditHolds(logger),
+        creditHolds: createCompletionCreditHolds(logger, apiKeyInfo?.keyId),
         userId,
         model: body.model,
         messages: body.messages as IMessage[],

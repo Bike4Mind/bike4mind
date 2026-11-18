@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  cleanResearchItemRuleCondition,
   deriveLegacyAllowedDomains,
   canonicalItemRules,
   isSameDomainSet,
@@ -211,5 +212,87 @@ describe('item rules', () => {
     expect(normalizeItemRules(many)).toHaveLength(10);
     expect(normalizeItemRules([{ condition: 'x'.repeat(400), action: 'review' }])[0].condition).toHaveLength(300);
     expect(normalizeItemRules(undefined)).toEqual([]);
+  });
+});
+
+describe('cleanResearchItemRuleCondition', () => {
+  it('reduces a zero-width-only condition to empty', () => {
+    expect(cleanResearchItemRuleCondition('\u200B\u200C\u200D\u2060\uFEFF')).toBe('');
+  });
+
+  it('removes C0, DEL and C1 control characters', () => {
+    expect(cleanResearchItemRuleCondition('a\u0000b\u001Fc\u007Fd\u0080e\u009Ff')).toBe('abcdef');
+  });
+
+  it('turns tab, newline and carriage return into a space', () => {
+    expect(cleanResearchItemRuleCondition('a\tb\nc\r\nd')).toBe('a b c d');
+  });
+
+  it.each([
+    ['soft hyphen', '\u00AD'],
+    ['invisible operators', '\u2061\u2062'],
+    ['variation selector', '\uFE0F'],
+    ['tag character', '\u{E0041}'],
+    ['hangul filler', '\u3164'],
+    ['braille blank', '\u2800'],
+  ])('reduces a lone %s to empty', (_name, char) => {
+    expect(cleanResearchItemRuleCondition(char)).toBe('');
+  });
+
+  it.each([
+    ['vertical tab', '\v'],
+    ['form feed', '\f'],
+    ['NEL', '\u0085'],
+    ['line separator', '\u2028'],
+    ['paragraph separator', '\u2029'],
+  ])('turns %s between words into one space', (_name, char) => {
+    expect(cleanResearchItemRuleCondition('press' + char + 'release')).toBe('press release');
+  });
+
+  it('collapses whitespace left around a stripped character', () => {
+    expect(cleanResearchItemRuleCondition('a \u200B b')).toBe('a b');
+  });
+
+  it('keys conditions that differ only in line breaks or spacing identically', () => {
+    const keys = ['a b', 'a\nb', 'a\r\nb', 'a  b'].map(condition =>
+      researchItemRuleKey({ condition, action: 'block' })
+    );
+    expect(new Set(keys).size).toBe(1);
+  });
+
+  it('leaves accents, CJK and emoji unchanged', () => {
+    expect(cleanResearchItemRuleCondition('caf\u00E9 \u65E5\u672C\u8A9E \u{1F600}')).toBe(
+      'caf\u00E9 \u65E5\u672C\u8A9E \u{1F600}'
+    );
+  });
+
+  it('removes bidi controls', () => {
+    expect(cleanResearchItemRuleCondition('a\u200E\u200F\u202A\u202E\u2066\u2069\u061Cb')).toBe('ab');
+  });
+
+  it('leaves ordinary text, accented letters, CJK and emoji unchanged', () => {
+    for (const text of ['Published by Acme, Inc.', 'caf\u00E9 na\u00EFve', '\u65E5\u672C\u8A9E', '\u{1F600} ok']) {
+      expect(cleanResearchItemRuleCondition(text)).toBe(text);
+    }
+  });
+
+  it('strips the ZWJ inside an emoji sequence (accepted)', () => {
+    expect(cleanResearchItemRuleCondition('\u{1F468}\u200D\u{1F469}')).toBe('\u{1F468}\u{1F469}');
+  });
+
+  it('keys conditions that differ only by invisible characters identically', () => {
+    expect(researchItemRuleKey({ condition: 'ab\u200Bc', action: 'block' })).toBe(
+      researchItemRuleKey({ condition: 'ABC', action: 'block' })
+    );
+  });
+
+  it('drops a zero-width-only rule and dedupes conditions differing by a zero-width character', () => {
+    expect(
+      canonicalItemRules([
+        { condition: '\u200B\u200B', action: 'block' },
+        { condition: 'ab\u200Bc', action: 'block' },
+        { condition: 'abc', action: 'block' },
+      ])
+    ).toEqual([{ condition: 'abc', action: 'block' }]);
   });
 });

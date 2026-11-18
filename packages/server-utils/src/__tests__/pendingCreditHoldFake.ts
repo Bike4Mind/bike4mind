@@ -15,6 +15,7 @@ export const pendingCreditHoldFake = {
   spendFreezeRepository: { findActiveForSubject: async () => null },
   cacheRepository: {},
   withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
+  warmExchangeAttribution: async () => undefined,
   newAccountSpendCapAdapters: {
     adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
     personalSpendSince: async () => [],

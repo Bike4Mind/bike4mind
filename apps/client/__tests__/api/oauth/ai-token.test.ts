@@ -28,6 +28,13 @@ vi.mock('@server/middlewares/baseApi', () => ({
 // via the cacheRepository mock below.
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 
+const mockGetActiveSubscriptions = vi.hoisted(() => vi.fn());
+const mockHoldsPaidStanding = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({
+  getActiveSubscriptionsForUser: mockGetActiveSubscriptions,
+}));
+vi.mock('@bike4mind/server-utils/entitlements/paidStanding', () => ({ holdsPaidStanding: mockHoldsPaidStanding }));
+
 // Minimal enum surface the handler reads (avoids loading real @bike4mind/common).
 // BadRequestError is included (and constructed by the tests) so the handler's
 // `instanceof` check sees the same class identity as the rejection it inspects.
@@ -156,6 +163,8 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     mockFindByUserId.mockResolvedValue([]);
     mockCreateUserApiKey.mockResolvedValue({ id: 'key-1', key: 'b4m_live_deadbeef', scopes: ['ai:generate'] });
     mockAuditCreate.mockResolvedValue({});
+    mockGetActiveSubscriptions.mockResolvedValue([]);
+    mockHoldsPaidStanding.mockReturnValue(false);
     mockRevokeUserApiKey.mockResolvedValue(undefined);
     // Default: user has an active grant covering the billable scope (realistic happy path). The
     // billable ai:generate scope - not mere grant existence - is what authorizes the mint.

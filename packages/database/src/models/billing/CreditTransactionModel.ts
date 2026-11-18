@@ -22,9 +22,11 @@ import {
   type CompletionRunSpend,
   type CompletionRunUsage,
   COMPLETION_RUN_USAGE_MAX_ATTEMPTS,
+  PAYER_STANDINGS,
   type CreditTransactionType,
   type PurchaseReversalReason,
 } from '@bike4mind/common';
+import { exchangeAttributionFor } from './exchangeAttribution';
 
 export type ICreditTransactionDocument = ICreditTransaction & IMongoDocument;
 
@@ -102,6 +104,9 @@ const CreditTransactionSchema = new Schema<ICreditTransactionDocument>(
     cacheReadTokens: { type: Number, required: false },
     cacheWriteTokens: { type: Number, required: false },
     apiKeyId: { type: String, required: false }, // For completion_api_usage (optional - present for API key auth, undefined for JWT)
+    // Stamped by createTransaction for a federated exchange key's charges; absent for every other row.
+    oauthClientId: { type: String, required: false },
+    payerStanding: { type: String, required: false, enum: [...PAYER_STANDINGS] },
 
     // Transfer and received credit fields
     recipientId: { type: String, required: false },
@@ -177,6 +182,12 @@ CreditTransactionSchema.index({ transactionId: 1 }, { unique: true, sparse: true
 CreditTransactionSchema.index(
   { 'metadata.run.runId': 1 },
   { name: 'credit_tx_completion_run', partialFilterExpression: { 'metadata.run.runId': { $exists: true } } }
+);
+// Serves per-app spend rollups. Partial, so it holds only exchange-key charges.
+// Built by the 20261115120000 ensure migration.
+CreditTransactionSchema.index(
+  { oauthClientId: 1, createdAt: -1 },
+  { name: 'credit_tx_oauth_client', partialFilterExpression: { oauthClientId: { $exists: true } } }
 );
 
 export type ICreditTransactionModel = Model<ICreditTransactionDocument>;
@@ -284,10 +295,15 @@ export class CreditTransactionRepository
     type: T,
     data: Omit<Extract<ICreditTransaction, { type: T }>, 'type' | 'id' | 'createdAt' | 'updatedAt'>
   ): Promise<ICreditTransactionDocument | null> {
+    const apiKeyId = (data as { apiKeyId?: string | null }).apiKeyId;
+    const attribution = apiKeyId
+      ? await exchangeAttributionFor(apiKeyId, { ownerType: data.ownerType, ownerId: data.ownerId })
+      : {};
     try {
       return await this.create({
         type,
         ...data,
+        ...attribution,
       } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
     } catch (err) {
       // E11000 on transactionId = idempotent duplicate (SQS retry or concurrent handler)

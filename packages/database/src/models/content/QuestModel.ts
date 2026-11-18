@@ -657,6 +657,9 @@ export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schem
     // set server-side so the client can render a targeted error state. Declared so Mongoose
     // strict mode persists it (otherwise the error UI would not survive a reload).
     errorCode: { type: String, required: false },
+    // Set only for a quest created by a federated exchange key, so per-app outcomes can be counted.
+    apiKeyId: { type: String, required: false, select: false },
+    oauthClientId: { type: String, required: false, select: false },
     // Completion callback for an API-key generation job (see IQuestCallback). select: false keeps
     // the caller's endpoint and key id out of every quest payload and out of the whole-doc
     // update() writes the generation services make, so a stale in-memory quest can never
@@ -1907,6 +1910,13 @@ function initializeQuestModel() {
     ChatHistoryItemSchema.index(
       { 'promptMeta.contextTelemetry.anonymousSessionId.hash': 1 },
       { name: 'contextTelemetry_anonymousSessionHash', sparse: true }
+    );
+
+    // Serves per-app quest outcome counts. Partial, so it holds only exchange-key quests.
+    // Pre-built by 20261115120000_ensure-side-app-attribution-indexes.
+    ChatHistoryItemSchema.index(
+      { oauthClientId: 1, timestamp: -1 },
+      { name: 'oauthClient_timestamp', partialFilterExpression: { oauthClientId: { $exists: true } } }
     );
   } catch (error) {
     // Plugin already applied, ignore error

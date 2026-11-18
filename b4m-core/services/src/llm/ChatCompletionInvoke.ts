@@ -105,6 +105,7 @@ export class ChatCompletionInvoke {
     authOrigin,
     apiKeyId,
     apiKeyBillingOwnerType,
+    oauthClientId,
     adminRoleWithheld,
     visitId,
   }: {
@@ -116,6 +117,8 @@ export class ChatCompletionInvoke {
     apiKeyId?: string;
     /** Server-derived from `req.apiKeyInfo`; see QuestStartBodySchema.apiKeyBillingOwnerType. */
     apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
+    /** Connected app of a federated exchange key; stamped on the quest beside `apiKeyId`. */
+    oauthClientId?: string;
     /** See QuestStartBodySchema.adminRoleWithheld. */
     adminRoleWithheld?: boolean;
     /** Read by the door from the request's visit cookie - never from `body` (see QuestStartBodySchema.visitId). */
@@ -478,6 +481,7 @@ export class ChatCompletionInvoke {
             // Session-bound by the guard above, so the chain a correction claims to extend is
             // always one the caller can actually see.
             correctsQuestId,
+            ...(apiKeyId && oauthClientId ? { apiKeyId, oauthClientId } : {}),
           }),
 
       // Admin settings fetches

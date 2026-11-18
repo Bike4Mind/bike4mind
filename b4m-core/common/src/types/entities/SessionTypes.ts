@@ -307,6 +307,11 @@ export interface IChatHistoryItem {
    */
   callback?: IQuestCallback;
 
+  /** Set with `oauthClientId` when a federated exchange key created the quest; absent for every other caller. */
+  apiKeyId?: string;
+  /** Connected app of the exchange key that created the quest. */
+  oauthClientId?: string;
+
   /**
    * The ID of the QuestMaster plan that was created from this chat history item
    */
