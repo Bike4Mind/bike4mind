@@ -6,7 +6,8 @@ import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import { useLayoutEffect, useRef } from 'react';
 import { AGENT_STATE_LABEL, type AgentView } from '../roster';
-import { STATE_LAMP, poseFor, type SlotPoint, type TavernZone } from './scene';
+import { poseFor, type SlotPoint, type TavernZone } from './scene';
+import { stateLampColor } from '../statePalette';
 import { characterSprite, type CharacterId } from './tavernArt';
 
 const ZONE_PLACE: Record<TavernZone, string> = {
@@ -100,7 +101,7 @@ export function OverflowStack({
                 borderRadius: '50%',
                 overflow: 'hidden',
                 bgcolor: '#2a1d10',
-                border: `2px solid ${STATE_LAMP[agent.state]}`,
+                border: `2px solid ${stateLampColor(agent.state)}`,
                 boxShadow:
                   agent.id === selectedId
                     ? '0 0 0 2px #f5c542, 0 2px 0 rgba(0, 0, 0, 0.45)'
@@ -131,7 +132,7 @@ export function OverflowStack({
           sx={{
             px: '0.5em',
             borderRadius: '999px',
-            bgcolor: urgent ? '#f5c542' : 'rgba(20, 12, 6, 0.85)',
+            bgcolor: urgent ? stateLampColor('needs-you') : 'rgba(20, 12, 6, 0.85)',
             color: urgent ? '#2a1d10' : '#fbe9c8',
             outline: holdsSelection ? '2px solid #f5c542' : 'none',
             fontWeight: 700,
@@ -164,8 +165,8 @@ export function OverflowStack({
                 sx={{
                   width: 8,
                   height: 8,
-                  bgcolor: STATE_LAMP[agent.state],
-                  boxShadow: `0 0 4px ${STATE_LAMP[agent.state]}`,
+                  bgcolor: stateLampColor(agent.state),
+                  boxShadow: `0 0 4px ${stateLampColor(agent.state)}`,
                 }}
               />
             </ListItemDecorator>

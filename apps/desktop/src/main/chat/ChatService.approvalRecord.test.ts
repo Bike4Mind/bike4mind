@@ -11,10 +11,12 @@ import { SessionStore } from './SessionStore';
 import { CapabilityLedger } from './capabilities/CapabilityLedger';
 import { revokeSessionCapability } from './capabilities/approvalCapabilities';
 import type { ApprovalLogEntry } from './permissions/ApprovalLog';
+import { summarizeApprovals } from './permissions/approvalSummary';
 import { PermissionRuleSet, compileRule, parseRule, type CompiledRule, type RuleSource } from './permissions/rules';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { bashExecute } from './tools/shellTools';
+import * as shellScanner from './tools/shellScan';
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -380,5 +382,81 @@ describe('ChatService approval record', () => {
       { timeout: 5000, interval: 10 }
     );
     expect(stored.approval).toMatchObject({ outcome: 'allowed', decidedBy: { kind: 'mode', mode: 'full' } });
+  });
+
+  /**
+   * Full access decides on its own except for a few named stops. Every card it still shows has to
+   * say which one, on the card and in the log, or a mode that did apply reads as one that did not.
+   */
+  describe('in Full access', () => {
+    async function askedAndLogged(id: string): Promise<{ card: ChatToolCall; entry: ApprovalLogEntry }> {
+      const card = await awaitCall(id, 'awaiting-approval');
+      approvals.resolve(card.approvalId!, { decision: 'deny' });
+      await awaitCall(id, 'denied');
+      const entry = await vi.waitUntil(() => logged.find(each => each.approval.asked), { timeout: 5000, interval: 5 });
+      return { card, entry };
+    }
+
+    it('applies a switch from the pill to the next call of a turn already running', async () => {
+      const sessionId = await run('ask', 'touch made.txt');
+      const asked = await awaitCall('c1', 'awaiting-approval');
+      await service.setApprovalMode(sessionId, 'full');
+      approvals.resolve(asked.approvalId!, { decision: 'once' });
+      await awaitCall('c1', 'done');
+
+      await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 5 });
+      useTool(streams[1], 'c2', 'touch other.txt');
+      const second = await awaitCall('c2', 'done');
+      expect(second.approval).toMatchObject({ decidedBy: { kind: 'mode', mode: 'full' }, asked: false });
+    });
+
+    it('names why it asked about a command that writes protected settings', async () => {
+      await run('full', 'cp notes.txt .claude/settings.json');
+      const { card, entry } = await askedAndLogged('c1');
+      expect(card.approvalDetail).toContain('Reaches a location Desktop protects');
+      expect(entry.mode).toBe('full');
+      expect(entry.approval.askedBecause).toContain('Full access');
+      expect(entry.approval.askedBecause).toContain('Reaches a location Desktop protects');
+    });
+
+    it('names why it asked about a command Desktop could not read, on the card too', async () => {
+      vi.spyOn(shellScanner, 'scanShell').mockResolvedValue(null);
+      await run('full', 'ls notes.txt');
+      const { card, entry } = await askedAndLogged('c1');
+      expect(card.approvalDetail).toContain('Could not read this command');
+      expect(entry.approval.askedBecause).toContain('Could not read this command');
+      expect(entry.approval.askedBecause).toContain('This tool asks in every mode. Tool checks:');
+    });
+
+    it.each(['ask', 'auto'] as const)('adds no Full access reason in %s mode', async mode => {
+      vi.spyOn(shellScanner, 'scanShell').mockResolvedValue(null);
+      await run(mode, 'ls notes.txt');
+      const { card, entry } = await askedAndLogged('c1');
+      expect(card.approvalDetail).not.toContain('Could not read this command');
+      expect(entry.approval.askedBecause ?? '').not.toContain('Full access');
+    });
+
+    it('names why it asked before deleting a conversation, which cannot be undone', async () => {
+      const created = await service.createCodeSession({ directory: root, branch: '', workspace: false });
+      const other = await service.createCodeSession({ directory: root, branch: '', workspace: false });
+      if (!created.ok || !other.ok) throw new Error('could not create the sessions');
+      await service.setApprovalMode(created.session.id, 'full');
+      await service.send(created.session.id, 'go');
+      await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+      streams[0].write(
+        frame({
+          type: 'tool_use',
+          tools: [{ id: 'd1', name: 'session_delete', arguments: JSON.stringify({ session_id: other.session.id }) }],
+        })
+      );
+      streams[0].write(frame('[DONE]'));
+      const { card, entry } = await askedAndLogged('d1');
+      const reason = 'It cannot be undone, so it is asked every time.';
+      expect(entry.approval.askedBecause).toContain('cannot be undone');
+      expect(entry.approval.askedBecause).toContain(reason);
+      expect(card.approvalDetail).toContain(reason);
+      expect(card.approvalIrreversible).toBe(true);
+      expect(summarizeApprovals([entry]).reasons).toContainEqual({ reason: 'full access stop', count: 1 });
+    });
   });
 });

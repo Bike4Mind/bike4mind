@@ -45,6 +45,8 @@ export function toPublicMusicJobErrorCode(code: GenerationJobErrorCode): MusicJo
     case 'enqueue_failed':
     // A music job takes no input image; the code is video-only.
     case 'input_image_not_found':
+    // A music job reads no input files.
+    case 'unsupported_input':
       return 'provider_error';
     case 'content_blocked':
     case 'provider_timeout':

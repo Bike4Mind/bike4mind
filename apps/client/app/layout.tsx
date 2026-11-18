@@ -3,7 +3,6 @@ import Script from 'next/script';
 import { ReactNode } from 'react';
 import { Source_Serif_4, Libre_Franklin, JetBrains_Mono, Inter } from 'next/font/google';
 import { AppRouterCacheProvider } from '@mui/material-nextjs/v16-appRouter';
-import { ClientProviders } from './providers';
 import { ColorSchemeScript } from './ColorSchemeScript';
 import { SerwistProvider } from './serwist';
 import { gaBootstrapScript, getGaMeasurementId } from './utils/gaConsentBootstrap';
@@ -105,9 +104,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           </>
         )}
         <AppRouterCacheProvider options={{ key: 'joy' }}>
-          <SerwistProvider swUrl="/serwist/sw.js">
-            <ClientProviders>{children}</ClientProviders>
-          </SerwistProvider>
+          {/* The client providers mount with the SPA in [[...slug]]/SpaApp, so they stay out of SSR. */}
+          <SerwistProvider swUrl="/serwist/sw.js">{children}</SerwistProvider>
         </AppRouterCacheProvider>
       </body>
     </html>

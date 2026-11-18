@@ -1,3 +1,4 @@
+import type { ClaimedAccountDeletionNotice } from '@bike4mind/database';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
@@ -14,6 +15,10 @@ const h = vi.hoisted(() => ({
   redactStripe: vi.fn(),
   endRealtimeConnections: vi.fn(),
   sendComplete: vi.fn(),
+  noticeRecord: vi.fn(),
+  noticeClaim: vi.fn<(idHash: string, dueBefore: Date) => Promise<ClaimedAccountDeletionNotice | null>>(),
+  noticeMarkFailed: vi.fn(),
+  noticeRemove: vi.fn(),
   recordAdminAction: vi.fn(),
   collections: vi.fn(),
   assertClassified: vi.fn(),
@@ -30,7 +35,15 @@ vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: {},
   mongoose: { modelNames: () => ['Alpha', 'Beta'] },
   adminAuditLogRepository: { append: vi.fn() },
+  ACCOUNT_DELETION_NOTICE_RETRY_DELAY_MS: 60 * 60 * 1000,
+  accountDeletionNoticeRepository: {
+    record: h.noticeRecord,
+    claimDue: h.noticeClaim,
+    markFailed: h.noticeMarkFailed,
+    remove: h.noticeRemove,
+  },
 }));
+vi.mock('../privacy/erasureHash', () => ({ erasureIdHash: (id: string) => `hash-${id}` }));
 vi.mock('@bike4mind/services', () => ({
   authSessionService: { endRealtimeConnections: h.endRealtimeConnections },
   adminAuditService: { recordAdminAction: h.recordAdminAction },
@@ -82,9 +95,21 @@ type HardDeleteContext = {
 };
 const deletedTarget = { name: 'Leaving User', username: 'leaving', email: 'leaving@example.com' };
 
+const claimedNotice = (idHash: string): ClaimedAccountDeletionNotice => ({
+  idHash,
+  email: 'leaving@example.com',
+  attempts: 0,
+  nextAttemptAt: NOW,
+  createdAt: NOW,
+  leaseToken: 'notice-owner',
+  leaseExpiresAt: new Date(NOW.getTime() + 60 * 60 * 1000),
+});
+
 beforeEach(() => {
   vi.resetAllMocks();
   h.order.length = 0;
+  h.noticeClaim.mockImplementation(async idHash => claimedNotice(idHash));
+  h.noticeMarkFailed.mockResolvedValue(1);
   h.exists.mockResolvedValue({ _id: USER_ID });
   h.claimUser.mockResolvedValue({ email: 'leaving@example.com' });
   h.organizationExists.mockResolvedValue(null);
@@ -317,13 +342,57 @@ describe('completeAccountDeletion', () => {
     await expect(complete()).resolves.toEqual({ deleted: true });
     expect(users.delete).toHaveBeenCalledWith(USER_ID);
     expect(h.sendComplete).toHaveBeenCalledWith('leaving@example.com');
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('bus down'));
+    // The address stays in the outbox for the sweep's retry, and no log line carries it or the id.
+    expect(h.noticeMarkFailed).toHaveBeenCalledWith(`hash-${USER_ID}`, 'notice-owner', expect.any(Date));
+    expect(h.noticeRemove).not.toHaveBeenCalled();
+    // Every argument, Errors by name and message, as the real Logger writes them.
+    for (const arg of [...logger.warn.mock.calls, ...logger.error.mock.calls].flat()) {
+      const text = arg instanceof Error ? `${arg.name}: ${arg.message}` : String(arg);
+      expect(text).not.toContain('leaving@example.com');
+      expect(text).not.toContain(USER_ID);
+    }
+  });
+
+  it('records the notice inside the delete transaction and clears it after a successful send', async () => {
+    h.noticeClaim.mockImplementation(async idHash => {
+      h.order.push('claim');
+      return claimedNotice(idHash);
+    });
+    h.noticeRecord.mockImplementation(async () => {
+      h.order.push('notice');
+    });
+    h.hardDeleteUser.mockImplementation(async (_id: string, context: HardDeleteContext) => {
+      await context.recordInTransaction?.(deletedTarget);
+      h.order.push('committed');
+      return { result: undefined, subscriptionCancellation: null };
+    });
+    await complete();
+    expect(h.noticeRecord).toHaveBeenCalledWith({
+      idHash: `hash-${USER_ID}`,
+      email: 'leaving@example.com',
+      now: expect.any(Date),
+    });
+    expect(h.order).toEqual([
+      'orgs',
+      'files',
+      'content',
+      'stripe',
+      'realtime',
+      'erase:beforeDelete',
+      'notice',
+      'audit',
+      'committed',
+      'claim',
+      'email',
+    ]);
+    expect(h.noticeRemove).toHaveBeenCalledWith(`hash-${USER_ID}`, 'notice-owner');
   });
 
   it('sends no completion email without an address', async () => {
     h.claimUser.mockResolvedValue({ email: null });
     await expect(complete()).resolves.toEqual({ deleted: true });
     expect(h.sendComplete).not.toHaveBeenCalled();
+    expect(h.noticeRecord).not.toHaveBeenCalled();
   });
 
   it('records the completed deletion in the admin audit log inside the delete transaction', async () => {
@@ -526,6 +595,7 @@ describe('completeAccountDeletion for an admin data subject erasure', () => {
     await complete();
 
     expect(h.sendComplete).not.toHaveBeenCalled();
+    expect(h.noticeRecord).not.toHaveBeenCalled();
   });
 
   it('keeps the self path emailing and planning nothing', async () => {

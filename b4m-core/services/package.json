@@ -140,6 +140,16 @@
         "default": "./dist/musicJobs/index.cjs"
       }
     },
+    "./sceneJobs": {
+      "import": {
+        "types": "./dist/sceneJobs/index.d.mts",
+        "default": "./dist/sceneJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/sceneJobs/index.d.cts",
+        "default": "./dist/sceneJobs/index.cjs"
+      }
+    },
     "./audioJobs": {
       "import": {
         "types": "./dist/audioJobs/index.d.mts",

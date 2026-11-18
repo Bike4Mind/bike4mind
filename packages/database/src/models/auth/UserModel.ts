@@ -398,6 +398,12 @@ const heldReviewTrancheFilter = {
   $expr: { $lt: ['$signupGrant.creditsReleased', '$signupGrant.signupCredits'] },
 };
 
+/** `$type` repeats the partial index's filter, without which the planner cannot use it. */
+export const overdueDeletionRequestFilter = (requestedBefore: Date) => ({
+  'deletion.scheduledFor': { $type: 'date' as const },
+  'deletion.requestedAt': { $lte: requestedBefore },
+});
+
 export class UserRepository extends BaseRepository<IUserDocument> implements IUserRepository {
   constructor(model: IUserModel) {
     super(model);
@@ -939,6 +945,11 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return docs.map(d => String(d._id));
   }
 
+  /** Deletion requests made at or before `requestedBefore` whose row still exists, i.e. not yet erased or cancelled. */
+  async countOverdueDeletionRequests(requestedBefore: Date): Promise<number> {
+    return this.model.countDocuments(overdueDeletionRequestFilter(requestedBefore));
+  }
+
   /** Stamps IUser.signupLanding once; a later call never overwrites it. */
   async recordSignupLanding(userId: string, notebookOwnerId: string, capturedAt: Date): Promise<void> {
     await this.model.updateOne(
@@ -968,10 +979,13 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     }));
   }
 
-  /** Other accounts that signed up from this exact IP, newest first; served by user_signupMeta_ip. */
-  async findIdsBySignupIp(ip: string, excludeId: string, limit: number): Promise<string[]> {
+  /**
+   * Accounts that signed up from this exact IP, newest first, leaving out excludeId when given;
+   * served by user_signupMeta_ip.
+   */
+  async findIdsBySignupIp(ip: string, excludeId: string | undefined, limit: number): Promise<string[]> {
     const docs = await this.model
-      .find({ 'signupMeta.ip': ip, _id: { $ne: convertIds([excludeId])[0] } })
+      .find({ 'signupMeta.ip': ip, ...(excludeId ? { _id: { $ne: convertIds([excludeId])[0] } } : {}) })
       .select('_id')
       .sort({ _id: -1 })
       .limit(limit)

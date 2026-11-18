@@ -29,6 +29,8 @@ export function toPublicAudioJobErrorCode(code: GenerationJobErrorCode): AudioJo
     // Neither audio kind takes an input image or is region-gated.
     case 'input_image_not_found':
     case 'region_unavailable':
+    // Compose-only: neither audio kind reads input files.
+    case 'unsupported_input':
       return 'provider_error';
     case 'content_blocked':
     case 'provider_timeout':
