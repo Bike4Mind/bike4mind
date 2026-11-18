@@ -65,6 +65,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/artifacts/{id}/versions',
   },
+  createAssistantInstruction: {
+    method: 'POST',
+    path: '/api/v1/assistant/instructions',
+  },
   createCompletion: {
     method: 'POST',
     path: '/api/ai/v1/completions',
@@ -136,6 +140,10 @@ export const operations = {
   deleteArtifact: {
     method: 'DELETE',
     path: '/api/v1/artifacts/{id}',
+  },
+  deleteAssistantInstruction: {
+    method: 'DELETE',
+    path: '/api/v1/assistant/instructions/{id}',
   },
   deleteFile: {
     method: 'DELETE',
@@ -340,6 +348,10 @@ export const operations = {
   listArtifacts: {
     method: 'GET',
     path: '/api/v1/artifacts',
+  },
+  listAssistantInstructions: {
+    method: 'GET',
+    path: '/api/v1/assistant/instructions',
   },
   listBriefs: {
     method: 'GET',
