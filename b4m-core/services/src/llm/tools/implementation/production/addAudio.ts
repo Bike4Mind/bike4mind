@@ -58,7 +58,8 @@ type Outcome<T> = { clips: T; notes: string[] };
 // A clip sets its shot's length, so lengthening that shot would drop the clip and spend another one.
 const fitAdvice = (shot: StudioShot): string =>
   shot.clipFileId
-    ? 'Shorten the line in production_storyboard (same prompts, so the takes and clips are kept), then replace the voiceover.'
+    ? 'Shorten the line, or move part of it to the next shot, in production_storyboard (same prompts and lengths, so ' +
+      'the takes and clips are kept), then replace the voiceover.'
     : 'Shorten the line or lengthen the shot in production_storyboard (same prompts, so the takes are kept), then ' +
       'replace the voiceover.';
 

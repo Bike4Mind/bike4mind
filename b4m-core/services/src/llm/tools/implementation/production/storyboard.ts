@@ -8,7 +8,7 @@ import {
 import type { ToolContext, ToolDefinition } from '../../base/types';
 import { buildUnavailableTool, toToolParameters } from '../generationJobTool';
 import { isProductionToolConfig } from './config';
-import { DIRECTOR_TRACK_IDS, withDirectorTracks } from './layout';
+import { DIRECTOR_TRACK_IDS, keptMusic, withDirectorTracks } from './layout';
 import { CompositionIdArg, ProductionToolError, describeProductionError } from './shared';
 
 export const STORYBOARD_MAX_SHOTS = 12;
@@ -56,14 +56,17 @@ const schema = z.object({
   replace: z
     .boolean()
     .optional()
-    .describe('Set true to change the prompt of, or remove, shots that already have takes. Their takes stay in Files.'),
+    .describe(
+      'Set true to change the prompt of, or remove, shots that already have takes, or to lengthen a shot past its ' +
+        'clip. Their takes stay in Files.'
+    ),
 });
 type StoryboardArgs = z.infer<typeof schema>;
 
 const description =
   'Write the storyboard of a Studio production: the shots in order, each with an image prompt, its length and its ' +
-  'voiceover line. Replaces the shot list; a shot whose prompt is unchanged keeps its takes, and its clip unless the ' +
-  'shot gets longer. Plan about 4 shots for a 15 second ad (hook, product, benefit, call to action). Then call ' +
+  'voiceover line. Replaces the shot list; a shot whose prompt is unchanged keeps its takes and clip, and cannot ' +
+  'grow past its clip. Plan about 4 shots for a 15 second ad (hook, product, benefit, call to action). Then call ' +
   'production_generate_shot.';
 
 const toShot = (shot: StoryboardArgs['shots'][number], index: number): StudioShot => ({
@@ -122,17 +125,26 @@ export const productionStoryboardTool: ToolDefinition = {
                 'takes; otherwise ask the user before replacing them, then pass replace: true.'
             );
           }
+          const outgrown = kept.filter(({ clipDropped }) => clipDropped).map(({ shot }) => shot.id);
+          if (!args.replace && outgrown.length > 0) {
+            throw new ProductionToolError(
+              `${outgrown.join(', ')} would run longer than its clip, which would drop the clip and need a new one. ` +
+                'Keep those shots at their length: to fit a long voice line, spread it over two shots or shorten it. ' +
+                'Pass replace: true only to make the new clips anyway.'
+            );
+          }
           const products = current.brandKit.productFileIds;
           const product = args.productFileId?.toLowerCase();
           const directorIds = new Set<string>(Object.values(DIRECTOR_TRACK_IDS));
-          // The old cut's picture, captions and audio were laid to the old shots, so a new storyboard clears them.
+          // The old cut's picture, captions, voice and effects were laid to the old shots, so a new storyboard
+          // clears them; the music bed is laid to the whole cut, so it is kept (trimmed) rather than paid for again.
           const staleCut = current.timeline.tracks.some(track => directorIds.has(track.id) && track.clips.length > 0);
           await config.compositions.update(args.compositionId, {
             shots,
             ...(staleCut && {
               timeline: withDirectorTracks(
                 current.timeline,
-                { video: [], music: [], voice: [], sfx: [], captions: [] },
+                { video: [], music: keptMusic(current.timeline, totalMs), voice: [], sfx: [], captions: [] },
                 totalMs
               ),
             }),

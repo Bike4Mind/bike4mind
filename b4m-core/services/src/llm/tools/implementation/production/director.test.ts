@@ -330,7 +330,7 @@ describe('production director tools', () => {
     expect(harness.composition().shots.map(shot => shot.fileIds.length > 0)).toEqual([true, false, true]);
   });
 
-  it('keeps takes and clips when a re-run only retimes shots, dropping a clip its shot outgrows', async () => {
+  it('keeps takes and clips on a re-time, and drops a clip its shot outgrows only with replace', async () => {
     await run(productionStoryboardTool, harness, STORYBOARD);
     await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID });
     const before = harness.composition().shots;
@@ -342,12 +342,32 @@ describe('production director tools', () => {
       ),
     };
 
-    const result = JSON.parse(await run(productionStoryboardTool, harness, retimed));
+    const refused = await run(productionStoryboardTool, harness, retimed);
+    expect(refused).toMatch(/^Error: shot-1 would run longer than its clip/);
+    expect(harness.composition().shots).toEqual(before);
+
+    const result = JSON.parse(await run(productionStoryboardTool, harness, { ...retimed, replace: true }));
     expect(result.clipsDropped).toEqual(['shot-1']);
     const after = harness.composition().shots;
     expect(after.map(shot => shot.chosenFileId)).toEqual(before.map(shot => shot.chosenFileId));
     expect(after.map(shot => shot.clipFileId)).toEqual([undefined, before[1]!.clipFileId, before[2]!.clipFileId]);
     expect(after.every(shot => shot.voiceLine === 'Shorter.' || shot.id === 'shot-1')).toBe(true);
+  });
+
+  it('keeps the music bed, trimmed, when a re-time shortens the cut', async () => {
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
+    await run(productionAddAudioTool, harness, { compositionId: COMPOSITION_ID, music: { prompt: 'bright acoustic' } });
+    expect(harness.counts.music).toBe(1);
+    const shorter = { ...STORYBOARD, shots: STORYBOARD.shots.map(shot => ({ ...shot, durationSeconds: 2 })) };
+
+    await run(productionStoryboardTool, harness, shorter);
+    const music = harness.composition().timeline.tracks.find(track => track.kind === 'music');
+    expect(music?.clips).toHaveLength(1);
+    expect(music?.clips[0]).toMatchObject({ startMs: 0, durationMs: 6000 });
+
+    await run(productionAddAudioTool, harness, { compositionId: COMPOSITION_ID, music: { prompt: 'bright acoustic' } });
+    expect(harness.counts.music).toBe(1);
   });
 
   it('keeps stills on the timeline when animate is false', async () => {
