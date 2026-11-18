@@ -1,6 +1,6 @@
 import type { APIRequestContext } from '@playwright/test';
 import { test, expect } from './fixtures';
-import { apiCreateTestUser } from './helpers/api';
+import { apiCreateTestUser, apiGetMfaCode } from './helpers/api';
 import { getE2ETestId, getTestRunId, getTestUsers } from './helpers/test-users';
 import { AdminPage } from './pages/AdminPage';
 
@@ -15,15 +15,20 @@ const PASSWORD = 'E2eAccessReviewPass123!';
 
 type ReportRow = { userId: string; fullAdmin: boolean; permissions: string[]; dormant: boolean; noMfa: boolean };
 
-async function stepUp(request: APIRequestContext, token: string, password: string) {
+async function stepUp(request: APIRequestContext, admin: { accessToken: string; email: string }) {
   const res = await request.post(`${baseURL}/api/auth/step-up`, {
-    headers: auth(token),
-    data: { method: 'password', password },
+    headers: auth(admin.accessToken),
+    data: { method: 'totp', code: await apiGetMfaCode(request, admin.email) },
   });
   expect(res.ok(), `step-up failed: ${res.status()}`).toBe(true);
 }
 
-async function createUser(request: APIRequestContext, slug: string, isAdmin: boolean) {
+async function createUser(
+  request: APIRequestContext,
+  slug: string,
+  isAdmin: boolean,
+  options: Pick<Parameters<typeof apiCreateTestUser>[1], 'mfa'> = {}
+) {
   const e2eId = getE2ETestId();
   const suffix = e2eId ? `${e2eId}-${getTestRunId()}` : getTestRunId();
   const { retry, repeatEachIndex } = test.info();
@@ -34,6 +39,7 @@ async function createUser(request: APIRequestContext, slug: string, isAdmin: boo
     name,
     password: PASSWORD,
     isAdmin,
+    ...options,
   });
   return (created.user.id || created.user._id) as string;
 }
@@ -47,9 +53,9 @@ test.describe('Admin access review', () => {
   let role: { id: string; name: string };
 
   test.beforeAll(async ({ request }) => {
-    adminB = await createUser(request, 'access-review-b', true);
+    adminB = await createUser(request, 'access-review-b', true, { mfa: 'unenrolled' });
     delegateC = await createUser(request, 'access-review-c', false);
-    await stepUp(request, adminA.accessToken, adminA.password);
+    await stepUp(request, adminA);
     const grant = await request.put(`${baseURL}/api/admin/users/${delegateC}/permissions`, {
       headers: auth(adminA.accessToken),
       data: { before: [], adminPermissions: ['users:read'], reason: 'access review e2e setup' },

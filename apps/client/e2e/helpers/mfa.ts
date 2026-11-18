@@ -144,8 +144,12 @@ export function watchMfaSetup(page: Page) {
     secret = ((await res.json()) as { secret: string }).secret;
   };
   page.on('response', onResponse);
+  const dispose = () => {
+    page.off('response', onResponse);
+  };
 
   return {
+    dispose,
     async enrollIfAsked(verifyBody: { mfaSetupRequired?: boolean }): Promise<{ accessToken: string } | null> {
       try {
         if (!verifyBody.mfaSetupRequired) return null;
@@ -166,7 +170,7 @@ export function watchMfaSetup(page: Page) {
         await expect(page.getByTestId('mfa-modal-content')).toBeHidden({ timeout: TIMEOUTS.ACTION });
         return { accessToken };
       } finally {
-        page.off('response', onResponse);
+        dispose();
       }
     },
   };
