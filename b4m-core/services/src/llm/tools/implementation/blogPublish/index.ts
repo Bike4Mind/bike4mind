@@ -1,6 +1,7 @@
 import { ToolDefinition } from '../../base/types';
 import { IUserDocument } from '@bike4mind/common';
 import { guardedFetch } from '../webfetch/guardedFetch';
+import { resolveBlogApiKey } from '../blogIntegration';
 
 interface BlogPublishParams {
   title: string;
@@ -29,7 +30,8 @@ async function publishToBlog(user: IUserDocument, params: BlogPublishParams): Pr
     );
   }
 
-  const { apiKey, baseUrl, defaultAuthor, defaultTags } = user.blogIntegration;
+  const { baseUrl, defaultAuthor, defaultTags } = user.blogIntegration;
+  const apiKey = resolveBlogApiKey(user.blogIntegration.apiKey);
 
   // Prepare request body
   const requestBody = {
