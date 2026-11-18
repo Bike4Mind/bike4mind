@@ -1,4 +1,5 @@
 {
+  "packages/database/src/models/billing/SpendFreezeModel.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/pages/api/admin/ai-operations.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/pages/api/admin/context-telemetry/[id]/analyze.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/pages/api/admin/email/jobs/[id]/check-status.ts": { "b4m/require-update-validators": { "count": 1 } },
