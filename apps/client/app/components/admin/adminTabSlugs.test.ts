@@ -65,6 +65,7 @@ describe('adminTabRedirectFromSlug', () => {
     const redirect = adminTabRedirectFromSlug(slug);
     expect(redirect?.tab).toBe(AdminTab.Waitlist);
     expect(redirect?.search?.inviteSection).toBe(section);
+    expect(redirect?.search?.heldGrants).toBe(slug === 'held-signup-grants' ? 'open' : undefined);
     expect(adminTabFromSlug(slug)).toBeUndefined();
   });
 
@@ -95,9 +96,16 @@ describe('adminTabLinkSearch', () => {
   it.each([
     [AdminTab.RegistrationInvites, 'invites'],
     [AdminTab.PartnerSignupRules, 'partners'],
-    [AdminTab.HeldSignupGrants, 'pending'],
   ])('links retired tab %s to its Invite Center section', (tab, section) => {
     expect(adminTabLinkSearch(tab)).toEqual({ tab: 'waitlist', inviteSection: section });
+  });
+
+  it('links the retired held grants tab to Pending with the held actions open', () => {
+    expect(adminTabLinkSearch(AdminTab.HeldSignupGrants)).toEqual({
+      tab: 'waitlist',
+      inviteSection: 'pending',
+      heldGrants: 'open',
+    });
   });
 
   it('links the retired issue filing page to the Security page, Scans view', () => {

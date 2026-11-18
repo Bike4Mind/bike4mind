@@ -14,6 +14,8 @@ export const INVITE_CENTER_SECTION_IDS = [
 export type InviteCenterSectionId = (typeof INVITE_CENTER_SECTION_IDS)[number];
 export const DEFAULT_INVITE_CENTER_SECTION: InviteCenterSectionId = 'waitlist';
 
+export const INVITE_CENTER_HELD_GRANTS_PARAM = 'heldGrants';
+
 export const PENDING_STATUS_PARAM = 'pendingStatus';
 export const PENDING_REASON_PARAM = 'pendingReason';
 export const PENDING_SOURCE_PARAM = 'pendingSource';
@@ -45,6 +47,7 @@ export const INVITE_CENTER_TAB_PARAMS = [
   PENDING_SOURCE_PARAM,
   PENDING_INVITE_PARAM,
   PENDING_SORT_PARAM,
+  INVITE_CENTER_HELD_GRANTS_PARAM,
 ] as const;
 
 export type InviteCenterSearch = {
@@ -54,6 +57,7 @@ export type InviteCenterSearch = {
   [PENDING_SOURCE_PARAM]?: (typeof PENDING_SOURCES)[number];
   [PENDING_INVITE_PARAM]?: (typeof PENDING_INVITES)[number];
   [PENDING_SORT_PARAM]?: (typeof PENDING_SORTS)[number];
+  [INVITE_CENTER_HELD_GRANTS_PARAM]?: 'open';
 };
 
 /** Per-key coercion for the route's `validateSearch`; an unknown section becomes undefined. */
@@ -66,4 +70,5 @@ export const INVITE_CENTER_SEARCH_PARSERS: {
   [PENDING_SOURCE_PARAM]: oneOf(PENDING_SOURCES),
   [PENDING_INVITE_PARAM]: oneOf(PENDING_INVITES),
   [PENDING_SORT_PARAM]: oneOf(PENDING_SORTS),
+  [INVITE_CENTER_HELD_GRANTS_PARAM]: oneOf(['open'] as const),
 };

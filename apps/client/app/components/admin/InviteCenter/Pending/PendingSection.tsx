@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Alert, Button, Link, Stack } from '@mui/joy';
-import { useNavigate } from '@tanstack/react-router';
+import { useNavigate, useSearch } from '@tanstack/react-router';
 import type { AdminSignupGrantPendingRow } from '@bike4mind/common';
 import {
   useAdminSignupGrantPendingList,
@@ -9,6 +9,8 @@ import {
 } from '@client/app/hooks/data/adminSignupGrant';
 import { AdminTab } from '../../adminSidebarConfig';
 import {
+  INVITE_CENTER_HELD_GRANTS_PARAM,
+  INVITE_CENTER_SEARCH_PARSERS,
   PENDING_HELD_REASONS,
   PENDING_INVITES,
   PENDING_SEARCH_KEYS,
@@ -16,6 +18,7 @@ import {
   PENDING_SOURCES,
   PENDING_STATUSES,
 } from '../../inviteCenterSearch';
+import type { AdminSearch } from '../../adminTabParams';
 import { useAdminModal } from '../../useAdminModal';
 import { BulkActionBar, type AdminSelection } from '../../shared/BulkActionBar';
 import { DataTable, type DataColumn } from '../../shared/DataTable';
@@ -73,6 +76,8 @@ const FILTERS: readonly AdminFilter[] = [
 
 const pick = <T extends string>(allowed: readonly T[], value: string): T | undefined =>
   (allowed as readonly string[]).includes(value) ? (value as T) : undefined;
+
+const parseHeldGrants = INVITE_CENTER_SEARCH_PARSERS[INVITE_CENTER_HELD_GRANTS_PARAM];
 
 const NO_SELECTION: AdminSelection = { mode: 'explicit', ids: [] };
 
@@ -154,10 +159,23 @@ const StateChips = ({ row }: { row: AdminSignupGrantPendingRow }) => (
 );
 
 export function PendingSection() {
-  const [heldActionsOpen, setHeldActionsOpen] = useState(false);
-  const [heldActionsMounted, setHeldActionsMounted] = useState(false);
+  const search = useSearch({ strict: false }) as AdminSearch;
+  const heldActionsOpen = parseHeldGrants(search[INVITE_CENTER_HELD_GRANTS_PARAM]) === 'open';
+  const [heldActionsOpened, setHeldActionsOpened] = useState(false);
+  const heldActionsMounted = heldActionsOpened || heldActionsOpen;
   const setActiveTab = useAdminModal(state => state.setActiveTab);
   const navigate = useNavigate();
+  const toggleHeldActions = () => {
+    setHeldActionsOpened(true);
+    return navigate({
+      to: '/admin',
+      search: (previous: AdminSearch) => ({
+        ...previous,
+        [INVITE_CENTER_HELD_GRANTS_PARAM]: heldActionsOpen ? undefined : 'open',
+      }),
+      replace: true,
+    });
+  };
   const [listState, setListState] = useAdminListUrlState(PENDING_SEARCH_KEYS);
   const filters: PendingListFilters = {
     status: pick(PENDING_STATUSES, listState.filters.status),
@@ -304,10 +322,7 @@ export function PendingSection() {
           size="sm"
           data-testid="invite-center-open-held-grants-btn"
           aria-expanded={heldActionsOpen}
-          onClick={() => {
-            setHeldActionsMounted(true);
-            setHeldActionsOpen(open => !open);
-          }}
+          onClick={() => void toggleHeldActions()}
         >
           {heldActionsOpen ? 'Hide held grant actions' : 'Held grant actions'}
         </Button>

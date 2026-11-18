@@ -313,17 +313,30 @@ describe('PendingSection', () => {
     expect(useAdminModal.getState().activeTab).toBe(tab);
   });
 
-  it('toggles held grant actions without leaving Pending', () => {
-    render(<PendingSection />, { wrapper: Wrapper });
+  it('asks the URL to open and close held grant actions without leaving Pending', () => {
+    const { rerender } = render(<PendingSection />, { wrapper: Wrapper });
     const activeTab = useAdminModal.getState().activeTab;
     expect(screen.queryByTestId('held-grant-actions-stub')).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId('invite-center-open-held-grants-btn'));
-    expect(screen.getByTestId('held-grant-actions-stub')).toBeInTheDocument();
+    const { to, replace, search } = mocks.navigate.mock.calls.at(-1)![0];
+    expect([to, replace]).toEqual(['/admin', true]);
+    expect(search({ inviteSection: 'pending' })).toEqual({ inviteSection: 'pending', heldGrants: 'open' });
     expect(useAdminModal.getState().activeTab).toBe(activeTab);
-    expect(mocks.navigate).not.toHaveBeenCalled();
+
+    mocks.search = { heldGrants: 'open' };
+    rerender(<PendingSection />);
+    expect(screen.getByTestId('held-grant-actions-stub')).toBeVisible();
     fireEvent.click(screen.getByTestId('invite-center-open-held-grants-btn'));
+    expect(mocks.navigate.mock.calls.at(-1)![0].search({ heldGrants: 'open' }).heldGrants).toBeUndefined();
+
+    mocks.search = {};
+    rerender(<PendingSection />);
     expect(screen.getByTestId('held-grant-actions-stub')).not.toBeVisible();
-    fireEvent.click(screen.getByTestId('invite-center-open-held-grants-btn'));
+  });
+
+  it('opens held grant actions straight from the URL', () => {
+    mocks.search = { heldGrants: 'open' };
+    render(<PendingSection />, { wrapper: Wrapper });
     expect(screen.getByTestId('held-grant-actions-stub')).toBeVisible();
   });
 
