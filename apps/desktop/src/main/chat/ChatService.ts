@@ -4341,6 +4341,7 @@ export class ChatService {
         // seeded rounds were stripped before they were stored - so the earlier artifacts are
         // carried across rather than parsed again, and none of them is published twice.
         const artifacts = [...(resume?.artifacts ?? []), ...published];
+        if (published.length > 0) this.deps.browser?.refreshArtifacts?.(sessionId, published);
 
         const rounds = [
           ...(resume?.rounds ?? []),
