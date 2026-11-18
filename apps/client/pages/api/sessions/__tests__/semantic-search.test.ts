@@ -61,6 +61,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsByNames: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({
+  spendFreezeRepository: { findActiveForSubject: async () => null },
   apiKeyRepository: {},
   adminSettingsRepository: { getSettingsValue: mockGetSettingsValue },
   sessionRepository: { find: vi.fn(async () => []) },

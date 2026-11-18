@@ -101,6 +101,8 @@ export async function createVideoJob(
       user: input.user,
       requiredCredits: estimateVideoCostCredits(caps, request),
       featureLabel: 'video generation',
+      apiKeyId: input.apiKeyId,
+      apiKeyBillingOwnerType: input.apiKeyBillingOwnerType,
     },
     deps
   );

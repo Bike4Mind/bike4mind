@@ -71,7 +71,12 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 vi.mock('@bike4mind/services', async () => ({
   meterCompletionBackend: (await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services'))
     .meterCompletionBackend,
-  creditService: { holdCredits: m.hold, releaseCreditHold: m.release, settleCreditHold: m.settleHold },
+  creditService: {
+    holdCredits: m.hold,
+    releaseCreditHold: m.release,
+    settleCreditHold: m.settleHold,
+    assertSpendNotFrozen: async () => undefined,
+  },
   organizationService: {},
   latchUsage: (u: Record<string, number>, info?: Record<string, number>) => {
     if (info?.inputTokens) u.inputTokens = info.inputTokens;

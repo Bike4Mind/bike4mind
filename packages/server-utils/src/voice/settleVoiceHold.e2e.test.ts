@@ -181,6 +181,8 @@ describe('reserveVoiceHold on a real replica set', () => {
       startedAt: new Date(),
       realtime: false,
       unaffordable: () => new Error('insufficient credits'),
+      organizationId: null,
+      spendFreezes: { findActiveForSubject: async () => null },
     });
 
   it('opens the hold and takes the reserve together', async () => {
@@ -239,6 +241,8 @@ describe('reserveVoiceHold on a real replica set', () => {
       realtime: false,
       apiKeyId,
       unaffordable: () => new Error('insufficient credits'),
+      organizationId: null,
+      spendFreezes: { findActiveForSubject: async () => null },
     });
     expect(opened).toBe(true);
     const connectedAt = new Date(startedAt.getTime() + 5_000);

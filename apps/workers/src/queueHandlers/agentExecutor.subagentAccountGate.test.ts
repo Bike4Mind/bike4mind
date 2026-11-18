@@ -154,6 +154,7 @@ vi.mock('@bike4mind/database', async () => {
     mockCheckAbortFlag(...args)
   );
   vi.spyOn(actual.userRepository, 'findById').mockImplementation((...args) => mockFreshUserRead(...args));
+  vi.spyOn(actual.spendFreezeRepository, 'findActiveForSubject').mockResolvedValue(null);
   vi.spyOn(actual.User, 'findById').mockResolvedValue({ id: 'user-1', currentCredits: 100 } as never);
   // disableUserIntegrations short-circuits loadMcpToolsForSession to an empty pool - no MCP wiring.
   vi.spyOn(actual.sessionRepository, 'findById').mockResolvedValue({

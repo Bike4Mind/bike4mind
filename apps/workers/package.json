@@ -5,7 +5,7 @@
   "scripts": {
     "typecheck": "NODE_OPTIONS='--max-old-space-size=8192' tsc --noEmit",
     "typecheck:native": "tsgo --noEmit",
-    "typecheck:fast": "tsgo --noEmit || NODE_OPTIONS='--max-old-space-size=8192' tsc --noEmit",
+    "typecheck:fast": "tsgo --noEmit",
     "test": "vitest run",
     "test:integration": "WORKERS_TEST_LANE=integration vitest run"
   },

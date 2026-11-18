@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createOAuthClientSchema,
   oauthRedirectUriSchema,
+  postLogoutRedirectUrisSchema,
   resolveOAuthFederatedIdp,
   updateOAuthClientSchema,
 } from './oauthClient';
@@ -194,5 +195,34 @@ describe('updateOAuthClientSchema', () => {
     expect(OAUTH_CLIENT_SCOPES).toEqual(
       expect.arrayContaining(['openid', 'ai:generate', 'me:read', FEDERATED_ADMIN_STATUS_SCOPE])
     );
+  });
+});
+
+describe('postLogoutRedirectUris', () => {
+  const base = { name: 'App', redirectUris: ['https://app.example.test/cb'] };
+
+  it('is optional on create and update, and accepts an empty list', () => {
+    expect(createOAuthClientSchema.parse(base).postLogoutRedirectUris).toBeUndefined();
+    expect(createOAuthClientSchema.parse({ ...base, postLogoutRedirectUris: [] }).postLogoutRedirectUris).toEqual([]);
+    expect(updateOAuthClientSchema.parse({ postLogoutRedirectUris: [] }).postLogoutRedirectUris).toEqual([]);
+  });
+
+  it('accepts https and loopback http URIs', () => {
+    const uris = ['https://rp.example.test/signed-out', 'http://localhost:3000/signed-out'];
+    expect(postLogoutRedirectUrisSchema.parse(uris)).toEqual(uris);
+    expect(updateOAuthClientSchema.parse({ postLogoutRedirectUris: uris }).postLogoutRedirectUris).toEqual(uris);
+  });
+
+  it.each([
+    ['plain http', ['http://rp.example.test/out']],
+    ['a fragment', ['https://rp.example.test/out#x']],
+    ['userinfo', ['https://u:p@rp.example.test/out']],
+    ['a javascript: URI', ['javascript:alert(1)']],
+    ['duplicates', ['https://rp.example.test/out', 'https://rp.example.test/out']],
+    ['too many', Array.from({ length: 21 }, (_, i) => `https://rp.example.test/out${i}`)],
+  ])('rejects %s', (_n, uris) => {
+    expect(postLogoutRedirectUrisSchema.safeParse(uris).success).toBe(false);
+    expect(createOAuthClientSchema.safeParse({ ...base, postLogoutRedirectUris: uris }).success).toBe(false);
+    expect(updateOAuthClientSchema.safeParse({ postLogoutRedirectUris: uris }).success).toBe(false);
   });
 });

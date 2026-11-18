@@ -117,7 +117,7 @@ function Note({
             flex: '0 0 auto',
             width: '0.8em',
             textAlign: 'center',
-            color: done ? '#2f7a2b' : stateLampColor(agent.state),
+            color: stateLampColor(done ? 'done' : agent.state),
           }}
         >
           {done ? '\u2713' : '\u25A0'}

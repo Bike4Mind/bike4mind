@@ -1,7 +1,12 @@
 import { defineEndpoint } from '../defineEndpoint';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 import { SessionSemanticSearchRequestSchema, SessionSemanticSearchResponseSchema } from '../../schemas/session';
-import { ApiErrorSchema, InsufficientCreditsErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
+import {
+  ApiErrorSchema,
+  InsufficientCreditsErrorSchema,
+  MeteredForbiddenErrorSchema,
+  SPEND_FROZEN_FORBIDDEN_NOTE,
+} from '../../schemas/chat';
 
 const EXAMPLE_REQUEST = { query: 'quarterly budget review', topK: 10 };
 
@@ -37,8 +42,8 @@ export const searchSessionsContract = defineEndpoint({
     403: {
       description:
         'The API key holds neither `notebooks:read` nor `notebooks:write`, or AI features are disabled ' +
-        'on the account.',
-      schema: ScopeForbiddenErrorSchema,
+        `on the account. ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
+      schema: MeteredForbiddenErrorSchema,
     },
     422: {
       description:
