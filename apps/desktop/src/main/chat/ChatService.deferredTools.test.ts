@@ -244,7 +244,8 @@ describe('ChatService deferred tools', () => {
       loaded(0).estimatedTokens
     );
     expect(samples[1].requestBytes).toBeGreaterThan(samples[0].requestBytes);
-    console.info('Sanitized deterministic overhead comparison:', JSON.stringify(samples));
+    if (process.env.B4M_PROMPT_BASELINE === '1')
+      console.info('Sanitized deterministic overhead comparison:', JSON.stringify(samples));
   });
 
   describe('a tool removed, then called on a turn that was not deferred', () => {

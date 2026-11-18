@@ -14,7 +14,13 @@ const tool: WireTool = {
 describe('prompt footprint', () => {
   it('exports only fixed block names, sizes, estimates and digests', () => {
     const result = promptFootprint(messages, [tool]);
-    expect(result.map(part => part.block)).toEqual(['loaded-tools', 'deferred-tools', 'system', 'history']);
+    expect(result.map(part => part.block)).toEqual([
+      'loaded-tools',
+      'deferred-tools',
+      'system',
+      'history',
+      'tool-changes',
+    ]);
     for (const part of result) {
       expect(Object.keys(part).sort()).toEqual(['block', 'bytes', 'estimatedTokens', 'sha256']);
       expect(part.sha256).toMatch(/^[a-f0-9]{64}$/);
@@ -47,6 +53,19 @@ describe('prompt footprint', () => {
         ])
       )
     ).toEqual(['loaded-tools']);
+  });
+
+  it('attributes appended tool changes separately from the stable system instructions', () => {
+    const after: CompletionMessage[] = [
+      ...messages,
+      {
+        role: 'system',
+        content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'fixture' } }],
+      },
+    ];
+    expect(changedPromptBlocks(promptFootprint(messages, [tool]), promptFootprint(after, [tool]))).toEqual([
+      'tool-changes',
+    ]);
   });
 
   it('is deterministic across tool ordering and separates deferred schema bytes', () => {

@@ -1,4 +1,4 @@
-import { mkdtemp, realpath } from 'node:fs/promises';
+import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -10,6 +10,9 @@ import { ChatService } from './ChatService';
 import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
+import type { CompletionMessage } from './completions';
+import type { WireTool } from './deferredTools';
+import { changedPromptBlocks, promptFootprint } from './promptFootprint';
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -33,6 +36,9 @@ describe('ChatService waking an Orchestrate parent', () => {
 
   beforeEach(async () => {
     project = await realpath(await mkdtemp(join(tmpdir(), 'b4m-wake-')));
+    await writeFile(join(project, 'CLAUDE.md'), 'Required fixture project rule: preserve verification evidence.');
+    const userInstructionsRoot = await mkdtemp(join(tmpdir(), 'b4m-wake-instructions-'));
+    await writeFile(join(userInstructionsRoot, 'CLAUDE.md'), 'Required fixture user rule: respect granted access.');
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-wake-sessions-')), 'test-model');
     const opened: PassThrough[] = [];
     streams = opened;
@@ -53,6 +59,7 @@ describe('ChatService waking an Orchestrate parent', () => {
           getAxiosInstance: () => ({ post: boundPost }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
+      userInstructionsRoot,
       emit: () => {},
     });
   });
@@ -152,6 +159,31 @@ describe('ChatService waking an Orchestrate parent', () => {
   it('wakes an idle parent exactly once, when the last of its agents settles', async () => {
     const parent = await idleParentWithAgents(2);
 
+    const request = (prompt: string, round: number) =>
+      post.mock.calls[streamIndexesOf(prompt)[round]][1] as {
+        messages: CompletionMessage[];
+        options: { tools: WireTool[] };
+      };
+    const footprint = (prompt: string, round: number) => {
+      const body = request(prompt, round);
+      const system = body.messages[0].content;
+      expect(system).toContain('Required fixture user rule: respect granted access.');
+      expect(system).toContain('Required fixture project rule: preserve verification evidence.');
+      return promptFootprint(body.messages, body.options.tools);
+    };
+    const initial = footprint('go', 0);
+    const afterSpawn = footprint('go', 1);
+    expect(changedPromptBlocks(initial, afterSpawn)).toEqual(['history']);
+    await nthStreamOf('task a-0', 1);
+    await nthStreamOf('task a-1', 1);
+    const workers = [footprint('task a-0', 0), footprint('task a-1', 0)];
+    expect(changedPromptBlocks(workers[0], workers[1])).toContain('history');
+    for (const title of ['a-0', 'a-1']) {
+      const child = await store.get(await childId(title));
+      expect(child?.origin?.parentSessionId).toBe(parent.id);
+      expect(child?.approvalMode).toBe('auto');
+    }
+
     reply(await nthStreamOf('task a-0', 1), 'did a-0');
     await vi.waitUntil(async () => (await reports(parent.id, 'a-0')).length === 1, WAIT);
     await settleTime();
@@ -167,7 +199,27 @@ describe('ChatService waking an Orchestrate parent', () => {
     expect(wake.content).toContain('"a-1"');
     expect(wake.automatic).toMatchObject({ kind: 'agents-settled', summary: '2 agents: 2 done' });
 
-    reply(await nthStreamOf('go', 3), 'All done: here is the summary.');
+    const wakeStream = await nthStreamOf('go', 3);
+    const afterWake = footprint('go', 2);
+    expect(changedPromptBlocks(afterSpawn, afterWake)).toEqual(['history']);
+    expect(afterWake.find(block => block.block === 'history')!.bytes).toBeGreaterThan(
+      afterSpawn.find(block => block.block === 'history')!.bytes
+    );
+    if (process.env.B4M_PROMPT_BASELINE === '1') {
+      console.info(
+        JSON.stringify({
+          kind: 'orchestration-request-shape',
+          stages: [initial, afterSpawn, ...workers, afterWake].map((blocks, index) => ({
+            stage: ['parent-initial', 'parent-after-spawn', 'worker-first', 'worker-second', 'parent-wake'][index],
+            blocks: blocks.map(({ block, bytes, estimatedTokens }) => ({ block, bytes, estimatedTokens })),
+          })),
+          providerUsage: null,
+          providerCost: null,
+          acceptedLiveResult: null,
+        })
+      );
+    }
+    reply(wakeStream, 'All done: here is the summary.');
     await idle(parent.id);
     await settleTime();
     expect(await wakes(parent.id)).toHaveLength(1);

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { CompletionMessage } from './completions';
 import type { WireTool } from './deferredTools';
 
-export type PromptBlock = 'loaded-tools' | 'deferred-tools' | 'system' | 'history';
+export type PromptBlock = 'loaded-tools' | 'deferred-tools' | 'system' | 'history' | 'tool-changes';
 
 export interface BlockFootprint {
   block: PromptBlock;
@@ -21,8 +21,9 @@ export function promptFootprint(messages: readonly CompletionMessage[], tools: r
   const blocks: [PromptBlock, unknown][] = [
     ['loaded-tools', schemas(false)],
     ['deferred-tools', schemas(true)],
-    ['system', messages.filter(message => message.role === 'system')],
+    ['system', messages.filter(message => message.role === 'system' && typeof message.content === 'string')],
     ['history', messages.filter(message => message.role !== 'system')],
+    ['tool-changes', messages.filter(message => message.role === 'system' && Array.isArray(message.content))],
   ];
   return blocks.map(([block, value]) => {
     const serialized = JSON.stringify(value);
