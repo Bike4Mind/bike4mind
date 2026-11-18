@@ -705,12 +705,13 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
   }
 
   async spendBreakdown(params: SpendBreakdownParams): Promise<SpendBreakdown> {
-    const [result] = await this.model.aggregate<{
-      totals: Array<{ costUsd: number }>;
-      byProvider: SpendBreakdown['byProvider'];
-      bySegment: SpendBreakdown['bySegment'];
-      topActors: SpendBreakdown['topActors'];
-    }>(spendBreakdownPipeline(params))
+    const [result] = await this.model
+      .aggregate<{
+        totals: Array<{ costUsd: number }>;
+        byProvider: SpendBreakdown['byProvider'];
+        bySegment: SpendBreakdown['bySegment'];
+        topActors: SpendBreakdown['topActors'];
+      }>(spendBreakdownPipeline(params))
       .option({ maxTimeMS: SPEND_EXPLORER_MAX_TIME_MS });
     return {
       totalCostUsd: result?.totals?.[0]?.costUsd ?? 0,

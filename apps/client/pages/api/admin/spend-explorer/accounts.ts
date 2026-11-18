@@ -16,20 +16,19 @@ const handler = adminApi({
   adminPermissions: { GET: 'support:read' },
   auth: 'jwtOnly',
   requiredScopes: [ApiKeyScope.ADMIN],
-}).get(
-  async (req, res) => {
-    const parsed = AccountsQuerySchema.safeParse(req.query);
-    if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'Invalid query');
-    const { recache, compareFrom, compareTo, ...rest } = parsed.data;
-    const query = { ...rest, compare: compareFrom && compareTo ? { from: compareFrom, to: compareTo } : undefined };
+}).get(async (req, res) => {
+  const parsed = AccountsQuerySchema.safeParse(req.query);
+  if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'Invalid query');
+  const { recache, compareFrom, compareTo, ...rest } = parsed.data;
+  const query = { ...rest, compare: compareFrom && compareTo ? { from: compareFrom, to: compareTo } : undefined };
 
-    const data = await cacheService.getCachedData(
-      spendExplorerCacheKey('accounts', query),
-      () => buildAccounts(query),
-      { db: { caches: cacheRepository }, expiry: SPEND_EXPLORER_CACHE_MS, recache, logger: req.logger }
-    );
-    return res.json(data);
-  }
-);
+  const data = await cacheService.getCachedData(spendExplorerCacheKey('accounts', query), () => buildAccounts(query), {
+    db: { caches: cacheRepository },
+    expiry: SPEND_EXPLORER_CACHE_MS,
+    recache,
+    logger: req.logger,
+  });
+  return res.json(data);
+});
 
 export default handler;
