@@ -92,7 +92,11 @@ export function registerStudio(deps: {
         const scope = sessions.scopeKey();
         if (!planned) throw new Error('Prepare and review these settings first.');
         const body = { ...planned.body, ...('text' in planned.body ? { text: prompt } : { prompt }) };
-        const request = { ...studioGenerationRequestSchema.parse({ ...planned, body }), provenance };
+        const request = {
+          ...studioGenerationRequestSchema.parse({ ...planned, body }),
+          provenance,
+          selection: draft.selection,
+        };
         const checked = planStudioCreation(draft, prompt, await catalog()).request;
         if (
           JSON.stringify(studioGenerationRequestSchema.parse({ ...planned, body })) !==

@@ -75,7 +75,12 @@ function controller(overrides: Partial<StudioController> = {}): StudioController
     ...overrides,
   };
 }
-async function mount(value?: StudioController, variant: 'docked' | 'stacked' = 'docked', onClose = vi.fn()) {
+async function mount(
+  value?: StudioController,
+  variant: 'docked' | 'stacked' = 'docked',
+  onClose = vi.fn(),
+  unavailableReason?: string
+) {
   if (!host) {
     host = document.createElement('div');
     document.body.appendChild(host);
@@ -84,7 +89,7 @@ async function mount(value?: StudioController, variant: 'docked' | 'stacked' = '
   await act(async () =>
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <StudioPane controller={value} variant={variant} onClose={onClose} />
+        <StudioPane controller={value} variant={variant} onClose={onClose} unavailableReason={unavailableReason} />
       </CssVarsProvider>
     )
   );
@@ -147,45 +152,49 @@ describe('Studio states', () => {
       })
     );
   });
-  it.each(['settings', 'model'] as const)('preserves newer %s when a reference upload finishes', async change => {
-    let finishUpload: (value: { fileId: string; name: string } | null) => void = () => {};
-    const upload = new Promise<{ fileId: string; name: string } | null>(resolve => {
-      finishUpload = resolve;
-    });
-    const value = controller({
-      uploadReference: vi.fn(() => upload),
-      catalog: {
-        images: [
-          { id: 'gpt-image-2', name: 'GPT Image 2', capabilities: IMAGE_MODEL_CATALOG['gpt-image-2'] },
-          { id: 'flux-pro-1.1', name: 'Flux Pro', capabilities: IMAGE_MODEL_CATALOG['flux-pro-1.1'] },
-        ],
-        videos: [],
-        music: [],
-        speech: [],
-        soundEffects: [],
-        voices: [],
-      },
-    });
-    await mount(value);
-    await click('studio-create-image-tile');
-    await input('studio-prompt-input', 'Before upload');
-    await click('studio-upload-reference-btn');
-    if (change === 'model') await input('studio-setting-model', 'flux-pro-1.1');
-    else await input('studio-setting-count', '3');
-    await input('studio-prompt-input', 'Edited while uploading');
-    await act(async () => finishUpload({ fileId: 'reference', name: 'Uploaded image.png' }));
-    expect((get('studio-prompt-input') as HTMLTextAreaElement).value).toBe('Edited while uploading');
-    expect((get('studio-setting-model') as HTMLSelectElement).value).toBe(
-      change === 'model' ? 'flux-pro-1.1' : 'gpt-image-2'
-    );
-    if (change === 'settings') {
-      expect((get('studio-setting-count') as HTMLSelectElement).value).toBe('3');
-      expect(get('studio-model-settings').textContent).toContain('Uploaded image.png');
-    } else {
-      expect(get('studio-model-settings').textContent).not.toContain('Uploaded image.png');
-      expect(get('studio-model-settings').textContent).toContain('Settings changed');
+  it.each(['settings', 'model', 'revision'] as const)(
+    'preserves newer %s when a reference upload finishes',
+    async change => {
+      let finishUpload: (value: { fileId: string; name: string } | null) => void = () => {};
+      const upload = new Promise<{ fileId: string; name: string } | null>(resolve => {
+        finishUpload = resolve;
+      });
+      const value = controller({
+        uploadReference: vi.fn(() => upload),
+        catalog: {
+          images: [
+            { id: 'gpt-image-2', name: 'GPT Image 2', capabilities: IMAGE_MODEL_CATALOG['gpt-image-2'] },
+            { id: 'flux-pro-1.1', name: 'Flux Pro', capabilities: IMAGE_MODEL_CATALOG['flux-pro-1.1'] },
+          ],
+          videos: [],
+          music: [],
+          speech: [],
+          soundEffects: [],
+          voices: [],
+        },
+      });
+      await mount(value);
+      await click('studio-create-image-tile');
+      await input('studio-prompt-input', 'Before upload');
+      await click('studio-upload-reference-btn');
+      if (change === 'model') await input('studio-setting-model', 'flux-pro-1.1');
+      else if (change === 'revision') await mount({ ...value, revision: '2' });
+      else await input('studio-setting-count', '3');
+      await input('studio-prompt-input', 'Edited while uploading');
+      await act(async () => finishUpload({ fileId: 'reference', name: 'Uploaded image.png' }));
+      expect((get('studio-prompt-input') as HTMLTextAreaElement).value).toBe('Edited while uploading');
+      expect((get('studio-setting-model') as HTMLSelectElement).value).toBe(
+        change === 'model' ? 'flux-pro-1.1' : 'gpt-image-2'
+      );
+      if (change === 'settings') {
+        expect((get('studio-setting-count') as HTMLSelectElement).value).toBe('3');
+        expect(get('studio-model-settings').textContent).toContain('Uploaded image.png');
+      } else {
+        expect(get('studio-model-settings').textContent).not.toContain('Uploaded image.png');
+        expect(get('studio-model-settings').textContent).toContain('Settings changed');
+      }
     }
-  });
+  );
   it('loads remaining history pages and prefills reusable settings without submitting', async () => {
     const loadMore = vi.fn(async () => undefined);
     const value = controller({
@@ -298,7 +307,8 @@ describe('Studio states', () => {
     await mount({ ...value, revision: '2' });
     await act(async () => finish(review));
     expect(value.create).not.toHaveBeenCalled();
-    expect((get('studio-generate-btn') as HTMLButtonElement).disabled).toBe(true);
+    expect((get('studio-prompt-input') as HTMLTextAreaElement).value).toBe('Before');
+    expect((get('studio-generate-btn') as HTMLButtonElement).disabled).toBe(false);
   });
   it('lists jobs chronologically and shows images inline with a collapsed prompt and action menu', async () => {
     const asset = {
@@ -423,5 +433,168 @@ describe('Studio states', () => {
       expect.objectContaining({ kind: 'video', settings: { durationSeconds: 5 } })
     );
     expect(find('studio-setting-resolution')).toBeNull();
+  });
+});
+
+describe('Studio QA draft ownership', () => {
+  it('keeps the same prompt, context choice and settings when the conversation model changes', async () => {
+    const value = controller({
+      capabilities: {
+        image: { status: 'available', fields: [{ key: 'count', label: 'Count', type: 'number', min: 1, max: 4 }] },
+      },
+    });
+    await mount(value);
+    await click('studio-create-image-tile');
+    await input('studio-prompt-input', 'Keep my draft');
+    await input('studio-setting-count', '3');
+    await click('studio-use-session-context-checkbox');
+    const prompt = get('studio-prompt-input');
+    await mount({ ...value, revision: '2' });
+    expect(get('studio-prompt-input')).toBe(prompt);
+    expect((prompt as HTMLTextAreaElement).value).toBe('Keep my draft');
+    expect((get('studio-use-session-context-checkbox') as HTMLInputElement).checked).toBe(false);
+    expect((get('studio-setting-count') as HTMLInputElement).value).toBe('3');
+    expect(get('studio-context-changed').textContent).toContain('draft');
+    await click('studio-generate-btn');
+    expect(value.prepareCreation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        revision: '2',
+        prompt: 'Keep my draft',
+        selection: { mode: 'none' },
+        settings: { count: 3 },
+      })
+    );
+    expect(value.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a paid creation locked until it settles even when the revision changes', async () => {
+    let finish = () => {};
+    const value = controller({
+      create: vi.fn(
+        () =>
+          new Promise<void>(resolve => {
+            finish = resolve;
+          })
+      ),
+    });
+    await mount(value);
+    await click('studio-create-image-tile');
+    await input('studio-prompt-input', 'Keep while creating');
+    await click('studio-generate-btn');
+    expect(value.create).toHaveBeenCalledTimes(1);
+    await mount({ ...value, revision: '2' });
+    expect((get('studio-prompt-input') as HTMLTextAreaElement).value).toBe('Keep while creating');
+    expect((get('studio-generate-btn') as HTMLButtonElement).disabled).toBe(true);
+    await click('studio-generate-btn');
+    expect(value.create).toHaveBeenCalledTimes(1);
+    await act(async () => finish());
+    expect((get('studio-generate-btn') as HTMLButtonElement).disabled).toBe(false);
+    expect((get('studio-prompt-input') as HTMLTextAreaElement).value).toBe('Keep while creating');
+    expect(get('studio-context-changed').textContent).toContain('check Your creations');
+  });
+
+  it('explains a preparation failure with context off and preserves the original error and draft', async () => {
+    const value = controller({
+      prepareCreation: vi.fn(async () => {
+        throw new Error('Selected model is unavailable');
+      }),
+    });
+    await mount(value);
+    await click('studio-create-image-tile');
+    await input('studio-prompt-input', 'Keep after failure');
+    await click('studio-use-session-context-checkbox');
+    await click('studio-generate-btn');
+    expect(get('studio-creation-error').textContent).toContain("conversation's chat model");
+    expect(get('studio-creation-error').textContent).toContain('Selected model is unavailable');
+    expect((get('studio-prompt-input') as HTMLTextAreaElement).value).toBe('Keep after failure');
+    expect((get('studio-use-session-context-checkbox') as HTMLInputElement).checked).toBe(false);
+    expect(value.create).not.toHaveBeenCalled();
+    expect((get('studio-generate-btn') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('keeps creation-stage errors distinct from prompt preparation errors', async () => {
+    const value = controller({
+      create: vi.fn(async () => {
+        throw new Error('Submission outcome unknown');
+      }),
+    });
+    await mount(value);
+    await click('studio-create-image-tile');
+    await input('studio-prompt-input', 'Keep after uncertain submission');
+    await click('studio-generate-btn');
+    expect(get('studio-creation-error').textContent).toBe('Submission outcome unknown');
+    expect(value.create).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['none', false],
+    ['current-session', true],
+    [undefined, false],
+  ] as const)(
+    'restores saved context selection %s without submitting or silently adding context',
+    async (mode, checked) => {
+      const asset = {
+        id: 'saved',
+        kind: 'image' as const,
+        title: 'Saved',
+        originatingSessionId: 's1',
+        createdAt: '2026-11-01',
+        updatedAt: '2026-11-01',
+        url: 'https://example.com/image.png',
+        creation: { prompt: 'Prepared saved prompt', settings: { count: 2 }, ...(mode ? { selection: { mode } } : {}) },
+      };
+      const value = controller({ state: { status: 'ready', assets: [asset], jobs: [] } });
+      await mount(value);
+      await click('studio-asset-saved-btn');
+      await click('studio-asset-actions-btn');
+      await click('studio-asset-reuse-btn');
+      expect((get('studio-prompt-input') as HTMLTextAreaElement).value).toBe('Prepared saved prompt');
+      expect((get('studio-use-session-context-checkbox') as HTMLInputElement).checked).toBe(checked);
+      expect(value.prepareCreation).not.toHaveBeenCalled();
+      expect(value.create).not.toHaveBeenCalled();
+      await click('studio-generate-btn');
+      expect(value.prepareCreation).toHaveBeenCalledWith(
+        expect.objectContaining({ selection: { mode: mode ?? 'none' }, settings: { count: 2 } })
+      );
+    }
+  );
+});
+
+describe('Studio QA empty state and paid completion', () => {
+  it('keeps fresh conversation tiles disabled and explains how to start', async () => {
+    await mount(
+      undefined,
+      'docked',
+      vi.fn(),
+      'Send a message to start a conversation, then open Studio to create media.'
+    );
+    expect(get('studio-unavailable').textContent).toContain('Send a message to start a conversation');
+    for (const kind of ['image', 'video', 'music', 'speech', 'sound-effect']) {
+      const tile = get(`studio-create-${kind}-tile`) as HTMLButtonElement;
+      expect(tile.disabled).toBe(true);
+      expect(tile.title).toContain('Send a message to start a conversation');
+    }
+  });
+
+  it('keeps an uncertain paid error visible after the context revision changes', async () => {
+    let fail: (cause: Error) => void = () => {};
+    const value = controller({
+      create: vi.fn(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            fail = reject;
+          })
+      ),
+    });
+    await mount(value);
+    await click('studio-create-image-tile');
+    await input('studio-prompt-input', 'Keep uncertain draft');
+    await click('studio-generate-btn');
+    await mount({ ...value, revision: '2' });
+    await act(async () => fail(new Error('Submission outcome unknown')));
+    expect(get('studio-creation-error').textContent).toBe('Submission outcome unknown');
+    expect(get('studio-context-changed').textContent).not.toContain('generate again');
+    expect(value.create).toHaveBeenCalledTimes(1);
+    expect((get('studio-prompt-input') as HTMLTextAreaElement).value).toBe('Keep uncertain draft');
   });
 });

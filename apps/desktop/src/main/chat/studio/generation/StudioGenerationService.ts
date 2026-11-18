@@ -10,7 +10,14 @@ import {
   soundEffectsRequestSchema,
   ttsRequestSchema,
 } from '@bike4mind/common';
-import { studioCreationSchema, studioProvenanceSchema, type StudioAsset, type StudioJob } from '@shared/studio';
+import {
+  studioCreationSchema,
+  studioProvenanceSchema,
+  studioContextSelectionSchema,
+  type StudioContextSelection,
+  type StudioAsset,
+  type StudioJob,
+} from '@shared/studio';
 import { titleFromStudioPrompt } from '@shared/studioAssetTitle';
 import { isTerminalQuest, type MediaApiClient } from '../../media/MediaApiClient';
 import { MediaStore, parseMediaUrl } from '../../media/MediaStore';
@@ -40,6 +47,7 @@ export const studioGenerationRequestSchema = z.discriminatedUnion('kind', [
 export type StudioGenerationRequest = z.input<typeof studioGenerationRequestSchema> & {
   title?: string;
   provenance?: StudioAsset['provenance'];
+  selection?: StudioContextSelection;
 };
 
 export interface StudioGenerationConnection {
@@ -134,6 +142,7 @@ export class StudioGenerationService {
       ...studioGenerationRequestSchema.parse(input),
       ...(input.title !== undefined ? { title: z.string().max(500).parse(input.title) } : {}),
       ...(input.provenance ? { provenance: studioProvenanceSchema.parse(input.provenance) } : {}),
+      ...(input.selection !== undefined ? { selection: studioContextSelectionSchema.parse(input.selection) } : {}),
     };
     const connection = this.requireConnection();
     const workspace = await this.requireWorkspace(sessionId, connection);
@@ -605,6 +614,7 @@ function creationFromRequest(request: StudioGenerationRequest) {
   const body = request.body as Record<string, unknown>;
   return studioCreationSchema.parse({
     prompt: body.prompt ?? body.text,
+    selection: request.selection,
     settings: {
       model: body.model,
       provider: body.provider,

@@ -389,11 +389,8 @@ export function ChatShell({
     },
     [studioRegion]
   );
-  const liveStudio = useStudioController(
-    persistedId,
-    studioOpen && !suppliedStudio,
-    `${auth?.environment.url ?? ''}:${auth?.user?.id ?? ''}:${auth?.status ?? ''}`
-  );
+  const studioAccountKey = `${auth?.environment.url ?? ''}:${auth?.user?.id ?? ''}:${auth?.status ?? ''}`;
+  const liveStudio = useStudioController(persistedId, studioOpen && !suppliedStudio, studioAccountKey);
   const studio = suppliedStudio ?? liveStudio;
   // Per conversation rather than one flag: see terminalPanelState.ts.
   const [terminalSessions, setTerminalSessions] = useState(readTerminalOpenSessions);
@@ -2128,8 +2125,11 @@ export function ChatShell({
           </Stack>
           {studioOpen && (
             <StudioPane
-              key={`${activeId ?? ''}:${studio?.workspaceId ?? ''}`}
+              key={`${studioAccountKey}:${activeId ?? ''}:${studio?.workspaceId ?? ''}`}
               controller={studio?.sessionId === persistedId ? studio : undefined}
+              unavailableReason={
+                !persistedId ? 'Send a message to start a conversation, then open Studio to create media.' : undefined
+              }
               variant={studioPaneLayout(studioWidth)}
               onClose={() => {
                 setStudioOpen(false);

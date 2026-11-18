@@ -105,6 +105,17 @@ describe('Studio generation', () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  it.each([null, { mode: 'invalid' }, { mode: 'none', unknown: true }])(
+    'rejects malformed saved selection metadata before approval: %j',
+    async selection => {
+      const session = await sessions.create();
+      const request = { ...image, selection } as unknown as StudioGenerationRequest;
+      await expect(service.submit(session.id, request)).rejects.toThrow();
+      expect(authorize).not.toHaveBeenCalled();
+      expect(client.generateImage).not.toHaveBeenCalled();
+      expect((await workspaces.get(session.id))?.jobs).toEqual([]);
+    }
+  );
   it('validates before approval and refuses spending without approval', async () => {
     const session = await sessions.create();
     await expect(service.submit(session.id, { kind: 'music', body: { model: '', prompt: '' } })).rejects.toThrow();
@@ -387,6 +398,19 @@ describe('Studio generation', () => {
     );
     expect(client.generateImage).toHaveBeenCalledTimes(1);
   });
+  it.each(['none', 'current-session'] as const)(
+    'persists %s context selection across job, output and disk reload',
+    async mode => {
+      const session = await sessions.create();
+      const job = await service.submit(session.id, { ...image, selection: { mode } });
+      expect(job.creation?.selection).toEqual({ mode });
+      await service.reconcile(session.id, job.id);
+      const reloaded = new StudioWorkspaceStore(join(root, 'studio'), sessions);
+      expect((await reloaded.getAsset(session.id, `${job.id}_0`))?.creation?.selection).toEqual({ mode });
+      expect(client.generateImage.mock.calls[0]?.[0]).not.toHaveProperty('selection');
+      expect(client.generateImage).toHaveBeenCalledTimes(1);
+    }
+  );
   it('imports a completed chat video into workspace storage without another provider call', async () => {
     const session = await sessions.create();
     const stored = await media.saveStream(session.id, Readable.from([Buffer.from('local video')]), 'video/mp4', 1024);

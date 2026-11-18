@@ -146,6 +146,22 @@ describe('registered Studio authorization', () => {
     ).rejects.toThrow('not approved');
     expect(paid).not.toHaveBeenCalled();
   });
+  it('binds reviewed context selection into the single-use generation authorization', async () => {
+    const { integration, invoke, draft, paid } = await setup();
+    const original = integration.generation.submit.bind(integration.generation);
+    vi.spyOn(integration.generation, 'submit').mockImplementationOnce(async (sessionId, input, authorize) => {
+      expect(input.selection).toEqual({ mode: 'none' });
+      expect(await authorize?.({ sessionId, request: { ...input, selection: { mode: 'current-session' } } })).toBe(
+        false
+      );
+      return original(sessionId, input, authorize);
+    });
+    const review = (await invoke(IPC_CHANNELS.studioPrepare, draft)) as StudioReview;
+    await expect(
+      invoke(IPC_CHANNELS.studioCreate, { draft, reviewId: review.id, preparedPrompt: review.preparedPrompt })
+    ).rejects.toThrow('not approved');
+    expect(paid).not.toHaveBeenCalled();
+  });
   it('rejects a prepared request after an account switch without a paid POST', async () => {
     const { invoke, draft, paid, switchAccount } = await setup();
     const review = (await invoke(IPC_CHANNELS.studioPrepare, draft)) as StudioReview;

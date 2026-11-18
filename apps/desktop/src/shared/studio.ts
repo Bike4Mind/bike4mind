@@ -10,11 +10,14 @@ export const studioWorkspaceIdentitySchema = z.object({
 });
 export type StudioWorkspaceIdentity = z.infer<typeof studioWorkspaceIdentitySchema>;
 
-export interface StudioContextSelection {
-  mode: 'current-session' | 'session-family' | 'custom' | 'none';
-  sessionIds?: string[];
-  files?: string[];
-}
+export const studioContextSelectionSchema = z
+  .object({
+    mode: z.enum(['current-session', 'session-family', 'custom', 'none']),
+    sessionIds: z.array(studioIdSchema).max(256).optional(),
+    files: z.array(z.string().min(1).max(4096)).max(32).optional(),
+  })
+  .strict();
+export type StudioContextSelection = z.infer<typeof studioContextSelectionSchema>;
 
 export const studioProvenanceSchema = z.object({
   preparedAt: z.string(),
@@ -57,6 +60,7 @@ export const studioCreationSchema = z
   .object({
     prompt: z.string().min(1).max(32_768),
     settings: studioSettingsSchema,
+    selection: studioContextSelectionSchema.optional(),
   })
   .strict();
 

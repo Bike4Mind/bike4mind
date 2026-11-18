@@ -1,4 +1,4 @@
-import type { ReactNode, Ref, RefObject } from 'react';
+import { useId, type ReactNode, type Ref, type RefObject } from 'react';
 import Box from '@mui/joy/Box';
 import Dropdown from '@mui/joy/Dropdown';
 import IconButton from '@mui/joy/IconButton';
@@ -145,6 +145,7 @@ export function PanesMenu({
   historyOn: boolean;
   buttonRef?: Ref<HTMLButtonElement>;
 }) {
+  const reasonPrefix = useId();
   return (
     <Dropdown>
       <Tooltip size="sm" variant="soft" placement="bottom-end" title="Panes">
@@ -166,6 +167,8 @@ export function PanesMenu({
               key={pane.id}
               role="menuitemcheckbox"
               aria-checked={pane.open}
+              aria-label={withShortcut(info.name, info.shortcut)}
+              aria-describedby={disabled ? `${reasonPrefix}-${pane.id}-reason` : undefined}
               selected={pane.open}
               disabled={disabled}
               onClick={pane.onToggle}
@@ -177,7 +180,7 @@ export function PanesMenu({
                   {info.name}
                 </Typography>
                 {disabled && (
-                  <Typography level="body-xs" textColor="text.tertiary">
+                  <Typography id={`${reasonPrefix}-${pane.id}-reason`} level="body-xs" textColor="text.tertiary">
                     {pane.unavailableReason}
                   </Typography>
                 )}

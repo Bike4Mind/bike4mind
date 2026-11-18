@@ -77,6 +77,23 @@ describe('PanesMenu', () => {
     expect(items.slice(1).some(item => item.textContent?.includes('Ctrl'))).toBe(false);
   });
 
+  it('explicitly labels Studio and Browser and preserves disabled reasons separately', async () => {
+    await mount([
+      pane('terminal'),
+      pane('studio'),
+      pane('browser', { unavailableReason: 'Open a conversation first.' }),
+    ]);
+    await openMenu();
+    expect(get('chat-panes-menu-studio-item').getAttribute('aria-label')).toBe('Studio');
+    expect(get('chat-panes-menu-terminal-item').getAttribute('aria-label')).toBe('Terminal (Ctrl+`)');
+    const browser = get('chat-panes-menu-browser-item');
+    expect(browser.getAttribute('aria-label')).toBe('Browser');
+    const reasonId = browser.getAttribute('aria-describedby');
+    expect(reasonId).toBeTruthy();
+    expect(document.getElementById(reasonId!)?.textContent).toBe('Open a conversation first.');
+    expect(browser.getAttribute('aria-disabled')).toBe('true');
+  });
+
   it('toggles a pane from its row', async () => {
     const browser = pane('browser');
     await mount([pane('terminal'), browser]);

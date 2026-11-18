@@ -3,6 +3,7 @@ import type { VideoModel } from '@bike4mind/common';
 import type { PublicMusicModel, ImageModelCatalogEntry } from '@bike4mind/common';
 import {
   studioIdSchema,
+  studioContextSelectionSchema,
   studioMediaKindSchema,
   studioSettingsSchema,
   type StudioWorkspace,
@@ -17,13 +18,7 @@ export const studioDraftSchema = z
     revision: z.string().max(128),
     kind: studioMediaKindSchema,
     prompt: z.string().trim().min(1).max(16_384),
-    selection: z
-      .object({
-        mode: z.enum(['current-session', 'session-family', 'custom', 'none']),
-        sessionIds: z.array(studioIdSchema).max(256).optional(),
-        files: z.array(z.string().min(1).max(4096)).max(32).optional(),
-      })
-      .strict(),
+    selection: studioContextSelectionSchema,
     settings: studioSettingsSchema,
   })
   .strict();

@@ -57,31 +57,45 @@ function CreationForm({
   onBack: () => void;
   initial?: StudioAsset['creation'];
 }) {
-  const [draft, setDraft] = useState<StudioCreationDraft>(() => ({
+  const [storedDraft, setDraft] = useState<StudioCreationDraft>(() => ({
     sessionId: controller.sessionId,
     workspaceId: controller.workspaceId,
     revision: controller.revision,
     kind,
     prompt: initial?.prompt ?? '',
-    selection: { mode: 'current-session' },
+    selection: initial ? (initial.selection ?? { mode: 'none' }) : { mode: 'current-session' },
     settings: initial?.settings ?? defaultStudioSettings(kind, controller),
   }));
+  const draft = { ...storedDraft, revision: controller.revision };
   const [phase, setPhase] = useState<'idle' | 'preparing' | 'creating'>('idle');
+  const [contextNotice, setContextNotice] = useState<string | null>(null);
+  const operation = useRef<number | null>(null);
+  const mounted = useRef(true);
+  const knownRevision = useRef(controller.revision);
   const [error, setError] = useState<string | null>(null);
   const epoch = useRef(0);
   const form = useRef<HTMLFormElement>(null);
   const capability = controller.capabilities[kind];
   const locked = !!controller.busy || phase !== 'idle' || capability?.status !== 'available';
-  useEffect(
-    () => () => {
+  const latest = useRef(controller);
+  latest.current = controller;
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
       epoch.current++;
-    },
-    []
-  );
+    };
+  }, []);
   useEffect(() => {
     epoch.current++;
-    setPhase('idle');
+    if (operation.current === null) setPhase('idle');
   }, [controller.busy, capability?.status]);
+  useEffect(() => {
+    if (knownRevision.current === controller.revision) return;
+    knownRevision.current = controller.revision;
+    epoch.current++;
+    setContextNotice('Studio context changed. Your draft is kept. Review your settings before continuing.');
+  }, [controller.revision]);
 
   const edit = (next: StudioCreationDraft) => {
     epoch.current++;
@@ -90,20 +104,41 @@ function CreationForm({
     setPhase('idle');
   };
   const generate = async () => {
-    if (locked || phase !== 'idle' || !form.current?.reportValidity()) return;
+    if (operation.current !== null || locked || !form.current?.reportValidity()) return;
     const request = ++epoch.current;
+    operation.current = request;
+    const snapshot = draft;
+    const current = () =>
+      mounted.current &&
+      request === epoch.current &&
+      latest.current.revision === snapshot.revision &&
+      !latest.current.busy &&
+      latest.current.capabilities[kind]?.status === 'available';
+    let stage: 'preparing' | 'creating' = 'preparing';
     setPhase('preparing');
     setError(null);
+    setContextNotice(null);
     try {
-      const result = await controller.prepareCreation(draft);
-      if (request !== epoch.current) return;
+      const result = await controller.prepareCreation(snapshot);
+      if (!current()) return;
+      stage = 'creating';
       setPhase('creating');
-      await controller.create({ draft, reviewId: result.id, preparedPrompt: result.preparedPrompt });
-      if (request === epoch.current) onBack();
+      await controller.create({ draft: snapshot, reviewId: result.id, preparedPrompt: result.preparedPrompt });
+      if (current()) onBack();
+      else if (mounted.current && operation.current === request)
+        setContextNotice('Your draft is kept; check Your creations for the request status before starting another.');
     } catch (cause) {
-      if (request === epoch.current) setError(errorText(cause));
+      if (mounted.current && operation.current === request && (stage === 'creating' || current()))
+        setError(
+          stage === 'preparing'
+            ? `Studio could not prepare the prompt using this conversation's chat model. ${errorText(cause)}`
+            : errorText(cause)
+        );
     } finally {
-      if (request === epoch.current) setPhase('idle');
+      if (operation.current === request) {
+        operation.current = null;
+        if (mounted.current) setPhase('idle');
+      }
     }
   };
   return (
@@ -114,6 +149,11 @@ function CreationForm({
       spacing={2}
       data-testid="studio-creation-form"
     >
+      {contextNotice && (
+        <Alert size="sm" color="neutral" data-testid="studio-context-changed">
+          {contextNotice}
+        </Alert>
+      )}
       <StudioSettings controller={controller} draft={draft} disabled={locked} edit={edit} />
       <FormControl disabled={locked}>
         <FormLabel>{kind === 'speech' ? 'Script or instructions' : 'What would you like to create?'}</FormLabel>
@@ -132,6 +172,9 @@ function CreationForm({
         onChange={event => edit({ ...draft, selection: { mode: event.target.checked ? 'current-session' : 'none' } })}
         slotProps={{ input: { 'data-testid': 'studio-use-session-context-checkbox' } }}
       />
+      <Typography level="body-xs" textColor="text.tertiary">
+        Studio prepares prompts using this conversation's chat model, even when session context is off.
+      </Typography>
       {!controller.catalog &&
         capability?.status === 'available' &&
         capability.fields?.map(field => {
@@ -431,10 +474,12 @@ function StudioContent({
   controller,
   kind,
   setKind,
+  unavailableReason,
 }: {
   controller?: StudioController;
   kind: StudioMediaKind | null;
   setKind: (kind: StudioMediaKind | null) => void;
+  unavailableReason?: string;
 }) {
   const [initial, setInitial] = useState<StudioAsset['creation']>();
   const [pagingError, setPagingError] = useState<string | null>(null);
@@ -445,7 +490,7 @@ function StudioContent({
   if (controller && kind)
     return (
       <CreationForm
-        key={`${controller.sessionId}:${controller.workspaceId}:${controller.revision}:${kind}`}
+        key={`${controller.sessionId}:${controller.workspaceId}:${kind}`}
         controller={controller}
         kind={kind}
         initial={initial}
@@ -480,7 +525,7 @@ function StudioContent({
         {STUDIO_TILES.map(tile => {
           const capability = controller?.capabilities[tile.kind];
           const reason = !controller
-            ? 'Studio is not connected yet.'
+            ? (unavailableReason ?? 'Studio is not connected yet.')
             : !capability
               ? 'Not supported.'
               : capability.status !== 'available'
@@ -572,7 +617,8 @@ function StudioContent({
       {pagingError && <Alert color="danger">{pagingError}</Alert>}
       {!controller && (
         <Typography level="body-sm" data-testid="studio-unavailable">
-          Studio workspace services are not connected. Creation and saved assets will appear here when available.
+          {unavailableReason ??
+            'Studio workspace services are not connected. Creation and saved assets will appear here when available.'}
         </Typography>
       )}
       {controller?.state.status === 'loading' && (
@@ -789,10 +835,12 @@ export function StudioPane({
   controller,
   variant,
   onClose,
+  unavailableReason,
 }: {
   controller?: StudioController;
   variant: 'docked' | 'stacked';
   onClose: () => void;
+  unavailableReason?: string;
 }) {
   const [creation, setCreation] = useState<{ sessionId: string; workspaceId: string; kind: StudioMediaKind } | null>(
     null
@@ -849,6 +897,7 @@ export function StudioPane({
           controller={controller}
           kind={kind}
           setKind={setKind}
+          unavailableReason={unavailableReason}
         />
       </Box>
     </>
