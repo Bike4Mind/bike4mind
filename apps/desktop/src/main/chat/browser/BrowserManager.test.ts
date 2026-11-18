@@ -1332,6 +1332,35 @@ describe('BrowserManager opening an artifact', () => {
     ]);
   });
 
+  it('switches to the tab already showing a keyed artifact instead of opening it again', async () => {
+    await manager.navigate('s', 'http://localhost:3080/');
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>', 'chart');
+    await manager.tab('s', 'select', 1);
+
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>', 'chart');
+
+    expect(lastState()).toMatchObject({ activeTabId: 2, tabs: [{ id: 1 }, { id: 2 }] });
+    expect(contents.loads).toHaveLength(2);
+  });
+
+  it('opens a keyed artifact again once its tab has left it or its content changed', async () => {
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>', 'chart');
+    await manager.navigate('s', 'http://localhost:3080/');
+
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>', 'chart');
+    expect(lastState()).toMatchObject({ activeTabId: 2, tabs: [{ id: 1 }, { id: 2 }] });
+
+    await manager.openArtifact('s', 'Chart', '<p>v2</p>', 'chart');
+    expect(lastState()).toMatchObject({ activeTabId: 3 });
+  });
+
+  it('keeps opening a new tab for an artifact sent without a key', async () => {
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>');
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>');
+
+    expect(lastState()).toMatchObject({ activeTabId: 2, tabs: [{ id: 1 }, { id: 2 }] });
+  });
+
   it('forgets every artifact when all browsers close', async () => {
     await manager.openArtifact('s', 'Chart', '<p>hi</p>');
     const url = contents.loads.at(-1)!.url;

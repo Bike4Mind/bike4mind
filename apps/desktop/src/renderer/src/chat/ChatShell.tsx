@@ -51,6 +51,8 @@ import { ComposerOllamaNotice } from '../models/OllamaNotRunning';
 import { useModelServers } from '../models/useModelHub';
 import { PanelRightIcon } from './icons';
 import { OpenPaneButtons, PanesMenu, type PaneControl } from './PanesMenu';
+import { SessionArtifactsButton } from './SessionArtifactsButton';
+import { paneDocument, sessionArtifacts, type SessionArtifact } from './sessionArtifacts';
 import { ProjectSubtitleLine } from './ProjectSubtitleLine';
 import { MessageThread } from './MessageThread';
 import {
@@ -544,6 +546,17 @@ export function ChatShell({
   const openArtifactInBrowserPane = useCallback(
     (artifact: Pick<ChatArtifact, 'title' | 'content'>) =>
       openArtifactInSessionBrowser(artifact, activeId, showBrowserPane),
+    [activeId, showBrowserPane]
+  );
+  const artifactsInSession = useMemo(() => sessionArtifacts(conversation.messages), [conversation.messages]);
+  const openSessionArtifact = useCallback(
+    ({ key, artifact }: SessionArtifact) =>
+      openArtifactInSessionBrowser(
+        { title: artifact.title, content: paneDocument(artifact) },
+        activeId,
+        showBrowserPane,
+        request => window.b4m.browser.openArtifact({ ...request, artifactKey: key })
+      ),
     [activeId, showBrowserPane]
   );
 
@@ -1668,6 +1681,7 @@ export function ChatShell({
                 {/* Inside the reading column, not out at the window edge: a popup opening from
                   here cannot reach the pane, and one over the pane would be drawn behind the
                   web page - see agentBrowser.ts. */}
+                <SessionArtifactsButton artifacts={artifactsInSession} onOpen={openSessionArtifact} />
                 <OpenPaneButtons panes={paneControls} focusAfterClose={panesMenuButtonRef} />
                 <PanesMenu
                   buttonRef={panesMenuButtonRef}
