@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CustomMcpPolicySchema } from '@bike4mind/common';
 
 const mocks = vi.hoisted(() => ({
   resolveCustomMcpContext: vi.fn(),
@@ -110,6 +111,50 @@ describe('customMcpToolHost.listConnections', () => {
       allowWriteTools: true,
       requireApprovalForAll: true,
     });
+  });
+});
+
+describe('customMcpToolHost.listConnections - platform connectors', () => {
+  const platform = { ...connection('shared', 'mcp.example.com'), ownerType: 'platform' };
+  const realPolicy = async (policy: Record<string, unknown>) => {
+    const { evaluateConnectionPolicy } = await vi.importActual<typeof import('./customMcpAccess')>('./customMcpAccess');
+    mocks.evaluateConnectionPolicy.mockImplementation(evaluateConnectionPolicy);
+    return { policies: [CustomMcpPolicySchema.parse(policy)], platformBlockedHosts: [] };
+  };
+
+  beforeEach(() => {
+    mocks.listForUser.mockResolvedValue([platform, connection('custom', 'mcp.other.test')]);
+  });
+
+  it('offers one under the catalog-only mode, with the organization switches applied', async () => {
+    mocks.resolveCustomMcpContext.mockResolvedValue({
+      enabled: true,
+      ...(await realPolicy({ mode: 'presets_only', allowUnauthenticated: true, allowWriteTools: false })),
+    });
+
+    const offers = await customMcpToolHost.listConnections('u1');
+
+    expect(offers.map(o => o.connectionId)).toEqual(['shared']);
+    expect(offers[0]).toMatchObject({ urlHost: 'mcp.example.com', allowWriteTools: false });
+  });
+
+  it('offers none to a member of an organization that switched connectors off', async () => {
+    // The resolved switch and the policy each close it on their own.
+    mocks.resolveCustomMcpContext.mockResolvedValue({ enabled: false, ...(await realPolicy({ mode: 'any' })) });
+    expect(await customMcpToolHost.listConnections('u1')).toEqual([]);
+    expect(await isCustomToolStillOffered('u1', 'shared', 'search')).toBe(false);
+
+    mocks.resolveCustomMcpContext.mockResolvedValue({ enabled: true, ...(await realPolicy({ mode: 'off' })) });
+    expect(await customMcpToolHost.listConnections('u1')).toEqual([]);
+  });
+
+  it('drops one whose host an organization blocks', async () => {
+    mocks.resolveCustomMcpContext.mockResolvedValue({
+      enabled: true,
+      ...(await realPolicy({ mode: 'any', blockedHostPatterns: ['mcp.example.com'] })),
+    });
+
+    expect((await customMcpToolHost.listConnections('u1')).map(o => o.connectionId)).toEqual(['custom']);
   });
 });
 

@@ -17,7 +17,7 @@ import {
   RemoteMcpTimeoutError,
   type RemoteMcpErrorCode,
 } from '@bike4mind/mcp/remote';
-import { createInProcessRemoteMcpRunner } from './remoteMcpRunner';
+import { createInProcessRemoteMcpRunner, type RemoteMcpRunPayload } from './remoteMcpRunner';
 // The c1 fixture server is test-only source, not part of the package's published surface.
 import {
   FIXTURE_RESOURCE_METADATA_URL,
@@ -1048,6 +1048,143 @@ describe('invokeRemoteMcp - checks before any network', () => {
     expect(tryIncrement).toHaveBeenCalledWith(`custom-mcp-calls:user-1:${id}`, 60, 60_000);
     expect(state.audits[0]).toMatchObject({ outcome: 'rate_limited' });
     expect(fixture.requests).toHaveLength(0);
+  });
+});
+
+describe('invokeRemoteMcp - platform connectors', () => {
+  const PLATFORM = { ownerType: 'platform' as const, ownerKey: 'platform' };
+  const seedPlatform = (overrides: Partial<IMcpConnectionDocument> = {}, path = '/mcp') =>
+    seed(path, { ...PLATFORM, userId: 'admin-1', ...overrides });
+  const writeTool = {
+    name: 'echo',
+    description: 'Echoes',
+    descriptionRawHash: 'h',
+    inputSchema: {},
+    enabled: true,
+    approval: 'default' as const,
+    state: 'active' as const,
+    firstSeenAt: new Date(),
+  };
+  const call = (connectionId: string, userId: string, ctx = context(), approved?: boolean) =>
+    invokeRemoteMcp(
+      { action: 'callTool', connectionId, userId, toolName: 'echo', args: { text: 'hi' }, approved },
+      { runner, context: ctx }
+    );
+  const policies = (policy: Record<string, unknown>) => ({ policies: [CustomMcpPolicySchema.parse(policy)] });
+
+  it('is callable by any user, audited with its owner type and rate limited per user', async () => {
+    const id = seedPlatform();
+    await expect(call(id, 'user-1')).resolves.toBeDefined();
+    await expect(call(id, 'user-2')).resolves.toBeDefined();
+
+    expect(state.audits.map(entry => entry.context)).toMatchObject([
+      { userId: 'user-1', metadata: { connectionId: id, ownerType: 'platform' } },
+      { userId: 'user-2', metadata: { connectionId: id, ownerType: 'platform' } },
+    ]);
+    expect(tryIncrement.mock.calls.map(args => args[0])).toEqual([
+      `custom-mcp-calls:user-1:${id}`,
+      `custom-mcp-calls:user-2:${id}`,
+    ]);
+  });
+
+  it('sends the remote server nothing that identifies the caller or the admin', async () => {
+    const id = seedPlatform({
+      auth: {
+        kind: 'api_key',
+        apiKey: { headerName: 'Authorization', scheme: 'Bearer', valueEnc: 'enc:key-123', last4: '****' },
+      },
+    });
+    const sent: RemoteMcpRunPayload[] = [];
+    await invokeRemoteMcp(
+      { action: 'callTool', connectionId: id, userId: 'user-77', toolName: 'echo', args: { text: 'hi' } },
+      {
+        runner: payload => {
+          sent.push(payload);
+          return runner(payload);
+        },
+        context: context(),
+      }
+    );
+
+    expect(Object.keys(sent[0]!).sort()).toEqual(
+      ['action', 'args', 'headers', 'limits', 'network', 'toolName', 'transport', 'url'].sort()
+    );
+    expect(sent[0]!.headers).toEqual({ Authorization: 'Bearer key-123' });
+    expect(JSON.stringify(sent)).not.toMatch(/user-77|admin-1/);
+  });
+
+  it('is rediscovered only by a caller that names the platform owner', async () => {
+    const id = seedPlatform();
+    await expect(
+      invokeRemoteMcp({ action: 'listTools', connectionId: id, userId: 'user-1' }, { runner, context: context() })
+    ).rejects.toBeInstanceOf(NotFoundError);
+    expect(fixture.requests).toHaveLength(0);
+
+    await expect(
+      invokeRemoteMcp(
+        { action: 'listTools', connectionId: id, userId: 'admin-1', owner: PLATFORM },
+        { runner, context: context() }
+      )
+    ).resolves.toMatchObject({ tools: expect.any(Array) });
+  });
+
+  it('passes the catalog-only mode that refuses the same host on a user connection', async () => {
+    const catalogOnly = context(policies({ mode: 'presets_only', allowUnauthenticated: true }));
+    await expect(call(seedPlatform(), 'user-1', catalogOnly)).resolves.toBeDefined();
+    await expect(call(seed('/mcp'), 'user-1', catalogOnly)).rejects.toMatchObject({
+      additionalInfo: { reason: 'presets_only' },
+    });
+  });
+
+  it('is refused when an organization switched connectors off, and by every host rule', async () => {
+    const id = seedPlatform();
+    // The resolved switch and the policy each refuse it on their own.
+    await expect(call(id, 'user-1', context({ enabled: false }))).rejects.toBeInstanceOf(CustomMcpPolicyBlockedError);
+    for (const [ctx, reason] of [
+      [context(policies({ mode: 'off' })), 'org_disabled'],
+      [context(policies({ mode: 'any', blockedHostPatterns: ['fixture.test'] })), 'org_blocked_host'],
+      [context(policies({ mode: 'allowlist', allowedHostPatterns: ['mcp.example.com'] })), 'host_not_allowlisted'],
+      [context({ platformBlockedHosts: ['fixture.test'] }), 'platform_blocked_host'],
+    ] as const) {
+      await expect(call(id, 'user-1', ctx)).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { code: 'policy_blocked', reason },
+      });
+    }
+    expect(fixture.requests).toHaveLength(0);
+  });
+
+  it('is not callable while switched off or not connected', async () => {
+    for (const overrides of [{ enabled: false }, { status: 'needs_reconnect' as const }]) {
+      await expect(call(seedPlatform(overrides), 'user-1')).rejects.toMatchObject({
+        statusCode: 409,
+        additionalInfo: { code: 'connection_not_ready' },
+      });
+    }
+    expect(fixture.requests).toHaveLength(0);
+  });
+
+  it('asks for approval before a write tool and keeps the organization switches', async () => {
+    const id = seedPlatform({ tools: [writeTool] });
+    await expect(call(id, 'user-1')).rejects.toMatchObject({ additionalInfo: { code: 'approval_required' } });
+    await expect(call(id, 'user-1', context(), true)).resolves.toBeDefined();
+    await expect(
+      call(id, 'user-1', context(policies({ mode: 'any', allowWriteTools: false })), true)
+    ).rejects.toMatchObject({ additionalInfo: { reason: 'write_tools_not_allowed' } });
+
+    const readOnly = seedPlatform();
+    await expect(
+      call(readOnly, 'user-1', context(policies({ mode: 'any', requireApprovalForAll: true })))
+    ).rejects.toMatchObject({ additionalInfo: { code: 'approval_required' } });
+  });
+
+  it('trips one breaker shared by every caller', async () => {
+    const id = seedPlatform({}, '/broken');
+    for (let i = 0; i < 5; i++) await expectRemoteCode(call(id, `user-${i}`), 'upstream_5xx');
+
+    const before = fixture.requests.length;
+    await expect(call(id, 'user-9')).rejects.toBeInstanceOf(CustomMcpUnavailableError);
+    expect(fixture.requests.length).toBe(before);
   });
 });
 

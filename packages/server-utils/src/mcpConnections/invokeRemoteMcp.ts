@@ -6,13 +6,14 @@ import {
   ForbiddenError,
   MCP_CONNECTION_LIMITS,
   NotFoundError,
+  PLATFORM_MCP_OWNER,
   TooManyRequestsError,
-  getMcpPresetHost,
   mcpApiKeyHeaderNameProblem,
   isReadOnlyMcpConnectionTool,
   requiresMcpConnectionToolApproval,
   type IMcpConnectionDocument,
   type McpConnectionLastErrorInput,
+  type McpConnectionOwner,
   type McpConnectionTransport,
 } from '@bike4mind/common';
 import { cacheRepository, mcpConnectionRepository, type CustomMcpAuditMetadata } from '@bike4mind/database';
@@ -64,6 +65,7 @@ import {
   OAuthRefreshUnavailableError,
   getOAuthAccessToken,
 } from './oauth/tokenManager';
+import { policyPresetHost } from './policyPresetHost';
 
 /**
  * The one way the app talks to a custom remote MCP server (design #4845 sections 5, 8, 11, 12).
@@ -138,13 +140,21 @@ export class CustomMcpUnavailableError extends BadGatewayError {
 
 interface InvokeRemoteMcpBase {
   connectionId: string;
-  /** The connection owner; the connection is loaded owner-scoped, so another user's id is a 404. */
+  /**
+   * The caller, whose policy, rate limit and audit entry apply. The connection is loaded
+   * owner-scoped, so another user's id is a 404.
+   */
   userId: string;
   limits?: Partial<RemoteMcpLimits>;
 }
 
 export interface InvokeRemoteMcpListTools extends InvokeRemoteMcpBase {
   action: 'listTools';
+  /**
+   * Whose connection to list: the caller's own unless named. Listing rewrites the stored tools, so
+   * a platform connector is reached only by naming its owner, which the admin routes alone do.
+   */
+  owner?: McpConnectionOwner;
 }
 
 export interface InvokeRemoteMcpCallTool extends InvokeRemoteMcpBase {
@@ -378,8 +388,13 @@ export async function invokeRemoteMcp(
   request: InvokeRemoteMcpRequest,
   options: InvokeRemoteMcpOptions = {}
 ): Promise<RemoteMcpListToolsResult | RemoteMcpCallToolResult> {
-  const owner = { ownerType: 'user' as const, ownerKey: request.userId };
-  const connection = await mcpConnectionRepository.findByIdWithCredentials(request.connectionId, owner);
+  const own: McpConnectionOwner = { ownerType: 'user', ownerKey: request.userId };
+  // A call reaches the caller's own connection, else a platform connector, which every user shares.
+  const connection =
+    request.action === 'listTools'
+      ? await mcpConnectionRepository.findByIdWithCredentials(request.connectionId, request.owner ?? own)
+      : ((await mcpConnectionRepository.findByIdWithCredentials(request.connectionId, own)) ??
+        (await mcpConnectionRepository.findByIdWithCredentials(request.connectionId, PLATFORM_MCP_OWNER)));
   if (!connection) throw new NotFoundError('Connection not found');
   if (connection.auth.kind === 'api_key') options.onApiKeyLoaded?.(connection.auth.apiKey?.valueEnc ?? null);
 
@@ -389,6 +404,7 @@ export async function invokeRemoteMcp(
     connectionId: connection.id,
     host: connection.urlHost,
     slug: connection.slug,
+    ownerType: connection.ownerType,
     ...(request.action === 'callTool' ? { toolName: request.toolName } : {}),
     ...(serializedArgs !== undefined
       ? { argsSha256: sha256(serializedArgs), argsBytes: Buffer.byteLength(serializedArgs, 'utf8') }
@@ -412,7 +428,7 @@ export async function invokeRemoteMcp(
   const verdict = evaluateConnectionPolicy(context, {
     urlHost: connection.urlHost,
     authKind: connection.auth.kind,
-    presetRemoteHost: getMcpPresetHost(connection.presetId),
+    presetRemoteHost: policyPresetHost(connection),
     url: connection.displayUrl,
   });
   if (!verdict.allowed) {
@@ -462,8 +478,10 @@ export async function invokeRemoteMcp(
     throw new TooManyRequestsError(`At most ${REMOTE_MCP_CALLS_PER_MINUTE} calls per minute per connection`);
   }
 
+  // A platform connector is one server on one credential for everyone, so its outage trips one
+  // breaker, not one per user.
   const breaker = getBreaker(
-    resolveMcpTenantKey(request.userId),
+    connection.ownerType === 'platform' ? PLATFORM_MCP_OWNER.ownerKey : resolveMcpTenantKey(request.userId),
     `custom:${connection.id}`,
     operationTypeFor(connection, request)
   );

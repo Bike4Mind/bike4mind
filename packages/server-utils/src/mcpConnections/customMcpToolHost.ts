@@ -1,8 +1,8 @@
-import { getMcpPresetHost } from '@bike4mind/common';
 import { mcpConnectionRepository } from '@bike4mind/database';
 import { isCustomToolOffered, type CustomMcpToolHost } from '@bike4mind/services/llm';
 import { evaluateConnectionPolicy, resolveCustomMcpContext } from './customMcpAccess';
 import { invokeRemoteMcp } from './invokeRemoteMcp';
+import { policyPresetHost } from './policyPresetHost';
 
 /**
  * Supplies custom-connector tools to tool building. Listing reports nothing unless custom
@@ -21,7 +21,7 @@ export const customMcpToolHost: CustomMcpToolHost = {
             urlHost: connection.urlHost,
             authKind: connection.auth.kind,
             url: connection.displayUrl,
-            presetRemoteHost: getMcpPresetHost(connection.presetId),
+            presetRemoteHost: policyPresetHost(connection),
           }).allowed
       )
       .map(connection => ({
