@@ -14,6 +14,8 @@ struct VoiceConversationView: View {
 
   let request: VoiceRequest
   @State private var model: VoiceConversationModel?
+  /// The prompt is raised by itself once per lock; a cancelled one is not raised again until Unlock is tapped.
+  @State private var promptedUnlock = false
 
   var body: some View {
     VStack(spacing: Tokens.Spacing.l) {
@@ -26,6 +28,12 @@ struct VoiceConversationView: View {
       }
       Spacer(minLength: 0)
       if let model { controls(for: model) }
+      if auth.state == .locked {
+        Button("Unlock") { Task { await auth.unlock() } }
+          .buttonStyle(.borderedProminent)
+          .controlSize(.large)
+          .accessibilityIdentifier("voice-conversation-unlock-btn")
+      }
     }
     .padding(Tokens.Spacing.m)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -36,7 +44,12 @@ struct VoiceConversationView: View {
     }
     // This cover sits above LockedView, whose own unlock prompt ran while the app was still in the background.
     .task(id: scenePhase) {
-      if scenePhase == .active, auth.state == .locked { await auth.unlock() }
+      guard scenePhase == .active, auth.state == .locked, !promptedUnlock else { return }
+      promptedUnlock = true
+      await auth.unlock()
+    }
+    .onChange(of: auth.state) { _, state in
+      if state != .locked { promptedUnlock = false }
     }
     .onDisappear { Task { await model?.stop() } }
     .onChange(of: model?.phase) { _, phase in announce(phase) }
