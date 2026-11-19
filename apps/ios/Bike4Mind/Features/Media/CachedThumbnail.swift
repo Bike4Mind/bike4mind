@@ -30,12 +30,22 @@ struct CachedThumbnail<Placeholder: View>: View {
     return loaded?.url == url ? loaded?.image : nil
   }
 
+  /// Always ends in a state change on success: `body` reads NSCache, which SwiftUI does not observe, so a
+  /// cache hit here must still land in `loaded` to redraw a view that rendered before the image arrived.
   private func load() async {
-    guard let url, ThumbnailCache.shared.cachedImage(for: url) == nil else { return }
+    guard let url else { return }
+    if let cached = ThumbnailCache.shared.cachedImage(for: url) {
+      loaded = (url, cached)
+      return
+    }
     do {
-      loaded = (url, try await ThumbnailCache.shared.image(for: url))
+      let image = try await ThumbnailCache.shared.image(for: url)
+      // `.task(id:)` cancelled this load because `url` changed; its result belongs to the old URL.
+      guard !Task.isCancelled else { return }
+      loaded = (url, image)
       failedURL = nil
     } catch {
+      guard !Task.isCancelled else { return }
       failedURL = url
     }
   }

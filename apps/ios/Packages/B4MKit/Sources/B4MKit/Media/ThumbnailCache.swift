@@ -17,14 +17,15 @@ public final class ThumbnailCache: @unchecked Sendable {
   public let maxPixelSize: Int
   private let downloader: any ImageDownloading
   private let images = NSCache<NSString, Entry>()
-  // Guards `inFlight`; NSCache is already thread-safe.
+  // Guards `inFlight` and `nextFlightID`; NSCache is already thread-safe.
   private let lock = NSLock()
-  private var inFlight: [String: Task<Entry, any Error>] = [:]
+  private var inFlight: [String: Flight] = [:]
+  private var nextFlightID: UInt64 = 0
 
   /// - Parameter costLimitBytes: decoded bitmap bytes kept before NSCache starts evicting; it also evicts on
   ///   memory pressure.
   public init(
-    downloader: any ImageDownloading = URLSessionImageDownloader(), maxPixelSize: Int = defaultMaxPixelSize,
+    downloader: any ImageDownloading = URLSessionThumbnailDownloader(), maxPixelSize: Int = defaultMaxPixelSize,
     costLimitBytes: Int = 128 * 1024 * 1024
   ) {
     self.downloader = downloader
@@ -43,36 +44,65 @@ public final class ThumbnailCache: @unchecked Sendable {
     images.object(forKey: Self.key(for: url) as NSString)?.image
   }
 
-  /// The cached thumbnail, or a fresh download shared with any caller already waiting on the same file.
-  /// The download is not cancelled with the caller, so a cell scrolled away mid-load still fills the cache.
+  /// The cached thumbnail, or a download shared with every caller waiting on the same file. The download is
+  /// cancelled once all of its callers are, so a fast scroll does not queue fetches for cells already gone.
   public func image(for url: URL) async throws -> CGImage {
     if let cached = cachedImage(for: url) { return cached }
     let key = Self.key(for: url)
-    let task = lock.withLock {
-      if let running = inFlight[key] { return running }
-      let running = Task.detached(priority: .userInitiated) { [downloader, maxPixelSize] in
-        let data = try await downloader.download(url)
-        guard let image = Self.decode(data, maxPixelSize: maxPixelSize) else {
-          throw URLError(.cannotDecodeContentData)
-        }
-        return Entry(image)
-      }
-      inFlight[key] = running
-      return running
-    }
-    do {
-      let entry = try await task.value
-      store(entry, key: key)
-      return entry.image
-    } catch {
-      _ = lock.withLock { inFlight.removeValue(forKey: key) }
-      throw error
+    let (id, task) = join(key: key, url: url)
+    return try await withTaskCancellationHandler {
+      try await task.value.image
+    } onCancel: {
+      leave(key: key, id: id)
     }
   }
 
-  private func store(_ entry: Entry, key: String) {
-    images.setObject(entry, forKey: key as NSString, cost: entry.image.bytesPerRow * entry.image.height)
-    _ = lock.withLock { inFlight.removeValue(forKey: key) }
+  private func join(key: String, url: URL) -> (UInt64, Task<Entry, any Error>) {
+    lock.withLock {
+      if var flight = inFlight[key] {
+        flight.waiters += 1
+        inFlight[key] = flight
+        return (flight.id, flight.task)
+      }
+      nextFlightID += 1
+      let id = nextFlightID
+      // `finish` takes the lock, so it cannot run before this flight is registered below.
+      let task = Task.detached(priority: .userInitiated) { [self] in
+        defer { finish(key: key, id: id) }
+        let data = try await downloader.download(url)
+        try Task.checkCancellation()
+        guard let image = Self.decode(data, maxPixelSize: maxPixelSize) else {
+          throw URLError(.cannotDecodeContentData)
+        }
+        let entry = Entry(image)
+        images.setObject(entry, forKey: key as NSString, cost: image.bytesPerRow * image.height)
+        return entry
+      }
+      inFlight[key] = Flight(id: id, task: task, waiters: 1)
+      return (id, task)
+    }
+  }
+
+  /// A waiter was cancelled; the last one out cancels the download. The id check keeps a late call from
+  /// touching a newer flight for the same key.
+  private func leave(key: String, id: UInt64) {
+    let abandoned: Task<Entry, any Error>? = lock.withLock {
+      guard var flight = inFlight[key], flight.id == id else { return nil }
+      flight.waiters -= 1
+      guard flight.waiters == 0 else {
+        inFlight[key] = flight
+        return nil
+      }
+      inFlight.removeValue(forKey: key)
+      return flight.task
+    }
+    abandoned?.cancel()
+  }
+
+  private func finish(key: String, id: UInt64) {
+    lock.withLock {
+      if inFlight[key]?.id == id { inFlight.removeValue(forKey: key) }
+    }
   }
 
   static func decode(_ data: Data, maxPixelSize: Int) -> CGImage? {
@@ -87,9 +117,33 @@ public final class ThumbnailCache: @unchecked Sendable {
     return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
   }
 
+  private struct Flight {
+    let id: UInt64
+    let task: Task<Entry, any Error>
+    var waiters: Int
+  }
+
   /// NSCache needs a class value, and the Task result needs to be Sendable; a CGImage is immutable.
   private final class Entry: @unchecked Sendable {
     let image: CGImage
     init(_ image: CGImage) { self.image = image }
+  }
+}
+
+/// Fetches a grid image in one bulk transfer and accepts any 2xx. Unlike `URLSessionImageDownloader` (built
+/// for the widget), it has no size cap: a thumbnail must show whatever the full-screen view can.
+public struct URLSessionThumbnailDownloader: ImageDownloading {
+  private let session: URLSession
+
+  public init(session: URLSession = .shared) {
+    self.session = session
+  }
+
+  public func download(_ url: URL) async throws -> Data {
+    let (data, response) = try await session.data(from: url)
+    guard let status = (response as? HTTPURLResponse)?.statusCode, (200..<300).contains(status) else {
+      throw URLError(.badServerResponse)
+    }
+    return data
   }
 }

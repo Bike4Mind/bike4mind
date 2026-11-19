@@ -16,11 +16,21 @@ private final class CountingDownloader: ImageDownloading, @unchecked Sendable {
     self.delay = delay
   }
 
+  private var _cancellations = 0
+
   var calls: Int { lock.withLock { _calls } }
+  var cancellations: Int { lock.withLock { _cancellations } }
 
   func download(_ url: URL) async throws -> Data {
     lock.withLock { _calls += 1 }
-    if delay > .zero { try await Task.sleep(for: delay) }
+    if delay > .zero {
+      do {
+        try await Task.sleep(for: delay)
+      } catch {
+        lock.withLock { _cancellations += 1 }
+        throw error
+      }
+    }
     return try result.get()
   }
 }
@@ -80,6 +90,33 @@ final class ThumbnailCacheTests: XCTestCase {
     async let second = cache.image(for: resigned)
     _ = try await (first, second)
     XCTAssertEqual(downloader.calls, 1)
+  }
+
+  func testCancellingTheOnlyWaiterCancelsTheDownload() async throws {
+    let downloader = CountingDownloader(result: .success(try pngData(width: 10, height: 10)), delay: .seconds(10))
+    let cache = ThumbnailCache(downloader: downloader)
+    let url = url
+    let waiter = Task { try await cache.image(for: url) }
+    try await Task.sleep(for: .milliseconds(50))
+    waiter.cancel()
+    _ = try? await waiter.value
+    XCTAssertEqual(downloader.cancellations, 1)
+    XCTAssertNil(cache.cachedImage(for: url))
+  }
+
+  func testCancellingOneWaiterKeepsTheSharedDownloadForTheOther() async throws {
+    let downloader = CountingDownloader(
+      result: .success(try pngData(width: 10, height: 10)), delay: .milliseconds(200))
+    let cache = ThumbnailCache(downloader: downloader)
+    let (url, resigned) = (url, resigned)
+    let leaving = Task { try await cache.image(for: url) }
+    let staying = Task { try await cache.image(for: resigned) }
+    try await Task.sleep(for: .milliseconds(50))
+    leaving.cancel()
+    _ = try await staying.value
+    XCTAssertEqual(downloader.calls, 1)
+    XCTAssertEqual(downloader.cancellations, 0)
+    XCTAssertNotNil(cache.cachedImage(for: url))
   }
 
   func testFailureIsNotCachedSoTheNextRequestRetries() async throws {

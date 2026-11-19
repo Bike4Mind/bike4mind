@@ -40,10 +40,12 @@ struct ZoomableImageView: View {
       case .failure:
         Color.clear.task { await onFailure() }
       default:
-        // The grid's thumbnail stands in until the full-size image arrives.
-        if let thumbnail = ThumbnailCache.shared.cachedImage(for: url) {
-          Image(decorative: thumbnail, scale: 1).resizable().scaledToFit()
-        } else {
+        // The grid's thumbnail stands in until the full-size image arrives; the spinner stays so VoiceOver
+        // and UI tests still see a loading state.
+        ZStack {
+          if let thumbnail = ThumbnailCache.shared.cachedImage(for: url) {
+            Image(decorative: thumbnail, scale: 1).resizable().scaledToFit()
+          }
           ProgressView().tint(.white)
         }
       }
