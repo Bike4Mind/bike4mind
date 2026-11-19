@@ -322,12 +322,35 @@ describe('production director tools', () => {
     };
 
     const refused = await run(productionStoryboardTool, harness, reprompted);
-    expect(refused).toMatch(/^Error: .*replace: true/);
+    expect(refused).toMatch(/^Error: this storyboard changes or removes the prompts of shot-2,.*replace: true/);
     expect(harness.composition().shots).toEqual(takenShots);
 
     const replaced = JSON.parse(await run(productionStoryboardTool, harness, { ...reprompted, replace: true }));
     expect(replaced.shots).toHaveLength(3);
     expect(harness.composition().shots.map(shot => shot.fileIds.length > 0)).toEqual([true, false, true]);
+  });
+
+  it('keeps the takes and clips of shots that move when a shot is inserted before them', async () => {
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID });
+    const before = harness.composition().shots;
+    const inserted = {
+      ...STORYBOARD,
+      shots: [
+        { title: 'Teaser', prompt: 'A shadow on the wall', durationSeconds: 2 },
+        ...STORYBOARD.shots.map(shot => ({ ...shot, prompt: `  ${shot.prompt.toUpperCase()} ` })),
+      ],
+    };
+
+    const result = JSON.parse(await run(productionStoryboardTool, harness, inserted));
+    expect(result.shots.map((shot: { takesKept?: boolean }) => shot.takesKept ?? false)).toEqual([
+      false,
+      true,
+      true,
+      true,
+    ]);
+    const after = harness.composition().shots;
+    expect(after.slice(1).map(shot => shot.clipFileId)).toEqual(before.map(shot => shot.clipFileId));
   });
 
   it('keeps takes and clips on a re-time, and refuses to grow a shot past its clip even with replace', async () => {
@@ -373,6 +396,18 @@ describe('production director tools', () => {
 
     await run(productionAddAudioTool, harness, { compositionId: COMPOSITION_ID, music: { prompt: 'bright acoustic' } });
     expect(harness.counts.music).toBe(1);
+  });
+
+  it('reports a music bed that ends before the cut when it assembles', async () => {
+    const shorter = { ...STORYBOARD, shots: STORYBOARD.shots.map(shot => ({ ...shot, durationSeconds: 2 })) };
+    await run(productionStoryboardTool, harness, shorter);
+    await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
+    await run(productionAddAudioTool, harness, { compositionId: COMPOSITION_ID, music: { prompt: 'bright acoustic' } });
+    await run(productionStoryboardTool, harness, STORYBOARD);
+
+    const assembled = JSON.parse(await run(productionAssembleTool, harness, { compositionId: COMPOSITION_ID }));
+    expect(assembled.musicEndsBeforeCutMs).toBe(6000);
+    expect(assembled.next).toContain('a music bed that ends before the cut');
   });
 
   it('remakes the music bed when a re-time grows the cut past it', async () => {
@@ -459,6 +494,8 @@ describe('production director tools', () => {
       await run(productionAddAudioTool, harness, { compositionId: COMPOSITION_ID, voiceover: true })
     );
     expect(result.notes.join(' ')).toContain('the voice line for shot-1 runs 5000 ms');
+    expect(result.cutLines).toEqual(['shot-1']);
+    expect(result.next).toMatch(/^The voice lines of shot-1 are cut short/);
     const voice = harness.composition().timeline.tracks.find(track => track.kind === 'voice');
     expect(voice?.clips.map(clip => [clip.startMs, clip.durationMs])).toEqual([
       [200, 3000],

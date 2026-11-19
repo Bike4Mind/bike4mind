@@ -69,8 +69,8 @@ async function makeVoiceover(
   audio: ProductionAudioAdapter | null,
   slots: readonly ShotSlot[],
   totalMs: number
-): Promise<Outcome<StudioAudioClip[]>> {
-  if (!audio) return { clips: [], notes: ['Voiceover is not available for this run.'] };
+): Promise<Outcome<StudioAudioClip[]> & { cutLines: string[] }> {
+  if (!audio) return { clips: [], notes: ['Voiceover is not available for this run.'], cutLines: [] };
   const lines: (PlacedAudio & { slot: ShotSlot })[] = [];
   const notes: string[] = [];
   for (const slot of slots.filter(candidate => candidate.shot.voiceLine)) {
@@ -81,15 +81,18 @@ async function makeVoiceover(
   }
   if (lines.length === 0 && notes.length === 0) notes.push('No shot has a voice line, so there is no voiceover.');
   const clips = buildVoiceClips(lines, totalMs);
+  const cutLines: string[] = [];
   for (const line of lines) {
     const placed = clips.find(clip => clip.id === line.id);
-    if (!placed || placed.durationMs < line.durationMs)
+    if (!placed || placed.durationMs < line.durationMs) {
+      cutLines.push(line.slot.shot.id);
       notes.push(
         `the voice line for ${line.slot.shot.id} runs ${line.durationMs} ms, longer than the time it has; it is cut ` +
           `to ${placed?.durationMs ?? 0} ms. ${fitAdvice(line.slot.shot)}`
       );
+    }
   }
-  return { clips, notes };
+  return { clips, notes, cutLines };
 }
 
 async function makeSoundEffects(
@@ -150,11 +153,13 @@ async function addAudio(context: Context, config: ProductionToolConfig, args: Ad
   const notes: string[] = [];
   const audio = config.audio && createProductionAudio(context, config.audio);
   let pendingMusic: string | undefined;
+  let cutLines: string[] = [];
 
   if (args.voiceover !== false && wants('voiceover', args, directorClips(timeline, 'voice'))) {
     const voice = await makeVoiceover(audio, slots, totalMs);
     if (voice.clips.length > 0) replacements.voice = voice.clips;
     notes.push(...voice.notes);
+    cutLines = voice.cutLines;
   }
   if (args.soundEffects?.length && wants('soundEffects', args, directorClips(timeline, 'sfx'))) {
     const sfx = await makeSoundEffects(audio, slots, args.soundEffects);
@@ -183,9 +188,13 @@ async function addAudio(context: Context, config: ProductionToolConfig, args: Ad
   return JSON.stringify({
     added: Object.fromEntries(Object.entries(replacements).map(([kind, clips]) => [kind, clips?.length ?? 0])),
     ...(notes.length > 0 && { notes }),
+    ...(cutLines.length > 0 && { cutLines }),
     next: pendingMusic
       ? 'The music is still rendering: call production_add_audio again with the same arguments to wait for it.'
-      : 'Call production_assemble to lay out the cut.',
+      : cutLines.length > 0
+        ? `The voice lines of ${cutLines.join(', ')} are cut short (see notes). Fit them and replace the voiceover, ` +
+          'or call production_assemble and tell the user which lines are cut; never say a cut line fits.'
+        : 'Call production_assemble to lay out the cut.',
   });
 }
 

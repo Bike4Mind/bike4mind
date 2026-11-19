@@ -27,7 +27,10 @@ const ShotArg = z.object({
     .trim()
     .min(1)
     .max(limits.shotPromptMaxLength)
-    .describe('The image prompt for the key frame: subject, setting, light, camera. Describe the product in it.'),
+    .describe(
+      'The image prompt for the key frame: subject, setting, light, camera. Describe the product in it. To keep a ' +
+        "shot's takes and clip, repeat its prompt exactly as it is; any change makes new ones."
+    ),
   durationSeconds: z.number().min(1).max(30).describe('How long the shot runs in the cut.'),
   voiceLine: z
     .string()
@@ -79,13 +82,20 @@ const toShot = (shot: StoryboardArgs['shots'][number], index: number): StudioSho
   fileIds: [],
 });
 
+const normalizedPrompt = (prompt: string | undefined): string =>
+  (prompt ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+
 /**
  * A shot whose image prompt is unchanged keeps its takes, so a re-run that only retimes shots or rewrites their
  * voice lines costs nothing. Its clip stays only while the shot is no longer than before: generate_shot already
  * cut the shot to its clip's length, so a longer shot would play past the clip's end.
  */
 function keepTakes(shot: StudioShot, previous: StudioShot | undefined): { shot: StudioShot; clipDropped: boolean } {
-  if (!previous || previous.fileIds.length === 0 || previous.prompt !== shot.prompt) {
+  if (
+    !previous ||
+    previous.fileIds.length === 0 ||
+    normalizedPrompt(previous.prompt) !== normalizedPrompt(shot.prompt)
+  ) {
     return { shot, clipDropped: false };
   }
   const keepClip = previous.clipFileId !== undefined && (shot.durationMs ?? 0) <= (previous.durationMs ?? 0);
@@ -98,6 +108,17 @@ function keepTakes(shot: StudioShot, previous: StudioShot | undefined): { shot: 
     },
     clipDropped: previous.clipFileId !== undefined && !keepClip,
   };
+}
+
+/**
+ * The current shot a new one carries its takes from: the one at the same place when its prompt matches, otherwise
+ * the first with the same prompt, so inserting or moving a shot keeps the takes of the shots around it.
+ */
+function previousShot(current: readonly StudioShot[], prompt: string, index: number): StudioShot | undefined {
+  const wanted = normalizedPrompt(prompt);
+  const atIndex = current[index];
+  if (atIndex && normalizedPrompt(atIndex.prompt) === wanted) return atIndex;
+  return current.find(shot => normalizedPrompt(shot.prompt) === wanted) ?? atIndex;
 }
 
 export const productionStoryboardTool: ToolDefinition = {
@@ -113,16 +134,23 @@ export const productionStoryboardTool: ToolDefinition = {
             throw new ProductionToolError('the shots run longer than a production can.');
           }
           const current = await config.compositions.get(args.compositionId);
-          const kept = args.shots.map((shot, index) => keepTakes(toShot(shot, index), current.shots[index]));
+          const kept = args.shots.map((shot, index) =>
+            keepTakes(toShot(shot, index), previousShot(current.shots, shot.prompt, index))
+          );
           const shots = kept.map(({ shot }) => shot);
           const keptTakeIds = new Set(shots.flatMap(shot => shot.fileIds));
           const lostTakes = current.shots.some(
             shot => shot.fileIds.length > 0 && !shot.fileIds.every(fileId => keptTakeIds.has(fileId))
           );
           if (!args.replace && lostTakes) {
+            const lost = current.shots
+              .filter(shot => shot.fileIds.length > 0 && !shot.fileIds.every(fileId => keptTakeIds.has(fileId)))
+              .map(shot => shot.id);
             throw new ProductionToolError(
-              'this storyboard changes or removes shots that already have takes. Keep their prompts to keep the ' +
-                'takes; otherwise ask the user before replacing them, then pass replace: true.'
+              `this storyboard changes or removes the prompts of ${lost.join(', ')}, which already have takes. ` +
+                'Repeat their prompts exactly to keep their takes and clips. Replacing them makes new takes and ' +
+                "clips, which spend this run's clip limit, so a shot past the limit is left a still; ask the user " +
+                'before replacing them, then pass replace: true.'
             );
           }
           // generate_shot cuts a shot to its clip, so a longer shot would play a still or spend another clip from
