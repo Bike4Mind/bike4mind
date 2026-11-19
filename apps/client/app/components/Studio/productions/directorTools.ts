@@ -16,4 +16,6 @@ export const buildDirectorSystemContext = (compositionId: string): string =>
   'production_add_audio (an instrumental music prompt, voiceover on, optionally one sound effect per shot), ' +
   'then production_assemble. Do not ask the user questions unless a tool refuses; when you do, end the question ' +
   `with the production id (${compositionId}) so your next turn has it. ` +
+  'On a later turn, call production_storyboard with keep (the shot id) for every shot you are not re-imagining, ' +
+  'and only claim a shot kept its clip when the storyboard result says takesKept for it. ' +
   'End with a short summary of what was made.';

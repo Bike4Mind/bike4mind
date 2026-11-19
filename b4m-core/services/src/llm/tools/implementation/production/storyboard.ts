@@ -15,7 +15,22 @@ export const STORYBOARD_MAX_SHOTS = 12;
 const limits = STUDIO_COMPOSITION_LIMITS;
 
 const ShotArg = z.object({
-  title: z.string().trim().min(1).max(limits.shotTitleMaxLength).describe('A short name, e.g. "Hook".'),
+  keep: z
+    .string()
+    .regex(/^shot-\d+$/)
+    .optional()
+    .describe(
+      'The id of a current shot (e.g. "shot-3") to carry over as it is: its prompt, takes and clip are kept, so ' +
+        'leave prompt out. Use it for every shot you are not re-imagining, even when it moves. Title, length and ' +
+        'voice line default to the current ones and can be changed; voiceLine "" removes the line.'
+    ),
+  title: z
+    .string()
+    .trim()
+    .min(1)
+    .max(limits.shotTitleMaxLength)
+    .optional()
+    .describe('A short name, e.g. "Hook". Required for a new shot.'),
   intent: z
     .string()
     .trim()
@@ -27,11 +42,17 @@ const ShotArg = z.object({
     .trim()
     .min(1)
     .max(limits.shotPromptMaxLength)
+    .optional()
     .describe(
-      'The image prompt for the key frame: subject, setting, light, camera. Describe the product in it. To keep a ' +
-        "shot's takes and clip, repeat its prompt exactly as it is; any change makes new ones."
+      'The image prompt for a new shot: subject, setting, light, camera. Describe the product in it. Required ' +
+        'unless keep is set; a shot with a new prompt gets new takes and a new clip.'
     ),
-  durationSeconds: z.number().min(1).max(30).describe('How long the shot runs in the cut.'),
+  durationSeconds: z
+    .number()
+    .min(1)
+    .max(30)
+    .optional()
+    .describe('How long the shot runs in the cut. Required for a new shot.'),
   voiceLine: z
     .string()
     .trim()
@@ -60,25 +81,56 @@ const schema = z.object({
     .boolean()
     .optional()
     .describe(
-      'Set true to change the prompt of, or remove, shots that already have takes (their takes stay in Files), or ' +
-        'to cut voice lines that a re-time leaves without room. It never lengthens a shot past its clip.'
+      'Set true only when the user asked for new pictures: it lets a shot with takes get a new prompt or be removed ' +
+        '(the takes stay in Files, the result lists them in takesDropped) and cuts voice lines a re-time leaves ' +
+        'without room. It never lengthens a shot past its clip; to keep a shot, use keep, not replace.'
     ),
 });
 type StoryboardArgs = z.infer<typeof schema>;
 
 const description =
   'Write the storyboard of a Studio production: the shots in order, each with an image prompt, its length and its ' +
-  'voiceover line. Replaces the shot list; a shot whose prompt is unchanged keeps its takes and clip, and a shot ' +
-  'with a clip cannot grow past it. Plan about 4 shots for a 15 second ad (hook, product, benefit, call to action). Then call ' +
+  'voiceover line. Replaces the shot list: list every shot, and carry each current shot you are not re-imagining ' +
+  'over with keep (its id), which keeps its takes and clip. A shot with a clip cannot grow past it. Plan about 4 shots for a 15 second ad (hook, product, benefit, call to action). Then call ' +
   'production_generate_shot.';
 
-const toShot = (shot: StoryboardArgs['shots'][number], index: number): StudioShot => ({
+type ResolvedShot = { title: string; intent?: string; prompt: string; durationMs: number; voiceLine?: string };
+
+/**
+ * A shot argument filled in from the current shot it keeps. The director often no longer has a shot's prompt in hand
+ * on a follow-up turn, so keep is how it carries a shot over; a prompt with no spaces is a stand-in for one, not a
+ * description of a frame, and is refused rather than turned into new takes.
+ */
+function resolveShot(shot: StoryboardArgs['shots'][number], current: readonly StudioShot[]): ResolvedShot {
+  const source = shot.keep ? current.find(candidate => candidate.id === shot.keep) : undefined;
+  if (shot.keep && !source) {
+    throw new ProductionToolError(
+      `there is no current ${shot.keep} to keep; the current shots are ${
+        current.map(candidate => candidate.id).join(', ') || 'none'
+      }.`
+    );
+  }
+  const prompt = source?.prompt ?? shot.prompt;
+  const title = shot.title ?? source?.title;
+  const durationMs = shot.durationSeconds !== undefined ? Math.round(shot.durationSeconds * 1000) : source?.durationMs;
+  if (!prompt || !title || durationMs === undefined) {
+    throw new ProductionToolError(
+      'a new shot needs a title, a prompt and durationSeconds; to carry a shot over, pass keep.'
+    );
+  }
+  if (!source && !/\s/.test(prompt)) {
+    throw new ProductionToolError(
+      `"${prompt}" is not an image prompt. To keep a current shot, pass keep with its id instead of a prompt.`
+    );
+  }
+  const voiceLine = shot.voiceLine ?? source?.voiceLine;
+  const intent = shot.intent ?? source?.intent;
+  return { title, ...(intent && { intent }), prompt, durationMs, ...(voiceLine && { voiceLine }) };
+}
+
+const toShot = (shot: ResolvedShot, index: number): StudioShot => ({
   id: `shot-${index + 1}`,
-  title: shot.title,
-  ...(shot.intent && { intent: shot.intent }),
-  prompt: shot.prompt,
-  durationMs: Math.round(shot.durationSeconds * 1000),
-  ...(shot.voiceLine && { voiceLine: shot.voiceLine }),
+  ...shot,
   fileIds: [],
 });
 
@@ -129,26 +181,24 @@ export const productionStoryboardTool: ToolDefinition = {
       toolFn: async (parameters?: unknown) => {
         const args = schema.parse(parameters);
         try {
-          const totalMs = args.shots.reduce((sum, shot) => sum + Math.round(shot.durationSeconds * 1000), 0);
+          const current = await config.compositions.get(args.compositionId);
+          const resolved = args.shots.map(shot => resolveShot(shot, current.shots));
+          const totalMs = resolved.reduce((sum, shot) => sum + shot.durationMs, 0);
           if (totalMs > STUDIO_TIMELINE_LIMITS.maxDurationMs) {
             throw new ProductionToolError('the shots run longer than a production can.');
           }
-          const current = await config.compositions.get(args.compositionId);
-          const kept = args.shots.map((shot, index) =>
+          const kept = resolved.map((shot, index) =>
             keepTakes(toShot(shot, index), previousShot(current.shots, shot.prompt, index))
           );
           const shots = kept.map(({ shot }) => shot);
           const keptTakeIds = new Set(shots.flatMap(shot => shot.fileIds));
-          const lostTakes = current.shots.some(
-            shot => shot.fileIds.length > 0 && !shot.fileIds.every(fileId => keptTakeIds.has(fileId))
-          );
-          if (!args.replace && lostTakes) {
-            const lost = current.shots
-              .filter(shot => shot.fileIds.length > 0 && !shot.fileIds.every(fileId => keptTakeIds.has(fileId)))
-              .map(shot => shot.id);
+          const lost = current.shots
+            .filter(shot => shot.fileIds.length > 0 && !shot.fileIds.every(fileId => keptTakeIds.has(fileId)))
+            .map(shot => shot.id);
+          if (!args.replace && lost.length > 0) {
             throw new ProductionToolError(
               `this storyboard changes or removes the prompts of ${lost.join(', ')}, which already have takes. ` +
-                'Repeat their prompts exactly to keep their takes and clips. Replacing them makes new takes and ' +
+                'Pass keep with their ids to keep their takes and clips. Replacing them makes new takes and ' +
                 "clips, which spend this run's clip limit, so a shot past the limit is left a still; ask the user " +
                 'before replacing them, then pass replace: true.'
             );
@@ -205,6 +255,7 @@ export const productionStoryboardTool: ToolDefinition = {
               ...(shot.fileIds.length > 0 && { takesKept: true }),
             })),
             totalSeconds: totalMs / 1000,
+            ...(lost.length > 0 && { takesDropped: lost }),
             next:
               'Call production_generate_shot to make the takes and clips; a shot that kept its takes is skipped ' +
               'unless it needs a clip.' +
