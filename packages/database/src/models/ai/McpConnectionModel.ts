@@ -484,15 +484,20 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     return result?.toJSON() ?? null;
   }
 
-  async listForUser(userId: string, options: { slugs?: string[] } = {}): Promise<IMcpConnectionDocument[]> {
+  async listForUser(
+    userId: string,
+    options: { slugs?: string[]; platformIds?: readonly string[] } = {}
+  ): Promise<IMcpConnectionDocument[]> {
     const offered = {
       enabled: true,
       status: 'connected',
       ...(options.slugs ? { slug: { $in: options.slugs } } : {}),
     };
+    // A platform connector is off for each user until they switch it on, so none is listed by default.
+    const platformIds = (options.platformIds ?? []).filter(id => mongoose.isObjectIdOrHexString(id));
     const [own, platform] = await Promise.all([
       this.find({ userId, ownerType: 'user', ...offered }),
-      this.find({ ...PLATFORM_MCP_OWNER, ...offered }),
+      platformIds.length > 0 ? this.find({ ...PLATFORM_MCP_OWNER, _id: { $in: platformIds }, ...offered }) : [],
     ]);
     if (platform.length === 0) return own;
     // The user's own connection keeps a shared slug whatever its state, so switching it off never

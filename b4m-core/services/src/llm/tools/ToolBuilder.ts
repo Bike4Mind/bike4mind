@@ -446,6 +446,8 @@ export interface BuildMcpToolsArgs {
   requestedMcpServers: string[] | undefined;
   /** Custom connector slugs switched off in the composer (see ChatCompletionInvokeParamsSchema). */
   disabledMcpConnections?: readonly string[];
+  /** Platform connector ids switched on in the composer; none when absent (see ChatCompletionInvokeParamsSchema). */
+  enabledPlatformMcpConnections?: readonly string[];
   defaultAdminSettings: Record<string, string>;
   userMessage: string;
   logger: Logger;
@@ -795,6 +797,7 @@ export class ToolBuilder {
     enableMCPServer,
     requestedMcpServers,
     disabledMcpConnections,
+    enabledPlatformMcpConnections,
     defaultAdminSettings: _defaultAdminSettings,
     userMessage: _userMessage,
     logger,
@@ -892,13 +895,15 @@ export class ToolBuilder {
     }
 
     // Custom connectors follow their own enabled switch, narrowed by the composer's opt-out list;
-    // `requestedMcpServers` names built-in servers only. A failure here drops custom tools only,
-    // never the built-ins above.
+    // a platform connector is listed only when the composer switched it on. `requestedMcpServers`
+    // names built-in servers only. A failure here drops custom tools only, never the built-ins above.
     if (this.deps.customMcp && onPendingAction && !disableUserIntegrations) {
       try {
         const userId = this.deps.user.id;
         const switchedOff = new Set(disabledMcpConnections ?? []);
-        const connections = await loadCustomMcpConnections(this.deps.customMcp, userId, logger);
+        const connections = await loadCustomMcpConnections(this.deps.customMcp, userId, logger, {
+          platformConnectionIds: enabledPlatformMcpConnections ?? [],
+        });
         for (const connection of connections) {
           if (switchedOff.has(connection.slug)) continue;
           const tools = generateCustomMcpTools(connection, {

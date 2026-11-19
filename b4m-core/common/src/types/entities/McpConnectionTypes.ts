@@ -714,10 +714,14 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
   findByIdWithCredentials(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null>;
   /**
    * Hot path: the enabled, connected connections offered to a chat turn or agent run, with the tool
-   * input schemas tool building needs: the user's own first, then every platform connector whose
-   * slug the user does not hold (in any state). `slugs` narrows to the connections a turn selected.
+   * input schemas tool building needs: the user's own first, then each platform connector named in
+   * `platformIds` (the ones the user switched on; none when omitted) whose slug the user does not
+   * hold (in any state). `slugs` narrows to the connections a turn selected.
    */
-  listForUser(userId: string, options?: { slugs?: string[] }): Promise<IMcpConnectionDocument[]>;
+  listForUser(
+    userId: string,
+    options?: { slugs?: string[]; platformIds?: readonly string[] }
+  ): Promise<IMcpConnectionDocument[]>;
   /** Every user-owned connection regardless of state, for the manage list. */
   listAllForUser(userId: string): Promise<IMcpConnectionSummary[]>;
   countForUser(userId: string): Promise<number>;

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ToolBuilder, type ToolBuilderConfig } from './ToolBuilder';
-import { CUSTOM_MCP_DATA_NOTICE, type CustomMcpToolHost } from './customMcpTools';
+import { CUSTOM_MCP_DATA_NOTICE, type CustomMcpListOptions, type CustomMcpToolHost } from './customMcpTools';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
 
@@ -43,7 +43,12 @@ const builderWith = (customMcp: CustomMcpToolHost | undefined, builtIns: unknown
 const run = (
   builder: ToolBuilder,
   onPendingAction = vi.fn(async () => undefined),
-  extra: { requestedMcpServers?: string[]; disabledMcpConnections?: string[]; disableUserIntegrations?: boolean } = {}
+  extra: {
+    requestedMcpServers?: string[];
+    disabledMcpConnections?: string[];
+    enabledPlatformMcpConnections?: string[];
+    disableUserIntegrations?: boolean;
+  } = {}
 ) =>
   builder.buildMcpTools({
     enableMCPServer: true,
@@ -128,6 +133,43 @@ describe('ToolBuilder buildMcpTools - custom connectors', () => {
 
     expect(Object.keys(mcpToolsByServer)).toEqual(['docs']);
     expect([...customMcpToolNames]).toEqual(['docs__search', 'docs__create']);
+  });
+
+  describe('platform connectors', () => {
+    const shared = { ...connection, connectionId: 'p1', slug: 'shared', displayName: 'Shared' };
+    // Lists a platform connector only when the request names it, as the server host does.
+    const optInHost = () => ({
+      listConnections: vi.fn(async (_userId: string, options?: CustomMcpListOptions) => [
+        connection,
+        ...(options?.platformConnectionIds?.includes(shared.connectionId) ? [shared] : []),
+      ]),
+      callTool: vi.fn(async () => ({ result: { content: [] } })),
+    });
+
+    it('offers none of its tools to a request that never switched it on, so a call by name finds no tool', async () => {
+      const host = optInHost();
+      const { mcpToolsByServer, customMcpToolNames } = await run(builderWith(host as never));
+
+      expect(Object.keys(mcpToolsByServer)).toEqual(['acme']);
+      expect([...customMcpToolNames].filter(name => name.startsWith('shared__'))).toEqual([]);
+      expect(host.listConnections).toHaveBeenCalledWith('u1', { platformConnectionIds: [] });
+      expect(host.callTool).not.toHaveBeenCalled();
+    });
+
+    it('offers its tools once switched on by id, and withholds them once switched off again', async () => {
+      const host = optInHost();
+      const on = await run(builderWith(host as never), undefined, { enabledPlatformMcpConnections: ['p1'] });
+      expect(Object.keys(on.mcpToolsByServer)).toEqual(['acme', 'shared']);
+      expect(on.mcpToolsByServer.shared.map(t => t.name)).toEqual(['shared__search', 'shared__create']);
+
+      await on.mcpToolsByServer.shared.find(t => t.name === 'shared__search')!.toolFn({ q: 'x' });
+      expect(host.callTool).toHaveBeenCalledWith(expect.objectContaining({ connectionId: 'p1', toolName: 'search' }));
+
+      for (const enabledPlatformMcpConnections of [[], ['shared']]) {
+        const off = await run(builderWith(host as never), undefined, { enabledPlatformMcpConnections });
+        expect(Object.keys(off.mcpToolsByServer)).toEqual(['acme']);
+      }
+    });
   });
 
   it('adds the connector-output-is-data notice to the tool prompt only when custom tools are offered', async () => {

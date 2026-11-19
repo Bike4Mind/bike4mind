@@ -446,6 +446,12 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    * would switch them all off.
    */
   disabledMcpConnections: z.array(z.string()).optional(),
+  /**
+   * Ids of the platform connectors the user switched on in the composer. Opt-in, unlike
+   * `disabledMcpConnections`: a platform connector is offered to no one who has not switched it on,
+   * so a request without this list gets none.
+   */
+  enabledPlatformMcpConnections: z.array(z.string()).optional(),
   /** Project ID */
   projectId: z.string().optional(),
   /** Organization ID */

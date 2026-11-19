@@ -6,8 +6,10 @@ import {
   connectionsFor,
   galleryConnectionState,
   initialToolDrafts,
+  isComposerConnectionOn,
   needsSignIn,
   offeredToolCount,
+  toggleComposerConnection,
   toReviewEntries,
   type McpConnectionTool,
 } from './customMcpModel';
@@ -120,5 +122,35 @@ describe('composerConnections', () => {
 
     expect(composerConnections(all).map(c => c.id)).toEqual(['shared']);
     expect(connectionsFor(all, undefined).map(c => c.id)).toEqual(['mine']);
+  });
+});
+
+describe('composer connection switches', () => {
+  const none = { disabledMcpConnections: [], enabledPlatformMcpConnections: [] };
+  const shared = { id: 'p1', slug: 'docs', ownerType: 'platform' as const };
+  const mine = { id: 'u1', slug: 'mine', ownerType: 'user' as const };
+
+  it("starts a platform connector off and the user's own connector on", () => {
+    expect(isComposerConnectionOn(shared, none)).toBe(false);
+    expect(isComposerConnectionOn(mine, none)).toBe(true);
+  });
+
+  it('switches a platform connector on and off by id, leaving the slug list alone', () => {
+    const on = toggleComposerConnection(shared, none);
+    expect(on).toEqual({ enabledPlatformMcpConnections: ['p1'] });
+    const afterOn = { ...none, ...on };
+    expect(isComposerConnectionOn(shared, afterOn)).toBe(true);
+
+    expect(toggleComposerConnection(shared, afterOn)).toEqual({ enabledPlatformMcpConnections: [] });
+    // A recreated connector has a new id, so the old switch does not carry over.
+    expect(isComposerConnectionOn({ ...shared, id: 'p2' }, afterOn)).toBe(false);
+  });
+
+  it("switches the user's own connector off and on by slug, as before", () => {
+    const off = toggleComposerConnection(mine, none);
+    expect(off).toEqual({ disabledMcpConnections: ['mine'] });
+    expect(isComposerConnectionOn(mine, { ...none, ...off })).toBe(false);
+    expect(toggleComposerConnection(mine, { ...none, ...off })).toEqual({ disabledMcpConnections: [] });
+    expect(isComposerConnectionOn(mine, { ...none, enabledPlatformMcpConnections: ['u1'] })).toBe(true);
   });
 });

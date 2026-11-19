@@ -1576,36 +1576,58 @@ describe('McpConnectionModel', () => {
       await expect(mcpConnectionRepository.create(input)).rejects.toThrow(/platform connection/);
     });
 
-    it('is offered to every user, after their own connections', async () => {
+    it('is offered to a user who switched it on, after their own connections', async () => {
+      const shared = await mcpConnectionRepository.create(platformConnection());
+      await mcpConnectionRepository.create(apiKeyConnection({ slug: 'mine' }));
+      const on = { platformIds: [shared.id] };
+
+      expect((await mcpConnectionRepository.listForUser('user-1', on)).map(c => c.slug)).toEqual(['mine', 'docs']);
+      expect((await mcpConnectionRepository.listForUser('user-2', on)).map(c => c.id)).toEqual([shared.id]);
+      expect(
+        (await mcpConnectionRepository.listForUser('user-2', { ...on, slugs: ['mine'] })).map(c => c.slug)
+      ).toEqual([]);
+      expect(
+        (await mcpConnectionRepository.listForUser('user-2', { ...on, slugs: ['docs'] })).map(c => c.slug)
+      ).toEqual(['docs']);
+    });
+
+    it('is offered to no user who has not switched it on, and not after it is recreated', async () => {
       const shared = await mcpConnectionRepository.create(platformConnection());
       await mcpConnectionRepository.create(apiKeyConnection({ slug: 'mine' }));
 
-      expect((await mcpConnectionRepository.listForUser('user-1')).map(c => c.slug)).toEqual(['mine', 'docs']);
-      expect((await mcpConnectionRepository.listForUser('user-2')).map(c => c.id)).toEqual([shared.id]);
-      expect((await mcpConnectionRepository.listForUser('user-2', { slugs: ['mine'] })).map(c => c.slug)).toEqual([]);
-      expect((await mcpConnectionRepository.listForUser('user-2', { slugs: ['docs'] })).map(c => c.slug)).toEqual([
-        'docs',
-      ]);
+      expect((await mcpConnectionRepository.listForUser('user-1')).map(c => c.slug)).toEqual(['mine']);
+      expect(await mcpConnectionRepository.listForUser('user-2')).toEqual([]);
+      expect(await mcpConnectionRepository.listForUser('user-2', { platformIds: [] })).toEqual([]);
+      expect(await mcpConnectionRepository.listForUser('user-2', { platformIds: ['not-an-id'] })).toEqual([]);
+
+      await mcpConnectionRepository.deleteForOwner(shared.id, PLATFORM_MCP_OWNER);
+      const recreated = await mcpConnectionRepository.create(platformConnection());
+      expect(await mcpConnectionRepository.listForUser('user-2', { platformIds: [shared.id] })).toEqual([]);
+      expect((await mcpConnectionRepository.listForUser('user-2', { platformIds: [recreated.id] })).length).toBe(1);
     });
 
-    it('is not offered while switched off or not connected', async () => {
+    it('is not offered while switched off or not connected, and is again once switched back on', async () => {
       const shared = await mcpConnectionRepository.create(platformConnection());
+      const on = { platformIds: [shared.id] };
       await mcpConnectionRepository.setEnabled(shared.id, PLATFORM_MCP_OWNER, false);
-      expect(await mcpConnectionRepository.listForUser('user-2')).toEqual([]);
+      expect(await mcpConnectionRepository.listForUser('user-2', on)).toEqual([]);
 
       await mcpConnectionRepository.setEnabled(shared.id, PLATFORM_MCP_OWNER, true);
+      expect((await mcpConnectionRepository.listForUser('user-2', on)).map(c => c.id)).toEqual([shared.id]);
+
       await mcpConnectionRepository.setStatus(shared.id, 'needs_reconnect', { code: 'auth_failed', message: 'm' });
-      expect(await mcpConnectionRepository.listForUser('user-2')).toEqual([]);
+      expect(await mcpConnectionRepository.listForUser('user-2', on)).toEqual([]);
     });
 
     it('gives way to a user connection with the same slug, even one that is switched off', async () => {
-      await mcpConnectionRepository.create(platformConnection());
+      const shared = await mcpConnectionRepository.create(platformConnection());
       const own = await mcpConnectionRepository.create(apiKeyConnection({ slug: 'docs' }));
+      const on = { platformIds: [shared.id] };
 
-      expect((await mcpConnectionRepository.listForUser('user-1')).map(c => c.id)).toEqual([own.id]);
+      expect((await mcpConnectionRepository.listForUser('user-1', on)).map(c => c.id)).toEqual([own.id]);
       await mcpConnectionRepository.setEnabled(own.id, OWNER, false);
-      expect(await mcpConnectionRepository.listForUser('user-1')).toEqual([]);
-      expect((await mcpConnectionRepository.listForUser('user-2')).map(c => c.ownerType)).toEqual(['platform']);
+      expect(await mcpConnectionRepository.listForUser('user-1', on)).toEqual([]);
+      expect((await mcpConnectionRepository.listForUser('user-2', on)).map(c => c.ownerType)).toEqual(['platform']);
     });
 
     it('records a use at most once a minute, while a user connection records every use', async () => {

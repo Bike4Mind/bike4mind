@@ -581,6 +581,7 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
       tools: ['web_search'],
       mcpServers: ['server-1'],
       disabledMcpConnections: ['acme'],
+      enabledPlatformMcpConnections: ['platform-1'],
       projectId: 'project-1',
       organizationId: 'org-1',
       toolPromptId: 'tool-prompt-1',

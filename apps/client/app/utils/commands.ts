@@ -70,6 +70,7 @@ export type CommandArgExtra = {
   userTags?: string[];
   mcpServers?: string[];
   disabledMcpConnections?: string[];
+  enabledPlatformMcpConnections?: string[];
   addMessageToSession?: (message: IChatHistoryItemDocument) => void;
   // Client-generated tmpId set by useSendMessage during /new pre-navigation.
   // Command handlers MUST use this when keying optimistic placeholders so the

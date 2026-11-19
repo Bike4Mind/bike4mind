@@ -240,7 +240,7 @@ describe('loadCustomMcpConnections', () => {
       offer([ro('c')], { connectionId: 'c2', slug: 'beta' }),
     ]);
     const warn = vi.fn();
-    const kept = await loadCustomMcpConnections(host, 'u1', { warn }, 2);
+    const kept = await loadCustomMcpConnections(host, 'u1', { warn }, { maxTools: 2 });
     expect(summary(kept)).toEqual({ acme: ['a', 'b'] });
     expect(warn).toHaveBeenCalledTimes(1);
   });
@@ -252,7 +252,7 @@ describe('loadCustomMcpConnections', () => {
       offer([ro('b'), ro('c'), ro('d')], { connectionId: 'c2', slug: 'beta' }),
       offer([ro('e')], { connectionId: 'c3', slug: 'gamma' }),
     ]);
-    const kept = await loadCustomMcpConnections(host, 'u1', { warn: vi.fn() }, 2);
+    const kept = await loadCustomMcpConnections(host, 'u1', { warn: vi.fn() }, { maxTools: 2 });
     expect(summary(kept)).toEqual({ acme: ['a'], beta: ['b'] });
   });
 
@@ -262,5 +262,17 @@ describe('loadCustomMcpConnections', () => {
     host.listConnections.mockResolvedValue([offer(names.map(ro))]);
     const kept = await loadCustomMcpConnections(host, 'u1', { warn: vi.fn() });
     expect(kept[0].tools.map(t => t.name)).toEqual(names.slice(0, MAX_CUSTOM_TOOLS_PER_TURN));
+  });
+
+  it('asks the host for the platform connectors the user switched on, and for none by default', async () => {
+    const host = makeHost();
+    host.listConnections.mockResolvedValue([]);
+    await loadCustomMcpConnections(host, 'u1', { warn: vi.fn() });
+    await loadCustomMcpConnections(host, 'u1', { warn: vi.fn() }, { platformConnectionIds: ['p1'], maxTools: 3 });
+
+    expect(host.listConnections.mock.calls).toEqual([
+      ['u1', {}],
+      ['u1', { platformConnectionIds: ['p1'] }],
+    ]);
   });
 });
