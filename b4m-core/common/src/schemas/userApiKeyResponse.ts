@@ -4,11 +4,17 @@ import { passthroughShape } from './responseShape';
 import { adminApiKeyAccessSchema, adminApiKeyRequestCountsSchema } from './adminUserCredits';
 
 /**
- * Secret fields of an API key, never sent to a client: the legacy bcrypt hash, the SHA-256 digest
- * of the raw key, and the callback signing secret. UserApiKeyModel's toJSON transform also drops
+ * Fields of an API key never sent to a client: the legacy bcrypt hash, the SHA-256 digest of the
+ * raw key, the callback signing secret, and the admin-set moderation exception (its reason and
+ * acting admin are not the key owner's to read). UserApiKeyModel's toJSON transform also drops
  * them; this keeps them out if a read path skips serialization.
  */
-export const USER_API_KEY_WITHHELD_FIELDS = ['keyHash', 'keyDigest', 'callbackSigningSecret'] as const;
+export const USER_API_KEY_WITHHELD_FIELDS = [
+  'keyHash',
+  'keyDigest',
+  'callbackSigningSecret',
+  'moderationException',
+] as const;
 
 // Held to IUserApiKeyDocument: a new field fails the build here until it is classified.
 const USER_API_KEY_RESPONSE_FIELDS = {
