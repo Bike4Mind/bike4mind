@@ -157,6 +157,7 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
     vpc: lambdaVpc,
     // dataLakeTaxonomyQueue + lakeMemoryQueue: finalizeBatchIfComplete (called from this handler)
     // enqueues taxonomy analysis and lake memory extraction, which need their queue URLs.
+    // eventBus: the data lake spend notice is queued as an email.send event.
     link: [
       ...allSecrets,
       websocketApi,
@@ -165,6 +166,7 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
       appFilesBucket,
       dataLakeTaxonomyQueue,
       lakeMemoryQueue,
+      eventBus,
     ],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -278,7 +280,8 @@ const fabFileBucketNotification = fabFileBucket.notify({
         // Animated images are moderated frame by frame (up to 60 frames), which can exceed the default 20s/1024 MB.
         timeout: '2 minutes',
         memory: '2048 MB',
-        link: [...allSecrets, websocketApi, fabFileChunkQueue, fabFileBucket],
+        // eventBus: a recorded moderation incident queues its reviewer alert as an email.send event.
+        link: [...allSecrets, websocketApi, fabFileChunkQueue, fabFileBucket, eventBus],
         permissions: [
           { actions: ['rekognition:DetectModerationLabels'], resources: ['*'] },
           // Required for Lambda's async-invoke failure mechanism to deliver the failed
@@ -1396,7 +1399,8 @@ const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets],
+    // eventBus: a recorded moderation incident queues its reviewer alert as an email.send event.
+    link: [...allSecrets, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },

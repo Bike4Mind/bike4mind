@@ -674,7 +674,14 @@ const AdminSystemHealthTab = () => {
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 1 }}>
             {email?.secrets &&
               Object.entries(email.secrets).map(([key, configured]) => (
-                <Stack key={key} direction="row" alignItems="center" gap={1} sx={{ minWidth: 0 }}>
+                <Stack
+                  key={key}
+                  data-testid={`system-health-email-secret-${key}`}
+                  direction="row"
+                  alignItems="center"
+                  gap={1}
+                  sx={{ minWidth: 0 }}
+                >
                   <Typography level="body-sm" sx={{ color: 'admin.ink', overflowWrap: 'anywhere' }}>
                     {key}
                   </Typography>
@@ -691,8 +698,15 @@ const AdminSystemHealthTab = () => {
                 </Typography>
                 <Typography level="body-xs">{email.missingSecrets.join(', ')}</Typography>
                 <Typography level="body-xs">
-                  Set these using: <code>./for-env {'<stage>'} npx sst secret set MAIL_HOST smtp.example.com</code>
+                  Set {email.missingSecrets.length === 1 ? 'it' : 'each one'} using:
                 </Typography>
+                {email.missingSecrets.map(name => (
+                  <Typography key={name} level="body-xs">
+                    <code data-testid={`system-health-email-secret-hint-${name}`}>
+                      ./for-env {'<stage>'} npx sst secret set {name} {'<value>'}
+                    </code>
+                  </Typography>
+                ))}
               </Stack>
             </Alert>
           )}
