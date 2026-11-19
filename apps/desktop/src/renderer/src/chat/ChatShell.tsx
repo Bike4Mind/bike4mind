@@ -152,6 +152,7 @@ import { ThreadDock, type ThreadDockMode } from './orchestrator/ThreadDock';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
 import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
 import { SidebarSyncHints } from './SyncHints';
+import { useNewChatRequests } from '../appMenu/newChatRequests';
 import type { ClaudeImportKind } from '@shared/claudeImport';
 
 /** How long the orchestrator's "Read the report" keeps the summary highlighted (ms). */
@@ -1193,6 +1194,8 @@ export function ChatShell({
     if (created) setActiveId(created);
     setComposerFocus(request => request + 1);
   }, [startSession, markSessionStart]);
+  // The app menu's New Chat (Cmd+N), once the last conversation is restored.
+  useNewChatRequests(onCreate, !settling);
 
   const shareFolderTo = conversation.addContextDirectoryTo;
   const addingFolder = useRef(false);

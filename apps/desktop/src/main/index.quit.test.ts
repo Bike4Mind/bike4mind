@@ -33,6 +33,7 @@ vi.mock('electron', async () => {
       whenReady: async () => undefined,
       getPath: () => '/unused',
       isPackaged: true,
+      getVersion: () => '0.0.0',
       quit: harness.quit,
     }),
     BrowserWindow: class extends EventEmitter {
@@ -44,6 +45,7 @@ vi.mock('electron', async () => {
       loadFile = vi.fn();
     },
     ipcMain: { handle: vi.fn() },
+    screen: { getAllDisplays: () => [] },
     shell: {},
     dialog: { showMessageBox: harness.showMessageBox },
   };
@@ -69,6 +71,17 @@ vi.mock('./devlog', () => ({
   closeDevLogWindow: vi.fn(),
 }));
 vi.mock('./logFile', () => ({ persistConsoleWarnings: vi.fn() }));
+vi.mock('./appMenu', () => ({ registerAppMenu: vi.fn() }));
+vi.mock('./rendererErrors', () => ({ registerRendererErrorLog: vi.fn() }));
+vi.mock('./singleInstance', () => ({ claimSingleInstance: () => true }));
+vi.mock('./mainWindowState', () => ({
+  MainWindowStateStore: class {
+    load = vi.fn(async () => undefined);
+    current = () => ({ bounds: null, maximized: false });
+  },
+  initialMainWindowPlacement: () => ({ bounds: { width: 1280, height: 860 }, maximized: false }),
+  trackMainWindowState: vi.fn(),
+}));
 vi.mock('./windows', () => ({ appWindows: () => harness.windows }));
 vi.mock('./chat/sessionScope', () => ({ sessionScopeFor: () => null, sessionScopeForChat: () => null }));
 vi.mock('./chat/browser/browserScope', () => ({ closeBrowsersOnScopeChange: vi.fn() }));
@@ -121,6 +134,8 @@ describe('application quit', () => {
     vi.spyOn(process, 'on').mockReturnValue(process);
     vi.useFakeTimers({ toFake: ['setImmediate'] });
     await import('./index');
+    // The window opens once its saved placement has loaded, a few promise turns into whenReady.
+    await vi.waitFor(() => expect(harness.windows.length).toBeGreaterThan(0));
   });
 
   afterEach(() => {
