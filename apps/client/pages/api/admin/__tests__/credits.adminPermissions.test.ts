@@ -46,7 +46,6 @@ const cases: AdminPermissionCase[] = [
   ...read('../users/[userId]/credit-summary'),
   ...read('../users/[userId]/credit-transactions'),
   ...read('../users/[userId]/subscriptions'),
-  ...read('../credit-adjustments'),
   ...read('../organizations/grants'),
   ...read('../subscriptions/index'),
   ...read('../subscriptions/summary'),
