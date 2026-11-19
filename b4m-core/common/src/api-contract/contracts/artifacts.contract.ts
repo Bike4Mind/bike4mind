@@ -11,10 +11,13 @@ import {
   ListArtifactsResponseSchema,
   ListArtifactTypesResponseSchema,
   ListArtifactVersionsResponseSchema,
+  PublishArtifactRequestSchema,
+  PublishedArtifactResourceSchema,
   SearchArtifactsQuerySchema,
   UpdateArtifactRequestSchema,
 } from '../../schemas/artifactPublic';
 import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
+import { z } from 'zod';
 
 /**
  * Artifacts (diagrams, charts, code, HTML and the like) for integrators: list, create, read, update,
@@ -387,4 +390,137 @@ export const listArtifactTypesContract = defineEndpoint({
     429: RATE_LIMITED,
   },
   codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: {} },
+});
+
+const PublishViolationsErrorSchema = ApiErrorSchema.extend({
+  violations: z
+    .array(
+      z.object({
+        type: z.string(),
+        message: z.string(),
+        file: z.string().optional(),
+        line: z.number().int().optional(),
+      })
+    )
+    .optional()
+    .describe('Present when the rendered page failed validation: what was rejected and where.'),
+});
+
+const StorageQuotaErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal('storage_limit_exceeded'),
+});
+
+const PUBLISHED_EXAMPLE = {
+  artifact_id: '<artifactId>',
+  public_id: 'a1b2c3d4e5f6',
+  url: 'https://app.example.com/p/u/<userId>/signup-flow',
+  slug: 'signup-flow',
+  visibility: 'public',
+  access_gate: { kind: 'passphrase' },
+  published_version: 2,
+  published_at: '2026-10-03T08:00:00.000Z',
+};
+
+const PUBLISH_EXAMPLE = {
+  slug: 'signup-flow',
+  visibility: 'public',
+  access_gate: { kind: 'passphrase', passphrase: '<passphrase>' },
+};
+
+const NOT_YOURS_TO_PUBLISH =
+  'No artifact with that id is yours to publish. Only the owner can publish, so one shared with you, ' +
+  'a public one, a deleted one and one that does not exist are all reported as 404.';
+
+const PUBLISH_FAILURES = {
+  400: {
+    description: 'Your storage quota would be exceeded by this page.',
+    schema: StorageQuotaErrorSchema,
+  },
+  403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+  404: { description: NOT_YOURS_TO_PUBLISH, schema: ApiErrorSchema },
+  422: {
+    description:
+      'The body failed validation, `access_gate` was sent without `visibility: "public"`, `slug` is reserved or ' +
+      'an allowed domain is not a registrable domain, the artifact is empty, or its rendered page failed ' +
+      'validation (see `violations`).',
+    schema: PublishViolationsErrorSchema,
+  },
+  429: {
+    description: 'Per-user rate limit exceeded, or the daily publish allowance is used up.',
+    schema: ApiErrorSchema,
+  },
+} as const;
+
+export const publishArtifactContract = defineEndpoint({
+  method: 'post',
+  path: '/api/v1/artifacts/{id}/publish',
+  operationId: 'publishArtifact',
+  summary: 'Publish an artifact',
+  description:
+    "Publishes the artifact's current version as a web page, reading the stored content on the server, and " +
+    'returns its absolute URL. `access_gate` is applied in the same request as `visibility`, so a gated page ' +
+    'is never reachable without its gate. The artifact itself is unchanged. An artifact has at most one ' +
+    'page: to refresh it after editing, call `POST /api/v1/artifacts/{id}/republish`; to take it down, ' +
+    '`DELETE /api/v1/artifacts/{id}/publish`. React artifacts publish as a single file. Unknown body fields ' +
+    'are rejected.',
+  tags: ['Artifacts'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.WRITE_NOTEBOOKS],
+  pathParams: ArtifactIdParamSchema,
+  request: PublishArtifactRequestSchema,
+  requestExample: PUBLISH_EXAMPLE,
+  emitsRateLimitHeaders: true,
+  responses: {
+    201: { description: 'The published page.', schema: PublishedArtifactResourceSchema, example: PUBLISHED_EXAMPLE },
+    ...PUBLISH_FAILURES,
+    409: {
+      description:
+        'The artifact already has a page (use republish or unpublish it first), or `slug` is used by another of your pages.',
+      schema: ApiErrorSchema,
+    },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: PUBLISH_EXAMPLE },
+});
+
+export const republishArtifactContract = defineEndpoint({
+  method: 'post',
+  path: '/api/v1/artifacts/{id}/republish',
+  operationId: 'republishArtifact',
+  summary: 'Republish an artifact',
+  description:
+    "Replaces the page's content with the artifact's current version. The address, visibility and access " +
+    'gate stay as they are, and earlier versions of the page are kept.',
+  tags: ['Artifacts'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.WRITE_NOTEBOOKS],
+  pathParams: ArtifactIdParamSchema,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: { description: 'The refreshed page.', schema: PublishedArtifactResourceSchema, example: PUBLISHED_EXAMPLE },
+    ...PUBLISH_FAILURES,
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: {} },
+});
+
+export const unpublishArtifactContract = defineEndpoint({
+  method: 'delete',
+  path: '/api/v1/artifacts/{id}/publish',
+  operationId: 'unpublishArtifact',
+  summary: 'Unpublish an artifact',
+  description: "Takes the artifact's page down. The artifact itself is unchanged and can be published again.",
+  tags: ['Artifacts'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.WRITE_NOTEBOOKS],
+  pathParams: ArtifactIdParamSchema,
+  emitsRateLimitHeaders: true,
+  responses: {
+    204: { description: 'The page was taken down.', noBody: true },
+    403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    404: {
+      description: 'You have no published page for that artifact id. The artifact itself does not need to exist.',
+      schema: ApiErrorSchema,
+    },
+    429: RATE_LIMITED,
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false },
 });
