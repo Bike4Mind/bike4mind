@@ -78,6 +78,10 @@ public final class VoiceConversationModel {
 
   private var target: ChatSendRequest.Target
   private var nextExchangeID = 0
+  /// Spoken once when the conversation starts, before the user says anything.
+  private let opening: [String]
+  /// Sent ahead of the first message of a new conversation, so the assistant knows what was just read out.
+  private var firstTurnContext: String?
 
   private var audioTask: Task<Void, Never>?
   private var framesTask: Task<Void, Never>?
@@ -105,10 +109,12 @@ public final class VoiceConversationModel {
     target: ChatSendRequest.Target, api: any B4MAPI, realtime: any RealtimeClient, listener: any SpeechListening,
     speaker: any SpeechSpeaking, audioSession: any VoiceAudioSessionControlling,
     silenceTimeout: Duration = .milliseconds(1400), stallTimeout: Duration = .seconds(20),
-    bargeInMinimumWords: Int = 2,
+    bargeInMinimumWords: Int = 2, opening: [String] = [], firstTurnContext: String? = nil,
     sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
   ) {
     self.target = target
+    self.opening = opening.filter { !$0.isEmpty }
+    self.firstTurnContext = firstTurnContext
     if case .session(let id) = target { sessionID = id }
     self.api = api
     self.realtime = realtime
@@ -143,6 +149,11 @@ public final class VoiceConversationModel {
     }
     phase = .listening
     await beginListening()
+    guard !opening.isEmpty, phase == .listening else { return }
+    turnToken += 1
+    exchanges.append(VoiceExchange(id: nextExchangeID, userText: "", replyText: opening.joined(separator: " ")))
+    nextExchangeID += 1
+    speakLocal(opening, token: turnToken)
   }
 
   /// Ends the conversation and gives the audio session back.
@@ -318,9 +329,15 @@ public final class VoiceConversationModel {
     await beginListening()
     guard token == turnToken else { return }
 
+    var message = text
+    if target == .newConversation, let context = firstTurnContext {
+      message = "Context - the brief you just read me:\n\(context)\n\n\(text)"
+    }
     let receipt: ChatSendReceipt
     do {
-      receipt = try await api.sendChatMessage(ChatSendRequest(message: text, target: target))
+      receipt = try await api.sendChatMessage(ChatSendRequest(message: message, target: target))
+      // Kept through a failed send so the retry still carries it; never sent twice.
+      firstTurnContext = nil
     } catch {
       guard token == turnToken else { return }
       if case APIError.signedOut = error { return await fail(.signedOut) }
@@ -432,6 +449,15 @@ public final class VoiceConversationModel {
   private func finishStream(saying notice: String) {
     self.notice = notice
     chunkSink?.yield(notice)
+    chunkSink?.finish()
+  }
+
+  /// Speaks text that did not come from a quest (the opening), then returns to listening like any reply.
+  private func speakLocal(_ sections: [String], token: Int) {
+    replyFinished = true
+    phase = .speaking
+    startSpeaking(token: token)
+    for section in sections { chunkSink?.yield(section) }
     chunkSink?.finish()
   }
 

@@ -5,11 +5,12 @@ import Foundation
 public enum VoiceFixtures {
   @MainActor
   public static func makeModel(
-    target: ChatSendRequest.Target, api: any B4MAPI, realtime: any RealtimeClient
+    target: ChatSendRequest.Target, api: any B4MAPI, realtime: any RealtimeClient, opening: [String] = [],
+    firstTurnContext: String? = nil
   ) -> VoiceConversationModel {
     VoiceConversationModel(
       target: target, api: api, realtime: realtime, listener: FixtureListener(), speaker: FixtureSpeaker(),
-      audioSession: FixtureAudioSession())
+      audioSession: FixtureAudioSession(), opening: opening, firstTurnContext: firstTurnContext)
   }
 
   /// Says one scripted sentence on the first start, then stays quiet like an idle room.
