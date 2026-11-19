@@ -70,6 +70,9 @@ public final class BriefVoiceSession {
     let command = BriefVoiceCommand.parse(
       utterance, options: decision?.question?.options ?? [], confirming: armed.map(\.confirmation))
     if command == .archive { return Self.archiveRefusal }
+    if command == nil, let armed, BriefVoiceCommand.isMixed(utterance, confirming: armed.confirmation) {
+      return keep(armed)
+    }
     guard let decision, let command else { return nil }
     if command != .cancel, !canAnswer() { return Self.lockedRefusal }
     switch command {
@@ -83,6 +86,7 @@ public final class BriefVoiceSession {
       guard let armed else { return nil }
       return await send(armed)
     case .approve:
+      if decision.approval == nil, let armed { return keep(armed) }
       guard decision.approval != nil else { return "That one is a question. Say reply and your answer." }
       if let local = model.approvalStates[decision.id], !local.offersDecision {
         return "That one can't be approved. Say deny to turn it down, or open the brief."
@@ -91,6 +95,7 @@ public final class BriefVoiceSession {
       let text = spoken(decision.text)
       return text.isEmpty ? "Approve it? Say yes to go ahead." : "Approve \(text)? Say yes to go ahead."
     case .deny:
+      if decision.approval == nil, let armed { return keep(armed) }
       guard decision.approval != nil else { return "That one is a question. Say reply and your answer." }
       await model.decide(decision, .deny)
       return approvalOutcome(decision)
@@ -103,6 +108,14 @@ public final class BriefVoiceSession {
       awaitingConfirm = .reply(decisionID: decision.id, text: options[index], choiceIndex: index)
       return "Choose \(spoken(options[index]))? Say yes to send it."
     }
+  }
+
+  /// Leaves the armed answer waiting and asks for a plain yes or no, for words that neither confirm nor
+  /// clearly move on.
+  private func keep(_ armed: PendingAnswer) -> String {
+    awaitingConfirm = armed
+    if case .approve = armed { return "Say yes to approve it or no to cancel." }
+    return "Say yes to send it or no to cancel."
   }
 
   private func send(_ armed: PendingAnswer) async -> String {
@@ -203,28 +216,18 @@ public enum BriefVoiceCommand: Hashable, Sendable {
     let words = normalized(utterance)
     guard let verb = words.first else { return nil }
     let short = words.count <= maxCommandWords
-    // While an approval waits for a yes, approve agrees and deny refuses, so "yes approve" is one command. Not
-    // for a reply or choice: there "approve" may be an option label and must not send the other answer.
-    let command: (String) -> BriefVoiceCommand? = { word in
-      guard confirming == .approval, let command = commandWords[word] else { return commandWords[word] }
-      switch command {
-      case .approve: return .confirm
-      case .deny: return .cancel
-      default: return command
-      }
-    }
-    // Words of two different commands ("deny it approve", "yes no") are most likely the tail of the app's own
-    // prompt heard ahead of the answer, so neither is acted on.
-    let mixed = Set(words.compactMap(command)).count > 1
-    if confirming != nil, short, !mixed, let verbCommand = command(verb),
+    let mixed = mixes(words, confirming: confirming)
+    let spoken = words.joined(separator: " ")
+    let option = options.firstIndex { normalized($0).joined(separator: " ") == spoken }
+    // A whole multi-word label ("No, wait") is that option even while an answer waits; only a lone yes or no
+    // is taken as the confirmation.
+    if let option, words.count > 1 { return .choose(option) }
+    if confirming != nil, short, !mixed, let verbCommand = command(verb, confirming: confirming),
       verbCommand == .confirm || verbCommand == .cancel
     {
       return verbCommand
     }
-    let spoken = words.joined(separator: " ")
-    if let index = options.firstIndex(where: { normalized($0).joined(separator: " ") == spoken }) {
-      return .choose(index)
-    }
+    if let option { return .choose(option) }
     if verb == "reply" || verb == "answer" {
       let raw = utterance.trimmingCharacters(in: .whitespacesAndNewlines)
       let text = raw.drop { !$0.isWhitespace }.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -232,6 +235,29 @@ public enum BriefVoiceCommand: Hashable, Sendable {
     }
     guard short, !mixed else { return nil }
     return commandWords[verb]
+  }
+
+  /// True for a short utterance that `parse` drops because it holds words of two different commands.
+  static func isMixed(_ utterance: String, confirming: BriefVoiceConfirmation?) -> Bool {
+    let words = normalized(utterance)
+    return words.count <= maxCommandWords && mixes(words, confirming: confirming)
+  }
+
+  // Words of two different commands ("deny it approve", "yes no") are most likely the tail of the app's own
+  // prompt heard ahead of the answer, so neither is acted on.
+  private static func mixes(_ words: [String], confirming: BriefVoiceConfirmation?) -> Bool {
+    Set(words.compactMap { command($0, confirming: confirming) }).count > 1
+  }
+
+  // While an approval waits for a yes, approve agrees and deny refuses, so "yes approve" is one command. Not
+  // for a reply or choice: there "approve" may be an option label and must not send the other answer.
+  private static func command(_ word: String, confirming: BriefVoiceConfirmation?) -> BriefVoiceCommand? {
+    guard confirming == .approval, let command = commandWords[word] else { return commandWords[word] }
+    switch command {
+    case .approve: return .confirm
+    case .deny: return .cancel
+    default: return command
+    }
   }
 
   private static func normalized(_ text: String) -> [String] { SpokenWords.normalized(text) }

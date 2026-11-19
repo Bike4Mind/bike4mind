@@ -167,6 +167,54 @@ final class BriefVoiceSessionTests: XCTestCase {
     XCTAssertEqual(replies.map(\.text), ["Approve"])
   }
 
+  func testAWholeMultiWordOptionIsChosenWhileAnotherWaits() async {
+    XCTAssertEqual(
+      BriefVoiceCommand.parse("no preference", options: ["No preference", "Garden"], confirming: .answer),
+      .choose(0))
+    let (session, api, _) = await loaded([question("d1", "Ship it?", options: ["Yes, ship it", "No, wait"])])
+    _ = await session.handle("no wait")
+    let rechose = await session.handle("yes ship it")
+    XCTAssertEqual(rechose, "Choose Yes, ship it? Say yes to send it.")
+    var replies = await api.replies
+    XCTAssertTrue(replies.isEmpty)
+    _ = await session.handle("yes")
+    replies = await api.replies
+    XCTAssertEqual(replies.map(\.text), ["Yes, ship it"])
+  }
+
+  func testApproveOrDenyKeepsAnArmedReplyOnAQuestion() async {
+    let (session, api, _) = await loaded([question("d1", "When?")])
+    _ = await session.handle("reply after lunch")
+    let approve = await session.handle("approve")
+    XCTAssertEqual(approve, "Say yes to send it or no to cancel.")
+    let deny = await session.handle("deny")
+    XCTAssertEqual(deny, "Say yes to send it or no to cancel.")
+    _ = await session.handle("yes")
+    let replies = await api.replies
+    XCTAssertEqual(replies.map(\.text), ["after lunch"])
+  }
+
+  func testMixedCommandWordsKeepTheArmedAnswer() async {
+    let (session, api, pending) = await loaded([question("d1", "When?"), approval("d2", "Ship it")])
+    _ = await session.handle("reply after lunch")
+    for utterance in ["yes approve", "no deny"] {
+      let kept = await session.handle(utterance)
+      XCTAssertEqual(kept, "Say yes to send it or no to cancel.", utterance)
+    }
+    _ = await session.handle("yes")
+    let replies = await api.replies
+    XCTAssertEqual(replies.map(\.text), ["after lunch"])
+    _ = await session.handle("approve")
+    let kept = await session.handle("yes deny")
+    XCTAssertEqual(kept, "Say yes to approve it or no to cancel.")
+    var calls = await pending.calls
+    XCTAssertTrue(calls.isEmpty)
+    let done = await session.handle("yes")
+    XCTAssertEqual(done?.hasPrefix("Approved."), true)
+    calls = await pending.calls
+    XCTAssertEqual(calls, [.approve])
+  }
+
   func testYesApproveConfirmsAndNoDenyItCancels() async {
     let (session, _, pending) = await loaded([approval("d1", "Ship it"), approval("d2", "Merge it")])
     _ = await session.handle("approve")
