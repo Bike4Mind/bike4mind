@@ -363,6 +363,24 @@ describe('VerdictEvalSetsPanel', () => {
       );
     });
 
+    it.each([
+      [29, '-'],
+      [30, '0.120'],
+    ])('shows the Brier score only from the minimum reviewed (n = %i)', (n, cell) => {
+      const latest = runOf(0.8);
+      latest.report.calibration = [{ ...latest.report.calibration[0], n }];
+      withRuns(latest);
+      open();
+      const table = screen.getByTestId('eval-sets-calibration-table');
+      const row = within(table).getByText('m1').closest('tr') as HTMLElement;
+      expect(within(row).queryByText('0.120') !== null).toBe(cell === '0.120');
+      expect(
+        within(row)
+          .getAllByRole('cell')
+          .map(c => c.textContent)
+      ).toContain(cell);
+    });
+
     it('says a run without calibration may predate it when it has assessment scores', () => {
       const latest = runOf(0.8);
       latest.report.scores = [{ ...score(0.8), grader: 'assessment', variant: 'm1' }];
@@ -400,8 +418,9 @@ describe('VerdictEvalSetsPanel', () => {
 
     it('compares the run with the previous one, row by row', () => {
       const previous = runOf(0.7);
-      previous.report.calibration = [{ ...previous.report.calibration[0], brier: 0.15 }];
+      previous.report.calibration = [{ ...previous.report.calibration[0], n: 40, brier: 0.15 }];
       const latest = runOf(0.8);
+      latest.report.calibration = [{ ...latest.report.calibration[0], n: 40 }];
       latest.report.scores = [
         { ...score(0.8), truePositive: 6 },
         { ...score(0.5), grader: 'assessment', variant: 'm1' },
@@ -412,13 +431,22 @@ describe('VerdictEvalSetsPanel', () => {
       const summary = screen.getByTestId('eval-sets-run-comparison-summary').textContent ?? '';
       expect(summary).toContain('Labelled examples: 5 (+2)');
       expect(summary).toContain('estimated recall: 2% (0 pts)');
-      expect(summary).toContain('Brier, m1: 0.120 (-0.030)');
+      expect(summary).toContain('Brier, m1: 0.120 (-0.030), n 40 (0)');
       const rows = within(screen.getByTestId('eval-sets-run-comparison-scores')).getAllByRole('row');
       const text = rows.slice(1).map(row => row.textContent ?? '');
       expect(text[0]).toContain('Detectors, any');
       expect(text[0]).toContain('+2');
       expect(text[0]).toContain('0 pts');
       expect(text[1]).toContain('AI assessment, m1 (new in this run)');
+    });
+
+    it('hides the Brier change while either run has too few assessed examples', () => {
+      const previous = runOf(0.7);
+      previous.report.calibration = [{ ...previous.report.calibration[0], brier: 0.15 }];
+      withRuns(previous, runOf(0.8));
+      open();
+      const summary = screen.getByTestId('eval-sets-run-comparison-summary').textContent ?? '';
+      expect(summary).toContain('Brier, m1: - (-), n 3 (0)');
     });
 
     it('shows no comparison without a previous run', () => {

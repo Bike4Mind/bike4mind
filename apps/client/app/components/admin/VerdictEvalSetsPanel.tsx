@@ -337,7 +337,10 @@ const RunComparison: React.FC<{ run: EvalSetRunReport; previous: EvalSetRun; onR
     `Labelled examples: ${count(run.labelled)} (${signedCount(comparison.labelled.change)})`,
     `estimated recall: ${percent(run.recall.estimatedRecall)} (${signedPoints(comparison.estimatedRecall.change)})`,
     ...comparison.brier.map(
-      ({ model, brier }) => `Brier, ${model}: ${brierText(brier.current)} (${signedBrier(brier.change)})`
+      ({ model, brier, n }) =>
+        `Brier, ${model}: ${brierText(brier.current)} (${signedBrier(brier.change)}), n ${
+          n.current === null ? '-' : count(n.current)
+        } (${signedCount(n.change)})`
     ),
   ];
   return (

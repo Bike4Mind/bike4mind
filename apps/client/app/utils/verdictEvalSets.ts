@@ -279,7 +279,7 @@ export type EvalSetRunComparison = {
   estimatedRecall: EvalSetValueChange;
   scores: EvalSetScoreComparison[];
   /** Per assessment model in either run. */
-  brier: { model: string; brier: EvalSetValueChange }[];
+  brier: { model: string; brier: EvalSetValueChange; n: EvalSetValueChange }[];
 };
 
 // Four places keeps rate and Brier differences free of float noise without rounding them away.
@@ -325,7 +325,10 @@ export function compareEvalSetRuns(run: EvalSetRunReport, previous: EvalSetRunRe
   // A Brier score on fewer than EVAL_SET_MIN_REVIEWED examples is noise; the calibration table hides it too.
   const brierOf = (report: EvalSetRunReport) =>
     new Map(report.calibration.map(entry => [entry.model, entry.n < EVAL_SET_MIN_REVIEWED ? null : entry.brier]));
+  const countOf = (report: EvalSetRunReport) => new Map(report.calibration.map(entry => [entry.model, entry.n]));
   const currentBrier = brierOf(run);
+  const currentN = countOf(run);
+  const previousN = countOf(previous);
   const previousBrier = brierOf(previous);
   const models = [...new Set([...currentBrier.keys(), ...previousBrier.keys()])].sort();
 
@@ -336,6 +339,7 @@ export function compareEvalSetRuns(run: EvalSetRunReport, previous: EvalSetRunRe
     brier: models.map(model => ({
       model,
       brier: valueChange(currentBrier.get(model) ?? null, previousBrier.get(model) ?? null),
+      n: valueChange(currentN.get(model) ?? null, previousN.get(model) ?? null),
     })),
   };
 }

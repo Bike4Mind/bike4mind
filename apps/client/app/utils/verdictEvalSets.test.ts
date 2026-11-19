@@ -119,20 +119,40 @@ describe('compareEvalSetRuns', () => {
       report({ calibration: [calibration('m1', 0.15), calibration('m3', 0.1)] })
     );
     expect(comparison.brier).toEqual([
-      { model: 'm1', brier: { current: 0.12, previous: 0.15, change: -0.03 } },
-      { model: 'm2', brier: { current: 0.2, previous: null, change: null } },
-      { model: 'm3', brier: { current: null, previous: 0.1, change: null } },
+      {
+        model: 'm1',
+        brier: { current: 0.12, previous: 0.15, change: -0.03 },
+        n: { current: 30, previous: 30, change: 0 },
+      },
+      {
+        model: 'm2',
+        brier: { current: 0.2, previous: null, change: null },
+        n: { current: 30, previous: null, change: null },
+      },
+      {
+        model: 'm3',
+        brier: { current: null, previous: 0.1, change: null },
+        n: { current: 0, previous: 30, change: -30 },
+      },
     ]);
   });
 
   it('withholds Brier below the minimum example count and lists models in name order', () => {
     const comparison = compareEvalSetRuns(
-      report({ calibration: [calibration('m2', 0.1, 29), calibration('m1', 0.2, 30)] }),
+      report({ calibration: [calibration('m2', 0.1, 29), calibration('m1', 0.2, 34)] }),
       report({ calibration: [calibration('m1', 0.25, 30), calibration('m2', 0.3, 30)] })
     );
     expect(comparison.brier).toEqual([
-      { model: 'm1', brier: { current: 0.2, previous: 0.25, change: -0.05 } },
-      { model: 'm2', brier: { current: null, previous: 0.3, change: null } },
+      {
+        model: 'm1',
+        brier: { current: 0.2, previous: 0.25, change: -0.05 },
+        n: { current: 34, previous: 30, change: 4 },
+      },
+      {
+        model: 'm2',
+        brier: { current: null, previous: 0.3, change: null },
+        n: { current: 29, previous: 30, change: -1 },
+      },
     ]);
   });
 
@@ -140,7 +160,11 @@ describe('compareEvalSetRuns', () => {
     const { calibration: _calibration, ...stored } = report();
     const old = evalSetRunReportSchema.parse(stored);
     expect(compareEvalSetRuns(report({ calibration: [calibration('m1', 0.1)] }), old).brier).toEqual([
-      { model: 'm1', brier: { current: 0.1, previous: null, change: null } },
+      {
+        model: 'm1',
+        brier: { current: 0.1, previous: null, change: null },
+        n: { current: 30, previous: null, change: null },
+      },
     ]);
   });
 });

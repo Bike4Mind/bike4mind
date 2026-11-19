@@ -214,14 +214,15 @@ describe('gradeEvalSet', () => {
   const assessment = (
     detectionId: string,
     result: 'abuse' | 'legitimate_automation' | 'insufficient_evidence' | 'unknown',
-    abuseProbability: number | null = 0.9
+    abuseProbability: number | null = 0.9,
+    assessedAt = new Date('2026-11-01T00:00:00Z')
   ) => ({
     detectionId,
     result,
     abuseProbability,
     confidence: 0.9,
     model: 'm1',
-    assessedAt: new Date('2026-11-01T00:00:00Z'),
+    assessedAt,
   });
   const report = gradeEvalSet(set, {
     assessments: [assessment('d1', 'abuse'), assessment('d2', 'abuse'), assessment('d3', 'insufficient_evidence')],
@@ -316,6 +317,36 @@ describe('gradeEvalSet', () => {
       assessments: [assessment('d1', 'unknown'), assessment('d2', 'abuse', null)],
     });
     expect(none.calibration).toEqual([expect.objectContaining({ model: 'm1', n: 0, brier: null })]);
+  });
+
+  it('calibrates on the newest assessment when a detection has several for one model', () => {
+    const older = new Date('2026-10-01T00:00:00Z');
+    const newer = new Date('2026-11-02T00:00:00Z');
+    const graded = gradeEvalSet(set, {
+      ...noPredictions,
+      assessments: [
+        assessment('d1', 'abuse', 0.9, newer),
+        assessment('d1', 'abuse', 0.2, older),
+        assessment('d2', 'abuse'),
+        assessment('d3', 'insufficient_evidence'),
+      ],
+    });
+    expect(graded.calibration[0]).toMatchObject({ model: 'm1', n: 3, brier: 0.2767 });
+    expect(graded.calibration[0].buckets[0].n).toBe(0);
+    expect(graded.calibration[0].buckets[4].n).toBe(3);
+  });
+
+  it('drops an example whose newest assessment is unknown even when an older one answered', () => {
+    const graded = gradeEvalSet(set, {
+      ...noPredictions,
+      assessments: [
+        assessment('d1', 'unknown', null, new Date('2026-11-02T00:00:00Z')),
+        assessment('d1', 'abuse', 0.9, new Date('2026-10-01T00:00:00Z')),
+        assessment('d2', 'abuse'),
+        assessment('d3', 'insufficient_evidence'),
+      ],
+    });
+    expect(graded.calibration[0]).toMatchObject({ model: 'm1', n: 2 });
   });
 
   it('has no recall estimate before any unflagged example is labelled', () => {
