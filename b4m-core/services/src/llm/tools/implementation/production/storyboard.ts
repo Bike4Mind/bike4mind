@@ -8,7 +8,13 @@ import {
 import type { ToolContext, ToolDefinition } from '../../base/types';
 import { buildUnavailableTool, toToolParameters } from '../generationJobTool';
 import { isProductionToolConfig } from './config';
-import { DIRECTOR_TRACK_IDS, keptMusic, shotsTooShortForVoice, withDirectorTracks } from './layout';
+import {
+  DEFAULT_SHOT_DURATION_MS,
+  DIRECTOR_TRACK_IDS,
+  keptMusic,
+  shotsTooShortForVoice,
+  withDirectorTracks,
+} from './layout';
 import { CompositionIdArg, ProductionToolError, describeProductionError } from './shared';
 
 export const STORYBOARD_MAX_SHOTS = 12;
@@ -17,7 +23,9 @@ const limits = STUDIO_COMPOSITION_LIMITS;
 const ShotArg = z.object({
   keep: z
     .string()
-    .regex(/^shot-\d+$/)
+    .min(1)
+    .max(64)
+    .regex(/^[A-Za-z0-9_-]+$/)
     .optional()
     .describe(
       'A current shot id (e.g. "shot-3") to carry over with its prompt, takes and clip; omit prompt. Use it for ' +
@@ -76,14 +84,17 @@ const description =
   'Carry over each current shot you are not re-imagining with keep. About 4 shots for a 15 second ad (hook, ' +
   'product, benefit, call to action). Then call production_generate_shot.';
 
-type ResolvedShot = { title: string; intent?: string; prompt: string; durationMs: number; voiceLine?: string };
+type ResolvedShot = { title: string; intent?: string; prompt?: string; durationMs: number; voiceLine?: string };
 
 /**
  * A shot argument filled in from the current shot it keeps. The director often no longer has a shot's prompt in hand
  * on a follow-up turn, so keep is how it carries a shot over; a prompt with no spaces is a stand-in for one, not a
  * description of a frame, and is refused rather than turned into new takes.
  */
-function resolveShot(shot: StoryboardArgs['shots'][number], current: readonly StudioShot[]): ResolvedShot {
+function resolveShot(
+  shot: StoryboardArgs['shots'][number],
+  current: readonly StudioShot[]
+): { shot: ResolvedShot; source?: StudioShot } {
   const source = shot.keep ? current.find(candidate => candidate.id === shot.keep) : undefined;
   if (shot.keep && !source) {
     throw new ProductionToolError(
@@ -92,22 +103,35 @@ function resolveShot(shot: StoryboardArgs['shots'][number], current: readonly St
       }.`
     );
   }
-  const prompt = source?.prompt ?? shot.prompt;
+  if (source && shot.prompt) {
+    throw new ProductionToolError(
+      `${source.id} has keep and a prompt; pass keep to carry it over as it is, or a prompt without keep to re-imagine it.`
+    );
+  }
+  const prompt = source ? source.prompt : shot.prompt;
   const title = shot.title ?? source?.title;
-  const durationMs = shot.durationSeconds !== undefined ? Math.round(shot.durationSeconds * 1000) : source?.durationMs;
-  if (!prompt || !title || durationMs === undefined) {
+  const durationMs =
+    shot.durationSeconds !== undefined
+      ? Math.round(shot.durationSeconds * 1000)
+      : source
+        ? (source.durationMs ?? DEFAULT_SHOT_DURATION_MS)
+        : undefined;
+  if (!title || durationMs === undefined || (!source && !prompt)) {
     throw new ProductionToolError(
       'a new shot needs a title, a prompt and durationSeconds; to carry a shot over, pass keep.'
     );
   }
-  if (!source && !/\s/.test(prompt)) {
+  if (!source && prompt && !/\s/.test(prompt)) {
     throw new ProductionToolError(
       `"${prompt}" is not an image prompt. To keep a current shot, pass keep with its id instead of a prompt.`
     );
   }
   const voiceLine = shot.voiceLine ?? source?.voiceLine;
   const intent = shot.intent ?? source?.intent;
-  return { title, ...(intent && { intent }), prompt, durationMs, ...(voiceLine && { voiceLine }) };
+  return {
+    shot: { title, ...(intent && { intent }), ...(prompt && { prompt }), durationMs, ...(voiceLine && { voiceLine }) },
+    source,
+  };
 }
 
 const toShot = (shot: ResolvedShot, index: number): StudioShot => ({
@@ -124,11 +148,15 @@ const normalizedPrompt = (prompt: string | undefined): string =>
  * voice lines costs nothing. Its clip stays only while the shot is no longer than before: generate_shot already
  * cut the shot to its clip's length, so a longer shot would play past the clip's end.
  */
-function keepTakes(shot: StudioShot, previous: StudioShot | undefined): { shot: StudioShot; clipDropped: boolean } {
+function keepTakes(
+  shot: StudioShot,
+  previous: StudioShot | undefined,
+  isSource = false
+): { shot: StudioShot; clipDropped: boolean } {
   if (
     !previous ||
     previous.fileIds.length === 0 ||
-    normalizedPrompt(previous.prompt) !== normalizedPrompt(shot.prompt)
+    (!isSource && normalizedPrompt(previous.prompt) !== normalizedPrompt(shot.prompt))
   ) {
     return { shot, clipDropped: false };
   }
@@ -148,7 +176,11 @@ function keepTakes(shot: StudioShot, previous: StudioShot | undefined): { shot: 
  * The current shot a new one carries its takes from: the one at the same place when its prompt matches, otherwise
  * the first with the same prompt, so inserting or moving a shot keeps the takes of the shots around it.
  */
-function previousShot(current: readonly StudioShot[], prompt: string, index: number): StudioShot | undefined {
+function previousShot(
+  current: readonly StudioShot[],
+  prompt: string | undefined,
+  index: number
+): StudioShot | undefined {
   const wanted = normalizedPrompt(prompt);
   const atIndex = current[index];
   if (atIndex && normalizedPrompt(atIndex.prompt) === wanted) return atIndex;
@@ -164,13 +196,20 @@ export const productionStoryboardTool: ToolDefinition = {
         const args = schema.parse(parameters);
         try {
           const current = await config.compositions.get(args.compositionId);
+          const keeps = args.shots.flatMap(shot => (shot.keep ? [shot.keep] : []));
+          const twice = keeps.find((id, index) => keeps.indexOf(id) !== index);
+          if (twice) throw new ProductionToolError(`${twice} is kept twice; keep each shot once.`);
           const resolved = args.shots.map(shot => resolveShot(shot, current.shots));
-          const totalMs = resolved.reduce((sum, shot) => sum + shot.durationMs, 0);
+          const totalMs = resolved.reduce((sum, { shot }) => sum + shot.durationMs, 0);
           if (totalMs > STUDIO_TIMELINE_LIMITS.maxDurationMs) {
             throw new ProductionToolError('the shots run longer than a production can.');
           }
-          const kept = resolved.map((shot, index) =>
-            keepTakes(toShot(shot, index), previousShot(current.shots, shot.prompt, index))
+          const kept = resolved.map(({ shot, source }, index) =>
+            keepTakes(
+              toShot(shot, index),
+              source ?? previousShot(current.shots, shot.prompt, index),
+              source !== undefined
+            )
           );
           const shots = kept.map(({ shot }) => shot);
           const keptTakeIds = new Set(shots.flatMap(shot => shot.fileIds));

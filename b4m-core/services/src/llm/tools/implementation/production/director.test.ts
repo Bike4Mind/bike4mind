@@ -374,6 +374,69 @@ describe('production director tools', () => {
     expect(after.map(shot => shot.voiceLine)).toEqual(['Spring is here.', 'Meet it.', 'Shop the', 'spring sale.']);
   });
 
+  it('keeps an editor-made shot by id when it has no prompt and no length, with its take', async () => {
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
+    const take = harness.composition().shots[0].fileIds[0];
+    const editorId = 'shot-3f2b9c1e-7a4d-4e8b-9c55-0d1e2f3a4b5c';
+    await harness.config.compositions.update(COMPOSITION_ID, {
+      shots: [{ id: editorId, title: 'Added in the editor', fileIds: [take], chosenFileId: take }],
+    });
+
+    const result = JSON.parse(
+      await run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [{ keep: editorId }, { title: 'CTA', prompt: 'The bottle beside a shop sign', durationSeconds: 2 }],
+      })
+    );
+    expect(result.takesDropped).toBeUndefined();
+    expect(result.shots[0]).toMatchObject({ durationMs: 4000, takesKept: true });
+    const [first] = harness.composition().shots;
+    expect(first.fileIds).toEqual([take]);
+    expect(first.prompt).toBeUndefined();
+  });
+
+  it('gives each of two same-prompt shots its own takes when they swap places', async () => {
+    await run(productionStoryboardTool, harness, {
+      compositionId: COMPOSITION_ID,
+      shots: [
+        { title: 'A', prompt: 'A bottle on a sunny table', durationSeconds: 3 },
+        { title: 'B', prompt: 'A bottle on a sunny table', durationSeconds: 3 },
+      ],
+    });
+    await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
+    const [one, two] = harness.composition().shots;
+    expect(one.fileIds[0]).not.toEqual(two.fileIds[0]);
+
+    const result = JSON.parse(
+      await run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [{ keep: two.id }, { keep: one.id }],
+      })
+    );
+    expect(result.takesDropped).toBeUndefined();
+    expect(harness.composition().shots.map(shot => shot.fileIds)).toEqual([two.fileIds, one.fileIds]);
+  });
+
+  it('refuses a shot that has both keep and a prompt, and a shot kept twice', async () => {
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    const before = harness.composition().shots;
+
+    expect(
+      await run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [{ keep: 'shot-1', prompt: 'A bottle on a beach at dusk' }],
+      })
+    ).toMatch(/^Error: shot-1 has keep and a prompt;/);
+    expect(
+      await run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [{ keep: 'shot-1' }, { keep: 'shot-1' }],
+      })
+    ).toMatch(/^Error: shot-1 is kept twice; keep each shot once\./);
+    expect(harness.composition().shots).toEqual(before);
+  });
+
   it('keeps the takes and clips of shots that move when a shot is inserted before them', async () => {
     await run(productionStoryboardTool, harness, STORYBOARD);
     await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID });
