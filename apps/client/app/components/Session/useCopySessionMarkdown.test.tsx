@@ -61,11 +61,11 @@ describe('useCopySessionMarkdown', () => {
 
   it('copies getMarkdown text when the main chat has no current session', async () => {
     sessions.currentSessionId = undefined;
-    const { result } = renderHook(() => useCopySessionMarkdown(() => 'ASK BOB CHAT'), { wrapper });
+    const { result } = renderHook(() => useCopySessionMarkdown(() => 'OVERLAY CHAT'), { wrapper });
 
     await act(() => result.current.copyMarkdown());
 
-    expect(writeText).toHaveBeenCalledWith('ASK BOB CHAT');
+    expect(writeText).toHaveBeenCalledWith('OVERLAY CHAT');
     expect(result.current.copied).toBe(true);
   });
 

@@ -63,7 +63,7 @@ describe('FloatingChatWindow', () => {
   });
 
   it('passes getCopyMarkdown through when the dock layouts are off', () => {
-    const getCopyMarkdown = () => 'ASK BOB CHAT';
+    const getCopyMarkdown = () => 'OVERLAY CHAT';
     render(
       <Wrapper>
         <FloatingChatWindow dockable={false} getCopyMarkdown={getCopyMarkdown}>
