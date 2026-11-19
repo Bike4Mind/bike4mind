@@ -1,0 +1,102 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('@bike4mind/common', () => ({
+  isPlaceholderValue: (value: string | undefined | null) => {
+    if (!value) return true;
+    const normalized = value.trim().toLowerCase();
+    return normalized === 'my-secret-placeholder-value' || normalized === 'not-configured';
+  },
+}));
+
+const configValues = vi.hoisted(() => ({
+  MAIL_HOST: 'smtp.example.com',
+  MAIL_PORT: '465',
+  MAIL_USERNAME: 'user@example.com',
+  MAIL_PASSWORD: 'secret',
+  MAIL_FROM: 'noreply@example.com',
+}));
+
+vi.mock('../config', () => ({ Config: configValues }));
+
+import { getMailConfigStatus, requiredMailSecrets, statusTransportKind } from './configStatus';
+
+const SMTP_KEYS = ['MAIL_HOST', 'MAIL_PORT', 'MAIL_USERNAME', 'MAIL_PASSWORD', 'MAIL_FROM'];
+
+describe('getMailConfigStatus', () => {
+  beforeEach(() => {
+    Object.assign(configValues, {
+      MAIL_HOST: 'smtp.example.com',
+      MAIL_PORT: '465',
+      MAIL_USERNAME: 'user@example.com',
+      MAIL_PASSWORD: 'secret',
+      MAIL_FROM: 'noreply@example.com',
+    });
+  });
+
+  it('reports SES as configured with only the sender when the SMTP secrets are placeholders', () => {
+    configValues.MAIL_HOST = 'not-configured';
+    configValues.MAIL_PORT = 'not-configured';
+    configValues.MAIL_USERNAME = 'not-configured';
+    configValues.MAIL_PASSWORD = 'not-configured';
+
+    const status = getMailConfigStatus('ses');
+
+    expect(status).toEqual({ configured: true, transport: 'ses', missingSecrets: [], secrets: { MAIL_FROM: true } });
+  });
+
+  it('reports SES as unconfigured without a sender', () => {
+    configValues.MAIL_FROM = '';
+
+    expect(getMailConfigStatus('ses')).toMatchObject({ configured: false, missingSecrets: ['MAIL_FROM'] });
+  });
+
+  it('names every SMTP secret when none is set', () => {
+    for (const key of SMTP_KEYS) Object.assign(configValues, { [key]: 'not-configured' });
+
+    const status = getMailConfigStatus('smtp');
+
+    expect(status.configured).toBe(false);
+    expect(status.missingSecrets).toEqual(SMTP_KEYS);
+    expect(Object.keys(status.secrets)).toEqual(SMTP_KEYS);
+    expect(Object.values(status.secrets)).toEqual([false, false, false, false, false]);
+  });
+
+  it('reports SMTP as configured when every secret is real', () => {
+    const status = getMailConfigStatus('smtp');
+
+    expect(status.configured).toBe(true);
+    expect(status.secrets).toEqual(Object.fromEntries(SMTP_KEYS.map(key => [key, true])));
+  });
+
+  it('defaults to the status transport from the environment', () => {
+    vi.stubEnv('MAIL_STATUS_TRANSPORT', 'ses');
+    vi.stubEnv('B4M_SELF_HOST', '');
+    try {
+      expect(getMailConfigStatus().transport).toBe('ses');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe('requiredMailSecrets', () => {
+  it('needs only the sender on SES and the whole set on SMTP', () => {
+    expect(requiredMailSecrets('ses')).toEqual(['MAIL_FROM']);
+    expect(requiredMailSecrets('smtp')).toEqual(SMTP_KEYS);
+  });
+});
+
+describe('statusTransportKind', () => {
+  it.each([
+    [{ MAIL_STATUS_TRANSPORT: 'ses' }, 'ses'],
+    [{ MAIL_STATUS_TRANSPORT: ' SES ' }, 'ses'],
+    [{ MAIL_STATUS_TRANSPORT: '', MAIL_TRANSPORT: 'ses' }, 'smtp'],
+    [{ MAIL_STATUS_TRANSPORT: 'smtp', MAIL_TRANSPORT: 'ses' }, 'smtp'],
+    [{ MAIL_TRANSPORT: 'ses' }, 'ses'],
+    [{}, 'smtp'],
+    [{ B4M_SELF_HOST: 'true', MAIL_STATUS_TRANSPORT: 'ses' }, 'smtp'],
+    [{ B4M_SELF_HOST: 'true', MAIL_TRANSPORT: 'ses' }, 'smtp'],
+  ])('resolves %o to %s', (env, expected) => {
+    expect(statusTransportKind(env)).toBe(expected);
+  });
+});

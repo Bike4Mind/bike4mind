@@ -121,6 +121,21 @@ describe('AdminSystemHealthTab', () => {
     expect(screen.getByTestId('system-health-oauth-google-status')).toHaveAttribute('data-tone', 'good');
   });
 
+  it('lists only the sender secret on SES and names it in the hint', async () => {
+    const sesEmail = {
+      configured: false,
+      transport: 'ses',
+      secrets: { MAIL_FROM: false },
+      missingSecrets: ['MAIL_FROM'],
+    };
+    respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, email: sesEmail } }) });
+    renderTab();
+
+    expect(await screen.findByTestId('system-health-email-secret-MAIL_FROM')).toBeInTheDocument();
+    expect(screen.queryByTestId('system-health-email-secret-MAIL_HOST')).not.toBeInTheDocument();
+    expect(screen.getByTestId('system-health-email-secret-hint')).toHaveTextContent('sst secret set MAIL_FROM');
+  });
+
   it('maps integration and breaker states to tones', async () => {
     renderTab();
 
