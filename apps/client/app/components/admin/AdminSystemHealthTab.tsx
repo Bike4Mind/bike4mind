@@ -698,11 +698,15 @@ const AdminSystemHealthTab = () => {
                 </Typography>
                 <Typography level="body-xs">{email.missingSecrets.join(', ')}</Typography>
                 <Typography level="body-xs">
-                  Set these using:{' '}
-                  <code data-testid="system-health-email-secret-hint">
-                    ./for-env {'<stage>'} npx sst secret set {email.missingSecrets[0]} {'<value>'}
-                  </code>
+                  Set {email.missingSecrets.length === 1 ? 'it' : 'each one'} using:
                 </Typography>
+                {email.missingSecrets.map(name => (
+                  <Typography key={name} level="body-xs">
+                    <code data-testid={`system-health-email-secret-hint-${name}`}>
+                      ./for-env {'<stage>'} npx sst secret set {name} {'<value>'}
+                    </code>
+                  </Typography>
+                ))}
               </Stack>
             </Alert>
           )}

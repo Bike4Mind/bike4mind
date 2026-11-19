@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   mailerSendTest: vi.fn(),
+  logError: vi.fn(),
   resource: {} as Record<string, unknown>,
   invokedCommands: [] as { input: Record<string, unknown> }[],
 }));
@@ -19,6 +20,7 @@ vi.mock('@aws-sdk/client-lambda', () => ({
   },
 }));
 vi.mock('sst', () => ({ Resource: mocks.resource }));
+vi.mock('@bike4mind/observability', () => ({ Logger: { error: mocks.logError } }));
 vi.mock('./index', () => ({
   default: { sendTestEmail: mocks.mailerSendTest, transport: { kind: 'smtp' } },
 }));
@@ -146,16 +148,18 @@ describe('sendLiveTestEmail on a hosted stage', () => {
     expect(mocks.invoke).not.toHaveBeenCalled();
   });
 
-  it('puts the worker error message in the result when the function failed', async () => {
+  it('logs the worker error message but keeps it out of the result when the function failed', async () => {
     mocks.invoke.mockResolvedValue({
       FunctionError: 'Unhandled',
-      Payload: payloadOf({ errorType: 'Error', errorMessage: 'transport exploded' }),
+      Payload: payloadOf({ errorType: 'Error', errorMessage: 'resource detail example-mail-fn exploded' }),
     });
 
     const result = await sendLiveTestEmail('qa@example.org');
 
     expect(result.success).toBe(false);
-    expect(result.error).toBe('The email worker failed: transport exploded');
+    expect(result.error).toBe('The email worker failed (Unhandled). Check the email worker logs for details.');
+    expect(JSON.stringify(result)).not.toContain('example-mail-fn');
+    expect(mocks.logError).toHaveBeenCalledWith(expect.stringContaining('resource detail example-mail-fn exploded'));
   });
 
   it('falls back to the function error kind when the payload has no message', async () => {
@@ -163,7 +167,7 @@ describe('sendLiveTestEmail on a hosted stage', () => {
 
     await expect(sendLiveTestEmail('qa@example.org')).resolves.toEqual({
       success: false,
-      error: 'The email worker failed: Unhandled',
+      error: 'The email worker failed (Unhandled). Check the email worker logs for details.',
     });
   });
 
@@ -172,7 +176,7 @@ describe('sendLiveTestEmail on a hosted stage', () => {
 
     await expect(sendLiveTestEmail('qa@example.org')).resolves.toEqual({
       success: false,
-      error: 'The email worker failed: Unhandled',
+      error: 'The email worker failed (Unhandled). Check the email worker logs for details.',
     });
   });
 

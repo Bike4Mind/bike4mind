@@ -82,18 +82,12 @@ export class MailService {
     }
   }
 
-  /**
-   * Get the current email configuration status.
-   * Used by admin system health panel to show config status without CloudWatch.
-   */
+  /** Config status for this service's transport. The status routes call getMailConfigStatus directly so they never load the mailer. */
   getConfigStatus(): EmailConfigStatus {
     return getMailConfigStatus(this.transport.kind);
   }
 
-  /**
-   * Send a test email to verify the transport can deliver.
-   * Used by admin system health panel.
-   */
+  /** Sends the System Health test email; the email-send worker runs it for sendLiveTestEmail (./testEmail). */
   async sendTestEmail(to: string): Promise<TestEmailResult> {
     try {
       await this.transport.verify();

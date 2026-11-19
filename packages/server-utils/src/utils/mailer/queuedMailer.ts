@@ -3,13 +3,20 @@ import { EmailEvents } from '../eventBus';
 import type { MailSendResult } from './transport';
 import type { SendEmailOptions } from './index';
 
+// EventBridge rejects an entry over 256 KB. The serialized properties understate the full entry, so
+// mail over this is certain to be rejected and anything under it is still checked by PutEvents.
+export const MAX_QUEUED_MAIL_BYTES = 256 * 1024;
+
 export interface QueuedMail {
   subject: string;
   html: string;
   text?: string;
 }
 
-/** `queued` means the event bus accepted the mail; the email-send worker logs the delivery itself. */
+/**
+ * `queued` means the event bus accepted the mail, not that it was delivered: the email-send worker
+ * sends it, and a failed send is retried by EventBridge and then dead-lettered.
+ */
 export type QueuedMailResult = MailSendResult | { queued: true } | false;
 
 /**
@@ -32,16 +39,21 @@ export const queuedMailer = {
 
     const recipient = Array.isArray(to) ? to.join(', ') : to;
     const { mirror, logRecipient, category } = options;
+    const properties = {
+      to: recipient,
+      subject: mail.subject,
+      body: mail.html,
+      ...(mail.text !== undefined && { text: mail.text }),
+      ...(category && { category }),
+      ...(mirror !== undefined && { mirror }),
+      ...(logRecipient !== undefined && { logRecipient }),
+    };
     try {
-      const result = await EmailEvents.Send.publish({
-        to: recipient,
-        subject: mail.subject,
-        body: mail.html,
-        ...(mail.text !== undefined && { text: mail.text }),
-        ...(category && { category }),
-        ...(mirror !== undefined && { mirror }),
-        ...(logRecipient !== undefined && { logRecipient }),
-      });
+      const size = Buffer.byteLength(JSON.stringify(properties));
+      if (size > MAX_QUEUED_MAIL_BYTES) {
+        throw new Error(`mail is ${size} bytes, over the ${MAX_QUEUED_MAIL_BYTES}-byte event limit`);
+      }
+      const result = await EmailEvents.Send.publish(properties);
       // PutEvents reports a rejected entry in its response instead of throwing.
       const rejected = result?.Entries?.find(entry => entry.ErrorCode);
       if (rejected) throw new Error(`${rejected.ErrorCode}: ${rejected.ErrorMessage ?? 'entry rejected'}`);

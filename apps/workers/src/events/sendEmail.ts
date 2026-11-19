@@ -59,9 +59,10 @@ const deliver = withEventContext(async (event, logger) => {
 
   if (result === false) {
     logger.error('Email delivery failed - check MailService logs for details', { to: loggedTo, subject });
-  } else {
-    logger.info('Email delivered successfully', { to: loggedTo, subject, messageId: result.messageId });
+    // Throwing fails the async invoke, so EventBridge retries it and a final failure lands in emailEventsDLQ.
+    throw new Error('Email delivery failed');
   }
+  logger.info('Email delivered successfully', { to: loggedTo, subject, messageId: result.messageId });
 });
 
 /** The System Health test email: sent by the transport this worker delivers with, result returned to the caller. */

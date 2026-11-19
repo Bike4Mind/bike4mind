@@ -47,7 +47,8 @@ const parseStoredEmailList = (raw: unknown): unknown => {
  *
  * Mail is queued for the email-send worker, so every function that records an incident has to be
  * linked to the event bus (infra/__tests__/mailSenderBusLinks.test.ts). An alert that cannot be
- * queued leaves the incident unstamped for the review sweep to pick up.
+ * queued leaves the incident unstamped for the review sweep to pick up; a queued alert is stamped, and
+ * a transport failure after that is retried by the email-send worker and dead-lettered, not by the sweep.
  */
 export function createReviewerAlertDelivery(options: { skipSettingsCache?: boolean } = {}): IncidentEscalationDelivery {
   const readEmailList = async (name: ReviewerListSetting) => {

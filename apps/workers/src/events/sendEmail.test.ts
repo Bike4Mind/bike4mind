@@ -68,9 +68,9 @@ it('decodes base64 attachments back into buffers', async () => {
   );
 });
 
-it('logs a delivery failure without throwing', async () => {
+it('logs a delivery failure and throws so the event is retried and dead-lettered', async () => {
   mocks.send.mockResolvedValue(false);
-  await send();
+  await expect(send()).rejects.toThrow('Email delivery failed');
   expect(mocks.logger.error).toHaveBeenCalledWith(expect.stringContaining('Email delivery failed'), expect.anything());
 });
 
@@ -139,7 +139,7 @@ it('names the recipient in its logs by default', async () => {
     expect.objectContaining({ to: 'test@example.org' })
   );
   mocks.send.mockResolvedValue(false);
-  await send();
+  await expect(send()).rejects.toThrow('Email delivery failed');
   expect(mocks.logger.error).toHaveBeenCalledWith(
     expect.stringContaining('Email delivery failed'),
     expect.objectContaining({ to: 'test@example.org' })
@@ -159,7 +159,9 @@ it('keeps the recipient out of every log line after a delivery when logRecipient
 
 it('keeps the recipient out of every log line after a failed delivery when logRecipient is false', async () => {
   mocks.send.mockResolvedValue(false);
-  await deliver({ to: 'private@example.org', subject: 'Test', body: 'Body', logRecipient: false });
+  await expect(
+    deliver({ to: 'private@example.org', subject: 'Test', body: 'Body', logRecipient: false })
+  ).rejects.toThrow('Email delivery failed');
   expect(mocks.logger.error).toHaveBeenCalledWith(
     expect.stringContaining('Email delivery failed'),
     expect.objectContaining({ to: '[redacted]' })

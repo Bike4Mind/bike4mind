@@ -76,7 +76,7 @@ const handler = adminApi({
 
   return res.json({
     success: true,
-    message: `Test email sent to ${email}`,
+    message: `Test email accepted for delivery to ${email}`,
     subject,
   });
 });

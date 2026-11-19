@@ -193,6 +193,7 @@ async function deliverToReviewers(
       deps.logger.error(`[ImageModeration] reviewer ${what} failed to send`, meta);
       return 'failed';
     }
+    // On a hosted stage this means queued for the email-send worker (see createReviewerAlertDelivery).
     return 'delivered';
   } finally {
     clearTimeout(timer);

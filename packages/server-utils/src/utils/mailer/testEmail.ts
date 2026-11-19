@@ -1,4 +1,5 @@
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
+import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import type { TestEmailResult } from './index';
 import type { MailTransportKind } from './transport';
@@ -56,10 +57,14 @@ export async function sendLiveTestEmail(to: string): Promise<LiveTestEmailResult
   const payload: unknown = response.Payload ? JSON.parse(Buffer.from(response.Payload).toString('utf8')) : undefined;
 
   if (response.FunctionError) {
+    // The raw worker error can name AWS resources, so it stays in the logs and the admin gets the kind.
     const errorMessage = (payload as { errorMessage?: unknown } | undefined)?.errorMessage;
+    Logger.error(
+      `Live test email: the email worker failed (${response.FunctionError}): ${typeof errorMessage === 'string' ? errorMessage : 'no message'}`
+    );
     return {
       success: false,
-      error: `The email worker failed: ${typeof errorMessage === 'string' ? errorMessage : response.FunctionError}`,
+      error: `The email worker failed (${response.FunctionError}). Check the email worker logs for details.`,
     };
   }
   if (typeof (payload as { success?: unknown } | undefined)?.success !== 'boolean') {

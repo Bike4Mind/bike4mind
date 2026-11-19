@@ -163,7 +163,8 @@ async function processAttempt(
         html: rendered.html,
       });
 
-      // On a hosted stage a truthy result means the email-send worker took the mail; delivery is logged there.
+      // On a hosted stage a truthy result only means the event bus accepted the mail, so SENT here is
+      // "queued": a transport failure in the email-send worker is retried there and dead-lettered, not written back.
       if (result) {
         await emailSendAttemptRepository.updateStatus(attempt.id, EmailSendStatus.SENT, {
           sentAt: new Date(),

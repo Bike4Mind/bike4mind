@@ -22,7 +22,7 @@ async function loadFreshQueuedMailer() {
   return (await import('./queuedMailer')).queuedMailer;
 }
 
-import { queuedMailer } from './queuedMailer';
+import { MAX_QUEUED_MAIL_BYTES, queuedMailer } from './queuedMailer';
 
 const mail = { subject: 'Hello', html: '<p>Body</p>' };
 
@@ -105,6 +105,19 @@ describe('queuedMailer on a hosted stage', () => {
     await expect(queuedMailer.sendEmail('a@example.org', mail)).resolves.toBe(false);
 
     expect(mocks.logError.mock.calls[0][0]).toContain('plain string failure');
+  });
+
+  it('resolves false without publishing when the mail is over the event size limit', async () => {
+    const html = 'x'.repeat(MAX_QUEUED_MAIL_BYTES);
+    await expect(queuedMailer.sendEmail('a@example.org', { subject: 'Big', html })).resolves.toBe(false);
+    expect(mocks.publish).not.toHaveBeenCalled();
+    expect(mocks.logError).toHaveBeenCalledWith(expect.stringContaining('over the 262144-byte event limit'));
+  });
+
+  it('publishes mail just under the event size limit', async () => {
+    const html = 'x'.repeat(MAX_QUEUED_MAIL_BYTES - 200);
+    await expect(queuedMailer.sendEmail('a@example.org', { subject: 'Big', html })).resolves.toEqual({ queued: true });
+    expect(mocks.publish).toHaveBeenCalledTimes(1);
   });
 
   it('resolves false when the bus response rejects an entry instead of throwing', async () => {
