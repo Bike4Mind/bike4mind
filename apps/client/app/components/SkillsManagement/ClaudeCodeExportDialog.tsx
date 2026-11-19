@@ -37,7 +37,7 @@ export interface ClaudeCodeExportDialogProps {
   thirdParty: boolean;
   /** A market listing the viewer hasn't imported: the export won't exist in Bike4Mind. */
   showImportHint?: boolean;
-  /** An Organization listing: adds a "Team marketplace" tab for the org's Claude Code plugin feed. */
+  /** An Organization or Space listing: adds a "Team marketplace" tab for its Claude Code plugin feed. */
   marketplace?: ClaudeCodeMarketplaceTabProps;
 }
 

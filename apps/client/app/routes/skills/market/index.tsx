@@ -62,6 +62,7 @@ const SkillMarketPage: FC = () => {
   const navigate = useNavigate();
   const { currentUser } = useUser();
   const { data: me } = useMarketMe();
+  const spaces = me?.spaces ?? [];
   const { data: mySkills = [] } = useGetSkills();
   const [publishOpen, setPublishOpen] = useState(false);
 
@@ -173,14 +174,31 @@ const SkillMarketPage: FC = () => {
             <Select
               size="sm"
               value={filters.scope}
-              onChange={(_e, v) => set('scope', v ?? '')}
+              onChange={(_e, v) => setFilters(f => ({ ...f, scope: v ?? '', spaceId: undefined }))}
               sx={{ minWidth: 150 }}
               slotProps={{ button: { 'data-testid': 'market-filter-scope', 'aria-label': 'Visibility' } }}
             >
               <Option value="">Everything I can see</Option>
               <Option value="public">Public</Option>
               <Option value="org">My organizations</Option>
+              {spaces.length ? <Option value="space">My Spaces</Option> : null}
             </Select>
+            {filters.scope === 'space' && spaces.length ? (
+              <Select
+                size="sm"
+                value={filters.spaceId ?? ''}
+                onChange={(_e, v) => set('spaceId', v || undefined)}
+                sx={{ minWidth: 150 }}
+                slotProps={{ button: { 'data-testid': 'market-filter-space', 'aria-label': 'Space' } }}
+              >
+                <Option value="">All my Spaces</Option>
+                {spaces.map(sp => (
+                  <Option key={sp.id} value={sp.id}>
+                    {sp.name}
+                  </Option>
+                ))}
+              </Select>
+            ) : null}
             <ToggleButtonGroup
               size="sm"
               value={filters.tools || 'any'}

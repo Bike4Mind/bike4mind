@@ -16,7 +16,8 @@ vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 const hooks = vi.hoisted(() => ({
   detail: vi.fn(),
   mutation: () => ({ isPending: false, mutateAsync: vi.fn() }),
-  me: undefined as { organizations: Array<{ id: string; name: string }> } | undefined,
+  me: undefined as
+    { organizations: Array<{ id: string; name: string }>; spaces?: Array<{ id: string; name: string }> } | undefined,
 }));
 
 vi.mock('@client/app/hooks/data/skillMarket', () => ({
@@ -176,9 +177,32 @@ describe('ListingDetail "Use in Claude Code"', () => {
     fireEvent.click(screen.getByTestId('skill-claude-code-btn'));
     fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
     expect(JSON.parse(screen.getByTestId('marketplace-tab-props').textContent ?? '')).toEqual({
-      org: { id: 'org1', name: 'Acme Labs' },
+      owner: { kind: 'organization', id: 'org1', name: 'Acme Labs' },
       pluginName: 'hello-team-abc123',
       skillName: 'Hello Team',
+    });
+  });
+
+  it('passes a Space listing to the team marketplace tab with the Space as owner', () => {
+    hooks.me = { organizations: [], spaces: [{ id: 'sp1', name: 'Platform' }] };
+    const data = makeData();
+    renderListing(
+      makeData({
+        listing: {
+          ...data.listing,
+          name: 'Hello Team',
+          visibility: 'space',
+          spaceId: 'sp1',
+          claudePluginName: 'hello-team-abc123',
+        },
+      })
+    );
+    fireEvent.click(screen.getByTestId('skill-claude-code-btn'));
+    fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
+    expect(JSON.parse(screen.getByTestId('marketplace-tab-props').textContent ?? '').owner).toEqual({
+      kind: 'space',
+      id: 'sp1',
+      name: 'Platform',
     });
   });
 });
