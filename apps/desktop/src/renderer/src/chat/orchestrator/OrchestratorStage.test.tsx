@@ -44,9 +44,11 @@ const pressEscape = (init: KeyboardEventInit = {}) =>
   });
 
 beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn();
   (window as unknown as { b4m: unknown }).b4m = {
     chat: {
       getSession: vi.fn().mockResolvedValue(null),
+      onStreamEvent: vi.fn(() => () => undefined),
       onQueueChanged: vi.fn(() => () => undefined),
       getRunSpend: vi.fn().mockResolvedValue({ status: 'unattributed' }),
     },
@@ -337,10 +339,16 @@ describe('OrchestratorStage', () => {
     expect(reachedWindow).toEqual([true]);
   });
 
-  it('opens the drawer when a table row is clicked', async () => {
+  it('opens the agent conversation when a table row is clicked', async () => {
+    vi.mocked(window.b4m.chat.getSession).mockResolvedValueOnce({
+      messages: [{ id: 'reply-w2', role: 'assistant', content: 'Working on the second task.' }],
+    } as Awaited<ReturnType<typeof window.b4m.chat.getSession>>);
     await renderStage(FIXTURE);
     await act(async () => el('orchestrator-table-row-w2').click());
     expect(el('orchestrator-peek-drawer').textContent).toContain('Agent w2');
+    expect(el('orchestrator-peek-conversation').contains(el('chat-message-assistant'))).toBe(true);
+    expect(el('chat-message-assistant').textContent).toContain('Working on the second task.');
+    expect(window.b4m.chat.getSession).toHaveBeenCalledWith('w2', true);
   });
 
   it('starts a fresh reply box when another agent is selected', async () => {
@@ -450,6 +458,7 @@ describe('OrchestratorStage', () => {
           ],
         }),
         respondToApproval: vi.fn().mockResolvedValue(undefined),
+        onStreamEvent: vi.fn(() => () => undefined),
         onQueueChanged: vi.fn(() => () => undefined),
       };
       (window as unknown as { b4m: unknown }).b4m = { chat };

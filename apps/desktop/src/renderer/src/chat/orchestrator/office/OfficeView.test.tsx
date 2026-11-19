@@ -38,7 +38,8 @@ describe('OfficeView', () => {
     expect(el('office-room-conference-room').contains(el('office-agent-idle'))).toBe(true);
     expect(el('office-room-michael-door').contains(el('office-agent-waiting'))).toBe(true);
     expect(el('office-agent-done').getAttribute('aria-pressed')).toBe('true');
-    const character = el('office-agent-done').textContent;
+    const character = el('office-agent-done').getAttribute('aria-label')!.split(':')[0];
+    expect(el('office-agent-done').textContent).toBe(`${character.split(' ')[0]} *`);
     await act(async () => el('office-agent-done').click());
     expect(select).toHaveBeenCalledWith('done');
     await mount.render(
@@ -48,7 +49,9 @@ describe('OfficeView', () => {
       />
     );
     expect(el('office-room-desks').contains(el('office-agent-done'))).toBe(true);
-    expect(el('office-agent-done').textContent).toBe(character);
+    expect(el('office-agent-done').getAttribute('aria-label')).toBe(`${character}: Agent done, working`);
+    expect(el('office-agent-done').textContent).toBe(character.split(' ')[0]);
+    expect(el('office-agent-done').getAttribute('aria-pressed')).toBe('true');
   });
 
   it('opens the parent reply in the shared conversation window', async () => {

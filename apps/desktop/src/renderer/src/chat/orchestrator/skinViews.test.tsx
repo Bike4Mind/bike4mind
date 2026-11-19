@@ -87,7 +87,13 @@ const SKINNED: Record<OrchestratorViewId, () => void> = {
 };
 
 beforeEach(() => {
-  (window as unknown as { b4m: unknown }).b4m = { chat: { getSession: vi.fn().mockResolvedValue(null) } };
+  (window as unknown as { b4m: unknown }).b4m = {
+    chat: {
+      getSession: vi.fn().mockResolvedValue(null),
+      onStreamEvent: vi.fn(() => () => undefined),
+      onQueueChanged: vi.fn(() => () => undefined),
+    },
+  };
   resetSkinsForTests([sampleSkinSummary()], 'nightglass');
 });
 
