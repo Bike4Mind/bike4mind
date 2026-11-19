@@ -113,7 +113,7 @@ class MainActivity : ComponentActivity() {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                failure.message ?: "Sign-in failed"
+                failure.message ?: getString(R.string.signin_failed)
             }
         }
     }
