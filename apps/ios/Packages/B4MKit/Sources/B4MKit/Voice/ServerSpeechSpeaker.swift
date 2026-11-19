@@ -5,7 +5,7 @@ import Foundation
 /// and forth and no later chunk waits on a call that is likely to fail too. Nothing is surfaced to the user.
 @MainActor
 public final class ServerSpeechSpeaker: SpeechSpeaking, SpeechPrefetching {
-  /// At most this many clips are fetched ahead of the one playing.
+  /// At most this many clips are fetched ahead of the one playing; later chunks wait their turn in `queued`.
   public static let prefetchLimit = 2
 
   public private(set) var isDegraded = false
@@ -15,6 +15,7 @@ public final class ServerSpeechSpeaker: SpeechSpeaking, SpeechPrefetching {
   private let fallback: any SpeechSpeaking
   private let player: any AudioClipPlaying
   private var prefetched: [(text: String, clip: Task<Data, any Error>)] = []
+  private var queued: [String] = []
   private var current: Task<Data, any Error>?
   /// Bumped by `stop()`, so a clip that arrives after it is never played.
   private var generation = 0
@@ -27,9 +28,9 @@ public final class ServerSpeechSpeaker: SpeechSpeaking, SpeechPrefetching {
   }
 
   public func prepare(_ text: String) {
-    guard !isDegraded, prefetched.count < Self.prefetchLimit, !prefetched.contains(where: { $0.text == text })
-    else { return }
-    prefetched.append((text, fetch(text)))
+    guard !isDegraded, !prefetched.contains(where: { $0.text == text }), !queued.contains(text) else { return }
+    queued.append(text)
+    refill()
   }
 
   public func speak(_ text: String) async {
@@ -39,9 +40,11 @@ public final class ServerSpeechSpeaker: SpeechSpeaking, SpeechPrefetching {
     if let index = prefetched.firstIndex(where: { $0.text == text }) {
       clip = prefetched.remove(at: index).clip
     } else {
+      queued.removeAll { $0 == text }
       clip = fetch(text)
     }
     current = clip
+    refill()
     do {
       let data = try await clip.value
       guard started == generation else { return }
@@ -64,6 +67,13 @@ public final class ServerSpeechSpeaker: SpeechSpeaking, SpeechPrefetching {
     Task { [wire, voiceID] in try await wire.synthesizeSpeech(text: text, voiceID: voiceID) }
   }
 
+  private func refill() {
+    while prefetched.count < Self.prefetchLimit, !queued.isEmpty {
+      let text = queued.removeFirst()
+      prefetched.append((text, fetch(text)))
+    }
+  }
+
   private func degrade() {
     isDegraded = true
     cancelFetches()
@@ -74,5 +84,6 @@ public final class ServerSpeechSpeaker: SpeechSpeaking, SpeechPrefetching {
     current = nil
     for entry in prefetched { entry.clip.cancel() }
     prefetched = []
+    queued = []
   }
 }

@@ -97,7 +97,7 @@ private struct VoiceSettingsContent: View {
     }
     .buttonStyle(.borderless)
     .accessibilityLabel(isPlaying ? "Stop sample of \(voice.name)" : "Play sample of \(voice.name)")
-    .accessibilityIdentifier("voice-settings-sample-btn")
+    .accessibilityIdentifier("voice-settings-sample-btn-\(voice.id)")
   }
 
   private static func detail(_ voice: VoiceOption) -> String? {

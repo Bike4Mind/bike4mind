@@ -122,6 +122,36 @@ final class VoiceWireTests: XCTestCase {
     }
   }
 
+  func testAProviderCredentialFailureFallsBackWithoutEndingTheSession() async {
+    let cases: [(String, VoiceWireError)] = [
+      ("provider_not_configured", .unavailable),
+      ("provider_rejected", .rejected(status: 401)),
+    ]
+    for (code, expected) in cases {
+      let tokens = FakeTokens()
+      let transport = FakeTransport { _ in (401, json(#"{"error":"TTS failed","errorCode":"\#(code)"}"#)) }
+      let voice = VoiceClient(baseURL: base, tokens: tokens, transport: transport)
+      let error = await voiceError { try await voice.synthesizeSpeech(text: "Hi", voiceID: "v1") }
+      XCTAssertEqual(error, expected, code)
+      let rejections = await tokens.rejections
+      let invalidations = await tokens.invalidations
+      XCTAssertEqual(rejections, 0, code)
+      XCTAssertEqual(invalidations, 0, code)
+      let sent = await transport.requests.count
+      XCTAssertEqual(sent, 1, code)
+    }
+  }
+
+  func testAnUncodedSpeech401StillEndsTheSession() async {
+    let tokens = FakeTokens()
+    let transport = FakeTransport { _ in (401, json(#"{"error":"Authentication required"}"#)) }
+    let voice = VoiceClient(baseURL: base, tokens: tokens, transport: transport)
+    let error = await voiceError { try await voice.synthesizeSpeech(text: "Hi", voiceID: "v1") }
+    XCTAssertEqual(error, .signedOut)
+    let rejections = await tokens.rejections
+    XCTAssertEqual(rejections, 1)
+  }
+
   func testSpeechOfflineIsTyped() async {
     let transport = FakeTransport { _ in throw URLError(.notConnectedToInternet) }
     let error = await voiceError { try await client(transport).synthesizeSpeech(text: "Hi", voiceID: "v1") }

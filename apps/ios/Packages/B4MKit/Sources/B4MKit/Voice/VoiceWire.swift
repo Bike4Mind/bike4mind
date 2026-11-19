@@ -19,7 +19,8 @@ public struct VoiceOption: Equatable, Hashable, Identifiable, Sendable {
 
 /// Why a voice call did not produce a usable result. Every case is a reason to fall back to on-device speech.
 public enum VoiceWireError: Error, Equatable, Sendable {
-  /// Premium voices are switched off or not configured on this deployment (403/503 on the catalog).
+  /// Premium voices are switched off or not configured on this deployment (403/503 on the catalog, or a
+  /// `provider_not_configured` 401 on speech).
   case unavailable
   /// The clip outlasted the server's synchronous wait and became a background job (202).
   case pending
@@ -77,7 +78,7 @@ public struct VoiceClient: VoiceAPI {
     -> AuthorizedRequester.Response
   {
     do {
-      return try await requester.send(method: method, path: path, jsonBody: jsonBody)
+      return try await requester.send(method: method, path: path, jsonBody: jsonBody, codedUnauthorizedIsAnswer: true)
     } catch let error as APIError {
       throw VoiceWire.error(from: error)
     }
@@ -147,6 +148,9 @@ enum VoiceWire {
 
   static func error(status: Int, body: Data) -> VoiceWireError {
     switch status {
+    // A coded 401 is the provider's credential failing (tts.ts), not the user's session.
+    case 401 where errorCode(in: body) == "provider_not_configured": return .unavailable
+    case 401 where errorCode(in: body) != nil: return .rejected(status: 401)
     case 401: return .signedOut
     case 422 where errorCode(in: body) == "insufficient_credits": return .insufficientCredits
     case 429: return .rateLimited
@@ -169,6 +173,6 @@ enum VoiceWire {
   }
 
   private static func errorCode(in body: Data) -> String? {
-    (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["errorCode"] as? String
+    AuthorizedRequester.errorCode(in: body)
   }
 }

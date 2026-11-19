@@ -6,9 +6,14 @@ import XCTest
 final class FakeVoiceAPI: VoiceAPI, @unchecked Sendable {
   var flag: Result<Bool, VoiceWireError> = .success(true)
   var voices: Result<[VoiceOption], VoiceWireError> = .success([])
+  /// When set, the flag read waits for the first element.
+  var flagGate: AsyncStream<Void>?
   private(set) var voiceListCalls = 0
 
-  func voiceSessionsEnabled() async throws -> Bool { try flag.get() }
+  func voiceSessionsEnabled() async throws -> Bool {
+    if let flagGate { for await _ in flagGate { break } }
+    return try flag.get()
+  }
 
   func listVoices() async throws -> [VoiceOption] {
     voiceListCalls += 1
@@ -90,7 +95,8 @@ final class VoiceCatalogTests: XCTestCase {
 
     let voice = await model.premiumVoice()
     XCTAssertEqual(voice, "v2")
-    XCTAssertEqual(store.selection(for: VoiceAccount(userID: "user-1", baseURL: base)), VoiceSelection(id: "v2", name: "Bob"))
+    XCTAssertEqual(
+      store.selection(for: VoiceAccount(userID: "user-1", baseURL: base)), VoiceSelection(id: "v2", name: "Bob"))
   }
 
   func testNoSelectionMeansOnDeviceSpeech() async {
@@ -147,19 +153,41 @@ final class VoiceCatalogTests: XCTestCase {
     XCTAssertNil(other.selection)
   }
 
-  func testResetForgetsEverySelection() async {
+  func testResetDropsTheCacheButKeepsEachAccountsPick() async {
     api.voices = .success([alice])
     let model = makeModel()
     await model.load()
     model.select(alice)
-    store.setSelection(VoiceSelection(id: "v2", name: "Bob"), for: VoiceAccount(userID: "user-2", baseURL: base))
 
     model.reset()
-
     XCTAssertEqual(model.state, .idle)
     XCTAssertNil(model.selection)
-    XCTAssertNil(store.selection(for: VoiceAccount(userID: "user-1", baseURL: base)))
-    XCTAssertNil(store.selection(for: VoiceAccount(userID: "user-2", baseURL: base)))
+
+    userID = "user-2"
+    let other = await model.premiumVoice()
+    XCTAssertNil(other, "another account never reads the first one's pick")
+
+    model.reset()
+    userID = "user-1"
+    let again = await model.premiumVoice()
+    XCTAssertEqual(again, "v1", "signing back in restores the pick")
+  }
+
+  func testAConversationWaitsForALoadAlreadyRunning() async {
+    api.voices = .success([alice])
+    store.setSelection(VoiceSelection(id: "v1", name: "Alice"), for: VoiceAccount(userID: "user-1", baseURL: base))
+    let (gate, open) = AsyncStream<Void>.makeStream()
+    api.flagGate = gate
+    let model = makeModel()
+    let settingsLoad = Task { await model.load() }
+    while model.state != .loading { await Task.yield() }
+
+    let conversation = Task { await model.premiumVoice() }
+    await Task.yield()
+    open.yield(())
+    let voice = await conversation.value
+    await settingsLoad.value
+    XCTAssertEqual(voice, "v1")
   }
 
   func testSelectionSurvivesANewModel() async {
