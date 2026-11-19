@@ -5,14 +5,14 @@ import Foundation
 public enum VoiceFixtures {
   @MainActor
   public static func makeModel(
-    target: ChatSendRequest.Target, api: any B4MAPI, realtime: any RealtimeClient, opening: [String] = [],
-    firstTurnContext: String? = nil, utteranceHandler: VoiceConversationModel.UtteranceHandler? = nil,
+    target: ChatSendRequest.Target, api: any B4MAPI, realtime: any RealtimeClient,
+    bargeInWords: Set<String> = [], opening: [String] = [], firstTurnContext: String? = nil, utteranceHandler: VoiceConversationModel.UtteranceHandler? = nil,
     script: [String] = ["What can you help me with today"], scriptDelay: Duration = .seconds(1)
   ) -> VoiceConversationModel {
     VoiceConversationModel(
       target: target, api: api, realtime: realtime, listener: FixtureListener(script: script, delay: scriptDelay),
       speaker: FixtureSpeaker(),
-      audioSession: FixtureAudioSession(), opening: opening, firstTurnContext: firstTurnContext,
+      audioSession: FixtureAudioSession(), bargeInWords: bargeInWords, opening: opening, firstTurnContext: firstTurnContext,
       utteranceHandler: utteranceHandler)
   }
 

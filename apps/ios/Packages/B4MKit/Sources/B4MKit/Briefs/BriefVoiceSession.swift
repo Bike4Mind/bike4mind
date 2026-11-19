@@ -9,15 +9,33 @@ public final class BriefVoiceSession {
 
   public static let archiveRefusal = "I can't archive by voice yet. Open the brief to archive it."
 
+  /// Spoken instead of answering while the app is locked or in the background: decisions act on the account,
+  /// so a voice in the room is not enough on its own.
+  public static let lockedRefusal = "Unlock Bike4Mind to answer decisions by voice."
+
+  /// The words that may cut into a prompt on their own; see `VoiceConversationModel`'s `bargeInWords`.
+  public static let bargeInWords: Set<String> = BriefVoiceCommand.oneWordCommands
+
   public let model: BriefViewModel
-  /// The approval a spoken "approve" is waiting on a "yes" for. Any other utterance disarms it.
-  private var awaitingConfirm: String?
+  /// What a spoken "yes" is waiting to send. Any other utterance disarms it.
+  private var awaitingConfirm: PendingAnswer?
+  private let canAnswer: @MainActor () -> Bool
+
+  private enum PendingAnswer {
+    case approve(decisionID: String)
+    case reply(decisionID: String, text: String, choiceIndex: Int?)
+  }
 
   /// A composing brief is polled once, briefly: voice mode should speak promptly, not wait out a compose.
-  public init(briefID: String, api: any BriefAPI, pendingActions: (any PendingActionAPI)?) {
+  /// `canAnswer` is checked before every answer (the app is unlocked and in the foreground).
+  public init(
+    briefID: String, api: any BriefAPI, pendingActions: (any PendingActionAPI)?,
+    canAnswer: @escaping @MainActor () -> Bool = { true }
+  ) {
     model = BriefViewModel(
       api: api, briefID: briefID, pendingActions: pendingActions, pollInterval: .seconds(1),
       pollWindow: .seconds(1))
+    self.canAnswer = canAnswer
   }
 
   /// What voice mode says on opening, and the brief text that seeds the first chat turn (nil when the brief
@@ -31,7 +49,8 @@ public final class BriefVoiceSession {
 
   /// Answers the first decision still waiting on the user, or returns nil so the utterance goes to the chat:
   /// with nothing pending, or when the words are not a triage command. "Archive" is always refused here, since
-  /// briefs have no archive action yet and the chat could not do it either.
+  /// briefs have no archive action yet and the chat could not do it either. Approvals, replies and choices are
+  /// read back and sent only on a "yes"; a deny acts at once.
   public func handle(_ utterance: String) async -> String? {
     let armed = awaitingConfirm
     awaitingConfirm = nil
@@ -39,35 +58,59 @@ public final class BriefVoiceSession {
     let command = BriefVoiceCommand.parse(utterance, options: decision?.question?.options ?? [])
     if command == .archive { return Self.archiveRefusal }
     guard let decision, let command else { return nil }
+    if command != .cancel, !canAnswer() { return Self.lockedRefusal }
     switch command {
     case .archive:
       return Self.archiveRefusal
-    case .confirm, .cancel:
+    case .cancel:
       guard let armed else { return nil }
-      guard command == .confirm else { return join("Okay, not approved.", prompt(for: decision)) }
-      guard let target = model.brief?.decisions.first(where: { $0.id == armed }), isOpen(target) else {
-        return join("That one was already answered.", next())
-      }
-      await model.decide(target, .approve)
-      return approvalOutcome(target)
+      if case .approve = armed { return join("Okay, not approved.", prompt(for: decision)) }
+      return join("Okay, not sent.", prompt(for: decision))
+    case .confirm:
+      guard let armed else { return nil }
+      return await send(armed)
     case .approve:
       guard decision.approval != nil else { return "That one is a question. Say reply and your answer." }
-      awaitingConfirm = decision.id
-      let text = SpokenBriefRenderer.plain(decision.text).trimmingCharacters(in: CharacterSet(charactersIn: ".!?"))
-      return text.isEmpty ? "Approve it? Say yes to confirm." : "Approve \(text)? Say yes to confirm."
+      if let local = model.approvalStates[decision.id], !local.offersDecision {
+        return "That one can't be approved. Say deny to turn it down, or open the brief."
+      }
+      awaitingConfirm = .approve(decisionID: decision.id)
+      let text = spoken(decision.text)
+      return text.isEmpty ? "Approve it? Say yes to go ahead." : "Approve \(text)? Say yes to go ahead."
     case .deny:
       guard decision.approval != nil else { return "That one is a question. Say reply and your answer." }
       await model.decide(decision, .deny)
       return approvalOutcome(decision)
     case .reply(let text):
       guard decision.question != nil else { return "Say approve or deny." }
-      await model.reply(decision, text: text)
-      return replyOutcome(decision)
+      awaitingConfirm = .reply(decisionID: decision.id, text: text, choiceIndex: nil)
+      return "Reply \(spoken(text))? Say yes to send it."
     case .choose(let index):
       guard let options = decision.question?.options, options.indices.contains(index) else { return nil }
-      await model.reply(decision, text: options[index], choiceIndex: index)
-      return replyOutcome(decision)
+      awaitingConfirm = .reply(decisionID: decision.id, text: options[index], choiceIndex: index)
+      return "Choose \(spoken(options[index]))? Say yes to send it."
     }
+  }
+
+  private func send(_ armed: PendingAnswer) async -> String {
+    switch armed {
+    case .approve(let id):
+      guard let target = openDecision(id) else { return join("That one was already answered.", next()) }
+      await model.decide(target, .approve)
+      return approvalOutcome(target)
+    case .reply(let id, let text, let choiceIndex):
+      guard let target = openDecision(id) else { return join("That one was already answered.", next()) }
+      await model.reply(target, text: text, choiceIndex: choiceIndex)
+      return replyOutcome(target)
+    }
+  }
+
+  private func openDecision(_ id: String) -> BriefDecision? {
+    model.brief?.decisions.first { $0.id == id && isOpen($0) }
+  }
+
+  private func spoken(_ text: String) -> String {
+    SpokenBriefRenderer.plain(text).trimmingCharacters(in: CharacterSet(charactersIn: ".!?"))
   }
 
   /// The first decision the user can still answer. One answered (or refused for good) here stays pending
@@ -121,6 +164,12 @@ public enum BriefVoiceCommand: Equatable, Sendable {
   case reply(String)
   case choose(Int)
 
+  /// Commands short enough to be said over a prompt; `parse` maps each of these alone to a command.
+  static let oneWordCommands: Set<String> = [
+    "approve", "approved", "deny", "denied", "reject", "decline", "yes", "yeah", "yep", "confirm", "no", "nope",
+    "cancel",
+  ]
+
   /// The most words a bare command may run to ("approve that one"); longer is treated as conversation.
   static let maxCommandWords = 3
 
@@ -147,10 +196,5 @@ public enum BriefVoiceCommand: Equatable, Sendable {
     }
   }
 
-  private static func normalized(_ text: String) -> [String] {
-    let kept = text.lowercased().unicodeScalars
-      .filter { $0 != "'" && $0 != "\u{2019}" }
-      .map { CharacterSet.alphanumerics.contains($0) ? Character($0) : " " }
-    return String(kept).split(separator: " ").map(String.init)
-  }
+  private static func normalized(_ text: String) -> [String] { SpokenWords.normalized(text) }
 }

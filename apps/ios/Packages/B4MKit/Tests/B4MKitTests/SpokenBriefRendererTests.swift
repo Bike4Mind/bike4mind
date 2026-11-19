@@ -39,7 +39,7 @@ final class SpokenBriefRendererTests: XCTestCase {
         "A busy morning.",
         "Here's what happened. Deploy finished.",
         "Handled for you. Triaged 3 emails.",
-        "2 things need you. Ship the budget. Approve or deny?",
+        "2 things need you. Ship the budget. Approve or deny it?",
       ])
   }
 
@@ -117,7 +117,7 @@ final class SpokenBriefRendererTests: XCTestCase {
     XCTAssertNil(SpokenBriefRenderer.prompt(for: approval("a", "x", .replaced)))
     XCTAssertNil(SpokenBriefRenderer.prompt(for: question("q", "x", .answered)))
     XCTAssertNil(SpokenBriefRenderer.prompt(for: BriefDecision(id: "d", text: "No ref")))
-    XCTAssertEqual(SpokenBriefRenderer.prompt(for: approval("a", "")), "Approve or deny?")
+    XCTAssertEqual(SpokenBriefRenderer.prompt(for: approval("a", "")), "Approve or deny it?")
   }
 
   func testComposingFailedAndUnknownStatuses() {

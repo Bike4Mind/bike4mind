@@ -26,7 +26,7 @@ private actor VoicePendingAPI: PendingActionAPI {
   private var failure: PendingActionFailure?
   private(set) var calls: [PendingActionDecision] = []
 
-  func fail(with failure: PendingActionFailure) { self.failure = failure }
+  func fail(with failure: PendingActionFailure?) { self.failure = failure }
 
   func respond(to target: PendingActionTarget, decision: PendingActionDecision) async throws -> PendingActionResult {
     calls.append(decision)
@@ -54,18 +54,22 @@ private func question(_ id: String, _ text: String, options: [String] = []) -> B
 
 @MainActor
 final class BriefVoiceSessionTests: XCTestCase {
+  private var canAnswer = true
+
   private func make(
     _ fetched: Result<Brief, APIError>
   ) -> (BriefVoiceSession, VoiceBriefAPI, VoicePendingAPI) {
     let api = VoiceBriefAPI(fetched)
     let pending = VoicePendingAPI()
-    return (BriefVoiceSession(briefID: "b1", api: api, pendingActions: pending), api, pending)
+    let session = BriefVoiceSession(
+      briefID: "b1", api: api, pendingActions: pending, canAnswer: { [unowned self] in canAnswer })
+    return (session, api, pending)
   }
 
   func testPrepareSpeaksTheBriefAndSeedsTheFirstTurnWithIt() async {
     let (session, _, _) = make(.success(brief([approval("d1", "Ship the release")])))
     let (opening, context) = await session.prepare()
-    XCTAssertEqual(opening, ["A quiet day.", "One thing needs you. Ship the release. Approve or deny?"])
+    XCTAssertEqual(opening, ["A quiet day.", "One thing needs you. Ship the release. Approve or deny it?"])
     XCTAssertEqual(context, opening.joined(separator: "\n"))
   }
 
@@ -100,7 +104,7 @@ final class BriefVoiceSessionTests: XCTestCase {
   func testApproveAsksForConfirmationAndYesApproves() async {
     let (session, _, pending) = await loaded([approval("d1", "Ship the **release**.")])
     let ask = await session.handle("approve")
-    XCTAssertEqual(ask, "Approve Ship the release? Say yes to confirm.")
+    XCTAssertEqual(ask, "Approve Ship the release? Say yes to go ahead.")
     var calls = await pending.calls
     XCTAssertTrue(calls.isEmpty)
     let done = await session.handle("yes")
@@ -124,7 +128,7 @@ final class BriefVoiceSessionTests: XCTestCase {
     let (session, _, pending) = await loaded([approval("d1", "Ship it")])
     _ = await session.handle("approve")
     let cancelled = await session.handle("no")
-    XCTAssertEqual(cancelled, "Okay, not approved. Ship it. Approve or deny?")
+    XCTAssertEqual(cancelled, "Okay, not approved. Ship it. Approve or deny it?")
     let calls = await pending.calls
     XCTAssertTrue(calls.isEmpty)
   }
@@ -142,12 +146,16 @@ final class BriefVoiceSessionTests: XCTestCase {
   func testRepliesAndChoicesGoToTheQuestion() async {
     let (session, api, _) = await loaded([question("d1", "Which venue?", options: ["Hall"]), question("d2", "When?")])
     let chose = await session.handle("hall")
-    XCTAssertEqual(chose, "Reply sent. Next: When? Say reply and your answer.")
-    let replied = await session.handle("reply Friday at noon")
-    XCTAssertEqual(replied, "Reply sent. That's everything.")
+    XCTAssertEqual(chose, "Choose Hall? Say yes to send it.")
+    let choseSent = await session.handle("yes")
+    XCTAssertEqual(choseSent, "Reply sent. Next: When? Say reply and your answer.")
+    let replied = await session.handle("reply Friday at noon.")
+    XCTAssertEqual(replied, "Reply Friday at noon? Say yes to send it.")
+    let repliedSent = await session.handle("yeah")
+    XCTAssertEqual(repliedSent, "Reply sent. That's everything.")
     let replies = await api.replies
     XCTAssertEqual(replies.map(\.decisionID), ["d1", "d2"])
-    XCTAssertEqual(replies.map(\.text), ["Hall", "Friday at noon"])
+    XCTAssertEqual(replies.map(\.text), ["Hall", "Friday at noon."])
     XCTAssertEqual(replies.map(\.choiceIndex), [0, nil])
   }
 
@@ -174,14 +182,63 @@ final class BriefVoiceSessionTests: XCTestCase {
     await api.set(brief([approval("d1", "Ship it", .approved), approval("d2", "Pay the invoice")]))
     await pending.fail(with: .alreadyResolved)
     let stale = await session.handle("deny")
-    XCTAssertEqual(stale, "That one was already answered. Next: Pay the invoice. Approve or deny?")
+    XCTAssertEqual(stale, "That one was already answered. Next: Pay the invoice. Approve or deny it?")
   }
 
   func testAReplyFailureIsSpoken() async {
     let (session, api, _) = await loaded([question("d1", "When?")])
     await api.failReplies(with: .invalid)
-    let spoken = await session.handle("reply soon")
+    _ = await session.handle("reply soon")
+    let spoken = await session.handle("yes")
     XCTAssertEqual(spoken, BriefReplyFailure.invalid.message)
+  }
+
+  func testAReplyOrAChoiceIsNotSentWithoutAYes() async {
+    let (session, api, _) = await loaded([question("d1", "Which venue?", options: ["Hall", "Garden"])])
+    _ = await session.handle("answer let me think about the garden first")
+    let other = await session.handle("what does the garden cost")
+    XCTAssertNil(other)
+    let chose = await session.handle("garden")
+    XCTAssertEqual(chose, "Choose Garden? Say yes to send it.")
+    let cancelled = await session.handle("no")
+    XCTAssertEqual(cancelled, "Okay, not sent. Which venue? Options: Hall or Garden.")
+    let replies = await api.replies
+    XCTAssertTrue(replies.isEmpty)
+  }
+
+  func testNothingIsAnsweredWhileTheAppCannotAnswer() async {
+    let (session, api, pending) = await loaded([approval("d1", "Ship it"), question("d2", "When?")])
+    _ = await session.handle("approve")
+    canAnswer = false
+    let confirm = await session.handle("yes")
+    XCTAssertEqual(confirm, BriefVoiceSession.lockedRefusal)
+    let deny = await session.handle("deny")
+    XCTAssertEqual(deny, BriefVoiceSession.lockedRefusal)
+    let calls = await pending.calls
+    XCTAssertTrue(calls.isEmpty)
+
+    canAnswer = true
+    _ = await session.handle("deny")
+    _ = await session.handle("reply Friday")
+    canAnswer = false
+    let reply = await session.handle("yes")
+    XCTAssertEqual(reply, BriefVoiceSession.lockedRefusal)
+    let replies = await api.replies
+    XCTAssertTrue(replies.isEmpty)
+  }
+
+  func testARefusedApprovalIsNotOfferedAgainButCanStillBeDenied() async {
+    let (session, _, pending) = await loaded([approval("d1", "Ship it")])
+    await pending.fail(with: .refused("Not allowed"))
+    _ = await session.handle("approve")
+    _ = await session.handle("yes")
+    let again = await session.handle("approve")
+    XCTAssertEqual(again, "That one can't be approved. Say deny to turn it down, or open the brief.")
+    await pending.fail(with: nil)
+    let denied = await session.handle("deny")
+    XCTAssertEqual(denied, "Denied. That's everything.")
+    let calls = await pending.calls
+    XCTAssertEqual(calls, [.approve, .deny])
   }
 
   func testArchiveIsRefusedEvenWithNothingPendingAndOtherWordsGoToTheChat() async {

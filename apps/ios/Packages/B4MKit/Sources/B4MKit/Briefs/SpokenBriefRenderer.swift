@@ -36,7 +36,7 @@ public enum SpokenBriefRenderer {
   public static func prompt(for decision: BriefDecision) -> String? {
     let text = sentence(plain(decision.text))
     if decision.approval?.state == .pending {
-      return join(text, "Approve or deny?")
+      return join(text, "Approve or deny it?")
     }
     guard let question = decision.question, question.state == .open else { return nil }
     let options = question.options.map(plain).filter { !$0.isEmpty }
