@@ -12,6 +12,7 @@ const m = vi.hoisted(() => ({
   publish: vi.fn(),
   slack: vi.fn(),
   settings: vi.fn(),
+  erasureState: vi.fn(),
 }));
 
 const route = vi.hoisted(() => ({
@@ -45,6 +46,7 @@ vi.mock('@server/admin/approvals/service', () => ({
   requestApproval: (...a: unknown[]) => m.requestApproval(...a),
 }));
 vi.mock('@server/users/accountDeletion', () => ({ requestAdminErasure: (...a: unknown[]) => m.requestErasure(...a) }));
+vi.mock('@server/dataSubject/adminErasure', () => ({ readAdminErasureState: (...a: unknown[]) => m.erasureState(...a) }));
 vi.mock('@bike4mind/services', () => ({ adminAuditService: {} }));
 vi.mock('@bike4mind/database', () => ({
   adminAuditLogRepository: {},
@@ -93,6 +95,7 @@ beforeEach(() => {
   m.users = { admin1: { id: 'admin1', isAdmin: true }, u1: { id: 'u1', name: 'Target', email: 't@example.com' } };
   m.policy.mockResolvedValue({ enabled: false, expiryHours: 24 });
   m.requestApproval.mockResolvedValue({ approvalId: 'appr1', status: 'pending', expiresAt: 'later' });
+  m.erasureState.mockResolvedValue({ state: 'none', ownedOrganizations: [] });
   m.record.mockResolvedValue(null);
   m.sendToQueue.mockResolvedValue(undefined);
   m.settings.mockResolvedValue([false, false]);
@@ -382,6 +385,25 @@ describe('deleting an admin account needs approval', () => {
       expect.anything()
     );
     expect(m.requestErasure).not.toHaveBeenCalled();
+  });
+
+  it('answers 409 and files no approval when the admin target already has a deletion pending', async () => {
+    m.erasureState.mockResolvedValue({ state: 'pending', ownedOrganizations: [] });
+    const { call } = await run();
+
+    await expect(call).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.requestApproval).not.toHaveBeenCalled();
+  });
+
+  it('answers 409 with the org-owner code and files no approval when the admin target owns organizations', async () => {
+    m.erasureState.mockResolvedValue({ state: 'none', ownedOrganizations: [{ id: 'o1', name: 'Org' }] });
+    const { call } = await run();
+
+    await expect(call).rejects.toMatchObject({
+      statusCode: 409,
+      details: { code: 'ACCOUNT_DELETION_ORG_OWNER', organizations: [{ id: 'o1', name: 'Org' }] },
+    });
+    expect(m.requestApproval).not.toHaveBeenCalled();
   });
 
   it('gates a delegated admin target too', async () => {
