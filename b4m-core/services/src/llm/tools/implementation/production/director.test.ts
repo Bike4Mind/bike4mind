@@ -346,7 +346,15 @@ describe('production director tools', () => {
     );
     expect(
       await run(productionStoryboardTool, harness, { compositionId: COMPOSITION_ID, shots: [{ keep: 'shot-9' }] })
-    ).toMatch(/^Error: there is no current shot-9 to keep; the current shots are shot-1, shot-2, shot-3/);
+    ).toMatch(
+      /^Error: there is no current shot with id shot-9 to keep \(keep takes an id, not a title\); the current shots are shot-1, shot-2, shot-3/
+    );
+    expect(
+      await run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [{ keep: 'Editor Packshot' }],
+      })
+    ).toMatch(/^Error: there is no current shot with id Editor Packshot to keep .*shot-1, shot-2, shot-3/);
     expect(harness.composition().shots).toEqual(before);
 
     const result = JSON.parse(
@@ -600,7 +608,7 @@ describe('production director tools', () => {
     const result = JSON.parse(
       await run(productionAddAudioTool, harness, { compositionId: COMPOSITION_ID, voiceover: true })
     );
-    expect(result.notes.join(' ')).toContain('the voice line for shot-1 runs 5000 ms');
+    expect(result.notes.join(' ')).toMatch(/the voice line for shot-1 \(".+"\) runs 5000 ms/);
     expect(result.cutLines).toEqual(['shot-1']);
     expect(result.next).toMatch(/^The voice lines of shot-1 are cut short/);
     const voice = harness.composition().timeline.tracks.find(track => track.kind === 'voice');

@@ -25,11 +25,11 @@ const ShotArg = z.object({
     .string()
     .min(1)
     .max(64)
-    .regex(/^[A-Za-z0-9_-]+$/)
     .optional()
     .describe(
-      'A current shot id (e.g. "shot-3") to carry over with its prompt, takes and clip; omit prompt. Use it for ' +
-        'every shot you are not re-imagining. Other fields default to the current ones; voiceLine "" removes it.'
+      'A current shot id (e.g. "shot-3", not its title) to carry over with its prompt, takes and clip; omit ' +
+        'prompt. Use it for every shot you are not re-imagining, in any order: listing kept shots in a new order ' +
+        'moves them. Other fields default to the current ones; voiceLine "" removes it.'
     ),
   title: z.string().trim().min(1).max(limits.shotTitleMaxLength).optional().describe('A short name, e.g. "Hook".'),
   intent: z
@@ -98,7 +98,7 @@ function resolveShot(
   const source = shot.keep ? current.find(candidate => candidate.id === shot.keep) : undefined;
   if (shot.keep && !source) {
     throw new ProductionToolError(
-      `there is no current ${shot.keep} to keep; the current shots are ${
+      `there is no current shot with id ${shot.keep} to keep (keep takes an id, not a title); the current shots are ${
         current.map(candidate => candidate.id).join(', ') || 'none'
       }.`
     );

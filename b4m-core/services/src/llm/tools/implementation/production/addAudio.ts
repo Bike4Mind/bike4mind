@@ -87,7 +87,7 @@ async function makeVoiceover(
     if (!placed || placed.durationMs < line.durationMs) {
       cutLines.push(line.slot.shot.id);
       notes.push(
-        `the voice line for ${line.slot.shot.id} runs ${line.durationMs} ms, longer than the time it has; it is cut ` +
+        `the voice line for ${line.slot.shot.id} ("${line.slot.shot.voiceLine}") runs ${line.durationMs} ms, longer than the time it has; it is cut ` +
           `to ${placed?.durationMs ?? 0} ms. ${fitAdvice(line.slot.shot)}`
       );
     }
@@ -193,7 +193,8 @@ async function addAudio(context: Context, config: ProductionToolConfig, args: Ad
       ? 'The music is still rendering: call production_add_audio again with the same arguments to wait for it.'
       : cutLines.length > 0
         ? `The voice lines of ${cutLines.join(', ')} are cut short (see notes). Fit them and replace the voiceover, ` +
-          'or call production_assemble and tell the user which lines are cut; never say a cut line fits.'
+          'or call production_assemble and tell the user which lines are cut, quoting them from the notes; never ' +
+          'say a cut line fits.'
         : 'Call production_assemble to lay out the cut.',
   });
 }

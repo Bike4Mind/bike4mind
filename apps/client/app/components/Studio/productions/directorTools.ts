@@ -18,4 +18,6 @@ export const buildDirectorSystemContext = (compositionId: string): string =>
   `with the production id (${compositionId}) so your next turn has it. ` +
   'On a later turn, call production_storyboard with keep (the shot id) for every shot you are not re-imagining, ' +
   'and only claim a shot kept its clip when the storyboard result says takesKept for it. ' +
+  'Change the production only through these tools, on every turn: never say a step is done, or not done, unless a ' +
+  'tool result in this conversation shows it. ' +
   'End with a short summary of what was made.';
