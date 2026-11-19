@@ -525,15 +525,15 @@ export async function runLakeResearch(
         }
         const { results: rawHits, servedBy } = outcome;
         // Classification reads the stored URL, so a provider redirect must be resolved here.
-        const resolutions = await Promise.all(
-          rawHits.map(hit => dataLakeResearchService.resolveSearchRedirect(hit.url))
-        );
+        // Sequential on purpose: concurrent requests to the redirect host were mostly refused.
         const resolution = { decoded: 0, followed: 0, unresolved: 0 };
+        const unresolvedDetails: Array<dataLakeResearchService.UnresolvedDetail | { reason: 'unknown' }> = [];
         const seenUrls = new Set<string>();
         const hits: typeof rawHits = [];
-        for (const [index, hit] of rawHits.entries()) {
-          const { url, resolved } = resolutions[index];
+        for (const hit of rawHits) {
+          const { url, resolved, detail } = await dataLakeResearchService.resolveSearchRedirect(hit.url);
           if (resolved !== 'not_redirect') resolution[resolved] += 1;
+          if (resolved === 'unresolved') unresolvedDetails.push(detail ?? { reason: 'unknown' });
           if (seenUrls.has(url)) continue;
           seenUrls.add(url);
           hits.push({ ...hit, url });
@@ -548,6 +548,7 @@ export async function runLakeResearch(
           recencyDays,
           hits: hits.length,
           redirects: resolution,
+          unresolvedDetails,
           hosts: hits.slice(0, LOGGED_SEARCH_HOSTS).map(hit => safeHostname(hit.url)),
         });
         return hits.map(hit => ({ title: hit.title, url: hit.url, snippet: hit.snippet }));

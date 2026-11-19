@@ -736,13 +736,17 @@ describe('runLakeResearch', () => {
         ]),
       };
       h.resolveWebSearchProviders.mockResolvedValue([lead, null]);
-      h.resolveSearchRedirect.mockImplementation(async (url: string) =>
-        url === goto
-          ? { url: 'https://en.wikipedia.org/wiki/Qubit', resolved: 'followed' }
-          : url === stuck
-            ? { url, resolved: 'unresolved' }
-            : { url, resolved: 'not_redirect' }
-      );
+      let inFlight = 0;
+      let maxInFlight = 0;
+      h.resolveSearchRedirect.mockImplementation(async (url: string) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise(resolve => setTimeout(resolve, 1));
+        inFlight -= 1;
+        if (url === goto) return { url: 'https://en.wikipedia.org/wiki/Qubit', resolved: 'followed' };
+        if (url === stuck) return { url, resolved: 'unresolved', detail: { reason: 'status', status: 429 } };
+        return { url, resolved: 'not_redirect' };
+      });
       const hits = searchOnce();
 
       await runLakeResearch('run-1', logger);
@@ -756,9 +760,12 @@ describe('runLakeResearch', () => {
         expect.objectContaining({
           hits: 2,
           redirects: { decoded: 0, followed: 1, unresolved: 1 },
+          unresolvedDetails: [{ reason: 'status', status: 429 }],
           hosts: ['en.wikipedia.org', 'www.google.com'],
         })
       );
+      expect(h.resolveSearchRedirect).toHaveBeenCalledTimes(3);
+      expect(maxInFlight).toBe(1);
     });
 
     it('logs the query, serving provider, levers, hit count and hostnames for the run', async () => {
@@ -784,6 +791,7 @@ describe('runLakeResearch', () => {
           recencyDays: 30,
           hits: 2,
           redirects: { decoded: 0, followed: 0, unresolved: 0 },
+          unresolvedDetails: [],
           hosts: ['arxiv.org', 'www.ieee.org'],
         }
       );
