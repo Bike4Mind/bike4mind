@@ -26,6 +26,7 @@ const query = (value: unknown) => ({
 });
 
 vi.mock('@bike4mind/database', () => ({
+  liveShareTokens: (page: { shareTokens?: unknown[] }) => page.shareTokens ?? [],
   PublishedArtifact: {
     findOne: (...a: unknown[]) => m.findOne(...a),
     exists: (...a: unknown[]) => m.exists(...a),
@@ -226,6 +227,24 @@ describe('republishStoredArtifact', () => {
     expect(set).not.toHaveProperty('accessGate');
     expect(set.previousVersionMeta.sha256Index).toBe('old-sha');
     expect(page.slug).toBe('signup-flow');
+  });
+
+  it('runs the public-link policy check for a public page', async () => {
+    m.findOne.mockReturnValue(query(previousPage));
+    await republishStoredArtifact(base);
+    expect(m.assertPublicationPublicLink).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs the public-link policy check for a private page with a live share link', async () => {
+    m.findOne.mockReturnValue(query({ ...previousPage, visibility: 'private', shareTokens: [{ tokenHash: 'h' }] }));
+    await republishStoredArtifact(base);
+    expect(m.assertPublicationPublicLink).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips the policy check for a private page with no share link', async () => {
+    m.findOne.mockReturnValue(query({ ...previousPage, visibility: 'private' }));
+    await republishStoredArtifact(base);
+    expect(m.assertPublicationPublicLink).not.toHaveBeenCalled();
   });
 
   it('never inserts: a page unpublished since the lookup answers 404 instead of being recreated', async () => {
