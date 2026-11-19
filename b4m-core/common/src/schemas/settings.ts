@@ -64,6 +64,11 @@ import {
 import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
 import { ReleaseNotesConfigSchema } from './releaseNotes';
+import {
+  DEFAULT_STUDIO_RENDER_PRICING,
+  StudioRenderPricingSchema,
+  type StudioRenderPricing,
+} from '../studioComposition/render';
 import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
 import {
   DEFAULT_CHUNK_SIZE_CHANGE_COOLDOWN_HOURS_DEFAULT,
@@ -436,6 +441,7 @@ export const SettingKeySchema = z.enum([
   'EnableStudioImage',
   'EnableStudioProductions',
   'StudioProductionsAudience',
+  'StudioRenderPricing',
   'VectorThreshold',
   'bflApiKey',
   'EnableMCPServer',
@@ -712,6 +718,7 @@ export const SettingKeySchema = z.enum([
 
   // EMAIL ANALYSIS SETTINGS
   'EnableEmailAnalysis',
+  'EnableEmailTriage',
   'EmailAnalysisModel',
   'EmailAnalysisTemperature',
   'EmailAnalysisPrompt',
@@ -2808,6 +2815,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableStudioImage', order: 301 },
       { key: 'EnableStudioProductions', order: 302 },
       { key: 'StudioProductionsAudience', order: 303 },
+      { key: 'StudioRenderPricing', order: 304 },
     ],
   },
   NOTEBOOK: {
@@ -6960,6 +6968,21 @@ export const settingsMap = {
     order: 303,
     dependsOn: 'EnableStudioProductions',
   }),
+  // Read by the render job create path (b4m-core/services/src/renderJobs); snapshotted onto each job at create.
+  StudioRenderPricing: makeObjectSetting<StudioRenderPricing>({
+    key: 'StudioRenderPricing',
+    name: 'Studio Render Pricing',
+    defaultValue: DEFAULT_STUDIO_RENDER_PRICING,
+    description:
+      'JSON price of a Studio Productions export, in USD per started output second for each aspect ratio, e.g. {"usdPerOutputSecond": {"16:9": 0.01, "9:16": 0.01, "1:1": 0.01, "4:5": 0.01}}. Placeholder values until render pricing is decided. A change applies to exports started afterwards.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 304,
+    // The export panel quotes this price to every user; it is a rate card, not a secret.
+    userReadable: true,
+    dependsOn: 'EnableStudioProductions',
+    schema: StudioRenderPricingSchema,
+  }),
   EnablePotionQuest: makeBooleanSetting({
     key: 'EnablePotionQuest',
     name: 'Enable PotionQuest Tools',
@@ -8097,6 +8120,16 @@ export const settingsMap = {
     order: 200,
     // The Integrations page derives the inbound-email analysis capability's status from it.
     userReadable: true,
+  }),
+  EnableEmailTriage: makeBooleanSetting({
+    key: 'EnableEmailTriage',
+    name: 'Enable Email Triage',
+    defaultValue: false,
+    description:
+      'After an ingested email is analyzed, sort it into needs-a-decision, handled or FYI and draft a reply for ' +
+      "decisions, for the owner's next assistant brief. Drafts are never sent. Runs only when analysis runs.",
+    category: 'AI',
+    order: 205,
   }),
   EmailAnalysisModel: makeStringSetting({
     key: 'EmailAnalysisModel',

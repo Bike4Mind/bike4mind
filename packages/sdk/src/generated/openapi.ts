@@ -12,7 +12,7 @@ export interface paths {
     put?: never;
     /**
      * Send a chat message
-     * @description Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`; one whose reasoning model spends its whole output budget thinking is answered with a 422 or 502 (see those responses). Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: "error"`, since the ACK was already sent. A terminal `status: "stopped"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: "error"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure has a classified reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has four members: `insufficient_credits`, `spend_cap_exceeded`, `spend_frozen`, and `free_quest_limit_reached`. `insufficient_credits` and `spend_frozen` are raised as quest errorCodes on this endpoint: a spending pause in force when the request arrives is refused synchronously with a 403, and one that lands after the ACK reaches the quest. A new exhausted QuestMaster start is refused synchronously with 403 before a quest exists; an older queued start can instead settle as an error quest with `free_quest_limit_reached`. `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Organization-policy preflight refusals use 403 with `errorCode: "org_model_not_allowed"` or `"org_tool_not_allowed"`. An explicit-model JWT request can instead be accepted and refused during quest execution: that refusal appears on the 200 `wait: true` body or polled quest as `type: "error"`, without a policy `errorCode`. Check the quest outcome as described above. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.
+     * @description Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`; one whose reasoning model spends its whole output budget thinking is answered with a 422 or 502 (see those responses). Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: "error"`, since the ACK was already sent. A terminal `status: "stopped"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: "error"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure has a classified reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has four members: `insufficient_credits`, `spend_cap_exceeded`, `spend_frozen`, and `free_quest_limit_reached`. `insufficient_credits` and `spend_frozen` are raised as quest errorCodes on this endpoint: a spending pause in force when the request arrives is refused synchronously with a 403, and one that lands after the ACK reaches the quest. A new exhausted QuestMaster start is refused synchronously with 403 before a quest exists; an older queued start can instead settle as an error quest with `free_quest_limit_reached`. `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A turn that prompt moderation refuses settles as `type: "error"` with `errorCode: "content_blocked"` and the refusal text in `reply`, on the 200 `wait: true` body and on the polled quest alike; do not resend it unchanged. A caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Organization-policy preflight refusals use 403 with `errorCode: "org_model_not_allowed"` or `"org_tool_not_allowed"`. An explicit-model JWT request can instead be accepted and refused during quest execution: that refusal appears on the 200 `wait: true` body or polled quest as `type: "error"`, without a policy `errorCode`. Check the quest outcome as described above. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.
      */
     post: operations['sendChatMessage'];
     delete?: never;
@@ -451,7 +451,7 @@ export interface paths {
     };
     /**
      * Get a brief
-     * @description Reads one brief. Decision items that reference an agent approval carry its `questId` and `pendingActionTs`; answer it through the pending-actions endpoints. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call.
+     * @description Reads one brief. Decision items that reference an agent approval carry its `questId` and `pendingActionTs`; answer it through the pending-actions endpoints. Items triaged from an ingested email carry a `source`, and an email decision may carry a `draftReply` for you to review; nothing sends it. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call.
      */
     get: operations['getBrief'];
     put?: never;
@@ -735,7 +735,7 @@ export interface paths {
     };
     /**
      * Get what a generated file was made from and into
-     * @description Returns the trail around a file: `ancestors` (the file itself first, then what it was made from, walked up to 8 generations and 32 files) and `children` (up to 24 readable files made directly from it, newest first), with one `edges` entry per link naming the `role` the parent played (`first_frame`, `last_frame`, `reference`, `style`, `extend_of`, `variation_of`, `edit_source`, `mask`, `scene_video`, `scene_audio`, `scene_cover`). An ancestor you cannot read is returned `redacted` with only its id and depth, and its own inputs are not followed. `request` on a node is the stored generation request, for re-running it with different settings. Safe (GET) requests are exempt from the per-day API-key quota; only the per-minute burst limit applies. Authenticate with an API key (`b4m_live_`) carrying `files:read`, or a JWT.
+     * @description Returns the trail around a file: `ancestors` (the file itself first, then what it was made from, walked up to 8 generations and 32 files) and `children` (up to 24 readable files made directly from it, newest first), with one `edges` entry per link naming the `role` the parent played (`first_frame`, `last_frame`, `reference`, `style`, `extend_of`, `variation_of`, `edit_source`, `mask`, `scene_video`, `scene_audio`, `scene_cover`, `timeline_clip`). An ancestor you cannot read is returned `redacted` with only its id and depth, and its own inputs are not followed. `request` on a node is the stored generation request, for re-running it with different settings. Safe (GET) requests are exempt from the per-day API-key quota; only the per-minute burst limit applies. Authenticate with an API key (`b4m_live_`) carrying `files:read`, or a JWT.
      */
     get: operations['getFileLineage'];
     put?: never;
@@ -2430,7 +2430,7 @@ export interface components {
       name?: string;
     };
     /**
-     * @description Outcome fields of the quest polled at `GET /api/v1/quests/{id}` after this ACK. A finished turn that failed is `status: "done"` with `type: "error"` and the failure text in `reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check `type` first, and also treat a terminal `status: "stopped"` (a missing session, a user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an optional refinement of `type: "error"`, present only for a classified failure; credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use, and a spending pause that lands after the ACK arrives as `spend_frozen`. An older queued QuestMaster start can instead settle with `free_quest_limit_reached`; new exhausted starts are refused synchronously with 403 before a quest exists. `QUEST_ERROR_CODES` has four members; its other code is `spend_cap_exceeded`, but no current throw site on this endpoint raises it as a quest errorCode: its only one, the embed chat route's pre-flight 422, fires outside the process try/catch that would classify it onto the quest. Most `type: "error"` turns - an abort, a provider timeout or overload - have NO `errorCode`; its absence does not mean success, only that the failure is unclassified. A recovered stuck quest that still has renderable content is not a failure at all: it keeps `type: "message"` even though it did not finish, so a caller gets the content rather than an error. `fallbackInfo` is present only when the requested model failed and another model produced the reply: `fallbackModel` answered, `primaryModel` is what was asked for, and `reason` is the error from the first failed attempt on the requested model. The poll body carries further fields not modelled here, including `images`, `files`, `toolPayloads`, `promptMeta`, and the attachment report (`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.
+     * @description Outcome fields of the quest polled at `GET /api/v1/quests/{id}` after this ACK. A finished turn that failed is `status: "done"` with `type: "error"` and the failure text in `reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check `type` first, and also treat a terminal `status: "stopped"` (a missing session, a user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an optional refinement of `type: "error"`, present only for a classified failure; credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use, and a spending pause that lands after the ACK arrives as `spend_frozen`. An older queued QuestMaster start can instead settle with `free_quest_limit_reached`; new exhausted starts are refused synchronously with 403 before a quest exists. `QUEST_ERROR_CODES` has four members; its other code is `spend_cap_exceeded`, but no current throw site on this endpoint raises it as a quest errorCode: its only one, the embed chat route's pre-flight 422, fires outside the process try/catch that would classify it onto the quest. A turn that prompt moderation refuses arrives as `content_blocked`; do not resend it unchanged. Most `type: "error"` turns - an abort, a provider timeout or overload - have NO `errorCode`; its absence does not mean success, only that the failure is unclassified. A recovered stuck quest that still has renderable content is not a failure at all: it keeps `type: "message"` even though it did not finish, so a caller gets the content rather than an error. `fallbackInfo` is present only when the requested model failed and another model produced the reply: `fallbackModel` answered, `primaryModel` is what was asked for, and `reason` is the error from the first failed attempt on the requested model. The poll body carries further fields not modelled here, including `images`, `files`, `toolPayloads`, `promptMeta`, and the attachment report (`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.
      * @example {
      *       "id": "664f1c2b9a1e4d0012ab34cd",
      *       "status": "done",
@@ -2446,7 +2446,8 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached' | 'content_blocked';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -2476,7 +2477,8 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached' | 'content_blocked';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -2508,7 +2510,8 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached' | 'content_blocked';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -2533,7 +2536,12 @@ export interface components {
           /** @enum {string} */
           type: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
           /** @enum {string} */
-          errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+          errorCode?:
+            | 'insufficient_credits'
+            | 'spend_cap_exceeded'
+            | 'spend_frozen'
+            | 'free_quest_limit_reached'
+            | 'content_blocked';
           tools?: {
             /** @enum {string} */
             toolMode?: 'fast' | 'smart';
@@ -2595,7 +2603,12 @@ export interface components {
           /** @enum {string} */
           type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
           /** @enum {string} */
-          errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+          errorCode?:
+            | 'insufficient_credits'
+            | 'spend_cap_exceeded'
+            | 'spend_frozen'
+            | 'free_quest_limit_reached'
+            | 'content_blocked';
           tools?: {
             /** @enum {string} */
             toolMode?: 'fast' | 'smart';
@@ -5248,22 +5261,50 @@ export interface components {
         /** @description Stable within the brief. */
         id: string;
         text: string;
+        /** @description The record the item came from, when it was not agent activity. */
+        source?: {
+          /** @enum {string} */
+          kind: 'email';
+          /** @description The ingested email the item was triaged from. */
+          emailId: string;
+        };
       }[];
       handled: {
         /** @description Stable within the brief. */
         id: string;
         text: string;
+        /** @description The record the item came from, when it was not agent activity. */
+        source?: {
+          /** @enum {string} */
+          kind: 'email';
+          /** @description The ingested email the item was triaged from. */
+          emailId: string;
+        };
       }[];
       decisions: {
         /** @description Stable within the brief. */
         id: string;
         text: string;
+        /** @description The record the item came from, when it was not agent activity. */
+        source?: {
+          /** @enum {string} */
+          kind: 'email';
+          /** @description The ingested email the item was triaged from. */
+          emailId: string;
+        };
         /** @description Present when the decision is an agent approval. The approval may have lapsed or been answered since the brief was composed; the pending-actions endpoints are authoritative. */
         approval?: {
           questId: string;
           /** @description The notebook holding the quest, where a client shows the approval card. */
           sessionId: string;
           pendingActionTs: number;
+        };
+        /** @description Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text. */
+        draftReply?: {
+          /** @description The source email's sender as received, unverified. */
+          to: string;
+          subject: string;
+          body: string;
         };
       }[];
     };
@@ -5286,22 +5327,50 @@ export interface components {
           /** @description Stable within the brief. */
           id: string;
           text: string;
+          /** @description The record the item came from, when it was not agent activity. */
+          source?: {
+            /** @enum {string} */
+            kind: 'email';
+            /** @description The ingested email the item was triaged from. */
+            emailId: string;
+          };
         }[];
         handled: {
           /** @description Stable within the brief. */
           id: string;
           text: string;
+          /** @description The record the item came from, when it was not agent activity. */
+          source?: {
+            /** @enum {string} */
+            kind: 'email';
+            /** @description The ingested email the item was triaged from. */
+            emailId: string;
+          };
         }[];
         decisions: {
           /** @description Stable within the brief. */
           id: string;
           text: string;
+          /** @description The record the item came from, when it was not agent activity. */
+          source?: {
+            /** @enum {string} */
+            kind: 'email';
+            /** @description The ingested email the item was triaged from. */
+            emailId: string;
+          };
           /** @description Present when the decision is an agent approval. The approval may have lapsed or been answered since the brief was composed; the pending-actions endpoints are authoritative. */
           approval?: {
             questId: string;
             /** @description The notebook holding the quest, where a client shows the approval card. */
             sessionId: string;
             pendingActionTs: number;
+          };
+          /** @description Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text. */
+          draftReply?: {
+            /** @description The source email's sender as received, unverified. */
+            to: string;
+            subject: string;
+            body: string;
           };
         }[];
       }[];
@@ -5323,22 +5392,50 @@ export interface components {
         /** @description Stable within the brief. */
         id: string;
         text: string;
+        /** @description The record the item came from, when it was not agent activity. */
+        source?: {
+          /** @enum {string} */
+          kind: 'email';
+          /** @description The ingested email the item was triaged from. */
+          emailId: string;
+        };
       }[];
       handled: {
         /** @description Stable within the brief. */
         id: string;
         text: string;
+        /** @description The record the item came from, when it was not agent activity. */
+        source?: {
+          /** @enum {string} */
+          kind: 'email';
+          /** @description The ingested email the item was triaged from. */
+          emailId: string;
+        };
       }[];
       decisions: {
         /** @description Stable within the brief. */
         id: string;
         text: string;
+        /** @description The record the item came from, when it was not agent activity. */
+        source?: {
+          /** @enum {string} */
+          kind: 'email';
+          /** @description The ingested email the item was triaged from. */
+          emailId: string;
+        };
         /** @description Present when the decision is an agent approval. The approval may have lapsed or been answered since the brief was composed; the pending-actions endpoints are authoritative. */
         approval?: {
           questId: string;
           /** @description The notebook holding the quest, where a client shows the approval card. */
           sessionId: string;
           pendingActionTs: number;
+        };
+        /** @description Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text. */
+        draftReply?: {
+          /** @description The source email's sender as received, unverified. */
+          to: string;
+          subject: string;
+          body: string;
         };
       }[];
     };
@@ -5653,7 +5750,12 @@ export interface components {
         /** @enum {string} */
         type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
         /** @enum {string} */
-        errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+        errorCode?:
+          | 'insufficient_credits'
+          | 'spend_cap_exceeded'
+          | 'spend_frozen'
+          | 'free_quest_limit_reached'
+          | 'content_blocked';
         reply?: string | null;
         replies?: string[];
         fallbackInfo?: {
@@ -5859,7 +5961,8 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached' | 'content_blocked';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -6264,7 +6367,7 @@ export interface components {
       edges: {
         parent_id: string;
         child_id: string;
-        /** @description How the parent was used. Known values: first_frame, last_frame, reference, style, extend_of, variation_of, edit_source, mask, scene_video, scene_audio, scene_cover. Treat others as generic. */
+        /** @description How the parent was used. Known values: first_frame, last_frame, reference, style, extend_of, variation_of, edit_source, mask, scene_video, scene_audio, scene_cover, timeline_clip. Treat others as generic. */
         role: string;
       }[];
       truncated: boolean;
@@ -7010,7 +7113,8 @@ export interface components {
       /** @enum {string} */
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached' | 'content_blocked';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -7229,7 +7333,12 @@ export interface components {
          * @description Machine-readable failure class, present only on `type: "error"` turns that have one.
          * @enum {string}
          */
-        errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+        errorCode?:
+          | 'insufficient_credits'
+          | 'spend_cap_exceeded'
+          | 'spend_frozen'
+          | 'free_quest_limit_reached'
+          | 'content_blocked';
         /**
          * Format: date-time
          * @description When the turn started; the sort key of the listing.

@@ -3636,7 +3636,7 @@
   },
   "apps/workers/src/events/stripe/customerSubscriptionUpdated.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 81
+      "count": 80
     }
   },
   "apps/workers/src/events/stripe/invoicePaymentSucceeded.test.ts": {
@@ -4236,11 +4236,6 @@
   "b4m-core/services/src/llm/ImageGeneration.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 52
-    }
-  },
-  "b4m-core/services/src/llm/ImageGeneration.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 15
     }
   },
   "b4m-core/services/src/llm/QuestMasterHistoryBudget.test.ts": {

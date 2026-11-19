@@ -91,6 +91,7 @@ import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index'
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { runDecisionTool } from '@bike4mind/server-utils/decisions/runDecisionTool';
 import { executionTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
@@ -1135,6 +1136,7 @@ async function runExecution(
     // as the HTTP doors do through apiKeyAuth.
     const storedUser = await User.findById(execution.userId);
     if (!storedUser) throw new Error(`User ${execution.userId} not found`);
+    await resolveRoleAdminPermissions(storedUser);
     const user = execution.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
     const thinkingVisibility = await resolveThinkingVisibility(user as IUserDocument);
 
@@ -4379,6 +4381,7 @@ async function processSubagentDispatch(
       });
       return;
     }
+    await resolveRoleAdminPermissions(storedUser);
     const user = child.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
     const thinkingVisibility = await resolveThinkingVisibility(user as IUserDocument);
     const loadedSession = await sessionRepository.findById(child.sessionId);

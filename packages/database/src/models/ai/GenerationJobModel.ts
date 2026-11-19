@@ -51,6 +51,7 @@ const GenerationJobSchema = new Schema<IGenerationJobDocument>(
         message: { type: String, required: true },
         providerStatus: { type: Number },
         retryAfterSeconds: { type: Number },
+        cutOffByStepDeadline: { type: Boolean },
       },
       { _id: false }
     ),
@@ -220,13 +221,14 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
     await this.jobModel.updateOne({ _id: id }, { $set: { settledCredits } });
   }
 
-  async listByRequester({ requestedBy, kind, state, source, beforeId, limit }: ListByRequesterQuery) {
+  async listByRequester({ requestedBy, kind, state, source, beforeId, compositionId, limit }: ListByRequesterQuery) {
     const docs = await this.jobModel
       .find({
         requestedBy,
         kind,
         ...(state && { state }),
         ...(source && { source }),
+        ...(compositionId && { 'payload.request.compositionId': compositionId }),
         ...(beforeId && { _id: { $lt: new mongoose.Types.ObjectId(beforeId) } }),
       })
       .sort({ _id: -1 })

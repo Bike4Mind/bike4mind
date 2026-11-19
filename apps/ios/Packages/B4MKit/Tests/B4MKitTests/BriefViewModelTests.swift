@@ -115,7 +115,7 @@ final class BriefViewModelTests: XCTestCase {
     XCTAssertEqual(model.brief?.status, .composing)
     XCTAssertFalse(model.isComposing)
     let sleeps = await recorder.count
-    XCTAssertEqual(sleeps, 45)
+    XCTAssertEqual(sleeps, 15)
   }
 
   func testComposeRequestFailureIsReported() async {
@@ -192,5 +192,14 @@ final class BriefViewModelTests: XCTestCase {
     XCTAssertEqual(model.brief?.status, .unknown("archived"))
     let sleeps = await recorder.count
     XCTAssertEqual(sleeps, 0)
+  }
+
+  func testARateLimitedPollWaitsAndKeepsPolling() async {
+    let api = FakeBriefAPI()
+    await api.set(fetches: [.failure(.rateLimited), .failure(.rateLimited), .success(makeBrief(status: .ready))])
+    let model = model(api)
+    await model.composeNow()
+    XCTAssertEqual(model.brief?.status, .ready)
+    XCTAssertEqual(model.state, .loaded)
   }
 }

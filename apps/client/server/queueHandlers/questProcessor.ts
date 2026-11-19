@@ -35,6 +35,7 @@ import {
   scopedSettingsRepository,
   usageEventRepository,
 } from '@bike4mind/database';
+import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
 import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitEvents';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
@@ -47,6 +48,7 @@ import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from '@bike4mind/server-utils/queueHandlers/latticeChatTools';
 import { adminAssistantToolDefinitions } from '@server/adminAssistant';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
 import { coreTutorialTurns } from '@bike4mind/server-utils/tutorials/chatTurns';
@@ -141,6 +143,7 @@ export const getStaticOptions = () => {
       projects: projectRepository,
       organizations: organizationRepository,
       spendFreezes: spendFreezeRepository,
+      userApiKeys: userApiKeyRepository,
       mcpServers: mcpServerRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
       recordLimitEvent: recordUserLimitEvent,
@@ -326,6 +329,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
   logger.debug('User and session queries completed', { durationMs: Date.now() - queryStartTime });
 
   if (!storedUser) throw new NotFoundError('User not found');
+  await resolveRoleAdminPermissions(storedUser);
 
   logger.updateMetadata({
     userId: params.userId,

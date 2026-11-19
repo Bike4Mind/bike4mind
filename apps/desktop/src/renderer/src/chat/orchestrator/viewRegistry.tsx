@@ -2,6 +2,7 @@ import type { ComponentType, ReactNode } from 'react';
 import { Aquarium } from './aquarium/Aquarium';
 import { BoardView } from './BoardView';
 import { Constellation } from './Constellation';
+import { OfficeView } from './office/OfficeView';
 import type { OrchestratorViewProps } from './OrchestratorStage';
 import type { OrchestratorViewId } from './orchestratorPrefs';
 import { snapshotView } from './snapshotView';
@@ -26,6 +27,7 @@ const AquariumView = snapshotView(Aquarium, { displayName: 'AquariumView', pause
 export const ORCHESTRATOR_VIEW_COMPONENTS: Record<OrchestratorViewId, ComponentType<OrchestratorViewProps>> = {
   tavern: TavernView,
   aquarium: AquariumView,
+  office: OfficeView,
   board: BoardView,
   table: TableView,
   'tile-wall': TileWallView,

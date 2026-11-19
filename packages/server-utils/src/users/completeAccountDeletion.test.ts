@@ -73,6 +73,7 @@ const users = {
 };
 // Stands in for apps/client/server/dataSubject/erasureRegistry.ts: classify, then plan; audit re-plans.
 const erasureRegistry: ErasureRegistry = {
+  assertReady: vi.fn(),
   async scope(_subject, assertLease) {
     h.assertClassified(['Alpha', 'Beta']);
     return h.collections(assertLease);
@@ -294,6 +295,17 @@ describe('completeAccountDeletion', () => {
     await expect(complete()).rejects.toThrow('purge lease lost');
     expect(h.hardDeleteUser).not.toHaveBeenCalled();
     expect(h.sendComplete).not.toHaveBeenCalled();
+  });
+
+  it('purges and claims nothing when the registry is not ready', async () => {
+    vi.mocked(erasureRegistry.assertReady).mockImplementation(() => {
+      throw new Error('registry invalid');
+    });
+    await expect(complete()).rejects.toThrow('registry invalid');
+    expect(h.claimUser).not.toHaveBeenCalled();
+    for (const purge of [h.deleteSoleOwned, h.purgeFiles, h.purgeContent, h.redactStripe, h.hardDeleteUser]) {
+      expect(purge).not.toHaveBeenCalled();
+    }
   });
 
   it('refuses an owner of an organization with other members before claiming the purge', async () => {

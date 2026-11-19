@@ -985,7 +985,7 @@ export interface DesktopApi {
     addContextDirectory(sessionId: string, path?: string): Promise<ShareDirectoryResult>;
     removeContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null>;
     /** Null when the session is gone (deleted in another window, or a stale id). */
-    getSession(sessionId: string): Promise<ChatSession | null>;
+    getSession(sessionId: string, viewed?: boolean): Promise<ChatSession | null>;
     renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
     deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
     inspectWorktreeRemoval(sessionId: string): Promise<WorktreeRemoval | null>;

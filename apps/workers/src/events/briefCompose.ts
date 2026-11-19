@@ -1,8 +1,10 @@
 import { withEventContext } from '@workers/utils/eventContext';
+import { loadPendingBriefEmails } from './loadPendingBriefEmails';
 import { BriefEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   agentExecutionRepository,
   assistantBriefRepository,
+  emailTriageItemRepository,
   questRepository,
   userRepository,
   assistantInstructionRepository,
@@ -18,6 +20,7 @@ import { recordSessionOperationalUsage } from '@workers/events/recordSessionOper
 import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
 import {
   assembleBrief,
+  briefedEmailIds,
   briefPushBody,
   buildBriefPrompt,
   emptyBrief,
@@ -30,8 +33,8 @@ import {
  * `brief.compose` consumer: composes one user's brief (POST /api/v1/briefs creates the `composing`
  * row and publishes the event), stores it and pushes `brief_ready`.
  *
- * Composition is one pass of the platform's operations model over the user's recent agent runs and the
- * approvals still waiting on them; there is no tool loop. Failures settle the row as `failed` so a
+ * Composition is one pass of the platform's operations model over the user's recent agent runs, the
+ * approvals still waiting on them and counts of their triaged email; there is no tool loop. Failures settle the row as `failed` so a
  * polling client stops waiting, and are never rethrown: a retry cannot fix a refused balance or a
  * malformed reply, and the user can simply compose again.
  */
@@ -47,7 +50,7 @@ type LogLike = Pick<Logger, 'info' | 'warn' | 'error'>;
 export type BriefComposeDeps = {
   now: () => Date;
   users: { findById(id: string): Promise<{ id: string } | null> };
-  briefs: Pick<typeof assistantBriefRepository, 'findById' | 'markReady' | 'markFailed'>;
+  briefs: Pick<typeof assistantBriefRepository, 'findById' | 'markReady' | 'markFailed' | 'removeEmailSourcedItems'>;
   loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefActivity>;
   /** Whether the call may run: 'ok', or why not (AI access held, or the balance cannot cover it). */
   canCompose(userId: string): Promise<'ok' | 'ai_access_held' | 'insufficient_credits'>;
@@ -56,6 +59,8 @@ export type BriefComposeDeps = {
   /** The user's standing instruction texts. A failing load means the brief is composed without them. */
   loadInstructions(userId: string): Promise<string[]>;
   push(event: PushNotificationEvent): Promise<void>;
+  /** `markBriefed` records the triage items a ready brief carried; the rest stay pending for the next brief. */
+  emails: Pick<typeof emailTriageItemRepository, 'markBriefed' | 'storedEmailIds'>;
   logger: LogLike;
 };
 
@@ -108,8 +113,11 @@ export async function composeBrief(deps: BriefComposeDeps, input: { briefId: str
       composed = emptyBrief();
     }
 
-    const settled = await briefs.markReady(input.briefId, composed, deps.now());
+    const composedAt = deps.now();
+    const settled = await briefs.markReady(input.briefId, composed, composedAt);
     if (!settled) return;
+
+    await settleBriefedEmails(deps, input.userId, briefedEmailIds(composed), composedAt);
 
     await deps.push({
       userId: input.userId,
@@ -126,6 +134,28 @@ export async function composeBrief(deps: BriefComposeDeps, input: { briefId: str
   }
 }
 
+/**
+ * Runs after the brief is stored, and never throws so the push still goes out: an unmarked item is carried into
+ * the next brief again rather than lost. The two steps are independent, so a failed mark still cleans up. An email deleted while this brief composed has lost its triage item by
+ * now or will be pulled by its delete route, which removes triage items before brief items
+ * (apps/client/pages/api/users/[id]/ingested-emails.ts).
+ */
+async function settleBriefedEmails(deps: BriefComposeDeps, userId: string, emailIds: string[], at: Date) {
+  if (emailIds.length === 0) return;
+  try {
+    await deps.emails.markBriefed(userId, emailIds, at);
+  } catch (error) {
+    deps.logger.error('[Brief] could not mark the briefed emails', { userId, error });
+  }
+  try {
+    const stored = new Set(await deps.emails.storedEmailIds(userId, emailIds));
+    const deleted = emailIds.filter(id => !stored.has(id));
+    if (deleted.length > 0) await deps.briefs.removeEmailSourcedItems(userId, deleted);
+  } catch (error) {
+    deps.logger.error('[Brief] could not drop brief items of deleted emails', { userId, error });
+  }
+}
+
 async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefActivity> {
   const { items } = await agentExecutionRepository.findByUserIdPaginated(
     brief.userId,
@@ -138,6 +168,8 @@ async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefAct
     now.getTime() - APPROVAL_TTL_MS,
     MAX_APPROVALS
   );
+  // Pending rather than windowed: an item a failed brief or a section cap left out is carried to the next brief.
+  const emails = await loadPendingBriefEmails(brief.userId, brief.periodEnd);
 
   return {
     periodStart: brief.periodStart,
@@ -155,6 +187,14 @@ async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefAct
       pendingActionTs: action.ts,
       tool: action.tool,
       summary: JSON.stringify(action.params ?? {}).slice(0, APPROVAL_SUMMARY_LIMIT),
+    })),
+    emails: emails.map(item => ({
+      emailId: item.emailId,
+      kind: item.kind,
+      summary: item.summary,
+      ...(item.draftReply && {
+        draftReply: { to: item.draftReply.to, subject: item.draftReply.subject, body: item.draftReply.body },
+      }),
     })),
   };
 }
@@ -204,6 +244,7 @@ export const handler = withEventContext(async (event, logger) => {
         return reply;
       },
       push: pushEvent => publishPushNotification(pushEvent, logger),
+      emails: emailTriageItemRepository,
       logger,
     },
     input
