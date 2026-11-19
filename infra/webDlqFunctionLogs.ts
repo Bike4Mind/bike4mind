@@ -9,6 +9,7 @@ import './eventBus';
 import './imageModerationReviewSweep';
 import './llm';
 import './organizationRetention';
+import './sideAppHealthAlerts';
 import './youngAccountSpendAlert';
 import { deadLetterRuleTargetArns } from './eventBusDeadLetter';
 import { web } from './web';

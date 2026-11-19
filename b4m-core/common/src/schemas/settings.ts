@@ -64,6 +64,11 @@ import {
 import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
 import { ReleaseNotesConfigSchema } from './releaseNotes';
+import {
+  DEFAULT_STUDIO_RENDER_PRICING,
+  StudioRenderPricingSchema,
+  type StudioRenderPricing,
+} from '../studioComposition/render';
 import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
 import {
   DEFAULT_CHUNK_SIZE_CHANGE_COOLDOWN_HOURS_DEFAULT,
@@ -436,6 +441,7 @@ export const SettingKeySchema = z.enum([
   'EnableStudioImage',
   'EnableStudioProductions',
   'StudioProductionsAudience',
+  'StudioRenderPricing',
   'VectorThreshold',
   'bflApiKey',
   'EnableMCPServer',
@@ -2809,6 +2815,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableStudioImage', order: 301 },
       { key: 'EnableStudioProductions', order: 302 },
       { key: 'StudioProductionsAudience', order: 303 },
+      { key: 'StudioRenderPricing', order: 304 },
     ],
   },
   NOTEBOOK: {
@@ -6960,6 +6967,21 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 303,
     dependsOn: 'EnableStudioProductions',
+  }),
+  // Read by the render job create path (b4m-core/services/src/renderJobs); snapshotted onto each job at create.
+  StudioRenderPricing: makeObjectSetting<StudioRenderPricing>({
+    key: 'StudioRenderPricing',
+    name: 'Studio Render Pricing',
+    defaultValue: DEFAULT_STUDIO_RENDER_PRICING,
+    description:
+      'JSON price of a Studio Productions export, in USD per started output second for each aspect ratio, e.g. {"usdPerOutputSecond": {"16:9": 0.01, "9:16": 0.01, "1:1": 0.01, "4:5": 0.01}}. Placeholder values until render pricing is decided. A change applies to exports started afterwards.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 304,
+    // The export panel quotes this price to every user; it is a rate card, not a secret.
+    userReadable: true,
+    dependsOn: 'EnableStudioProductions',
+    schema: StudioRenderPricingSchema,
   }),
   EnablePotionQuest: makeBooleanSetting({
     key: 'EnablePotionQuest',

@@ -476,23 +476,6 @@ export class CreditTransactionRepository
       .exec();
   }
 
-  async queryAdminAdjustmentsPage(options: { days?: number; limit: number; skip: number }): Promise<ILedgerPage> {
-    const query: Record<string, unknown> = { ...ADMIN_ADJUSTMENT_FILTER };
-
-    if (options.days !== undefined) {
-      const from = new Date();
-      from.setDate(from.getDate() - options.days);
-      query.createdAt = { $gte: from };
-    }
-
-    const [data, total] = await Promise.all([
-      this.model.find(query).sort({ createdAt: -1 }).skip(options.skip).limit(options.limit).exec(),
-      this.model.countDocuments(query),
-    ]);
-
-    return { data, total };
-  }
-
   /**
    * One keyset page of an owner's ledger, newest first by {createdAt, _id}. Pass the last row of the
    * previous page as `after` to continue strictly past it. Rides the {ownerId, ownerType, createdAt, _id}
