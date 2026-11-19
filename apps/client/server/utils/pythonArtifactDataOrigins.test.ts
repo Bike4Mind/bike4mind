@@ -9,9 +9,11 @@ vi.mock('@bike4mind/database', () => ({
   connectDB: () => state.connect(),
   adminSettingsRepository: {},
 }));
+// EnableArtifacts falls back to its schema default (on), as the real getSettingsValue does.
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: async () => state.settings,
-  getSettingsValue: (key: string, settings: Record<string, unknown>) => settings[key],
+  getSettingsValue: (key: string, settings: Record<string, unknown>) =>
+    key in settings ? settings[key] : key === 'EnableArtifacts' ? true : undefined,
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://db.example.com/%STAGE%', STAGE: 'test' },
@@ -36,6 +38,11 @@ describe('loadPythonArtifactDataOrigins', () => {
   it('returns the canonical list for a valid stored value', async () => {
     state.settings = { pythonArtifactDataOrigins: ['https://Data.example.org/'] };
     await expect(loadPythonArtifactDataOrigins()).resolves.toEqual(['https://data.example.org']);
+  });
+
+  it('returns nothing while Artifacts is turned off', async () => {
+    state.settings = { EnableArtifacts: false, pythonArtifactDataOrigins: ['https://data.example.org'] };
+    await expect(loadPythonArtifactDataOrigins()).resolves.toEqual([]);
   });
 
   it('returns nothing when the setting is unset', async () => {

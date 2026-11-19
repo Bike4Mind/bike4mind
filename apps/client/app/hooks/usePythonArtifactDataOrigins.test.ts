@@ -36,13 +36,13 @@ describe('usePythonArtifactDataOrigins', () => {
 });
 
 describe('describePythonNetworkAccess', () => {
-  it('says there is no network when nothing is listed', () => {
-    expect(describePythonNetworkAccess([])).toBe('Cannot access the network');
+  it('names only the package CDN when nothing is listed', () => {
+    expect(describePythonNetworkAccess([])).toBe('Network access is limited to the Python package CDN');
   });
 
   it('names every listed origin', () => {
     expect(describePythonNetworkAccess(['https://data.example.org', 'https://stats.example.net'])).toBe(
-      'Network access is limited to reading data from https://data.example.org, https://stats.example.net'
+      'Network access is limited to the Python package CDN and reading data from https://data.example.org, https://stats.example.net'
     );
   });
 });

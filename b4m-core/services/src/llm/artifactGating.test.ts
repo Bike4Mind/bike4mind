@@ -1,6 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { ARTIFACT_EMISSION_PROMPT } from '@bike4mind/common';
-import { buildArtifactEmissionMessages, resolveArtifactsEnabled, withArtifactDataOrigins } from './artifactGating';
+import {
+  buildArtifactEmissionMessages,
+  dataOriginReservedHosts,
+  resolveArtifactsEnabled,
+  withArtifactDataOrigins,
+} from './artifactGating';
 import { buildTaggedContextMessages } from './systemPromptSources';
 
 describe('resolveArtifactsEnabled', () => {
@@ -68,7 +73,11 @@ describe('artifact-emission wiring into the assembled system messages', () => {
 });
 
 describe('withArtifactDataOrigins', () => {
-  const APP_URL = 'https://app.example.com';
+  const RESERVED = dataOriginReservedHosts({ APP_URL: 'https://app.example.com' });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
 
   it.each([
     ['unset', undefined],
@@ -76,14 +85,24 @@ describe('withArtifactDataOrigins', () => {
     ['invalid', ['https://data.example.org', 'http://plain.example.org']],
     ["naming the app's own site", ['https://api.example.com']],
   ])('returns the default prompt byte for byte when the list is %s', (_label, stored) => {
-    expect(withArtifactDataOrigins(ARTIFACT_EMISSION_PROMPT, stored, APP_URL)).toBe(ARTIFACT_EMISSION_PROMPT);
+    expect(withArtifactDataOrigins(ARTIFACT_EMISSION_PROMPT, stored, RESERVED)).toBe(ARTIFACT_EMISSION_PROMPT);
+  });
+
+  it('reserves the deployment site from SERVER_DOMAIN where APP_URL is not set', () => {
+    vi.stubEnv('APP_URL', '');
+    vi.stubEnv('CHAT_COMPLETION_PUBLIC_URL', '');
+    vi.stubEnv('NEXT_PUBLIC_CDN_URL', '');
+    vi.stubEnv('SERVER_DOMAIN', 'example.com');
+    expect(withArtifactDataOrigins(ARTIFACT_EMISSION_PROMPT, ['https://api.example.com'])).toBe(
+      ARTIFACT_EMISSION_PROMPT
+    );
   });
 
   it('names each listed origin and how to fetch it after the Python section', () => {
     const content = withArtifactDataOrigins(
       ARTIFACT_EMISSION_PROMPT,
       ['https://Data.example.org/', 'https://stats.example.net'],
-      APP_URL
+      RESERVED
     );
 
     expect(content.startsWith(ARTIFACT_EMISSION_PROMPT)).toBe(true);
