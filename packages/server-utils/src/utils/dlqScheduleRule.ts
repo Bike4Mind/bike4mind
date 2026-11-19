@@ -1,10 +1,11 @@
 import { DescribeRuleCommand, EventBridgeClient, ListTargetsByRuleCommand } from '@aws-sdk/client-eventbridge';
 import { Logger } from '@bike4mind/observability';
+import { CONSUMER_LOGS_BUDGET_MS, settleWithinBudget } from './dlqLookupBudget';
 
 export type ScheduleRule = {
   state: 'ENABLED' | 'DISABLED';
   scheduleExpression?: string;
-  targetFunctionName?: string;
+  targetFunctionArn?: string;
 };
 
 const CACHE_TTL_MS = 10 * 60_000;
@@ -80,7 +81,10 @@ export function nextRunDueAt(scheduledAt: string, rule: ScheduleRule | null): st
   return interval !== undefined && Number.isFinite(at) ? new Date(at + interval).toISOString() : undefined;
 }
 
-async function lookupRule(ruleArn: string): Promise<{ rule: ScheduleRule | null; retryable: boolean }> {
+async function lookupRule(
+  ruleArn: string,
+  deadline: number
+): Promise<{ rule: ScheduleRule | null; retryable: boolean }> {
   const [, region, name] = ruleArn.match(RULE_ARN)!;
   let client = clients.get(region);
   if (!client) {
@@ -89,14 +93,17 @@ async function lookupRule(ruleArn: string): Promise<{ rule: ScheduleRule | null;
   }
   try {
     const described = await client.send(new DescribeRuleCommand({ Name: name }));
+    if (Date.now() >= deadline) return { rule: null, retryable: true };
+    if (described.Arn !== ruleArn) return { rule: null, retryable: false };
     if (described.State !== 'ENABLED' && described.State !== 'DISABLED') return { rule: null, retryable: false };
-    const { Targets = [] } = await client.send(new ListTargetsByRuleCommand({ Rule: name }));
-    const targetFunctionName = Targets.map(target => target.Arn?.match(LAMBDA_FUNCTION_ARN)?.[2]).find(Boolean);
+    const { Targets = [], NextToken } = await client.send(new ListTargetsByRuleCommand({ Rule: name }));
+    const target = !NextToken && Targets.length === 1 ? Targets[0].Arn?.match(LAMBDA_FUNCTION_ARN) : null;
+    const targetFunctionArn = target?.[1] === region ? target[0].split(':').slice(0, 7).join(':') : undefined;
     return {
       rule: {
         state: described.State,
         ...(described.ScheduleExpression ? { scheduleExpression: described.ScheduleExpression } : {}),
-        ...(targetFunctionName ? { targetFunctionName } : {}),
+        ...(targetFunctionArn ? { targetFunctionArn } : {}),
       },
       retryable: false,
     };
@@ -111,20 +118,27 @@ async function lookupRule(ruleArn: string): Promise<{ rule: ScheduleRule | null;
  * The state, schedule and Lambda target of an EventBridge rule in the deploy region. Never throws: any
  * failure resolves to null. Cached 10 minutes, a null result 1 minute; a throttled or timed-out lookup is not cached.
  */
-export function resolveScheduleRule(ruleArn: string): Promise<ScheduleRule | null> {
+export function resolveScheduleRule(
+  ruleArn: string,
+  deadline = Date.now() + CONSUMER_LOGS_BUDGET_MS
+): Promise<ScheduleRule | null> {
   // The ARN comes from a message body; checking the region first keeps one client per region bounded to ours.
   const region = ruleArn.match(RULE_ARN)?.[1];
-  if (!region || region !== process.env.AWS_REGION) return Promise.resolve(null);
+  if (!region || region !== process.env.AWS_REGION || ruleArn.split('/').length !== 2) return Promise.resolve(null);
   const now = Date.now();
+  if (now >= deadline) return Promise.resolve(null);
   const hit = cache.get(ruleArn);
-  if (hit && hit.expiresAt > now) return hit.promise;
+  if (hit && hit.expiresAt > now) {
+    return settleWithinBudget([hit.promise], deadline - now).then(([rule]) => rule ?? null);
+  }
+  const lookupDeadline = Math.min(deadline, now + LOOKUP_TIMEOUT_MS);
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<{ rule: null; retryable: true }>(resolve => {
-    timer = setTimeout(() => resolve({ rule: null, retryable: true }), LOOKUP_TIMEOUT_MS);
+    timer = setTimeout(() => resolve({ rule: null, retryable: true }), lookupDeadline - now);
   });
   const entry: { promise: Promise<ScheduleRule | null>; expiresAt: number } = {
-    promise: Promise.race([lookupRule(ruleArn), timeout])
+    promise: Promise.race([lookupRule(ruleArn, lookupDeadline), timeout])
       .finally(() => clearTimeout(timer))
       .then(({ rule, retryable }) => {
         if (retryable) {

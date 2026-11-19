@@ -131,6 +131,12 @@ const redirectUrisList = <T extends z.ZodType<string>>(item: T) =>
 
 const redirectUrisSchema = redirectUrisList(oauthRedirectUriSchema);
 
+// RP-Initiated Logout targets: same per-URI rules as redirectUris, but a client may register none.
+export const postLogoutRedirectUrisSchema = z
+  .array(oauthRedirectUriSchema)
+  .max(20, 'Too many post-logout redirect URIs')
+  .refine(uris => new Set(uris).size === uris.length, 'Post-logout redirect URIs must be unique');
+
 // Update keeps URIs a legacy client already stores, so only the shape is checked here;
 // updateOAuthClient applies oauthRedirectUriSchema to the newly-added ones.
 const storedRedirectUriSchema = redirectUriBaseSchema;
@@ -143,6 +149,7 @@ export const createOAuthClientSchema = z
   .object({
     name: z.string().trim().min(1, 'Name is required').max(100, 'Name is too long'),
     redirectUris: redirectUrisSchema,
+    postLogoutRedirectUris: postLogoutRedirectUrisSchema.optional(),
     clientType: z.enum(OAUTH_CLIENT_TYPES).default('relying-party'),
     federatedIdp: oauthFederatedIdpInputSchema.optional(),
     rateLimit: oauthClientRateLimitSchema.optional(),
@@ -172,6 +179,7 @@ export const oauthOverwatchProductIdSchema = z
 export const updateOAuthClientSchema = z
   .object({
     redirectUris: redirectUrisList(storedRedirectUriSchema).optional(),
+    postLogoutRedirectUris: postLogoutRedirectUrisSchema.optional(),
     isActive: z.boolean().optional(),
     allowedScopes: allowedScopesSchema.optional(),
     federatedIdp: oauthFederatedIdpInputSchema.nullable().optional(),
@@ -198,6 +206,7 @@ export interface OAuthClientView {
   clientType: OAuthClientType;
   tokenEndpointAuthMethod: 'none' | 'client_secret_post';
   redirectUris: string[];
+  postLogoutRedirectUris: string[];
   allowedScopes: string[];
   isActive: boolean;
   federatedIdp?: OAuthFederatedIdpConfig;

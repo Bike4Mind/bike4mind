@@ -7,7 +7,11 @@ import type {
   ResearchScheduleCadence,
   ResearchScheduleOutcome,
 } from '@bike4mind/common';
-import { RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT, RESEARCH_REVIEW_BACKLOG_LIMIT_MAX } from '@bike4mind/common';
+import {
+  RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
+  RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
+  isSpendFrozenError,
+} from '@bike4mind/common';
 import type { LakeConfigAuditLakeRef } from '../dataLakeService/recordLakeConfigChange';
 import {
   isResearchRunCreditRefusal,
@@ -148,6 +152,7 @@ async function fireScheduledConfig(
     // The credit pre-flight's 422 is a skip like any other spend rail, not a failed tick: a broke
     // owner clears, and the caller's retry-in-an-hour path is the right response.
     if (isResearchRunCreditRefusal(error)) return { outcome: 'skipped', at, reason: 'insufficient_credits' };
+    if (isSpendFrozenError(error)) return { outcome: 'skipped', at, reason: 'spend_frozen' };
     throw error;
   }
 

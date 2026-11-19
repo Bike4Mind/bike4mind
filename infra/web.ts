@@ -57,6 +57,7 @@ import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter
 import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
 import { organizationRetentionDeadLetter } from './organizationRetention';
 import { businessMetricAlertsDLQ } from './businessMetricAlerts';
+import { sideAppHealthAlertsDLQ } from './sideAppHealthAlerts';
 import { dlqAlarmHandlerDlq } from './dlqAlarmHandlerDeadLetter';
 import { mcpHandler } from './mcp';
 import { remoteMcpHandler } from './remoteMcp';
@@ -293,6 +294,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
       ...(dlqTriageSweepDeadLetter && { 'dlq-triage-sweep': dlqTriageSweepDeadLetter.queue.url }),
       ...(organizationRetentionDeadLetter && { 'organization-retention': organizationRetentionDeadLetter.queue.url }),
       ...(businessMetricAlertsDLQ && { 'business-metric-alerts': businessMetricAlertsDLQ.url }),
+      ...(sideAppHealthAlertsDLQ && { 'side-app-health-alerts': sideAppHealthAlertsDLQ.url }),
     }),
     // This raw AWS queue retains its existing provider-assigned physical name.
     ...(dlqAlarmHandlerDlq && { 'alarm-handler': dlqAlarmHandlerDlq.url }),

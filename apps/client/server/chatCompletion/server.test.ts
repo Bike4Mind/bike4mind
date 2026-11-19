@@ -57,6 +57,7 @@ vi.mock('@bike4mind/database', () => ({
   // personal/JWT cases but must exist or the mocked-module export getter throws.
   organizationRepository: { findById: vi.fn().mockResolvedValue(null) },
   cacheRepository: {},
+  spendFreezeRepository: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
 }));
 
 // executeCompletion - the route's LLM execution seam. Mock so tests drive its onChunk

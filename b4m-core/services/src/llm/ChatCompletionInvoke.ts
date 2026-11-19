@@ -1,6 +1,7 @@
 import {
   assertAuthOriginMatchesApiKey,
   type AuthOrigin,
+  type ApiKeyBillingOwnerType,
   canUpdateShareable,
   ChatCompletionInvokeParamsSchema,
   hasAutoNamePlaceholderName,
@@ -118,6 +119,7 @@ export class ChatCompletionInvoke {
     userId,
     authOrigin,
     apiKeyId,
+    apiKeyBillingOwnerType,
     oauthClientId,
     adminRoleWithheld,
     visitId,
@@ -128,6 +130,8 @@ export class ChatCompletionInvoke {
     authOrigin: AuthOrigin;
     /** Server-derived from `req.apiKeyInfo` - never from `body` (see QuestStartBodySchema.apiKeyId). */
     apiKeyId?: string;
+    /** Server-derived from `req.apiKeyInfo`; see QuestStartBodySchema.apiKeyBillingOwnerType. */
+    apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
     /** Connected app of a federated exchange key; stamped on the quest beside `apiKeyId`. */
     oauthClientId?: string;
     /** See QuestStartBodySchema.adminRoleWithheld. */
@@ -613,6 +617,7 @@ export class ChatCompletionInvoke {
         deniedTools,
         authOrigin,
         apiKeyId,
+        ...(apiKeyBillingOwnerType ? { apiKeyBillingOwnerType } : {}),
         ...(adminRoleWithheld ? { adminRoleWithheld } : {}),
         ...(visitId ? { visitId } : {}),
         systemPrompt,

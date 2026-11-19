@@ -34,6 +34,8 @@ export type ErasureStage = 'beforeDelete' | 'afterDelete';
  * import, so callers pass it in.
  */
 export type ErasureRegistry = {
+  /** Throws when a contributed entry is malformed. Called before the claim so a bad registry purges nothing. */
+  assertReady(): void;
   /** What an erasure of the subject covers, per collection. Throws when a registered model is unclassified. */
   scope(subject: ErasureSubject, assertLease: () => Promise<void>): Promise<AdminErasureCollection[]>;
   /** Deletes, anonymizes or detaches every row the registry finds naming the subject, or one stage of them. Idempotent. */
@@ -124,6 +126,7 @@ export async function completeAccountDeletion(
   if (!(await User.exists(dueFilter(userId, now)))) {
     return { deleted: false, reason: (await User.exists({ _id: userId })) ? 'not_due' : 'not_found' };
   }
+  erasureRegistry.assertReady();
   await assertNoSharedOrganizations(userId);
   const leaseId = randomUUID();
   const user = await claimPurge(userId, now, leaseId);

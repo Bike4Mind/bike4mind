@@ -1,6 +1,6 @@
 import Chip from '@mui/joy/Chip';
 import { AGENT_STATE_LABEL, type AgentState } from './roster';
-import { stateJoyColor } from './statePalette';
+import { stateJoyColor, stateSkinSx } from './statePalette';
 
 export function AgentStateChip({
   state,
@@ -27,17 +27,20 @@ export function AgentStateChip({
         size="sm"
         color={stateJoyColor('working')}
         variant="outlined"
+        sx={stateSkinSx('working', 'outlined')}
         data-testid="orchestrator-state-chip-preparing"
       >
         Preparing
       </Chip>
     );
   }
+  const variant = muted ? 'outlined' : state === 'needs-you' ? 'solid' : 'soft';
   return (
     <Chip
       size="sm"
       color={stateJoyColor(state)}
-      variant={muted ? 'outlined' : state === 'needs-you' ? 'solid' : 'soft'}
+      variant={variant}
+      sx={stateSkinSx(state, variant)}
       data-testid={`orchestrator-state-chip-${state}`}
     >
       {AGENT_STATE_LABEL[state]}

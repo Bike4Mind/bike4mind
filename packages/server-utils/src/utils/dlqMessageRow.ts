@@ -187,7 +187,8 @@ export type DlqScheduleFacts = {
 export async function resolveDlqScheduleFacts(
   entry: Pick<RegisteredDlqDescriptor, 'staleWhen'>,
   messages: readonly Message[],
-  queueDepth?: number
+  queueDepth?: number,
+  deadline = Date.now() + CONSUMER_LOGS_BUDGET_MS
 ): Promise<Map<string, DlqScheduleFacts>> {
   const facts = new Map<string, DlqScheduleFacts>();
   const superseded = entry.staleWhen === 'superseded-schedule';
@@ -198,15 +199,17 @@ export async function resolveDlqScheduleFacts(
     return [{ messageId: message.MessageId!, needsRule, ...event }];
   });
   const ruleArns = [...new Set(events.filter(event => event.needsRule).map(event => event.ruleArn))];
-  const ruleLookups = ruleArns.map(resolveScheduleRule);
+  const ruleLookups = ruleArns.map(arn => resolveScheduleRule(arn, deadline));
   const logGroupLookups = ruleArns.map((arn, index) =>
     ruleLookups[index].then(rule =>
-      rule?.targetFunctionName ? resolveFunctionLogGroup(arn.split(':')[3], rule.targetFunctionName) : null
+      rule?.targetFunctionArn && Date.now() < deadline
+        ? resolveFunctionLogGroup(rule.targetFunctionArn.split(':')[3], rule.targetFunctionArn, deadline)
+        : null
     )
   );
   const [rules, logGroups] = await Promise.all([
-    settleWithinBudget(ruleLookups, CONSUMER_LOGS_BUDGET_MS),
-    settleWithinBudget(logGroupLookups, CONSUMER_LOGS_BUDGET_MS),
+    settleWithinBudget(ruleLookups, deadline - Date.now()),
+    settleWithinBudget(logGroupLookups, deadline - Date.now()),
   ]);
   const ruleByArn = new Map(ruleArns.map((arn, index) => [arn, rules[index] ?? null]));
   const logGroupByArn = new Map(ruleArns.map((arn, index) => [arn, logGroups[index] ?? null]));
@@ -231,7 +234,10 @@ export async function resolveDlqScheduleFacts(
  * Log group per message ID of the Lambda an EventBridge TARGET_ARN names, for targets in the deploy region.
  * Each function is looked up once, within the consumer-logs budget; a failed or slow lookup leaves it out.
  */
-export async function resolveDlqTargetLogs(messages: readonly Message[]): Promise<Map<string, DlqFunctionLogs>> {
+export async function resolveDlqTargetLogs(
+  messages: readonly Message[],
+  deadline = Date.now() + CONSUMER_LOGS_BUDGET_MS
+): Promise<Map<string, DlqFunctionLogs>> {
   const targets = messages.flatMap(message => {
     const match = attributeFailure(message)?.targetArn?.match(LAMBDA_FUNCTION_ARN);
     if (!message.MessageId || !match || match[1] !== process.env.AWS_REGION) return [];
@@ -241,8 +247,8 @@ export async function resolveDlqTargetLogs(messages: readonly Message[]): Promis
   });
   const functionArns = [...new Set(targets.map(target => target.functionArn))];
   const logGroups = await settleWithinBudget(
-    functionArns.map(functionArn => resolveFunctionLogGroup(functionArn.split(':')[3], functionArn)),
-    CONSUMER_LOGS_BUDGET_MS
+    functionArns.map(functionArn => resolveFunctionLogGroup(functionArn.split(':')[3], functionArn, deadline)),
+    deadline - Date.now()
   );
   const logGroupByArn = new Map(functionArns.map((arn, index) => [arn, logGroups[index] ?? null]));
   const result = new Map<string, DlqFunctionLogs>();

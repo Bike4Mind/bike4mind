@@ -104,6 +104,7 @@ export async function createSpeechJob(
       user: input.user,
       requiredCredits: estimateTtsHoldCredits(vendor, request.model, text.length, candidates),
       featureLabel: 'text-to-speech',
+      apiKeyId: input.apiKeyId,
     },
     deps
   );

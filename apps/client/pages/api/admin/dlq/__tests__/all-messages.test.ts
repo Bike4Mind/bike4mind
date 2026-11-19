@@ -272,7 +272,7 @@ describe('GET /api/admin/dlq/all-messages', () => {
       ],
     };
     await call();
-    expect(h.functionLogGroup).toHaveBeenCalledWith('us-east-2', targetArn);
+    expect(h.functionLogGroup).toHaveBeenCalledWith('us-east-2', targetArn, expect.any(Number));
     expect(h.logsUrl).toHaveBeenCalledWith(
       expect.objectContaining({ targetLogs: { region: 'us-east-2', logGroup: '/sst/app/stage/app-stage-Consumer' } })
     );

@@ -67,6 +67,7 @@ const mockDlqUrls = vi.hoisted(() => ({
       'notebook-events',
       'completion-events',
       'business-metric-alerts',
+      'side-app-health-alerts',
       'alarm-handler',
     ].map(label => [label, `https://sqs.us-east-2.amazonaws.com/123456789/${label}`])
   ),

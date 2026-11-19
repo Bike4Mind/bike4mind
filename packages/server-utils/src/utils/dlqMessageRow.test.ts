@@ -216,7 +216,7 @@ describe('resolveDlqScheduleFacts', () => {
   });
 
   it('looks up the rule target for a request-id message on an unflagged queue, once per rule', async () => {
-    resolveScheduleRule.mockReset().mockResolvedValue({ state: 'ENABLED', targetFunctionName: 'app-stage-Nightly' });
+    resolveScheduleRule.mockReset().mockResolvedValue({ state: 'ENABLED', targetFunctionArn: LAMBDA_ARN });
     resolveFunctionLogGroup.mockReset().mockResolvedValue('/sst/app/stage/Nightly-LogGroup');
     const facts = await resolveDlqScheduleFacts({ staleWhen: undefined }, [
       scheduled('a', { RequestID: str(REQUEST_ID), ErrorCode: num('200') }),
@@ -225,7 +225,7 @@ describe('resolveDlqScheduleFacts', () => {
     ]);
     expect(resolveScheduleRule).toHaveBeenCalledTimes(1);
     expect(resolveFunctionLogGroup).toHaveBeenCalledTimes(1);
-    expect(resolveFunctionLogGroup).toHaveBeenCalledWith('us-east-2', 'app-stage-Nightly');
+    expect(resolveFunctionLogGroup).toHaveBeenCalledWith('us-east-2', LAMBDA_ARN, expect.any(Number));
     expect(facts.get('a')).toEqual({
       scheduledAt: '2026-01-02T03:00:00.000Z',
       logTarget: { region: 'us-east-2', logGroup: '/sst/app/stage/Nightly-LogGroup' },
@@ -234,7 +234,7 @@ describe('resolveDlqScheduleFacts', () => {
   });
 
   it('leaves the log target unset when the function lookup fails', async () => {
-    resolveScheduleRule.mockReset().mockResolvedValue({ state: 'ENABLED', targetFunctionName: 'app-stage-Nightly' });
+    resolveScheduleRule.mockReset().mockResolvedValue({ state: 'ENABLED', targetFunctionArn: LAMBDA_ARN });
     resolveFunctionLogGroup.mockReset().mockResolvedValue(null);
     const facts = await resolveDlqScheduleFacts({ staleWhen: undefined }, [
       scheduled('a', { RequestID: str(REQUEST_ID), ErrorCode: num('200') }),
@@ -247,7 +247,7 @@ describe('resolveDlqScheduleFacts', () => {
     try {
       resolveScheduleRule
         .mockReset()
-        .mockResolvedValue({ state: 'ENABLED', scheduleExpression: 'rate(1 hour)', targetFunctionName: 'f' });
+        .mockResolvedValue({ state: 'ENABLED', scheduleExpression: 'rate(1 hour)', targetFunctionArn: LAMBDA_ARN });
       resolveFunctionLogGroup.mockReset().mockReturnValue(new Promise(() => {}));
       const pending = resolveDlqScheduleFacts(
         { staleWhen: 'superseded-schedule' },
@@ -388,7 +388,7 @@ describe('resolveDlqTargetLogs', () => {
   it('resolves each target function once, by its unqualified ARN', async () => {
     const logs = await resolveDlqTargetLogs([target('a', `${LAMBDA_ARN}:live`), target('b', LAMBDA_ARN)]);
     expect(resolveFunctionLogGroup).toHaveBeenCalledTimes(1);
-    expect(resolveFunctionLogGroup).toHaveBeenCalledWith('us-east-2', LAMBDA_ARN);
+    expect(resolveFunctionLogGroup).toHaveBeenCalledWith('us-east-2', LAMBDA_ARN, expect.any(Number));
     expect(logs.get('a')).toEqual({ region: 'us-east-2', logGroup: '/sst/app/stage/Consumer-LogGroup' });
     expect(logs.get('b')).toEqual({ region: 'us-east-2', logGroup: '/sst/app/stage/Consumer-LogGroup' });
   });
@@ -396,7 +396,7 @@ describe('resolveDlqTargetLogs', () => {
   it('accepts a target in another AWS partition', async () => {
     const govArn = `arn:${PARTITION}-us-gov:lambda:us-east-2:000000000000:function:app-stage-Consumer`;
     const logs = await resolveDlqTargetLogs([target('a', govArn)]);
-    expect(resolveFunctionLogGroup).toHaveBeenCalledWith('us-east-2', govArn);
+    expect(resolveFunctionLogGroup).toHaveBeenCalledWith('us-east-2', govArn, expect.any(Number));
     expect(logs.has('a')).toBe(true);
   });
 

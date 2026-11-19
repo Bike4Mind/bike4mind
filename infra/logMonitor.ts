@@ -37,6 +37,7 @@ import { agentContinuationQueueSubscription, agentExecutor } from './agentExecut
 import { agentExecutionAbandonedSweepCron, questTimeoutSweepCron } from './cron';
 import { chatCompletion } from './chatCompletion';
 import {
+  briefComposeSubscription,
   sessionAutoNamingSubscription,
   sessionSummarizationSubscription,
   sessionTaggingSubscription,
@@ -176,6 +177,7 @@ const individualLogGroups = $util.all([
   imageProcessor.nodes.logGroup.apply(lg => lg?.name),
   mcpHandler.nodes.logGroup.apply(lg => lg?.name),
   remoteMcpHandler.nodes.logGroup.apply(lg => lg?.name),
+  briefComposeSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   sessionAutoNamingSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   sessionSummarizationSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   sessionTaggingSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),

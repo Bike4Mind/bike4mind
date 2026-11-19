@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { InviteType, Permission } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError, UnauthorizedError } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import {
@@ -138,7 +138,7 @@ describe('group-invite authorization (end-to-end, real repos + Mongo)', () => {
       sharingService.listInvitesForDocument(strangerUser, { documentId: groupId, type: InviteType.Group }, {
         db,
       } as any)
-    ).rejects.toThrow(UnauthorizedError);
+    ).rejects.toThrow(ForbiddenError);
   });
 
   it('lets the billing owner cancel a group invite by id (remaining -> 0)', async () => {
@@ -154,9 +154,9 @@ describe('group-invite authorization (end-to-end, real repos + Mongo)', () => {
   it('denies a plain org member from cancelling a group invite by id', async () => {
     const { inviteId } = await seedGroupInvite();
 
-    await expect(
-      sharingService.cancelInviteById(memberUser, { id: inviteId }, { db } as any)
-    ).rejects.toThrow(ForbiddenError);
+    await expect(sharingService.cancelInviteById(memberUser, { id: inviteId }, { db } as any)).rejects.toThrow(
+      ForbiddenError
+    );
 
     const reloaded = await Invite.findById(inviteId);
     expect(reloaded?.remaining).toBe(1);
@@ -224,6 +224,6 @@ describe('group-invite authorization (end-to-end, real repos + Mongo)', () => {
       sharingService.listInvitesForDocument(memberUser, { documentId: legacyGroupId, type: InviteType.Group }, {
         db,
       } as any)
-    ).rejects.toThrow(UnauthorizedError);
+    ).rejects.toThrow(ForbiddenError);
   });
 });

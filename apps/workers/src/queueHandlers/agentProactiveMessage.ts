@@ -18,8 +18,10 @@ import { ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { apiKeyService } from '@bike4mind/services';
-import { isTerminalCreditRefusal } from '@bike4mind/common';
+import { isTerminalCreditRefusal, readOrgModelPolicy } from '@bike4mind/common';
 import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
+import { isOrgModelNotAllowedError } from '@bike4mind/services/llm/modelAdmission';
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import * as agentProactiveMessagingService from '@bike4mind/services/agentProactiveMessagingService';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
@@ -83,6 +85,12 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
       return;
     }
 
+    // The meter bills the user's org seat, so that org's model policy governs the message. Read once so the
+    // meter's admission and the tools see the same snapshot; a missing org doc is unrestricted.
+    const billingOrgId = resolveRequestBillingOrgId({ user });
+    const billingOrg = billingOrgId ? await organizationRepository.findById(billingOrgId) : null;
+    const orgModelPolicy = readOrgModelPolicy(billingOrg?.modelPolicy);
+
     const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(config.userId, {
       db: {
         apiKeys: apiKeyRepository,
@@ -134,12 +142,16 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
         storage: getFilesStorage(),
         imageGenerateStorage: getGeneratedImageStorage(),
         imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
-        meter: createCompletionMeter(user, logger, 'proactive agent messages', { sessionId: config.sessionId }),
+        meter: createCompletionMeter(user, logger, 'proactive agent messages', {
+          sessionId: config.sessionId,
+          orgModelPolicy,
+        }),
+        orgModelPolicy,
       });
     } catch (err) {
       // Refused before any provider call; retrying cannot help until the owner adds credits, the daily cap
-      // resets, or an admin restores the account's AI access.
-      if (!isTerminalCreditRefusal(err) && !isAiAccessRefusal(err)) throw err;
+      // resets, an admin restores the account's AI access, or the org allows the model again.
+      if (!isTerminalCreditRefusal(err) && !isAiAccessRefusal(err) && !isOrgModelNotAllowedError(err)) throw err;
       logger.warn(`Skipping proactive message for agent ${config.agentId}: ${(err as Error).message}`);
       return;
     }

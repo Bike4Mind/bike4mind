@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
+import { SIDE_APP_MINT_OUR_FAULT_EVENT } from '@bike4mind/server-utils/auth/sideAppMintEvent';
 const recordSideAppRefusal = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/server-utils/auth/sideAppRefusal', () => ({ recordSideAppRefusal }));
+vi.mock('@bike4mind/server-utils/auth/sideAppRefusal', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/auth/sideAppRefusal')>()),
+  recordSideAppRefusal,
+}));
 
 import { logAndRecordSideAppMintRefusal, logOAuthError } from './oauthErrorLog';
 
@@ -64,5 +68,35 @@ describe('logAndRecordSideAppMintRefusal', () => {
   it('passes no client id when the claim is not a string', () => {
     logAndRecordSideAppMintRefusal(undefined, { ...base, clientId: { id: 1 }, verified: false });
     expect(recordSideAppRefusal).toHaveBeenLastCalledWith(expect.objectContaining({ clientId: undefined }));
+  });
+
+  it('emits the dedicated event line beside the log line for our-fault refusals only', () => {
+    const warn = vi.fn();
+    logAndRecordSideAppMintRefusal(
+      { warn },
+      { ...base, error: 'server_error', status: 500, clientId: 'c', verified: true }
+    );
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenLastCalledWith(SIDE_APP_MINT_OUR_FAULT_EVENT, { route: 'oauth/ai-token', status: 500 });
+
+    const appFault = vi.fn();
+    logAndRecordSideAppMintRefusal({ warn: appFault }, { ...base, clientId: 'c', verified: true });
+    expect(appFault).toHaveBeenCalledTimes(1);
+  });
+
+  it('classifies by the recorded reason when it differs from the wire error', () => {
+    const warn = vi.fn();
+    logAndRecordSideAppMintRefusal(
+      { warn },
+      {
+        ...base,
+        error: 'temporarily_unavailable',
+        recordAs: 'rate_limited',
+        status: 429,
+        clientId: 'c',
+        verified: true,
+      }
+    );
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 });

@@ -137,7 +137,7 @@ describe('GET /api/admin/dlq/messages', () => {
   const ruleResponses = (rule: { State: string; ScheduleExpression?: string }) =>
     h.ebSend.mockImplementation(async (command: { kind: string }) =>
       command.kind === 'describe'
-        ? rule
+        ? { Arn: RULE_ARN, ...rule }
         : { Targets: [{ Arn: `arn:${PARTITION}:lambda:us-east-2:000000000000:function:app-stage-Nightly` }] }
     );
 
@@ -198,7 +198,9 @@ describe('GET /api/admin/dlq/messages', () => {
     const detail = decodeConsoleUrl(row.logsUrl!);
     expect(detail).toContain(`filter @requestId = "${REQUEST_ID}"`);
     expect(detail).toContain("source~(~'/sst/app/stage/app-stage-Nightly-LogGroup)");
-    expect(h.lambdaSend).toHaveBeenCalledWith({ input: { FunctionName: 'app-stage-Nightly' } });
+    expect(h.lambdaSend).toHaveBeenCalledWith({
+      input: { FunctionName: `arn:${PARTITION}:lambda:us-east-2:000000000000:function:app-stage-Nightly` },
+    });
     expect(row.logsUrl).not.toMatch(/\d{12}/);
   });
 
@@ -347,7 +349,7 @@ describe('GET /api/admin/dlq/messages', () => {
 
     const body = await peek(['support:read']);
 
-    expect(h.resolveConsumerLogsForSourceQueue).toHaveBeenCalledWith('webhookDeliveryQueue');
+    expect(h.resolveConsumerLogsForSourceQueue).toHaveBeenCalledWith('webhookDeliveryQueue', expect.any(Number));
     const url = body.messages[0].logsUrl!;
     expect(url.startsWith('https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#')).toBe(true);
     const detail = decodeConsoleUrl(url);
