@@ -89,6 +89,8 @@ public final class ThumbnailCache: @unchecked Sendable {
         guard let image = Self.decode(data, maxPixelSize: maxPixelSize) else {
           throw URLError(.cannotDecodeContentData)
         }
+        // A `removeAll` during the decode must not let this image land in the emptied cache.
+        try Task.checkCancellation()
         let entry = Entry(image)
         images.setObject(entry, forKey: key as NSString, cost: image.bytesPerRow * image.height)
         return entry
