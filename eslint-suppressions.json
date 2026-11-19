@@ -4238,11 +4238,6 @@
       "count": 52
     }
   },
-  "b4m-core/services/src/llm/ImageGeneration.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 15
-    }
-  },
   "b4m-core/services/src/llm/QuestMasterHistoryBudget.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 18
