@@ -102,10 +102,46 @@ final class BriefVoiceSessionTests: XCTestCase {
       ("Reply: the main hall", .reply("the main hall")),
       ("answer tomorrow at 3", .reply("tomorrow at 3")), ("reply", nil), ("garden.", .choose(1)),
       ("main hall", .choose(0)), ("the pool", nil), ("what's next", nil),
+      ("deny it approve", nil), ("yes no", nil), ("approve or deny", nil),
     ]
     for (utterance, expected) in table {
       XCTAssertEqual(BriefVoiceCommand.parse(utterance, options: options), expected, utterance)
     }
+  }
+
+  func testYesAndNoKeepTheirMeaningWhileAnAnswerWaits() {
+    let options = ["Yes", "No"]
+    XCTAssertEqual(BriefVoiceCommand.parse("yes", options: options), .choose(0))
+    XCTAssertEqual(BriefVoiceCommand.parse("yes", options: options, confirming: true), .confirm)
+    XCTAssertEqual(BriefVoiceCommand.parse("no", options: options, confirming: true), .cancel)
+    XCTAssertNil(BriefVoiceCommand.parse("yes no", options: options, confirming: true))
+  }
+
+  func testAYesOptionCanBeChosenAndThenConfirmed() async {
+    let (session, api, _) = await loaded([question("d1", "Go ahead?", options: ["Yes", "No"])])
+    let chose = await session.handle("yes")
+    XCTAssertEqual(chose, "Choose Yes? Say yes to send it.")
+    let sent = await session.handle("yes")
+    XCTAssertEqual(sent, "Reply sent. That's everything.")
+    let replies = await api.replies
+    XCTAssertEqual(replies.map(\.text), ["Yes"])
+  }
+
+  func testNoCancelsAnArmedReplyRatherThanChoosingTheNoOption() async {
+    let (session, api, _) = await loaded([question("d1", "Go ahead?", options: ["Yes", "No"])])
+    _ = await session.handle("reply after lunch")
+    let cancelled = await session.handle("no")
+    XCTAssertEqual(cancelled?.hasPrefix("Okay, not sent."), true)
+    let replies = await api.replies
+    XCTAssertTrue(replies.isEmpty)
+  }
+
+  func testMixedCommandWordsAnswerNothing() async {
+    let (session, _, pending) = await loaded([approval("d1", "Ship it")])
+    let heard = await session.handle("deny it approve")
+    XCTAssertNil(heard)
+    let calls = await pending.calls
+    XCTAssertTrue(calls.isEmpty)
   }
 
   func testApproveAsksForConfirmationAndYesApproves() async {
