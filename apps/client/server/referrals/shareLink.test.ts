@@ -7,6 +7,7 @@ const m = vi.hoisted(() => ({
   countDocuments: vi.fn(),
   getSettingsMap: vi.fn(),
   emit: vi.fn(),
+  website: '',
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -18,6 +19,11 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsValue: (key: string, settings: Record<string, unknown>, fallback: number) =>
     key in settings ? Number(settings[key]) : fallback,
 }));
+vi.mock('@client/config/general', () => ({
+  get WEBSITE_URL() {
+    return m.website;
+  },
+}));
 vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', () => ({
   emitProductEvent: m.emit,
   HOST_PRODUCT_ID: 'bike4mind',
@@ -28,10 +34,13 @@ import {
   creditShareLinkSignup,
   getOrCreateReferralCode,
   normalizeReferralCode,
+  publishedAuthorShareLink,
+  publishMarketingUrl,
   readReferralCookie,
   referralCookieName,
   referralLinkUrl,
   setReferralCookie,
+  shareLinkDestination,
 } from './shareLink';
 
 const NOW = new Date('2026-11-19T12:00:00.000Z');
@@ -80,6 +89,8 @@ const credit = (overrides: Partial<Parameters<typeof creditShareLinkSignup>[0]> 
 beforeEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
+  m.website = '';
   m.getSettingsMap.mockResolvedValue({});
   m.findOne.mockReturnValue(query(referrer()));
   m.findById.mockReturnValue(query(newAccount()));
@@ -284,5 +295,64 @@ describe('creditShareLinkSignup', () => {
       errorName: 'Error',
     });
     expect(m.emit).not.toHaveBeenCalled();
+  });
+});
+
+describe('share links from a published page', () => {
+  it('lands a published-page link on the tagged marketing site', () => {
+    m.website = 'https://www.example.test/';
+    expect(publishMarketingUrl('embed-badge')).toBe(
+      'https://www.example.test/?utm_source=shared-artifact&utm_medium=embed-badge&utm_campaign=publish'
+    );
+    expect(shareLinkDestination('share-bar')).toBe(
+      'https://www.example.test/?utm_source=shared-artifact&utm_medium=share-bar&utm_campaign=publish'
+    );
+  });
+
+  it.each([
+    ['no via', undefined],
+    ['an unknown via', 'https://evil.example'],
+    ['a repeated via', ['embed-badge', 'share-bar']],
+  ])('sends %s to signup', (_label, via) => {
+    m.website = 'https://www.example.test';
+    expect(shareLinkDestination(via)).toBe('/register');
+  });
+
+  it('sends a published-page link to signup when no marketing site is configured', () => {
+    expect(publishMarketingUrl('share-bar')).toBeNull();
+    expect(shareLinkDestination('share-bar')).toBe('/register');
+  });
+
+  it("links through the author's existing code without writing", async () => {
+    vi.stubEnv('APP_URL', 'https://app.example.test');
+    await expect(
+      publishedAuthorShareLink(REFERRER, { referralCode: CODE, canRefer: false }, 'share-bar')
+    ).resolves.toBe(`https://app.example.test/r/${CODE}?via=share-bar`);
+    expect(m.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('mints a code for an author who may refer and has none', async () => {
+    vi.stubEnv('APP_URL', 'https://app.example.test');
+    m.findById.mockReturnValueOnce(query({ referralCode: null })).mockReturnValueOnce(query({ referralCode: CODE }));
+    await expect(
+      publishedAuthorShareLink(REFERRER, { referralCode: null, canRefer: true }, 'embed-badge')
+    ).resolves.toBe(`https://app.example.test/r/${CODE}?via=embed-badge`);
+    expect(m.updateOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives an author who may not refer no link', async () => {
+    await expect(
+      publishedAuthorShareLink(REFERRER, { referralCode: null, canRefer: false }, 'share-bar')
+    ).resolves.toBeNull();
+    expect(m.findById).not.toHaveBeenCalled();
+  });
+
+  it('falls back quietly when the link cannot be built', async () => {
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
+    vi.stubEnv('APP_URL', '');
+    await expect(
+      publishedAuthorShareLink(REFERRER, { referralCode: CODE, canRefer: true }, 'share-bar')
+    ).resolves.toBeNull();
+    expect(warn).toHaveBeenCalled();
   });
 });
