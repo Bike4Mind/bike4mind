@@ -16,6 +16,7 @@ import {
   type RolePolicy,
   type RootPolicy,
   type SpawnOptions,
+  type TaskContract,
   type TaskAction,
   type TaskReport,
   type DecisionRecord,
@@ -6746,7 +6747,7 @@ export class ChatService {
           const { models } = await this.listModels();
           const resolved = resolveWorkerModel(parent.model, managed.policy, validated, models);
           const contextWindow = models.find(model => model.id === resolved.effectiveModel)?.contextWindow;
-          const briefTokens = Math.ceil((validated.contract ? renderTaskBrief(validated.contract) : seed).length / 3);
+          const briefTokens = Math.ceil(contractBrief(seed, validated.contract).length / 3);
           validateWorkerModel(resolved.effectiveModel, models, {
             localOnly: this.workerLocality(isLocalModel(parent.model), 'local-parent'),
             ...validated.requirements,
@@ -6768,7 +6769,7 @@ export class ChatService {
           reason: 'model-policy',
           message: 'Account changed before launch. Try again in the intended account.',
         };
-      const brief = validated.contract ? renderTaskBrief(validated.contract) : seed;
+      const brief = contractBrief(seed, validated.contract);
       const named = title?.trim();
       const inherited = managed ? await this.currentPolicyFor(parent, managed) : undefined;
       if (this.deps.store.scopeKey() !== scope)
@@ -9216,6 +9217,11 @@ const HOST_GUIDANCE: readonly string[] = [
   'conversation to be deleted.',
 ];
 
+/** The prompt carries the task, so a contract only has to add the outcome, role and acceptance criteria. */
+function contractBrief(prompt: string, contract: TaskContract | undefined): string {
+  return contract ? `${prompt.trim()}\n\n${renderTaskBrief(contract)}` : prompt;
+}
+
 /**
  * For a session with Orchestrate on. Placed after HOST_GUIDANCE because it overrides that
  * block's suggest-only rule: in such a session session_spawn starts the child at once (see
@@ -9227,10 +9233,11 @@ const ORCHESTRATOR_GUIDANCE: readonly string[] = [
   'The user turned on Orchestrate for this conversation: you are coordinating agents for',
   'separable work with bounded tasks. Here session_spawn STARTS the session at once, with no card and nothing to',
   'approve, whatever is said above about suggesting.',
-  'Execute small or non-separable requests directly. For separable work, prefer a versioned task',
-  'contract on session_spawn: outcome, rationale, role, paths/context, ownership/coordination,',
-  'non-goals, acceptance evidence, verification, assumptions and escalation conditions. Explicit',
-  'empty lists are fine. Do not copy the transcript, load every skill or pay for spec-polishing.',
+  'Execute small or non-separable requests directly. For separable work, prefer a task contract on',
+  'session_spawn with just outcome, role and acceptanceCriteria; add owned paths, non-goals or',
+  'verification only where an agent would otherwise guess, and leave the other fields out. Keep',
+  'the prompt short when a contract carries the task. Do not copy the transcript, load every skill',
+  'or pay for spec-polishing.',
   'Use task_assess to review completion evidence or revise the same task after a disproven',
   'assumption. A stopped model turn is not accepted completion. Failed checks remain unresolved.',
   'Worker model requests are validated by runtime policy. Skills grant no permission or spend.',

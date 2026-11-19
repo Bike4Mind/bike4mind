@@ -31,7 +31,7 @@ describe('ORCHESTRATOR_GUIDANCE', () => {
     expect(text).toContain('you are coordinating agents');
     expect(text).toContain('session_spawn STARTS');
     expect(text).toContain('Execute small or non-separable requests directly');
-    expect(text).toContain('prefer a versioned task');
+    expect(text).toContain('just outcome, role and acceptanceCriteria');
     expect(text).toContain('A stopped model turn is not accepted completion');
     expect(text).toContain('Spawn early');
     expect(text).toContain('do only a brief survey');

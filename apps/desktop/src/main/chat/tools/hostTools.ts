@@ -332,7 +332,7 @@ export const delegatedSpawnSchema = (modelHint: string | null): ToolSchema => ({
           'agent, or work you may want to discard.',
       },
       ...(modelHint ? { requested_model_id: { type: 'string', description: modelHint } } : {}),
-      contract: z.toJSONSchema(taskContractSchema, { unrepresentable: 'any' }),
+      contract: z.toJSONSchema(taskContractSchema, { unrepresentable: 'any', io: 'input' }),
       model_requirements: z.toJSONSchema(workerRequirementsSchema),
     },
   },
