@@ -126,6 +126,14 @@ describe('tokenEncryption', () => {
       expect(() => decryptStoredSecret(encrypted)).toThrow('SECRET_ENCRYPTION_KEY is not configured');
     });
 
+    it('does not fall back to the previous key when no current key is configured', () => {
+      const encrypted = encryptSecret('secret', key1);
+      mockConfig.SECRET_ENCRYPTION_KEY = undefined;
+      mockConfig.SECRET_ENCRYPTION_KEY_PREVIOUS = key1;
+
+      expect(() => decryptStoredSecret(encrypted)).toThrow('SECRET_ENCRYPTION_KEY is not configured');
+    });
+
     it('opens a context-bound value under the previous key only with the same context', () => {
       const encrypted = encryptSecret('bound-secret', key1, 'ctx');
       expect(encrypted.startsWith('v2:')).toBe(true);

@@ -59,8 +59,9 @@ export function decryptToken(value: string | null | undefined, context?: string)
  * the current key's own error so callers that classify the failure by message keep working.
  */
 export function decryptStoredSecret(value: string, context?: string): string {
+  const current = requireKey();
   try {
-    return decryptSecret(value, requireKey(), context);
+    return decryptSecret(value, current, context);
   } catch (currentKeyError) {
     const previous = previousKey();
     if (previous) {
