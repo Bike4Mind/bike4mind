@@ -36,6 +36,7 @@ describe('resolveSearchRedirect', () => {
     expect(await resolveSearchRedirect(GOTO, { fetchImpl })).toEqual({
       url: 'https://en.wikipedia.org/wiki/Qubit',
       resolved: 'followed',
+      via: 'location',
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(fetchImpl).toHaveBeenCalledWith(GOTO, expect.objectContaining({ redirect: 'manual', credentials: 'omit' }));
@@ -65,6 +66,100 @@ describe('resolveSearchRedirect', () => {
     expect(await resolveSearchRedirect(GOTO, { fetchImpl })).toEqual({
       url: 'https://arxiv.org/abs/1?a=1&b=2',
       resolved: 'followed',
+      via: 'meta_refresh',
+    });
+  });
+
+  describe('200 page mechanisms', () => {
+    const pageWith = (body: string, headers: Record<string, string> = {}) =>
+      new Response(body, { status: 200, headers: { 'content-type': 'text/html', ...headers } });
+    const run = (response: Response) => resolveSearchRedirect(GOTO, { fetchImpl: vi.fn(async () => response) });
+
+    it('follows a Refresh header', async () => {
+      const result = await run(pageWith('<html></html>', { refresh: '0; URL="https://example.com/r?a=1"' }));
+      expect(result).toEqual({ url: 'https://example.com/r?a=1', resolved: 'followed', via: 'refresh_header' });
+    });
+
+    it('reports via meta_refresh for a meta refresh', async () => {
+      const result = await run(pageWith('<meta http-equiv="refresh" content="0;url=https://example.com/m">'));
+      expect(result).toMatchObject({ url: 'https://example.com/m', via: 'meta_refresh' });
+    });
+
+    it('follows location.replace with escaped literal', async () => {
+      const result = await run(
+        pageWith('<script>location.replace("https:\/\/example.com\/a?b\x3dc\u0026d\u003de");</script>')
+      );
+      expect(result).toEqual({ url: 'https://example.com/a?b=c&d=e', resolved: 'followed', via: 'script' });
+    });
+
+    it('follows window.location.href assignment', async () => {
+      const result = await run(pageWith("<script>window.location.href='https://example.com/h';</script>"));
+      expect(result).toEqual({ url: 'https://example.com/h', resolved: 'followed', via: 'script' });
+    });
+
+    it('skips a non-validating script literal and uses a later valid one', async () => {
+      const result = await run(
+        pageWith(
+          '<script>top.location = "https://www.google.com/x"; self.location.assign("https://example.com/ok")</script>'
+        )
+      );
+      expect(result).toMatchObject({ url: 'https://example.com/ok', via: 'script' });
+    });
+
+    it('follows a lone anchor, decoding entities', async () => {
+      const result = await run(
+        pageWith('<a href="https://www.google.com/x">back</a><a href="https://example.com/p?a=1&amp;b=2&#39;">go</a>')
+      );
+      expect(result).toEqual({ url: 'https://example.com/p?a=1&b=2%27', resolved: 'followed', via: 'anchor' });
+    });
+
+    it('dedupes repeated anchors to the same url', async () => {
+      const result = await run(pageWith('<a href="https://example.com/a">1</a><a href="https://example.com/a">2</a>'));
+      expect(result).toMatchObject({ url: 'https://example.com/a', via: 'anchor' });
+    });
+
+    it('prefers the Refresh header over a body script', async () => {
+      const result = await run(
+        pageWith('<script>location.replace("https://example.com/script")</script>', {
+          refresh: '0;url=https://example.com/header',
+        })
+      );
+      expect(result).toMatchObject({ url: 'https://example.com/header', via: 'refresh_header' });
+    });
+
+    it.each([
+      ['a google url', '<script>location.replace("https://www.google.com/x")</script>'],
+      ['javascript:', '<script>location.href = "javascript:void(0)"</script>'],
+      ['a relative url', '<script>window.location = "/relative"</script>'],
+    ])('does not follow a script pointing at %s', async (_label, body) => {
+      const result = await run(pageWith(body));
+      expect(result.resolved).toBe('unresolved');
+      expect(result.detail).toMatchObject({ scriptRedirect: true, externalLinks: 0 });
+    });
+
+    it('is unresolved for two distinct external anchors', async () => {
+      const result = await run(pageWith('<a href="https://example.com/a">a</a><a href="https://example.org/b">b</a>'));
+      expect(result.resolved).toBe('unresolved');
+      expect(result.detail).toMatchObject({ externalLinks: 2, scriptRedirect: false, hasRefreshHeader: false });
+    });
+
+    it('counts no external links when anchors only point at google hosts', async () => {
+      const result = await run(
+        pageWith('<a href="https://www.google.com/a">a</a><a href="https://accounts.google.com/b">b</a>')
+      );
+      expect(result.detail).toMatchObject({ externalLinks: 0 });
+    });
+
+    it('flags a refresh header that does not validate', async () => {
+      const result = await run(pageWith('x', { refresh: '0;url=https://www.google.com/x' }));
+      expect(result.detail).toMatchObject({ hasRefreshHeader: true, bodyLength: 1 });
+    });
+
+    it('stays fast on a pathological body', async () => {
+      const started = Date.now();
+      await run(pageWith(`<a ${'href='.repeat(8000)}`));
+      await run(pageWith(`location.href="${'\\'.repeat(30000)}`));
+      expect(Date.now() - started).toBeLessThan(1000);
     });
   });
 
@@ -119,6 +214,19 @@ describe('resolveSearchRedirect', () => {
       noToken(result);
     });
 
+    it('keeps URLs and page text out of the 200 structure markers', async () => {
+      const result = await run(
+        vi.fn(async () =>
+          page(
+            '<a href="https://a.example/opaque-token">x</a><a href="https://b.example/y">y</a>location.href="/opaque-token"'
+          )
+        )
+      );
+      expect(result.detail).toMatchObject({ externalLinks: 2, scriptRedirect: true });
+      noToken(result);
+      expect(JSON.stringify(result.detail)).not.toContain('example');
+    });
+
     it('reports a 302 back to Google with the location host only', async () => {
       const result = await run(vi.fn(async () => redirect(302, 'https://consent.google.com/m?continue=opaque-token')));
       expect(result.detail).toEqual({ reason: 'google_location', status: 302, locationHost: 'consent.google.com' });
@@ -142,6 +250,10 @@ describe('resolveSearchRedirect', () => {
         status: 200,
         contentType: 'text/html',
         bodyHint: 'consent',
+        bodyLength: 'Before you continue to Google'.length + '<html></html>'.length,
+        hasRefreshHeader: false,
+        scriptRedirect: false,
+        externalLinks: 0,
       });
     });
 

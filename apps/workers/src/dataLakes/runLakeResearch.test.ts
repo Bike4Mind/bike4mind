@@ -743,7 +743,7 @@ describe('runLakeResearch', () => {
         maxInFlight = Math.max(maxInFlight, inFlight);
         await new Promise(resolve => setTimeout(resolve, 1));
         inFlight -= 1;
-        if (url === goto) return { url: 'https://en.wikipedia.org/wiki/Qubit', resolved: 'followed' };
+        if (url === goto) return { url: 'https://en.wikipedia.org/wiki/Qubit', resolved: 'followed', via: 'script' };
         if (url === stuck) return { url, resolved: 'unresolved', detail: { reason: 'status', status: 429 } };
         return { url, resolved: 'not_redirect' };
       });
@@ -760,6 +760,7 @@ describe('runLakeResearch', () => {
         expect.objectContaining({
           hits: 2,
           redirects: { decoded: 0, followed: 1, unresolved: 1 },
+          followedVia: { script: 1 },
           unresolvedDetails: [{ reason: 'status', status: 429 }],
           hosts: ['en.wikipedia.org', 'www.google.com'],
         })
@@ -791,6 +792,7 @@ describe('runLakeResearch', () => {
           recencyDays: 30,
           hits: 2,
           redirects: { decoded: 0, followed: 0, unresolved: 0 },
+          followedVia: {},
           unresolvedDetails: [],
           hosts: ['arxiv.org', 'www.ieee.org'],
         }

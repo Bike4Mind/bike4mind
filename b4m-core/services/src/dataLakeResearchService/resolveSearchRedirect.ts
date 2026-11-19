@@ -1,5 +1,7 @@
 export type SearchRedirectResolution = 'not_redirect' | 'decoded' | 'followed' | 'unresolved';
 
+export type SearchRedirectVia = 'location' | 'refresh_header' | 'meta_refresh' | 'script' | 'anchor';
+
 export interface UnresolvedDetail {
   reason:
     'status' | 'no_location' | 'google_location' | 'bad_location' | 'no_meta_refresh' | 'timeout' | 'network_error';
@@ -7,11 +9,16 @@ export interface UnresolvedDetail {
   contentType?: string;
   locationHost?: string;
   bodyHint?: 'consent' | 'redirect_notice' | 'captcha' | 'other';
+  bodyLength?: number;
+  hasRefreshHeader?: boolean;
+  scriptRedirect?: boolean;
+  externalLinks?: number;
 }
 
 export interface SearchRedirectResult {
   url: string;
   resolved: SearchRedirectResolution;
+  via?: SearchRedirectVia;
   detail?: UnresolvedDetail;
 }
 
@@ -45,15 +52,59 @@ const nonGoogleDestination = (value: string | null | undefined): string | null =
   return parsed && !isGoogleHost(parsed.hostname.toLowerCase()) ? parsed.toString() : null;
 };
 
+const refreshContentTarget = (content: string): string | null => {
+  const target = /url\s*=\s*['"]?([^'";]+)/i.exec(content.replace(/&amp;/g, '&'));
+  return nonGoogleDestination(target?.[1]?.trim());
+};
+
 const metaRefreshTarget = (html: string): string | null => {
   const tags = html.match(/<meta\b[^>]*>/gi) ?? [];
   for (const tag of tags) {
     if (!/http-equiv\s*=\s*["']?refresh/i.test(tag)) continue;
     const content = /content\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(tag);
-    const target = /url\s*=\s*['"]?([^'";]+)/i.exec((content?.[1] ?? content?.[2] ?? '').replace(/&amp;/g, '&'));
-    return nonGoogleDestination(target?.[1]?.trim());
+    return refreshContentTarget(content?.[1] ?? content?.[2] ?? '');
   }
   return null;
+};
+
+const SCRIPT_ASSIGNMENT = String.raw`(?<![\w$.])(?:(?:top|self|window|document|parent)\.)*location`;
+const SCRIPT_LITERAL = String.raw`(["'])((?:\\.|(?!\1)[^\\\r\n]){0,2048})\1`;
+const SCRIPT_REDIRECT = new RegExp(
+  `${SCRIPT_ASSIGNMENT}(?:\\.(?:replace|assign)\\s*\\(|(?:\\.href)?\\s*=(?!=))\\s*${SCRIPT_LITERAL}`,
+  'g'
+);
+const SCRIPT_REDIRECT_MARKER = new RegExp(
+  `${SCRIPT_ASSIGNMENT}(?:\\.(?:replace|assign)\\s*\\(|(?:\\.href)?\\s*=(?!=))`
+);
+
+const unescapeJsString = (literal: string): string =>
+  literal.replace(/\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|([\s\S]))/g, (_m, hex2, hex4, other) =>
+    hex2 || hex4 ? String.fromCharCode(parseInt(hex2 ?? hex4, 16)) : other
+  );
+
+const scriptRedirectTarget = (body: string): string | null => {
+  for (const match of body.matchAll(SCRIPT_REDIRECT)) {
+    const target = nonGoogleDestination(unescapeJsString(match[2]).trim());
+    if (target) return target;
+  }
+  return null;
+};
+
+const decodeHtmlEntities = (value: string): string =>
+  value.replace(/&(?:#(\d{1,7})|#[xX]([0-9a-fA-F]{1,6})|(amp|quot|apos|lt|gt));/g, (_m, dec, hex, name) => {
+    if (name) return { amp: '&', quot: '"', apos: "'", lt: '<', gt: '>' }[name as string] ?? '';
+    const code = dec ? parseInt(dec, 10) : parseInt(hex, 16);
+    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '';
+  });
+
+const externalAnchorTargets = (body: string): string[] => {
+  const found = new Set<string>();
+  for (const tag of body.match(/<a\b[^>]*>/gi) ?? []) {
+    const href = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(tag);
+    const target = nonGoogleDestination(decodeHtmlEntities(href?.[1] ?? href?.[2] ?? '').trim());
+    if (target) found.add(target);
+  }
+  return [...found];
 };
 
 const readCapped = async (response: Response): Promise<string> => {
@@ -119,7 +170,7 @@ export async function resolveSearchRedirect(
     if (response.status >= 300 && response.status < 400) {
       const rawLocation = response.headers.get('location');
       const location = nonGoogleDestination(rawLocation);
-      if (location) return { url: location, resolved: 'followed' };
+      if (location) return { url: location, resolved: 'followed', via: 'location' };
       if (!rawLocation) return unresolved({ reason: 'no_location' });
       const locationHost = parseHttpUrl(rawLocation)?.hostname.toLowerCase();
       if (locationHost && isGoogleHost(locationHost)) return unresolved({ reason: 'google_location', locationHost });
@@ -128,9 +179,23 @@ export async function resolveSearchRedirect(
     if (response.status === 200) {
       // Body reads share the timeout: a slow body must not stall the run.
       const body = await readCapped(response);
-      const target = metaRefreshTarget(body);
-      if (target) return { url: target, resolved: 'followed' };
-      return unresolved({ reason: 'no_meta_refresh', bodyHint: bodyHintFor(body) });
+      const refreshHeader = response.headers.get('refresh');
+      const headerTarget = refreshHeader ? refreshContentTarget(refreshHeader) : null;
+      if (headerTarget) return { url: headerTarget, resolved: 'followed', via: 'refresh_header' };
+      const metaTarget = metaRefreshTarget(body);
+      if (metaTarget) return { url: metaTarget, resolved: 'followed', via: 'meta_refresh' };
+      const scriptTarget = scriptRedirectTarget(body);
+      if (scriptTarget) return { url: scriptTarget, resolved: 'followed', via: 'script' };
+      const anchors = externalAnchorTargets(body);
+      if (anchors.length === 1) return { url: anchors[0], resolved: 'followed', via: 'anchor' };
+      return unresolved({
+        reason: 'no_meta_refresh',
+        bodyHint: bodyHintFor(body),
+        bodyLength: body.length,
+        hasRefreshHeader: Boolean(refreshHeader),
+        scriptRedirect: SCRIPT_REDIRECT_MARKER.test(body),
+        externalLinks: anchors.length,
+      });
     }
     if (response.status >= 400 && response.status < 500) {
       return unresolved({ reason: 'status', bodyHint: bodyHintFor(await readCapped(response)) });
