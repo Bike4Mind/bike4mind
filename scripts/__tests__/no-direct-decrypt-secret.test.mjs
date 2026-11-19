@@ -14,7 +14,7 @@ tester.run('no-direct-decrypt-secret', rule, {
   valid: [
     "import { decryptToken, decryptStoredSecret } from '@bike4mind/server-utils/security/tokenEncryption';",
     "import { decryptAtRest, encryptSecret, isEncrypted } from '@bike4mind/utils/security';",
-    "export { decryptSecret } from '@bike4mind/utils/security';",
+    "export { decryptStoredSecret as readSecret } from '@bike4mind/server-utils/security/tokenEncryption';",
     'export function decryptSecret(value: string, key: string): string { return value + key; }',
     'const decryptSecrets = 1;',
     "const name = 'decryptSecret';",
@@ -26,6 +26,10 @@ tester.run('no-direct-decrypt-secret', rule, {
     invalid("import { encryptSecret, decryptSecret } from '@bike4mind/utils/security';"),
     invalid("import { decryptSecret as open } from './secretEncryption';"),
     invalid("import { 'decryptSecret' as open } from './secretEncryption';"),
+    invalid("export { decryptSecret } from '@bike4mind/utils/security';"),
+    invalid("export { decryptSecret as readSecret } from '@bike4mind/utils/security';"),
+    invalid("export { 'decryptSecret' as readSecret } from '@bike4mind/utils/security';"),
+    invalid('const decryptSecret = () => 1; export { decryptSecret as readSecret };'),
     invalid("import * as crypto from './secretEncryption'; crypto.decryptSecret(value, key);"),
     invalid("import * as crypto from './secretEncryption'; crypto['decryptSecret'](value, key);"),
     invalid("const { decryptSecret } = require('./secretEncryption');"),
@@ -56,6 +60,7 @@ describe('no-direct-decrypt-secret wiring', () => {
   it.each([
     'b4m-core/utils/src/security/secretsAtRest.ts',
     'packages/server-utils/src/security/tokenEncryption.ts',
+    'packages/server-utils/src/security/secretEncryption.ts',
     'packages/scripts/migrate/encrypt-admin-settings-and-apikeys.ts',
     'packages/scripts/migrate/encrypt-tokens-at-rest.ts',
     'packages/server-utils/src/services/example.test.ts',

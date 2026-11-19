@@ -913,6 +913,7 @@ export default defineConfig([
       '**/__test__/**',
       'b4m-core/utils/src/security/secretsAtRest.ts',
       'packages/server-utils/src/security/tokenEncryption.ts',
+      'packages/server-utils/src/security/secretEncryption.ts',
       'packages/scripts/migrate/encrypt-admin-settings-and-apikeys.ts',
       'packages/scripts/migrate/encrypt-tokens-at-rest.ts',
     ],

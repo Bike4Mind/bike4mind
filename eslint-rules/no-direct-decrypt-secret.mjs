@@ -6,8 +6,8 @@
  * reading every value still stored under the other. The files allowed to call the primitive are
  * listed where the rule is enabled, in eslint.config.mjs.
  *
- * The import is what gets reported, so a renamed binding is covered too. A member access covers a
- * namespace import and a required module.
+ * Named imports and re-exports are reported even when renamed. A member access covers a namespace import
+ * and a required module.
  */
 const PRIMITIVE = 'decryptSecret';
 
@@ -32,6 +32,9 @@ export default {
     return {
       ImportSpecifier: node => {
         if (specifierName(node.imported) === PRIMITIVE) context.report({ node, messageId: 'direct' });
+      },
+      ExportSpecifier: node => {
+        if (specifierName(node.local) === PRIMITIVE) context.report({ node, messageId: 'direct' });
       },
       MemberExpression: node => {
         const name = node.computed
