@@ -17,6 +17,7 @@ import {
   directorClips,
   layoutShots,
   withDirectorTracks,
+  musicShortfallMs,
   type PlacedAudio,
   type ShotSlot,
 } from './layout';
@@ -50,7 +51,7 @@ type AddAudioArgs = z.infer<typeof schema>;
 const description =
   'Add sound to a Studio production: an instrumental music bed sized to the cut, a voiceover made from the ' +
   "shots' voice lines, and short sound effects, all placed on the timeline. A part already on the timeline is kept " +
-  'unless named in `replace`. Run it after the shots are final (production_generate_shot), then call ' +
+  'unless named in `replace`, or, for music, unless the cut has grown past it. Run it after the shots are final (production_generate_shot), then call ' +
   'production_assemble.';
 
 type Outcome<T> = { clips: T; notes: string[] };
@@ -60,7 +61,7 @@ const fitAdvice = (shot: StudioShot): string =>
   shot.clipFileId
     ? 'Shorten the line, or move part of it to the next shot, in production_storyboard (same prompts and lengths, so ' +
       'the takes and clips are kept), then replace the voiceover. A shot with a clip cannot be lengthened; if the ' +
-      'line must stay word for word, tell the user it does not fit and ask which part to shorten.'
+      'line must stay word for word, ask the user whether to split it over two shots, shorten it, or add a shot.'
     : 'Shorten the line or lengthen the shot in production_storyboard (same prompts, so the takes are kept), then ' +
       'replace the voiceover.';
 
@@ -160,7 +161,9 @@ async function addAudio(context: Context, config: ProductionToolConfig, args: Ad
     if (sfx.clips.length > 0) replacements.sfx = sfx.clips;
     notes.push(...sfx.notes);
   }
-  if (args.music && wants('music', args, directorClips(timeline, 'music'))) {
+  const musicShortMs = musicShortfallMs(timeline, totalMs);
+  if (args.music && (musicShortMs > 0 || wants('music', args, directorClips(timeline, 'music')))) {
+    if (musicShortMs > 0) notes.push(`the music bed ended ${musicShortMs} ms before the cut, so a new one was made.`);
     const underVoice = (replacements.voice ?? directorClips(timeline, 'voice')).length > 0;
     const music = await makeMusic(context, config, args.music.prompt, totalMs, underVoice);
     if (music.clips.length > 0) replacements.music = music.clips;
