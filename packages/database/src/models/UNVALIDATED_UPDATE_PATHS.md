@@ -56,7 +56,7 @@ can silently turn it into `none`.
 | AdminAccessReview | `decisions.decision` | enum | `infra/admin/AdminAccessReviewModel.ts#AdminAccessReviewRepository.recordDecision` | schema | `runValidators` | update call passes runValidators |
 | AdminAccessReview | `decisions.decision` | enum | `infra/admin/AdminAccessReviewModel.ts#AdminAccessReviewRepository.upsert` | schema | `runValidators` | update call passes runValidators |
 | AdminMorningBrief | `delivery` | enum | `infra/admin/AdminMorningBriefModel.ts#claimDelivery` | repository-check | `literal` | writes "sending" |
-| AdminMorningBrief | `delivery` | enum | `infra/admin/AdminMorningBriefModel.ts#finishDelivery` | route-schema | `apps/client/server/admin/morningBrief.ts#outcome` | Only caller sets literal union; Slack helper returns sent/unconfigured/failed literals only |
+| AdminMorningBrief | `delivery` | enum | `infra/admin/AdminMorningBriefModel.ts#finishDelivery` | route-schema | `apps/workers/src/admin/morningBrief.ts#outcome` | Only caller sets literal union; Slack helper returns sent/unconfigured/failed literals only |
 | AssistantBrief | `status` | enum | `content/AssistantBriefModel.ts#markFailed` | schema | `runValidators` | update call passes runValidators |
 | AssistantBrief | `status` | enum | `content/AssistantBriefModel.ts#markReady` | schema | `runValidators` | update call passes runValidators |
 | AdminMorningBrief | `delivery` | enum | `infra/admin/AdminMorningBriefModel.ts#saveOnce` | repository-check | `literal` | writes "ready" |

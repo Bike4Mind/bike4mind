@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { DATA_HOLDER_REGISTRY } from '@server/dataSubject/registry';
+import { DATA_HOLDER_REGISTRY } from '@bike4mind/server-utils/dataSubject/registry/index';
 import { ACCOUNT_ARCHIVE_METADATA_MODELS } from './accountDataExportCollections';
 import { accountArchiveFilter, accountArchiveMetadata } from './accountDataExportCollections';
 

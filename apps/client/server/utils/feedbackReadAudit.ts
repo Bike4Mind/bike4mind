@@ -26,7 +26,7 @@ export type FeedbackReader = { id: string; impersonatedBy?: string };
  * the caller is an admin impersonating that account.
  *
  * Details name the report ids rather than their owners, since AdminAuditLog's data-subject entry
- * (server/dataSubject/registry/infra.ts) resolves `target.id`, never `details`. The caller's own
+ * (packages/server-utils/src/dataSubject/registry/infra.ts) resolves `target.id`, never `details`. The caller's own
  * filter values (a userId or a search term, which may be an email) are recorded as given.
  *
  * Only the reports actually returned are audited. A list response's `total` is computed across the

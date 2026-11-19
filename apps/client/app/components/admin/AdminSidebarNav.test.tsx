@@ -10,7 +10,7 @@ import {
   ADMIN_ACTION_COUNT_KEYS,
   ADMIN_ACTION_COUNT_LABELS,
   type AdminActionCountKey,
-} from './adminActionCounts';
+} from '@bike4mind/server-utils/app/components/admin/adminActionCounts';
 import { onOpenAdminCommandPalette } from './shared/adminKeyboard';
 
 const theme = extendTheme({ ...getThemeConfig() });

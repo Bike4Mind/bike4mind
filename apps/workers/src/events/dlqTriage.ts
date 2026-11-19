@@ -10,7 +10,7 @@ import {
 import { dlqTriageDeliveryRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { getDlqByLabel } from '@bike4mind/server-utils/utils/dlqRegistry';
-import { triageDlqMessage, loadDlqTriageConfig } from '@server/admin/dlq/triage';
+import { triageDlqMessage, loadDlqTriageConfig } from '@bike4mind/server-utils/admin/dlq/triage';
 import { Resource } from 'sst';
 import { buildDlqTriageSection } from './dlqTriageMessage';
 import { withinTriageBudget } from './dlqTriageBudget';

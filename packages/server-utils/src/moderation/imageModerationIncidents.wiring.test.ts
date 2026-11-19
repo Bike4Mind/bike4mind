@@ -18,7 +18,7 @@ const ALLOWED = new Set([
   'apps/client/pages/api/admin/moderation-incidents/[id]/verdict.ts',
   'apps/client/pages/api/admin/moderation-incidents/[id]/view.ts',
   'apps/client/pages/api/admin/users/[userId]/compliance.ts',
-  'apps/client/server/admin/actionCounts.ts',
+  'packages/server-utils/src/admin/actionCounts.ts',
   'apps/workers/src/cron/imageModerationReviewSweep.ts',
 ]);
 

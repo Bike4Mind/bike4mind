@@ -15,7 +15,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
 import { getAdminAiOperations } from './operations';
-import { getAdminAiClassReadiness, validateAdminAiConfigPromotion } from './readiness';
+import { getAdminAiClassReadiness, validateAdminAiConfigPromotion } from '@bike4mind/server-utils/admin/ai/readiness';
 import { AdminAiConfigSchema, supportedChatModels, DECISION_MODEL_IDS } from '@bike4mind/common';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });

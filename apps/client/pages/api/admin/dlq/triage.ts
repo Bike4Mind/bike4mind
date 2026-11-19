@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { adminApi } from '@server/middlewares/adminApi';
-import { visibleDlqSuggestion } from '@server/admin/dlq/triage';
+import { visibleDlqSuggestion } from '@bike4mind/server-utils/admin/dlq/triage';
 import { adminAiSuggestionRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';

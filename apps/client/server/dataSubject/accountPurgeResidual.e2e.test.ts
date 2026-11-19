@@ -57,13 +57,13 @@ import { completeAccountDeletion, type ErasureRegistry } from '@bike4mind/server
 import { PlatformEndUser, platformEndUserRepository } from '@bike4mind/database/ai';
 import { erasureIdHash } from '@bike4mind/server-utils/privacy/erasureHash';
 import { reapplyErasure } from '../users/reapplyErasure';
-import { erasureRegistry } from './erasureRegistry';
-import { DELETED_USER_ID } from './placeholder';
-import { SubjectErasurePlan } from './subjectErasurePlan';
-import { SubjectErasureExecutor } from './subjectErasureExecutor';
-import { SubjectRecordExport } from './subjectRecordExport';
-import { aiHolders } from './registry/ai';
-import { DATA_HOLDER_REGISTRY } from './registry';
+import { erasureRegistry } from '@bike4mind/server-utils/dataSubject/erasureRegistry';
+import { DELETED_USER_ID } from '@bike4mind/server-utils/dataSubject/placeholder';
+import { SubjectErasurePlan } from '@bike4mind/server-utils/dataSubject/subjectErasurePlan';
+import { SubjectErasureExecutor } from '@bike4mind/server-utils/dataSubject/subjectErasureExecutor';
+import { SubjectRecordExport } from '@bike4mind/server-utils/dataSubject/subjectRecordExport';
+import { aiHolders } from '@bike4mind/server-utils/dataSubject/registry/ai';
+import { DATA_HOLDER_REGISTRY } from '@bike4mind/server-utils/dataSubject/registry/index';
 import { purgePersonalLakeById } from '@bike4mind/server-utils/users/purgeAccountContent';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });

@@ -243,7 +243,7 @@ import { buildAgentMusicToolConfig, getAgentMusicToolConfigDeps } from './agentE
 import { buildAgentAudioToolJobs, getAgentAudioToolJobsDeps } from './agentExecutor.audioToolConfig';
 import { buildAgentImageToolConfig, getAgentImageToolConfigDeps } from './agentExecutor.imageToolConfig';
 import { buildAgentRecentImagesNote, withRecentImagesNote } from './agentExecutor.recentImagesNote';
-import { resolveImageJobFiles } from '@server/generations/resolveImageJobFiles';
+import { resolveImageJobFiles } from '@bike4mind/server-utils/generations/resolveImageJobFiles';
 import { publishRunGenerationJobs } from './agentExecutor.generationJobs';
 import { resolveMediaRoot } from './agentExecutor.mediaRoot';
 import {

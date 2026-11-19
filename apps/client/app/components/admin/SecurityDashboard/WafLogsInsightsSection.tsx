@@ -1,7 +1,7 @@
 import { Box, LinearProgress, Sheet, Stack, Typography, useTheme } from '@mui/joy';
 import { DataTable } from '../shared';
 import dynamic from 'next/dynamic';
-import type { WafRangeInput } from '@/server/security/wafTraffic';
+import type { WafRangeInput } from '@bike4mind/server-utils/security/wafTraffic';
 import type {
   SecurityDashboardWafLogsInsightsOverview,
   SecurityDashboardWafBlockedRequestsResult,
