@@ -53,6 +53,9 @@ export {
   createArtifactVersionContract,
   searchArtifactsContract,
   listArtifactTypesContract,
+  publishArtifactContract,
+  republishArtifactContract,
+  unpublishArtifactContract,
 } from './contracts/artifacts.contract';
 export { createTranscriptionUploadContract, createTranscriptionContract } from './contracts/transcription.contract';
 export { createSessionContract } from './contracts/sessionCreate.contract';
