@@ -213,8 +213,8 @@ export function OfficeView({
           }}
         >
           {celebrating
-            ? 'SHIFT COMPLETE. COFFEE IS ON MORGAN.'
-            : 'Click Morgan to talk. Select an employee to inspect their work.'}
+            ? 'SHIFT COMPLETE. COFFEE IS ON THE MANAGER.'
+            : 'Click Manager to talk. Select an employee to inspect their work.'}
         </Typography>
         {agentDetailsOverlay}
       </Box>

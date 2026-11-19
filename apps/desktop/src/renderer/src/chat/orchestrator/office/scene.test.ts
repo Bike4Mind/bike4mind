@@ -22,7 +22,7 @@ describe('Office scene', () => {
     expect([...groupOfficeAgents([])]).toEqual(OFFICE_ROOMS.map(room => [room.id, []]));
   });
 
-  it('assigns the full cast before repeating and reserves Morgan for the parent', () => {
+  it('assigns the full cast before repeating and reserves Manager for the parent', () => {
     const agents = Array.from({ length: OFFICE_CAST.length + 1 }, (_, index) =>
       subject(String(index).padStart(2, '0'))
     );

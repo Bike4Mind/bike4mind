@@ -8,7 +8,7 @@ const mount = createThemedMount();
 afterEach(() => mount.unmount());
 
 describe('OfficeView', () => {
-  it('keeps Morgan visible with an empty roster and opens the parent session', async () => {
+  it('keeps Manager visible with an empty roster and opens the parent session', async () => {
     const focus = vi.fn();
     await mount.render(
       <OfficeView
@@ -20,6 +20,7 @@ describe('OfficeView', () => {
         onInnkeeperSelect={focus}
       />
     );
+    expect(el('office-parent').textContent).toContain('Manager');
     await act(async () => el('office-parent').click());
     expect(focus).toHaveBeenCalledOnce();
     expect(el('office-room-break-room').getAttribute('aria-label')).toBe('Break room');

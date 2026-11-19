@@ -215,10 +215,10 @@ export function OfficeBackdrop() {
         strokeWidth="2"
       />
       <text x="25" y="29" fill="#e7e3cd" fontFamily="monospace" fontSize="15" fontWeight="bold">
-        COPPERLEAF SUPPLY
+        Paper company
       </text>
       <text x="978" y="29" textAnchor="end" fill="#aebbab" fontFamily="monospace" fontSize="10" letterSpacing="2">
-        BROOKVALE BRANCH / PAPERWORK
+        BROOKVALE BRANCH / OFFICE
       </text>
     </svg>
   );

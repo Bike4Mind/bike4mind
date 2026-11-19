@@ -1,4 +1,4 @@
-export const OFFICE_PARENT = 'Morgan Reed';
+export const OFFICE_PARENT = 'Manager';
 
 export const OFFICE_CAST = [
   'Elliot Vale',
