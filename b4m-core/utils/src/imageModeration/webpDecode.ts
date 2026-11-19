@@ -10,8 +10,8 @@ export const isWebp = (bytes: Buffer) =>
   bytes.subarray(8, 12).toString('latin1') === 'WEBP';
 
 /**
- * The decoder itself could not start: a fault in this deployment, not in the image. Moderation rethrows it as a
- * transient failure so it is retried and alarmed rather than blocking every WebP as an unsupported format.
+ * The decoder itself could not start. Moderation rethrows this deployment failure instead of classifying the
+ * image as unsupported; callers retain their existing failure and retry behavior.
  */
 export class WebpDecoderUnavailableError extends Error {
   constructor(cause: unknown) {
