@@ -119,6 +119,8 @@ const menuItems = (menu: HTMLElement) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Also drops queued one-off answers a failed test left unused.
+  [api.get, api.post, api.patch, api.delete].forEach(fn => vi.mocked(fn).mockReset());
   h.confirm.mockImplementation(({ onOk }: { onOk: () => void }) => onOk());
   h.impersonating = false;
   h.featureOn = true;
