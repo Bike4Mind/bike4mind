@@ -208,6 +208,30 @@ describe('publishStoredArtifact', () => {
   });
 });
 
+describe('publishStoredArtifact generated slug', () => {
+  const noSlug = { user, artifact, content: 'graph TD; A-->B', logger, visibility: 'public' } as const;
+
+  it('derives the slug from the title and the artifact id, so it is stable across calls', async () => {
+    await publishStoredArtifact(noSlug);
+    await publishStoredArtifact(noSlug);
+    const slugs = m.findOneAndUpdate.mock.calls.map(c => c[0].slug);
+    expect(slugs[0]).toMatch(/^signup-flow-[0-9a-f]{6}$/);
+    expect(slugs[1]).toBe(slugs[0]);
+  });
+
+  it('gives different artifacts with the same title different slugs', async () => {
+    await publishStoredArtifact(noSlug);
+    await publishStoredArtifact({ ...noSlug, artifact: { ...artifact, id: 'art-2' } });
+    const slugs = m.findOneAndUpdate.mock.calls.map(c => c[0].slug);
+    expect(slugs[1]).not.toBe(slugs[0]);
+  });
+
+  it('answers 409 for the loser of two concurrent slugless publishes of one artifact', async () => {
+    m.findOneAndUpdate.mockImplementation(() => Promise.reject(Object.assign(new Error('dup'), { code: 11000 })));
+    await expect(publishStoredArtifact(noSlug)).rejects.toMatchObject({ statusCode: 409 });
+  });
+});
+
 describe('republishStoredArtifact', () => {
   const base = { user, artifact, content: 'graph TD; A-->B; B-->C', logger } as const;
 
