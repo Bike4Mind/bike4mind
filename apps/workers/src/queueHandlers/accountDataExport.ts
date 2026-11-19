@@ -46,7 +46,7 @@ import {
 // Registered outside the `@bike4mind/database` barrel: unregistered, the registry walk cannot query
 // them and the index would list both as omitted.
 import '@bike4mind/server-utils/models/Subscription';
-import '@server/models/UserSubscription';
+import '@bike4mind/server-utils/models/UserSubscription';
 import { SubjectRecordExport, assertEveryModelClassified } from '@server/dataSubject/subjectRecordExport';
 import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 import { createLedgerMemoryStore } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
@@ -785,7 +785,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const forAdmin = requestedBy !== undefined;
   const key = forAdmin ? adminDataExportKey(userId, exportJobId) : accountDataExportKey(userId, exportJobId);
   // The admin profile lists an export skipped here as failed, with the reason, instead of building
-  // until it gives up (apps/client/server/dataSubject/adminDataExports.ts).
+  // until it gives up (packages/server-utils/src/dataSubject/adminDataExports.ts).
   const skipExport = async (skipReason: AdminDataExportSkipReason, displayName = userId) => {
     await getFilesStorage().deletePermanently(key);
     if (!forAdmin) return;

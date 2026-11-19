@@ -8,8 +8,8 @@ import {
 } from '@bike4mind/common';
 import { adminSettingsRepository, cacheRepository, usageEventRepository, User } from '@bike4mind/database';
 import { userApiKeyService } from '@bike4mind/services';
-import type { ActiveSubscriptionsRequest } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
-import { resolveApiKeyTrust } from '@bike4mind/server-utils/utils/apiKeyTrust';
+import type { ActiveSubscriptionsRequest } from '../entitlements/activeSubscriptions';
+import { resolveApiKeyTrust } from './apiKeyTrust';
 
 const TOKEN_WINDOW_MS = 60_000;
 // Backstop only: every exit path releases its slot, so this bounds a slot whose process died first.
@@ -131,12 +131,18 @@ export async function admitApiKeyCompletion({
   };
 }
 
+/** The auth fields baseApi puts on the request (apps/client/global.d.ts). */
+export type CompletionRequestAuth = {
+  user?: QuotaOwner;
+  apiKeyInfo?: { ownerUntrusted?: boolean; billingOwnerType?: string };
+};
+
 /**
  * {@link admitApiKeyCompletion} for a Next API route: a no-op unless an API key authenticated the
  * request. Pass `holdSlot` only when the request itself runs the work to completion.
  */
 export function admitRequestCompletion(
-  req: ActiveSubscriptionsRequest & Pick<Express.Request, 'user' | 'apiKeyInfo'>,
+  req: ActiveSubscriptionsRequest & CompletionRequestAuth,
   { holdSlot }: { holdSlot: boolean }
 ): Promise<CompletionQuotaGrant> {
   if (!req.apiKeyInfo || !req.user) return Promise.resolve(NO_COMPLETION_QUOTA);

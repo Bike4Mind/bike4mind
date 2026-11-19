@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({ send: vi.fn() }));
-vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.send }));
+vi.mock('../utils/sqs', () => ({ sendToQueue: h.send }));
+vi.mock('sst', () => ({
+  Resource: { generatedMediaPurgeQueue: { url: 'https://sqs.test/generatedMediaPurgeQueue' } },
+}));
 
 import {
   MAX_PURGE_KEYS,

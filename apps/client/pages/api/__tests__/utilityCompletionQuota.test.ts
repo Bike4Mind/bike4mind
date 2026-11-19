@@ -8,7 +8,7 @@ import type { Request, Response } from 'express';
 type Handler = (request: Request, response: Response) => Promise<unknown>;
 const quota = vi.hoisted(() => ({ admit: vi.fn() }));
 const reserveRequestCredits = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quota.admit }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quota.admit }));
 vi.mock('@bike4mind/server-utils/billing/reserveRequestCredits', () => ({ reserveRequestCredits }));
 
 // Keep each route's real completion wrapper. The router only captures its registered handler;

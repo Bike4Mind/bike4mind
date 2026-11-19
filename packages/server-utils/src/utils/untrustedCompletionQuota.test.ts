@@ -30,15 +30,16 @@ vi.mock('@bike4mind/database', () => ({
   usageEventRepository: { userTokensSince: mocks.userTokensSince },
   User: { findById: mocks.findUser },
 }));
-vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({ resolveApiKeyTrust: mocks.resolveTrust }));
+vi.mock('./apiKeyTrust', () => ({ resolveApiKeyTrust: mocks.resolveTrust }));
 
-import type { Request } from 'express';
 import {
   admitApiKeyCompletion,
   admitRequestCompletion,
   completionSlotsKey,
   NO_COMPLETION_QUOTA,
 } from './untrustedCompletionQuota';
+
+type Request = Parameters<typeof admitRequestCompletion>[0];
 
 const owner = {
   id: 'user-1',

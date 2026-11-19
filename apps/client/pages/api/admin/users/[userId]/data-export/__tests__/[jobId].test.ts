@@ -24,7 +24,7 @@ vi.mock('@server/middlewares/adminApi', () => ({
   },
 }));
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: h.requireStepUp }));
-vi.mock('@server/dataSubject/adminDataExports', () => ({
+vi.mock('@bike4mind/server-utils/dataSubject/adminDataExports', () => ({
   findDataExportTarget: h.findTarget,
   denySelfDataExport: h.denySelf,
   readAdminDataExportBuiltAt: h.builtAt,

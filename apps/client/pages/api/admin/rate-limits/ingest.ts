@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { persistRateLimitEvents } from '@bike4mind/server-utils/utils/mcpRateLimitSnapshots';
 import { Resource } from 'sst';
-import { verifyIngestToken } from '@server/security/ingestToken';
+import { verifyIngestToken } from '@bike4mind/server-utils/security/ingestToken';
 import type { Request } from 'express';
 import { z } from 'zod';
 

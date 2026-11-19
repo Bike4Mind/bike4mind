@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
 import { securityDashboardSnapshotRepository, type ISecurityDashboardSnapshotDocument } from '@bike4mind/database';
 import { Resource } from 'sst';
-import { verifyIngestToken } from '@server/security/ingestToken';
+import { verifyIngestToken } from '@bike4mind/server-utils/security/ingestToken';
 import { isPlaceholderValue } from '@bike4mind/common';
 import { computeStatusScoreAndSummary } from '@bike4mind/server-utils/security/securityDashboardScoring';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';

@@ -35,7 +35,7 @@ import {
   personaCapRefusal,
   personaExpiresAt,
   personaIdentity,
-} from '@server/personas/personaAccounts';
+} from '@bike4mind/server-utils/personas/personaAccounts';
 
 const isDuplicateKeyError = (error: unknown) =>
   typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 11000;

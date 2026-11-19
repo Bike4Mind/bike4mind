@@ -7,7 +7,7 @@ import {
 import { abuseAssessmentRepository, AdminAuditLogModel, shadowDetectionRepository, User } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import type { AdminAuditWriter } from '@bike4mind/server-utils/utils/adminAudit';
-import { ACCOUNT_STATUS_ACTIONS_FILTER } from './accountStatusAuditActions';
+import { ACCOUNT_STATUS_ACTIONS_FILTER } from '@bike4mind/server-utils/security/accountStatusAuditActions';
 
 /**
  * Grades stale, ungraded signup network burst detections insufficient_evidence as automation, unless
