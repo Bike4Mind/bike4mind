@@ -70,6 +70,9 @@ final class SpeechEchoFilterTests: XCTestCase {
     Case(
       label: "user question right after an echo, reusing reply words",
       heard: "the capital of France what is the capital of Spain", expected: "what is the capital of Spain"),
+    Case(
+      label: "one-word interjection, then a phrase from later in the reply",
+      heard: "the capital of France is Paris and the capital of Spain", expected: "and the capital of Spain"),
     Case(label: "empty transcript", heard: "", expected: ""),
     Case(label: "nothing spoken", heard: "hello there", expected: "hello there", spoken: []),
     Case(label: "blank chunks", heard: "hello there", expected: "hello there", spoken: ["", "  "]),

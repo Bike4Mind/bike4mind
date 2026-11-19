@@ -9,7 +9,7 @@ struct SpeechEchoFilter {
   static let lookahead = 8
 
   /// The part of `recognized` left after its leading echo of `spoken`, in the recognizer's own casing.
-  /// Runs of fewer than `gapTolerance` unmatched words inside the echo count as misheard echo.
+  /// Fewer than `gapTolerance` stray words may come before the echo, and misheard words inside it are skipped.
   static func residual(recognized: String, spoken: [String], gapTolerance: Int) -> String {
     let words = recognized.split(whereSeparator: \.isWhitespace)
     let heard = words.map { normalize($0) }
@@ -27,7 +27,7 @@ struct SpeechEchoFilter {
         echoEnd = max(
           echoEnd,
           echoLength(
-            heard: heard, said: said, start: start, first: first, tolerance: gapTolerance, recentFrom: recentFrom))
+            heard: heard, said: said, start: start, first: first, recentFrom: recentFrom))
       }
     }
     return words[echoEnd...].joined(separator: " ")
@@ -35,7 +35,7 @@ struct SpeechEchoFilter {
 
   /// How many heard words, from the start, are echo when `heard[first]` lines up with `said[start]`.
   private static func echoLength(
-    heard: [String], said: [String], start: Int, first: Int, tolerance: Int, recentFrom: Int
+    heard: [String], said: [String], start: Int, first: Int, recentFrom: Int
   ) -> Int {
     var next = start
     var end = 0
@@ -50,9 +50,9 @@ struct SpeechEchoFilter {
       if gap > 0 {
         // After a misheard word the echo picks up again only where the next two heard words sit side by side in the
         // reply, or on the reply's last word; one loose match would eat the user's own words ("what is the capital").
-        // A run as long as the tolerance stands for about as many spoken words, so it resumes just past that run.
+        // A run of misheard words stands for about as many spoken words, so it resumes just past that run.
         guard gap < lookahead else { break }
-        let candidates = gap >= tolerance ? next + gap - 1...next + gap : next...next + lookahead - 1
+        let candidates = next + gap - 1...next + gap
         if position < order.count {
           let following = heard[order[position]]
           let resume = candidates.first {
