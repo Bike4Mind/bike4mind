@@ -4149,7 +4149,10 @@ export class ChatService {
       const skillRoot = session.project?.workingDirectory ?? null;
       const skillCatalog = this.deps.skills;
       const skills: SkillContext | undefined = skillCatalog
-        ? { available: () => skillCatalog.forModel(skillRoot) }
+        ? {
+            available: () => skillCatalog.forModel(skillRoot),
+            isUserOnly: async name => (await skillCatalog.get(skillRoot, name))?.disableModelInvocation === true,
+          }
         : undefined;
       const videoModels = await videoModelsRead;
       // Cleared when the server-fixed context cannot hold Desktop's prompt with tools; see toolPromptOverflow.
