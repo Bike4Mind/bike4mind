@@ -386,7 +386,7 @@
 				CODE_SIGN_ENTITLEMENTS = "$(B4M_APP_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-								ENABLE_PREVIEWS = YES;
+				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Bike4Mind;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
@@ -425,7 +425,7 @@
 				CODE_SIGN_ENTITLEMENTS = "$(B4M_APP_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-								ENABLE_PREVIEWS = YES;
+				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Bike4Mind;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
@@ -463,7 +463,7 @@
 				CODE_SIGN_ENTITLEMENTS = "$(B4M_WIDGETS_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-								ENABLE_PREVIEWS = YES;
+				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = WidgetSupport/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Bike4Mind Widgets";
@@ -490,7 +490,7 @@
 				CODE_SIGN_ENTITLEMENTS = "$(B4M_WIDGETS_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-								ENABLE_PREVIEWS = YES;
+				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = WidgetSupport/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Bike4Mind Widgets";
@@ -517,7 +517,7 @@
 				CODE_SIGN_ENTITLEMENTS = "$(B4M_SHARE_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-								GENERATE_INFOPLIST_FILE = NO;
+				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShareExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -542,7 +542,7 @@
 				CODE_SIGN_ENTITLEMENTS = "$(B4M_SHARE_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-								GENERATE_INFOPLIST_FILE = NO;
+				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShareExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
