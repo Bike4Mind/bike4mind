@@ -150,6 +150,69 @@ describe.skipIf(process.platform === 'win32')('resolveUserPath', () => {
     vi.doUnmock('node:child_process');
   });
 
+  it("captures the login shell's exported variables, leaving out PATH and session variables", async () => {
+    const shell = join(directory, 'shell');
+    await writeFile(
+      shell,
+      [
+        '#!/bin/sh',
+        'printf "Shell startup output\\n"',
+        'export PATH="/login/bin:/usr/bin:/bin"',
+        'export B4M_TEST_SECRET="secret value"',
+        "export MULTILINE='line one",
+        "line two'",
+        'export SHLVL=7',
+        'exec /bin/sh -c "$2"',
+        '',
+      ].join('\n'),
+      { mode: 0o755 }
+    );
+    vi.stubEnv('SHELL', shell);
+    const { resolveLoginShellVariables, resolveUserPath } = await import('./userPath');
+
+    const variables = await resolveLoginShellVariables();
+
+    expect(variables.B4M_TEST_SECRET).toBe('secret value');
+    expect(variables.MULTILINE).toBe('line one\nline two');
+    expect(variables).not.toHaveProperty('PATH');
+    expect(variables).not.toHaveProperty('SHLVL');
+    expect((await resolveUserPath()).split(delimiter)[0]).toBe('/login/bin');
+  });
+
+  it('caps the probe output, so an enormous environment falls back instead of growing without bound', async () => {
+    const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+    const execFile = vi.fn(actual.execFile);
+    vi.doMock('node:child_process', () => ({ ...actual, execFile }));
+    vi.stubEnv('SHELL', join(directory, 'missing-shell'));
+    const { resolveUserPath } = await import('./userPath');
+
+    await resolveUserPath();
+
+    expect(execFile.mock.calls[0][2]).toMatchObject({ timeout: expect.any(Number), maxBuffer: expect.any(Number) });
+    expect(execFile.mock.calls[0][1]).toEqual(['-ilc', expect.not.stringContaining('$')]);
+    vi.doUnmock('node:child_process');
+  });
+
+  it('adds no variables and keeps the fallback PATH when the shell prints no listing', async () => {
+    const shell = join(directory, 'shell');
+    await writeFile(shell, '#!/bin/sh\nprintf "no listing here"\n', { mode: 0o755 });
+    vi.stubEnv('SHELL', shell);
+    vi.stubEnv('PATH', '/custom/bin');
+    const { resolveLoginShellVariables, resolveUserPath } = await import('./userPath');
+
+    expect(await resolveLoginShellVariables()).toEqual({});
+    expect((await resolveUserPath()).split(delimiter)[0]).toBe('/custom/bin');
+  });
+
+  it('adds no variables when the shell exits with an error', async () => {
+    const shell = join(directory, 'shell');
+    await writeFile(shell, '#!/bin/sh\nprintf "__B4M_ENV__A=1\\0__B4M_ENV__"\nexit 1\n', { mode: 0o755 });
+    vi.stubEnv('SHELL', shell);
+    const { resolveLoginShellVariables } = await import('./userPath');
+
+    expect(await resolveLoginShellVariables()).toEqual({});
+  });
+
   it('keeps the inherited PATH plus Homebrew and Nix locations when the shell cannot start', async () => {
     vi.stubEnv('SHELL', join(directory, 'missing-shell'));
     vi.stubEnv('PATH', '/custom/bin:/usr/bin');
@@ -170,5 +233,23 @@ describe.skipIf(process.platform === 'win32')('resolveUserPath', () => {
       '/run/current-system/sw/bin',
       '/nix/var/nix/profiles/default/bin',
     ]);
+  });
+});
+
+describe('parseShellEnvironment', () => {
+  it('reads the NUL-separated listing between the markers and ignores output around them', async () => {
+    const { parseShellEnvironment } = await import('./userPath');
+
+    const found = parseShellEnvironment('banner __B4M_ENV__A=1\0B=x=y\0C=two\nlines\0__B4M_ENV__ trailing');
+
+    expect(Object.fromEntries(found ?? [])).toEqual({ A: '1', B: 'x=y', C: 'two\nlines' });
+  });
+
+  it('is null without both markers or without any variable', async () => {
+    const { parseShellEnvironment } = await import('./userPath');
+
+    expect(parseShellEnvironment('A=1\0')).toBeNull();
+    expect(parseShellEnvironment('__B4M_ENV__A=1\0')).toBeNull();
+    expect(parseShellEnvironment('__B4M_ENV____B4M_ENV__')).toBeNull();
   });
 });
