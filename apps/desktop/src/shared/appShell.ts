@@ -4,10 +4,6 @@ import { z } from 'zod';
 export const APP_MENU_ACTIONS = ['new-chat', 'open-settings'] as const;
 export type AppMenuAction = (typeof APP_MENU_ACTIONS)[number];
 
-export function isAppMenuAction(value: unknown): value is AppMenuAction {
-  return typeof value === 'string' && (APP_MENU_ACTIONS as readonly string[]).includes(value);
-}
-
 /** Bounded so a runaway stack cannot flood main's log. */
 export const RENDERER_ERROR_FIELD_MAX = 8_000;
 
