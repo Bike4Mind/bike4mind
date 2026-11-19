@@ -57,7 +57,8 @@ const handler = adminApi({
       console.error('Error sending test email:', error);
       return res.status(500).json({
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to send test email',
+        // A rejected Lambda invoke carries raw AWS SDK text, so it stays in the log above.
+        error: 'Failed to send test email',
       });
     }
   });

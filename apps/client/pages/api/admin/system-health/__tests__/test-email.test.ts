@@ -107,13 +107,13 @@ describe('POST /api/admin/system-health/test-email', () => {
     expect(h.audit).not.toHaveBeenCalled();
   });
 
-  it('returns 500 with the error message when the live send throws', async () => {
+  it('returns 500 with a generic error when the live send throws', async () => {
     h.sendLiveTestEmail.mockRejectedValue(new Error('invoke denied'));
 
     const res = await call({ to: 'qa@example.org' });
 
     expect(res._getStatusCode()).toBe(500);
-    expect(res._getJSONData()).toEqual({ success: false, error: 'invoke denied' });
+    expect(res._getJSONData()).toEqual({ success: false, error: 'Failed to send test email' });
     expect(h.audit).not.toHaveBeenCalled();
   });
 });

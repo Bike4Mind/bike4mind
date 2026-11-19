@@ -28,6 +28,11 @@ const MAIL_CLIENT_PACKAGES = ['nodemailer', '@aws-sdk/client-sesv2', '@aws-sdk/c
 const ALLOWLIST: Record<string, string> = {
   'apps/workers/src/events/sendEmail.ts': 'the email-send worker',
   'packages/server-utils/src/utils/eventBus.ts': 'self-host has no event bus; email.send goes to the SMTP mailer',
+  [`${MAILER_DIR}/index.ts`]: 'MailService picks the transport',
+  [`${MAILER_DIR}/smtpTransport.ts`]: 'the SMTP transport',
+  [`${MAILER_DIR}/sesTransport.ts`]: 'the SES transport',
+  [`${MAILER_DIR}/queuedMailer.ts`]: 'self-host has no event bus; mail goes to the SMTP mailer',
+  [`${MAILER_DIR}/testEmail.ts`]: 'self-host test email runs in-process through the SMTP mailer',
 };
 
 const SCAN_ROOTS = ['apps', 'b4m-core', 'packages', 'infra', 'scripts'];
@@ -68,9 +73,7 @@ function scannedFiles(): string[] {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
   });
-  return out
-    .split('\n')
-    .filter(file => SOURCE_FILE.test(file) && !NOT_SHIPPED.test(file) && !file.startsWith(`${MAILER_DIR}/`));
+  return out.split('\n').filter(file => SOURCE_FILE.test(file) && !NOT_SHIPPED.test(file));
 }
 
 function findSendSites(): Map<string, string[]> {
