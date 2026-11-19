@@ -74,6 +74,7 @@ describe('DirectButton', () => {
     expect(dispatch.systemContext).toContain('comp123');
     expect(dispatch.promptContent).toContain('Direct this production: A running shoe ad');
     expect(dispatch.promptContent).toContain('file789');
+    expect(dispatch.promptContent).toContain('Production id: comp123');
     expect(mockGenerateNewSession).toHaveBeenCalledWith('Direct: A running shoe ad');
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/notebooks/$id', params: { id: 'session1' } });
   });
