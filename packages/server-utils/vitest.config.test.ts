@@ -6,7 +6,7 @@ import path from 'node:path';
 /**
  * Guards the lane-conditional `retry`, `include` and `exclude` gates in vitest.config.mts. `retry`
  * only changes behaviour on a failing test, and a lane that stops excluding or including the
- * `*.e2e.test.ts` suites would still go green, so nothing else would notice. Same shape as
+ * `*.e2e.test.ts` or `*.repo.test.*` suites would still go green, so nothing else would notice. Same shape as
  * apps/client/vitest.config.test.ts: ask vitest itself what it resolved.
  */
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)));
@@ -44,5 +44,15 @@ describe('the server-utils-integration lane gates', () => {
 
   it('runs only the real-Mongo suites in the integration lane', () => {
     expect(resolvedLane('integration').include).toEqual(['**/*.e2e.test.ts']);
+  });
+
+  it('keeps the repo-scan suites out of the unit and integration lanes', () => {
+    expect(resolvedLane(undefined).exclude).toContain('**/*.repo.test.?(c|m)[jt]s?(x)');
+    expect(resolvedLane('integration').exclude).toContain('**/*.repo.test.?(c|m)[jt]s?(x)');
+  });
+
+  it('runs only the repo-scan suites in the repo lane', () => {
+    expect(resolvedLane('repo').include).toEqual(['**/*.repo.test.?(c|m)[jt]s?(x)']);
+    expect(resolvedLane('repo').retry).toBeFalsy();
   });
 });

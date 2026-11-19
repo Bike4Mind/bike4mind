@@ -11,7 +11,8 @@
     "typecheck:native": "tsgo --noEmit",
     "typecheck:fast": "tsgo --noEmit",
     "test": "vitest run",
-    "test:integration": "SERVER_UTILS_TEST_LANE=integration vitest run"
+    "test:integration": "SERVER_UTILS_TEST_LANE=integration vitest run",
+    "test:repo": "SERVER_UTILS_TEST_LANE=repo vitest run"
   },
   "dependencies": {
     "@aws-sdk/client-apigatewaymanagementapi": "^3.1150.0",
