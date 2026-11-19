@@ -26,6 +26,7 @@ import {
   IFabFileDocument,
   usdToCreditsStochastic,
   type PersistedCreditHold,
+  CompletionRunAttributionSchema,
 } from '@bike4mind/common';
 import {
   isImageServeable,
@@ -71,6 +72,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
 import type { ImageCreditHolds } from './imageCreditHolds';
+import type { ImageGenerationRun } from './ImageGeneration';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
@@ -116,6 +118,8 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   adminRoleWithheld: z.boolean().optional(),
   /** The UserApiKey that authenticated the request; recorded on the settled ledger row. */
   apiKeyId: z.string().optional(),
+  /** The completion run this edit bills against, its owner checked by the route; the hold claims its budget. */
+  run: CompletionRunAttributionSchema.optional(),
   // `n` is inherited from OpenAIImageGenerationInput (1-10, the range generation honors) and
   // deliberately left alone: editing renders IMAGES_PER_EDIT_REQUEST whatever it says, so it is
   // accepted and ignored, never billed. Narrowing it to 1 here would 400 an API-key caller whose
@@ -133,6 +137,9 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
 export type ImageEditBody = z.infer<typeof ImageEditBodySchema>;
 
 const IMAGE_EDIT_FEATURE_LABEL = 'image editing';
+
+/** Billed input images: the source plus each unique reference. The mask is not an input image. */
+const editInputImageCount = (referenceImageFabFileIds?: string[]) => 1 + new Set(referenceImageFabFileIds ?? []).size;
 
 interface IImageEditServiceOptions {
   db: {
@@ -235,11 +242,13 @@ export class ImageEditService {
     userId,
     adminRoleWithheld,
     apiKeyId,
+    run,
   }: {
     adminRoleWithheld?: boolean;
     apiKeyId?: string;
     body: z.infer<typeof EditImageRequestBodySchema>;
     userId: string;
+    run?: ImageGenerationRun;
   }) {
     const now = new Date();
 
@@ -250,6 +259,8 @@ export class ImageEditService {
       questId,
       fabFileIds,
       organizationId,
+      // Only the route-checked `run` argument may bill a run; an attribution in the body is dropped.
+      run: _unverifiedRun,
       ...rest
     } = EditImageRequestBodySchema.parse(body);
     if (rest.edit_regions?.length && !isFlux3ImageModel(requestedModel))
@@ -275,6 +286,8 @@ export class ImageEditService {
     await this.assertModelAdmission(userId, model, adminRoleWithheld, organizationId);
     const session = await this.db.sessions.findById(sessionId);
     if (!session) throw new NotFoundError('Session not found');
+    // Before the quest exists, so the common refusal is the route's own 422 rather than a failed quest.
+    if (run) await this.assertRunHeadroom(userId, model, run, rest);
 
     const promptMeta: Partial<PromptMeta> = {
       model: {
@@ -348,6 +361,7 @@ export class ImageEditService {
           generationId: uuidv4(),
           adminRoleWithheld,
           apiKeyId,
+          run: run?.attribution,
         })
       );
     } catch (error) {
@@ -369,6 +383,26 @@ export class ImageEditService {
     }
 
     return quest;
+  }
+
+  /**
+   * Refuses up front a run that cannot cover the edit, priced as the worker's hold will price it. It
+   * claims nothing: the hold takes the claim, so a run drained in between still fails on the quest.
+   */
+  private async assertRunHeadroom(
+    userId: string,
+    model: string,
+    run: ImageGenerationRun,
+    { size, quality, referenceImageFabFileIds }: Pick<ImageEditBody, 'size' | 'quality' | 'referenceImageFabFileIds'>
+  ) {
+    const settings = await getSettingsMap(this.db, { skipCache: true });
+    if (!getSettingsValue('enforceCredits', settings)) return;
+    const { requiredCredits } = await this.estimateCredits(userId, model, {
+      size,
+      quality,
+      inputImageCount: editInputImageCount(referenceImageFabFileIds),
+    });
+    await run.assertHeadroom(requiredCredits);
   }
 
   /** Prices an edit; the balance and member-cap checks happen atomically in creditHolds.hold. */
@@ -509,6 +543,7 @@ export class ImageEditService {
       organizationId,
       generationId,
       edit_regions,
+      run,
     } = ImageEditBodySchema.parse(body);
     // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
     // gpt-image-2 rejects background: 'transparent' outright, so sending it there would
@@ -655,8 +690,7 @@ export class ImageEditService {
         const { requiredCredits, usdCost } = await this.estimateCredits(userId, model, {
           size,
           quality,
-          // The primary image plus the de-duped references; the mask is not an input image.
-          inputImageCount: 1 + new Set(referenceImageFabFileIds ?? []).size,
+          inputImageCount: editInputImageCount(referenceImageFabFileIds),
         });
         // An atomic decrement, not a balance read: concurrent runs cannot all pass on one balance.
         creditHold = await this.creditHolds.hold({
@@ -665,6 +699,7 @@ export class ImageEditService {
           requiredCredits,
           featureLabel: IMAGE_EDIT_FEATURE_LABEL,
           logger,
+          ...(run && { run }),
         });
         quest.creditsUsed = requiredCredits;
         usageCostUsd = usdCost;
@@ -983,7 +1018,7 @@ export class ImageEditService {
         const creditsCharged = await this.creditHolds.settle(
           creditHold,
           settlement.credits,
-          { type: 'image_edit_usage', sessionId, questId, model, apiKeyId },
+          { type: 'image_edit_usage', sessionId, questId, model, apiKeyId, ...(run && { run }) },
           { featureLabel: IMAGE_EDIT_FEATURE_LABEL, logger }
         );
         creditHold = undefined;

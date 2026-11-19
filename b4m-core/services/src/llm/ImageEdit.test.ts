@@ -8,6 +8,9 @@ import {
   IMAGES_PER_EDIT_REQUEST,
   insufficientCreditsError,
   ModelBackend,
+  RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+  UnprocessableEntityError,
+  type CompletionRunAttribution,
   type IUserDocument,
   type ModelInfo,
 } from '@bike4mind/common';
@@ -637,6 +640,131 @@ describe('ImageEditService.process model dispatch', () => {
       await runBilled({ n: 5 });
 
       expect(editSpy.mock.calls[0][2]).not.toHaveProperty('n');
+    });
+  });
+
+  describe('with a completion run', () => {
+    const completionRun: CompletionRunAttribution = {
+      runId: '6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b',
+      role: 'worker',
+      purpose: 'tool',
+    };
+    const editBody = {
+      sessionId: 'session1',
+      questId: 'quest1',
+      prompt: 'make it blue',
+      model: ImageModels.GPT_IMAGE_1_5,
+      image: 'https://example.invalid/source.png',
+      fabFileIds: ['mask1'],
+    };
+    const oneEditCredits = (inputImageCount = 1) =>
+      estimateImageCredits(gptImage, IMAGES_PER_EDIT_REQUEST, { model: gptImage.id, inputImageCount }).requiredCredits;
+
+    beforeEach(() => {
+      vi.mocked(getAvailableModels).mockResolvedValue([gptImage]);
+      vi.mocked(getSettingsValue).mockImplementation(name => name === 'enforceCredits' || undefined);
+    });
+
+    afterEach(() => {
+      vi.mocked(getSettingsValue).mockImplementation(() => undefined);
+    });
+
+    it('claims the run with the hold and tags the settled ledger entry with it', async () => {
+      editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/edited.png' });
+
+      const quest = await run(
+        ImageModels.GPT_IMAGE_1_5,
+        { run: completionRun },
+        { creditTransactions: { create: vi.fn() } }
+      );
+
+      expect(quest.status).toBe('done');
+      expect(quest.creditHolds.hold).toHaveBeenCalledWith(expect.objectContaining({ run: completionRun }));
+      expect(quest.creditHolds.settle).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(Number),
+        expect.objectContaining({ type: 'image_edit_usage', run: completionRun }),
+        expect.anything()
+      );
+    });
+
+    it('fails the quest with run_budget_exhausted and never calls the provider when the run cannot fit the hold', async () => {
+      const { service, creditHolds } = makeService({ creditTransactions: { create: vi.fn() } });
+      creditHolds.hold.mockRejectedValueOnce(
+        new UnprocessableEntityError("This run's credit budget is used up", {
+          errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+        })
+      );
+
+      await service.process({ body: { ...editBody, userId: 'user1', run: completionRun } as never, logger: silentLogger });
+
+      expect(vi.mocked(service['db'].quests.update)).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'done', errorCode: 'run_budget_exhausted' })
+      );
+      expect(editSpy).not.toHaveBeenCalled();
+      expect(creditHolds.settle).not.toHaveBeenCalled();
+    });
+
+    it('sends no run to the hold or the ledger without one', async () => {
+      editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/edited.png' });
+
+      const quest = await run(ImageModels.GPT_IMAGE_1_5, {}, { creditTransactions: { create: vi.fn() } });
+
+      expect(quest.creditHolds.hold.mock.calls[0][0]).not.toHaveProperty('run');
+      expect(quest.creditHolds.settle.mock.calls[0][2]).not.toHaveProperty('run');
+    });
+
+    it('checks the run has room for the edit, priced as the hold prices it, before queueing it with the run', async () => {
+      const enqueue = vi.fn();
+      const assertHeadroom = vi.fn(async () => undefined);
+      const { service } = makeService({}, enqueue);
+
+      await service.invoke({
+        userId: 'user1',
+        body: { ...editBody, referenceImageFabFileIds: ['a', 'a', 'b'] },
+        run: { attribution: completionRun, assertHeadroom },
+      });
+
+      expect(assertHeadroom).toHaveBeenCalledWith(oneEditCredits(3));
+      expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ run: completionRun }));
+    });
+
+    it('refuses before touching the quest or the queue when the run has no room', async () => {
+      const refusal = new UnprocessableEntityError('used up', { errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE });
+      const enqueue = vi.fn();
+      const { service } = makeService({}, enqueue);
+
+      await expect(
+        service.invoke({
+          userId: 'user1',
+          body: editBody,
+          run: { attribution: completionRun, assertHeadroom: async () => Promise.reject(refusal) },
+        })
+      ).rejects.toBe(refusal);
+
+      expect(vi.mocked(service['db'].quests.findById)).not.toHaveBeenCalled();
+      expect(enqueue).not.toHaveBeenCalled();
+    });
+
+    it('skips the headroom check when credits are not enforced', async () => {
+      vi.mocked(getSettingsValue).mockImplementation(() => undefined);
+      const enqueue = vi.fn();
+      const assertHeadroom = vi.fn(async () => undefined);
+      const { service } = makeService({}, enqueue);
+
+      await service.invoke({ userId: 'user1', body: editBody, run: { attribution: completionRun, assertHeadroom } });
+
+      expect(assertHeadroom).not.toHaveBeenCalled();
+      expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ run: completionRun }));
+    });
+
+    it('never queues a run named only in the body, which the route has not checked', async () => {
+      const enqueue = vi.fn();
+      const { service } = makeService({}, enqueue);
+
+      await service.invoke({ userId: 'user1', body: { ...editBody, run: completionRun } });
+
+      expect(enqueue.mock.calls[0][0].run).toBeUndefined();
     });
   });
 
