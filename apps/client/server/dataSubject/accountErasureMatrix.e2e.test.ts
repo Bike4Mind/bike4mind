@@ -4,7 +4,7 @@ import { adminAuditLogRepository, mongoose } from '@bike4mind/database';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 // Registered outside the `@bike4mind/database` barrel, so they register only when imported.
 import '@bike4mind/server-utils/models/Subscription';
-import '@server/models/UserSubscription';
+import '@bike4mind/server-utils/models/UserSubscription';
 import { erasureIdHash } from '@bike4mind/server-utils/privacy/erasureHash';
 import {
   createMongoReplSet,

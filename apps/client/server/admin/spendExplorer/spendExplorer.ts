@@ -11,7 +11,7 @@ import {
   type SpendTimelineMarker,
   type SpendTimelineResponse,
 } from '@bike4mind/common';
-import { SUSPEND_ACTIONS } from '@server/security/accountStatusAuditActions';
+import { SUSPEND_ACTIONS } from '@bike4mind/server-utils/security/accountStatusAuditActions';
 import { lookbackStart, normalizeProvider, shapeTimeline } from './shapeTimeline';
 
 const MAX_TIME_MS = 20_000;

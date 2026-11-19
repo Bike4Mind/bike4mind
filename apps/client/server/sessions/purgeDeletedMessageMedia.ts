@@ -1,11 +1,11 @@
 import { Session } from '@bike4mind/database';
-import { enqueueGeneratedMediaPurge } from '@server/sessions/generatedMediaPurgeQueue';
+import { enqueueGeneratedMediaPurge } from '@bike4mind/server-utils/sessions/generatedMediaPurgeQueue';
 import {
   PURGE_BUDGET_MS,
   type PurgeRequestLogger,
   isGeneratedContentKey,
   runGeneratedMediaPurge,
-} from '@server/sessions/purgeDeletedNotebookMedia';
+} from '@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia';
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 

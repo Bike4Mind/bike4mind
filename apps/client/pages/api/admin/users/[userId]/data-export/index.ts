@@ -9,7 +9,11 @@ import { cacheRepository } from '@bike4mind/database';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { requireStepUp } from '@server/auth/stepUp';
-import { denySelfDataExport, findDataExportTarget, listAdminDataExports } from '@server/dataSubject/adminDataExports';
+import {
+  denySelfDataExport,
+  findDataExportTarget,
+  listAdminDataExports,
+} from '@bike4mind/server-utils/dataSubject/adminDataExports';
 import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';

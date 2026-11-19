@@ -36,10 +36,9 @@ vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
 const { mockApplyPlanStorageLimit } = vi.hoisted(() => ({ mockApplyPlanStorageLimit: vi.fn() }));
 vi.mock('./applyPlanStorageLimit', () => ({ applyPlanStorageLimit: mockApplyPlanStorageLimit }));
 
-vi.mock('@bike4mind/database', async () => {
-  const actual = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
+vi.mock('@bike4mind/database', () => {
   return {
-    ...actual,
+    creditLotRepository: {},
     userRepository: {
       findById: vi.fn().mockResolvedValue({ id: 'u1', email: 'owner@acme.com' }),
       findByStripeCustomerId: vi.fn(),
@@ -133,6 +132,80 @@ const orgMirror = {
   stripeCustomerId: 'cus_test',
   lastSyncedAt: expect.any(Date),
 };
+
+describe('organization invoice storage synchronization', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(organizationRepository.findByStripeCustomerId).mockResolvedValue(null);
+  });
+
+  it.each(['subscription_create', 'subscription_cycle', 'subscription_update'] as const)(
+    'synchronizes %s from the persisted subscription owner',
+    async billing_reason => {
+      const sub = buildSubscription();
+      vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockResolvedValue({
+        ownerType: SubscriptionOwnerType.Organization,
+        ownerId: 'stored-org',
+      } as NonNullable<Awaited<ReturnType<typeof subscriptionRepository.findByStripeSubscriptionId>>>);
+      await handleOrganizationSubscriptionInvoice(
+        { ...buildInvoice(), billing_reason },
+        sub,
+        { userId: 'u1', stage: 'test', ownerType: SubscriptionOwnerType.Organization },
+        logger
+      );
+      expect(mockApplyPlanStorageLimit).toHaveBeenCalledWith(sub, 'stored-org', logger, 'Organization');
+    }
+  );
+
+  it('does not adopt the storage of a refused subscription with no stored row', async () => {
+    vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockResolvedValue(null);
+    await handleOrganizationSubscriptionInvoice(
+      buildInvoice(),
+      buildSubscription(),
+      {
+        userId: 'u1',
+        stage: 'test',
+        ownerType: SubscriptionOwnerType.Organization,
+      },
+      logger
+    );
+    expect(mockApplyPlanStorageLimit).not.toHaveBeenCalled();
+  });
+
+  it('does not retry a committed invoice when storage owner lookup fails', async () => {
+    vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockRejectedValueOnce(new Error('lookup failed'));
+    await expect(
+      handleOrganizationSubscriptionInvoice(
+        buildInvoice(),
+        buildSubscription(),
+        {
+          userId: 'u1',
+          stage: 'test',
+          ownerType: SubscriptionOwnerType.Organization,
+        },
+        logger
+      )
+    ).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalled();
+    expect(emitMetric).toHaveBeenCalledWith('Lumina5/Entitlements', 'PlanStorageLimitFailed', 1, {
+      reason: 'owner_lookup_failed',
+    });
+  });
+
+  it('does not apply storage when the stored subscription belongs to a user', async () => {
+    vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockResolvedValue({
+      ownerType: SubscriptionOwnerType.User,
+      ownerId: 'stored-user',
+    } as NonNullable<Awaited<ReturnType<typeof subscriptionRepository.findByStripeSubscriptionId>>>);
+    await handleOrganizationSubscriptionInvoice(
+      buildInvoice(),
+      buildSubscription(),
+      { userId: 'u1', stage: 'test', ownerType: SubscriptionOwnerType.Organization },
+      logger
+    );
+    expect(mockApplyPlanStorageLimit).not.toHaveBeenCalled();
+  });
+});
 
 describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
   beforeEach(() => {

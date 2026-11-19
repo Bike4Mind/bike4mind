@@ -109,6 +109,7 @@ beforeEach(async () => {
 
 // These purges are self-serve, so the erasure registry is never consulted.
 const erasureRegistry: ErasureRegistry = {
+  assertReady: () => {},
   scope: async () => [],
   erase: async () => {},
   audit: async () => ({ remaining: [], unclassified: [] }),

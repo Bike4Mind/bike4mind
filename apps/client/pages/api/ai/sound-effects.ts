@@ -18,6 +18,7 @@ import {
   createAudioJobKeepingAudioOnFullQuota,
   dailyLimitError,
   GENERATION_JOB_ID_HEADER,
+  failureLogLevelOf,
   isRateLimitedFailure,
   prefersRespondAsync,
   retryAfterSecondsOf,
@@ -143,7 +144,11 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
       req.logger.warn('Sound-effects generation deferred: provider at capacity', { jobId: job.id, provider });
       throw providerBusyHttpError(new ProviderBusyError(provider, 'upstream_rate_limited', retryAfterSecondsOf(job)));
     }
-    req.logger.error('Sound-effects generation failed', { jobId: job.id, state: job.state, error: job.error });
+    req.logger[failureLogLevelOf(job)]('Sound-effects generation failed', {
+      jobId: job.id,
+      state: job.state,
+      error: job.error,
+    });
     return res.status(502).json(GENERATION_FAILED);
   }
 

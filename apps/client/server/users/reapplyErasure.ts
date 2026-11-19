@@ -16,6 +16,7 @@ import { purgeDeletedUserData } from '@bike4mind/server-utils/services/purgeDele
 import { purgeAccountContent } from '@bike4mind/server-utils/users/purgeAccountContent';
 import { purgeAccountFiles } from '@bike4mind/server-utils/users/purgeAccountFiles';
 import { erasureRegistry } from '../dataSubject/erasureRegistry';
+import { assertContributedRegistryValid } from '../dataSubject/registry';
 
 type ReapplyLogger = Pick<Logger, 'info' | 'warn' | 'error'>;
 
@@ -61,6 +62,7 @@ export async function reapplyErasure(
     // File erasure acquires its own User lease and permanent export fence, including restored
     // accounts without a deletion schedule. No scheduled-deletion lease exists for content replay.
     const assertLease = async () => {};
+    assertContributedRegistryValid();
     await purgeAccountFiles(userId, { logger, assertLease });
     await purgeAccountContent(userId, { logger, assertLease });
     await erasureRegistry.erase(subject, assertLease);

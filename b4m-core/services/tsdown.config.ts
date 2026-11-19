@@ -23,6 +23,7 @@ export default defineConfig({
     'src/sceneJobs/index.ts',
     'src/audioJobs/index.ts',
     'src/imageJobs/index.ts',
+    'src/renderJobs/index.ts',
     'src/agentProactiveMessagingService/index.ts',
     'src/cliCompletions.ts',
     'src/llm/index.ts',

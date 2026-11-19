@@ -12,6 +12,7 @@ process.on('warning', warning => {
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { render, Box, Text, useApp, useInput } from 'ink';
+import { fullscreenEnabled, renderFullscreen } from './fullscreen.js';
 import { randomBytes } from 'crypto';
 import { existsSync, promises as fs } from 'fs';
 import { homedir } from 'os';
@@ -3033,8 +3034,10 @@ function CliApp() {
       case 'new': {
         // Clear the terminal screen and re-render the banner so the fresh
         // session starts with the same header the user sees on startup.
-        console.clear();
-        renderBanner();
+        if (!fullscreenEnabled()) {
+          console.clear();
+          renderBanner();
+        }
 
         const newSession = await createFreshSession(buildLifecycleContext());
 
@@ -4543,6 +4546,7 @@ function CliApp() {
 
   return (
     <App
+      fullscreen={fullscreenEnabled()}
       onMessage={handleMessage}
       onBackgroundCompletion={handleBackgroundCompletion}
       onCommand={handleCommand}
@@ -4654,6 +4658,8 @@ warmFileCache();
 // the terminal's native mouse-wheel/scrollbar. Trade-off: Ink 7.0.1 has
 // a known resize-render bug where widening the terminal can leave ghost
 // frames in scrollback. Re-evaluate when upgrading Ink.
-render(<CliApp />, {
-  exitOnCtrlC: false,
-});
+if (fullscreenEnabled()) {
+  renderFullscreen(<CliApp />);
+} else {
+  render(<CliApp />, { exitOnCtrlC: false });
+}

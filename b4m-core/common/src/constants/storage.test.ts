@@ -1,5 +1,28 @@
 import { describe, it, expect } from 'vitest';
-import { resolveUserStorageLimit, storageLimitToBytes } from './storage';
+import {
+  resolveOrganizationStorageLimit,
+  organizationStorageLimitBytes,
+  resolveUserStorageLimit,
+  storageLimitToBytes,
+} from './storage';
+
+describe('resolveOrganizationStorageLimit', () => {
+  it.each([
+    [{}, 10_000, 'default'],
+    [{ storageLimit: null }, 10_000, 'default'],
+    [{ storageLimit: 10_000 }, 10_000, 'override'],
+    [{ storageLimit: 2500 }, 2500, 'override'],
+    [{ storageLimit: 0 }, 0, 'override'],
+    [{ storageLimitOverride: null, planStorageLimit: 5000 }, 5000, 'plan'],
+    [{ storageLimit: 2500, storageLimitOverride: null }, 10_000, 'default'],
+    [{ storageLimit: 2500, planStorageLimit: 5000 }, 5000, 'plan'],
+    [{ storageLimitOverride: 0, planStorageLimit: 5000 }, 0, 'override'],
+    [{ storageLimitOverride: 2000, planStorageLimit: 5000 }, 2000, 'override'],
+  ])('resolves %j to %i MB from %s', (allocation, limitMb, source) => {
+    expect(resolveOrganizationStorageLimit(allocation)).toEqual({ limitMb, source });
+    expect(organizationStorageLimitBytes(allocation)).toBe(storageLimitToBytes(limitMb));
+  });
+});
 
 describe('storageLimitToBytes', () => {
   it('converts decimal MB to bytes', () => {

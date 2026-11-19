@@ -361,6 +361,13 @@ export const infraHolders = {
     kind: 'holder',
     references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
   },
+  // Triage of the person's own mail. The draft's recipient is the third-party sender, which goes with the document.
+  EmailTriageItem: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    // The ingested email's id, not an address.
+    unrelatedPaths: ['emailId'],
+  },
   FallbackLakeSetting: { kind: 'noUserData', note: 'Per-lake grounding settings; no user reference.' },
   GitHubLakeAuthGrant: {
     kind: 'holder',

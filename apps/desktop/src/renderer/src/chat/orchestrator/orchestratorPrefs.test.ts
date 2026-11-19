@@ -33,6 +33,7 @@ describe('orchestratorPrefs', () => {
     expect(ORCHESTRATOR_VIEWS).toEqual([
       'tavern',
       'aquarium',
+      'office',
       'board',
       'table',
       'tile-wall',
@@ -47,6 +48,15 @@ describe('orchestratorPrefs', () => {
     writeView('s2', 'aquarium');
     expect(readView('s1')).toBe('tile-wall');
     expect(readView('s2')).toBe('aquarium');
+  });
+
+  it('remembers Office at the session, project and global levels', () => {
+    writeView('office-session', 'office', '/office-project');
+    writeView('other-session', 'board', '/other-project');
+    expect(readView('office-session', '/other-project')).toBe('office');
+    expect(readView('new-session', '/office-project')).toBe('office');
+    writeView('office-session', 'office', '/office-project');
+    expect(readView('new-session', '/new-project')).toBe('office');
   });
 
   describe('view fallback levels', () => {

@@ -2,6 +2,8 @@ import { ApiKeyScope, isFullAdmin } from '@bike4mind/common';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
+import { providerIdSearchAudit } from '@bike4mind/server-utils/admin/usersList/providerIdSearchAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { selfIdsOf } from '@server/admin/usersBulk/actor';
 import { usersBulkPreviewDeps, usersBulkResolveDeps } from '@bike4mind/server-utils/admin/usersBulk/adapters';
 import { previewAdminUsersBulk, resolveAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/resolve';
@@ -30,6 +32,18 @@ const handler = adminApi({
         actorIsFullAdmin: isFullAdmin(req.user),
       });
       const preview: AdminUsersBulkPreview = await previewAdminUsersBulk(cohort, action, usersBulkPreviewDeps);
+      // The sample carries identities, so a provider-id filter resolves an account here too.
+      const input =
+        target.kind === 'filter'
+          ? providerIdSearchAudit(target.filter.search, 'users_bulk_preview', {
+              count: cohort.matched,
+              sole:
+                cohort.matched === 1 && preview.sample.length === 1
+                  ? { id: preview.sample[0].id, displayName: preview.sample[0].email ?? preview.sample[0].id }
+                  : undefined,
+            })
+          : null;
+      if (input) await recordAdminActionFromRequest(req, input);
       return res.json(preview);
     })
   );

@@ -35,12 +35,14 @@ vi.mock('../utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
 }));
 
+const mockFindAdminRoles = vi.hoisted(() => vi.fn());
 const cacheStore = new Map<string, { value: number; expiresAt: number }>();
 
 vi.mock('@bike4mind/database', () => ({
   User: { findById: vi.fn() },
   userApiKeyRepository: { findById: vi.fn() },
   cacheRepository: {},
+  adminRoleRepository: { findByIds: (...args: unknown[]) => mockFindAdminRoles(...args) },
 }));
 
 vi.mock('@bike4mind/services', async importOriginal => ({
@@ -100,7 +102,7 @@ import {
 import { cacheService, userApiKeyService } from '@bike4mind/services';
 import { User } from '@bike4mind/database';
 import { checkApiKeyRateLimit, extractApiKeyFromHeaders } from '../utils/apiKeyRateLimitCheck';
-import { ACCOUNT_DELETION_PENDING_CODE, ApiKeyScope, CreditHolderType } from '@bike4mind/common';
+import { ACCOUNT_DELETION_PENDING_CODE, ApiKeyScope, CreditHolderType, hasAdminPermission } from '@bike4mind/common';
 
 const userId = 'user-abc';
 const key = `rate-limit:ws-auth:${userId}`;
@@ -404,6 +406,58 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
   // A still-valid session JWT for a consented account must still be refused once the account is
   // banned/disputed/suspended: ban does not bump tokenVersion, and the WS/CLI completion surfaces
   // fall back to this primitive. Same gate verifyApiKey applies via assertOwnerAccountUsable.
+  describe('role-held admin permissions', () => {
+    const ROLE_ID = 'a'.repeat(24);
+    const DELETED_ROLE_ID = 'c'.repeat(24);
+
+    beforeEach(() => {
+      mockFindAdminRoles.mockReset().mockResolvedValue([{ permissions: ['settings:manage'] }]);
+    });
+
+    it('returns a user whose only grant comes from a role', async () => {
+      vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', adminRoleIds: [ROLE_ID] }));
+
+      const { user } = await verifyJwtToken(sign('u1'));
+
+      expect(mockFindAdminRoles).toHaveBeenCalledWith([ROLE_ID]);
+      expect(hasAdminPermission(user, 'settings:manage')).toBe(true);
+    });
+
+    it('refuses the permission on the next call once the role is removed', async () => {
+      vi.mocked(User.findById).mockResolvedValueOnce(mockUser({ aupAcceptedVersion: 'v1', adminRoleIds: [ROLE_ID] }));
+      expect(hasAdminPermission((await verifyJwtToken(sign('u1'))).user, 'settings:manage')).toBe(true);
+
+      vi.mocked(User.findById).mockResolvedValueOnce(mockUser({ aupAcceptedVersion: 'v1', adminRoleIds: [] }));
+      expect(hasAdminPermission((await verifyJwtToken(sign('u1'))).user, 'settings:manage')).toBe(false);
+    });
+
+    it('grants nothing for a deleted or malformed role id', async () => {
+      mockFindAdminRoles.mockResolvedValue([]);
+      vi.mocked(User.findById).mockResolvedValue(
+        mockUser({ aupAcceptedVersion: 'v1', adminRoleIds: [DELETED_ROLE_ID, 'not-an-id'] })
+      );
+
+      const { user } = await verifyJwtToken(sign('u1'));
+
+      expect(mockFindAdminRoles).toHaveBeenCalledWith([DELETED_ROLE_ID]);
+      expect(hasAdminPermission(user, 'settings:manage')).toBe(false);
+    });
+
+    it('rejects rather than returning a user when the role lookup throws', async () => {
+      vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', adminRoleIds: [ROLE_ID] }));
+      mockFindAdminRoles.mockRejectedValue(new Error('db down'));
+
+      await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('db down');
+    });
+
+    it('does not look up roles for a refused session', async () => {
+      vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: undefined, adminRoleIds: [ROLE_ID] }));
+
+      await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('Policy acceptance required');
+      expect(mockFindAdminRoles).not.toHaveBeenCalled();
+    });
+  });
+
   describe('account state (ban / dispute / suspension) on the JWT/WS/CLI fallback', () => {
     it('rejects a banned owner even with accepted policy and a current tokenVersion', async () => {
       vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', isBanned: true }));

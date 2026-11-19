@@ -8,13 +8,13 @@
  * - apps/client/server/middlewares/errorHandler.ts (`<METHOD> <url> \u2192 <status>: ...` and `[cast-id-remap]`)
  * - apps/client/pages/api/tools/web-fetch.ts, whose refused targets reach that handler as a 400
  * - apps/client/pages/api/stripe/webhook.ts (signature verification failure)
- * - apps/client/server/security/ingestToken.ts (INGEST_TOKEN_REFUSED_MESSAGE, a refused ingest token)
+ * - packages/server-utils/src/security/ingestToken.ts (INGEST_TOKEN_REFUSED_MESSAGE, a refused ingest token)
  * Request metadata (`clientIp`, `userId`) comes from apps/client/server/middlewares/requestLogger.ts.
  * Paths are parsed from the error handler line's raw URL, not the `path` field: apps/client/server/middlewares/logging.ts
  * folds every catch-all miss into `/api/:unmatchedApiPath`. Neither carries the query string.
  */
 
-import { INGEST_TOKEN_REFUSED_MESSAGE } from '@server/security/ingestToken';
+import { INGEST_TOKEN_REFUSED_MESSAGE } from '@bike4mind/server-utils/security/ingestToken';
 import { rowToObject } from '../utils/logsInsights';
 import type { ResultField } from '@aws-sdk/client-cloudwatch-logs';
 

@@ -24,7 +24,7 @@ const m = vi.hoisted(() => ({
   admissionArgs: vi.fn(),
 }));
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.quotaAdmission }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.quotaAdmission }));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain = {
