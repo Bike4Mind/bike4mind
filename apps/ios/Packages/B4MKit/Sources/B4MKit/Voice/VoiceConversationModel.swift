@@ -168,12 +168,17 @@ public final class VoiceConversationModel {
     await audioSession.deactivate()
   }
 
-  /// Tap to interrupt: stops the reply and goes back to listening.
+  /// Tap to interrupt: stops the reply and goes back to listening with a fresh recognizer.
   public func interrupt() async {
     switch phase {
-    case .sending, .streaming, .speaking: await abandonTurn()
-    default: break
+    case .sending, .streaming, .speaking: break
+    default: return
     }
+    await abandonTurn()
+    // Unlike a spoken barge-in, nothing heard so far is the user's next utterance; it is the reply's echo.
+    dropTranscript()
+    await listener.stop()
+    await beginListening()
   }
 
   public func setMuted(_ muted: Bool) async {

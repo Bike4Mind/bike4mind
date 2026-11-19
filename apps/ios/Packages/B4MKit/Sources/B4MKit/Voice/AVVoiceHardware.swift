@@ -17,6 +17,7 @@
 
     public func speak(_ text: String) async {
       await withCheckedContinuation { continuation in
+        complete()
         finished = continuation
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: AVSpeechSynthesisVoice.currentLanguageCode())

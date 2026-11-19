@@ -237,10 +237,26 @@ final class VoiceConversationModelTests: XCTestCase {
     await realtime.emit(frame(reply: longReply, status: .running))
     await until { model.phase == .speaking }
 
+    await listener.emit("the capital")
+    let startsBefore = await listener.startCount
     await model.interrupt()
     XCTAssertEqual(model.phase, .listening)
+    XCTAssertEqual(model.liveTranscript, "")
     let stops = await speaker.stopCount
     XCTAssertGreaterThanOrEqual(stops, 1)
+    let startsAfter = await listener.startCount
+    XCTAssertEqual(startsAfter, startsBefore + 1)
+
+    // The rest of the reply is never spoken, and only what is heard after the tap is sent.
+    await realtime.emit(frame(reply: longReply + "A third sentence that is long enough. ", status: .done))
+    await api.setSendResult(.success(ChatSendReceipt(questID: "quest-2", sessionID: "s1")))
+    await say("hello there")
+    await until { await api.sentMessages.count == 2 }
+    try await Task.sleep(for: .milliseconds(50))
+    let sent = await api.sentMessages
+    XCTAssertEqual(sent.map(\.message), ["Tell me about Paris", "hello there"])
+    let spoken = await speaker.spoken
+    XCTAssertEqual(spoken, ["The capital of France is Paris."])
     await model.stop()
   }
 
