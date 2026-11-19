@@ -53,6 +53,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.credits.grant_unblocked': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.credits.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.subscription.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
+  'spend.freeze.applied': { category: 'credits', severity: 'critical', write: 'strict' },
+  'spend.freeze.lifted': { category: 'credits', severity: 'critical', write: 'strict' },
   'billing.comp.changed': { category: 'credits', severity: 'notice', write: 'strict' },
   'billing.subscription.synced': { category: 'credits', severity: 'notice', write: 'strict' },
   'billing.subscription.cancel_scheduled': { category: 'credits', severity: 'critical', write: 'strict' },
@@ -66,6 +68,11 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.role.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
   'user.permissions.updated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.permissions.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'access_review.confirmed': { category: 'access', severity: 'notice', write: 'strict' },
+  'access_review.revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'access_review.completed': { category: 'access', severity: 'notice', write: 'strict' },
+  'access_review.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'access_review.exported': { category: 'access', severity: 'notice', write: 'bestEffort' },
   'user.impersonation.started': { category: 'access', severity: 'critical', write: 'strict' },
   'user.impersonation.escalated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.impersonation.ended': { category: 'access', severity: 'info', write: 'bestEffort' },
@@ -113,6 +120,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.conversion.initiated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.revoked': { category: 'org', severity: 'notice', write: 'strict' },
   'org.group_types.updated': { category: 'org', severity: 'info', write: 'strict' },
+  'org.segment.changed': { category: 'org', severity: 'notice', write: 'strict' },
   'org.admins.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.owner.transferred': { category: 'org', severity: 'notice', write: 'strict' },
   'org.group_member.assigned': { category: 'org', severity: 'info', write: 'bestEffort' },
@@ -142,6 +150,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.api_key.access_updated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.member_revoked': { category: 'access', severity: 'notice', write: 'strict' },
   'org.settings.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  // A platform admin reading an org they do not belong to. strict, like the other staff read audits.
+  'org.viewed': { category: 'org', severity: 'info', write: 'strict' },
   'org.logo.updated': { category: 'org', severity: 'info', write: 'bestEffort' },
   // strict: written inside the delete transaction, so the delete never lands without its entry.
   'org.deleted': { category: 'org', severity: 'notice', write: 'strict' },
@@ -183,6 +193,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // counts as a customer, so both directions keep a record.
   'user.internal.marked': { category: 'account', severity: 'notice', write: 'strict' },
   'user.internal.unmarked': { category: 'account', severity: 'notice', write: 'strict' },
+  'user.segment.changed': { category: 'account', severity: 'notice', write: 'strict' },
   'user.email.unverified': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.verification_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
@@ -290,6 +301,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },
   'user.api_key.restored': { category: 'access', severity: 'notice', write: 'strict' },
   'user.api_key.rotated': { category: 'access', severity: 'critical', write: 'strict' },
+  // Adds or removes ai:end-user-id on an existing key (pages/api/admin/user-api-keys/[id]/end-user-id.ts).
+  'user.api_key.end_user_id_updated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.api_keys.revoked_all': { category: 'access', severity: 'notice', write: 'strict' },
   'org.data_lake.embedding_spend_reset': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.storage.recalculated': { category: 'support', severity: 'info', write: 'bestEffort' },
@@ -403,6 +416,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'abuse.eval_set.created': { category: 'access', severity: 'info', write: 'bestEffort' },
   'abuse.eval_set.verdict_recorded': { category: 'access', severity: 'info', write: 'bestEffort' },
   'abuse.eval_set.run': { category: 'access', severity: 'info', write: 'bestEffort' },
+  // An admin resolving a provider end-user identifier (from a provider safety notice) to an account.
+  'user.provider_id.resolved': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.incident.viewed': { category: 'support', severity: 'notice', write: 'strict' },
   // An admin read of other users' feedback text. No support case (triage reads it routinely), but strict.
   'feedback.viewed': { category: 'support', severity: 'info', write: 'strict' },
@@ -411,6 +426,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'feedback.note_added': { category: 'support', severity: 'info', write: 'strict' },
   'feedback.deleted': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.incident.verdict_recorded': { category: 'support', severity: 'notice', write: 'strict' },
+  'moderation.incident.escalated': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.taken_down': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.takedown_reverted': { category: 'support', severity: 'notice', write: 'strict' },
 

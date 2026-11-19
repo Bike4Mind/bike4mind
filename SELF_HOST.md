@@ -635,7 +635,7 @@ This is a separate corpus from your uploaded files: the **Help** panel and the H
 | Half                                           | Built by                                          | Needs a key        |
 | ---------------------------------------------- | ------------------------------------------------- | ------------------ |
 | The article index and the bundled markdown     | `prebuild`, on every `next build`                 | no                 |
-| The embedding vectors (`help-embeddings.json`) | `pnpm --filter @bike4mind/scripts help:vectorize` | yes, an OpenAI key |
+| The embedding vectors (`help-embeddings.json` + `help-embeddings.bin`) | `pnpm --filter @bike4mind/scripts help:vectorize` | yes, an OpenAI key |
 
 Neither artifact is committed to the repository, so **a stock self-host build has the index but no vectors, and help search runs on keyword matching.** That is the supported default, not a misconfiguration: the Help panel, article browsing and every help link work exactly the same, and the Help AI chat still answers - it just ranks passages lexically instead of semantically, so a question phrased in words the article does not literally use may retrieve less relevant sections.
 
@@ -654,7 +654,9 @@ Re-run it whenever you edit the shipped docs. The failure is quieter than it sou
 
 Without a key the command throws rather than skipping. Set `HELP_EMBEDDINGS_REQUIRED=false` to downgrade that to a logged skip, which is what a build pipeline that does not care about semantic help search wants.
 
-**You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Profile menu -> More -> API Keys**) as well as at build time.
+**Upgrading from an older build:** the vectors used to live entirely in `help-embeddings.json`. An install that built them then and rebuilds without a key keeps serving keyword results until you re-run `help:vectorize`, which writes the new JSON + binary pair.
+
+**You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` + `help-embeddings.bin` pair still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Profile menu -> More -> API Keys**) as well as at build time.
 
 This is also the one place OpenAI specifically is required: Help panel vectors are always embedded with `text-embedding-3-small`, whatever **Default Embedding Model** you picked for your own files, because the corpus and the query have to share a vector space.
 
@@ -1312,7 +1314,7 @@ Focused verification:
 
 ```sh
 pnpm --filter @bike4mind/database test src/models/ai/DataLakeModel.purge.test.ts src/models/content/FabFileModel.cleanupTransaction.test.ts
-pnpm --filter @bike4mind/services test src/dataLakeService/cleanupDeletedDataLake.test.ts
+pnpm --filter @bike4mind/services-core test src/dataLakeService/cleanupDeletedDataLake.test.ts
 pnpm --filter @bike4mind/workers test src/selfhost/dataLakeCleanupQueue.test.ts
 pnpm --filter @bike4mind/workers test src/queueHandlers/dataLakeCleanup.test.ts
 # Requires an isolated loopback MinIO, a disposable bucket, and test AWS credentials.

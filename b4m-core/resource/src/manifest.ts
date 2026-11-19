@@ -79,6 +79,7 @@ export const DEFAULT_MANIFEST = {
   SLACK_COST_ALARMS_WEBHOOK_URL: { kind: 'secret', optional: true },
   SLACK_ERROR_REPORTING_WEBHOOK_URL: { kind: 'secret', optional: true },
   SLACK_WEBHOOK_URL: { kind: 'secret', optional: true },
+  SLACK_FEEDBACK_DESTINATIONS: { kind: 'secret', optional: true },
   STRIPE_PUBLISHABLE_KEY: { kind: 'secret', optional: true },
   STRIPE_SECRET_KEY: { kind: 'secret', optional: true },
   STRIPE_WEBHOOK_SECRET: { kind: 'secret', optional: true },
@@ -162,6 +163,9 @@ export const DEFAULT_MANIFEST = {
   dataLakeCleanupQueue: { kind: 'queue', optional: true },
   // Leftovers of a notebook or message delete's media purge; with no URL they are logged and dropped.
   generatedMediaPurgeQueue: { kind: 'queue', optional: true },
+  // Studio render jobs; drained by the optional render-worker compose profile (apps/workers/src/render/main.ts).
+  // With no URL the render submit step throws instead of queueing work nothing consumes.
+  renderJobQueue: { kind: 'queue', optional: true },
   researchEngineQueue: { kind: 'queue' },
   // Queue name -> URL map read by getSourceQueueUrl (dlqRegistry). Hosted links this as a
   // Linkable to the frontend Lambda instead of the individual queues; the shim computes it

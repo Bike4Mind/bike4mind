@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { emptyResearchRunTotals, researchFeedFingerprint, RESEARCH_FEED_MAX_BYTES } from '@bike4mind/common';
+import {
+  emptyResearchRunTotals,
+  researchFeedFingerprint,
+  RESEARCH_FEED_MAX_BYTES,
+  spendFrozenError,
+} from '@bike4mind/common';
 import type { ResearchFeedCursor } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
@@ -9,11 +14,13 @@ const h = vi.hoisted(() => ({
   findLakeById: vi.fn(),
   findUserById: vi.fn(),
   findOrgById: vi.fn(),
+  findActiveFreeze: vi.fn(),
   resolveWebSearchProviders: vi.fn(),
   executeResearchRun: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
   getAvailableModels: vi.fn(),
   judge: vi.fn(),
+  evaluateRules: vi.fn(),
   fetchAndParseURL: vi.fn(),
   proposeDataLakeContent: vi.fn(),
   recordResearchRunOutcome: vi.fn(),
@@ -39,6 +46,7 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   userRepository: { findById: h.findUserById },
   organizationRepository: { findById: h.findOrgById, findIdsWithAdminRights: h.findIdsWithAdminRights },
+  spendFreezeRepository: { findActiveForSubject: h.findActiveFreeze },
   dataLakeRepository: { findById: h.findLakeById },
   dataLakeResearchRunRepository: {
     claimForExecution: h.claimForExecution,
@@ -47,8 +55,11 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('@bike4mind/services', async importOriginal => {
-  const real = (await importOriginal<typeof import('@bike4mind/services')>()).dataLakeResearchService;
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  const real = actual.dataLakeResearchService;
   return {
+    // Real: the run must refuse with the shared spend_frozen error and subject.
+    spendFreezeService: actual.spendFreezeService,
     apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
     dataLakeService: {
       proposeDataLakeContent: h.proposeDataLakeContent,
@@ -61,6 +72,9 @@ vi.mock('@bike4mind/services', async importOriginal => {
       recordResearchRunOutcome: h.recordResearchRunOutcome,
       RelevanceJudgeService: class {
         judge = h.judge;
+      },
+      ItemRuleService: class {
+        evaluate = h.evaluateRules;
       },
       RELEVANCE_JUDGE_DEFAULT_MODEL: 'default-judge-model',
       // Real: the live source rules are what these tests exercise.
@@ -142,6 +156,7 @@ beforeEach(() => {
   h.findLakeById.mockResolvedValue({ id: 'lake-1', createdByUserId: 'owner-1' });
   h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: null });
   h.findOrgById.mockResolvedValue(null);
+  h.findActiveFreeze.mockResolvedValue(null);
   h.resolveWebSearchProviders.mockResolvedValue([{ name: 'serpapi', search: vi.fn(async () => []) }, null]);
   h.getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'k' });
   h.getAvailableModels.mockResolvedValue([{ id: 'gpt-4.1-mini', backend: 'openai' }]);
@@ -187,6 +202,59 @@ describe('runLakeResearch', () => {
       'run-1',
       expect.objectContaining({ status: 'failed', spentMicroUsd: 0, error: expect.stringMatching(/owner account/) })
     );
+  });
+
+  it('fails a run whose billed org has spending paused before any search, judgment or charge', async () => {
+    h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: 'org-7' });
+    h.findOrgById.mockResolvedValue({ id: 'org-7' });
+    h.findActiveFreeze.mockResolvedValue({ scopeType: 'Organization', frozenAt: new Date() });
+
+    expect(await runLakeResearch('run-1', logger)).toEqual({ claimed: true });
+
+    expect(h.findActiveFreeze).toHaveBeenCalledWith({ userId: 'owner-1', organizationId: 'org-7', apiKeyId: null });
+    expect(h.executeResearchRun).not.toHaveBeenCalled();
+    expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+    expect(h.settleRun).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        status: 'failed',
+        spentMicroUsd: 0,
+        error: spendFrozenError({ scopeType: 'Organization', frozenAt: new Date() }).message,
+      })
+    );
+  });
+
+  it('checks the owner personally when their home org does not resolve, as the charge does', async () => {
+    h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: 'org-gone' });
+    h.findOrgById.mockResolvedValue(null);
+
+    await runLakeResearch('run-1', logger);
+
+    expect(h.findActiveFreeze).toHaveBeenCalledWith({ userId: 'owner-1', organizationId: null, apiKeyId: null });
+    expect(h.executeResearchRun).toHaveBeenCalled();
+  });
+
+  it('settles and rethrows when the billed org read fails, without searching', async () => {
+    h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: 'org-7' });
+    h.findOrgById.mockRejectedValue(new Error('org read down'));
+
+    await expect(runLakeResearch('run-1', logger)).rejects.toThrow('org read down');
+
+    expect(h.findActiveFreeze).not.toHaveBeenCalled();
+    expect(h.executeResearchRun).not.toHaveBeenCalled();
+    expect(h.settleRun).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({ status: 'failed', error: 'org read down' })
+    );
+  });
+
+  it('settles and rethrows when the spend freeze read fails, without searching', async () => {
+    h.findActiveFreeze.mockRejectedValue(new Error('db down'));
+
+    await expect(runLakeResearch('run-1', logger)).rejects.toThrow('db down');
+
+    expect(h.executeResearchRun).not.toHaveBeenCalled();
+    expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'failed', error: 'db down' }));
   });
 
   it('settles a finished run with its stop reason, spend and totals', async () => {
@@ -411,6 +479,50 @@ describe('runLakeResearch', () => {
       h.claimForExecution.mockResolvedValueOnce(null);
       await runLakeResearch('run-1', logger);
       expect(h.recordOperationalUsage).toHaveBeenCalledOnce();
+    });
+
+    it('wires the item-rule port only when the config has rules, and adds its usage beside the judge', async () => {
+      type RulePorts = { evaluateItemRules?: (rules: unknown[], item: unknown) => Promise<unknown> };
+      const rule = { condition: 'is a press release', action: 'block' };
+      h.evaluateRules.mockResolvedValue({
+        status: 'evaluated',
+        answers: ['no_match'],
+        costMicroUsd: 300,
+        inputTokens: 7,
+        outputTokens: 3,
+        cacheReadInputTokens: 2,
+        cacheCreationInputTokens: 1,
+      });
+      let wired: RulePorts | undefined;
+      h.executeResearchRun.mockImplementationOnce(async (_l: unknown, _r: string, ports: RulePorts) => {
+        wired = ports;
+        return { totals: emptyResearchRunTotals(), spentMicroUsd: 0, stopReason: 'exhausted' };
+      });
+      await runLakeResearch('run-1', logger);
+      expect(wired?.evaluateItemRules).toBeUndefined();
+
+      h.recordOperationalUsage.mockClear();
+      h.claimForExecution.mockResolvedValue(
+        claimedRun({ levers: levers({ itemRules: [rule], model: 'gpt-4.1-mini' }) })
+      );
+      h.executeResearchRun.mockImplementationOnce(async (_l: unknown, _r: string, ports: RulePorts) => {
+        await ports.evaluateItemRules!([rule], { title: 'T', url: 'https://example.com', snippet: 'S' });
+        return { totals: emptyResearchRunTotals(), spentMicroUsd: 300, stopReason: 'exhausted' };
+      });
+      await runLakeResearch('run-1', logger);
+      expect(h.evaluateRules).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'gpt-4.1-mini', rules: [rule], endUserId: 'owner-1' })
+      );
+      expect(h.recordOperationalUsage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: 'gpt-4.1-mini',
+          inputTokens: 7,
+          outputTokens: 3,
+          cachedInputTokens: 2,
+          cacheWriteTokens: 1,
+        }),
+        expect.anything()
+      );
     });
 
     it('records one UsageEvent for the run, attributed to the lake and the resolved judge model', async () => {

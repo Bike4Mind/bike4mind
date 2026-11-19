@@ -560,6 +560,13 @@ const HAND_WRITTEN_ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'POST /api/files/createFabFile (purpose: modal-media only)',
     ],
   },
+  {
+    value: ApiKeyScope.AI_END_USER_ID,
+    label: 'AI: Platform End Users',
+    description:
+      'Lets a key that serves many end users send end_user_id on AI completions and text-to-speech, so the model provider sees each end user separately. Opens no route by itself: grant alongside ai:chat or ai:generate',
+    endpoints: [],
+  },
 ];
 
 /**

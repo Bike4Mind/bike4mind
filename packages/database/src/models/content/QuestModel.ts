@@ -12,7 +12,7 @@ import {
   QuestCallbackStateSchema,
   ChatToolModeSchema,
   type GenerationJobRef,
-  type QuestGenerationJobKind,
+  type AgentGenerationSlotKind,
   QUEST_GENERATION_JOB_KINDS,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
@@ -648,6 +648,8 @@ export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schem
     agentVideoClipsClaimed: { type: Number, required: false },
     agentMusicTracksClaimed: { type: Number, required: false },
     agentImagesClaimed: { type: Number, required: false },
+    agentSpeechClipsClaimed: { type: Number, required: false },
+    agentSoundEffectsClaimed: { type: Number, required: false },
     oob: { type: String, required: false },
     promptMeta: { type: PromptMetaSchema, required: false },
     status: { type: String, required: false },
@@ -655,6 +657,9 @@ export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schem
     // set server-side so the client can render a targeted error state. Declared so Mongoose
     // strict mode persists it (otherwise the error UI would not survive a reload).
     errorCode: { type: String, required: false },
+    // Set only for a quest created by a federated exchange key, so per-app outcomes can be counted.
+    apiKeyId: { type: String, required: false, select: false },
+    oauthClientId: { type: String, required: false, select: false },
     // Completion callback for an API-key generation job (see IQuestCallback). select: false keeps
     // the caller's endpoint and key id out of every quest payload and out of the whole-doc
     // update() writes the generation services make, so a stale in-memory quest can never
@@ -966,7 +971,9 @@ const AGENT_GENERATION_SLOT_FIELDS = {
   video: 'agentVideoClipsClaimed',
   music: 'agentMusicTracksClaimed',
   image: 'agentImagesClaimed',
-} as const satisfies Record<QuestGenerationJobKind, keyof IChatHistoryItem>;
+  speech: 'agentSpeechClipsClaimed',
+  sound_effect: 'agentSoundEffectsClaimed',
+} as const satisfies Record<AgentGenerationSlotKind, keyof IChatHistoryItem>;
 
 class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implements IChatHistoryItemRepository {
   ctx: mongoose.mongo.ClientSession | null;
@@ -1293,7 +1300,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    */
   async settleIfUnfinished(
     id: string,
-    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply' | 'replies' | 'fallbackInfo'>> & {
+    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply' | 'replies' | 'fallbackInfo' | 'errorCode'>> & {
       finishReason?: string;
     }
   ): Promise<boolean> {
@@ -1362,6 +1369,34 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
+   * Approvals still waiting on the user in the given sessions: a `pendingAction` raised after
+   * `raisedAfterTs` (ms epoch; older ones have lapsed). Bounded by the caller's session list, so it
+   * needs no index of its own.
+   */
+  async findPendingActionsBySessionIds(sessionIds: string[], raisedAfterTs: number, limit: number) {
+    if (sessionIds.length === 0) return [];
+    const quests = await this.model
+      .find({ sessionId: { $in: sessionIds }, 'pendingAction.ts': { $gt: raisedAfterTs } })
+      .select('_id sessionId pendingAction.tool pendingAction.ts pendingAction.params')
+      .sort({ 'pendingAction.ts': -1 })
+      .limit(limit)
+      .lean<
+        Array<{
+          _id: { toString(): string };
+          sessionId: string;
+          pendingAction: { tool: string; ts: number; params: Record<string, unknown> };
+        }>
+      >();
+    return quests.map(quest => ({
+      questId: quest._id.toString(),
+      sessionId: quest.sessionId,
+      tool: quest.pendingAction.tool,
+      ts: quest.pendingAction.ts,
+      params: quest.pendingAction.params,
+    }));
+  }
+
+  /**
    * Stores the MCP write preview a Confirm card renders from, for runs that have no in-memory quest
    * to assign it to (Agent mode). Replaces any earlier action, as classic chat does. No-op if no
    * Quest matches.
@@ -1388,7 +1423,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    * checkpoint continuations share this Quest and can claim concurrently, so the check and the increment must be one atomic update.
    * Returns false when the cap is reached or no Quest matches.
    */
-  async claimAgentGenerationSlot(questId: string, kind: QuestGenerationJobKind, limit: number): Promise<boolean> {
+  async claimAgentGenerationSlot(questId: string, kind: AgentGenerationSlotKind, limit: number): Promise<boolean> {
     if (limit <= 0) return false;
     const field = AGENT_GENERATION_SLOT_FIELDS[kind];
     const result = await this.model.updateOne(
@@ -1413,7 +1448,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /** Give back a slot from claimAgentGenerationSlot whose call started no new job. */
-  async releaseAgentGenerationSlot(questId: string, kind: QuestGenerationJobKind): Promise<void> {
+  async releaseAgentGenerationSlot(questId: string, kind: AgentGenerationSlotKind): Promise<void> {
     const field = AGENT_GENERATION_SLOT_FIELDS[kind];
     await this.model.updateOne({ _id: convertId(questId), [field]: { $gt: 0 } }, { $inc: { [field]: -1 } });
   }
@@ -1903,6 +1938,13 @@ function initializeQuestModel() {
     ChatHistoryItemSchema.index(
       { 'promptMeta.contextTelemetry.anonymousSessionId.hash': 1 },
       { name: 'contextTelemetry_anonymousSessionHash', sparse: true }
+    );
+
+    // Serves per-app quest outcome counts. Partial, so it holds only exchange-key quests.
+    // Pre-built by 20261115120000_ensure-side-app-attribution-indexes.
+    ChatHistoryItemSchema.index(
+      { oauthClientId: 1, timestamp: -1 },
+      { name: 'oauthClient_timestamp', partialFilterExpression: { oauthClientId: { $exists: true } } }
     );
   } catch (error) {
     // Plugin already applied, ignore error

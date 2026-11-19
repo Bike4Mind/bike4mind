@@ -101,8 +101,11 @@ export type UserReference = ErasureAction & {
    * in some other mixed case is not found.
    */
   matchBy: 'userId' | 'email';
-  /** Extra equality filter, e.g. `{ ownerType: 'User' }` when `ownerId` may also hold an organization id. */
-  where?: Readonly<Record<string, string>>;
+  /**
+   * Extra equality filter, e.g. `{ ownerType: 'User' }` when `ownerId` may also hold an organization id.
+   * `null` matches a path that is null or absent, as in a Mongo filter.
+   */
+  where?: Readonly<Record<string, string | null>>;
   /**
    * `personal` limits the reference to the person's own content, not their organization's. It is not
    * a literal filter: personal rows store `organizationId` as null, absent or `''`, or name one of
@@ -124,6 +127,12 @@ export type UserReference = ErasureAction & {
    * record, as for an `anonymize`.
    */
   exportScope?: 'reference';
+  /**
+   * The account purge (completeAccountDeletion.ts) writes this reference only after the user row is
+   * deleted: `hardDeleteUser` follows it to the Stripe customers it cancels, and its delete guard to
+   * the organizations the person still owns. A plain `erase` writes it with everything else.
+   */
+  afterSubjectDeleted?: true;
 };
 
 export type AttributionReference = UserReference & { action: 'anonymize' };
@@ -202,3 +211,14 @@ export type DataHolder =
   | { kind: 'noUserData'; note: string; unrelatedPaths?: readonly string[] };
 
 export type DataHolderRegistry = Readonly<Record<string, DataHolder>>;
+
+/** Kinds a premium overlay may classify its own models as; the rest describe core's own models. */
+export const CONTRIBUTED_DATA_HOLDER_KINDS = ['holder', 'viaParent', 'pseudonymous', 'noUserData'] as const;
+
+/** A model an overlay registers. It cannot name a `beforeErasure` hook: those resolve from a static core list. */
+export type ContributedDataHolder =
+  | Omit<Extract<DataHolder, { kind: 'holder' }>, 'beforeErasure'>
+  | Extract<DataHolder, { kind: 'viaParent' | 'pseudonymous' | 'noUserData' }>;
+
+/** What an overlay's `dataSubjectRegistryExport` module exports as `dataSubjectRegistry`. */
+export type ContributedDataHolderRegistry = Readonly<Record<string, ContributedDataHolder>>;

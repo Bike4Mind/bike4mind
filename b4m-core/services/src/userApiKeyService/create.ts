@@ -17,6 +17,8 @@ import {
   IUserApiKeyRepository,
   OrgApiKeyGrant,
   OrgApiKeyGrantsSchema,
+  PAYER_STANDINGS,
+  type PayerStanding,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { secureParameters, BadRequestError, ForbiddenError } from '@bike4mind/utils';
@@ -78,6 +80,7 @@ const createUserApiKeySchema = z.object({
     createdByUserId: z.string().optional(),
     // Tags a key minted by the federated AI-token exchange to its (user, client) pair.
     oauthClientId: z.string().optional(),
+    payerStanding: z.enum(PAYER_STANDINGS).optional(),
   }),
   productId: z.string().optional(),
   productName: z.string().optional(),
@@ -115,7 +118,7 @@ export type CreateExchangeUserApiKeyParameters = Omit<
   'metadata' | 'expiresAt' | 'orgOwned'
 > & {
   expiresAt: Date;
-  metadata: { clientIP?: string; userAgent?: string; oauthClientId: string };
+  metadata: { clientIP?: string; userAgent?: string; oauthClientId: string; payerStanding?: PayerStanding };
 };
 
 interface CreateUserApiKeyAdapters {
@@ -173,6 +176,7 @@ export interface CreateUserApiKeyResult {
     createdFrom: 'dashboard' | 'cli' | 'api' | 'bridge' | 'overwatch-admin' | 'oauth-exchange';
     createdByUserId?: string;
     oauthClientId?: string;
+    payerStanding?: PayerStanding;
   };
   productId?: string;
   productName?: string;

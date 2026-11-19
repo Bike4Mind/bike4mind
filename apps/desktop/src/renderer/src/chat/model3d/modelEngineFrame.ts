@@ -1,6 +1,6 @@
 import type * as THREE from 'three';
 import { partTreeError, type ModelBuildOutcome, type ModelSummary } from '@shared/model3d';
-import { exportGlb } from './modelScene';
+import { exportGlb, renderThumbnail } from './modelScene';
 
 /** Must match MODEL_ENGINE_URL / MODEL_ENGINE_ORIGIN in main/chat/model3d/engineProtocol.ts. */
 const ENGINE_URL = 'b4m-model://engine/';
@@ -75,15 +75,21 @@ export function checkedOutcome(built: ModelBuildOutcome): ModelBuildOutcome {
   return treeError ? { ok: false, error: treeError } : built;
 }
 
+/** How the window that built it wants a version's thumbnail and pose kept. */
+export type VersionLook = { dark: boolean; jointAngles: Record<string, number> };
+
 /**
  * Writes the sibling GLB of a good file build, then reports the build to main, which the model
  * tools wait on. The GLB goes first so a tool woken by the report can name a file already on disk.
+ * Last it asks main to keep the build as a version, after the report so no tool waits on the
+ * thumbnail; main takes the path and source from its own state and keeps each generation once.
  */
 export async function reportGoodFileBuild(
   sessionId: string,
   generation: number,
   object: THREE.Group,
-  summary: ModelSummary
+  summary: ModelSummary,
+  look: VersionLook
 ): Promise<void> {
   const glbError = await exportGlb(object)
     .then(bytes => window.b4m.model.writeGlb(sessionId, { generation, bytes }))
@@ -92,6 +98,34 @@ export async function reportGoodFileBuild(
       (caught: unknown) => (caught instanceof Error ? caught.message : String(caught))
     );
   await window.b4m.model.reportBuild(sessionId, { generation, ok: true, summary, glbError });
+  await recordVersion(sessionId, generation, object, look);
+}
+
+async function recordVersion(
+  sessionId: string,
+  generation: number,
+  object: THREE.Group,
+  { dark, jointAngles }: VersionLook
+): Promise<void> {
+  // Every window builds each generation; only one needs to pay for a thumbnail's GL context.
+  try {
+    if (!(await window.b4m.model.wantsVersion(sessionId, generation))) return;
+  } catch (caught) {
+    console.warn(`Model version check failed: ${errorMessage(caught)}`);
+  }
+  // A version without a picture is still worth keeping, so a failed render only loses the thumbnail.
+  let thumbnail: Uint8Array | null = null;
+  try {
+    thumbnail = await renderThumbnail(object, dark, jointAngles);
+  } catch (caught) {
+    console.warn(`Model version thumbnail failed: ${errorMessage(caught)}`);
+  }
+  // The build itself succeeded and was reported; failing to keep it must not turn it into an error.
+  try {
+    await window.b4m.model.recordVersion(sessionId, { generation, jointAngles, thumbnail });
+  } catch (caught) {
+    console.warn(`Model version was not kept: ${errorMessage(caught)}`);
+  }
 }
 
 export function errorMessage(caught: unknown): string {

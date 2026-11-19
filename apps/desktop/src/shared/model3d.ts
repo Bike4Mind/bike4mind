@@ -159,6 +159,41 @@ export type ModelStateUpdate = { sessionId: string; state: ModelViewState };
 /** Main asking a window to render one conversation's model; answered with captureResult by id. */
 export type ModelCaptureRequestEvent = { sessionId: string } & ModelCaptureRequest;
 
+/**
+ * One kept build of a conversation's `.model.js` (main/chat/model3d/ModelVersionStore.ts). Numbers
+ * only grow and are never reused, so "v3" names the same build after older ones are pruned.
+ */
+export type ModelVersion = {
+  number: number;
+  path: string;
+  source: string;
+  /** The pane's joint pose when it was built, degrees or model units by part name. */
+  jointAngles: Record<string, number>;
+  /** Epoch ms. */
+  createdAt: number;
+  /** What produced it, when known, e.g. "Restored v3" or "width = 40". */
+  note?: string;
+  restoredFrom?: number;
+};
+
+/** A version as the pane lists it, with its thumbnail PNG (null when none was rendered or it was lost). */
+export type ModelVersionEntry = ModelVersion & { thumbnail: Uint8Array | null };
+
+/** What a window sends after a good file build so main can keep it; main supplies the path and source. */
+export type ModelVersionRecordRequest = {
+  generation: number;
+  jointAngles: Record<string, number>;
+  thumbnail: Uint8Array | null;
+};
+
+/** Main's broadcast that one conversation's versions changed; panes showing it list them again. */
+export type ModelVersionsUpdate = { sessionId: string };
+
+/** "v3", the way the pane, the agent's tools and notes all name a version. */
+export function versionLabel(number: number): string {
+  return `v${number}`;
+}
+
 export const EMPTY_MODEL_STATE: ModelViewState = {
   path: null,
   kind: null,

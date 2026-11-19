@@ -2,6 +2,7 @@ import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { desktopTheme } from '../../theme';
+import { VIEW_SNAPSHOT_CONTRACT, type ViewAgent, type ViewSnapshot } from '@shared/viewSnapshot';
 import type { AgentState, AgentView } from './roster';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -31,8 +32,27 @@ export const agentFixture = (id: string, state: AgentState = 'working', extra: P
   ...extra,
 });
 
+/** One agent as a snapshot view sees it (@shared/viewSnapshot); a needs-you one gets a pending question. */
+export const viewAgentFixture = (id: string, state: AgentState, extra: Partial<ViewAgent> = {}): ViewAgent => ({
+  id,
+  title: `Agent ${id}`,
+  state,
+  parentId: 'root',
+  depth: 1,
+  updatedAt: '2026-10-01T00:00:00.000Z',
+  ...(state === 'needs-you' && {
+    decision: { id: `d-${id}`, question: `Question from ${id}?`, options: ['Yes', 'No'] },
+  }),
+  ...extra,
+});
+
+export const snapshotFixture = (
+  agents: ViewAgent[],
+  rootState: ViewSnapshot['root']['state'] = 'working'
+): ViewSnapshot => ({ contract: VIEW_SNAPSHOT_CONTRACT, root: { id: 'root', state: rootState }, agents });
+
 /** One themed mount per test; call `unmount` in afterEach. `render` again to re-render in place. */
-export function createThemedMount() {
+export function createThemedMount(mode: 'light' | 'dark' = 'light') {
   let root: Root | null = null;
   let host: HTMLElement | null = null;
   return {
@@ -43,7 +63,11 @@ export function createThemedMount() {
         root = createRoot(host);
       }
       await act(async () => {
-        root?.render(<CssVarsProvider theme={desktopTheme}>{node}</CssVarsProvider>);
+        root?.render(
+          <CssVarsProvider theme={desktopTheme} defaultMode={mode}>
+            {node}
+          </CssVarsProvider>
+        );
       });
     },
     unmount() {

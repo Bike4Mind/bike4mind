@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { createPortal } from 'react-dom';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type {
   ChatMessage,
@@ -34,7 +35,12 @@ vi.mock('./MessageThread', async importOriginal => {
       useEffect(() => {
         threadMounts.count += 1;
       }, []);
-      return <actual.MessageThread {...props} />;
+      return (
+        <>
+          <actual.MessageThread {...props} />
+          {createPortal(<button data-testid="thread-portal-control">Portal control</button>, document.body)}
+        </>
+      );
     },
   };
 });
@@ -263,6 +269,60 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('chat-thread-empty-host')).not.toBeNull();
   });
 
+  it.each(['tavern', 'aquarium'] as const)(
+    'overlays the single parent thread on the %s scene and gives agent details Escape priority',
+    async view => {
+      window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+      window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, view);
+      await openParent();
+      const thread = el('chat-thread-empty-host');
+      const mounts = threadMounts.count;
+      await enterOrchestrate();
+      const dock = el('orchestrator-dock');
+      expect(dock.hasAttribute('data-scene-conversation')).toBe(true);
+      expect(getComputedStyle(dock).position).toBe('absolute');
+      expect(query('orchestrator-dock-resize-handle')).toBeNull();
+      const scene = el(view === 'tavern' ? 'orchestrator-tavern' : 'orchestrator-aquarium');
+      expect(getComputedStyle(scene).getPropertyValue('anchor-name')).toBe('--orchestrator-scene');
+      const agent = el(view === 'tavern' ? `orchestrator-tavern-agent-${CHILD.id}` : `orchestrator-fish-${CHILD.id}`);
+      await act(async () => agent.click());
+      expect(el('orchestrator-stage').getAttribute('data-agent-details-open')).toBe('true');
+      await act(async () => el('orchestrator-dock-toggle-btn').click());
+      expect(query('orchestrator-peek-drawer')).toBeNull();
+      expect(query('orchestrator-dock')).not.toBeNull();
+      await act(async () => agent.click());
+      act(() =>
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+      );
+      expect(query('orchestrator-peek-drawer')).toBeNull();
+      expect(query('orchestrator-dock-hidden')).not.toBeNull();
+      expect(el('chat-thread-empty-host')).toBe(thread);
+      expect(threadMounts.count).toBe(mounts);
+      await act(async () => el('orchestrator-dock-toggle-btn').click());
+      act(() =>
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+      );
+      expect(query('orchestrator-dock-hidden')).not.toBeNull();
+      expect(el('chat-thread-empty-host')).toBe(thread);
+    }
+  );
+
+  it('keeps the parent scene thread mounted through ambient settle and wake', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    await openParent();
+    await enterOrchestrate();
+    const thread = el('chat-thread-empty-host');
+    const mounts = threadMounts.count;
+    vi.useFakeTimers();
+    act(() => window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true })));
+    await act(async () => vi.advanceTimersByTime(46000));
+    expect(query('orchestrator-dock-hidden')).not.toBeNull();
+    expect(el('chat-thread-empty-host')).toBe(thread);
+    act(() => window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true })));
+    expect(query('orchestrator-dock')).not.toBeNull();
+    expect(threadMounts.count).toBe(mounts);
+  });
+
   it('shows the stage with the conversation docked beside it, and the dock toggles', async () => {
     await openParent();
     await enterOrchestrate();
@@ -451,6 +511,17 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('orchestrate-example-quests')).toBeNull();
   });
 
+  it("opens a new Code session on its project's last view", async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem('b4m.orchestrator.projectView./work/repo', 'table');
+    const code = { ...CODE, orchestrate: true } as ChatSessionSummary;
+    const agent = { ...CHILD, id: 'code-child', mode: 'code', origin: { parentSessionId: CODE.id, seedPrompt: 'x' } };
+    listed = [...SESSIONS, code, agent as ChatSessionSummary];
+    await openParent(CODE.title, 'code');
+    await enterOrchestrate();
+    expect(query('orchestrator-table-row-code-child')).not.toBeNull();
+  });
+
   it('shows the agents switch once the session spawns its first agent', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     const code = { ...CODE, orchestrate: true } as ChatSessionSummary;
@@ -560,7 +631,7 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('composer-orchestrate-toggle')).toBeNull();
   });
 
-  it('takes an order at the bar, and brings the whole conversation forward from it into a hidden dock', async () => {
+  it('toggles the conversation directly from the Innkeeper and brings it forward over an agent peek', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     await openParent();
     await enterOrchestrate();
@@ -568,14 +639,86 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('orchestrator-dock')).toBeNull();
 
     await act(async () => el('orchestrator-tavern-innkeeper').click());
-    expect(query('orchestrator-tavern-order-slip')).not.toBeNull();
-    expect(query('orchestrator-dock')).toBeNull();
-
-    await act(async () => el('orchestrator-tavern-order-open-conversation-btn').click());
     expect(query('orchestrator-tavern-order-slip')).toBeNull();
     expect(query('orchestrator-dock')).not.toBeNull();
     expect(document.activeElement).toBe(el('chat-composer-input'));
+    await act(async () => el('orchestrator-tavern-innkeeper').click());
+    expect(query('orchestrator-dock')).toBeNull();
+    await act(async () => el('orchestrator-tavern-innkeeper').click());
+    await act(async () => el(`orchestrator-tavern-agent-${CHILD.id}`).click());
+    expect(query('orchestrator-peek-drawer')).not.toBeNull();
+    await act(async () => el('orchestrator-tavern-innkeeper').click());
+    expect(query('orchestrator-peek-drawer')).toBeNull();
+    expect(query('orchestrator-dock')).not.toBeNull();
+    expect(document.activeElement).toBe(el('chat-composer-input'));
   });
+
+  it('wakes the conversation composer on quiet-scene typing without seeding or sending an order', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    await openParent();
+    await enterOrchestrate();
+    act(() => el('orchestrator-dock-toggle-btn').click());
+    vi.useFakeTimers();
+    act(() => el('orchestrator-dock-toggle-btn').blur());
+    act(() => window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true })));
+    await act(async () => vi.advanceTimersByTime(46000));
+    expect(query('orchestrator-ambient-talk-btn')).not.toBeNull();
+    const key = new KeyboardEvent('keydown', { key: 'h', bubbles: true, cancelable: true });
+    act(() => document.body.dispatchEvent(key));
+    expect(key.defaultPrevented).toBe(true);
+    expect(query('orchestrator-dock')).not.toBeNull();
+    expect(query('orchestrator-tavern-order-slip')).toBeNull();
+    expect(document.activeElement).toBe(el('chat-composer-input'));
+    expect((el('chat-composer-input') as HTMLTextAreaElement).value).toBe('');
+  });
+
+  it.each(['tavern', 'aquarium'] as const)(
+    'closes the %s conversation on outside clicks but preserves portals',
+    async view => {
+      window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+      window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, view);
+      await openParent();
+      await enterOrchestrate();
+      await act(async () => el('chat-thread-empty-host').click());
+      expect(query('orchestrator-dock')).not.toBeNull();
+      await act(async () => el('thread-portal-control').click());
+      expect(query('orchestrator-dock')).not.toBeNull();
+      await act(async () => el('chat-composer-input').click());
+      expect(query('orchestrator-dock')).toBeNull();
+      await act(async () => el('orchestrator-dock-toggle-btn').click());
+      await act(async () => el('chat-header-tools').click());
+      expect(query('orchestrator-dock')).toBeNull();
+      await act(async () => el('orchestrator-dock-toggle-btn').click());
+      await act(async () => document.body.click());
+      expect(query('orchestrator-dock')).toBeNull();
+      await act(async () => el('orchestrator-dock-toggle-btn').click());
+      await act(async () => el(view === 'tavern' ? 'orchestrator-tavern' : 'orchestrator-aquarium').click());
+      expect(query('orchestrator-dock')).toBeNull();
+      await act(async () => el('orchestrator-dock-toggle-btn').click());
+      await act(async () =>
+        el(view === 'tavern' ? `orchestrator-tavern-agent-${CHILD.id}` : `orchestrator-fish-${CHILD.id}`).click()
+      );
+      expect(query('orchestrator-dock')).toBeNull();
+      expect(query('orchestrator-peek-drawer')).not.toBeNull();
+      await act(async () => el('orchestrator-peek-drawer').click());
+      expect(query('orchestrator-peek-drawer')).not.toBeNull();
+      await act(async () => el('orchestrator-peek-actions-menu-btn').click());
+      await act(async () => el('orchestrator-peek-actions-menu').click());
+      expect(query('orchestrator-peek-drawer')).not.toBeNull();
+      await act(async () => document.body.click());
+      expect(query('orchestrator-peek-drawer')).toBeNull();
+      await act(async () =>
+        el(view === 'tavern' ? `orchestrator-tavern-agent-${CHILD.id}` : `orchestrator-fish-${CHILD.id}`).click()
+      );
+      expect(query('orchestrator-peek-drawer')).not.toBeNull();
+      await act(async () => el('chat-composer-input').click());
+      expect(query('orchestrator-peek-drawer')).toBeNull();
+      await act(async () => el('chat-surface-toggle-chat').click());
+      await act(async () => el('chat-thread-region').click());
+      expect(query('chat-thread-empty-host')).not.toBeNull();
+      expect(query('orchestrator-dock-hidden')).toBeNull();
+    }
+  );
 
   it('celebrates a quest_complete summary and reads the report by scrolling to it', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');

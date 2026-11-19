@@ -1,4 +1,7 @@
 import { assertMediaModelAdmission } from '../billing/assertMediaModelAdmission';
+import { createWriteStream } from 'node:fs';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { Resource } from 'sst';
 import { apiKeyService } from '@bike4mind/auth';
 import {
@@ -12,6 +15,10 @@ import {
   type ImageProviderId,
   type MusicProviderId,
   type VideoProviderId,
+  DEFAULT_STUDIO_RENDER_PRICING,
+  StudioRenderStatusSchema,
+  studioRenderStatusKey,
+  type StudioRenderStatus,
 } from '@bike4mind/common';
 import {
   adminSettingsRepository,
@@ -23,6 +30,8 @@ import {
   organizationRepository,
   questRepository,
   sessionRepository,
+  spendFreezeRepository,
+  studioCompositionRepository,
   usageEventRepository,
   userRepository,
 } from '@bike4mind/database';
@@ -37,8 +46,17 @@ import {
 } from '@bike4mind/services/generationJobs';
 import { StudioEvents } from '../utils/eventBus';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
+import { createSoundEffectJobHandler, createSpeechJobHandler } from '@bike4mind/services/audioJobs';
+import { getSoundEffectJobDeps, getSpeechJobDeps } from './audioJobWiring';
 import { createMusicJobHandler, type CreateMusicJobDeps, type MusicJobDeps } from '@bike4mind/services/musicJobs';
 import { createImageJobHandler, type CreateImageJobsDeps, type ImageJobDeps } from '@bike4mind/services/imageJobs';
+import {
+  createSceneJobHandler,
+  SceneInputError,
+  type CreateSceneCompositionJobDeps,
+  type SceneJobDeps,
+} from '@bike4mind/services/sceneJobs';
+import { createRenderJobHandler, type CreateRenderJobsDeps, type RenderJobDeps } from '@bike4mind/services/renderJobs';
 import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
 import {
   callerOwnsGeneratedImage,
@@ -90,6 +108,7 @@ import { appPathDeepLink, appRootDeepLink, publishPushNotification } from '../ut
 import { createSlackJobDeliveryDeps } from './slackJobDeliveryDeps';
 import { getFilesStorage, getGeneratedImageStorage } from '../utils/storage/index';
 import { imageModerationIncidents } from '../moderation/imageModerationIncidents';
+import { createFfmpegRunner } from './ffmpegRunner';
 
 // Must outlive the worker timeout (5 min, infra/queues.ts generationJobQueue) so two workers never overlap on
 // one job, and stay under the queue visibility timeout (6 min).
@@ -347,7 +366,49 @@ export const saveToFiles: MusicJobDeps['saveToFiles'] = async params => {
   return saveGeneratedAssetToFiles({ ...params, ...(sessionId && { sessionId }) }, logger);
 };
 
-const saveToGeneratedBucket: VideoJobDeps['saveToGeneratedBucket'] = async ({ key, bytes, contentType, signal }) => {
+// Owner-only, like loadInputFabFile: a Scene re-publishes its inputs' bytes in a new file of the requester's.
+export const loadSceneInputFile: SceneJobDeps['loadInputFile'] = async (userId, fileId) => {
+  if (!isValidObjectId(fileId)) return null;
+  const fabFile = await fabFileRepository.findByIdAndUserId(fileId, userId);
+  if (!fabFile || fabFile.deletedAt || !fabFile.filePath || !fabFile.mimeType) return null;
+  // The upload moderation gate every FabFile read goes through: a pending or blocked file is not used.
+  if (!isImageServeable(fabFile)) return null;
+  // The input cap sums these sizes; a row without one would turn the sum into NaN and skip the cap.
+  if (!Number.isFinite(fabFile.fileSize) || fabFile.fileSize < 0) return null;
+  return { s3Key: fabFile.filePath, mimeType: fabFile.mimeType, bytes: fabFile.fileSize };
+};
+
+// Streamed to disk rather than buffered: the inputs together can reach SCENE_MAX_INPUT_BYTES.
+export const downloadSceneInputFile: SceneJobDeps['downloadInputFile'] = async ({
+  s3Key,
+  destinationPath,
+  maxBytes,
+  signal,
+}) => {
+  const body = await getFilesStorage().getContent(s3Key);
+  if (!(body instanceof Readable)) throw new Error(`unexpected S3 body type for ${s3Key}`);
+  // The recorded size is metadata; cap what is actually written so /tmp cannot be filled whatever the row says.
+  let written = 0;
+  const capBytes = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      written += chunk.byteLength;
+      if (written > maxBytes) {
+        callback(new SceneInputError('The input files total more than the size limit', 'unsupported_input'));
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+  await pipeline(body, capBytes, createWriteStream(destinationPath), { signal });
+  return { bytes: written };
+};
+
+export const saveToGeneratedBucket: VideoJobDeps['saveToGeneratedBucket'] = async ({
+  key,
+  bytes,
+  contentType,
+  signal,
+}) => {
   await getGeneratedImageStorage().upload(bytes, key, { ContentType: contentType }, signal);
   return { s3Key: key };
 };
@@ -563,6 +624,7 @@ export const getVideoJobDeps = (): VideoJobDeps => {
       organizations: organizationRepository,
       creditTransactions: creditTransactionRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+      spendFreezes: spendFreezeRepository,
       onInsufficientCredits: recordInsufficientCredits,
     },
     enqueue: enqueueGenerationJob,
@@ -593,6 +655,7 @@ export const getMusicJobDeps = (): MusicJobDeps => {
       organizations: organizationRepository,
       creditTransactions: creditTransactionRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+      spendFreezes: spendFreezeRepository,
       onInsufficientCredits: recordInsufficientCredits,
     },
     enqueue: enqueueGenerationJob,
@@ -606,6 +669,36 @@ export const getMusicJobDeps = (): MusicJobDeps => {
 export const getCreateMusicJobDeps = (): CreateMusicJobDeps => ({
   ...getMusicJobDeps(),
   assertModelAdmission: assertMediaModelAdmission,
+  engine: getGenerationJobEngine(),
+  checkStorageFor,
+});
+
+let sceneJobDeps: SceneJobDeps | undefined;
+export const getSceneJobDeps = (): SceneJobDeps => {
+  sceneJobDeps ??= {
+    repository: generationJobRepository,
+    loadInputFile: loadSceneInputFile,
+    downloadInputFile: downloadSceneInputFile,
+    ffmpeg: createFfmpegRunner(),
+    saveToFiles,
+    saveToGeneratedBucket,
+    credits: {
+      users: userRepository,
+      organizations: organizationRepository,
+      creditTransactions: creditTransactionRepository,
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+      spendFreezes: spendFreezeRepository,
+      onInsufficientCredits: recordInsufficientCredits,
+    },
+    enqueue: enqueueGenerationJob,
+    now: () => new Date(),
+    logger,
+  };
+  return sceneJobDeps;
+};
+
+export const getCreateSceneCompositionJobDeps = (): CreateSceneCompositionJobDeps => ({
+  ...getSceneJobDeps(),
   engine: getGenerationJobEngine(),
   checkStorageFor,
 });
@@ -631,6 +724,7 @@ export const getImageJobDeps = (): ImageJobDeps => {
       organizations: organizationRepository,
       creditTransactions: creditTransactionRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+      spendFreezes: spendFreezeRepository,
       onInsufficientCredits: recordInsufficientCredits,
     },
     enqueue: enqueueGenerationJob,
@@ -649,6 +743,86 @@ export const getCreateImageJobsDeps = (): CreateImageJobsDeps => ({
   checkStorageFor,
 });
 
+// Linked on the generation-job worker and the web function; self-host maps it from RENDER_JOB_QUEUE.
+const resolveRenderJobQueueUrl = (): string => {
+  const url = (Resource as unknown as { renderJobQueue?: { url?: string } }).renderJobQueue?.url;
+  if (!url) throw new Error('renderJobQueue is not linked here, so render jobs cannot be dispatched');
+  return url;
+};
+
+const isMissingObjectError = (error: unknown): boolean =>
+  error instanceof Error && (error.name === 'NoSuchKey' || error.name === 'NotFound');
+
+const readRenderStatus: RenderJobDeps['readRenderStatus'] = async jobId => {
+  let raw: string;
+  try {
+    raw = await getGeneratedImageStorage().getContentAsString(studioRenderStatusKey(jobId));
+  } catch (error) {
+    if (isMissingObjectError(error)) return null;
+    throw error;
+  }
+  const parsed = StudioRenderStatusSchema.safeParse(JSON.parse(raw));
+  if (!parsed.success) {
+    // A worker that writes a shape this engine cannot read is a deploy skew; fail the render rather than spin.
+    logger.error('render_status_unreadable', { jobId, issues: parsed.error.issues });
+    return { state: 'failed', message: 'The render worker reported an unreadable status', updatedAt: '' };
+  }
+  return parsed.data satisfies StudioRenderStatus;
+};
+
+const getRenderSettings: CreateRenderJobsDeps['getSettings'] = async () => {
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits', 'StudioRenderPricing'], skipCache: true }
+  );
+  return {
+    enforceCredits: Boolean(getSettingsValue('enforceCredits', settings)),
+    pricing: getSettingsValue('StudioRenderPricing', settings) ?? DEFAULT_STUDIO_RENDER_PRICING,
+  };
+};
+
+let renderJobDeps: RenderJobDeps | undefined;
+export const getRenderJobDeps = (): RenderJobDeps => {
+  renderJobDeps ??= {
+    repository: generationJobRepository,
+    credits: {
+      users: userRepository,
+      organizations: organizationRepository,
+      creditTransactions: creditTransactionRepository,
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+      spendFreezes: spendFreezeRepository,
+      onInsufficientCredits: recordInsufficientCredits,
+    },
+    dispatchRender: async jobId => {
+      await sendToQueue(resolveRenderJobQueueUrl(), { jobId });
+    },
+    readRenderStatus,
+    fetchRenderedOutput: async s3Key => getGeneratedImageStorage().download(s3Key),
+    saveToFiles,
+    saveToGeneratedBucket,
+    now: () => new Date(),
+    logger,
+  };
+  return renderJobDeps;
+};
+
+export const getCreateRenderJobsDeps = (): CreateRenderJobsDeps => ({
+  ...getRenderJobDeps(),
+  enqueue: enqueueGenerationJob,
+  engine: getGenerationJobEngine(),
+  getSettings: getRenderSettings,
+  // Self-host has no paid plans, so exports are not paid-plan gated there.
+  planlessDeployment: process.env.B4M_SELF_HOST === 'true',
+  findComposition: (id, userId) =>
+    isValidObjectId(id) ? studioCompositionRepository.findOwned(id, userId) : Promise.resolve(null),
+  findReadableFiles: async (fileIds, userId) => {
+    if (fileIds.length === 0) return new Map();
+    const files = await fabFileRepository.findAccessibleInIds(fileIds, { userId });
+    return new Map(files.map(file => [file.id, file.mimeType]));
+  },
+  checkStorageFor,
+});
+
 let generationJobEngine: GenerationJobEngine | undefined;
 export const getGenerationJobEngine = (): GenerationJobEngine => {
   generationJobEngine ??= new GenerationJobEngine({
@@ -657,6 +831,10 @@ export const getGenerationJobEngine = (): GenerationJobEngine => {
       createVideoJobHandler(getVideoJobDeps()),
       createMusicJobHandler(getMusicJobDeps()),
       createImageJobHandler(getImageJobDeps()),
+      createSpeechJobHandler(getSpeechJobDeps()),
+      createSoundEffectJobHandler(getSoundEffectJobDeps()),
+      createSceneJobHandler(getSceneJobDeps()),
+      createRenderJobHandler(getRenderJobDeps()),
     ],
     enqueue: enqueueGenerationJob,
     notify,

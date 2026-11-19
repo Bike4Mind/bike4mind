@@ -24,6 +24,7 @@ import { dlqAlarmHandlerDlq } from './dlqAlarmHandlerDeadLetter';
 import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { llmSpendLogSources } from './llmSpendLogGroups';
 import { businessMetricAlertsDLQ } from './businessMetricAlerts';
+import { sideAppHealthAlertsDLQ } from './sideAppHealthAlerts';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import {
   fabFileVectorizeQueueDLQ,
@@ -55,6 +56,7 @@ import {
   githubLakeIngestQueueDLQ,
   githubLakeRevokeQueueDLQ,
   generationJobDLQ,
+  renderJobDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -97,6 +99,7 @@ import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliati
 import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
 import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
 import { dlqTriagePermissions } from './dlqTriagePermissions';
+import { refusedRequestRuleName, type RefusedRequestRuleKind } from './refusedRequestRules';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -151,6 +154,19 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
     const arn = aws.cloudwatch.getLogGroupOutput({ name: logGroupName }).arn;
     return [arn, $interpolate`${arn}:*`];
   });
+  // The refused-request burst alarm names its top IPs and paths from the rules it is built on
+  // (apps/workers/src/events/refusedRequestBurstDetail.ts, infra/refusedRequestAlarms.ts).
+  const refusedRequestRules: Record<RefusedRequestRuleKind, string> = {
+    'by-ip': refusedRequestRuleName($app.name, $app.stage, 'by-ip'),
+    'by-ip-path': refusedRequestRuleName($app.name, $app.stage, 'by-ip-path'),
+  };
+  const refusedRequestRuleArns = $util
+    .all([aws.getPartitionOutput().partition, aws.getRegionOutput().name, aws.getCallerIdentityOutput().accountId])
+    .apply(([partition, region, accountId]) =>
+      Object.values(refusedRequestRules).map(
+        name => `arn:${partition}:cloudwatch:${region}:${accountId}:insight-rule/${name}`
+      )
+    );
   dlqAlarmTopic!.subscribe(
     {
       vpc: lambdaVpc,
@@ -167,6 +183,8 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
         ...DEFAULT_LAMBDA_ENVIRONMENT,
         ...mentionArgs.environment,
         LLM_SPEND_LOG_GROUPS: $util.all(spendLogGroupNames).apply(names => names.join(',')),
+        REFUSED_REQUEST_IP_RULE: refusedRequestRules['by-ip'],
+        REFUSED_REQUEST_IP_PATH_RULE: refusedRequestRules['by-ip-path'],
       },
       permissions: [
         ...mentionArgs.permissions,
@@ -174,6 +192,7 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
         dlqTriagePermissions(),
         { actions: ['logs:StartQuery'], resources: spendLogGroupArns },
         { actions: ['logs:GetQueryResults', 'logs:StopQuery'], resources: ['*'] },
+        { actions: ['cloudwatch:GetInsightRuleReport'], resources: refusedRequestRuleArns },
       ],
     },
     {
@@ -463,6 +482,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'GenerationJob',
     sourceQueue: 'generationJobQueue',
     queue: generationJobDLQ,
+  },
+  {
+    label: 'render-job',
+    displayName: 'Studio Render Job',
+    application: 'GenerationJob',
+    sourceQueue: 'renderJobQueue',
+    queue: renderJobDLQ,
   },
   {
     label: 'liveops-triage',
@@ -771,6 +797,15 @@ if (businessMetricAlertsDLQ && dlqAlarmTopic) {
     displayName: 'Business Metric Alerts',
     application: 'Analytics',
     queue: businessMetricAlertsDLQ,
+  });
+}
+
+if (sideAppHealthAlertsDLQ && dlqAlarmTopic) {
+  createDlqAlarms({
+    label: 'side-app-health-alerts',
+    displayName: 'Side App Health Alerts',
+    application: 'SideApps',
+    queue: sideAppHealthAlertsDLQ,
   });
 }
 

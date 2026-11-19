@@ -23,12 +23,14 @@ import {
   ICreditTransactionRepository,
   IUsageEventRepository,
   CreditHolderType,
+  type ApiKeyBillingOwnerType,
   PromptIntentSchema,
   ImageModerationIncident as ImageModerationIncidentInput,
   AttachmentLakeAccess,
   materializePromptMetaSession,
   PersistedSessionSummaryTrigger,
   type PersistedCreditHold,
+  type ISpendFreezeRepository,
 } from '@bike4mind/common';
 import {
   BFL_IMAGE_MODELS,
@@ -94,6 +96,8 @@ import { FluxImageCostCalculator } from './imageCostCalculator/FluxImageCostCalc
 import { GeminiImageCostCalculator } from './imageCostCalculator/GeminiImageCostCalculator';
 import { CostInput } from './imageCostCalculator/types';
 import type { ImageCreditHolds } from './imageCreditHolds';
+import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
+import { spendFreezeSubjectForHold } from '../spendFreezeService/spendFreezeSubjectForHold';
 import { shouldSummarizeSession } from './ChatCompletionFeatures';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
@@ -131,6 +135,11 @@ export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
   adminRoleWithheld: z.boolean().optional(),
   /** The UserApiKey that authenticated the request; recorded on the settled ledger row. */
   apiKeyId: z.string().optional(),
+  /**
+   * Whether that key bills its owner or an organization. No longer read by the spend freeze check, which keeps
+   * the acting user for every key.
+   */
+  apiKeyBillingOwnerType: z.enum([CreditHolderType.User, CreditHolderType.Organization]).optional(),
 });
 export type ImageGenerationBody = z.infer<typeof ImageGenerationBodySchema>;
 
@@ -158,6 +167,8 @@ interface IImageGenerationServiceOptions {
     usageEvents?: IUsageEventRepository;
     organizations: IOrganizationRepository;
     imageModerationIncidents?: { record(input: ImageModerationIncidentInput): Promise<unknown> };
+    /** Checked before the provider call when credits are off; the credit hold checks it otherwise. */
+    spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
   } & GetEffectiveApiKeyAdapters['db'];
   startImageGenerationProcess: (body: ImageGenerationBody) => Promise<void>;
   /** Reserves the estimate before the provider call. Required so the app factory cannot drop the hold. */
@@ -300,9 +311,11 @@ export class ImageGenerationService {
     userId,
     adminRoleWithheld,
     apiKeyId,
+    apiKeyBillingOwnerType,
   }: {
     adminRoleWithheld?: boolean;
     apiKeyId?: string;
+    apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
     body: z.infer<typeof GenerateImageIvokeParamsSchema>;
     userId: string;
   }) {
@@ -477,6 +490,7 @@ export class ImageGenerationService {
           generationId: uuidv4(),
           adminRoleWithheld,
           apiKeyId,
+          apiKeyBillingOwnerType,
         })
       );
 
@@ -839,6 +853,7 @@ export class ImageGenerationService {
       userId,
       adminRoleWithheld,
       apiKeyId,
+      apiKeyBillingOwnerType,
       prompt,
       model,
       n = 1,
@@ -1036,9 +1051,20 @@ export class ImageGenerationService {
           requiredCredits,
           featureLabel: IMAGE_GENERATION_FEATURE_LABEL,
           logger,
+          apiKeyId,
+          apiKeyBillingOwnerType,
         });
         quest.creditsUsed = requiredCredits;
         usageCostUsd = usdCost;
+      } else {
+        await assertSpendNotFrozen(
+          spendFreezeSubjectForHold({
+            userId,
+            organizationId: organization ? organization.id : null,
+            apiKeyId,
+          }),
+          { db: { spendFreezes: this.db.spendFreezes } }
+        );
       }
 
       // Choose the appropriate service based on the model

@@ -6,6 +6,7 @@ import {
   type IDataLakeResearchRunDocument,
   type IDataLakeResearchRunRepository,
   type IOrganizationRepository,
+  type ISpendFreezeRepository,
   type IUserRepository,
   type ResearchScheduleSkipReason,
 } from '@bike4mind/common';
@@ -18,6 +19,7 @@ import {
   type LakeConfigAuditAdapters,
   type LakeConfigAuditLakeRef,
 } from '../dataLakeService/recordLakeConfigChange';
+import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
 import { aiAccessDeniedMessage } from '../userService/accountState';
 import { normalizeResearchLevers } from './researchLevers';
 
@@ -36,7 +38,7 @@ export type ResearchRunStarter =
 
 type ResearchRunRefusalReason = Exclude<
   ResearchScheduleSkipReason,
-  'review_backlog' | 'lake_inactive' | 'insufficient_credits'
+  'review_backlog' | 'lake_inactive' | 'insufficient_credits' | 'spend_frozen'
 >;
 
 /**
@@ -80,6 +82,8 @@ export interface StartResearchRunAdapters extends LakeConfigAuditAdapters {
     adminSettings: NonNullable<LakeConfigAuditAdapters['db']['adminSettings']>;
     users: Pick<IUserRepository, 'findById'>;
     organizations: Pick<IOrganizationRepository, 'findById'>;
+    // REQUIRED for the same reason as the two above: the owner's spend freeze is read here.
+    spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
   };
   now?: () => Date;
 }
@@ -201,6 +205,11 @@ export async function startResearchRun(
   // The owner pays, so a blocked owner refuses the run whoever starts it, and whether or not credits are enforced.
   if (owner && aiAccessDeniedMessage(owner)) {
     throw new ForbiddenError("This data lake's owner account cannot run research. Please contact support.");
+  }
+  // The owner pays, so it is the owner's freeze that counts, with credits enforced or not. A lake with
+  // no owner has nobody to freeze; the balance pre-flight below refuses it when credits are enforced.
+  if (owner) {
+    await assertSpendNotFrozen({ userId: owner.id, organizationId: owner.organizationId ?? null }, { db });
   }
   await assertResearchRunAffordable(owner, levers.costCeilingMicroUsd, { db });
 

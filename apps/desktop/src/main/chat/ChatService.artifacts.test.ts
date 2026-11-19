@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { ChatStreamEvent } from '@shared/chat';
+import type { ChatArtifact, ChatStreamEvent } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { ChatService } from './ChatService';
@@ -29,6 +29,7 @@ describe('ChatService artifacts', () => {
   let events: ChatStreamEvent[];
   let stream: PassThrough;
   let post: ReturnType<typeof vi.fn>;
+  let refreshArtifacts: ReturnType<typeof vi.fn<(sessionId: string, artifacts: readonly ChatArtifact[]) => void>>;
 
   beforeEach(async () => {
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-artifacts-')), 'test-model');
@@ -43,6 +44,7 @@ describe('ChatService artifacts', () => {
       return Promise.resolve({ data: stream, status: 200 });
     });
     post = boundPost;
+    refreshArtifacts = vi.fn();
 
     const apiClient = {
       get: vi.fn().mockResolvedValue({ sseCompletionsUrl: '' }),
@@ -54,6 +56,7 @@ describe('ChatService artifacts', () => {
       access: { list: async () => [] } as unknown as AccessStore,
       logger: { debug: vi.fn(), warn: vi.fn() },
       artifacts: new ArtifactPublisher(() => apiClient, { debug: vi.fn() }),
+      browser: { context: vi.fn(), closeSession: vi.fn(async () => undefined), refreshArtifacts },
       getApiClient: () => apiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: event => emitted.push(event),
@@ -99,6 +102,25 @@ describe('ChatService artifacts', () => {
     expect(session?.messages[1].artifacts).toMatchObject([
       { type: 'html', title: 'Counter', identifier: 'counter', save: { status: 'saved' } },
     ]);
+  });
+
+  it("hands the reply's artifacts to the browser, so a tab still showing one reloads", async () => {
+    const id = await reply(`Here.\n${HTML_ARTIFACT}`);
+
+    expect(refreshArtifacts).toHaveBeenCalledTimes(1);
+    expect(refreshArtifacts).toHaveBeenCalledWith(id, [
+      expect.objectContaining({
+        identifier: 'counter',
+        type: 'html',
+        content: expect.stringContaining('<button>0</button>'),
+      }),
+    ]);
+  });
+
+  it('tells the browser nothing for a reply with no artifact', async () => {
+    await reply('Just prose.');
+
+    expect(refreshArtifacts).not.toHaveBeenCalled();
   });
 
   it('persists every artifact of a reply that emits several, in order', async () => {

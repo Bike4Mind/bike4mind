@@ -5,6 +5,7 @@ import { IModelConfig } from './ModelConfigTypes';
 import type { OrganizationRetentionPolicy } from './OrganizationRetention';
 import type { OrganizationSharingPolicy } from '../../organizationSharingPolicy';
 import type { IOrgBudgetAlerts } from './OrgAlertTypes';
+import type { AccountSegment } from './SpendExplorerTypes';
 
 export interface IUserDetails {
   id: string;
@@ -28,6 +29,9 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
    * only; defaults to empty = fail-closed. An org starts with no group types (org-groups #1172).
    */
   allowedGroupTypes: string[];
+
+  /** Set by an admin; absent reads as `customer`. Spend explorer splits cost by it. */
+  accountSegment?: AccountSegment;
   /**
    * User ids appointed as org admins by the billing owner or a platform admin. NOT a `Permission`
    * verb and NOT on the shared `users[]` ACL. The billing owner (`userId`) is implicitly an admin
@@ -48,8 +52,10 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
   logo?: IAppFileDocument | null;
   stripeCustomerId?: string | null;
 
-  /** Cumulative storage ceiling in decimal MB; unset or null means DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
+  /** Effective flat-pool storage ceiling in decimal MB, mirrored for legacy consumers. */
   storageLimit?: number | null;
+  storageLimitOverride?: number | null;
+  planStorageLimit?: number | null;
 
   /**
    * Bytes held by files this org OWNS (FabFile.organizationId), whoever uploaded them. Unset reads
@@ -159,6 +165,9 @@ export interface IOrganizationRepository
 
   /** Seat counts keyed by Stripe customer id, in one query. */
   findSeatsByStripeCustomerIds(stripeCustomerIds: string[]): Promise<Map<string, number>>;
+
+  setPlanStorageLimit(organizationId: string, limitMb: number): Promise<boolean>;
+  setStorageLimitOverride(organizationId: string, limitMb: number | null): Promise<IOrganizationDocument | null>;
 
   /**
    * Atomically add `bytes` (negative to refund) to the org's storage counter, floored at 0.

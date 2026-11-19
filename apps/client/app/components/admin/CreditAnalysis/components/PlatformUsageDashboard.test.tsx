@@ -176,6 +176,25 @@ describe('PlatformUsageDashboard consumers', () => {
     expect(rows[2]).toHaveTextContent('Unknown key');
     expect(rows[2]).toHaveTextContent('Unknown owner');
   });
+
+  it('renders one page of a large consumer list, not every API key', () => {
+    setData({
+      byConsumer: Array.from({ length: 60 }, (_, index) => ({
+        apiKeyId: `k${index}`,
+        keyName: `Key ${index}`,
+        requests: 1,
+        inputTokens: 1,
+        outputTokens: 1,
+        cogsUsd: 0,
+        creditsCharged: 60 - index,
+      })),
+    });
+    renderDashboard();
+
+    const table = screen.getByTestId('platform-usage-consumer-table');
+    expect(within(table).getAllByRole('row').slice(1)).toHaveLength(25);
+    expect(screen.getByTestId('admin-table-range')).toHaveTextContent('1 to 25 of 60');
+  });
 });
 
 describe('PlatformUsageDashboard endpoint section', () => {

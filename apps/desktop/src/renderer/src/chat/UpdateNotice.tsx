@@ -7,6 +7,7 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { updateNoticeVersion, type UpdateState } from '@shared/update';
 import { CloseIcon } from './icons';
+import { SESSION_PANEL_SPACE } from './sessionPanelState';
 import { UpdateRestartConfirm } from './UpdateSettings';
 import type { AppUpdateController } from './useAppUpdate';
 
@@ -21,11 +22,10 @@ export interface UpdateNoticeProps {
   onOpenRelease: (url: string) => void;
   onDismiss: (version: string) => void;
   actions?: UpdateNoticeActions;
+  contained?: boolean;
+  panelShown?: boolean;
 }
 
-// The bar across the top of the main pane (ChatShell's conversation header, CustomizePanel's): py 1.25
-// either side of a size-sm control (2rem) and a 1px divider. A project line under the title adds ~5px.
-const HEADER_BAR_HEIGHT = 10 + 32 + 10 + 1;
 const EDGE = 12;
 
 function noticeTitle(state: UpdateState, inApp: boolean): string {
@@ -35,11 +35,17 @@ function noticeTitle(state: UpdateState, inApp: boolean): string {
 }
 
 /**
- * The update card, fixed in the window's upper-right corner just below the header bar: clear of
- * the header's controls above it and of the composer at the foot of the window. Given `actions` it
- * downloads and installs; which version it shows, if any, is updateNoticeVersion's call.
+ * Given `actions` the card downloads and installs; which version it shows, if any,
+ * is updateNoticeVersion's call.
  */
-export function UpdateNotice({ state, onOpenRelease, onDismiss, actions }: UpdateNoticeProps) {
+export function UpdateNotice({
+  state,
+  onOpenRelease,
+  onDismiss,
+  actions,
+  contained = false,
+  panelShown = false,
+}: UpdateNoticeProps) {
   // A failed download outranks an earlier dismissal: the user has just asked for this version.
   const version =
     updateNoticeVersion(state) ??
@@ -54,9 +60,9 @@ export function UpdateNotice({ state, onOpenRelease, onDismiss, actions }: Updat
       role="status"
       data-testid="update-notice"
       sx={{
-        position: 'fixed',
-        top: HEADER_BAR_HEIGHT + EDGE,
-        right: EDGE,
+        position: contained ? 'absolute' : 'fixed',
+        bottom: EDGE,
+        right: panelShown ? SESSION_PANEL_SPACE : EDGE,
         zIndex: 'snackbar',
         width: `min(280px, calc(100vw - ${2 * EDGE}px))`,
         p: 1.5,
@@ -172,11 +178,21 @@ function NoticeActions({ state, actions }: { state: UpdateState; actions: Update
 }
 
 /** The notice wired to main through `controller`, which the account label shares. */
-export function AppUpdateNotice({ controller }: { controller: AppUpdateController }) {
+export function AppUpdateNotice({
+  controller,
+  contained,
+  panelShown,
+}: {
+  controller: AppUpdateController;
+  contained?: boolean;
+  panelShown?: boolean;
+}) {
   return (
     <UpdateNotice
       state={controller.state}
       actions={controller}
+      contained={contained}
+      panelShown={panelShown}
       onOpenRelease={url => void window.b4m.shell.openExternal(url)}
       onDismiss={controller.dismiss}
     />

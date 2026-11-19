@@ -46,7 +46,12 @@ const GenerationJobSchema = new Schema<IGenerationJobDocument>(
     creditHold: { type: Schema.Types.Mixed, default: null },
     settledCredits: { type: Number },
     error: new Schema(
-      { code: { type: String, required: true }, message: { type: String, required: true } },
+      {
+        code: { type: String, required: true },
+        message: { type: String, required: true },
+        providerStatus: { type: Number },
+        retryAfterSeconds: { type: Number },
+      },
       { _id: false }
     ),
     // Raw provider payloads can be large and are never returned to clients.
@@ -215,13 +220,14 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
     await this.jobModel.updateOne({ _id: id }, { $set: { settledCredits } });
   }
 
-  async listByRequester({ requestedBy, kind, state, source, beforeId, limit }: ListByRequesterQuery) {
+  async listByRequester({ requestedBy, kind, state, source, beforeId, compositionId, limit }: ListByRequesterQuery) {
     const docs = await this.jobModel
       .find({
         requestedBy,
         kind,
         ...(state && { state }),
         ...(source && { source }),
+        ...(compositionId && { 'payload.request.compositionId': compositionId }),
         ...(beforeId && { _id: { $lt: new mongoose.Types.ObjectId(beforeId) } }),
       })
       .sort({ _id: -1 })

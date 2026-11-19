@@ -23,6 +23,10 @@ describe('canRenderAdminTab', () => {
     }
   });
 
+  it('rejects the retired issue filing page, which has no panel of its own', () => {
+    expect(canRenderAdminTab(AdminTab.SecOpsTriage, { user: admin })).toBe(false);
+  });
+
   it('rejects model lifecycle, which has no panel of its own', () => {
     expect(canRenderAdminTab(AdminTab.ModelLifecycle, { user: admin })).toBe(false);
   });

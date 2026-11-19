@@ -202,7 +202,28 @@ encryptBucketAtRest('generatedImagesBucket', generatedImagesBucket);
 
 const generatedImagesBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('generatedImagesBucketLifecycle', {
   bucket: generatedImagesBucket.name,
-  rules: [expireNoncurrentVersionsRule],
+  rules: [
+    {
+      // Render worker scratch (status.json + output.mp4); the store step copies the MP4 into Files within
+      // the job's 30-min cap, so nothing reads it after. Prefix must stay in sync with STUDIO_RENDER_PREFIX
+      // in b4m-core/common/src/studioComposition/render.ts.
+      id: 'expire-studio-render-scratch',
+      status: 'Enabled',
+      filter: {
+        prefix: 'studio-render/',
+      },
+      expiration: {
+        days: 2,
+      },
+      noncurrentVersionExpiration: {
+        noncurrentDays: 1,
+      },
+      abortIncompleteMultipartUpload: {
+        daysAfterInitiation: 1,
+      },
+    },
+    expireNoncurrentVersionsRule,
+  ],
 });
 
 // PARITY: these routeBucket prefixes are mirrored by resolveProxyTarget in

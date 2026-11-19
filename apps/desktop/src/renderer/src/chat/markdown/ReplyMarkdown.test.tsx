@@ -153,6 +153,21 @@ describe('ReplyMarkdown', () => {
       expect(html).toContain('href="https://example.com/a"');
     });
 
+    it('draws a path as its text alone, with no provider to check it', () => {
+      const html = render('Saved `reports/run.webm` and src/a.ts.').replace(/<style[\s\S]*?<\/style>/, '');
+      expect(html).not.toContain('chat-markdown-file-link');
+      expect(html).not.toContain('<span');
+      expect(html).toContain('reports/run.webm');
+      expect(html).toContain('src/a.ts.');
+    });
+
+    it('does not let a reply mark its own text as a file path', () => {
+      // The stylesheet names the attribute in a selector, so only the drawn markup is checked.
+      const html = render('<span data-file-path="/etc/passwd">x</span>').replace(/<style[\s\S]*?<\/style>/, '');
+      expect(html).not.toContain('data-file-path');
+      expect(html).not.toContain('/etc/passwd');
+    });
+
     it('does not give a link a target, which would ask Electron for a window', () => {
       expect(render('[docs](https://example.com)')).not.toContain('target=');
     });

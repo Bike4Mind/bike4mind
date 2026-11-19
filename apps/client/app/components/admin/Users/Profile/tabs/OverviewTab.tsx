@@ -47,8 +47,9 @@ const formatBytes = (bytes: number): string => {
 };
 
 /** As analytics counts it (server-utils analytics/lane.ts): an admin is internal whatever the flag says. */
-const analyticsMark = (user: Pick<AdminUserProfile, 'isAdmin' | 'isInternal'>): string => {
+const analyticsMark = (user: Pick<AdminUserProfile, 'isAdmin' | 'isInternal' | 'accountSegment'>): string => {
   if (user.isInternal) return 'Internal account';
+  if (user.accountSegment === 'partner' && !user.isAdmin) return 'Partner account';
   return user.isAdmin ? 'Internal account (admin)' : 'Customer';
 };
 
@@ -134,6 +135,9 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
           {analyticsMark(user)}
           <RowAction onClick={() => onAction('internalAccount')} data-testid="user-profile-internal-btn">
             Change
+          </RowAction>
+          <RowAction onClick={() => onAction('partnerAccount')} data-testid="user-profile-partner-btn">
+            {user.accountSegment === 'partner' ? 'Unmark partner' : 'Mark partner'}
           </RowAction>
         </Stack>
       </Fact>

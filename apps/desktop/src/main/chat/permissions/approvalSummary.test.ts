@@ -100,6 +100,20 @@ describe('summarizeApprovals', () => {
     expect(summary.refusals).toEqual([{ pattern: 'bash_execute: pnpm -s *', count: 1 }]);
   });
 
+  it('counts a Full access stop under its own reason', () => {
+    const summary = summarizeApprovals([
+      entry({
+        mode: 'full',
+        approval: {
+          asked: true,
+          askedBecause:
+            'Asked in Full access because: Could not read this command, so where it acts cannot be checked.',
+        },
+      }),
+    ]);
+    expect(summary.reasons).toEqual([{ reason: 'full access stop', count: 1 }]);
+  });
+
   it('groups prompts by tool, pattern and project folder name, and picks the always-allowed ones', () => {
     const summary = summarizeApprovals(entries);
     expect(summary.prompted[0]).toEqual({

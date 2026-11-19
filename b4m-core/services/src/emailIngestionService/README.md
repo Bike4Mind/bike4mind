@@ -139,7 +139,7 @@ The Email Ingestion Service provides a complete solution for processing incoming
 1. **`processIngestedEmail`** - Main orchestration function
 2. **`authenticateSender`** - Checks the topmost SES `Authentication-Results` header against the From address; the parser adapter supplies it via **`readSenderAuthenticationHeaders`**
 3. **`validateSenderAuthorization`** - Checks if sender is authorized
-4. **`processAttachments`** - Handles email attachments
+4. **`processAttachments`** - Handles email attachments; processes at most 20 attachments / 25 MB total per email in parser order, skipping the rest with one warning
 5. **`processEmailBody`** - Converts and stores email body
 6. **`extractPlatformEmail`**, **`extractSenderEmail`**, **`extractEmails`** - Email parsing utilities
 
@@ -157,7 +157,7 @@ The Email Ingestion Service provides a complete solution for processing incoming
 
 ```bash
 cd your-app
-pnpm add @bike4mind/services @bike4mind/common @bike4mind/utils
+pnpm add @bike4mind/services@npm:@bike4mind/services-core @bike4mind/common @bike4mind/utils
 pnpm add mailparser  # or your preferred email parser
 ```
 
