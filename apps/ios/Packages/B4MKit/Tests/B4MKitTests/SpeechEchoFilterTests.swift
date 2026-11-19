@@ -33,6 +33,11 @@ final class SpeechEchoFilterTests: XCTestCase {
     XCTAssertEqual(residual("so so the capital of France is Paris"), "so so the capital of France is Paris")
   }
 
+  func testAStrayWordNeedsMoreThanOneEchoedWordAfterIt() {
+    XCTAssertEqual(residual("wait Paris"), "wait Paris")
+    XCTAssertEqual(residual("so time what about Rome"), "so time what about Rome")
+  }
+
   func testTheReplysLastWordAloneIsEcho() {
     XCTAssertEqual(residual("time what about Rome"), "what about Rome")
     XCTAssertEqual(residual("Paris what about Rome", spoken: ["The capital of France is Paris."]), "what about Rome")

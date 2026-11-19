@@ -47,9 +47,9 @@ struct SpeechEchoFilter {
         if gap >= tolerance { break }
       }
     }
-    // One matching word followed by unmatched ones is more likely the user ("the weather today"), unless it is
-    // the reply's last word, which is all of the echo a recognizer that started late can catch.
-    if matched < 2, end < heard.count, next < said.count { return 0 }
+    // One matching word is more likely the user ("the weather today", "wait Paris"), unless it opens the transcript
+    // and is the last word played so far, which is all of the echo a recognizer that started late can catch.
+    if matched < 2, first > 0 || (end < heard.count && next < said.count) { return 0 }
     return end
   }
 
