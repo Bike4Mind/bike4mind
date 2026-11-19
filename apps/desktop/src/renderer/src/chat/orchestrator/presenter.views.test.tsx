@@ -62,6 +62,7 @@ beforeEach(() => {
       getSession: vi.fn().mockResolvedValue(null),
       getRunSpend: vi.fn().mockResolvedValue({ status: 'unattributed' }),
       onQueueChanged: vi.fn(() => () => undefined),
+      onStreamEvent: vi.fn(() => () => undefined),
       answerTaskDecision,
     },
   };
