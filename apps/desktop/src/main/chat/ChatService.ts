@@ -24,6 +24,7 @@ import {
   type WorkerTask,
 } from '@shared/orchestration';
 import { randomUUID } from 'node:crypto';
+import { isUpdateOnlyTask, MISSING_TASK_RESULT_REASON } from '@shared/agentState';
 import { LOOP_HELP, parseLoop, type LoopResult, type LoopStart, type LoopState } from '@shared/loop';
 import { LoopScheduler, type LoopOutcome } from './LoopScheduler';
 import { realpath, stat } from 'node:fs/promises';
@@ -2705,8 +2706,17 @@ export class ChatService {
    * when they settle, so without the live part a window opening mid-turn has nothing for the
    * next event to extend, and shows the prompt alone until the turn ends.
    */
-  async getSession(sessionId: string): Promise<ChatSession | null> {
-    const session = await this.deps.store.get(sessionId);
+  async getSession(sessionId: string, viewed = false): Promise<ChatSession | null> {
+    let session = await this.deps.store.get(sessionId);
+    const task = session?.workerTask;
+    if (viewed && task && !task.attentionViewed && isUpdateOnlyTask(task.state)) {
+      const updated = await this.deps.store.updateWorkerTask(sessionId, current => {
+        if (!isUpdateOnlyTask(current.state)) return current;
+        return { ...current, attentionViewed: true };
+      });
+      if (updated) this.deps.summaryChanged?.(updated);
+      session = await this.deps.store.get(sessionId);
+    }
     const preparing = this.preparing.get(sessionId);
     if (session && preparing) return { ...session, preparingWorkspace: { ...preparing } };
     const live = this.live.get(sessionId);
@@ -5178,6 +5188,7 @@ export class ChatService {
     return {
       bytes: attachment => this.deps.attachments?.read(sessionId, attachment.id) ?? Promise.resolve(null),
       pdfText: attachment => this.deps.attachments?.readPdfText(sessionId, attachment.id) ?? Promise.resolve(null),
+      path: attachment => this.deps.attachments?.locate(sessionId, attachment.id) ?? Promise.resolve(null),
     };
   }
 
@@ -7137,7 +7148,7 @@ export class ChatService {
                 ...task,
                 state: {
                   status: 'blocked',
-                  reason: 'The attempt stopped without a structured result.',
+                  reason: MISSING_TASK_RESULT_REASON,
                   evidence: ['Read the attempt transcript and request missing acceptance evidence.'],
                 },
               }
@@ -10033,10 +10044,16 @@ function automaticDisplay(automatic: ChatAutomaticOrigin): string {
   }
 }
 
+function imageLocationNote(attachment: ChatAttachment, path: string): string {
+  return `<attached-image-file name="${attachment.name}" media-type="${attachment.mediaType}" path="${path}" />`;
+}
+
 /** Reads one attachment's stored content; null when the file is gone or, for a PDF, unreadable. */
 interface AttachmentReader {
   bytes(attachment: ChatAttachment): Promise<Buffer | null>;
   pdfText(attachment: ChatAttachment): Promise<PdfPromptText | null>;
+  /** Where the stored bytes sit on disk, so a tool-using agent can hand the file to another service. */
+  path?(attachment: ChatAttachment): Promise<string | null>;
 }
 
 /**
@@ -10080,6 +10097,9 @@ async function toAttachedContent(
         type: 'image',
         source: { type: 'base64', media_type: attachment.mediaType, data: bytes.toString('base64') },
       });
+      // The stored file has no extension, so the name and type are given for whoever copies it out.
+      const stored = await readAttachment.path?.(attachment);
+      if (stored) sections.push(imageLocationNote(attachment, stored));
       continue;
     }
 

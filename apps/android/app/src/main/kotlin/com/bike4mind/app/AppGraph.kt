@@ -16,6 +16,8 @@ import com.bike4mind.kit.auth.AuthSession
 import com.bike4mind.kit.auth.AuthorizationRequest
 import com.bike4mind.kit.auth.AuthorizationResult
 import com.bike4mind.kit.auth.OAuthConfiguration
+import com.bike4mind.kit.briefs.BriefController
+import com.bike4mind.kit.briefs.BriefWire
 import com.bike4mind.kit.chat.ChatController
 import com.bike4mind.kit.chat.ChatSendWire
 import com.bike4mind.kit.chat.LiveChatBackend
@@ -63,6 +65,7 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
         SessionsApi(environment.baseUrl, engine) { transport.install(it) },
         AIApi(environment.baseUrl, engine) { transport.install(it) },
     )
+    private val briefs = BriefWire(environment, http)
     private val chatBackend = LiveChatBackend(sessions, ChatSendWire(environment, http), RealtimeConnection(environment, http))
 
     /** Registers this install's FCM token with the server while signed in and notifications are allowed. */
@@ -76,6 +79,9 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
     private val pendingSignIn = PendingSignInStore(context)
 
     fun chat(sessionId: String?, scope: CoroutineScope) = ChatController(sessionId, chatBackend, scope)
+
+    /** [briefId] null shows the latest brief. */
+    fun brief(briefId: String?, scope: CoroutineScope) = BriefController(briefs, briefId, scope)
 
     /** Feature flags, limits and the model list for this user (`GET /api/v1/client-config`). */
     suspend fun clientConfig(): GetClientConfigResponse200 = accountApi.getClientConfig().requireBody()

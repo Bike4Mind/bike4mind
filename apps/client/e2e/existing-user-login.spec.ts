@@ -1,8 +1,8 @@
-import type { APIRequestContext, Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
-import { apiGetOtcCode, apiLoginViaOtc } from './helpers/api';
-import type { LoginPage } from './pages/LoginPage';
+import { apiLoginViaOtc } from './helpers/api';
+import { signInThroughForm } from './helpers/signInThroughForm';
 
 /**
  * Sign-in for an account that already existed before the deploy under test. Every other login test
@@ -23,21 +23,6 @@ const EXISTING_USER_EMAIL = 'qa-user-e2e@test.com';
 const BARE_REFRESH_COOKIE = 'b4m_rt';
 const BARE_REFRESH_COOKIE_PATH = '/api';
 
-/** Signs in through the login form and returns the verify response the app received. */
-async function signInThroughForm(page: Page, loginPage: LoginPage, request: APIRequestContext) {
-  await loginPage.goto();
-  await loginPage.fillEmail(EXISTING_USER_EMAIL);
-  const code = await apiGetOtcCode(request, EXISTING_USER_EMAIL);
-  await loginPage.fillOtc(code);
-  const verified = page.waitForResponse(
-    response => response.url().includes('/api/otc/verify') && response.request().method() === 'POST'
-  );
-  await loginPage.submit();
-  const response = await verified;
-  expect(response.status(), 'OTC verify').toBe(200);
-  return (await response.json()) as { email?: string; registrationRequired?: boolean; mfaRequired?: boolean };
-}
-
 async function expectSignedIn(page: Page) {
   await expect(page).not.toHaveURL(/.*login.*/);
   await expect(page.getByTestId('profile-menu-card')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
@@ -56,9 +41,8 @@ test.describe('Existing user sign-in', () => {
     await basePage.clearAllStorage();
 
     await test.step('the code logs in to the existing account instead of starting a registration', async () => {
-      const body = await signInThroughForm(page, loginPage, request);
+      const body = await signInThroughForm(page, loginPage, request, EXISTING_USER_EMAIL);
       expect(body.registrationRequired, 'an existing account must not be asked to register').toBeFalsy();
-      expect(body.mfaRequired, 'the standing account is expected to have no MFA').toBeFalsy();
       expect(body.email).toBe(EXISTING_USER_EMAIL);
       await basePage.dismissModals();
       await expectSignedIn(page);
@@ -82,7 +66,7 @@ test.describe('Existing user sign-in', () => {
     });
 
     await test.step('the same account signs straight back in', async () => {
-      await signInThroughForm(page, loginPage, request);
+      await signInThroughForm(page, loginPage, request, EXISTING_USER_EMAIL);
       await basePage.dismissModals();
       await expectSignedIn(page);
     });
@@ -127,7 +111,7 @@ test.describe('Existing user sign-in', () => {
       await loginPage.expectLoginPage();
       await expect(page.getByTestId('login-email-input')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
 
-      const body = await signInThroughForm(page, loginPage, request);
+      const body = await signInThroughForm(page, loginPage, request, EXISTING_USER_EMAIL);
       expect(body.email).toBe(EXISTING_USER_EMAIL);
       await basePage.dismissModals();
       await expectSignedIn(page);

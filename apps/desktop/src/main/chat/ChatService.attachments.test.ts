@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -115,7 +115,14 @@ describe('ChatService attachments', () => {
       type: 'image',
       source: { type: 'base64', media_type: 'image/png', data: Buffer.from([1, 2, 3]).toString('base64') },
     });
-    expect(content[1]).toEqual({ type: 'text', text: 'what is wrong here?' });
+    expect(content[1]).toMatchObject({
+      type: 'text',
+      text: expect.stringMatching(
+        /^<attached-image-file name="bug\.png" media-type="image\/png" path="[^"]+" \/>\n\nwhat is wrong here\?$/
+      ),
+    });
+    const storedPath = /path="([^"]+)"/.exec((content[1] as { text: string }).text)?.[1] ?? '';
+    expect([...(await readFile(storedPath))]).toEqual([1, 2, 3]);
   });
 
   it('inlines a text file ahead of the prompt, tagged with its name', async () => {

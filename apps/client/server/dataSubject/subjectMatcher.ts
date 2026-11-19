@@ -7,7 +7,7 @@ import {
   isSubjectOwnedPersonalLake,
 } from '@bike4mind/server-utils/users/purgeAccountContent';
 import { findOrganizationFileIds } from '@bike4mind/server-utils/users/purgeAccountFiles';
-import { findUnclassifiedModels } from './registry';
+import { assertContributedRegistryValid, findUnclassifiedModels } from './registry';
 import { valuesAt } from './documentPaths';
 import type { DataHolder, DataHolderRegistry, UserReference } from './types';
 
@@ -40,8 +40,12 @@ export const isServerQueryFailure = (error: unknown): boolean =>
 /** Per `scope: 'personal'` reference, the ids of the documents it may match on this model. */
 export type PersonalScope = ReadonlyMap<UserReference, ReadonlySet<string>>;
 
-/** A model registered in this process that the registry does not classify fails the walk loudly. */
+/**
+ * A model registered in this process that the registry does not classify fails the walk loudly,
+ * and so does an invalid contributed entry: this is the first-use check every walk goes through.
+ */
 export function assertEveryModelClassified(modelNames: readonly string[]): void {
+  assertContributedRegistryValid();
   const unclassified = findUnclassifiedModels(modelNames);
   if (unclassified.length > 0) {
     throw new Error(`Data subject walk refused: unclassified models ${unclassified.join(', ')}`);

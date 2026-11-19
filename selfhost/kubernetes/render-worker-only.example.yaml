@@ -1,0 +1,28 @@
+# Only the Studio render worker, against hosted AWS queues and buckets (no app, Mongo, object store or SQS here).
+# The pre-created runtime Secret must hold MONGODB_URI; AWS access comes from the ServiceAccount, never static keys.
+mode: renderWorkerOnly
+existingSecret: bike4mind-render-runtime
+renderWorker:
+  enabled: true
+  image: registry.example.com/bike4mind/render-worker:tested-revision
+  aws:
+    mode: podIdentity
+  env:
+    RENDER_JOB_QUEUE: https://sqs.example.invalid/queue/renderJobQueue
+    GENERATION_JOB_QUEUE: https://sqs.example.invalid/queue/generationJobQueue
+    FAB_FILE_BUCKET: example-fab-files
+    GENERATED_IMAGES_BUCKET: example-generated-images
+    AWS_REGION: us-east-1
+    # Required: the hosted MONGODB_URI contains %STAGE%, which the worker fills from APP_STAGE (use the stage the
+    # app was deployed with). APP_NAME is the matching app name.
+    APP_STAGE: example-stage
+    APP_NAME: bike4mind
+  serviceAccount:
+    # IRSA: eks.amazonaws.com/role-arn. EKS Pod Identity: none, the association is made on the cluster.
+    annotations: {}
+  # Scale-in can delete a replica mid-encode (the job is handed back and retried). For production prefer a
+  # nonzero minReplicaCount or keda.enabled false with fixed replicas.
+  keda:
+    enabled: true
+    queueURL: https://sqs.example.invalid/queue/renderJobQueue
+    awsRegion: us-east-1
