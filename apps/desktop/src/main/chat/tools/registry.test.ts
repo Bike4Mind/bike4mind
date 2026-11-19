@@ -19,8 +19,21 @@ const mcpSchema: ToolSchema = {
  * off must subtract only itself.
  */
 describe('toolsForRequest', () => {
-  it('declares nothing when nothing is available', () => {
-    expect(names({ roots: [], media: false, host: false })).toEqual([]);
+  it('declares only the plan tool when nothing else is available', () => {
+    expect(names({ roots: [], media: false, host: false })).toEqual(['todo_write']);
+  });
+
+  // A projectless Chat session has no roots; the plan lives in the transcript and needs none.
+  it('offers todo_write without a granted folder, and once alongside the local tools', () => {
+    for (const options of [
+      { roots: [], media: false, host: false },
+      { roots: [], media: true, host: true, ask: true, browser: true, web: true, skills: true },
+      { roots: [], media: false, host: false, modelId: 'gpt-5' },
+      { roots: ['/tmp'], media: false, host: false },
+    ]) {
+      expect(names(options).filter(name => name === 'todo_write')).toEqual(['todo_write']);
+    }
+    expect(names({ roots: [], media: false, host: false })).not.toContain('file_read');
   });
 
   // It reads from the server session's media and writes into the project, so it needs both.
@@ -78,7 +91,10 @@ describe('toolsForRequest', () => {
   it('keeps MCP tools when every built-in family is off', () => {
     // A signed-out user with no folder and no project still gets the servers they configured:
     // an MCP server is theirs, and none of the other three preconditions is about it.
-    expect(names({ roots: [], media: false, host: false, mcp: [mcpSchema] })).toEqual(['mcp__notion_search']);
+    expect(names({ roots: [], media: false, host: false, mcp: [mcpSchema] })).toEqual([
+      'todo_write',
+      'mcp__notion_search',
+    ]);
   });
 
   it('drops each family independently', () => {
@@ -189,7 +205,7 @@ describe('toolsForRequest', () => {
     });
 
     it('offers no edit tool at all without a granted folder', () => {
-      expect(names({ roots: [], media: false, host: false, modelId: 'gpt-5' })).toEqual([]);
+      expect(names({ roots: [], media: false, host: false, modelId: 'gpt-5' })).toEqual(['todo_write']);
     });
 
     it('finds every edit tool by name, and says which family a model was offered', () => {
