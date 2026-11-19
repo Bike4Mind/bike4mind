@@ -50,12 +50,12 @@ describe('useCopySessionMarkdown', () => {
   });
 
   it("copies getMarkdown's text instead of the main chat's session", async () => {
-    const { result } = renderHook(() => useCopySessionMarkdown(() => 'ASK BOB CHAT'), { wrapper });
+    const { result } = renderHook(() => useCopySessionMarkdown(() => 'OVERLAY CHAT'), { wrapper });
 
     await act(() => result.current.copyMarkdown());
 
     expect(writeText).toHaveBeenCalledTimes(1);
-    expect(writeText).toHaveBeenCalledWith('ASK BOB CHAT');
+    expect(writeText).toHaveBeenCalledWith('OVERLAY CHAT');
     expect(result.current.copied).toBe(true);
   });
 
@@ -153,11 +153,11 @@ describe('useCopySessionMarkdown', () => {
     writeText.mockRejectedValueOnce(denied);
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      const { result } = renderHook(() => useCopySessionMarkdown(() => 'ASK BOB CHAT'), { wrapper });
+      const { result } = renderHook(() => useCopySessionMarkdown(() => 'OVERLAY CHAT'), { wrapper });
 
       await act(() => result.current.copyMarkdown());
 
-      expect(writeText).toHaveBeenCalledWith('ASK BOB CHAT');
+      expect(writeText).toHaveBeenCalledWith('OVERLAY CHAT');
       expect(result.current.copied).toBe(false);
       expect(consoleError).toHaveBeenCalledWith('Failed to copy markdown:', denied);
     } finally {

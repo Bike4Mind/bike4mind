@@ -140,7 +140,7 @@ describe('ChatPanelControls copy button', () => {
   });
 
   it("hands the caller's getCopyMarkdown to the copy hook", () => {
-    const getCopyMarkdown = () => 'ASK BOB CHAT';
+    const getCopyMarkdown = () => 'OVERLAY CHAT';
     renderControls({ getCopyMarkdown });
 
     expect(useCopySessionMarkdown).toHaveBeenLastCalledWith(getCopyMarkdown);

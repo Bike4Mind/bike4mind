@@ -74,7 +74,7 @@ describe('DockedChatPanel', () => {
   });
 
   it('passes getCopyMarkdown through to the copy button', () => {
-    const getCopyMarkdown = () => 'ASK BOB CHAT';
+    const getCopyMarkdown = () => 'OVERLAY CHAT';
     render(
       <Wrapper>
         <DockedChatPanel getCopyMarkdown={getCopyMarkdown}>chat</DockedChatPanel>

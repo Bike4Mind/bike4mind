@@ -52,7 +52,7 @@ describe('FloatingChatWindow', () => {
   });
 
   it('passes getCopyMarkdown through to the copy button', () => {
-    const getCopyMarkdown = () => 'ASK BOB CHAT';
+    const getCopyMarkdown = () => 'OVERLAY CHAT';
     render(
       <Wrapper>
         <FloatingChatWindow getCopyMarkdown={getCopyMarkdown}>chat</FloatingChatWindow>
