@@ -178,7 +178,7 @@ describe('customMcpToolHost.listConnections - platform connectors', () => {
 });
 
 describe('customMcpToolHost.callTool', () => {
-  it('delegates to invokeRemoteMcp with approved preserved', async () => {
+  it('delegates to invokeRemoteMcp with approved and the switched-on platform ids preserved', async () => {
     mocks.invokeRemoteMcp.mockResolvedValue({ result: { content: [] } });
 
     await customMcpToolHost.callTool({
@@ -187,6 +187,7 @@ describe('customMcpToolHost.callTool', () => {
       toolName: 'create',
       args: { a: 1 },
       approved: true,
+      platformConnectionIds: ['c1'],
     });
 
     expect(mocks.invokeRemoteMcp).toHaveBeenCalledWith({
@@ -196,6 +197,7 @@ describe('customMcpToolHost.callTool', () => {
       toolName: 'create',
       args: { a: 1 },
       approved: true,
+      platformConnectionIds: ['c1'],
     });
   });
 });

@@ -1067,10 +1067,66 @@ describe('invokeRemoteMcp - platform connectors', () => {
   };
   const call = (connectionId: string, userId: string, ctx = context(), approved?: boolean) =>
     invokeRemoteMcp(
-      { action: 'callTool', connectionId, userId, toolName: 'echo', args: { text: 'hi' }, approved },
+      {
+        action: 'callTool',
+        connectionId,
+        userId,
+        toolName: 'echo',
+        args: { text: 'hi' },
+        approved,
+        platformConnectionIds: [connectionId],
+      },
       { runner, context: ctx }
     );
   const policies = (policy: Record<string, unknown>) => ({ policies: [CustomMcpPolicySchema.parse(policy)] });
+
+  it('is not found for a user who has not switched it on, and nothing is sent', async () => {
+    const id = seedPlatform();
+    const other = seedPlatform();
+    const spy = vi.fn(runner);
+    for (const platformConnectionIds of [undefined, [], [other]]) {
+      await expect(
+        invokeRemoteMcp(
+          { action: 'callTool', connectionId: id, userId: 'user-1', toolName: 'echo', args: {}, platformConnectionIds },
+          { runner: spy, context: context() }
+        )
+      ).rejects.toBeInstanceOf(NotFoundError);
+    }
+    expect(spy).not.toHaveBeenCalled();
+    expect(fixture.requests).toHaveLength(0);
+    expect(repo.findByIdWithCredentials).not.toHaveBeenCalledWith(id, PLATFORM);
+  });
+
+  it('reaches the call once the user switches it on', async () => {
+    const id = seedPlatform();
+    const callAs = (platformConnectionIds: string[]) =>
+      invokeRemoteMcp(
+        {
+          action: 'callTool',
+          connectionId: id,
+          userId: 'user-1',
+          toolName: 'echo',
+          args: { text: 'hi' },
+          platformConnectionIds,
+        },
+        { runner, context: context() }
+      );
+    await expect(callAs([])).rejects.toBeInstanceOf(NotFoundError);
+    expect(fixture.requests).toHaveLength(0);
+
+    await expect(callAs([id])).resolves.toMatchObject({ result: expect.any(Object) });
+    expect(fixture.requests.length).toBeGreaterThan(0);
+  });
+
+  it("leaves the caller's own connector callable without switched-on ids, which a platform one needs", async () => {
+    const callWithoutIds = (connectionId: string) =>
+      invokeRemoteMcp(
+        { action: 'callTool', connectionId, userId: 'user-1', toolName: 'echo', args: { text: 'hi' } },
+        { runner, context: context() }
+      );
+    await expect(callWithoutIds(seed('/mcp'))).resolves.toMatchObject({ result: expect.any(Object) });
+    await expect(callWithoutIds(seedPlatform())).rejects.toBeInstanceOf(NotFoundError);
+  });
 
   it('is callable by any user, audited with its owner type and rate limited per user', async () => {
     const id = seedPlatform();
@@ -1096,7 +1152,14 @@ describe('invokeRemoteMcp - platform connectors', () => {
     });
     const sent: RemoteMcpRunPayload[] = [];
     await invokeRemoteMcp(
-      { action: 'callTool', connectionId: id, userId: 'user-77', toolName: 'echo', args: { text: 'hi' } },
+      {
+        action: 'callTool',
+        connectionId: id,
+        userId: 'user-77',
+        toolName: 'echo',
+        args: { text: 'hi' },
+        platformConnectionIds: [id],
+      },
       {
         runner: payload => {
           sent.push(payload);

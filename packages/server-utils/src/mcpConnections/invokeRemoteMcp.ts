@@ -163,6 +163,8 @@ export interface InvokeRemoteMcpCallTool extends InvokeRemoteMcpBase {
   args?: Record<string, unknown>;
   /** The user or agent gate approved this call; required by policy and the saved tool approval mode. */
   approved?: boolean;
+  /** Platform connectors the user switched on, by id. Only a connector named here is reached as a platform one. */
+  platformConnectionIds?: readonly string[];
 }
 
 export type InvokeRemoteMcpRequest = InvokeRemoteMcpListTools | InvokeRemoteMcpCallTool;
@@ -391,12 +393,14 @@ export async function invokeRemoteMcp(
   options: InvokeRemoteMcpOptions = {}
 ): Promise<RemoteMcpListToolsResult | RemoteMcpCallToolResult> {
   const own: McpConnectionOwner = { ownerType: 'user', ownerKey: request.userId };
-  // A call reaches the caller's own connection, else a platform connector, which every user shares.
+  // A call reaches the caller's own connection, else a platform connector the caller switched on.
   const connection =
     request.action === 'listTools'
       ? await mcpConnectionRepository.findByIdWithCredentials(request.connectionId, request.owner ?? own)
       : ((await mcpConnectionRepository.findByIdWithCredentials(request.connectionId, own)) ??
-        (await mcpConnectionRepository.findByIdWithCredentials(request.connectionId, PLATFORM_MCP_OWNER)));
+        (request.platformConnectionIds?.includes(request.connectionId)
+          ? await mcpConnectionRepository.findByIdWithCredentials(request.connectionId, PLATFORM_MCP_OWNER)
+          : null));
   if (!connection) throw new NotFoundError('Connection not found');
   if (connection.auth.kind === 'api_key') options.onApiKeyLoaded?.(connection.auth.apiKey?.valueEnc ?? null);
 

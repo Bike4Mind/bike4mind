@@ -163,7 +163,9 @@ describe('ToolBuilder buildMcpTools - custom connectors', () => {
       expect(on.mcpToolsByServer.shared.map(t => t.name)).toEqual(['shared__search', 'shared__create']);
 
       await on.mcpToolsByServer.shared.find(t => t.name === 'shared__search')!.toolFn({ q: 'x' });
-      expect(host.callTool).toHaveBeenCalledWith(expect.objectContaining({ connectionId: 'p1', toolName: 'search' }));
+      expect(host.callTool).toHaveBeenCalledWith(
+        expect.objectContaining({ connectionId: 'p1', toolName: 'search', platformConnectionIds: ['p1'] })
+      );
 
       for (const enabledPlatformMcpConnections of [[], ['shared']]) {
         const off = await run(builderWith(host as never), undefined, { enabledPlatformMcpConnections });

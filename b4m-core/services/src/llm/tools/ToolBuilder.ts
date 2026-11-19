@@ -901,8 +901,9 @@ export class ToolBuilder {
       try {
         const userId = this.deps.user.id;
         const switchedOff = new Set(disabledMcpConnections ?? []);
+        const platformConnectionIds = enabledPlatformMcpConnections ?? [];
         const connections = await loadCustomMcpConnections(this.deps.customMcp, userId, logger, {
-          platformConnectionIds: enabledPlatformMcpConnections ?? [],
+          platformConnectionIds,
         });
         for (const connection of connections) {
           if (switchedOff.has(connection.slug)) continue;
@@ -910,6 +911,7 @@ export class ToolBuilder {
             userId,
             host: this.deps.customMcp,
             requestApproval: onPendingAction,
+            platformConnectionIds,
           });
           mcpToolsByServer[connection.slug] = tools;
           tools.forEach(tool => customMcpToolNames.add(tool.name));

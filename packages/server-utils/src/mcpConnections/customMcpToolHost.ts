@@ -38,8 +38,8 @@ export const customMcpToolHost: CustomMcpToolHost = {
       }));
   },
 
-  callTool: ({ connectionId, userId, toolName, args, approved }) =>
-    invokeRemoteMcp({ action: 'callTool', connectionId, userId, toolName, args, approved }),
+  callTool: ({ connectionId, userId, toolName, args, approved, platformConnectionIds }) =>
+    invokeRemoteMcp({ action: 'callTool', connectionId, userId, toolName, args, approved, platformConnectionIds }),
 };
 
 /**
