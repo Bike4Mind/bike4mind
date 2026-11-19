@@ -1,5 +1,6 @@
 import { isTurnBudgetStop, type ChatMessage, type ChatSession, type ChatSessionSummary } from './chat';
 import { mentionedRefs } from './githubRefs';
+import { latestTodos, todoProgress } from './todos';
 
 /**
  * How a spawned session ended, classified once for the two audiences that read it.
@@ -57,6 +58,8 @@ export function summarizeSession(session: ChatSession): ChatSessionSummary {
   const totalUsdCost = sumUsage(messages, 'usdCost');
   const totalCredits = sumUsage(messages, 'creditsUsed');
   const githubRefs = mentionedRefs(messages);
+  const items = latestTodos(messages);
+  const plan = items && todoProgress(items);
   return {
     ...summary,
     messageCount: messages.length,
@@ -65,6 +68,7 @@ export function summarizeSession(session: ChatSession): ChatSessionSummary {
     ...(totalUsdCost !== undefined ? { totalUsdCost } : {}),
     ...(totalCredits !== undefined ? { totalCredits } : {}),
     ...(githubRefs.length > 0 ? { githubRefs } : {}),
+    ...(plan?.total ? { plan } : {}),
   };
 }
 

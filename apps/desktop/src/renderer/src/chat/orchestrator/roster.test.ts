@@ -175,6 +175,7 @@ describe('buildRoster', () => {
         lastSnippet: 'all done',
         totalUsdCost: 0.5,
         totalCredits: 20,
+        plan: { done: 1, total: 2, next: 'Two' },
         project: { branch: 'main', workspaceBranch: 'agent/a' } as ChatSessionSummary['project'],
       }),
       summary('b', 'root', { project: { branch: 'main' } as ChatSessionSummary['project'] }),
@@ -187,6 +188,7 @@ describe('buildRoster', () => {
     });
     const a = roster.find(agent => agent.id === 'a');
     expect(a).toMatchObject({
+      plan: { done: 1, total: 2, next: 'Two' },
       title: 'Untitled agent',
       parentId: 'root',
       seedPrompt: 'seed a',
