@@ -27,6 +27,7 @@ type Handler = (req: unknown, res: unknown) => Promise<void>;
 
 const h = vi.hoisted(() => ({
   baseApiOptions: [] as Array<Record<string, unknown>>,
+  rateLimits: [] as Array<{ limit: number; bucket: string }>,
   store: new Map<string, Record<string, unknown>>(),
   nextId: 0,
   context: undefined as unknown,
@@ -47,7 +48,10 @@ vi.mock('@server/middlewares/baseApi', async () => {
   };
 });
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
-  rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  rateLimit: (options: { limit: number; bucket: string }) => {
+    h.rateLimits.push(options);
+    return (_req: unknown, _res: unknown, next: () => void) => next();
+  },
 }));
 vi.mock('@server/middlewares/perUserRateLimit', () => ({
   perUserRateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
@@ -302,6 +306,18 @@ describe('admin route wiring', () => {
     ]);
   });
 
+  it('limits each route that probes the remote server like its user route, in a bucket of its own', () => {
+    const limits = new Map(h.rateLimits.map(options => [options.bucket, options.limit]));
+    for (const [bucket, limit] of [
+      ['POST /api/admin/mcp-connections', 10],
+      ['POST /api/admin/mcp-connections/[id]/api-key', 10],
+      ['POST /api/admin/mcp-connections/[id]/refresh-tools', 20],
+    ] as const) {
+      expect(limits.get(bucket)).toBe(limit);
+      expect(limits.get(bucket.replace('/admin', ''))).toBe(limit);
+    }
+  });
+
   it('refuses a user who is not an admin on every route', async () => {
     const id = await createPlatform();
     for (const [handler, method] of [
@@ -542,7 +558,7 @@ describe('a platform connector seen from the user routes', () => {
     }
   });
 
-  it('comes after the user own connections and gives way to one with the same slug', async () => {
+  it("comes after the user's own connections and gives way to one with the same slug", async () => {
     await createReviewedPlatform();
     await createReviewedPlatform({ displayName: 'Wiki' });
     h.context = anyHost();

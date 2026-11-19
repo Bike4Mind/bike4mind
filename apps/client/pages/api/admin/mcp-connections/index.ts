@@ -1,4 +1,5 @@
 import { ApiKeyScope, PLATFORM_MCP_OWNER, SETTINGS_PAGE_READ } from '@bike4mind/common';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   assertCustomMcpEnabled,
   resolveCustomMcpContext,
@@ -22,14 +23,18 @@ const handler = adminApi({
   .get(async (req, res) => {
     res.json(await listPlatformConnections(await resolveCustomMcpContext(req.user.id)));
   })
-  .post(async (req, res) => {
-    const context = await assertCustomMcpEnabled(req.user);
-    const body = parseMcpConnectionBody(mcpPlatformConnectionCreateBodySchema, req.body);
-    const connection = await createConnection(PLATFORM_MCP_OWNER, req.user, context, body);
-    await recordPlatformConnectorAction(req, 'settings.mcp_connector.created', connection, 'created', {
-      details: { authKind: connection.auth.kind, status: connection.status },
-    });
-    res.status(201).json(connection);
-  });
+  // Creating probes the remote server, so it keeps the user create route's 10 an hour.
+  .post(
+    rateLimit({ limit: 10, windowMs: 60 * 60 * 1000, bucket: 'POST /api/admin/mcp-connections' }),
+    async (req, res) => {
+      const context = await assertCustomMcpEnabled(req.user);
+      const body = parseMcpConnectionBody(mcpPlatformConnectionCreateBodySchema, req.body);
+      const connection = await createConnection(PLATFORM_MCP_OWNER, req.user, context, body);
+      await recordPlatformConnectorAction(req, 'settings.mcp_connector.created', connection, 'created', {
+        details: { authKind: connection.auth.kind, status: connection.status },
+      });
+      res.status(201).json(connection);
+    }
+  );
 
 export default handler;

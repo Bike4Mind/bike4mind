@@ -122,7 +122,7 @@ describe('account purge reconciliation', () => {
     expect(matched('MemoryPrincipalKey', { ...key, dek: null })).toContain('retain');
   });
 
-  it('deletes a person own MCP connections and only anonymizes the creator of a shared one', () => {
+  it("deletes a person's own MCP connections and only anonymizes the creator of a shared one", () => {
     expect(matched('McpConnection', { ownerType: 'user', ownerKey: userId, userId })).toEqual(['deleteDocument']);
     expect(matched('McpConnection', { ownerType: 'org', ownerKey: 'org-1', userId })).toEqual(['anonymize']);
     expect(matched('McpConnection', { ownerType: 'platform', ownerKey: 'platform', userId })).toEqual(['anonymize']);
