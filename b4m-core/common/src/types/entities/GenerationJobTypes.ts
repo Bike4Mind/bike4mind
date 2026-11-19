@@ -251,8 +251,11 @@ export type SoundEffectJobPayload = {
   output?: AudioJobOutput;
 };
 
-/** Same storage fields as VideoJobOutput: the Scene is a video file. */
-export type ComposeJobOutput = VideoJobOutput;
+/**
+ * Same storage fields as VideoJobOutput: the Scene is a video file. `filesSkipReason`: why Files refused the Scene
+ * (over the per-file size limit or the user's storage quota), so it landed in the generated bucket instead.
+ */
+export type ComposeJobOutput = VideoJobOutput & { filesSkipReason?: GeneratedAssetSaveSkippedReason };
 
 /**
  * A Scene is rendered by our own worker (ffmpeg), not a provider: submit downloads the inputs, muxes them and stores

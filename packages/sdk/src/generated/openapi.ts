@@ -1305,7 +1305,7 @@ export interface paths {
     put?: never;
     /**
      * Compose a Scene from a video and a music track
-     * @description Queues a Scene: one shareable clip made from a video file and an audio file you own, with optional cover art, and returns `202` with the job. The Scene runs exactly as long as the video: its picture is copied unchanged and the audio is trimmed (or looped) to fit, with optional fades. The video may run at most 300 seconds, and the input files together may total at most 200 MB. Poll `GET /api/v1/scene-compositions/{id}` until `state` is `succeeded`, `failed` or `cancelled`. The finished Scene is saved to your Files with the `generated` and `scene` tags, linked to its inputs (see `GET /api/v1/files/{id}/lineage`); if that save fails it is kept outside Files and `output.file_id` is null. `output.availability` works as on the other generation jobs: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one), `pending_scan` means keep re-fetching, and `unavailable` means stop polling. A file that cannot be read as the media its slot needs (no video stream, an over-long video) ends the job `failed` with `unsupported_input`. Composing is free: no credits are reserved or charged. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original job, and the same key with a different body is a 422 `idempotency_key_reused`.
+     * @description Queues a Scene: one shareable clip made from a video file and an audio file you own, with optional cover art, and returns `202` with the job. The Scene runs exactly as long as the video: its picture is copied unchanged and the audio is trimmed (or looped) to fit, with optional fades. The video may run at most 300 seconds, and the input files together may total at most 200 MB. A Scene over your Files per-file size limit is still rendered, but is stored outside Files: its output has a null file_id and a files_skip_reason. Poll `GET /api/v1/scene-compositions/{id}` until `state` is `succeeded`, `failed` or `cancelled`. The finished Scene is saved to your Files with the `generated` and `scene` tags, linked to its inputs (see `GET /api/v1/files/{id}/lineage`); if that save fails it is kept outside Files and `output.file_id` is null. `output.availability` works as on the other generation jobs: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one), `pending_scan` means keep re-fetching, and `unavailable` means stop polling. A file that cannot be read as the media its slot needs (no video stream, an over-long video) ends the job `failed` with `unsupported_input`. Composing is free: no credits are reserved or charged. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original job, and the same key with a different body is a 422 `idempotency_key_reused`.
      */
     post: operations['createSceneComposition'];
     delete?: never;
@@ -8968,6 +8968,11 @@ export interface components {
         content_type: string;
         /** @description The length of the Scene, which is the length of its video. */
         duration_seconds: number;
+        /**
+         * @description Why the Scene was stored outside Files, or null when it was saved there. `file_too_large`: it is over the per-file size limit. `storage_limit`: your storage quota has no room for it. `error`: the save failed. The Scene is still downloadable through url.
+         * @enum {string|null}
+         */
+        files_skip_reason: 'storage_limit' | 'file_too_large' | 'error' | null;
         /** @description The Files entry, or null when the Scene was stored outside Files. */
         file_id: string | null;
       } | null;
@@ -9059,6 +9064,11 @@ export interface components {
         content_type: string;
         /** @description The length of the Scene, which is the length of its video. */
         duration_seconds: number;
+        /**
+         * @description Why the Scene was stored outside Files, or null when it was saved there. `file_too_large`: it is over the per-file size limit. `storage_limit`: your storage quota has no room for it. `error`: the save failed. The Scene is still downloadable through url.
+         * @enum {string|null}
+         */
+        files_skip_reason: 'storage_limit' | 'file_too_large' | 'error' | null;
         /** @description The Files entry, or null when the Scene was stored outside Files. */
         file_id: string | null;
       } | null;
@@ -9222,6 +9232,11 @@ export interface components {
         content_type: string;
         /** @description The length of the Scene, which is the length of its video. */
         duration_seconds: number;
+        /**
+         * @description Why the Scene was stored outside Files, or null when it was saved there. `file_too_large`: it is over the per-file size limit. `storage_limit`: your storage quota has no room for it. `error`: the save failed. The Scene is still downloadable through url.
+         * @enum {string|null}
+         */
+        files_skip_reason: 'storage_limit' | 'file_too_large' | 'error' | null;
         /** @description The Files entry, or null when the Scene was stored outside Files. */
         file_id: string | null;
       } | null;
@@ -9270,6 +9285,11 @@ export interface components {
           content_type: string;
           /** @description The length of the Scene, which is the length of its video. */
           duration_seconds: number;
+          /**
+           * @description Why the Scene was stored outside Files, or null when it was saved there. `file_too_large`: it is over the per-file size limit. `storage_limit`: your storage quota has no room for it. `error`: the save failed. The Scene is still downloadable through url.
+           * @enum {string|null}
+           */
+          files_skip_reason: 'storage_limit' | 'file_too_large' | 'error' | null;
           /** @description The Files entry, or null when the Scene was stored outside Files. */
           file_id: string | null;
         } | null;

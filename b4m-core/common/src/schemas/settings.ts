@@ -1162,6 +1162,11 @@ export interface BaseSetting {
    */
   hideOnProductionStages?: boolean;
   /**
+   * Leave the setting out of the Admin Settings list on every stage: it is edited on its own admin
+   * surface, or is internal state no admin edits. Display only, like hideOnProductionStages.
+   */
+  hideFromSettingsList?: boolean;
+  /**
    * Opt-in: include this setting in the PUBLIC, unauthenticated CDN config artifact
    * (see docs/perf/mobile-startup-latency.md, M2.5). Fail-closed - a setting is NEVER
    * public unless explicitly tagged here, regardless of isSensitive. Only tag settings
@@ -1226,6 +1231,11 @@ export type SettingDefinition<K extends string = SettingKey> = Omit<BaseSetting,
   schema: z.ZodType;
   defaultValue?: string | number | boolean | object | undefined;
   options?: string[];
+  /**
+   * Model ids the value pins, keyed by their path under the setting, for the stale model reference
+   * audit (server-utils modelDiscovery/modelReferenceReport.ts). Called with a value the schema accepted.
+   */
+  modelReferences?: (value: unknown) => Record<string, string>;
 };
 
 /**
@@ -1488,10 +1498,13 @@ function makeObjectSetting<T>(
   config: {
     defaultValue?: T;
     schema: z.ZodType<T>;
+    modelReferences?: (value: T) => Record<string, string>;
   } & BaseSetting
 ) {
+  const { modelReferences, ...rest } = config;
   return {
-    ...config,
+    ...rest,
+    ...(modelReferences && { modelReferences: (value: unknown) => modelReferences(value as T) }),
     type: 'object' as const,
     // Admin settings are stored as JSON strings in the database.
     // This preprocess step parses the JSON string before schema validation.
@@ -6784,6 +6797,7 @@ export const settingsMap = {
   logoSettings: makeObjectSetting({
     key: 'logoSettings',
     name: 'Logo Settings',
+    hideFromSettingsList: true, // has its own admin UI
     defaultValue: {
       customLogoUrl: '',
       customDarkLogoUrl: '',
@@ -6819,6 +6833,7 @@ export const settingsMap = {
   SystemFiles: makeStringSetting({
     key: 'SystemFiles',
     name: 'System Prompt Files',
+    hideFromSettingsList: true, // has its own admin UI
     defaultValue: undefined,
     description: 'The global system prompt files to be used for AI model configuration.',
     category: 'AI',
@@ -8077,6 +8092,7 @@ export const settingsMap = {
   RapidReplySettings: makeObjectSetting({
     key: 'RapidReplySettings',
     name: 'Rapid Reply Settings',
+    hideFromSettingsList: true, // has its own admin UI
     defaultValue: {
       enabled: false,
       allowedUserTags: [],
@@ -8169,6 +8185,7 @@ export const settingsMap = {
   releaseNotesConfig: makeObjectSetting({
     key: 'releaseNotesConfig',
     name: 'Release Notes Configuration',
+    hideFromSettingsList: true, // edited in the Release notes tab
     defaultValue: ReleaseNotesConfigSchema.parse({}),
     description:
       'Customer-facing release notes generated from each production release. Disabled by default. Sets the model, the embargo before a note becomes visible, a denylist of terms that must never appear, and the Slack channel that gets the pre-publish preview.',
@@ -8500,6 +8517,7 @@ export const settingsMap = {
   EnableContextTelemetry: makeBooleanSetting({
     key: 'EnableContextTelemetry',
     name: 'Enable Context Telemetry',
+    hideFromSettingsList: true, // managed in the Context Inspector tab
     defaultValue: false,
     description:
       'Enable privacy-first telemetry for LLM completions. Captures operational metadata for debugging without storing content or user identity.',
@@ -8531,6 +8549,11 @@ export const settingsMap = {
   sreAgentConfig: makeObjectSetting({
     key: 'sreAgentConfig',
     name: 'SRE Agent Config',
+    hideFromSettingsList: true, // has its own admin tab
+    modelReferences: config =>
+      Object.fromEntries(
+        config.repos.flatMap((repo, index) => (repo.enabled ? [[`repos.${index}.modelId`, repo.modelId]] : []))
+      ),
     defaultValue: SreAgentConfigSchema.parse({}),
     description:
       'Configuration for the autonomous SRE Agent Trio pipeline (Sentinel → Diagnostician → Surgeon). Master kill switch defaults to disabled.',
@@ -8541,6 +8564,7 @@ export const settingsMap = {
   contextTelemetryAlerts: makeObjectSetting({
     key: 'contextTelemetryAlerts',
     name: 'Context Telemetry Alerts',
+    hideFromSettingsList: true, // managed in the Context Inspector tab
     defaultValue: {
       enabled: false,
       autoCreateIssues: false,
@@ -8572,6 +8596,7 @@ export const settingsMap = {
   secopsTriageConfig: makeObjectSetting({
     key: 'secopsTriageConfig',
     name: 'SecOps Triage Config',
+    hideFromSettingsList: true, // edited from the Security page's Scans view
     defaultValue: SecopsTriageConfigSchema.parse({}),
     description:
       'Configuration for SecOps triage: files a GitHub issue for each critical or high finding reported by a security scan through the system GitHub connection, and closes it when the finding is gone. Disabled by default.',
@@ -8582,6 +8607,7 @@ export const settingsMap = {
   overwatchRollupSync: makeObjectSetting({
     key: 'overwatchRollupSync',
     name: 'Overwatch Rollup Sync Lock',
+    hideFromSettingsList: true, // internal cron-lock document
     defaultValue: {},
     description:
       'Internal lock document for the Overwatch daily rollup cron. Prevents concurrent executions. Not user-configurable.',
@@ -8769,6 +8795,7 @@ export const settingsMap = {
   modelListRevision: makeStringSetting({
     key: 'modelListRevision',
     name: 'Model List Revision',
+    hideFromSettingsList: true, // internal stamp rewritten by the model-list refresh
     defaultValue: '',
     description:
       'Internal stamp rewritten whenever a catalog or price change alters the model list, so open tabs refetch it. Written by packages/server-utils/src/modelDiscovery/modelListRevision.ts; not user-configurable.',
@@ -8777,6 +8804,7 @@ export const settingsMap = {
   modelAccessRevision: makeStringSetting({
     key: 'modelAccessRevision',
     name: 'Model Access Revision',
+    hideFromSettingsList: true, // internal stamp rewritten by model access writes
     defaultValue: '',
     description:
       'Internal stamp rewritten whenever an admin changes model access (on / off, tags, entitlements, fallback, rank), so open pickers refetch it. Written by packages/server-utils/src/modelDiscovery/modelAccessRevision.ts; not user-configurable.',
@@ -8785,6 +8813,7 @@ export const settingsMap = {
   prReportRepo: makeStringSetting({
     key: 'prReportRepo',
     name: 'PR Report Repository',
+    hideFromSettingsList: true, // edited in the PR Status Digest tab
     defaultValue: '',
     description:
       'The `owner/repo` whose open pull requests the PR status digest reports on. Validated against an anchored GitHub repo grammar before it is interpolated into any authenticated outbound URL (SSRF guard) - a value with an empty or `..` segment is rejected.',
@@ -8794,6 +8823,7 @@ export const settingsMap = {
   prReportIdentityMap: makeStringSetting({
     key: 'prReportIdentityMap',
     name: 'PR Report Identity Map',
+    hideFromSettingsList: true, // edited in the PR Status Digest tab
     defaultValue: '',
     description:
       'Maps GitHub logins and synthetic role keys (`qa_*`, `devops_*`, `reviewer_*`) to Slack member IDs, one mapping per line. Accepts `key value`, `key=value` or `key: value`; blank and `#` comment lines are ignored. Values must be real Slack member IDs - display names do not produce notification mentions.',
@@ -8803,6 +8833,7 @@ export const settingsMap = {
   prReportWebhookUrl: makeStringSetting({
     key: 'prReportWebhookUrl',
     name: 'PR Report Slack Webhook URL',
+    hideFromSettingsList: true, // edited in the PR Status Digest tab
     defaultValue: '',
     isSensitive: true,
     description:
@@ -8813,6 +8844,7 @@ export const settingsMap = {
   prReportEgressAllowlist: makeObjectSetting({
     key: 'prReportEgressAllowlist',
     name: 'PR Report Egress Allowlist',
+    hideFromSettingsList: true, // edited in the PR Status Digest tab
     defaultValue: { hosts: ['hooks.slack.com'] },
     description:
       'Hosts the PR digest may post to, checked against the webhook URL its own hostname. FAILS CLOSED: an empty list rejects every send rather than degrading to allow-any, because the post body carries PR titles, author logins and the staffing implied by the role rosters. Slack incoming webhooks live at hooks.slack.com, so that is the default.',
