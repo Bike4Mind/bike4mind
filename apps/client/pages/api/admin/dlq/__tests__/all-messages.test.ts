@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
@@ -8,11 +8,15 @@ const h = vi.hoisted(() => ({
   handler: undefined as undefined | Handler,
   routeOptions: undefined as unknown,
   counts: {} as Record<string, number | Error>,
+  inFlight: {} as Record<string, number>,
   messages: {} as Record<string, Array<Record<string, unknown>> | Error>,
   browse: vi.fn(),
   findFailures: vi.fn(),
   countAttempts: vi.fn(),
   recommend: vi.fn(),
+  scheduleFacts: vi.fn(),
+  logsUrl: vi.fn(),
+  functionLogGroup: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/adminApi', () => ({
@@ -49,7 +53,10 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   getQueueAttributes: async (url: string) => {
     const count = h.counts[url.slice('dlq:'.length)];
     if (count instanceof Error) throw count;
-    return { approximateMessageCount: count ?? 0, approximateNotVisibleCount: 0 };
+    return {
+      approximateMessageCount: count ?? 0,
+      approximateNotVisibleCount: h.inFlight[url.slice('dlq:'.length)] ?? 0,
+    };
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/dlqMessages', () => ({
@@ -57,12 +64,17 @@ vi.mock('@bike4mind/server-utils/utils/dlqMessages', () => ({
   findDlqFailures: h.findFailures,
   countDlqReplayAttempts: h.countAttempts,
   recommendForDlqMessage: h.recommend,
-  messageLogsUrl: () => null,
+  messageLogsUrl: h.logsUrl,
 }));
 vi.mock('@bike4mind/server-utils/utils/dlqConsumerLogs', () => ({
   CONSUMER_LOGS_BUDGET_MS: 10,
   resolveConsumerLogsForSourceQueue: async () => null,
+  resolveFunctionLogGroup: h.functionLogGroup,
   settleWithinBudget: async (lookups: Promise<unknown>[]) => Promise.all(lookups),
+}));
+vi.mock('@bike4mind/server-utils/utils/dlqMessageRow', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/dlqMessageRow')>()),
+  resolveDlqScheduleFacts: h.scheduleFacts,
 }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), warn: vi.fn() } }));
 
@@ -84,6 +96,7 @@ async function call() {
 beforeEach(() => {
   vi.clearAllMocks();
   h.counts = { billing: 2, files: 1, empty: 0, broken: 1 };
+  h.inFlight = {};
   h.messages = {
     billing: [sqsMessage('b-old', 100, '{"invoiceId":"in_1"}'), sqsMessage('b-new', 300)],
     files: [sqsMessage('f-mid', 200)],
@@ -94,6 +107,10 @@ beforeEach(() => {
     if (messages instanceof Error) throw messages;
     return messages ?? [];
   });
+  h.scheduleFacts.mockResolvedValue(new Map());
+  h.logsUrl.mockReturnValue(null);
+  h.functionLogGroup.mockImplementation(async (_region: string, fn: string) => `/sst/app/stage/${fn.split(':').pop()}`);
+  vi.stubEnv('AWS_REGION', 'us-east-2');
   h.findFailures.mockResolvedValue({ failures: [], lookupFailed: false });
   h.countAttempts.mockResolvedValue(null);
   h.recommend.mockImplementation((facts: { replayAttempts?: number }) => ({
@@ -102,6 +119,8 @@ beforeEach(() => {
     basis: `attempts=${facts.replayAttempts ?? 'unknown'}`,
   }));
 });
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe('GET /api/admin/dlq/all-messages', () => {
   it('is readable with support:read, by a signed-in admin only', () => {
@@ -142,6 +161,22 @@ describe('GET /api/admin/dlq/all-messages', () => {
     expect(h.browse).not.toHaveBeenCalledWith(expect.stringContaining('offstage'), expect.anything());
   });
 
+  it('passes each queue its depth, so schedule facts can tell a partial listing', async () => {
+    h.counts.files = new Error('throttled');
+    await call();
+    const depthByQueue = Object.fromEntries(
+      h.scheduleFacts.mock.calls.map(([entry, messages, depth]) => [entry.label, [messages.length, depth]])
+    );
+    expect(depthByQueue).toEqual({ billing: [2, 2], files: [1, -1] });
+  });
+
+  it('counts in-flight messages in the depth passed to schedule facts', async () => {
+    h.inFlight.billing = 1;
+    await call();
+    const billing = h.scheduleFacts.mock.calls.find(([entry]) => entry.label === 'billing');
+    expect(billing?.[2]).toBe(3);
+  });
+
   it('still browses a queue whose count could not be read', async () => {
     h.counts.files = new Error('throttled');
     const { queues, messages } = await call();
@@ -151,6 +186,27 @@ describe('GET /api/admin/dlq/all-messages', () => {
       listed: 1,
     });
     expect(messages).toHaveLength(3);
+  });
+
+  it('attributes a failure from EventBridge message attributes when none was recorded', async () => {
+    h.messages.files = [
+      {
+        ...sqsMessage('f-mid', 200),
+        MessageAttributes: {
+          ERROR_CODE: { DataType: 'String', StringValue: 'SDK_CLIENT_ERROR' },
+          ERROR_MESSAGE: { DataType: 'String', StringValue: 'Lambda throttled' },
+        },
+      },
+    ];
+    const { messages } = await call();
+    const row = messages.find((m: { messageId: string }) => m.messageId === 'f-mid');
+    expect(row.failure).toEqual({
+      errorMessage: 'Lambda throttled',
+      category: 'unknown',
+      source: 'attributes',
+      errorCode: 'SDK_CLIENT_ERROR',
+    });
+    expect(messages.find((m: { messageId: string }) => m.messageId === 'b-new').failure).toBeUndefined();
   });
 
   it('attaches recorded failures and flags a failed lookup', async () => {
@@ -164,7 +220,7 @@ describe('GET /api/admin/dlq/all-messages', () => {
     );
     const { messages } = await call();
     const byId = (id: string) => messages.find((m: { messageId: string }) => m.messageId === id);
-    expect(byId('b-new').failure).toEqual({ errorMessage: 'card declined', category: 'refused' });
+    expect(byId('b-new').failure).toEqual({ errorMessage: 'card declined', category: 'refused', source: 'recorded' });
     expect(byId('b-old').failureLookupFailed).toBeUndefined();
     expect(byId('f-mid').failureLookupFailed).toBe(true);
   });
@@ -184,5 +240,61 @@ describe('GET /api/admin/dlq/all-messages', () => {
     );
     expect(byId('b-new').recommendation).toMatchObject({ basis: 'attempts=2' });
     expect(byId('f-mid').recommendation).toMatchObject({ basis: 'attempts=unknown' });
+  });
+
+  it('passes a schedule target log group to the logs link', async () => {
+    h.messages = { billing: [sqsMessage('b-new', 300)] };
+    h.scheduleFacts.mockResolvedValue(
+      new Map([
+        [
+          'b-new',
+          { scheduledAt: '2026-01-02T03:00:00.000Z', logTarget: { region: 'us-east-2', logGroup: '/sst/app/Nightly' } },
+        ],
+      ])
+    );
+    await call();
+    expect(h.logsUrl).toHaveBeenCalledWith(
+      expect.objectContaining({ scheduleLogs: { region: 'us-east-2', logGroup: '/sst/app/Nightly' } })
+    );
+  });
+
+  it('resolves an EventBridge TARGET_ARN to its function log group for the logs link', async () => {
+    const targetArn = ['arn', 'aws', 'lambda', 'us-east-2', '0'.repeat(12), 'function', 'app-stage-Consumer'].join(':');
+    h.messages = {
+      billing: [
+        {
+          ...sqsMessage('b-new', 300),
+          MessageAttributes: {
+            ERROR_CODE: { DataType: 'String', StringValue: 'SDK_CLIENT_ERROR' },
+            TARGET_ARN: { DataType: 'String', StringValue: targetArn },
+          },
+        },
+      ],
+    };
+    await call();
+    expect(h.functionLogGroup).toHaveBeenCalledWith('us-east-2', targetArn, expect.any(Number));
+    expect(h.logsUrl).toHaveBeenCalledWith(
+      expect.objectContaining({ targetLogs: { region: 'us-east-2', logGroup: '/sst/app/stage/app-stage-Consumer' } })
+    );
+  });
+
+  it('leaves out the TARGET_ARN log group when its lookup fails', async () => {
+    h.functionLogGroup.mockResolvedValue(null);
+    h.messages = {
+      billing: [
+        {
+          ...sqsMessage('b-new', 300),
+          MessageAttributes: {
+            ERROR_CODE: { DataType: 'String', StringValue: 'SDK_CLIENT_ERROR' },
+            TARGET_ARN: {
+              DataType: 'String',
+              StringValue: ['arn', 'aws', 'lambda', 'us-east-2', '0'.repeat(12), 'function', 'fn'].join(':'),
+            },
+          },
+        },
+      ],
+    };
+    await call();
+    expect(h.logsUrl).toHaveBeenCalledWith(expect.objectContaining({ targetLogs: undefined }));
   });
 });

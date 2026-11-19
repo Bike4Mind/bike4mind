@@ -44,6 +44,7 @@ const mockFindModelByCollectionName = vi.fn();
 const mockUpsertSubscriber = vi.fn();
 const mockRemoveConnectionSubscribers = vi.fn();
 // The registered Connection row the handler requires; a test overrides it to null or another user.
+const mockFindRoles = vi.fn();
 let connectionRow: { userId: string } | null = { userId: 'caller-1' };
 const mockConnectionFindOne = vi.fn(() => ({ lean: async () => connectionRow }));
 const mockCloseConnection = vi.fn(async () => undefined);
@@ -76,6 +77,7 @@ vi.mock('@bike4mind/database', () => ({
     removeConnectionSubscribers: (...args: unknown[]) => mockRemoveConnectionSubscribers(...args),
   },
   User: { findById: vi.fn(), collection: { collectionName: 'users' } },
+  adminRoleRepository: { findByIds: (...args: unknown[]) => mockFindRoles(...args) },
 }));
 
 const mockSessionFind = vi.fn();
@@ -140,6 +142,8 @@ vi.mock('sst', () => ({
 }));
 
 import { func } from '../dataSubscribeRequest';
+import ability from '@bike4mind/server-utils/auth/ability';
+import { hasAdminPermission } from '@bike4mind/common';
 import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { Organization, Project, User } from '@bike4mind/database';
 import { accessibleBy } from '@casl/mongoose';
@@ -820,5 +824,87 @@ describe('dataSubscribeRequest WS handler - admin settings scope', () => {
       expect.objectContaining({ collectionName: 'adminsettings', query: scoped }),
       expect.anything()
     );
+  });
+});
+
+describe('subscribe role-held admin permissions', () => {
+  const ROLE_ID = 'a'.repeat(24);
+  const DELETED_ROLE_ID = 'c'.repeat(24);
+  const noopLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+  const runHandler = func as unknown as (event: unknown, context: unknown, logger: unknown) => Promise<unknown>;
+  const subscribe = () =>
+    runHandler(
+      {
+        requestContext: { connectionId: 'conn-1' },
+        body: JSON.stringify({
+          action: 'subscribe_query',
+          accessToken: 'token-123',
+          subscriptionId: 'sessions',
+          collectionName: 'sessions',
+          query: {},
+          fields: {},
+          fetchInitialData: false,
+        }),
+      },
+      {},
+      noopLogger
+    ).catch(() => undefined);
+  const abilityUser = () => vi.mocked(ability).mock.calls.at(-1)?.[0] as never;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    connectionRow = { userId: 'caller-1' };
+    mockConnectionFindOne.mockImplementation(() => ({ lean: async () => connectionRow }));
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockVerifyToken.mockReturnValue({ id: 'caller-1' });
+    vi.mocked(Organization.findById).mockResolvedValue(null);
+    mockFindRoles.mockResolvedValue([{ permissions: ['settings:manage'] }]);
+  });
+
+  it('builds the ability from a user whose only grant comes from a role', async () => {
+    vi.mocked(User.findById).mockResolvedValue({ _id: 'caller-1', id: 'caller-1', adminRoleIds: [ROLE_ID] } as never);
+
+    await subscribe();
+
+    expect(mockFindRoles).toHaveBeenCalledWith([ROLE_ID]);
+    expect(hasAdminPermission(abilityUser(), 'settings:manage')).toBe(true);
+  });
+
+  it('refuses the permission on the next subscribe once the role is removed', async () => {
+    vi.mocked(User.findById).mockResolvedValueOnce({
+      _id: 'caller-1',
+      id: 'caller-1',
+      adminRoleIds: [ROLE_ID],
+    } as never);
+    await subscribe();
+    expect(hasAdminPermission(abilityUser(), 'settings:manage')).toBe(true);
+
+    vi.mocked(User.findById).mockResolvedValueOnce({ _id: 'caller-1', id: 'caller-1', adminRoleIds: [] } as never);
+    await subscribe();
+    expect(hasAdminPermission(abilityUser(), 'settings:manage')).toBe(false);
+  });
+
+  it('grants nothing for a deleted or malformed role id', async () => {
+    mockFindRoles.mockResolvedValue([]);
+    vi.mocked(User.findById).mockResolvedValue({
+      _id: 'caller-1',
+      id: 'caller-1',
+      adminRoleIds: [DELETED_ROLE_ID, 'not-an-id'],
+    } as never);
+
+    await subscribe();
+
+    expect(mockFindRoles).toHaveBeenCalledWith([DELETED_ROLE_ID]);
+    expect(hasAdminPermission(abilityUser(), 'settings:manage')).toBe(false);
+  });
+
+  it('builds no ability when the role lookup throws', async () => {
+    vi.mocked(User.findById).mockResolvedValue({ _id: 'caller-1', id: 'caller-1', adminRoleIds: [ROLE_ID] } as never);
+    mockFindRoles.mockRejectedValue(new Error('db down'));
+
+    await subscribe();
+
+    expect(ability).not.toHaveBeenCalled();
   });
 });

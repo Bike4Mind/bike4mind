@@ -48,6 +48,8 @@ export const contentHolders = {
   AssistantBrief: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    // The source ingested email's id, not an address.
+    unrelatedPaths: ['happened.source.emailId', 'handled.source.emailId', 'decisions.source.emailId'],
   },
   BriefcasePrompt: {
     kind: 'holder',

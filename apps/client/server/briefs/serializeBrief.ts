@@ -1,4 +1,4 @@
-import type { Brief } from '@bike4mind/common';
+import type { Brief, BriefItem } from '@bike4mind/common';
 import type { IAssistantBrief } from '@bike4mind/database';
 
 /** The wire shape of a stored brief (`BriefSchema`). Internal fields such as the failure reason stay server-side. */
@@ -11,18 +11,28 @@ export function serializeBrief(brief: IAssistantBrief): Brief {
     periodStart: brief.periodStart.toISOString(),
     periodEnd: brief.periodEnd.toISOString(),
     headline: brief.headline,
-    happened: brief.happened.map(({ id, text }) => ({ id, text })),
-    handled: brief.handled.map(({ id, text }) => ({ id, text })),
-    decisions: brief.decisions.map(({ id, text, approval }) => ({
-      id,
-      text,
-      ...(approval && {
+    happened: brief.happened.map(serializeItem),
+    handled: brief.handled.map(serializeItem),
+    decisions: brief.decisions.map(decision => ({
+      ...serializeItem(decision),
+      ...(decision.approval && {
         approval: {
-          questId: approval.questId,
-          sessionId: approval.sessionId,
-          pendingActionTs: approval.pendingActionTs,
+          questId: decision.approval.questId,
+          sessionId: decision.approval.sessionId,
+          pendingActionTs: decision.approval.pendingActionTs,
+        },
+      }),
+      ...(decision.draftReply && {
+        draftReply: {
+          to: decision.draftReply.to,
+          subject: decision.draftReply.subject,
+          body: decision.draftReply.body,
         },
       }),
     })),
   };
+}
+
+function serializeItem({ id, text, source }: BriefItem): BriefItem {
+  return { id, text, ...(source && { source: { kind: source.kind, emailId: source.emailId } }) };
 }

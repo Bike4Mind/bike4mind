@@ -451,7 +451,7 @@ export interface paths {
     };
     /**
      * Get a brief
-     * @description Reads one brief. Decision items that reference an agent approval carry its `questId` and `pendingActionTs`; answer it through the pending-actions endpoints. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call.
+     * @description Reads one brief. Decision items that reference an agent approval carry its `questId` and `pendingActionTs`; answer it through the pending-actions endpoints. Items triaged from an ingested email carry a `source`, and an email decision may carry a `draftReply` for you to review; nothing sends it. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call.
      */
     get: operations['getBrief'];
     put?: never;
@@ -5204,22 +5204,50 @@ export interface components {
         /** @description Stable within the brief. */
         id: string;
         text: string;
+        /** @description The record the item came from, when it was not agent activity. */
+        source?: {
+          /** @enum {string} */
+          kind: 'email';
+          /** @description The ingested email the item was triaged from. */
+          emailId: string;
+        };
       }[];
       handled: {
         /** @description Stable within the brief. */
         id: string;
         text: string;
+        /** @description The record the item came from, when it was not agent activity. */
+        source?: {
+          /** @enum {string} */
+          kind: 'email';
+          /** @description The ingested email the item was triaged from. */
+          emailId: string;
+        };
       }[];
       decisions: {
         /** @description Stable within the brief. */
         id: string;
         text: string;
+        /** @description The record the item came from, when it was not agent activity. */
+        source?: {
+          /** @enum {string} */
+          kind: 'email';
+          /** @description The ingested email the item was triaged from. */
+          emailId: string;
+        };
         /** @description Present when the decision is an agent approval. The approval may have lapsed or been answered since the brief was composed; the pending-actions endpoints are authoritative. */
         approval?: {
           questId: string;
           /** @description The notebook holding the quest, where a client shows the approval card. */
           sessionId: string;
           pendingActionTs: number;
+        };
+        /** @description Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text. */
+        draftReply?: {
+          /** @description The source email's sender as received, unverified. */
+          to: string;
+          subject: string;
+          body: string;
         };
       }[];
     };
@@ -5242,22 +5270,50 @@ export interface components {
           /** @description Stable within the brief. */
           id: string;
           text: string;
+          /** @description The record the item came from, when it was not agent activity. */
+          source?: {
+            /** @enum {string} */
+            kind: 'email';
+            /** @description The ingested email the item was triaged from. */
+            emailId: string;
+          };
         }[];
         handled: {
           /** @description Stable within the brief. */
           id: string;
           text: string;
+          /** @description The record the item came from, when it was not agent activity. */
+          source?: {
+            /** @enum {string} */
+            kind: 'email';
+            /** @description The ingested email the item was triaged from. */
+            emailId: string;
+          };
         }[];
         decisions: {
           /** @description Stable within the brief. */
           id: string;
           text: string;
+          /** @description The record the item came from, when it was not agent activity. */
+          source?: {
+            /** @enum {string} */
+            kind: 'email';
+            /** @description The ingested email the item was triaged from. */
+            emailId: string;
+          };
           /** @description Present when the decision is an agent approval. The approval may have lapsed or been answered since the brief was composed; the pending-actions endpoints are authoritative. */
           approval?: {
             questId: string;
             /** @description The notebook holding the quest, where a client shows the approval card. */
             sessionId: string;
             pendingActionTs: number;
+          };
+          /** @description Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text. */
+          draftReply?: {
+            /** @description The source email's sender as received, unverified. */
+            to: string;
+            subject: string;
+            body: string;
           };
         }[];
       }[];
@@ -5279,22 +5335,50 @@ export interface components {
         /** @description Stable within the brief. */
         id: string;
         text: string;
+        /** @description The record the item came from, when it was not agent activity. */
+        source?: {
+          /** @enum {string} */
+          kind: 'email';
+          /** @description The ingested email the item was triaged from. */
+          emailId: string;
+        };
       }[];
       handled: {
         /** @description Stable within the brief. */
         id: string;
         text: string;
+        /** @description The record the item came from, when it was not agent activity. */
+        source?: {
+          /** @enum {string} */
+          kind: 'email';
+          /** @description The ingested email the item was triaged from. */
+          emailId: string;
+        };
       }[];
       decisions: {
         /** @description Stable within the brief. */
         id: string;
         text: string;
+        /** @description The record the item came from, when it was not agent activity. */
+        source?: {
+          /** @enum {string} */
+          kind: 'email';
+          /** @description The ingested email the item was triaged from. */
+          emailId: string;
+        };
         /** @description Present when the decision is an agent approval. The approval may have lapsed or been answered since the brief was composed; the pending-actions endpoints are authoritative. */
         approval?: {
           questId: string;
           /** @description The notebook holding the quest, where a client shows the approval card. */
           sessionId: string;
           pendingActionTs: number;
+        };
+        /** @description Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text. */
+        draftReply?: {
+          /** @description The source email's sender as received, unverified. */
+          to: string;
+          subject: string;
+          body: string;
         };
       }[];
     };

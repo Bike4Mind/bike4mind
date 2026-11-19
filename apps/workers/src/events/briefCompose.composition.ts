@@ -1,10 +1,11 @@
 import { z } from 'zod';
-import { BRIEF_LIMITS, type BriefDecision, type BriefItem } from '@bike4mind/common';
+import { BRIEF_LIMITS, type BriefDecision, type BriefDraftReply, type BriefItem } from '@bike4mind/common';
 
 /**
  * The pure half of brief composition: shaping activity into a prompt and a model reply into a brief.
  * The model writes wording only. Every id, and every approval reference, is assigned here from real
- * records, so a reply can never invent an approval a client would then offer to answer.
+ * records, so a reply can never invent an approval a client would then offer to answer. Triaged email
+ * items reach the brief from their stored records and never pass through the model.
  */
 
 export type BriefRun = {
@@ -23,11 +24,20 @@ export type BriefApproval = {
   summary: string;
 };
 
+/** One triaged email (EmailTriageItem in @bike4mind/database). */
+export type BriefEmail = {
+  emailId: string;
+  kind: 'decision' | 'handled' | 'fyi';
+  summary: string;
+  draftReply?: BriefDraftReply;
+};
+
 export type BriefActivity = {
   periodStart: Date;
   periodEnd: Date;
   runs: BriefRun[];
   approvals: BriefApproval[];
+  emails: BriefEmail[];
 };
 
 export type ComposedBrief = {
@@ -46,7 +56,7 @@ const clip = (text: string, limit: number): string => {
 };
 
 export const hasActivity = (activity: BriefActivity): boolean =>
-  activity.runs.length > 0 || activity.approvals.length > 0;
+  activity.runs.length > 0 || activity.approvals.length > 0 || activity.emails.length > 0;
 
 /** What the brief says when nothing happened; no model call is made for it. */
 export const emptyBrief = (): ComposedBrief => ({
@@ -77,6 +87,11 @@ export function buildBriefPrompt(activity: BriefActivity): string {
     tool: approval.tool,
     details: clip(approval.summary, PROMPT_FIELD_LIMIT),
   }));
+  const emailCounts = {
+    needsDecision: activity.emails.filter(email => email.kind === 'decision').length,
+    handled: activity.emails.filter(email => email.kind === 'handled').length,
+    fyi: activity.emails.filter(email => email.kind === 'fyi').length,
+  };
 
   return [
     "You are the user's executive assistant. Write a short brief of what your agents did for them between",
@@ -86,6 +101,9 @@ export function buildBriefPrompt(activity: BriefActivity): string {
     '',
     `Agent runs: ${JSON.stringify(runs)}`,
     `Actions waiting for the user's approval: ${JSON.stringify(approvals)}`,
+    `Emails triaged for the user (counts only): ${JSON.stringify(emailCounts)}`,
+    'The triaged emails are listed in the brief separately: mention them in the headline if notable, never in',
+    'happened, handled or decisions.',
     '',
     'Reply with ONLY a JSON object, no code fence, in exactly this shape:',
     '{"headline": string (one sentence), "happened": string[] (notable events, at most 6),',
@@ -103,12 +121,23 @@ function extractJsonObject(reply: string): unknown {
   return JSON.parse(reply.slice(start, end + 1));
 }
 
-const toItems = (prefix: string, texts: string[]): BriefItem[] =>
-  texts
-    .map(text => clip(text, BRIEF_LIMITS.itemText))
-    .filter(text => text.length > 0)
+type UnnumberedItem = Omit<BriefItem, 'id'>;
+
+/** Record-derived items lead, so model text can never push one out of the capped section. */
+const toItems = (prefix: string, records: UnnumberedItem[], modelTexts: string[]): BriefItem[] =>
+  [...records, ...modelTexts.map(text => ({ text }))]
+    .map(item => ({ ...item, text: clip(item.text, BRIEF_LIMITS.itemText) }))
+    .filter(item => item.text.length > 0)
     .slice(0, BRIEF_LIMITS.itemsPerSection)
-    .map((text, index) => ({ id: `${prefix}${index + 1}`, text }));
+    .map((item, index) => ({ id: `${prefix}${index + 1}`, ...item }));
+
+const emailsOfKind = (activity: BriefActivity, kind: BriefEmail['kind']) =>
+  activity.emails.filter(email => email.kind === kind);
+
+const emailItem = (email: BriefEmail): UnnumberedItem => ({
+  text: email.summary,
+  source: { kind: 'email', emailId: email.emailId },
+});
 
 /**
  * Validates the model reply and joins it to the real activity. Throws on a malformed reply so the
@@ -118,32 +147,43 @@ export function assembleBrief(reply: string, activity: BriefActivity): ComposedB
   const parsed = ModelReplySchema.parse(extractJsonObject(reply));
   const wordingByApprovalId = new Map(parsed.decisions.map(decision => [decision.approvalId, decision.text]));
 
-  const decisions: BriefDecision[] = activity.approvals
+  const approvalDecisions = activity.approvals.map((approval, index) => {
+    const wording = wordingByApprovalId.get(approvalPromptId(index));
+    return {
+      // An approval the model skipped still reaches the user: a decision is never dropped.
+      text: wording?.trim() || `Your assistant is waiting for your go-ahead: ${approval.tool}.`,
+      approval: {
+        questId: approval.questId,
+        sessionId: approval.sessionId,
+        pendingActionTs: approval.pendingActionTs,
+      },
+    };
+  });
+
+  // Email decisions carry no approval reference, so a client has nothing to execute; the draft is for review only.
+  const decisions: BriefDecision[] = [
+    ...approvalDecisions,
+    ...emailsOfKind(activity, 'decision').map(email => ({
+      ...emailItem(email),
+      ...(email.draftReply && { draftReply: email.draftReply }),
+    })),
+  ]
     .slice(0, BRIEF_LIMITS.itemsPerSection)
-    .map((approval, index) => {
-      const wording = wordingByApprovalId.get(approvalPromptId(index));
-      return {
-        id: `d${index + 1}`,
-        // An approval the model skipped still reaches the user: a decision is never dropped.
-        text: clip(
-          wording?.trim() || `Your assistant is waiting for your go-ahead: ${approval.tool}.`,
-          BRIEF_LIMITS.itemText
-        ),
-        approval: {
-          questId: approval.questId,
-          sessionId: approval.sessionId,
-          pendingActionTs: approval.pendingActionTs,
-        },
-      };
-    });
+    .map((decision, index) => ({ id: `d${index + 1}`, ...decision, text: clip(decision.text, BRIEF_LIMITS.itemText) }));
 
   return {
     headline: clip(parsed.headline, BRIEF_LIMITS.headline) || 'Your brief',
-    happened: toItems('h', parsed.happened),
-    handled: toItems('x', parsed.handled),
+    happened: toItems('h', emailsOfKind(activity, 'fyi').map(emailItem), parsed.happened),
+    handled: toItems('x', emailsOfKind(activity, 'handled').map(emailItem), parsed.handled),
     decisions,
   };
 }
+
+/** The triaged emails the brief actually carries, after every section cap. */
+export const briefedEmailIds = (brief: ComposedBrief): string[] =>
+  [...brief.happened, ...brief.handled, ...brief.decisions].flatMap(item =>
+    item.source?.kind === 'email' ? [item.source.emailId] : []
+  );
 
 /** A short push body: the decision count when any, else the model-written headline; the full brief is fetched with the user's credentials. */
 export function briefPushBody(brief: ComposedBrief): string {
