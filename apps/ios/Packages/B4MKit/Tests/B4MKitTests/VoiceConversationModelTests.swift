@@ -487,6 +487,7 @@ final class VoiceConversationModelTests: XCTestCase {
     let model = await startedModel()
     await say("Tell me about Paris")
     await until { model.phase == .failed(.signedOut) }
+    await until { await audio.deactivations == 1 }
     let deactivations = await audio.deactivations
     XCTAssertEqual(deactivations, 1)
     await until { await realtime.listenerCount == 0 }
