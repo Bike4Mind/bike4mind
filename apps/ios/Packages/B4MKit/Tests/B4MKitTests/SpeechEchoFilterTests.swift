@@ -27,6 +27,17 @@ final class SpeechEchoFilterTests: XCTestCase {
     XCTAssertEqual(residual("been the capital for a very long time hold on"), "hold on")
   }
 
+  func testAStrayWordBeforeTheEchoDoesNotHideIt() {
+    XCTAssertEqual(residual("um the capital of France is Paris"), "")
+    XCTAssertEqual(residual("a capital of France is Paris what about Rome"), "what about Rome")
+    XCTAssertEqual(residual("so so the capital of France is Paris"), "so so the capital of France is Paris")
+  }
+
+  func testTheReplysLastWordAloneIsEcho() {
+    XCTAssertEqual(residual("time what about Rome"), "what about Rome")
+    XCTAssertEqual(residual("Paris what about Rome", spoken: ["The capital of France is Paris."]), "what about Rome")
+  }
+
   func testSpeechThatIsNotTheReplyIsKept() {
     XCTAssertEqual(residual("wait stop that"), "wait stop that")
     XCTAssertEqual(residual("the weather today"), "the weather today")

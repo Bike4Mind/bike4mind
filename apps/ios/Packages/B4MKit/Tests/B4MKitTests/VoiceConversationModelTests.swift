@@ -395,6 +395,33 @@ final class VoiceConversationModelTests: XCTestCase {
     await until { model.phase == .listening }
     let activations = await audio.activations
     XCTAssertEqual(activations, 2)
+
+    // The reply heard before the pause is not echo any more, so repeating it is the user.
+    await api.setSendResult(.success(ChatSendReceipt(questID: "quest-2", sessionID: "s1")))
+    await listener.emit("the capital of France is Paris", isFinal: true)
+    await until { await api.sentMessages.count == 2 }
+    let sent = await api.sentMessages
+    XCTAssertEqual(sent.last?.message, "the capital of France is Paris")
+    await model.stop()
+  }
+
+  func testStoppingForgetsTheReplysEcho() async throws {
+    await speaker.setHolding(true)
+    let model = await startedModel()
+    await say("Tell me about Paris")
+    await until { await api.sentMessages.count == 1 }
+    await realtime.emit(frame(reply: longReply, status: .running))
+    await until { model.phase == .speaking }
+
+    await model.stop()
+    let starts = await listener.startCount
+    await model.start()
+    await until { await listener.startCount > starts }
+    await api.setSendResult(.success(ChatSendReceipt(questID: "quest-2", sessionID: "s1")))
+    await listener.emit("the capital of France is Paris", isFinal: true)
+    await until { await api.sentMessages.count == 2 }
+    let sent = await api.sentMessages
+    XCTAssertEqual(sent.last?.message, "the capital of France is Paris")
     await model.stop()
   }
 

@@ -97,7 +97,8 @@ public final class VoiceConversationModel {
   private var chunkSink: AsyncStream<String>.Continuation?
   private var replyFinished = false
   private var frameCount = 0
-  /// The reply text played since the current recognizer started, so its echo in the mic is not taken as the user.
+  /// Reply text played since the transcript was last cleared (a commit, a stop, a pause, the reply ending), so its
+  /// echo in the mic is not taken as the user.
   private var echoSpoken: [String] = []
 
   public init(
@@ -162,6 +163,7 @@ public final class VoiceConversationModel {
     chunkSink?.finish()
     chunkSink = nil
     liveTranscript = ""
+    echoSpoken = []
     phase = final
     await listener.stop()
     await speaker.stop()
@@ -408,7 +410,6 @@ public final class VoiceConversationModel {
     case .sending, .streaming, .speaking: phase = .listening
     default: return
     }
-    guard liveTranscript.isEmpty else { return }
     // The recognizer heard the whole reply; a fresh one keeps that transcript out of the next utterance.
     dropTranscript()
     Task { [weak self] in
@@ -507,10 +508,7 @@ public final class VoiceConversationModel {
     default: break
     }
     await abandonTurn()
-    silenceTask?.cancel()
-    liveTranscript = ""
-    listenGeneration += 1
-    listenTask?.cancel()
+    dropTranscript()
     phase = .paused(reason)
     await listener.stop()
   }

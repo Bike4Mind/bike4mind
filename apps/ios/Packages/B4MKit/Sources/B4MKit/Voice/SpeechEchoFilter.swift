@@ -14,23 +14,28 @@ struct SpeechEchoFilter {
     let words = recognized.split(whereSeparator: \.isWhitespace)
     let heard = words.map { normalize($0) }
     let said = spoken.flatMap { $0.split(whereSeparator: \.isWhitespace).map { normalize($0) } }.filter { !$0.isEmpty }
-    guard let first = heard.first(where: { !$0.isEmpty }), !said.isEmpty else { return recognized }
+    guard heard.contains(where: { !$0.isEmpty }), !said.isEmpty else { return recognized }
 
-    // The task may have started anywhere in the reply, so try every place the first heard word was spoken.
+    // A stray or misheard word can come before the echo, so it may begin at any of the first few heard words,
+    // and the task may have started anywhere in the reply, so try every place that word was spoken.
     var echoEnd = 0
-    for start in said.indices where said[start] == first {
-      echoEnd = max(echoEnd, echoLength(heard: heard, said: said, from: start, gapTolerance: gapTolerance))
+    for first in heard.indices.filter({ !heard[$0].isEmpty }).prefix(max(1, gapTolerance)) {
+      for start in said.indices where said[start] == heard[first] {
+        echoEnd = max(
+          echoEnd, echoLength(heard: heard, said: said, start: start, first: first, tolerance: gapTolerance))
+      }
     }
     return words[echoEnd...].joined(separator: " ")
   }
 
-  /// How many heard words, from the start, are echo when the first one lines up with `said[start]`.
-  private static func echoLength(heard: [String], said: [String], from start: Int, gapTolerance: Int) -> Int {
+  /// How many heard words, from the start, are echo when `heard[first]` lines up with `said[start]`.
+  private static func echoLength(heard: [String], said: [String], start: Int, first: Int, tolerance: Int) -> Int {
     var next = start
     var end = 0
     var matched = 0
     var gap = 0
-    for (index, word) in heard.enumerated() where !word.isEmpty {
+    for index in heard.indices[first...] where !heard[index].isEmpty {
+      let word = heard[index]
       let window = said[min(next, said.count)..<min(next + (matched == 0 ? 1 : lookahead), said.count)]
       if let hit = window.firstIndex(of: word) {
         next = hit + 1
@@ -39,11 +44,12 @@ struct SpeechEchoFilter {
         gap = 0
       } else {
         gap += 1
-        if gap >= gapTolerance { break }
+        if gap >= tolerance { break }
       }
     }
-    // One matching word followed by unmatched ones is more likely the user than the reply ("the weather today").
-    if matched < 2, end < heard.count { return 0 }
+    // One matching word followed by unmatched ones is more likely the user ("the weather today"), unless it is
+    // the reply's last word, which is all of the echo a recognizer that started late can catch.
+    if matched < 2, end < heard.count, next < said.count { return 0 }
     return end
   }
 
