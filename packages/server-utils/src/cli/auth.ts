@@ -8,11 +8,12 @@ import {
   type ApiKeyBillingOwnerType,
   type CompletionSource,
   type IEmbedBranding,
+  type OAuthClientUnpaidAccountLimits,
   type PayerStanding,
 } from '@bike4mind/common';
 import { User, userApiKeyRepository, cacheRepository } from '@bike4mind/database';
 import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
-import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '../utils/apiKeyRateLimitCheck';
+import { extractApiKeyFromHeaders, checkApiKeyRateLimit, rateLimitRefusalInfo } from '../utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '../auth/consentGate';
 import { assertAccountStateUsable } from '../auth/assertAccountStateUsable';
 import { assertNoPendingDeletion } from '../auth/deletionPendingGate';
@@ -69,6 +70,7 @@ export interface ApiKeyInfo {
   currentSpend?: number;
   /** The owner's API key trust standing as judged at verification (see apiKeyTrust.ts). */
   ownerUntrusted?: boolean;
+  unpaidAccountLimits?: OAuthClientUnpaidAccountLimits;
   /** The admin who provisioned the key for its owner; exempts it from the paid-only switch. */
   createdByUserId?: string;
   /** OAuth client that minted this key, present only for a federated exchange key. */
@@ -391,8 +393,8 @@ export async function verifyApiKey(
     const info = toApiKeyInfo(validation);
     const owner = await assertOwnerAccountUsable(info);
     // Apply the trust ceiling only after the access policy has accepted the owner; same ceiling apiKeyAuth applies.
-    const { rateLimit, ownerUntrusted } = await resolveUntrustedKeyLimits(owner, info);
-    return { ...info, rateLimit, ownerUntrusted };
+    const { rateLimit, ownerUntrusted, unpaidAccountLimits } = await resolveUntrustedKeyLimits(owner, info);
+    return { ...info, rateLimit, ownerUntrusted, unpaidAccountLimits };
   } catch (error) {
     throw toApiKeyAuthError(error);
   }
@@ -492,7 +494,11 @@ export async function checkApiKeyRateLimitOrThrow(
   const result = await checkApiKeyRateLimit(apiKeyInfo.keyId, apiKeyInfo.rateLimit, context);
 
   if (!result.allowed) {
-    const info = { retryAfter: result.retryAfter, rateLimitHeaders: result.headers } satisfies RateLimitErrorInfo;
+    const info = {
+      ...rateLimitRefusalInfo(result),
+      retryAfter: result.retryAfter,
+      rateLimitHeaders: result.headers,
+    } satisfies RateLimitErrorInfo;
     throw new TooManyRequestsError(result.error || 'Rate limit exceeded', info);
   }
 
