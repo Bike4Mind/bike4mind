@@ -19,7 +19,8 @@ export async function archiveFromSidebar(
   const finished = children.filter(session => service.childArchiveStatus(session) === 'finished');
   let includeChildren = false;
   if (children.length > 0) {
-    const kept = children.filter(session => !finished.includes(session));
+    const finishedIds = new Set(finished.map(session => session.id));
+    const kept = children.filter(session => !finishedIds.has(session.id));
     const result = await confirm({
       type: 'question',
       message: `Archive "${parent.title}"?`,
