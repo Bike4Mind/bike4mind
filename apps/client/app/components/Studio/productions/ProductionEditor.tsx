@@ -22,6 +22,7 @@ import BriefPanel from './BriefPanel';
 import ClipInspector from './ClipInspector';
 import HookVariationButton from './HookVariationButton';
 import { probeMediaDurationMs } from './probeMediaDuration';
+import { ExportPanel } from './ExportPanel';
 import SecondsField from './SecondsField';
 import ShotsBoard from './ShotsBoard';
 import { formatTimecode } from './timelinePlayback';
@@ -257,6 +258,11 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
           >
             {status.kind === 'error' ? `${STATUS_LABEL.error}: ${status.message}` : STATUS_LABEL[status.kind]}
           </Chip>
+          <ExportPanel
+            compositionId={composition.id}
+            timeline={timeline}
+            canExport={status.kind === 'saved' && dirtyFields.size === 0}
+          />
         </Toolbar>
 
         <PlanGrid>

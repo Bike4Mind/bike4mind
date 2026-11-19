@@ -32,6 +32,7 @@ export * from './PushTokenModel';
 export * from './RegistrationInviteModel';
 export * from './SamlRequestIdModel';
 export * from './SessionModel';
+export * from './SideAppAlertStateModel';
 export * from './SideAppRefusalModel';
 export * from './SideAppRefusalCounterModel';
 export * from './SubscriberModel';

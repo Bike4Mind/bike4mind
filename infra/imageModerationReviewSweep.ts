@@ -29,7 +29,7 @@ const imageModerationReviewSweep =
           transform: imageModerationReviewSweepDeadLetter.functionTarget,
           logging: { retention: '1 week' },
         },
-        transform: imageModerationReviewSweepDeadLetter.ruleTarget,
+        transform: { target: { ...imageModerationReviewSweepDeadLetter.ruleTarget.target, input: undefined } },
       })
     : undefined;
 

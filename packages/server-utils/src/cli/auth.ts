@@ -15,6 +15,7 @@ import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcce
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '../utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '../auth/consentGate';
 import { assertAccountStateUsable } from '../auth/assertAccountStateUsable';
+import { resolveRoleAdminPermissions } from '../auth/adminRoles';
 import { assertNoPendingDeletion } from '../auth/deletionPendingGate';
 import {
   API_KEY_ACCESS_DENIED_MESSAGE,
@@ -172,6 +173,8 @@ export async function verifyJwtToken(
     } catch (error) {
       throw toApiKeyAuthError(error);
     }
+
+    await resolveRoleAdminPermissions(user);
 
     return {
       id: user.id,

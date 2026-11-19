@@ -76,11 +76,39 @@ beforeEach(() => {
 });
 
 describe('Productions under the paid audience', () => {
-  it('shows a free user the upgrade prompt, not the editor, and keeps the Productions tab', () => {
+  it('shows a free user the read-only showcase, not the editor, and keeps the Productions tab', () => {
     renderRoute();
     expect(screen.getByTestId('studio-upgrade-prompt')).toBeInTheDocument();
+    expect(screen.getByTestId('productions-showcase')).toBeInTheDocument();
     expect(screen.queryByTestId('productions-list')).not.toBeInTheDocument();
     expect(screen.getByTestId('studio-area-productions')).toBeInTheDocument();
+  });
+
+  it('previews, scrubs and changes output sizes without calling a production API', () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    renderRoute();
+    expect(screen.getByTestId('production-preview-caption-sample-title-0')).toHaveTextContent('Make room');
+    fireEvent.change(screen.getByTestId('productions-showcase-scrubber'), { target: { value: '8000' } });
+    expect(screen.getByTestId('production-preview-caption-sample-title-2')).toHaveTextContent('Small enough');
+    expect(screen.getByTestId('productions-showcase-time')).toHaveTextContent('8.0s / 15s');
+    fireEvent.click(screen.getByTestId('productions-showcase-output-out-9x16'));
+    expect(screen.getByTestId('production-preview-stage')).toHaveAttribute('data-aspect-ratio', '9:16');
+    fireEvent.click(screen.getByTestId('productions-showcase-output-out-1x1'));
+    expect(screen.getByTestId('production-preview-stage')).toHaveAttribute('data-aspect-ratio', '1:1');
+    fireEvent.click(screen.getByTestId('productions-showcase-play-btn'));
+    expect(screen.getByTestId('productions-showcase-play-btn')).toHaveTextContent('Pause');
+    fireEvent.click(screen.getByTestId('productions-showcase-play-btn'));
+    expect(screen.getByTestId('productions-showcase-play-btn')).toHaveTextContent('Play sample');
+    expect(screen.getByTestId('productions-showcase-shots').children).toHaveLength(4);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it.each(['EnableStudioCreateV2', 'EnableStudioProductions'])('hides the showcase with %s off', setting => {
+    h.enabledSettings.delete(setting);
+    renderRoute();
+    expect(screen.getByTestId('not-found-stub')).toBeInTheDocument();
+    expect(screen.queryByTestId('productions-showcase')).not.toBeInTheDocument();
   });
 
   it('waits, with no upgrade prompt, while a free-tier viewer entitlements are pending', () => {
@@ -115,6 +143,7 @@ describe('Productions under the paid audience', () => {
     renderRoute();
     expect(screen.getByTestId('productions-list')).toBeInTheDocument();
     expect(screen.queryByTestId('studio-upgrade-prompt')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('productions-showcase')).not.toBeInTheDocument();
   });
 
   it('opens the editor for a developer and an admin', () => {

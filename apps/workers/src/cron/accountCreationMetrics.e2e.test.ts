@@ -11,11 +11,22 @@ const mocks = vi.hoisted(() => ({
   send: vi.fn(),
   maxTimeMS: vi.fn(),
   option: vi.fn(),
+  getSpent: vi.fn(),
+  resolvePoolBudget: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({
   connectDB: mocks.connect,
   User: { collection: { name: 'users' }, countDocuments: mocks.count },
   UserApiKey: { aggregate: mocks.aggregate },
+  adminSettingsRepository: {},
+  signupGrantBudgetRepository: { getSpent: mocks.getSpent },
+}));
+vi.mock('@bike4mind/services', () => ({
+  userService: {
+    signupGrantBudgetDay: (now: Date) => now.toISOString().slice(0, 10),
+    signupGrantBudgetKey: (pool: string, day: string) => `${pool}:${day}`,
+    resolvePoolBudget: mocks.resolvePoolBudget,
+  },
 }));
 vi.mock('@aws-sdk/client-cloudwatch', () => ({
   CloudWatchClient: class {
@@ -45,6 +56,11 @@ beforeEach(() => {
   mocks.maxTimeMS.mockReset().mockResolvedValueOnce(3).mockResolvedValueOnce(5);
   mocks.option.mockResolvedValue([{ count: 2 }]);
   mocks.send.mockResolvedValue(undefined);
+  mocks.resolvePoolBudget.mockReset().mockImplementation(async (_adapters: unknown, pool: string) => ({
+    budget: pool === 'signup' ? 1000 : 400,
+    missing: false,
+  }));
+  mocks.getSpent.mockReset().mockImplementation(async (key: string) => (key.startsWith('signup') ? 250 : 100));
 });
 
 describe('account creation census', () => {
@@ -101,6 +117,20 @@ describe('account creation census', () => {
             { MetricName: 'SuccessfulSignups', Value: 3, Unit: 'Count', Timestamp: new Date('2026-01-02T11:00:00Z') },
             { MetricName: 'NewAccountApiKeys', Value: 2, Unit: 'Count', Timestamp: new Date('2026-01-02T11:00:00Z') },
             { MetricName: 'NegativeBalances', Value: 5, Unit: 'Count', Timestamp: new Date('2026-01-02T12:00:00Z') },
+            ...[
+              ['SignupGrantPoolSpent', 'signup', 250],
+              ['SignupGrantPoolBudget', 'signup', 1000],
+              ['SignupGrantPoolBudgetMissing', 'signup', 0],
+              ['SignupGrantPoolSpent', 'trickle', 100],
+              ['SignupGrantPoolBudget', 'trickle', 400],
+              ['SignupGrantPoolBudgetMissing', 'trickle', 0],
+            ].map(([MetricName, pool, Value]) => ({
+              MetricName,
+              Value,
+              Unit: 'Count',
+              Timestamp: new Date('2026-01-02T12:00:00Z'),
+              Dimensions: [{ Name: 'Pool', Value: pool }],
+            })),
             { MetricName: 'CensusCompleted', Value: 1, Unit: 'Count', Timestamp: new Date('2026-01-02T11:00:00Z') },
           ],
         },
@@ -113,8 +143,50 @@ describe('account creation census', () => {
     mocks.option.mockResolvedValue([]);
     await handler(event);
     expect(mocks.send.mock.calls[0][0].input.MetricData.map((metric: { Value: number }) => metric.Value)).toEqual([
-      0, 0, 0, 1,
+      0, 0, 0, 250, 1000, 0, 100, 400, 0, 1,
     ]);
+  });
+
+  it('publishes a zero budget for a pool with no budget row and still completes the census', async () => {
+    mocks.resolvePoolBudget.mockResolvedValue({ budget: 0, missing: true });
+    await handler(event);
+    const data = mocks.send.mock.calls[0][0].input.MetricData as { MetricName: string; Value: number }[];
+    expect(data.filter(m => m.MetricName === 'SignupGrantPoolBudget').map(m => m.Value)).toEqual([0, 0]);
+    expect(data.filter(m => m.MetricName === 'SignupGrantPoolBudgetMissing').map(m => m.Value)).toEqual([1, 1]);
+    expect(data.map(m => m.MetricName)).toContain('CensusCompleted');
+  });
+
+  it('does not flag a deliberately paused pool as missing', async () => {
+    mocks.resolvePoolBudget.mockResolvedValue({ budget: 0, missing: false });
+    await handler(event);
+    const data = mocks.send.mock.calls[0][0].input.MetricData as { MetricName: string; Value: number }[];
+    expect(data.filter(m => m.MetricName === 'SignupGrantPoolBudget').map(m => m.Value)).toEqual([0, 0]);
+    expect(data.filter(m => m.MetricName === 'SignupGrantPoolBudgetMissing').map(m => m.Value)).toEqual([0, 0]);
+  });
+
+  it('reads the pool-day of the window start, so the 00:05 run publishes the day that just closed', async () => {
+    mocks.maxTimeMS.mockReset().mockResolvedValue(3);
+    await handler({ time: '2026-01-03T00:05:00Z' } as ScheduledEvent);
+    expect(mocks.getSpent).toHaveBeenCalledWith('signup:2026-01-02');
+    expect(mocks.getSpent).toHaveBeenCalledWith('trickle:2026-01-02');
+    expect(mocks.getSpent).not.toHaveBeenCalledWith('signup:2026-01-03');
+    expect(mocks.send.mock.calls[0][0].input.MetricData).toContainEqual(
+      expect.objectContaining({ MetricName: 'SignupGrantPoolSpent', Timestamp: new Date('2026-01-03T00:00:00Z') })
+    );
+  });
+
+  it('reads the same pool-day counter when the same scheduled event is redelivered', async () => {
+    mocks.maxTimeMS.mockReset().mockResolvedValue(3);
+    const redelivered = { time: '2026-01-03T00:05:00Z' } as ScheduledEvent;
+    await handler(redelivered);
+    await handler(redelivered);
+    expect(mocks.getSpent.mock.calls.map(call => call[0])).toEqual([
+      'signup:2026-01-02',
+      'trickle:2026-01-02',
+      'signup:2026-01-02',
+      'trickle:2026-01-02',
+    ]);
+    expect(mocks.send.mock.calls[0][0].input).toEqual(mocks.send.mock.calls[1][0].input);
   });
 
   it('fails for retry rather than publishing a false zero or swallowing delivery failure', async () => {
@@ -123,6 +195,12 @@ describe('account creation census', () => {
     expect(mocks.send).not.toHaveBeenCalled();
     mocks.send.mockRejectedValueOnce(new Error('metrics unavailable'));
     await expect(handler(event)).rejects.toThrow('metrics unavailable');
+  });
+
+  it('fails for retry rather than publishing a false zero when a grant pool spend read fails', async () => {
+    mocks.getSpent.mockRejectedValueOnce(new Error('budget counter unavailable'));
+    await expect(handler(event)).rejects.toThrow('budget counter unavailable');
+    expect(mocks.send).not.toHaveBeenCalled();
   });
 
   it('executes the age boundary against MongoDB, excluding missing, future, system and synthetic owners but counting personas', async () => {

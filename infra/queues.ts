@@ -1201,6 +1201,21 @@ const generatedMediaPurgeQueueSubscription = generatedMediaPurgeQueue.subscribe(
   }
 );
 
+// Render Job Queue
+// The render engine step (packages/server-utils/src/generationJobs/wiring.ts resolveRenderJobQueueUrl) sends
+// {jobId} here; the render worker (apps/workers/src/render/main.ts) long-polls it, as a Fargate service on hosted
+// stages (infra/renderWorker.ts) or from the self-host chart, so there is no Lambda subscription. The visibility
+// timeout covers the whole render cap (STUDIO_RENDER_MAX_WALL_CLOCK_MS, 30 minutes) plus the hand-back, so a
+// running render is never redelivered to a second task.
+const renderJobDLQ = new sst.aws.Queue('renderJobDLQ', {});
+const renderJobQueue = new sst.aws.Queue('renderJobQueue', {
+  visibilityTimeout: '35 minutes',
+  dlq: {
+    queue: renderJobDLQ.arn,
+    retry: 3,
+  },
+});
+
 // Generation Job Queue
 // One engine step per message (submit, poll or store) for the generic GenerationJob engine; a step that
 // needs another turn re-enqueues itself with a delay. The subscription timeout, queue visibility timeout
@@ -1242,6 +1257,8 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
       eventBus,
       generationCallbackQueue,
       generationJobQueue,
+      // The render submit step hands the job to the render worker.
+      renderJobQueue,
       // A masked image edit converts the mask to PNG there.
       imageProcessor,
     ],
@@ -1799,6 +1816,7 @@ export {
   imageGenerationQueue,
   imageEditQueue,
   generationJobQueue,
+  renderJobQueue,
   researchEngineQueue,
   whatsNewGenerationQueue,
   notebookCurationQueue,
@@ -1839,6 +1857,7 @@ export {
   imageGenerationDLQ,
   imageEditDLQ,
   generationJobDLQ,
+  renderJobDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
   notebookCurationQueueDLQ,

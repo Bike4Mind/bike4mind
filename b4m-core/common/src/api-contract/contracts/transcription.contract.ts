@@ -9,8 +9,10 @@ import {
 import {
   ApiErrorSchema,
   InsufficientCreditsErrorSchema,
+  MeteredForbiddenErrorSchema,
   ProviderNotConfiguredErrorSchema,
   ScopeForbiddenErrorSchema,
+  SPEND_FROZEN_FORBIDDEN_NOTE,
 } from '../../schemas/chat';
 
 /**
@@ -19,6 +21,11 @@ import {
  * /api/ai/transcribe; both doors share apps/client/server/transcribe/transcribe.ts.
  */
 const FORBIDDEN = { description: 'The API key lacks `ai:generate`.', schema: ScopeForbiddenErrorSchema };
+/** Transcribing is billed, so its 403 also covers a spend freeze; minting an upload charges nothing. */
+const METERED_FORBIDDEN = {
+  description: `${FORBIDDEN.description} ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
+  schema: MeteredForbiddenErrorSchema,
+};
 const RATE_LIMITED = { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema };
 const NO_CREDITS =
   'Request body failed validation, or the balance cannot cover the estimated cost of transcribing `file_size` ' +
@@ -90,7 +97,7 @@ export const createTranscriptionContract = defineEndpoint({
       schema: TranscriptionResponseSchema,
       example: { text: 'Thanks for calling. How can I help?' },
     },
-    403: FORBIDDEN,
+    403: METERED_FORBIDDEN,
     404: {
       description: '`file_key` is not one of your uploads, or the upload is missing or expired.',
       schema: ApiErrorSchema,

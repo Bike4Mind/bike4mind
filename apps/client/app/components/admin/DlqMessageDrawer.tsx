@@ -18,6 +18,25 @@ export const REPLAY_CHIP: Record<DlqReplaySafety, { tone: AdminStatusTone; label
 // A class the server knows but this bundle does not (e.g. deployed ahead of the client) reads as unsafe.
 export const UNKNOWN_REPLAY_CHIP = { tone: 'bad', label: 'Replay safety unknown' } as const;
 
+/** An attribute-derived failure leads with its error code. */
+export const failureText = (failure: DlqMessage['failure']): string => {
+  if (!failure) return 'Unknown';
+  if (failure.source !== 'attributes' || !failure.errorCode) return failure.errorMessage || 'Unknown';
+  return failure.errorMessage ? `${failure.errorCode}: ${failure.errorMessage}` : failure.errorCode;
+};
+
+/** Recorded failures show their category; attribute-derived ones say where they came from instead. */
+export const FailureChip: React.FC<{
+  failure: DlqMessage['failure'];
+  categoryTestId: string;
+  sourceTestId: string;
+}> = ({ failure, categoryTestId, sourceTestId }) =>
+  failure?.source === 'attributes' ? (
+    <StatusChip tone="neutral" label="From message attributes" data-testid={sourceTestId} />
+  ) : (
+    <StatusChip tone="neutral" label={failure?.category ?? 'Unknown'} data-testid={categoryTestId} />
+  );
+
 const QueueHint: React.FC<{ queue: DlqQueueInfo }> = ({ queue }) => {
   const chip = queue.replay ? (REPLAY_CHIP[queue.replay] ?? UNKNOWN_REPLAY_CHIP) : undefined;
   return (
@@ -129,7 +148,7 @@ export const DlqMessageDrawer: React.FC<{
               sx={{ alignSelf: 'flex-start' }}
               data-testid="dlq-drawer-logs"
             >
-              View consumer logs
+              {message.logsScope === 'request' ? 'View request logs' : 'View consumer logs'}
             </Button>
           )}
           {expiry && (
@@ -157,12 +176,12 @@ export const DlqMessageDrawer: React.FC<{
               Failure reason
             </Typography>
             <Typography level="body-sm" sx={{ wordBreak: 'break-word' }} data-testid="dlq-failure-reason">
-              {message.failure?.errorMessage ?? 'Unknown'}
+              {failureText(message.failure)}
             </Typography>
-            <StatusChip
-              tone="neutral"
-              label={message.failure?.category ?? 'Unknown'}
-              data-testid="dlq-failure-category"
+            <FailureChip
+              failure={message.failure}
+              categoryTestId="dlq-failure-category"
+              sourceTestId="dlq-failure-source"
             />
           </Box>
 

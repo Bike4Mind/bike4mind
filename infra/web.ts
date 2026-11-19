@@ -58,6 +58,7 @@ import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter
 import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
 import { organizationRetentionDeadLetter } from './organizationRetention';
 import { businessMetricAlertsDLQ } from './businessMetricAlerts';
+import { sideAppHealthAlertsDLQ } from './sideAppHealthAlerts';
 import { dlqAlarmHandlerDlq } from './dlqAlarmHandlerDeadLetter';
 import { mcpHandler } from './mcp';
 import { remoteMcpHandler } from './remoteMcp';
@@ -69,6 +70,7 @@ import {
   imageEditQueue,
   imageGenerationQueue,
   generationJobQueue,
+  renderJobQueue,
   researchEngineQueue,
   agentProactiveMessageQueue,
   slackExportQueue,
@@ -112,6 +114,7 @@ import {
   imageGenerationDLQ,
   imageEditDLQ,
   generationJobDLQ,
+  renderJobDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
   notebookCurationQueueDLQ,
@@ -230,6 +233,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
       'image-generation': imageGenerationDLQ.url,
       'image-edit': imageEditDLQ.url,
       'generation-job': generationJobDLQ.url,
+      'render-job': renderJobDLQ.url,
       'research-engine': researchEngineQueueDLQ.url,
       'release-notes': whatsNewGenerationQueueDLQ.url,
       'notebook-curation': notebookCurationQueueDLQ.url,
@@ -294,6 +298,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
       ...(dlqTriageSweepDeadLetter && { 'dlq-triage-sweep': dlqTriageSweepDeadLetter.queue.url }),
       ...(organizationRetentionDeadLetter && { 'organization-retention': organizationRetentionDeadLetter.queue.url }),
       ...(businessMetricAlertsDLQ && { 'business-metric-alerts': businessMetricAlertsDLQ.url }),
+      ...(sideAppHealthAlertsDLQ && { 'side-app-health-alerts': sideAppHealthAlertsDLQ.url }),
     }),
     // This raw AWS queue retains its existing provider-assigned physical name.
     ...(dlqAlarmHandlerDlq && { 'alarm-handler': dlqAlarmHandlerDlq.url }),
@@ -329,6 +334,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     imageGenerationQueue: imageGenerationQueue.url,
     imageEditQueue: imageEditQueue.url,
     generationJobQueue: generationJobQueue.url,
+    renderJobQueue: renderJobQueue.url,
     researchEngineQueue: researchEngineQueue.url,
     agentProactiveMessageQueue: agentProactiveMessageQueue.url,
     slackExportQueue: slackExportQueue.url,
@@ -551,7 +557,8 @@ export const web = new sst.aws.Nextjs(
       {
         // Admin DLQ "View logs": finds the Lambda consumers of a source queue. ListEventSourceMappings
         // has no resource-level permissions, so it cannot be scoped. GetFunctionConfiguration is
-        // granted per consumer by dlqConsumerLogsPolicy below.
+        // granted per consumer by dlqConsumerLogsPolicy below and per dead-letter rule target in
+        // infra/webDlqFunctionLogs.ts.
         actions: ['lambda:ListEventSourceMappings'],
         resources: ['*'],
       },
@@ -794,5 +801,25 @@ if (web.nodes.server) {
   new aws.iam.RolePolicyAttachment('WebDlqConsumerLogsPolicyAttachment', {
     role: web.nodes.server.nodes.role.name,
     policyArn: dlqConsumerLogsPolicy.arn,
+  });
+  // The admin DLQ listing reads a scheduled job's rule (state, schedule) to tell when a later run superseded it.
+  // SST's prefixName (naming.ts) names a rule <app>-<stage>-<name>, truncating the app name (possibly to
+  // nothing) or dropping it on long names; one exact prefix per form keeps other stages' rules out.
+  const stageRulePrefixes = [
+    $app.stage,
+    ...Array.from({ length: $app.name.length + 1 }, (_, n) => `${$app.name.slice(0, n)}-${$app.stage}`),
+  ];
+  const stageRuleArns = stageRulePrefixes.map(
+    prefix =>
+      $interpolate`arn:${aws.getPartitionOutput().partition}:events:${aws.getRegionOutput().name}:${aws.getCallerIdentityOutput().accountId}:rule/${prefix}-*`
+  );
+  const dlqScheduleRulePolicy = new aws.iam.Policy('WebDlqScheduleRulePolicy', {
+    policy: aws.iam.getPolicyDocumentOutput({
+      statements: [{ actions: ['events:DescribeRule', 'events:ListTargetsByRule'], resources: stageRuleArns }],
+    }).json,
+  });
+  new aws.iam.RolePolicyAttachment('WebDlqScheduleRulePolicyAttachment', {
+    role: web.nodes.server.nodes.role.name,
+    policyArn: dlqScheduleRulePolicy.arn,
   });
 }

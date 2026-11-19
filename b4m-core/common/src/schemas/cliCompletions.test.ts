@@ -546,7 +546,12 @@ describe('CompletionSseErrorEventSchema', () => {
 
   // QUEST_ERROR_CODES is persisted on quests; the frame widens its own copy instead.
   it('keeps provider-only classifiers out of the persisted quest vocabulary', () => {
-    expect([...QUEST_ERROR_CODES]).toEqual(['insufficient_credits', 'spend_cap_exceeded', 'free_quest_limit_reached']);
+    expect([...QUEST_ERROR_CODES]).toEqual([
+      'insufficient_credits',
+      'spend_cap_exceeded',
+      'spend_frozen',
+      'free_quest_limit_reached',
+    ]);
     expect([...COMPLETION_SSE_ERROR_CODES]).toEqual([
       ...QUEST_ERROR_CODES,
       'invalid_request',
