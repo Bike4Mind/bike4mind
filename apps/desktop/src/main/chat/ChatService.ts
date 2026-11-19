@@ -654,6 +654,8 @@ export interface ChatServiceDeps {
   local?: LocalChat;
   /** Paths kept out of reach of shell commands whatever the user granted. Enforced by the file tools, and by the shell only when SANDBOX_SHELL_COMMANDS is on. */
   protectedPaths?: readonly string[];
+  /** Folders within protectedPaths that request_directory may still share, such as chat attachments. */
+  shareableUnderProtected?: readonly string[];
   /** Protected folders not yet resolved; the file tools refuse every write while any is. */
   unresolvedProtectedPaths?: readonly string[];
   /** Folders no permission allow rule covers; a shell command reaching one asks in auto mode too. */
@@ -1295,6 +1297,41 @@ export class ChatService {
       await this.announceSuggestions(sessionId);
     }
     return updated;
+  }
+
+  childArchiveStatus(session: Pick<ChatSessionSummary, 'id' | 'workerTask'>): 'finished' | 'running' | 'waiting' {
+    const status = this.deps.activity?.statusOf(session.id);
+    if (status === 'needs-action' || pendingDecisionOf(session.workerTask)) return 'waiting';
+    if (
+      status === 'processing' ||
+      this.hasTurnInFlight(session.id) ||
+      this.launching.has(session.id) ||
+      (this.deps.queue?.list(session.id).length ?? 0) > 0 ||
+      this.deps.background?.list(session.id).some(process => process.status === 'running')
+    )
+      return 'running';
+    return 'finished';
+  }
+
+  async archiveFinishedChildren(parentId: string, childIds: readonly string[], scope: string | null): Promise<void> {
+    for (const id of childIds) {
+      // Recheck inside the serialized mutation: a child can resume while the dialog is open.
+      const updated = await this.deps.store.setArchived(
+        id,
+        true,
+        session =>
+          this.deps.store.scopeKey() === scope &&
+          session.origin?.parentSessionId === parentId &&
+          !session.archived &&
+          this.childArchiveStatus(session) === 'finished'
+      );
+      if (!updated) continue;
+      this.archiveCleanup(id);
+      for (const entry of this.heldRelaysFor(id)) await this.resolveHeldRelay(id, entry.id, true);
+      this.dropHeldFrom(id);
+      await this.announceSuggestions(id);
+      this.deps.summaryChanged?.(updated);
+    }
   }
 
   private archiveCleanup(sessionId: string): void {
@@ -2580,6 +2617,7 @@ export class ChatService {
       roots: scope.roots,
       ...(scope.workingDirectory ? { workingDirectory: scope.workingDirectory } : {}),
       ...(this.deps.protectedPaths ? { protectedPaths: this.deps.protectedPaths } : {}),
+      ...(this.deps.shareableUnderProtected ? { shareableUnderProtected: this.deps.shareableUnderProtected } : {}),
       declined: [],
     });
     if (inspection.kind === 'refused') return { status: 'refused', error: inspection.message };
@@ -4149,7 +4187,10 @@ export class ChatService {
       const skillRoot = session.project?.workingDirectory ?? null;
       const skillCatalog = this.deps.skills;
       const skills: SkillContext | undefined = skillCatalog
-        ? { available: () => skillCatalog.forModel(skillRoot) }
+        ? {
+            available: () => skillCatalog.forModel(skillRoot),
+            isUserOnly: async name => (await skillCatalog.get(skillRoot, name))?.disableModelInvocation === true,
+          }
         : undefined;
       const videoModels = await videoModelsRead;
       // Cleared when the server-fixed context cannot hold Desktop's prompt with tools; see toolPromptOverflow.
@@ -4308,7 +4349,8 @@ export class ChatService {
           toolsSupported && !!web,
           toolsSupported && !!screen,
           toolsSupported && !!simulator,
-          orchestrating
+          orchestrating,
+          toolsSupported
         );
       wire.unshift(
         deferred ? buildDeferredSystemMessage(session.project, projectContext, skillsSection) : systemMessage()
@@ -5537,6 +5579,7 @@ export class ChatService {
           },
           // Read first: once it is empty, protectedPaths holds every spelling.
           unresolvedProtectedPaths: this.deps.unresolvedProtectedPaths,
+          shareableUnderProtected: this.deps.shareableUnderProtected,
           protectedPaths: this.deps.protectedPaths,
           uncoverablePaths: this.deps.uncoverablePaths,
           sessionId,
@@ -7853,6 +7896,7 @@ export class ChatService {
       roots: context.roots,
       ...(context.workingDirectory ? { workingDirectory: context.workingDirectory } : {}),
       ...(context.protectedPaths ? { protectedPaths: context.protectedPaths } : {}),
+      ...(context.shareableUnderProtected ? { shareableUnderProtected: context.shareableUnderProtected } : {}),
       declined: turn.declined,
     });
     if (inspection.kind === 'refused') {
@@ -8582,7 +8626,9 @@ export function buildSystemMessage(
   screen = false,
   simulator = false,
   /** The session's Orchestrate switch; only meaningful with the host tools it steers toward. */
-  orchestrate = false
+  orchestrate = false,
+  /** todo_write is declared; false for a model without tools, or once they are shed to fit its context. */
+  plan = false
 ): CompletionMessage {
   const orchestrating = host && orchestrate;
   if (roots.length === 0) {
@@ -8590,6 +8636,7 @@ export function buildSystemMessage(
       role: 'system',
       content: [
         ...noAccessLines(ask),
+        ...(plan ? PLAN_GUIDANCE : []),
         // The browser is not file access and is not withheld with it: a conversation that can
         // read nothing on disk can still open a page, and needs to be told how.
         ...(browser ? BROWSER_GUIDANCE : []),
@@ -8620,6 +8667,7 @@ export function buildSystemMessage(
       ...dependencyLines,
       ...sharedRootLines(roots),
       ...localToolLines(ask, projectContext ? 'below' : null, explore, patchEdits),
+      ...(plan ? PLAN_GUIDANCE : []),
       ...(browser ? BROWSER_GUIDANCE : []),
       ...(screen ? SCREEN_GUIDANCE : []),
       ...(simulator ? SIMULATOR_GUIDANCE : []),
@@ -8721,14 +8769,6 @@ function localToolLines(
     'why - including the first batch of the turn, which otherwise draws as tool rows with nothing',
     'above them. One sentence per round of work, not per call, with no label in front of it, and',
     'none at all when a single call speaks for itself.',
-    'Most work needs no plan. Keep one with todo_write only when the user gave you several separate',
-    'things to do, or the work clearly runs to five or more steps, usually across several files.',
-    'Never for a question, an explanation, an investigation, a piece of research, a single fix or a',
-    'small edit: answer those directly.',
-    'When you do keep one, send the whole list each time and mark one item in_progress before',
-    'starting it. Before writing the message that ends a turn, make the plan match what actually',
-    'happened: an item whose result you are about to report as done is marked completed in that',
-    'same reply, not left for later. Never end a turn with an item still in_progress.',
     ...(patchEdits
       ? [
           'An older file_read result may show as a [stale: ...] placeholder once the file was replaced',
@@ -8845,6 +8885,7 @@ export function buildToolStateText(state: {
           ...sharedRootLines(roots),
           ...localToolLines(ask, state.projectContext ? 'in the system prompt' : null, state.explore, state.patchEdits),
         ]),
+    ...PLAN_GUIDANCE,
     ...(state.browser ? BROWSER_GUIDANCE : []),
     ...(state.screen ? SCREEN_GUIDANCE : []),
     ...(state.simulator ? SIMULATOR_GUIDANCE : []),
@@ -8927,6 +8968,18 @@ function pruneScreenshots(wire: CompletionMessage[], turns: number[]): void {
     };
   }
 }
+
+/** todo_write is declared in every conversation, folder or not; see toolsForRequest. */
+const PLAN_GUIDANCE: readonly string[] = [
+  'Most work needs no plan. Keep one with todo_write only when the user gave you several separate',
+  'things to do, or the work clearly runs to five or more steps, usually across several files.',
+  'Never for a question, an explanation, an investigation, a piece of research, a single fix or a',
+  'small edit: answer those directly.',
+  'When you do keep one, send the whole list each time and mark one item in_progress before',
+  'starting it. Before writing the message that ends a turn, make the plan match what actually',
+  'happened: an item whose result you are about to report as done is marked completed in that',
+  'same reply, not left for later. Never end a turn with an item still in_progress.',
+];
 
 const BROWSER_GUIDANCE: readonly string[] = [
   'You also have a browser (browser_navigate, browser_click, browser_type, browser_scroll,',

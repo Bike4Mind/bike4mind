@@ -457,6 +457,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/slack/messages',
   },
+  publishArtifact: {
+    method: 'POST',
+    path: '/api/v1/artifacts/{id}/publish',
+  },
   publishSkillMarketListing: {
     method: 'POST',
     path: '/api/v1/skills/market/listings',
@@ -484,6 +488,10 @@ export const operations = {
   removeProjectSystemPrompt: {
     method: 'DELETE',
     path: '/api/v1/projects/{id}/system-prompts/{file_id}',
+  },
+  republishArtifact: {
+    method: 'POST',
+    path: '/api/v1/artifacts/{id}/republish',
   },
   rescanSkillMarketVersion: {
     method: 'POST',
@@ -532,6 +540,10 @@ export const operations = {
   transferAgentCredits: {
     method: 'POST',
     path: '/api/v1/agents/{id}/transfer-credits',
+  },
+  unpublishArtifact: {
+    method: 'DELETE',
+    path: '/api/v1/artifacts/{id}/publish',
   },
   unregisterPushToken: {
     method: 'DELETE',

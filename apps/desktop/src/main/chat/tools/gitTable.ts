@@ -14,6 +14,9 @@ export interface GitWord {
   glob?: boolean;
 }
 
+/** The output format a call selects, `value` absent when it reads format.pretty. */
+export type SignatureFormat = { kind: 'pretty' | 'ref'; value?: GitWord };
+
 /** The options a call gives, each with the values it took. */
 type Given = ReadonlyMap<string, readonly GitWord[]>;
 
@@ -34,6 +37,9 @@ export type GitListing =
       contacts?: GitContacts;
       /** Programs git looks up on PATH for the call. */
       programs: readonly string[];
+      /** Config keys (lowercased) under any of which, set true, the call may sign or verify with gpg.program. */
+      signs: readonly string[];
+      signatureFormat?: SignatureFormat;
     }
   | { listed: false; reason: string };
 
@@ -41,6 +47,7 @@ interface Call {
   given: Given;
   operands: readonly GitWord[];
   open: boolean;
+  signatureFormat?: SignatureFormat;
 }
 
 type Kind = 'flag' | 'valued' | 'optional' | 'lastArg';
@@ -63,7 +70,11 @@ interface FormSpec {
   /** The remotes the call contacts: those `remotes` gives, every one, or none (null). */
   contacts?: (operands: readonly GitWord[], given: Given) => readonly GitWord[] | 'all' | null;
   push?: boolean;
+  signatureFormat?: 'pretty' | 'ref';
+  /** Read format.pretty when no output selector was supplied. */
+  readsDefaultPretty?: boolean;
   programs?: (call: Call) => readonly string[];
+  signs?: (given: Given, operands: readonly GitWord[]) => readonly string[];
   check?: (operands: readonly GitWord[], given: Given) => string | null;
   verbs?: Readonly<Record<string, FormSpec>>;
   /** Flags git reads before the verb. */
@@ -166,12 +177,58 @@ const firstOperand = (operands: readonly GitWord[]): readonly GitWord[] => opera
 const firstOrDefault = (operands: readonly GitWord[]): readonly GitWord[] | 'all' =>
   operands.length === 0 ? 'all' : firstOperand(operands);
 
-/** What git verifies signatures with, for a format that shows one (`%G?`, `%(signature)`) or an option bash fills in. */
-function signaturePrograms({ given, open }: Call): readonly string[] {
-  const formats = ['--format', '--pretty'].flatMap(name => given.get(name) ?? []);
-  const shown = formats.some(value => !value.whole || /%G|%\(signature/.test(value.text));
-  return open || shown ? ['gpg', 'gpgsm', 'ssh-keygen'] : [];
+/** Whether formatting input can trigger verification; escaped percent signs are never rescanned. */
+export function formatShowsSignatures(value: string, kind: 'pretty' | 'ref'): boolean {
+  for (let at = 0; at < value.length; at++) {
+    if (value[at] !== '%') continue;
+    at++;
+    if (value[at] === '%') continue;
+    if (kind === 'pretty') {
+      if (value[at] === '+' || value[at] === '-' || value[at] === ' ') at++;
+      // Git checks the signature before it validates the character following G.
+      if (value[at] === 'G') return true;
+    } else if (value[at] === '(') {
+      const start = at + (value[at + 1] === '*' ? 2 : 1);
+      const end = value[start + 'signature'.length];
+      if (value.startsWith('signature', start) && (end === ':' || end === ')')) return true;
+    }
+  }
+  return false;
 }
+
+function signaturePrograms({ signatureFormat, open }: Call): readonly string[] {
+  const shown = signatureFormat?.value;
+  return open || (shown && (!shown.whole || formatShowsSignatures(shown.text, signatureFormat.kind)))
+    ? ['gpg', 'gpgsm', 'ssh-keygen']
+    : [];
+}
+
+/** The settings under which a call that may make commits signs them, or verifies what it merges, less those it turns off. */
+const commitSigning =
+  (verifies: boolean) =>
+  (given: Given): readonly string[] => {
+    if (['--abort', '--quit', '--show-current-patch'].some(mode => given.has(mode))) return [];
+    return [
+      ...(given.has('--no-gpg-sign') ? [] : ['commit.gpgsign']),
+      ...(verifies && !given.has('--no-verify-signatures') ? ['merge.verifysignatures'] : []),
+    ];
+  };
+
+const TAG_LISTS = `-l --list -d --delete -n --contains --no-contains --merged --no-merged --points-at`.split(' ');
+const TAG_ANNOTATES = ['-m', '--message', '-F', '--file', '--trailer', '-e', '--edit'];
+
+/**
+ * A tag created with tag.gpgSign on is signed. tag.forceSignAnnotated signs one a message annotates, unless -a asks
+ * for it (a later --no-annotate takes that back).
+ */
+function tagSigning(given: Given, operands: readonly GitWord[]): readonly string[] {
+  if (operands.length === 0 || TAG_LISTS.some(mode => given.has(mode))) return [];
+  const explicit = (given.has('-a') || given.has('--annotate')) && !given.has('--no-annotate');
+  const forced = !explicit && TAG_ANNOTATES.some(option => given.has(option));
+  return ['tag.gpgsign', ...(forced ? ['tag.forcesignannotated'] : [])];
+}
+
+const showsSignatures = (): readonly string[] => ['log.showsignature'];
 
 const ANY_VALUE_SETTINGS = new Set(
   `user.name user.email author.name author.email committer.name committer.email column.ui core.abbrev core.quotepath
@@ -243,7 +300,14 @@ const STASH_PUSH: FormSpec = {
   options:
     '-quakS -m: --quiet --include-untracked --no-include-untracked --all --(no-)keep-index --staged --message= --pathspec-file-nul',
 };
-const REFLOG_SHOW: FormSpec = { options: LOG_DIFF, open: 'any', programs: signaturePrograms };
+const REFLOG_SHOW: FormSpec = {
+  readsDefaultPretty: true,
+  options: LOG_DIFF,
+  open: 'any',
+  signatureFormat: 'pretty',
+  programs: signaturePrograms,
+  signs: showsSignatures,
+};
 const SUBMODULE_STATUS: FormSpec = { options: '-q --quiet --cached --recursive' };
 
 const FORMS: Readonly<Record<string, FormSpec>> = {
@@ -254,21 +318,39 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
     open: 'any',
   },
   diff: { options: `${DIFF_SHORT} ${DIFF_LONG} --cached --staged --no-index`, open: 'any' },
-  log: { options: LOG_DIFF, open: 'any', programs: signaturePrograms },
-  show: { options: LOG_DIFF, open: 'any', programs: signaturePrograms },
+  log: {
+    readsDefaultPretty: true,
+    options: LOG_DIFF,
+    open: 'any',
+    signatureFormat: 'pretty',
+    programs: signaturePrograms,
+    signs: showsSignatures,
+  },
+  show: {
+    readsDefaultPretty: true,
+    options: LOG_DIFF,
+    open: 'any',
+    signatureFormat: 'pretty',
+    programs: signaturePrograms,
+    signs: showsSignatures,
+  },
   shortlog: {
     options: `-iEFPg -L: -nsec -w? ${LOG_LONG} --(no-)numbered --(no-)summary --(no-)email --(no-)committer --group=`,
     open: 'any',
+    signatureFormat: 'pretty',
     programs: signaturePrograms,
   },
   'range-diff': {
     options: `${DIFF_SHORT} ${DIFF_LONG} --creation-factor= --(no-)dual-color --(no-)left-only --(no-)right-only
       --max-memory=`,
     open: 'any',
+    // range-diff runs `git log`, which reads log.showSignature.
+    signs: showsSignatures,
   },
   'diff-tree': {
     options: `${LOG_DIFF} -v --root --no-commit-id --always`,
     open: 'any',
+    signatureFormat: 'pretty',
     programs: signaturePrograms,
   },
   'rev-parse': {
@@ -285,6 +367,7 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --object-names --disk-usage[=] --quiet --bisect-vars --bisect-all --timestamp --header --unpacked --missing=
       --filter= --no-filter --filter-print-omitted --indexed-objects --exclude-promisor-objects --use-bitmap-index`,
     open: 'any',
+    signatureFormat: 'pretty',
     programs: signaturePrograms,
   },
   'merge-base': { options: '-a --all --octopus --independent --is-ancestor --fork-point', open: 'any' },
@@ -318,6 +401,7 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --color[=] --no-color --exclude= --sort= --points-at= --merged=? --no-merged=? --contains=? --no-contains=?
       --(no-)ignore-case --(no-)include-root-refs`,
     open: 'any',
+    signatureFormat: 'ref',
     programs: signaturePrograms,
   },
   'show-ref': {
@@ -390,6 +474,7 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --no-gpg-sign --(no-)all --(no-)include --(no-)only --no-verify --verify --(no-)dry-run --(no-)short
       --(no-)branch --(no-)ahead-behind --(no-)porcelain --(no-)long --(no-)null --(no-)amend --no-edit
       --no-post-rewrite --post-rewrite --untracked-files[=] --allow-empty --allow-empty-message`,
+    signs: commitSigning(false),
   },
   merge: {
     options: `-nvq -m: -F: -s: -X: --(no-)stat --(no-)summary --(no-)compact-summary --log[=] --no-log --(no-)squash
@@ -398,6 +483,7 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --continue --(no-)allow-unrelated-histories --(no-)progress --no-gpg-sign --(no-)autostash
       --(no-)overwrite-ignore --(no-)signoff --no-verify --verify`,
     values: { '-s': strategy, '--strategy': strategy },
+    signs: commitSigning(true),
   },
   rebase: {
     options: `-qvnfm -C: -s: -X: -r? --onto= --(no-)keep-base --no-verify --verify --(no-)quiet --(no-)verbose
@@ -407,17 +493,20 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --(no-)autostash --rebase-merges[=] --no-rebase-merges --(no-)fork-point --strategy= --strategy-option=
       --(no-)root --(no-)reapply-cherry-picks --(no-)keep-empty`,
     values: { '-s': strategy, '--strategy': strategy },
+    signs: commitSigning(false),
   },
   'cherry-pick': {
     options: `-nsx -m: -X: --quit --continue --abort --skip --cleanup= --no-commit --commit --(no-)signoff --mainline=
       --(no-)rerere-autoupdate --strategy= --strategy-option= --no-gpg-sign --(no-)ff --(no-)allow-empty
       --(no-)allow-empty-message --(no-)keep-redundant-commits --empty= --no-edit`,
     values: { '--strategy': strategy },
+    signs: commitSigning(false),
   },
   revert: {
     options: `-ns -m: -X: --quit --continue --abort --skip --cleanup= --no-commit --commit --(no-)signoff --mainline=
       --(no-)rerere-autoupdate --strategy= --strategy-option= --no-gpg-sign --(no-)reference --no-edit`,
     values: { '--strategy': strategy },
+    signs: commitSigning(false),
   },
   branch: {
     options: `-vqrdDmMcCfial -t? -u: --(no-)verbose --(no-)quiet --track[=] --no-track --set-upstream-to=
@@ -426,13 +515,16 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --(no-)create-reflog --(no-)force --column[=] --no-column --sort= --points-at= --(no-)ignore-case
       --(no-)recurse-submodules --format=`,
     open: 'any',
+    signatureFormat: 'ref',
     programs: signaturePrograms,
   },
   tag: {
     options: `-ldafi -n? -m: -F: --list --delete --(no-)annotate --message= --file= --trailer= --cleanup= --(no-)force
       --(no-)create-reflog --column[=] --no-column --contains=? --no-contains=? --merged=? --no-merged=?
       --(no-)omit-empty --sort= --points-at= --format= --color[=] --no-color --(no-)ignore-case`,
+    signatureFormat: 'ref',
     programs: signaturePrograms,
+    signs: tagSigning,
   },
   stash: {
     verbs: {
@@ -440,8 +532,19 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       save: { options: '-quakS --quiet --include-untracked --no-include-untracked --all --(no-)keep-index --staged' },
       pop: { options: '-q --quiet --index', maxOperands: 1 },
       apply: { options: '-q --quiet --index', maxOperands: 1 },
-      list: { options: LOG, open: 'any', programs: signaturePrograms },
-      show: { options: `${LOG_DIFF} --include-untracked --only-untracked`, open: 'any', programs: signaturePrograms },
+      list: {
+        options: LOG,
+        open: 'any',
+        signatureFormat: 'pretty',
+        programs: signaturePrograms,
+        signs: showsSignatures,
+      },
+      show: {
+        options: `${LOG_DIFF} --include-untracked --only-untracked`,
+        open: 'any',
+        signatureFormat: 'pretty',
+        programs: signaturePrograms,
+      },
       drop: { options: '-q --quiet', maxOperands: 1 },
       clear: { maxOperands: 0 },
       branch: { maxOperands: 2 },
@@ -488,6 +591,7 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --no-cc --from[=] --no-from --in-reply-to= --attach[=] --no-attach --inline[=] --thread[=] --no-thread
       --signature= --no-signature --base= --signature-file= --(no-)quiet --(no-)progress --interdiff= --range-diff=
       --creation-factor= --(no-)force-in-body-from`,
+    signatureFormat: 'pretty',
     programs: signaturePrograms,
   },
   'send-email': {
@@ -584,6 +688,7 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
     },
     remotes: firstOperand,
     contacts: firstOrDefault,
+    signs: commitSigning(true),
   },
   push: {
     options: `-vqdnfu46 -o: --(no-)verbose --(no-)quiet --(no-)all --(no-)branches --(no-)mirror --(no-)delete --(no-)tags
@@ -593,6 +698,8 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
     remotes: firstOperand,
     contacts: firstOrDefault,
     push: true,
+    // push.gpgSign signs for `true` and, when the server takes certificates, `if-asked`.
+    signs: given => (given.has('--no-signed') ? [] : ['push.gpgsign']),
   },
   'ls-remote': {
     options: `-qtb -o: --(no-)quiet --(no-)tags --(no-)branches --(no-)heads --(no-)refs --(no-)get-url --sort=
@@ -711,13 +818,15 @@ function readOption(
   words: readonly GitWord[],
   at: number,
   given: Map<string, GitWord[]>,
-  label: string
+  label: string,
+  selectFormat: (name: string, value?: GitWord) => void
 ): number | 'open' | 'exits' | Miss {
   const word = words[at] as GitWord;
   const { text, whole } = word;
   const known = form.options;
   const take = (name: string, value?: GitWord): void => {
     given.set(name, [...(given.get(name) ?? []), ...(value ? [value] : [])]);
+    selectFormat(name, value);
   };
   if (known.numeric && /^-\d+$/.test(text)) {
     if (!whole) return 'open';
@@ -795,6 +904,7 @@ const plainListing = (form: string, given: Given): GitListing => ({
   operands: [],
   open: false,
   programs: [],
+  signs: [],
 });
 
 function readForm(form: Form, words: readonly GitWord[], label: string): GitListing {
@@ -803,6 +913,12 @@ function readForm(form: Form, words: readonly GitWord[], label: string): GitList
     return plainListing(label, new Map([['-h', []]]));
   }
   if (form.verbs) return readVerb(form, words, label);
+  let selectedFormat: GitWord | undefined;
+  const selectFormat = (name: string, value?: GitWord): void => {
+    if (name === '--oneline') selectedFormat = { text: 'oneline', whole: true, splits: false };
+    else if (name === '--pretty') selectedFormat = value ?? { text: 'medium', whole: true, splits: false };
+    else if (name === '--format') selectedFormat = value ?? { text: '', whole: false, splits: false };
+  };
   const operands: GitWord[] = [];
   let reading = true;
   let open = false;
@@ -818,7 +934,7 @@ function readForm(form: Form, words: readonly GitWord[], label: string): GitList
     }
     // A lone `-` is a word of its own; `-$x` may become any option.
     const option = !isOpen(word) && word.text.startsWith('-') && (word.text !== '-' || !word.whole);
-    const read = isOpen(word) ? 'open' : option ? readOption(form, words, at, given, label) : at;
+    const read = isOpen(word) ? 'open' : option ? readOption(form, words, at, given, label, selectFormat) : at;
     if (typeof read === 'object') return read;
     if (read === 'exits') return plainListing(label, given);
     if (read === 'open') {
@@ -858,8 +974,94 @@ function readForm(form: Form, words: readonly GitWord[], label: string): GitList
           push: form.push === true,
         }
       : undefined;
-  const programs = form.programs?.({ given, operands, open }) ?? [];
-  return { listed: true, form: label, given, operands, open, ...(contacts ? { contacts } : {}), programs };
+  const signatureFormat: SignatureFormat | undefined = form.signatureFormat
+    ? {
+        kind: form.signatureFormat,
+        value: open
+          ? { text: '', whole: false, splits: false }
+          : (selectedFormat ?? (form.readsDefaultPretty ? undefined : { text: 'format:', whole: true, splits: false })),
+      }
+    : undefined;
+  const programs = form.programs?.({ given, operands, open, signatureFormat }) ?? [];
+  const signs = form.signs?.(given, operands) ?? [];
+  return {
+    listed: true,
+    form: label,
+    given,
+    operands,
+    open,
+    ...(contacts ? { contacts } : {}),
+    programs,
+    signs,
+    ...(signatureFormat ? { signatureFormat } : {}),
+  };
+}
+
+/** A config entry as `git config --get-regexp` prints it; a null value for a key set without `=`. */
+export interface ConfigEntry {
+  key: string;
+  value: string | null;
+}
+
+/** `key` as git compares it: section and name in any case, a subsection as written. */
+export function configKey(key: string): string {
+  const first = key.indexOf('.');
+  const last = key.lastIndexOf('.');
+  if (first === last) return key.toLowerCase();
+  return `${key.slice(0, first).toLowerCase()}${key.slice(first, last)}${key.slice(last).toLowerCase()}`;
+}
+
+/** Whether git reads a boolean setting of `value` as true; any spelling it might not read as false counts as true. */
+export function configTrue(value: string | null): boolean {
+  return value === null || !/^(false|no|off|[-+]?0+|)$/i.test(value);
+}
+
+/** The keys of `keys` the last of `entries` (in the order git prints them) to name each sets true. */
+export function settingsOn(entries: readonly ConfigEntry[], keys: readonly string[]): string[] {
+  const last = new Map<string, string | null>();
+  for (const { key, value } of entries) last.set(configKey(key), value);
+  return keys.filter(key => last.has(key) && configTrue(last.get(key) as string | null));
+}
+
+const PRETTY_BUILTINS = ['raw', 'medium', 'short', 'email', 'mboxrd', 'fuller', 'full', 'oneline', 'reference'];
+/** Whether git reads a `--pretty` value as a format string rather than a name it looks up. */
+const prettyFormatString = (value: string): boolean =>
+  value === '' || value.startsWith('format:') || value.startsWith('tformat:') || value.includes('%');
+
+/** Whether a `--pretty` or `--format` value is a name git may look up among the `pretty.<name>` settings. */
+export const prettyNamesAlias = (value: string): boolean =>
+  !prettyFormatString(value) && !PRETTY_BUILTINS.includes(value);
+
+/** The `format.pretty` and `pretty.<alias>` entries a log form reads, and whether they may make it print signatures. */
+export function prettyShowsSignatures(entries: readonly ConfigEntry[], selected?: string): boolean {
+  const aliases = new Map<string, string | null>();
+  let chosen: string | null = selected ?? 'medium';
+  for (const { key, value } of entries) {
+    const name = configKey(key);
+    if (name === 'format.pretty') {
+      if (selected === undefined) chosen = value;
+    } else if (name.startsWith('pretty.') && name.length > 7) aliases.set(name.slice(7), value);
+    else return true;
+  }
+  const visited = new Set<string>();
+  for (let step = 0; step < 16; step++) {
+    if (chosen === null) return true;
+    if (prettyFormatString(chosen)) return formatShowsSignatures(chosen, 'pretty');
+    const prefix = chosen;
+    // Exact builtins cannot be replaced by pretty.<name>.
+    if (PRETTY_BUILTINS.includes(prefix)) return false;
+    if (visited.has(prefix)) return true;
+    visited.add(prefix);
+    // Git selects the shortest matching name. Ambiguous matches stay conservative.
+    const names = [...PRETTY_BUILTINS, ...aliases.keys()].filter(name => name.startsWith(prefix));
+    const shortest = Math.min(...names.map(name => name.length));
+    const matches = names.filter(name => name.length === shortest);
+    if (matches.length !== 1) return true;
+    const name = matches[0] as string;
+    if (PRETTY_BUILTINS.includes(name)) return false;
+    chosen = aliases.get(name) ?? null;
+  }
+  return true;
 }
 
 /** The setting a `-c` or `--config-env` word names, and whether its value passes: null when the key is not fixed. */
@@ -913,4 +1115,157 @@ export function gitListed(words: readonly GitWord[]): GitListing {
     return miss(`git ${shown(name)}`);
   }
   return plainListing('git', new Map());
+}
+
+const COMMIT_SIGNS = ['commit.gpgsign'];
+const MERGE_SIGNS = ['commit.gpgsign', 'merge.verifysignatures'];
+const LOG_SIGNS = ['log.showsignature'];
+
+/** The settings under which a subcommand may sign or verify whatever options it is given. */
+const UNLISTED_SIGNS: ReadonlyMap<string, readonly string[]> = new Map([
+  ...['commit', 'commit-tree', 'am', 'rebase', 'cherry-pick', 'revert'].map(sub => [sub, COMMIT_SIGNS] as const),
+  ...['merge', 'pull'].map(sub => [sub, MERGE_SIGNS] as const),
+  ...['log', 'show', 'whatchanged', 'reflog', 'range-diff', 'stash'].map(sub => [sub, LOG_SIGNS] as const),
+  ['tag', ['tag.gpgsign', 'tag.forcesignannotated']],
+  ['push', ['push.gpgsign']],
+]);
+
+const GLOBAL_VALUED = new Set(['-C', '-c', '--config-env', '--namespace', '--attr-source', '--super-prefix']);
+
+/**
+ * The subcommand of git run with `words` (those after `git`, its aliases expanded) in a form the table does not list,
+ * and the settings under which it may sign or verify; null when the scan cannot name the subcommand.
+ */
+export function unlistedSigning(words: readonly GitWord[]): { form: string; signs: readonly string[] } | null {
+  const at = subcommandAt(words);
+  if (at === null) return null;
+  const { text } = words[at] as GitWord;
+  return { form: `git ${shown(text)}`, signs: UNLISTED_SIGNS.get(text) ?? [] };
+}
+
+/** Where the subcommand of git run with `words` stands; null when the scan cannot name it. */
+function subcommandAt(words: readonly GitWord[]): number | null {
+  for (let at = 0; at < words.length; at++) {
+    const word = words[at] as GitWord;
+    if (isOpen(word)) return null;
+    if (!word.text.startsWith('-')) return word.whole ? at : null;
+    if (GLOBAL_VALUED.has(word.text) || GLOBAL_PATHS.has(word.text)) at++;
+  }
+  return null;
+}
+
+export interface CommandSigning {
+  /** What in the command makes git sign or verify whatever its config says. */
+  text?: string;
+  /** The output format the command selects, read as gitListed reads `signatureFormat`, for a form it does not list. */
+  format?: SignatureFormat;
+  /** The signing settings (lowercased) the command's own options turn off. */
+  off: readonly string[];
+}
+
+const GPG_SIGNERS = new Set(['commit', 'commit-tree', 'merge', 'pull', 'rebase', 'cherry-pick', 'revert', 'am']);
+// The forms that read format.pretty when no output format is given (readsDefaultPretty).
+const LOG_FORMS = new Set(['log', 'show', 'whatchanged', 'reflog']);
+// The forms whose output format may show a signature git verifies (signatureFormat).
+const PRETTY_FORMS = new Set([...LOG_FORMS, 'shortlog', 'diff-tree', 'rev-list', 'stash', 'format-patch']);
+const REF_FORMS = new Set(['for-each-ref', 'branch', 'tag']);
+const UNREAD_FORMAT: GitWord = { text: '', whole: false, splits: false };
+
+/** Whether `name` spells the long option `full`, or a prefix of it at least `least` characters long. */
+const spells = (name: string, full: string, least: number): boolean => name.length >= least && full.startsWith(name);
+
+/** Whether the output format a call selects shows a signature in its own text, which git verifies whatever config says. */
+export const formatVerifies = (format: SignatureFormat | undefined): boolean =>
+  format?.value !== undefined && formatShowsSignatures(format.value.text, format.kind);
+
+/**
+ * What the options of git run with `words` (those after `git`, its aliases expanded) do to signing, a later option
+ * taking back an earlier one as git does; null when the scan cannot name the subcommand.
+ */
+export function commandSigning(words: readonly GitWord[]): CommandSigning | null {
+  const at = subcommandAt(words);
+  if (at === null) return null;
+  const sub = (words[at] as GitWord).text;
+  const known = COMPILED.get(sub)?.options;
+  const gpg = GPG_SIGNERS.has(sub);
+  const merges = sub === 'merge' || sub === 'pull';
+  const tag = sub === 'tag';
+  const push = sub === 'push' || sub === 'send-pack';
+  const kind = REF_FORMS.has(sub) ? 'ref' : PRETTY_FORMS.has(sub) ? 'pretty' : undefined;
+  // The option in effect for each setting it overrides; null once a later option turns that off.
+  const state = new Map<string, string | null>();
+  let sticky: string | null = null;
+  // The last output format given wins, as gitListed's selectFormat reads it.
+  let selected: GitWord | undefined;
+  for (let index = at + 1; index < words.length; index++) {
+    const word = words[index] as GitWord;
+    const { text } = word;
+    if (word.whole && text === '--') break;
+    // A word the shell splits still starts with the option its fixed text spells.
+    if (!text.startsWith('-') || text === '-') continue;
+    if (text.startsWith('--')) {
+      const equals = text.indexOf('=');
+      const name = equals === -1 ? text : text.slice(0, equals);
+      const joined = equals === -1 ? undefined : { text: text.slice(equals + 1), whole: word.whole, splits: false };
+      const valued = known?.long.get(name) === 'valued';
+      if (gpg && spells(name, '--gpg-sign', 3)) state.set('commit.gpgsign', '--gpg-sign');
+      else if (gpg && text === '--no-gpg-sign') state.set('commit.gpgsign', null);
+      else if (merges && spells(name, '--verify-signatures', 10))
+        state.set('merge.verifysignatures', '--verify-signatures');
+      else if (merges && text === '--no-verify-signatures') state.set('merge.verifysignatures', null);
+      else if (push && spells(name, '--signed', 4)) {
+        const signed = joined === undefined || !joined.whole || !FALSE.test(joined.text);
+        state.set('push.gpgsign', signed ? '--signed' : null);
+      } else if (push && text === '--no-signed') state.set('push.gpgsign', null);
+      else if (tag && spells(name, '--sign', 4)) state.set('tag.gpgsign', '--sign');
+      else if (tag && text === '--no-sign') state.set('tag.gpgsign', null);
+      else if (tag && spells(name, '--local-user', 4)) {
+        sticky = '--local-user';
+        if (joined === undefined) index++;
+      } else if (tag && spells(name, '--verify', 5)) sticky = '--verify';
+      else if (text === '--show-signature') state.set('log.showsignature', text);
+      else if (text === '--no-show-signature') state.set('log.showsignature', null);
+      else if (kind === 'pretty' && text === '--oneline') selected = { text: 'oneline', whole: true, splits: false };
+      else if (kind === 'pretty' && name === '--pretty')
+        selected = joined ?? { text: 'medium', whole: true, splits: false };
+      else if (kind === 'pretty' && name === '--format') selected = joined ?? UNREAD_FORMAT;
+      // The for-each-ref family parses options as git's parse-options does: a separate value, or an abbreviation.
+      else if (kind === 'ref' && spells(name, '--format', 5)) selected = joined ?? words[++index] ?? UNREAD_FORMAT;
+      else if (joined === undefined && valued) index++;
+      continue;
+    }
+    for (let letter = 1; letter < text.length; letter++) {
+      const char = text[letter] as string;
+      const last = letter === text.length - 1;
+      // -S takes the rest of its word as a key; -u takes it or the next word.
+      if (gpg && char === 'S') {
+        state.set('commit.gpgsign', '-S');
+        break;
+      }
+      if (tag && char === 'u') {
+        sticky = '-u';
+        if (last && word.whole) index++;
+        break;
+      }
+      if (tag && (char === 's' || char === 'v')) {
+        if (char === 's') state.set('tag.gpgsign', '-s');
+        else sticky = '-v';
+        continue;
+      }
+      const short = known?.short.get(char);
+      if (short === 'valued' || short === 'optional') {
+        if (short === 'valued' && last && word.whole) index++;
+        break;
+      }
+    }
+  }
+  const option = sticky ?? [...state.values()].find(given => given !== null) ?? null;
+  const verifies = sub === 'verify-commit' || sub === 'verify-tag';
+  const off = [...state].flatMap(([key, given]) => (given === null ? [key] : []));
+  const format: SignatureFormat | undefined =
+    kind && (selected !== undefined || LOG_FORMS.has(sub))
+      ? { kind, ...(selected ? { value: selected } : {}) }
+      : undefined;
+  const reason = option !== null ? `with ${option}` : verifies ? 'that verifies signatures' : undefined;
+  return { ...(reason ? { text: reason } : {}), ...(format ? { format } : {}), off };
 }

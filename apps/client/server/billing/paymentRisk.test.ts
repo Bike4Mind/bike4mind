@@ -175,6 +175,38 @@ describe('paymentNetworkOf', () => {
 });
 
 describe('recordPaymentStart', () => {
+  beforeEach(() => {
+    mocks.emitMetric.mockReset();
+  });
+
+  it('counts each started payment once with the credits kind', async () => {
+    mocks.recordStart.mockResolvedValue(undefined);
+    const network = { ip: '203.0.113.7', isDatacenter: true } as Parameters<typeof recordPaymentStart>[0]['network'];
+
+    await recordPaymentStart({ paymentIntentId: 'pi_1', userId: 'u1', amount: 100, currency: 'usd', network }, logger);
+
+    expect(mocks.emitMetric).toHaveBeenCalledTimes(1);
+    expect(mocks.emitMetric).toHaveBeenCalledWith(
+      'Lumina5/Billing',
+      'PaymentStarted',
+      1,
+      { kind: 'credits', Stage: 'test-stage' },
+      'Count'
+    );
+  });
+
+  it('still counts the start when the attempt write fails', async () => {
+    mocks.recordStart.mockRejectedValue(new Error('db down'));
+    const network = { ip: '203.0.113.7', isDatacenter: true } as Parameters<typeof recordPaymentStart>[0]['network'];
+
+    await expect(
+      recordPaymentStart({ paymentIntentId: 'pi_1', userId: 'u1', amount: 100, currency: 'usd', network }, logger)
+    ).resolves.toBeUndefined();
+
+    expect(mocks.emitMetric).toHaveBeenCalledTimes(1);
+    expect(mocks.emitMetric.mock.calls[0][1]).toBe('PaymentStarted');
+  });
+
   it('records the visit the payment started in, or null without one', async () => {
     mocks.recordStart.mockResolvedValue(undefined);
     const network = { ip: '203.0.113.7', isDatacenter: true } as Parameters<typeof recordPaymentStart>[0]['network'];
