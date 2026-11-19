@@ -32,6 +32,7 @@ import {
   type PermissionsState,
 } from '@shared/permissions';
 import { ChevronIcon } from './icons';
+import { thinScrollbarSx } from './layout';
 
 const LIST_LABEL: Record<PermissionList, string> = { allow: 'Allow', ask: 'Ask', deny: 'Deny' };
 const LIST_COLOR: Record<PermissionList, 'success' | 'warning' | 'danger'> = {
@@ -40,7 +41,6 @@ const LIST_COLOR: Record<PermissionList, 'success' | 'warning' | 'danger'> = {
   deny: 'danger',
 };
 const USER_SCOPE = 'user';
-const RULE_PAGE_SIZE = 6;
 const PERMISSION_VIEWS = ['desktop', 'claude', 'activity'] as const;
 
 export function permissionsSummary(state: PermissionsState | null): string {
@@ -249,7 +249,6 @@ export function PermissionsSettings({
   const [section, setSection] = useState<(typeof PERMISSION_VIEWS)[number]>('desktop');
   const [query, setQuery] = useState('');
   const [listFilter, setListFilter] = useState<PermissionList | 'all'>('all');
-  const [page, setPage] = useState(0);
 
   const mutate = useCallback(async (change: () => Promise<boolean>) => {
     if (changing.current) return false;
@@ -312,9 +311,6 @@ export function PermissionsSettings({
     view =>
       (listFilter === 'all' || view.list === listFilter) && view.rule.toLowerCase().includes(query.trim().toLowerCase())
   );
-  const lastPage = Math.max(0, Math.ceil(filteredRules.length / RULE_PAGE_SIZE) - 1);
-  const currentPage = Math.min(page, lastPage);
-  const pageStart = currentPage * RULE_PAGE_SIZE;
 
   const save = useCallback(
     async (next: PermissionRuleView[], target: PermissionScope = scope) =>
@@ -462,7 +458,6 @@ export function PermissionsSettings({
                   onChange={(_event, next) => {
                     if (next) {
                       setScopeKey(next);
-                      setPage(0);
                     }
                   }}
                   sx={{ maxWidth: 280 }}
@@ -483,7 +478,6 @@ export function PermissionsSettings({
                 value={query}
                 onChange={event => {
                   setQuery(event.target.value);
-                  setPage(0);
                 }}
                 slotProps={{
                   input: { 'aria-label': 'Search desktop rules', 'data-testid': 'permissions-search-input' },
@@ -500,7 +494,6 @@ export function PermissionsSettings({
                     data-testid={`permissions-filter-${list}`}
                     onClick={() => {
                       setListFilter(list);
-                      setPage(0);
                     }}
                   >
                     {list === 'all' ? 'All' : LIST_LABEL[list]}
@@ -520,8 +513,8 @@ export function PermissionsSettings({
                   No matching rules. Try another search or filter.
                 </Typography>
               ) : (
-                <Stack spacing={0.75}>
-                  {filteredRules.slice(pageStart, pageStart + RULE_PAGE_SIZE).map(view => (
+                <Stack spacing={0.75} sx={{ maxHeight: 480, overflowY: 'auto', pr: 0.5, ...thinScrollbarSx }}>
+                  {filteredRules.map(view => (
                     <RuleRow
                       key={`${view.list}:${view.rule}`}
                       view={view}
@@ -532,34 +525,6 @@ export function PermissionsSettings({
                 </Stack>
               )}
 
-              {desktopOpen && filteredRules.length > RULE_PAGE_SIZE && (
-                <Stack direction="row" spacing={1} alignItems="center" data-testid="permissions-pagination">
-                  <Typography level="body-xs" textColor="text.tertiary" sx={{ flex: 1 }}>
-                    {pageStart + 1}-{Math.min(pageStart + RULE_PAGE_SIZE, filteredRules.length)} of{' '}
-                    {filteredRules.length}
-                  </Typography>
-                  <Button
-                    size="sm"
-                    variant="plain"
-                    color="neutral"
-                    disabled={currentPage === 0}
-                    onClick={() => setPage(currentPage - 1)}
-                    data-testid="permissions-previous-btn"
-                  >
-                    Previous
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="plain"
-                    color="neutral"
-                    disabled={currentPage === lastPage}
-                    onClick={() => setPage(currentPage + 1)}
-                    data-testid="permissions-next-btn"
-                  >
-                    Next
-                  </Button>
-                </Stack>
-              )}
               <Typography level="title-sm" sx={{ pt: 1 }}>
                 Add a rule
               </Typography>
