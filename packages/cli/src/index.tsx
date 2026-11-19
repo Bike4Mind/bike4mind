@@ -394,7 +394,7 @@ function CliApp() {
   const mcpApprovalResolvedRef = useRef(false);
   const detectedOllamaRef = useRef<BuildLlmBackendResult['detectedOllama']>(null);
   const initGenerationRef = useRef(0);
-  const todoStoreRef = useRef(createTodoStore());
+  const todoStoreRef = useRef(createTodoStore(items => useCliStore.getState().setPlan(items)));
   const decisionStoreRef = useRef(createDecisionStore());
   const blockerStoreRef = useRef(createBlockerStore());
   const reviewGateStoreRef = useRef(createReviewGateStore());
@@ -1110,6 +1110,7 @@ function CliApp() {
       // Create write_todos tool for task tracking
       const todoStore = todoStoreRef.current;
       todoStore.todos = [];
+      todoStore.onUpdate?.([]);
       const writeTodosTool = createWriteTodosTool(todoStore);
 
       // Create durable workflow tools (Q-inspired agentic patterns)

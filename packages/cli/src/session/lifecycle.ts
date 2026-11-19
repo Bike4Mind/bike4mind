@@ -123,6 +123,7 @@ export async function createFreshSession(ctx: SessionLifecycleContext): Promise<
   ctx.decisionStore.decisions = [];
   ctx.blockerStore.blockers = [];
   ctx.todoStore.todos = [];
+  ctx.todoStore.onUpdate?.([]);
 
   ctx.checkpointStore?.setSessionId(newSession.id);
 

@@ -5,6 +5,7 @@ import { InputPrompt, type SubmitOptions } from './InputPrompt';
 import { AgentThinking } from './AgentThinking';
 import { BackgroundAgentStatus } from './BackgroundAgentStatus';
 import { BackgroundShellStatus } from './BackgroundShellStatus';
+import { PlanBlock } from './PlanBlock';
 import { CompletedGroupNotification } from './CompletedGroupNotification';
 import { PermissionPrompt } from './PermissionPrompt';
 import type { PermissionResponse } from './PermissionPrompt';
@@ -407,6 +408,9 @@ export function App({
 
               {/* Agent thinking display - hidden when an interactive prompt is active */}
               {!permissionPrompt && !userQuestionPrompt && !reviewGatePrompt && !exitHandoffPrompt && <AgentThinking />}
+
+              {/* write_todos plan: expanded during the turn, one line after */}
+              <PlanBlock />
 
               {/* Background agent status */}
               <BackgroundAgentStatus />

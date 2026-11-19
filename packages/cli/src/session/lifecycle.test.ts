@@ -120,7 +120,7 @@ describe('session lifecycle', () => {
         .setSession(makeSession({ id: 'old', model: 'claude-opus-4-8', messages: [message('user', 'x')] }));
       const decisionStore = { decisions: [{ id: 'd1' }] } as unknown as DecisionStore;
       const blockerStore = { blockers: [{ id: 'b1' }] } as unknown as BlockerStore;
-      const todoStore = { todos: [{ description: 'stale', status: 'in_progress' }] } as unknown as TodoStore;
+      const todoStore = { todos: [{ id: 'x', content: 'stale', status: 'in_progress' }] } as unknown as TodoStore;
       const onSessionReplaced = vi.fn();
       const ctx = makeCtx({ decisionStore, blockerStore, todoStore, onSessionReplaced });
 

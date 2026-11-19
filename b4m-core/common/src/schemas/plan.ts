@@ -151,13 +151,22 @@ export function fromClaudeTodoWrite(input: unknown, options: PlanAdapterOptions 
   return adapt('TodoWrite', Array.isArray(input) ? input : record(input).todos, options);
 }
 
+/** `content` wins; `description` is a deprecated alias that warns once per call. */
 export function fromCliTodos(input: unknown, options: PlanAdapterOptions = {}): NormalizedPlan {
   const todos = Array.isArray(input) ? input : record(input).todos;
-  return adapt(
+  if (!Array.isArray(todos)) return adapt('write_todos', todos, options);
+  const usesAlias = todos.some(item => record(item).description !== undefined);
+  const result = adapt(
     'write_todos',
-    Array.isArray(todos) ? todos.map(item => ({ ...record(item), content: record(item).description })) : todos,
+    todos.map(item => {
+      const { description, ...rest } = record(item);
+      return { ...rest, content: rest.content ?? description };
+    }),
     options
   );
+  return usesAlias
+    ? { plan: result.plan, warnings: ["description is deprecated; use 'content'.", ...result.warnings] }
+    : result;
 }
 
 export interface ClaudeTaskCall {
