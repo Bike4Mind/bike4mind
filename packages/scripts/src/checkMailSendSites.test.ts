@@ -28,8 +28,6 @@ const MAIL_CLIENT_PACKAGES = ['nodemailer', '@aws-sdk/client-sesv2', '@aws-sdk/c
 const ALLOWLIST: Record<string, string> = {
   'apps/workers/src/events/sendEmail.ts': 'the email-send worker',
   'packages/server-utils/src/utils/eventBus.ts': 'self-host has no event bus; email.send goes to the SMTP mailer',
-  'apps/client/pages/api/email/resend-verification.ts': 'reads the config status, never sends',
-  'apps/client/server/admin/systemHealth/getSystemHealthStatus.ts': 'reads the config status, never sends',
 };
 
 const SCAN_ROOTS = ['apps', 'b4m-core', 'packages', 'infra', 'scripts'];
@@ -130,6 +128,10 @@ describe('mail is sent from one place', () => {
   it.each([
     ["import type { EmailConfigStatus } from '@bike4mind/server-utils/utils/mailer/index';", 'apps/client/server/x.ts'],
     ["import type Mail from 'nodemailer/lib/mailer';", 'apps/workers/src/x.ts'],
+    [
+      "import { getMailConfigStatus } from '@bike4mind/server-utils/utils/mailer/configStatus';",
+      'apps/client/server/x.ts',
+    ],
     ["import { queuedMailer } from '@bike4mind/server-utils/utils/mailer/queuedMailer';", 'apps/client/server/x.ts'],
     ["import { escapeHtml } from '../utils/mailer/emailHelpers';", 'packages/server-utils/src/moderation/x.ts'],
     ["import { sendEmailWithAttachments } from '@server/utils/mailer/emailAttachments';", 'apps/client/pages/api/x.ts'],
