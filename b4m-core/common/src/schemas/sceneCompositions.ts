@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { ApiErrorCode } from '../apiErrorCodes';
+import { generatedAssetSaveSkippedReasonSchema } from '../generatedAsset';
 import { GENERATION_OUTPUT_AVAILABILITIES } from '../generation/types';
 import {
   SCENE_AUDIO_FITS,
@@ -152,6 +153,13 @@ export const SceneCompositionSchema = z.object({
       expires_at: z.string().nullable().describe('ISO 8601. When url stops working; null whenever url is.'),
       content_type: z.string(),
       duration_seconds: z.number().describe('The length of the Scene, which is the length of its video.'),
+      files_skip_reason: generatedAssetSaveSkippedReasonSchema
+        .nullable()
+        .describe(
+          'Why the Scene was stored outside Files, or null when it was saved there. `file_too_large`: it is over ' +
+            'the per-file size limit. `storage_limit`: your storage quota has no room for it. `error`: the save ' +
+            'failed. The Scene is still downloadable through url.'
+        ),
       file_id: z.string().nullable().describe('The Files entry, or null when the Scene was stored outside Files.'),
     })
     .nullable(),
@@ -174,4 +182,5 @@ export const SceneCompositionIdParamSchema = z.object({ id: z.string().min(1) })
 /** Published in the contract description so the limits are stated in one place. */
 export const SCENE_COMPOSITION_LIMITS_DESCRIPTION =
   `The video may run at most ${SCENE_MAX_VIDEO_SECONDS} seconds, and the input files together may total at most ` +
-  `${SCENE_MAX_INPUT_BYTES / (1024 * 1024)} MB.`;
+  `${SCENE_MAX_INPUT_BYTES / (1024 * 1024)} MB. A Scene over your Files per-file size limit is still rendered, but ` +
+  'is stored outside Files: its output has a null file_id and a files_skip_reason.';
