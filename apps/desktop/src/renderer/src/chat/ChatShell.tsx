@@ -132,6 +132,7 @@ import { useCreationTools } from './useCreationTools';
 import { OrchestratePill } from './orchestrator/OrchestratePill';
 import { OrchestrateToggle } from './orchestrator/OrchestrateToggle';
 import { ExampleQuestStrip } from './orchestrator/exampleQuests';
+import { markSessionViewed } from './markSessionViewed';
 import { ambientHeld, isEditable, isPrintableKey, useAmbientSettle } from './orchestrator/ambient';
 import type { AgentActions, InnkeeperDesk, StageAmbient } from './orchestrator/OrchestratorStage';
 import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
@@ -513,6 +514,7 @@ export function ChatShell({
       if (selected) setMode(selected.mode);
       setScreen('conversation');
       setActiveId(sessionId);
+      markSessionViewed(sessionId);
     },
     [sessions]
   );
@@ -1499,12 +1501,6 @@ export function ChatShell({
   const threadDockMode: ThreadDockMode = !orchestratorShown ? 'chat' : dockVisible ? 'docked' : 'hidden';
   const sceneConversation =
     orchestratorShown && !orchestratorPrefs.focus && ORCHESTRATOR_VIEW_INFO[orchestratorView].group === 'scene';
-  const conversationVisible = !orchestratorShown || dockVisible;
-  const visibleTask = conversation.session?.workerTask;
-  useEffect(() => {
-    if (!activeId || !conversationVisible || !visibleTask || visibleTask.attentionViewed === true) return;
-    void window.b4m.chat.getSession(activeId, true).catch(() => undefined);
-  }, [activeId, conversationVisible, visibleTask]);
   const handledConversationClicks = useRef(new WeakSet<Event>());
   useEffect(() => {
     if (!sceneConversation || !dockVisible) return;

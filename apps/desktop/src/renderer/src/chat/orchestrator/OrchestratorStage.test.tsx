@@ -343,7 +343,7 @@ describe('OrchestratorStage', () => {
     expect(el('orchestrator-peek-drawer').textContent).toContain('Agent w2');
     expect(el('orchestrator-peek-conversation').contains(el('chat-message-assistant'))).toBe(true);
     expect(el('chat-message-assistant').textContent).toContain('Working on the second task.');
-    expect(window.b4m.chat.getSession).toHaveBeenCalledWith('w2', true);
+    expect(window.b4m.chat.getSession).toHaveBeenCalledWith('w2', false);
   });
 
   it('starts a fresh reply box when another agent is selected', async () => {

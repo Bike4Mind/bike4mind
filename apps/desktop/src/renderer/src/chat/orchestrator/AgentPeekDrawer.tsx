@@ -15,6 +15,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import { CaretDownIcon } from '../icons';
 import { ToolCallList } from '../ToolCallList';
 import { MessageThread } from '../MessageThread';
+import { markSessionViewed } from '../markSessionViewed';
 import { activityLabel } from './activity';
 import { AgentStateChip } from './AgentStateChip';
 import type { AgentActions } from './OrchestratorStage';
@@ -65,7 +66,7 @@ export function useSessionMessages(
       loading = true;
       dirty = false;
       try {
-        const session = await window.b4m.chat.getSession(agentId, viewed);
+        const session = await window.b4m.chat.getSession(agentId, false);
         if (!stale) {
           setLoadError(null);
           setMessages(session ? session.messages : []);
@@ -97,7 +98,10 @@ export function useSessionMessages(
       unsubscribe();
       unsubscribeQueue();
     };
-  }, [agentId, refreshKey, viewed]);
+  }, [agentId, refreshKey]);
+  useEffect(() => {
+    if (viewed) markSessionViewed(agentId);
+  }, [agentId, viewed]);
   return { messages, loadError };
 }
 

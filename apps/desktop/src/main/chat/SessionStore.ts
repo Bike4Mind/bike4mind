@@ -571,6 +571,7 @@ export class SessionStore implements SessionWritesStore {
           const task = session.workerTask;
           session.workerTask = workerTaskSchema.parse({
             ...task,
+            attentionViewed: undefined,
             state: { status: 'queued' },
             attempts: [
               ...task.attempts,

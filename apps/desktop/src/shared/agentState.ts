@@ -1,5 +1,15 @@
 import type { ChildOutcome } from './agentOutcome';
 import type { ChatSessionStatus, ChatSessionSummary } from './chat';
+import type { WorkerTask } from './orchestration';
+
+export const MISSING_TASK_RESULT_REASON = 'The attempt stopped without a structured result.';
+
+export function isUpdateOnlyTask(state: WorkerTask['state']): boolean {
+  return (
+    (state.status === 'completed' && state.accepted === true) ||
+    (state.status === 'blocked' && !state.decision && state.reason === MISSING_TASK_RESULT_REASON)
+  );
+}
 
 /*
  * An agent's state as the stage, the menu-bar summary and the mini Tavern show it. Shared so the
@@ -89,10 +99,7 @@ export function deriveTaskAgentState(
   // Queued or running with no live status (a pre-reply gap, a model switch, a restart) waits on nothing.
   if (task.status === 'queued' || task.status === 'running') return runtimeState;
   if (task.status === 'completed' && task.accepted && session.workerTask?.attentionViewed !== false) return 'done';
-  const updateOnly =
-    task.status === 'completed' ||
-    (task.status === 'blocked' && !task.decision && task.reason === 'The attempt stopped without a structured result.');
-  if (updateOnly && session.workerTask?.attentionViewed) return 'done';
+  if (isUpdateOnlyTask(task) && session.workerTask?.attentionViewed) return 'done';
   return task.status === 'canceled' ? 'stopped' : 'needs-you';
 }
 

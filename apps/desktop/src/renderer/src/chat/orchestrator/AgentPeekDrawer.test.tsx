@@ -2,7 +2,7 @@
 import { act } from 'react';
 import type { ChatMessage, ChatQueueEvent, ChatQueuedMessage, ChatToolCall } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AgentPeekDrawer } from './AgentPeekDrawer';
+import { AgentPeekDrawer, useSessionMessages } from './AgentPeekDrawer';
 import type { AgentView } from './roster';
 import type { WorkerTask } from '@shared/orchestration';
 import { assignPersonas } from '@shared/agentPersona';
@@ -119,6 +119,7 @@ const pressEnter = (init: KeyboardEventInit = {}) =>
 beforeEach(() => {
   vi.clearAllMocks();
   Element.prototype.scrollIntoView = vi.fn();
+  vi.spyOn(document, 'hasFocus').mockReturnValue(false);
   queueListener = null;
   queueListeners.clear();
   chat.getSession.mockResolvedValue(sessionWith('message 1', 'message 2', 'message 3', 'message 4'));
@@ -129,9 +130,39 @@ beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = { chat };
 });
 
-afterEach(() => themed.unmount());
+afterEach(() => {
+  themed.unmount();
+  vi.restoreAllMocks();
+});
 
 describe('AgentPeekDrawer', () => {
+  it('acknowledges a focused opening once, not refreshes or stream events', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    function Messages({ refreshKey, visible }: { refreshKey: string; visible: boolean }) {
+      useSessionMessages('a1', refreshKey, visible);
+      return null;
+    }
+    await themed.render(<Messages refreshKey="first" visible />);
+    const acknowledgements = () => chat.getSession.mock.calls.filter(([, viewed]) => viewed === true);
+    expect(acknowledgements()).toHaveLength(1);
+    await themed.render(<Messages refreshKey="next" visible />);
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        queueListener?.({ sessionId: 'a1', queued: [] });
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(acknowledgements()).toHaveLength(1);
+      expect(chat.getSession).toHaveBeenLastCalledWith('a1', false);
+    } finally {
+      vi.useRealTimers();
+    }
+    await themed.render(<Messages refreshKey="next" visible={false} />);
+    await themed.render(<Messages refreshKey="next" visible />);
+    expect(acknowledgements()).toHaveLength(2);
+  });
+
   it('keeps the task title and state without a redundant persona subtitle', async () => {
     const agent = agentFixture('a1', 'working', { title: 'Fix the flaky login test' });
     await renderDrawer(agent);
@@ -357,7 +388,7 @@ describe('AgentPeekDrawer', () => {
     it('shows the pending approval of a session that is not the active one', async () => {
       chat.getSession.mockResolvedValue(pendingSession());
       await renderDrawer(agentFixture('child-1', 'needs-you'));
-      expect(chat.getSession).toHaveBeenCalledWith('child-1', true);
+      expect(chat.getSession).toHaveBeenCalledWith('child-1', false);
       const pending = el('orchestrator-peek-conversation');
       expect(pending.querySelector('[data-testid="chat-tool-approval"]')).not.toBeNull();
       expect(pending.textContent).toContain('rm -rf build');

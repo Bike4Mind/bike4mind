@@ -24,6 +24,7 @@ import {
   type WorkerTask,
 } from '@shared/orchestration';
 import { randomUUID } from 'node:crypto';
+import { isUpdateOnlyTask, MISSING_TASK_RESULT_REASON } from '@shared/agentState';
 import { LOOP_HELP, parseLoop, type LoopResult, type LoopStart, type LoopState } from '@shared/loop';
 import { LoopScheduler, type LoopOutcome } from './LoopScheduler';
 import { realpath, stat } from 'node:fs/promises';
@@ -2708,25 +2709,9 @@ export class ChatService {
   async getSession(sessionId: string, viewed = false): Promise<ChatSession | null> {
     let session = await this.deps.store.get(sessionId);
     const task = session?.workerTask;
-    if (
-      viewed &&
-      task &&
-      !task.attentionViewed &&
-      (task.state.status === 'completed' ||
-        (task.state.status === 'blocked' &&
-          !task.state.decision &&
-          task.state.reason === 'The attempt stopped without a structured result.'))
-    ) {
+    if (viewed && task && !task.attentionViewed && isUpdateOnlyTask(task.state)) {
       const updated = await this.deps.store.updateWorkerTask(sessionId, current => {
-        if (
-          current.state.status !== 'completed' &&
-          !(
-            current.state.status === 'blocked' &&
-            !current.state.decision &&
-            current.state.reason === 'The attempt stopped without a structured result.'
-          )
-        )
-          return current;
+        if (!isUpdateOnlyTask(current.state)) return current;
         return { ...current, attentionViewed: true };
       });
       if (updated) this.deps.summaryChanged?.(updated);
@@ -7163,7 +7148,7 @@ export class ChatService {
                 ...task,
                 state: {
                   status: 'blocked',
-                  reason: 'The attempt stopped without a structured result.',
+                  reason: MISSING_TASK_RESULT_REASON,
                   evidence: ['Read the attempt transcript and request missing acceptance evidence.'],
                 },
               }
