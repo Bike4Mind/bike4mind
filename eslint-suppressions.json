@@ -1363,11 +1363,6 @@
       "count": 1
     }
   },
-  "apps/client/app/utils/performanceLogger.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 14
-    }
-  },
   "apps/client/app/utils/promise.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 3
