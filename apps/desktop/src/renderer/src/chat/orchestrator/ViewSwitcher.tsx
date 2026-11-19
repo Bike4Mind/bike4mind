@@ -82,6 +82,13 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     icon: <TableIcon />,
     ambient: false,
   },
+  plan: {
+    label: 'Plan',
+    description: 'Done, working on and next for every agent',
+    group: 'layout',
+    icon: <TableIcon />,
+    ambient: false,
+  },
   'tile-wall': {
     label: 'Tile Wall',
     description: 'A calm grid, one tile per agent',

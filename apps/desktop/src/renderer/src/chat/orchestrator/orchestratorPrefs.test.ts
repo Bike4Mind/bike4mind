@@ -36,6 +36,7 @@ describe('orchestratorPrefs', () => {
       'office',
       'board',
       'table',
+      'plan',
       'tile-wall',
       'swimlanes',
       'constellation',

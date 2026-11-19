@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { acceptViewAction, viewSnapshotSchema, type ViewApproval } from '@shared/viewSnapshot';
+import { acceptViewAction, VIEW_SNAPSHOT_CONTRACT, viewSnapshotSchema, type ViewApproval } from '@shared/viewSnapshot';
 import { agentFixture } from './testUtils';
 import { runViewAction, toViewSnapshot } from './viewSnapshot';
 import type { AgentView } from './roster';
@@ -239,5 +239,31 @@ describe('runViewAction', () => {
     await expect(runViewAction({ kind: 'approve', approvalId: 'p1', mode: 'once' }, host)).rejects.toThrow(
       'Already answered'
     );
+  });
+});
+
+describe('plan in the snapshot', () => {
+  it('copies an agent plan and omits it when there is none', () => {
+    const plan = { done: 1, total: 3, current: 'Wire it', next: 'Test it' };
+    const [withPlan, without] = toViewSnapshot(
+      'root',
+      [agentFixture('a', 'working', { plan }), agentFixture('b')],
+      {}
+    ).agents;
+    expect(withPlan.plan).toEqual(plan);
+    expect(without).not.toHaveProperty('plan');
+  });
+
+  it('is contract 2: strict inside plan, done never above total, contract 1 rejected', () => {
+    const snapshot = (plan: unknown, contract = 2) => ({
+      contract,
+      root: { id: 'root', state: 'idle' },
+      agents: [{ id: 'a', title: 'A', state: 'idle', parentId: 'root', depth: 1, updatedAt: '', plan }],
+    });
+    expect(VIEW_SNAPSHOT_CONTRACT).toBe(2);
+    expect(viewSnapshotSchema.safeParse(snapshot({ done: 1, total: 2, current: 'x' })).success).toBe(true);
+    expect(viewSnapshotSchema.safeParse(snapshot({ done: 1, total: 2, notes: 'x' })).success).toBe(false);
+    expect(viewSnapshotSchema.safeParse(snapshot({ done: 3, total: 2 })).success).toBe(false);
+    expect(viewSnapshotSchema.safeParse(snapshot({ done: 1, total: 2 }, 1)).success).toBe(false);
   });
 });

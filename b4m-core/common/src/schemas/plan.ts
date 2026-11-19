@@ -123,8 +123,15 @@ export function normalizePlan(value: unknown): NormalizedPlan {
   return { plan: { version: 1, source, items: items(input.items, 'items'), updatedAt }, warnings };
 }
 
+export interface PlanProgress {
+  done: number;
+  total: number;
+  current?: string;
+  next?: string;
+}
+
 /** Counts leaf work, not both a group and its children. Cancelled groups exclude their subtree. */
-export function planProgress(plan: Plan): { done: number; total: number; current?: string; next?: string } {
+export function planProgress(plan: Plan): PlanProgress {
   const leaves = plan.items
     .filter(item => item.status !== 'cancelled')
     .flatMap(item => (item.children?.length ? item.children : [item]))
