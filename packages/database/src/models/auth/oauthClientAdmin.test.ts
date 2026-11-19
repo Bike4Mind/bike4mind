@@ -144,6 +144,28 @@ describe('createOAuthClient', () => {
     ).rejects.toThrow(/requires a federated/);
   });
 
+  it('refuses unpaidAccountLimits on a non-federated client at create and update', async () => {
+    const limits = { requestsPerMinute: 10, requestsPerDay: 500, tokensPerMinute: 20_000, maxConcurrent: 2 };
+    await expect(createOAuthClient({ ...base, unpaidAccountLimits: limits })).rejects.toThrow(
+      /Unpaid account limits require a federated client/
+    );
+    const { client } = await createOAuthClient(base);
+    await expect(updateOAuthClient(client.id, { unpaidAccountLimits: limits })).rejects.toThrow(
+      /Unpaid account limits require a federated client/
+    );
+  });
+
+  it('refuses removing federation while unpaidAccountLimits are stored unless they are cleared too', async () => {
+    const limits = { requestsPerMinute: 10, requestsPerDay: 500, tokensPerMinute: 20_000, maxConcurrent: 2 };
+    const { client } = await createOAuthClient({ ...federated, unpaidAccountLimits: limits });
+    await expect(updateOAuthClient(client.id, { federatedIdp: null })).rejects.toThrow(
+      /Unpaid account limits require a federated client/
+    );
+    const removed = await updateOAuthClient(client.id, { federatedIdp: null, unpaidAccountLimits: null });
+    expect(removed.after.federatedIdp).toBeUndefined();
+    expect(removed.after.unpaidAccountLimits).toBeUndefined();
+  });
+
   it('stores only a bcrypt hash that verifies against the returned secret', async () => {
     const { client, clientSecret } = await createOAuthClient(base);
 

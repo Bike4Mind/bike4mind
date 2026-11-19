@@ -74,10 +74,19 @@ vi.mock('@bike4mind/services', async importOriginal => ({
 }));
 
 const resolveUntrustedKeyLimits = vi.hoisted(() =>
-  vi.fn(async (_owner: unknown, key: { rateLimit: { requestsPerMinute: number; requestsPerDay: number } }) => ({
-    rateLimit: key.rateLimit,
-    ownerUntrusted: false,
-  }))
+  vi.fn(
+    async (
+      _owner: unknown,
+      key: { rateLimit: { requestsPerMinute: number; requestsPerDay: number } }
+    ): Promise<{
+      rateLimit: { requestsPerMinute: number; requestsPerDay: number };
+      ownerUntrusted: boolean;
+      unpaidAccountLimits?: Record<string, number>;
+    }> => ({
+      rateLimit: key.rateLimit,
+      ownerUntrusted: false,
+    })
+  )
 );
 vi.mock('../utils/apiKeyTrust', () => ({ resolveUntrustedKeyLimits }));
 const refuseIfSuspendedOwner = vi.hoisted(() => vi.fn(async (_key: string, _logger?: unknown) => undefined));
@@ -715,6 +724,22 @@ describe('verifyApiKey exchange keys', () => {
       keyId: 'k1',
       oauthExchangeClientId: 'client-1',
     });
+  });
+
+  it('judges the exchange client and returns its unpaid account limits', async () => {
+    const unpaidAccountLimits = { requestsPerMinute: 5, requestsPerDay: 50, tokensPerMinute: 300, maxConcurrent: 1 };
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(exchangeKey);
+    resolveUntrustedKeyLimits.mockResolvedValueOnce({
+      rateLimit: { requestsPerMinute: 5, requestsPerDay: 50 },
+      ownerUntrusted: true,
+      unpaidAccountLimits,
+    });
+    const info = await verifyApiKey({}, { allowExchangeKeys: true });
+    expect(resolveUntrustedKeyLimits).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'u1' }),
+      expect.objectContaining({ oauthExchangeClientId: 'client-1' })
+    );
+    expect(info.unpaidAccountLimits).toEqual(unpaidAccountLimits);
   });
 
   it('passes the exchange client to the gate, so a starter-only owner is admitted only for that key', async () => {

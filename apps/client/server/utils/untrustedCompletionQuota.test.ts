@@ -329,6 +329,22 @@ describe('admitApiKeyCompletion', () => {
       const error = await rejectionOf(admitApiKeyCompletion({ owner, holdSlot: true }));
       expect(error.additionalInfo).toMatchObject({ errorCode: CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE, limit: 2 });
     });
+
+    it('takes no slot when the caller does not hold one for the completion', async () => {
+      expect(await admitApiKeyCompletion({ owner, holdSlot: false })).toBe(NO_COMPLETION_QUOTA);
+      expect(mocks.tryAcquireLease).not.toHaveBeenCalled();
+    });
+
+    it('logs a failed release, leaving the lease to lapse', async () => {
+      const error = new Error('db down');
+      mocks.releaseLease.mockRejectedValue(error);
+      const grant = await admitApiKeyCompletion({ owner, holdSlot: true });
+      await expect(grant.release()).resolves.toBeUndefined();
+      expect(mocks.warn).toHaveBeenCalledWith('Failed to release API completion quota slot; waiting for lease expiry', {
+        userId: owner.id,
+        error,
+      });
+    });
   });
 
   describe('unpaid account limits override', () => {
@@ -366,22 +382,6 @@ describe('admitApiKeyCompletion', () => {
       } as unknown as Parameters<typeof admitRequestCompletion>[0];
       await admitRequestCompletion(req, { holdSlot: true });
       expect(mocks.tryAcquireLease.mock.calls[0][2]).toBe(1);
-    });
-
-    it('takes no slot when the caller does not hold one for the completion', async () => {
-      expect(await admitApiKeyCompletion({ owner, holdSlot: false })).toBe(NO_COMPLETION_QUOTA);
-      expect(mocks.tryAcquireLease).not.toHaveBeenCalled();
-    });
-
-    it('logs a failed release, leaving the lease to lapse', async () => {
-      const error = new Error('db down');
-      mocks.releaseLease.mockRejectedValue(error);
-      const grant = await admitApiKeyCompletion({ owner, holdSlot: true });
-      await expect(grant.release()).resolves.toBeUndefined();
-      expect(mocks.warn).toHaveBeenCalledWith('Failed to release API completion quota slot; waiting for lease expiry', {
-        userId: owner.id,
-        error,
-      });
     });
   });
 });

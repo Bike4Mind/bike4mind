@@ -120,6 +120,10 @@ export async function createOAuthClient(input: CreateOAuthClientInput): Promise<
     throw new BadRequestError(error instanceof Error ? error.message : String(error));
   }
 
+  if (data.unpaidAccountLimits && !federatedIdp) {
+    throw new BadRequestError('Unpaid account limits require a federated client');
+  }
+
   const clientSecret = generateOAuthClientSecret();
   const doc = await OAuthClientModel.create({
     clientId,
@@ -206,6 +210,11 @@ export async function updateOAuthClient(
   const finalRateLimit = data.rateLimit === undefined ? before.rateLimit : data.rateLimit;
   if (finalRateLimit && !finalFederated) {
     throw new BadRequestError('A rate-limit profile requires a federated client');
+  }
+  const finalUnpaidAccountLimits =
+    data.unpaidAccountLimits === undefined ? before.unpaidAccountLimits : data.unpaidAccountLimits;
+  if (finalUnpaidAccountLimits && !finalFederated) {
+    throw new BadRequestError('Unpaid account limits require a federated client');
   }
   const finalScopes = data.allowedScopes ?? before.allowedScopes;
   const grantsOptIn = nonOptInScopes(finalScopes).length < finalScopes.length;
