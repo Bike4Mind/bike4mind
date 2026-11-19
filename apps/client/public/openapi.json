@@ -66774,7 +66774,7 @@
       "post": {
         "operationId": "publishArtifact",
         "summary": "Publish an artifact",
-        "description": "Publishes the artifact's current version as a web page, reading the stored content on the server, and returns its absolute URL. `access_gate` is applied in the same request as `visibility`, so a gated page is never reachable without its gate. The artifact itself is unchanged. An artifact has at most one page: to refresh it after editing, call `POST /api/v1/artifacts/{id}/republish`; to take it down, `DELETE /api/v1/artifacts/{id}/publish`. React artifacts publish as a single file. Unknown body fields are rejected.",
+        "description": "Publishes the artifact's current version as a web page, reading the stored content on the server, and returns its absolute URL. `access_gate` is applied in the same request as `visibility`, so a gated page is never reachable without its gate. The artifact itself is unchanged. A normal publish reuses a stable generated slug and rejects an existing page; use the returned page for subsequent updates. Concurrent requests with different explicit slugs are not serialized per artifact. To refresh a page, call `POST /api/v1/artifacts/{id}/republish`; to take it down, `DELETE /api/v1/artifacts/{id}/publish`. React artifacts publish as a single file. Unknown body fields are rejected.",
         "tags": [
           "Artifacts"
         ],
@@ -67998,6 +67998,60 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The page changed or a revision is in progress. Reload it before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }

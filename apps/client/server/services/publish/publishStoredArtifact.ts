@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
+import mongoose from 'mongoose';
 import {
   PUBLISH_LIMITS,
   SlugSchema,
@@ -23,6 +24,11 @@ import {
   UnprocessableEntityError,
 } from '@bike4mind/server-utils/utils/errors';
 import { buildPublishS3KeyPrefix, buildPublishUrlPath } from '@bike4mind/server-utils/services/publish/paths';
+import {
+  downloadPublishedIndex,
+  deleteRetiredPublishedIndex,
+  publishedContentSnapshotFilter,
+} from '@bike4mind/server-utils/services/publish/currentIndex';
 import { validateBundle } from '@bike4mind/server-utils/services/publish/validateBundle';
 import { invalidatePublishCdn, toCacheTarget } from '@bike4mind/server-utils/services/publish/invalidatePublishCdn';
 import { assertPublicationPublicLink } from './organizationPolicy';
@@ -41,7 +47,7 @@ import type { PublishUser } from './checkScopePermission';
  * Publishes a STORED artifact as a page: the server reads the content, renders it with the same
  * renderer `finalize` uses, and writes the page and its record in one call, with the access gate set
  * in the same write as the visibility. Backs the public `/api/v1/artifacts/{id}/publish` family;
- * the web app keeps the upload-url -> PUT -> finalize flow, whose handlers are untouched.
+ * the web app keeps the upload-url -> PUT -> finalize flow and its canonical object writes.
  *
  * Only the user tier is reachable from here: the page lives at `user/<ownerId>/<slug>`, and the
  * stored artifact's owner is the only caller allowed to publish it.
@@ -88,6 +94,8 @@ interface PreviousPage {
   visibility: PublishVisibility;
   size: { totalBytes: number; fileCount: number };
   sha256Index?: string;
+  storageKeyPrefix: string;
+  indexObjectPath?: string | null;
   versions?: Array<{ sha256Index: string; indexBytes?: number }>;
   shareTokens?: PublishedArtifactShareToken[];
 }
@@ -170,11 +178,13 @@ function findPreviousPage(artifactId: string, userId: string) {
     scopeId: userId,
     deletedAt: null,
   })
-    .select('publicId slug publishedAt ownerId lastPublishedBy visibility size sha256Index versions shareTokens')
+    .select(
+      'publicId slug publishedAt ownerId lastPublishedBy visibility size sha256Index storageKeyPrefix indexObjectPath versions shareTokens'
+    )
     .lean<PreviousPage | null>();
 }
 
-/** Promotes the rendered page to its canonical key and upserts the record. Refunds the publish action on failure. */
+/** Stages owned immutable bytes before an insert or exact-generation metadata switch. */
 async function writePage(
   input: Omit<PublishCommon, 'content'> & {
     slug: string;
@@ -193,10 +203,13 @@ async function writePage(
     sha256: page.sha256,
   };
 
-  // The prior index.html is archived before it is overwritten, so its bytes survive in version history.
+  // Archive the exact previous payload; a concurrent canonical write cannot become the wrong version.
   const priorIndex = previous?.sha256Index
-    ? await storage.download(`${canonicalPrefix}index.html`).catch(() => null)
+    ? await downloadPublishedIndex({ ...previous, storageKeyPrefix: canonicalPrefix }, storage)
     : null;
+  if (priorIndex && createHash('sha256').update(priorIndex).digest('hex') !== previous?.sha256Index) {
+    throw new ConflictError('The published page changed. Reload it before republishing.');
+  }
 
   const now = new Date();
   const haveShas = new Set((previous?.versions ?? []).map(v => v.sha256Index));
@@ -237,60 +250,82 @@ async function writePage(
   }
 
   const action = await consumePublishAction({ id: user.id, isAdmin: user.isAdmin, createdAt: user.createdAt });
+  const indexObjectPath = `revisions/${randomUUID()}/index.html`;
+  const indexKey = `${canonicalPrefix}${indexObjectPath}`;
+  const publicId = previous?.publicId ?? randomUUID().replace(/-/g, '').slice(0, 12);
+  let commitState: 'not_attempted' | 'unknown' | 'committed' = 'not_attempted';
   try {
     if (previous?.sha256Index && priorIndex) {
-      await storage
-        .upload(priorIndex, `${canonicalPrefix}versions/${previous.sha256Index}.html`, { ContentType: 'text/html' })
-        .catch(() => undefined);
+      await storage.upload(priorIndex, `${canonicalPrefix}versions/${previous.sha256Index}.html`, {
+        ContentType: 'text/html',
+      });
     }
-    await storage.upload(page.buffer, `${canonicalPrefix}index.html`, { ContentType: 'text/html' });
-
-    const publicId = previous?.publicId ?? randomUUID().replace(/-/g, '').slice(0, 12);
-    const saved = await PublishedArtifact.findOneAndUpdate(
-      // ownerId in the filter: a slug that changed hands after the lookup collides on the unique index.
-      { tier: 'user', scopeId: user.id, slug, deletedAt: null, ownerId: user.id },
-      {
-        $set: {
-          publicId,
-          title: artifact.title,
-          ownerId: user.id,
-          lastPublishedBy: user.id,
-          source: { kind: 'bundle', artifactId: artifact.id, artifactType: artifact.type },
-          storageKeyPrefix: canonicalPrefix,
-          size: { totalBytes: page.buffer.length, fileCount: 1 },
-          sha256Index: page.sha256,
-          manifest: [manifestFile],
-          publishedAt: now,
-          previousVersionMeta: previous
-            ? {
-                publishedAt: previous.publishedAt,
-                publishedBy: previous.lastPublishedBy ?? previous.ownerId,
-                size: previous.size,
-                sha256Index: previous.sha256Index ?? '',
-              }
-            : undefined,
-          // Visibility and gate are written together and only on the first publish: a republish
-          // keeps whatever the owner has since set on the page.
-          ...(settings
-            ? {
-                visibility: settings.visibility,
-                commentPolicy: 'none',
-                ...(settings.accessGate ? { accessGate: settings.accessGate } : {}),
-              }
-            : {}),
-        },
-        $push: { versions: { $each: versionsToPush } },
-      },
-      // A republish never inserts: a page unpublished since the lookup must not be recreated without its settings.
-      { upsert: !previous, new: true, runValidators: true }
-    ).catch((err: unknown) => {
-      if (isDuplicateKeyError(err)) return null;
-      throw err;
-    });
+    await storage.upload(page.buffer, indexKey, { ContentType: 'text/html' });
+    const fields = {
+      publicId,
+      title: artifact.title,
+      ownerId: user.id,
+      lastPublishedBy: user.id,
+      source: { kind: 'bundle', artifactId: artifact.id, artifactType: artifact.type },
+      storageKeyPrefix: canonicalPrefix,
+      indexObjectPath,
+      size: { totalBytes: page.buffer.length, fileCount: 1 },
+      sha256Index: page.sha256,
+      manifest: [manifestFile],
+      publishedAt: now,
+      previousVersionMeta: previous
+        ? {
+            publishedAt: previous.publishedAt,
+            publishedBy: previous.lastPublishedBy ?? previous.ownerId,
+            size: previous.size,
+            sha256Index: previous.sha256Index ?? '',
+          }
+        : undefined,
+      // Visibility and gate are written together and only on the first publish: a republish
+      // keeps whatever the owner has since set on the page.
+      ...(settings
+        ? {
+            visibility: settings.visibility,
+            commentPolicy: 'none',
+            ...(settings.accessGate ? { accessGate: settings.accessGate } : {}),
+          }
+        : {}),
+    };
+    commitState = 'unknown';
+    const saved = previous
+      ? await PublishedArtifact.findOneAndUpdate(
+          {
+            publicId: previous.publicId,
+            tier: 'user',
+            scopeId: user.id,
+            slug,
+            deletedAt: null,
+            ownerId: user.id,
+            'source.artifactId': artifact.id,
+            ...publishedContentSnapshotFilter(previous),
+            revisingAt: null,
+          },
+          { $set: fields, $push: { versions: { $each: versionsToPush } } },
+          { upsert: false, new: true, runValidators: true }
+        )
+      : await PublishedArtifact.create({
+          ...fields,
+          tier: 'user',
+          scopeId: user.id,
+          slug,
+          versions: versionsToPush,
+        });
     if (!saved) {
-      throw previous
-        ? new NotFoundError('Artifact is not published')
-        : new ConflictError('This slug was published by another request');
+      commitState = 'not_attempted';
+      throw new ConflictError('The published page changed or is being revised. Reload it before republishing.');
+    }
+    commitState = 'committed';
+    if (previous && priorIndex) {
+      await deleteRetiredPublishedIndex({ ...previous, storageKeyPrefix: canonicalPrefix }, storage, error => {
+        logger.warn(
+          `[PUBLISH] ${publicId} could not remove a retired page payload: ${error instanceof Error ? error.message : String(error)}`
+        );
+      });
     }
 
     // A public page is CDN-cached, so a republish must purge the prior copy.
@@ -311,9 +346,27 @@ async function writePage(
       publishedVersion: artifact.version,
       publishedAt: now,
     };
-  } catch (err) {
-    await action.refund();
-    throw err;
+  } catch (error) {
+    if (
+      commitState === 'unknown' &&
+      (isDuplicateKeyError(error) ||
+        error instanceof mongoose.Error.ValidationError ||
+        error instanceof mongoose.Error.CastError)
+    )
+      commitState = 'not_attempted';
+    if (commitState === 'not_attempted') {
+      await action.refund();
+      await storage.delete(indexKey).catch((cleanupError: unknown) => {
+        logger.warn(
+          `[PUBLISH] ${publicId} could not remove an uncommitted page payload: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`
+        );
+      });
+    } else if (commitState === 'unknown') {
+      // A lost acknowledgement can follow a committed write; its payload and counted action must survive.
+      logger.warn(`[PUBLISH] ${publicId} metadata write is unconfirmed; retaining its payload and counted action`);
+    }
+    if (isDuplicateKeyError(error)) throw new ConflictError('This slug was published by another request');
+    throw error;
   }
 }
 

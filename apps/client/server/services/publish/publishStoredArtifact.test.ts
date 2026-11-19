@@ -1,7 +1,10 @@
+import { createHash } from 'node:crypto';
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const m = vi.hoisted(() => ({
+  create: vi.fn(),
+  remove: vi.fn(),
   findOne: vi.fn(),
   exists: vi.fn(),
   findOneAndUpdate: vi.fn(),
@@ -28,13 +31,14 @@ const query = (value: unknown) => ({
 vi.mock('@bike4mind/database', () => ({
   liveShareTokens: (page: { shareTokens?: unknown[] }) => page.shareTokens ?? [],
   PublishedArtifact: {
+    create: (...a: unknown[]) => m.create(...a),
     findOne: (...a: unknown[]) => m.findOne(...a),
     exists: (...a: unknown[]) => m.exists(...a),
     findOneAndUpdate: (...a: unknown[]) => m.findOneAndUpdate(...a),
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
-  getPublishedArtifactsStorage: () => ({ upload: m.upload, download: m.download }),
+  getPublishedArtifactsStorage: () => ({ upload: m.upload, download: m.download, delete: m.remove }),
 }));
 vi.mock('@bike4mind/server-utils/utils/publishThumbnails', () => ({
   enqueuePublishThumbnail: (...a: unknown[]) => m.enqueuePublishThumbnail(...a),
@@ -71,6 +75,7 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 const user = { id: 'user-1', isAdmin: false, createdAt: new Date('2025-01-01') };
 const artifact = { id: 'art-1', type: 'code' as const, title: 'Signup flow', version: 3 };
 
+const oldSha = createHash('sha256').update('old').digest('hex');
 const previousPage = {
   publicId: 'abc123def456',
   slug: 'signup-flow',
@@ -78,8 +83,8 @@ const previousPage = {
   ownerId: 'user-1',
   visibility: 'public',
   size: { totalBytes: 10, fileCount: 1 },
-  sha256Index: 'old-sha',
-  versions: [{ sha256Index: 'old-sha', indexBytes: 10 }],
+  sha256Index: oldSha,
+  versions: [{ sha256Index: oldSha, indexBytes: 10 }],
 };
 
 function savedDoc(overrides: Record<string, unknown> = {}) {
@@ -95,6 +100,9 @@ beforeEach(() => {
   m.consumePublishAction.mockResolvedValue({ refund: m.refund });
   m.assertPublicationPublicLink.mockResolvedValue(undefined);
   m.upload.mockResolvedValue(undefined);
+  m.remove.mockResolvedValue(undefined);
+  m.refund.mockResolvedValue(undefined);
+  m.create.mockImplementation(() => Promise.resolve(savedDoc()));
   m.download.mockResolvedValue(Buffer.from('old'));
   m.findOneAndUpdate.mockImplementation(() => Promise.resolve(savedDoc()));
   m.invalidatePublishCdn.mockResolvedValue(undefined);
@@ -112,7 +120,9 @@ describe('publishStoredArtifact', () => {
 
   it('inserts on a first publish', async () => {
     await publishStoredArtifact({ ...base, visibility: 'public' });
-    expect(m.findOneAndUpdate.mock.calls[0][2]).toMatchObject({ upsert: true });
+    expect(m.create).toHaveBeenCalledTimes(1);
+    expect(m.create.mock.calls[0][0]).toMatchObject({ tier: 'user', scopeId: user.id, slug: base.slug });
+    expect(m.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
   it('writes the access gate in the same record write as the visibility', async () => {
@@ -122,8 +132,8 @@ describe('publishStoredArtifact', () => {
       accessGate: { kind: 'passphrase', passphrase: 'correct-horse' },
     });
 
-    expect(m.findOneAndUpdate).toHaveBeenCalledTimes(1);
-    const update = m.findOneAndUpdate.mock.calls[0][1].$set;
+    expect(m.create).toHaveBeenCalledTimes(1);
+    const update = m.create.mock.calls[0][0];
     expect(update.visibility).toBe('public');
     expect(update.accessGate.kind).toBe('passphrase');
     expect(update.accessGate.passphraseHash).toMatch(/^\$2[aby]\$/);
@@ -197,7 +207,7 @@ describe('publishStoredArtifact', () => {
   });
 
   it('answers 409 when another request took the slug between the check and the write', async () => {
-    m.findOneAndUpdate.mockImplementation(() => Promise.reject(Object.assign(new Error('dup'), { code: 11000 })));
+    m.create.mockImplementation(() => Promise.reject(Object.assign(new Error('dup'), { code: 11000 })));
     await expect(publishStoredArtifact({ ...base, visibility: 'public' })).rejects.toMatchObject({ statusCode: 409 });
     expect(m.refund).toHaveBeenCalledTimes(1);
   });
@@ -214,7 +224,7 @@ describe('publishStoredArtifact generated slug', () => {
   it('derives the slug from the title and the artifact id, so it is stable across calls', async () => {
     await publishStoredArtifact(noSlug);
     await publishStoredArtifact(noSlug);
-    const slugs = m.findOneAndUpdate.mock.calls.map(c => c[0].slug);
+    const slugs = m.create.mock.calls.map(c => c[0].slug);
     expect(slugs[0]).toMatch(/^signup-flow-[0-9a-f]{6}$/);
     expect(slugs[1]).toBe(slugs[0]);
   });
@@ -222,12 +232,12 @@ describe('publishStoredArtifact generated slug', () => {
   it('gives different artifacts with the same title different slugs', async () => {
     await publishStoredArtifact(noSlug);
     await publishStoredArtifact({ ...noSlug, artifact: { ...artifact, id: 'art-2' } });
-    const slugs = m.findOneAndUpdate.mock.calls.map(c => c[0].slug);
+    const slugs = m.create.mock.calls.map(c => c[0].slug);
     expect(slugs[1]).not.toBe(slugs[0]);
   });
 
   it('answers 409 for the loser of two concurrent slugless publishes of one artifact', async () => {
-    m.findOneAndUpdate.mockImplementation(() => Promise.reject(Object.assign(new Error('dup'), { code: 11000 })));
+    m.create.mockImplementation(() => Promise.reject(Object.assign(new Error('dup'), { code: 11000 })));
     await expect(publishStoredArtifact(noSlug)).rejects.toMatchObject({ statusCode: 409 });
   });
 });
@@ -249,7 +259,7 @@ describe('republishStoredArtifact', () => {
     const set = m.findOneAndUpdate.mock.calls[0][1].$set;
     expect(set).not.toHaveProperty('visibility');
     expect(set).not.toHaveProperty('accessGate');
-    expect(set.previousVersionMeta.sha256Index).toBe('old-sha');
+    expect(set.previousVersionMeta.sha256Index).toBe(oldSha);
     expect(page.slug).toBe('signup-flow');
   });
 
@@ -271,10 +281,10 @@ describe('republishStoredArtifact', () => {
     expect(m.assertPublicationPublicLink).not.toHaveBeenCalled();
   });
 
-  it('never inserts: a page unpublished since the lookup answers 404 instead of being recreated', async () => {
+  it('never inserts: a page changed since lookup answers 409 instead of being recreated', async () => {
     m.findOne.mockReturnValue(query(previousPage));
     m.findOneAndUpdate.mockImplementation(() => Promise.resolve(null));
-    await expect(republishStoredArtifact(base)).rejects.toMatchObject({ statusCode: 404 });
+    await expect(republishStoredArtifact(base)).rejects.toMatchObject({ statusCode: 409 });
     expect(m.findOneAndUpdate.mock.calls[0][2]).toMatchObject({ upsert: false });
     expect(m.refund).toHaveBeenCalledTimes(1);
   });
@@ -283,7 +293,8 @@ describe('republishStoredArtifact', () => {
     m.findOne.mockReturnValue(query(previousPage));
     await republishStoredArtifact(base);
     const keys = m.upload.mock.calls.map(c => c[1]);
-    expect(keys).toEqual(['user/user-1/signup-flow/versions/old-sha.html', 'user/user-1/signup-flow/index.html']);
+    expect(keys[0]).toBe(`user/user-1/signup-flow/versions/${oldSha}.html`);
+    expect(keys[1]).toMatch(/^user\/user-1\/signup-flow\/revisions\/[0-9a-f-]{36}\/index\.html$/);
   });
 });
 
@@ -306,5 +317,37 @@ describe('unpublishStoredArtifact', () => {
     m.findOne.mockReturnValue(query({ publicId: 'p1', visibility: 'private', softDelete: m.softDelete }));
     await unpublishStoredArtifact({ user, artifactId: 'art-1', logger });
     expect(m.invalidatePublishCdn).not.toHaveBeenCalled();
+  });
+});
+
+describe('publication write outcomes', () => {
+  const base = {
+    user,
+    artifact,
+    content: 'graph TD; A-->B',
+    logger,
+    slug: 'signup-flow',
+    visibility: 'public',
+  } as const;
+  it('retains payload and allowance when the database acknowledgement is ambiguous', async () => {
+    m.create.mockRejectedValue(new Error('connection lost after write'));
+    await expect(publishStoredArtifact(base)).rejects.toThrow('connection lost after write');
+    expect(m.remove).not.toHaveBeenCalled();
+    expect(m.refund).not.toHaveBeenCalled();
+  });
+  it('retains a committed payload and allowance if follow-up thumbnail work throws', async () => {
+    m.enqueuePublishThumbnail.mockRejectedValueOnce(new Error('unexpected follow-up error'));
+    await expect(publishStoredArtifact(base)).rejects.toThrow('unexpected follow-up error');
+    expect(m.create).toHaveBeenCalledTimes(1);
+    expect(m.remove).not.toHaveBeenCalled();
+    expect(m.refund).not.toHaveBeenCalled();
+  });
+  it('does not replace the live pointer if archiving the prior version fails', async () => {
+    m.findOne.mockReturnValue(query(previousPage));
+    m.upload.mockRejectedValueOnce(new Error('archive unavailable'));
+    await expect(republishStoredArtifact(base)).rejects.toThrow('archive unavailable');
+    expect(m.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(m.refund).toHaveBeenCalledTimes(1);
+    expect(m.remove).toHaveBeenCalledTimes(1);
   });
 });

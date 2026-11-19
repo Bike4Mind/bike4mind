@@ -1633,7 +1633,7 @@ export interface paths {
     put?: never;
     /**
      * Publish an artifact
-     * @description Publishes the artifact's current version as a web page, reading the stored content on the server, and returns its absolute URL. `access_gate` is applied in the same request as `visibility`, so a gated page is never reachable without its gate. The artifact itself is unchanged. An artifact has at most one page: to refresh it after editing, call `POST /api/v1/artifacts/{id}/republish`; to take it down, `DELETE /api/v1/artifacts/{id}/publish`. React artifacts publish as a single file. Unknown body fields are rejected.
+     * @description Publishes the artifact's current version as a web page, reading the stored content on the server, and returns its absolute URL. `access_gate` is applied in the same request as `visibility`, so a gated page is never reachable without its gate. The artifact itself is unchanged. A normal publish reuses a stable generated slug and rejects an existing page; use the returned page for subsequent updates. Concurrent requests with different explicit slugs are not serialized per artifact. To refresh a page, call `POST /api/v1/artifacts/{id}/republish`; to take it down, `DELETE /api/v1/artifacts/{id}/publish`. React artifacts publish as a single file. Unknown body fields are rejected.
      */
     post: operations['publishArtifact'];
     /**
@@ -29445,6 +29445,29 @@ export interface operations {
           'X-Request-ID'?: string;
           /** @description The methods this path serves. GET implies HEAD. */
           Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The page changed or a revision is in progress. Reload it before retrying. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
           [name: string]: unknown;
         };
         content: {
