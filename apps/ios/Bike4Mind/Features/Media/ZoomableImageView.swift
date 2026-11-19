@@ -1,3 +1,4 @@
+import B4MKit
 import SwiftUI
 
 /// An image you can pinch to zoom, drag while zoomed, and double-tap to toggle between fit and 3x.
@@ -39,7 +40,12 @@ struct ZoomableImageView: View {
       case .failure:
         Color.clear.task { await onFailure() }
       default:
-        ProgressView().tint(.white)
+        // The grid's thumbnail stands in until the full-size image arrives.
+        if let thumbnail = ThumbnailCache.shared.cachedImage(for: url) {
+          Image(decorative: thumbnail, scale: 1).resizable().scaledToFit()
+        } else {
+          ProgressView().tint(.white)
+        }
       }
     }
   }
