@@ -130,9 +130,9 @@ export function groupSessions(
 
 /**
  * Which visible sessions hang under which top-level row, keyed by that row's id. A child stays
- * where the user put it when they put it somewhere on purpose - pinned, or filed in a section of their own - and falls back to its own
- * row when its parent is archived, deleted or in the other mode, since there is nothing visible
- * to hang it under.
+ * where the user put it when they put it somewhere on purpose - pinned, or filed in a section of
+ * their own - and falls back to its own row when its parent is archived, deleted or in the other
+ * mode, since there is nothing visible to hang it under.
  */
 function nestSpawned(
   visible: readonly ChatSessionSummary[],
