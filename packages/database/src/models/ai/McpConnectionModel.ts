@@ -296,6 +296,8 @@ const SUMMARY_PROJECTION = { 'tools.inputSchema': 0 };
 
 const WITH_CREDENTIALS = MCP_CONNECTION_SECRET_PATHS.map(path => `+${path}`).join(' ');
 
+const PLATFORM_LAST_USED_INTERVAL_MS = 60_000;
+
 /** `create` returns the inserted values, which include any secrets the caller just wrote. */
 function stripSecrets<T extends IMcpConnectionDocument>(doc: T): T {
   for (const path of MCP_CONNECTION_SECRET_PATHS) {
@@ -878,9 +880,18 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     return result?.toJSON() ?? null;
   }
 
+  /** Every user's calls land on a platform row, so it records at most one use a minute. */
   async markUsed(id: string): Promise<void> {
     if (!mongoose.isObjectIdOrHexString(id)) return;
-    await this.model.updateOne({ _id: id }, { $set: { lastUsedAt: new Date() } });
+    const now = new Date();
+    const cutoff = new Date(now.getTime() - PLATFORM_LAST_USED_INTERVAL_MS);
+    await this.model.updateOne(
+      {
+        _id: id,
+        $or: [{ ownerType: { $ne: 'platform' } }, { lastUsedAt: null }, { lastUsedAt: { $lt: cutoff } }],
+      },
+      { $set: { lastUsedAt: now } }
+    );
   }
 
   /**

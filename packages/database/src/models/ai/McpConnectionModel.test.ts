@@ -1608,6 +1608,29 @@ describe('McpConnectionModel', () => {
       expect((await mcpConnectionRepository.listForUser('user-2')).map(c => c.ownerType)).toEqual(['platform']);
     });
 
+    it('records a use at most once a minute, while a user connection records every use', async () => {
+      const shared = await mcpConnectionRepository.create(platformConnection());
+      const own = await mcpConnectionRepository.create(apiKeyConnection({ slug: 'mine' }));
+      const lastUsed = async (id: string) => (await McpConnection.findById(id))?.lastUsedAt?.getTime();
+      const setLastUsed = (id: string, at: Date) => McpConnection.updateOne({ _id: id }, { $set: { lastUsedAt: at } });
+
+      await mcpConnectionRepository.markUsed(shared.id);
+      expect(await lastUsed(shared.id)).toEqual(expect.any(Number));
+
+      const recent = new Date(Date.now() - 10_000);
+      await setLastUsed(shared.id, recent);
+      await setLastUsed(own.id, recent);
+      await mcpConnectionRepository.markUsed(shared.id);
+      await mcpConnectionRepository.markUsed(own.id);
+      expect(await lastUsed(shared.id)).toBe(recent.getTime());
+      expect(await lastUsed(own.id)).toBeGreaterThan(recent.getTime());
+
+      const old = new Date(Date.now() - 61_000);
+      await setLastUsed(shared.id, old);
+      await mcpConnectionRepository.markUsed(shared.id);
+      expect(await lastUsed(shared.id)).toBeGreaterThan(old.getTime());
+    });
+
     it('keeps platform slugs unique among themselves and lists them', async () => {
       await mcpConnectionRepository.create(platformConnection());
       await mcpConnectionRepository.create(platformConnection({ slug: 'wiki' }));
