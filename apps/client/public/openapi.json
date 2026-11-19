@@ -23594,10 +23594,17 @@
                   "enum": [
                     "public",
                     "organization",
+                    "space",
                     "unlisted"
                   ]
                 },
                 "organization_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "space_id": {
                   "type": [
                     "string",
                     "null"
@@ -23701,6 +23708,7 @@
                 "description",
                 "visibility",
                 "organization_id",
+                "space_id",
                 "tags",
                 "status",
                 "author_name",
@@ -23749,10 +23757,17 @@
                 "enum": [
                   "public",
                   "organization",
+                  "space",
                   "unlisted"
                 ]
               },
               "organization_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "space_id": {
                 "type": [
                   "string",
                   "null"
@@ -23856,6 +23871,7 @@
               "description",
               "visibility",
               "organization_id",
+              "space_id",
               "tags",
               "status",
               "author_name",
@@ -24200,10 +24216,17 @@
                 "enum": [
                   "public",
                   "organization",
+                  "space",
                   "unlisted"
                 ]
               },
               "organization_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "space_id": {
                 "type": [
                   "string",
                   "null"
@@ -24307,6 +24330,7 @@
               "description",
               "visibility",
               "organization_id",
+              "space_id",
               "tags",
               "status",
               "author_name",
@@ -24557,6 +24581,7 @@
             "enum": [
               "public",
               "organization",
+              "space",
               "unlisted"
             ]
           },
@@ -24564,6 +24589,11 @@
             "type": "string",
             "minLength": 1,
             "description": "Required for `organization` visibility, unless you belong to exactly one organization."
+          },
+          "space_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Required for `space` visibility; you must belong to the Space."
           },
           "tags": {
             "type": "array",
@@ -24608,10 +24638,17 @@
                   "enum": [
                     "public",
                     "organization",
+                    "space",
                     "unlisted"
                   ]
                 },
                 "organization_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "space_id": {
                   "type": [
                     "string",
                     "null"
@@ -24935,6 +24972,7 @@
                 "description",
                 "visibility",
                 "organization_id",
+                "space_id",
                 "tags",
                 "status",
                 "author_name",
@@ -24984,10 +25022,17 @@
                 "enum": [
                   "public",
                   "organization",
+                  "space",
                   "unlisted"
                 ]
               },
               "organization_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "space_id": {
                 "type": [
                   "string",
                   "null"
@@ -25091,6 +25136,7 @@
               "description",
               "visibility",
               "organization_id",
+              "space_id",
               "tags",
               "status",
               "author_name",
@@ -26432,10 +26478,17 @@
                       "enum": [
                         "public",
                         "organization",
+                        "space",
                         "unlisted"
                       ]
                     },
                     "organization_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "space_id": {
                       "type": [
                         "string",
                         "null"
@@ -26539,6 +26592,7 @@
                     "description",
                     "visibility",
                     "organization_id",
+                    "space_id",
                     "tags",
                     "status",
                     "author_name",
@@ -79791,8 +79845,8 @@
     "/api/v1/skills/market/claude-marketplace.json": {
       "get": {
         "operationId": "getClaudeMarketplace",
-        "summary": "Get an organization's Claude Code plugin marketplace",
-        "description": "Returns a Claude Code `marketplace.json` listing the organization's approved Organization-visibility Skill Market listings, one `archive` plugin each, pinned by `sha256`, followed by one `archive` plugin per skill bundle whose `version` is a hash prefix, not a semantic version. Public and unlisted listings are not included. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `skills:read`, sent as `Authorization: Bearer`. Claude Code sends that header when it is set as the marketplace source's `headers` in its settings, and forwards it to the same-origin plugin archives.",
+        "summary": "Get an organization's or Space's Claude Code plugin marketplace",
+        "description": "Returns a Claude Code `marketplace.json` listing the organization's (`orgId`) or Space's (`spaceId`) approved Skill Market listings, one `archive` plugin each, pinned by `sha256`, followed by one `archive` plugin per skill bundle whose `version` is a hash prefix, not a semantic version. Send exactly one of `orgId` and `spaceId`. A Space feed is named `b4m-space-<id>`. Public and unlisted listings are not included. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `skills:read`, sent as `Authorization: Bearer`. Claude Code sends that header when it is set as the marketplace source's `headers` in its settings, and forwards it to the same-origin plugin archives.",
         "tags": [
           "Skills"
         ],
@@ -79808,10 +79862,23 @@
           {
             "schema": {
               "type": "string",
-              "minLength": 1
+              "minLength": 1,
+              "description": "The organization whose feed to return. Send this or `spaceId`."
             },
-            "required": true,
+            "required": false,
+            "description": "The organization whose feed to return. Send this or `spaceId`.",
             "name": "orgId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The Space whose feed to return. Send this or `orgId`."
+            },
+            "required": false,
+            "description": "The Space whose feed to return. Send this or `orgId`.",
+            "name": "spaceId",
             "in": "query"
           }
         ],
@@ -79889,7 +79956,7 @@
             }
           },
           "403": {
-            "description": "The API key lacks `skills:read`, or the caller is not a member of the organization.",
+            "description": "The API key lacks `skills:read`, or the caller is not a member of the organization or Space (or Spaces are not enabled).",
             "content": {
               "application/json": {
                 "schema": {
@@ -81000,7 +81067,7 @@
       "get": {
         "operationId": "listSkillMarketListings",
         "summary": "Browse Skill Market listings",
-        "description": "Lists the approved Public listings and the Organization listings of your organizations, with search and filters. Unlisted listings never appear. Cursor-paginated: pass `next_cursor` back as `cursor` until it is `null`, keeping the same filters.",
+        "description": "Lists the approved Public listings, the Organization listings of your organizations and the Space listings of your Spaces, with search and filters. Unlisted listings never appear. Cursor-paginated: pass `next_cursor` back as `cursor` until it is `null`, keeping the same filters.",
         "tags": [
           "Skills"
         ],
@@ -81049,11 +81116,23 @@
               "type": "string",
               "enum": [
                 "public",
-                "org"
+                "org",
+                "space"
               ]
             },
             "required": false,
             "name": "scope",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "With `scope=space`, only this Space. Empty when you do not belong to it."
+            },
+            "required": false,
+            "description": "With `scope=space`, only this Space. Empty when you do not belong to it.",
+            "name": "space_id",
             "in": "query"
           },
           {
@@ -81448,7 +81527,7 @@
       "post": {
         "operationId": "publishSkillMarketListing",
         "summary": "Publish a skill to the Skill Market",
-        "description": "Creates a listing from a skill you own and submits its first version. Every version is safety-scanned. A clean version goes live at once; one that needs a human waits in review, and importers keep receiving the previous approved version until it is approved. A skill has at most one live listing: to publish a change, submit a new version instead. Unknown body fields are rejected.",
+        "description": "Creates a listing from a skill you own and submits its first version. Every version is safety-scanned. A clean version goes live at once; one that needs a human waits in review, and importers keep receiving the previous approved version until it is approved. A skill has at most one live listing: to publish a change, submit a new version instead. `space` visibility needs `space_id` and membership of that Space. Unknown body fields are rejected.",
         "tags": [
           "Skills"
         ],
@@ -81526,7 +81605,7 @@
             }
           },
           "400": {
-            "description": "The skill was imported from the market, no organization was chosen, a tag is invalid, or you have reached your active listing cap.",
+            "description": "The skill was imported from the market, no organization or Space was chosen, a tag is invalid, or you have reached your active listing cap.",
             "content": {
               "application/json": {
                 "schema": {
@@ -81598,7 +81677,7 @@
             }
           },
           "403": {
-            "description": "The API key lacks `skills:write`, or the caller may not act on this listing. Also: you are not in the organization, your account is too new for a Public listing, or moderators removed this skill from the market.",
+            "description": "The API key lacks `skills:write`, or the caller may not act on this listing. Also: you are not in the organization or Space (or Spaces are not enabled), your account is too new for a Public listing, or moderators removed this skill from the market.",
             "content": {
               "application/json": {
                 "schema": {
@@ -86768,7 +86847,7 @@
       "get": {
         "operationId": "listSkillMarketReviewQueue",
         "summary": "List Skill Market versions awaiting review",
-        "description": "Lists the held versions you can review, oldest first, each with its listing and the approved version it would replace. Under an API key without `admin:*` this is the Organization listings of the organizations you administer. Cursor-paginated, but a page can be shorter than `limit`, even empty, while `next_cursor` is non-null: keep passing `next_cursor` back as `cursor` until it is `null`. A version that finishes scanning after you paged past its creation time shows up on the next pass that starts without a cursor.",
+        "description": "Lists the held versions you can review, oldest first, each with its listing and the approved version it would replace. Under an API key without `admin:*` this is the Organization listings of the organizations you administer and the Space listings of Spaces you own or administer. Cursor-paginated, but a page can be shorter than `limit`, even empty, while `next_cursor` is non-null: keep passing `next_cursor` back as `cursor` until it is `null`. A version that finishes scanning after you paged past its creation time shows up on the next pass that starts without a cursor.",
         "tags": [
           "Skills"
         ],
@@ -86876,7 +86955,7 @@
             }
           },
           "403": {
-            "description": "The API key lacks `skills:review`, or you administer no organization.",
+            "description": "The API key lacks `skills:review`, or you administer no organization or Space.",
             "content": {
               "application/json": {
                 "schema": {
@@ -87303,7 +87382,7 @@
             }
           },
           "403": {
-            "description": "The API key lacks `skills:review`, or you may not review this listing: it is not an Organization listing of an organization you administer, or it is your own Public listing.",
+            "description": "The API key lacks `skills:review`, or you may not review this listing: it is not an Organization or Space listing you administer, or it is your own Public listing.",
             "content": {
               "application/json": {
                 "schema": {
