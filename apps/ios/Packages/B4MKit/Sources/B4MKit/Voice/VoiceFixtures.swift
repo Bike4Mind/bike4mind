@@ -6,14 +6,15 @@ public enum VoiceFixtures {
   @MainActor
   public static func makeModel(
     target: ChatSendRequest.Target, api: any B4MAPI, realtime: any RealtimeClient,
-    bargeInWords: Set<String> = [], opening: [String] = [], firstTurnContext: String? = nil, utteranceHandler: VoiceConversationModel.UtteranceHandler? = nil,
+    bargeInWords: Set<String> = [], answerPhrases: Set<String> = [], opening: [String] = [],
+    firstTurnContext: String? = nil, utteranceHandler: VoiceConversationModel.UtteranceHandler? = nil,
     script: [String] = ["What can you help me with today"], scriptDelay: Duration = .seconds(1)
   ) -> VoiceConversationModel {
     VoiceConversationModel(
       target: target, api: api, realtime: realtime, listener: FixtureListener(script: script, delay: scriptDelay),
       speaker: FixtureSpeaker(),
-      audioSession: FixtureAudioSession(), bargeInWords: bargeInWords, opening: opening, firstTurnContext: firstTurnContext,
-      utteranceHandler: utteranceHandler)
+      audioSession: FixtureAudioSession(), bargeInWords: bargeInWords, answerPhrases: answerPhrases, opening: opening,
+      firstTurnContext: firstTurnContext, utteranceHandler: utteranceHandler)
   }
 
   /// Says the next scripted sentence on each start, then stays quiet like an idle room once the script runs out.
