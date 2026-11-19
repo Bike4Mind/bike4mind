@@ -34,6 +34,7 @@ import {
   MCP_OAUTH_CLIENT_MODES,
   MCP_TOOL_APPROVAL_MODES,
   MCP_TOOL_STATES,
+  PLATFORM_MCP_OWNER,
   isValidMcpConnectionSlug,
 } from '@bike4mind/common';
 import mongoose, { Schema, Model, model } from 'mongoose';
@@ -271,8 +272,8 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
   }
 );
 
-// Writes after create cannot break this: the generic writers refuse the owner fields and the token
-// and lease writers filter on ownerType 'user'.
+// Writes after create cannot break this: the generic writers refuse the owner fields, the OAuth
+// and lease writers filter on ownerType 'user', and the API key writer refuses an org definition.
 McpConnectionSchema.pre('validate', function () {
   const problem = mcpConnectionOwnerProblem(this.toObject());
   if (problem) throw new McpConnectionOwnerError(problem);
@@ -482,13 +483,26 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
   }
 
   async listForUser(userId: string, options: { slugs?: string[] } = {}): Promise<IMcpConnectionDocument[]> {
-    return this.find({
-      userId,
+    const offered = {
       enabled: true,
-      ownerType: 'user',
       status: 'connected',
       ...(options.slugs ? { slug: { $in: options.slugs } } : {}),
-    });
+    };
+    const [own, platform] = await Promise.all([
+      this.find({ userId, ownerType: 'user', ...offered }),
+      this.find({ ...PLATFORM_MCP_OWNER, ...offered }),
+    ]);
+    if (platform.length === 0) return own;
+    // The user's own connection keeps a shared slug whatever its state, so switching it off never
+    // hands its `<slug>__<tool>` names to another server.
+    const held = new Set<string>(
+      await this.model.distinct('slug', {
+        ownerType: 'user',
+        ownerKey: userId,
+        slug: { $in: platform.map(connection => connection.slug) },
+      })
+    );
+    return [...own, ...platform.filter(connection => !held.has(connection.slug))];
   }
 
   async listAllForUser(userId: string): Promise<IMcpConnectionSummary[]> {
@@ -497,6 +511,14 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
 
   async countForUser(userId: string): Promise<number> {
     return this.model.countDocuments({ userId, ownerType: 'user' });
+  }
+
+  async listPlatform(): Promise<IMcpConnectionSummary[]> {
+    return this.findSummaries({ ...PLATFORM_MCP_OWNER });
+  }
+
+  async listPlatformSlugs(): Promise<string[]> {
+    return this.model.distinct('slug', { ...PLATFORM_MCP_OWNER });
   }
 
   async listForOrg(organizationId: string): Promise<IMcpConnectionSummary[]> {
@@ -657,9 +679,9 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     owner: McpConnectionOwner,
     apiKey: McpApiKeyUpdate
   ): Promise<IMcpConnectionDocument | null> {
-    if (!mongoose.isObjectIdOrHexString(id) || owner.ownerType !== 'user') return null;
+    if (!mongoose.isObjectIdOrHexString(id) || owner.ownerType === 'org') return null;
     const result = await this.model.findOneAndUpdate(
-      { _id: id, ownerType: 'user', ownerKey: owner.ownerKey, 'auth.kind': 'api_key' },
+      { _id: id, ownerType: owner.ownerType, ownerKey: owner.ownerKey, 'auth.kind': 'api_key' },
       {
         $set: {
           'auth.apiKey.headerName': apiKey.headerName,

@@ -8,6 +8,7 @@ import {
   McpConnectionProtectedFieldError,
   McpConnectionSlugConflictError,
   McpToolVersionConflictError,
+  PLATFORM_MCP_OWNER,
   toMcpConnectionPublic,
   type IMcpConnectionDocument,
   type IMcpConnectionTool,
@@ -1551,6 +1552,124 @@ describe('McpConnectionModel', () => {
       ],
     ])('%s returns its empty value for a malformed id without throwing', async (_name, call, expected) => {
       expect(await call()).toBe(expected);
+    });
+  });
+
+  describe('platform connectors', () => {
+    const ADMIN_OWNER = { ownerType: 'user' as const, ownerKey: 'admin-1' };
+    const platformConnection = (overrides: Partial<CreateInput> = {}): CreateInput =>
+      apiKeyConnection({
+        ...PLATFORM_MCP_OWNER,
+        userId: 'admin-1',
+        slug: 'docs',
+        displayName: 'Docs',
+        displayUrl: 'https://mcp.example.com/mcp',
+        urlHost: 'mcp.example.com',
+        ...overrides,
+      });
+
+    it.each([
+      ['another owner key', platformConnection({ ownerKey: 'admin-1' })],
+      ['an organization', platformConnection({ organizationId: 'org-1' })],
+      ['OAuth sign-in', baseConnection({ ...PLATFORM_MCP_OWNER, userId: 'admin-1' })],
+    ])('refuses a platform connection with %s', async (_label, input) => {
+      await expect(mcpConnectionRepository.create(input)).rejects.toThrow(/platform connection/);
+    });
+
+    it('is offered to every user, after their own connections', async () => {
+      const shared = await mcpConnectionRepository.create(platformConnection());
+      await mcpConnectionRepository.create(apiKeyConnection({ slug: 'mine' }));
+
+      expect((await mcpConnectionRepository.listForUser('user-1')).map(c => c.slug)).toEqual(['mine', 'docs']);
+      expect((await mcpConnectionRepository.listForUser('user-2')).map(c => c.id)).toEqual([shared.id]);
+      expect((await mcpConnectionRepository.listForUser('user-2', { slugs: ['mine'] })).map(c => c.slug)).toEqual([]);
+      expect((await mcpConnectionRepository.listForUser('user-2', { slugs: ['docs'] })).map(c => c.slug)).toEqual([
+        'docs',
+      ]);
+    });
+
+    it('is not offered while switched off or not connected', async () => {
+      const shared = await mcpConnectionRepository.create(platformConnection());
+      await mcpConnectionRepository.setEnabled(shared.id, PLATFORM_MCP_OWNER, false);
+      expect(await mcpConnectionRepository.listForUser('user-2')).toEqual([]);
+
+      await mcpConnectionRepository.setEnabled(shared.id, PLATFORM_MCP_OWNER, true);
+      await mcpConnectionRepository.setStatus(shared.id, 'needs_reconnect', { code: 'auth_failed', message: 'm' });
+      expect(await mcpConnectionRepository.listForUser('user-2')).toEqual([]);
+    });
+
+    it('gives way to a user connection with the same slug, even one that is switched off', async () => {
+      await mcpConnectionRepository.create(platformConnection());
+      const own = await mcpConnectionRepository.create(apiKeyConnection({ slug: 'docs' }));
+
+      expect((await mcpConnectionRepository.listForUser('user-1')).map(c => c.id)).toEqual([own.id]);
+      await mcpConnectionRepository.setEnabled(own.id, OWNER, false);
+      expect(await mcpConnectionRepository.listForUser('user-1')).toEqual([]);
+      expect((await mcpConnectionRepository.listForUser('user-2')).map(c => c.ownerType)).toEqual(['platform']);
+    });
+
+    it('keeps platform slugs unique among themselves and lists them', async () => {
+      await mcpConnectionRepository.create(platformConnection());
+      await mcpConnectionRepository.create(platformConnection({ slug: 'wiki' }));
+      await expect(mcpConnectionRepository.create(platformConnection())).rejects.toBeInstanceOf(
+        McpConnectionSlugConflictError
+      );
+
+      expect((await mcpConnectionRepository.listPlatformSlugs()).sort()).toEqual(['docs', 'wiki']);
+      const listed = await mcpConnectionRepository.listPlatform();
+      expect(listed.map(c => c.slug)).toEqual(['docs', 'wiki']);
+      for (const path of MCP_CONNECTION_SECRET_PATHS) expect(listed[0]).not.toHaveProperty(path);
+    });
+
+    it('is in none of the per-user reads or deletes, not even those of the admin who created it', async () => {
+      const shared = await mcpConnectionRepository.create(platformConnection());
+
+      expect(await mcpConnectionRepository.listAllForUser('admin-1')).toEqual([]);
+      expect(await mcpConnectionRepository.countForUser('admin-1')).toBe(0);
+      expect(await mcpConnectionRepository.listMemberConnections('org-1', ['admin-1'])).toEqual([]);
+      expect(await mcpConnectionRepository.deleteAllForUser('admin-1')).toBe(0);
+      expect(await mcpConnectionRepository.findByIdForOwner(shared.id, PLATFORM_MCP_OWNER)).not.toBeNull();
+    });
+
+    it('cannot be read or written through a user owner, including its creator', async () => {
+      const shared = await mcpConnectionRepository.create(platformConnection());
+      const key = { headerName: 'Authorization', scheme: 'Bearer' as const, valueEnc: 'enc:other', last4: 'zzzz' };
+
+      for (const owner of [OWNER, ADMIN_OWNER]) {
+        expect(await mcpConnectionRepository.findByIdForOwner(shared.id, owner)).toBeNull();
+        expect(await mcpConnectionRepository.findByIdWithCredentials(shared.id, owner)).toBeNull();
+        expect(await mcpConnectionRepository.setApiKey(shared.id, owner, key)).toBeNull();
+        expect(await mcpConnectionRepository.updateSettings(shared.id, owner, { enabled: false })).toBeNull();
+        expect(await mcpConnectionRepository.rename(shared.id, owner, 'Renamed')).toBeNull();
+        expect(await mcpConnectionRepository.deleteForOwner(shared.id, owner)).toBe(false);
+      }
+
+      const stored = await mcpConnectionRepository.findByIdWithCredentials(shared.id, PLATFORM_MCP_OWNER);
+      expect(stored).toMatchObject({ displayName: 'Docs', enabled: true });
+      expect(stored?.auth.apiKey).toMatchObject({ valueEnc: 'enc:key', last4: 'abcd' });
+    });
+
+    it('rotates its key under the platform owner and never becomes an OAuth connection', async () => {
+      const shared = await mcpConnectionRepository.create(platformConnection());
+      const key = { headerName: 'X-Api-Key', scheme: 'raw' as const, valueEnc: 'enc:rotated', last4: 'wxyz' };
+
+      expect((await mcpConnectionRepository.setApiKey(shared.id, PLATFORM_MCP_OWNER, key))?.auth.apiKey?.last4).toBe(
+        'wxyz'
+      );
+      expect(
+        await mcpConnectionRepository.setOAuthConfig(shared.id, PLATFORM_MCP_OWNER, {
+          resource: 'r',
+          issuer: 'i',
+          authorizationServerUrl: 'a',
+          scopes: [],
+          clientMode: 'dcr',
+        })
+      ).toBeNull();
+      expect(await mcpConnectionRepository.acquireRefreshLease(shared.id, PLATFORM_MCP_OWNER, 'h')).toEqual({
+        outcome: 'not_found',
+      });
+      const stored = await mcpConnectionRepository.findByIdWithCredentials(shared.id, PLATFORM_MCP_OWNER);
+      expect(stored?.auth).toMatchObject({ kind: 'api_key', apiKey: { valueEnc: 'enc:rotated' } });
     });
   });
 });

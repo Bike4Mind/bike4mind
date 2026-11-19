@@ -16,8 +16,11 @@ import { McpServerName } from './McpServerTypes';
  * server: API responses go through {@link toMcpConnectionPublic}.
  */
 
-export const MCP_CONNECTION_OWNER_TYPES = ['user', 'org'] as const;
-/** `org` is an org-published definition: it carries no tokens, each member connects their own. */
+export const MCP_CONNECTION_OWNER_TYPES = ['user', 'org', 'platform'] as const;
+/**
+ * `org` is an org-published definition: it carries no tokens, each member connects their own.
+ * `platform` is a connector an admin set up once for every user; the platform holds its credential.
+ */
 export type McpConnectionOwnerType = (typeof MCP_CONNECTION_OWNER_TYPES)[number];
 
 export const MCP_CONNECTION_TRANSPORTS = ['auto', 'streamable-http', 'sse'] as const;
@@ -202,7 +205,10 @@ export interface IMcpConnectionRefreshLease {
 
 export interface IMcpConnection {
   ownerType: McpConnectionOwnerType;
-  /** userId for `user`, organizationId for `org`; the slug is unique per (ownerType, ownerKey). */
+  /**
+   * userId for `user`, organizationId for `org`, the constant in {@link PLATFORM_MCP_OWNER} for
+   * `platform`; the slug is unique per (ownerType, ownerKey).
+   */
   ownerKey: string;
   /** Creator; for `user` connections, also the credential owner. */
   userId: string;
@@ -307,14 +313,30 @@ export function toMcpDisplayUrl(url: string): string {
 /**
  * Why the owner fields are inconsistent, or null. `user`: `ownerKey === userId`. `org`: an
  * `organizationId` equal to `ownerKey`, and no credential or refresh lease on the definition.
+ * `platform`: the fixed `ownerKey`, no organization or definition, and never OAuth, because an
+ * OAuth grant belongs to the one user who signed in.
  */
 export function mcpConnectionOwnerProblem(
-  doc: Pick<IMcpConnection, 'ownerType' | 'ownerKey' | 'userId' | 'organizationId' | 'refreshLease'> & {
+  doc: Pick<
+    IMcpConnection,
+    'ownerType' | 'ownerKey' | 'userId' | 'organizationId' | 'definitionId' | 'refreshLease'
+  > & {
     auth?: unknown;
   }
 ): string | null {
   if (doc.ownerType === 'user') {
     return doc.ownerKey === doc.userId ? null : 'A user connection must have ownerKey equal to userId';
+  }
+  if (doc.ownerType === 'platform') {
+    if (doc.ownerKey !== PLATFORM_MCP_OWNER.ownerKey) {
+      return `A platform connection must have ownerKey ${PLATFORM_MCP_OWNER.ownerKey}`;
+    }
+    if (doc.organizationId || doc.definitionId) {
+      return 'A platform connection cannot belong to an organization or a definition';
+    }
+    if (doc.refreshLease) return 'A platform connection cannot hold a refresh lease';
+    const kind = (doc.auth as { kind?: unknown } | undefined)?.kind;
+    return kind === 'oauth' ? 'A platform connection cannot use OAuth sign-in' : null;
   }
   if (doc.ownerType !== 'org') return `Unknown ownerType ${String(doc.ownerType)}`;
   if (!doc.organizationId || doc.ownerKey !== doc.organizationId) {
@@ -428,6 +450,41 @@ export function toMcpConnectionPublic(
 }
 
 /**
+ * What every user sees of a platform connector: enough for a Tools-menu row. It leaves out the
+ * admin who created it, the URL beyond its host, every key detail, the last error and the last use.
+ */
+export interface IMcpPlatformConnectionMemberView {
+  id: string;
+  ownerType: 'platform';
+  slug: string;
+  displayName: string;
+  urlHost: string;
+  status: McpConnectionEffectiveStatus;
+  tools: IMcpConnectionToolSummary[];
+  enabled: boolean;
+}
+
+/** One row of the connection list a user is served: their own connection, or a platform connector. */
+export type McpConnectionListEntry = IMcpConnectionPublic | IMcpPlatformConnectionMemberView;
+
+/** An allowlist like {@link toMcpConnectionPublic}: a field reaches members only when it is named here. */
+export function toMcpPlatformConnectionMemberView(
+  doc: IMcpConnectionSummary,
+  policyVerdict: McpPolicyVerdictLike
+): IMcpPlatformConnectionMemberView {
+  return {
+    id: doc.id,
+    ownerType: 'platform',
+    slug: doc.slug,
+    displayName: doc.displayName,
+    urlHost: doc.urlHost,
+    status: effectiveMcpConnectionStatus(doc, policyVerdict),
+    tools: doc.tools ?? [],
+    enabled: doc.enabled,
+  };
+}
+
+/**
  * Namespace for the connection's tools (`<slug>__<tool>`), so it must stay short and unambiguous:
  * 2-20 characters, a leading letter, and single underscores between alphanumeric runs. No `__`
  * (the namespace separator) and no trailing `_`, which would make `<slug>__<tool>` ambiguous.
@@ -466,6 +523,9 @@ export interface McpConnectionOwner {
   ownerType: McpConnectionOwnerType;
   ownerKey: string;
 }
+
+/** The one owner of every platform connector; platform slugs are unique under it. */
+export const PLATFORM_MCP_OWNER: McpConnectionOwner = { ownerType: 'platform', ownerKey: 'platform' };
 
 export interface McpOAuthTokenUpdate {
   accessTokenEnc: string;
@@ -628,7 +688,10 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
     data: Omit<IMcpConnectionDocument, 'id' | 'updatedAt' | 'createdAt'>,
     cap: number
   ): Promise<IMcpConnectionDocument>;
-  /** Replaces the API key of an `api_key` connection; null when not found, not the owner's, or another kind. */
+  /**
+   * Replaces the API key of an `api_key` connection; null when not found, not the owner's, another
+   * kind, or an org definition (which holds no credential).
+   */
   setApiKey(id: string, owner: McpConnectionOwner, apiKey: McpApiKeyUpdate): Promise<IMcpConnectionDocument | null>;
   /**
    * Writes the OAuth configuration and flips the kind to `oauth`; allowed from `none` or `oauth` only.
@@ -649,13 +712,18 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
   /** Includes the `*Enc` fields. Only for the token manager and the call path, never a response. */
   findByIdWithCredentials(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null>;
   /**
-   * Hot path: the user's enabled, connected connections offered to a chat turn or agent run, with
-   * the tool input schemas tool building needs. `slugs` narrows to the connections a turn selected.
+   * Hot path: the enabled, connected connections offered to a chat turn or agent run, with the tool
+   * input schemas tool building needs: the user's own first, then every platform connector whose
+   * slug the user does not hold (in any state). `slugs` narrows to the connections a turn selected.
    */
   listForUser(userId: string, options?: { slugs?: string[] }): Promise<IMcpConnectionDocument[]>;
   /** Every user-owned connection regardless of state, for the manage list. */
   listAllForUser(userId: string): Promise<IMcpConnectionSummary[]>;
   countForUser(userId: string): Promise<number>;
+  /** Every platform connector regardless of state, for the admin list and the member list. */
+  listPlatform(): Promise<IMcpConnectionSummary[]>;
+  /** The slugs platform connectors hold, which a new user connection must not take. */
+  listPlatformSlugs(): Promise<string[]>;
   /** Org-published definitions. */
   listForOrg(organizationId: string): Promise<IMcpConnectionSummary[]>;
   findByUrlHost(urlHost: string): Promise<IMcpConnectionSummary[]>;
