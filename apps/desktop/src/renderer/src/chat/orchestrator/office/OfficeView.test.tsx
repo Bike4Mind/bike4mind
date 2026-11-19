@@ -8,7 +8,7 @@ const mount = createThemedMount();
 afterEach(() => mount.unmount());
 
 describe('OfficeView', () => {
-  it('keeps Michael visible with an empty roster and opens the parent session', async () => {
+  it('keeps Morgan visible with an empty roster and opens the parent session', async () => {
     const focus = vi.fn();
     await mount.render(
       <OfficeView
@@ -36,7 +36,7 @@ describe('OfficeView', () => {
     );
     expect(el('office-room-break-room').contains(el('office-agent-done'))).toBe(true);
     expect(el('office-room-conference-room').contains(el('office-agent-idle'))).toBe(true);
-    expect(el('office-room-michael-door').contains(el('office-agent-waiting'))).toBe(true);
+    expect(el('office-room-manager-door').contains(el('office-agent-waiting'))).toBe(true);
     expect(el('office-agent-done').getAttribute('aria-pressed')).toBe('true');
     const character = el('office-agent-done').getAttribute('aria-label')!.split(':')[0];
     expect(el('office-agent-done').textContent).toBe(`${character.split(' ')[0]} *`);

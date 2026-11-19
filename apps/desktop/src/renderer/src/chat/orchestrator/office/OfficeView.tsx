@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { Box, Button, Typography } from '@mui/joy';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
-import { OFFICE_PARENT, assignOfficeCast } from './officeCast';
+import { OFFICE_CAST, OFFICE_PARENT, assignOfficeCast } from './officeCast';
 import { OFFICE_ROOMS, type OfficeRoom } from './officeLayout';
 import { groupOfficeAgents } from './scene';
 import { OfficeBackdrop } from './OfficeBackdrop';
@@ -10,7 +10,7 @@ import { OfficeSprite } from './OfficeSprite';
 const ROOM_BOUNDS: Record<OfficeRoom, { x: number; y: number; width: number; height: number; columns: number }> = {
   reception: { x: 4, y: 56, width: 14, height: 14, columns: 2 },
   desks: { x: 23, y: 43, width: 28, height: 45, columns: 3 },
-  'michael-door': { x: 17, y: 37, width: 33, height: 9, columns: 5 },
+  'manager-door': { x: 17, y: 37, width: 33, height: 9, columns: 5 },
   'break-room': { x: 59, y: 21, width: 32, height: 25, columns: 4 },
   'conference-room': { x: 75, y: 57, width: 21, height: 32, columns: 3 },
 };
@@ -102,7 +102,7 @@ export function OfficeView({
               fontSize: 10,
             }}
           >
-            Michael Scott
+            {OFFICE_PARENT}
           </span>
         </Button>
         {desk?.reply && desk.conversationHidden && (
@@ -174,7 +174,7 @@ export function OfficeView({
                 >
                   <Box sx={{ display: 'flex' }}>
                     <OfficeSprite
-                      name={cast.get(agent.id) ?? 'Jim Halpert'}
+                      name={cast.get(agent.id) ?? OFFICE_CAST[0]}
                       resting={agent.state === 'done'}
                       working={agent.state === 'working'}
                       attention={agent.state === 'needs-you'}
@@ -213,8 +213,8 @@ export function OfficeView({
           }}
         >
           {celebrating
-            ? 'SHIFT COMPLETE. COFFEE IS ON MICHAEL.'
-            : 'Click Michael to talk. Select an employee to inspect their work.'}
+            ? 'SHIFT COMPLETE. COFFEE IS ON MORGAN.'
+            : 'Click Morgan to talk. Select an employee to inspect their work.'}
         </Typography>
         {agentDetailsOverlay}
       </Box>

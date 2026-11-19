@@ -63,7 +63,6 @@ export function OfficeBackdrop() {
       <path d="M16 40H984V90H16Z" fill="#d8ccb0" />
       <path d="M16 85H984V93H16Z" fill="#786f59" />
       <rect x="24" y="48" width="950" height="7" fill="#eee5c9" />
-      {/* Back offices, sales floor, connecting kitchen and annex follow the Scranton set's landmarks. */}
       <path d="M24 94H223V242H24ZM234 94H535V242H234Z" fill="#a4a68b" />
       <rect x="547" y="94" width="427" height="237" fill="url(#office-tile)" />
       <rect x="548" y="345" width="176" height="156" fill="url(#office-tile)" />
@@ -216,10 +215,10 @@ export function OfficeBackdrop() {
         strokeWidth="2"
       />
       <text x="25" y="29" fill="#e7e3cd" fontFamily="monospace" fontSize="15" fontWeight="bold">
-        DUNDER MIFFLIN
+        COPPERLEAF SUPPLY
       </text>
       <text x="978" y="29" textAnchor="end" fill="#aebbab" fontFamily="monospace" fontSize="10" letterSpacing="2">
-        SCRANTON BRANCH / THE OFFICE
+        BROOKVALE BRANCH / PAPERWORK
       </text>
     </svg>
   );

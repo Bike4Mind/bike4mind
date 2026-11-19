@@ -62,8 +62,8 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     },
   },
   office: {
-    label: 'The Office',
-    description: 'Michael and the team at the Scranton branch',
+    label: 'Paperwork',
+    description: 'Morgan and the team at Copperleaf Supply',
     group: 'scene',
     icon: <BoardIcon />,
     ambient: true,

@@ -1924,7 +1924,7 @@ export function ChatShell({
                     }}
                     data-testid="orchestrator-ambient-talk-btn"
                   >
-                    {orchestratorView === 'office' ? 'Type to talk to Michael' : 'Type to talk to the Innkeeper'}
+                    {orchestratorView === 'office' ? 'Type to talk to Morgan' : 'Type to talk to the Innkeeper'}
                   </Button>
                   {ambientHint && (
                     <Typography level="body-xs" textColor="text.tertiary" data-testid="orchestrator-ambient-hint">

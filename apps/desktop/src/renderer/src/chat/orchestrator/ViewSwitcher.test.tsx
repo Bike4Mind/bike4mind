@@ -205,7 +205,7 @@ describe('ViewSwitcher', () => {
     await themed.render(
       <ViewSwitcher view="office" onViewChange={onViewChange} ambient={{ on: true, onToggle: vi.fn() }} />
     );
-    expect(el('orchestrator-view-menu-btn').textContent).toContain('Office');
+    expect(el('orchestrator-view-menu-btn').textContent).toContain('Paperwork');
     act(() => el('orchestrator-view-menu-btn').click());
     expect(el('orchestrator-ambient-toggle').getAttribute('aria-checked')).toBe('true');
     expect(stepView('aquarium', 1)).toBe('office');
