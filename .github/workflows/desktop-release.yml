@@ -142,7 +142,7 @@ jobs:
         run: pnpm turbo:core:build
       - name: Check desktop types
         run: pnpm --filter @bike4mind/desktop typecheck
-      # The full desktop suite runs on macOS only: ci.yml's cli-desktop-workers shard already runs
+      # The full desktop suite runs on macOS only: ci.yml's desktop shard already runs
       # it on Linux, and the local tool layer it covers assumes a POSIX shell and paths, so
       # Windows runs only the packaging script tests until that layer is ported.
       - name: Test desktop
