@@ -152,9 +152,10 @@ async function startGatedBrief(
   ]);
   if (!hasRuns && !hasEmails) return 'no_activity';
 
-  if (!(await deps.users.claimBriefStart(userId, now, claimGapMs))) return 'debounced';
+  const claim = await deps.users.claimBriefStart(userId, now, claimGapMs);
+  if (!claim) return 'debounced';
   const release = () =>
-    deps.users.releaseBriefStart(userId, now).catch((releaseError: unknown) => {
+    deps.users.releaseBriefStart(userId, now, claim.previous).catch((releaseError: unknown) => {
       logger.error('Failed to release a brief start claim', { userId, releaseError });
     });
   let created: boolean;

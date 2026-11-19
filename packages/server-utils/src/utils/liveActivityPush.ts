@@ -37,8 +37,6 @@ export async function publishLiveActivityUpdate(
   }
 }
 
-export { isTopLevelRun };
-
 export async function endAgentRunLiveActivity(
   execution: {
     userId: string;

@@ -3,11 +3,11 @@ import { agentExecutionRepository, sessionRepository } from '@bike4mind/database
 import type { Logger } from '@bike4mind/observability';
 import {
   createLiveActivityThrottle,
-  isTopLevelRun,
   LIVE_ACTIVITY_STAGE_LABEL_MAX,
   publishLiveActivityUpdate,
   type LiveActivityThrottle,
 } from '@bike4mind/server-utils/utils/liveActivityPush';
+import { isTopLevelRun } from '@bike4mind/server-utils/utils/isTopLevelRun';
 import {
   isPushDeliveryConfigured,
   publishPushNotification,
