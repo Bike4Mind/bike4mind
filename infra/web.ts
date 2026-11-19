@@ -63,6 +63,7 @@ import { dlqAlarmHandlerDlq } from './dlqAlarmHandlerDeadLetter';
 import { mcpHandler } from './mcp';
 import { remoteMcpHandler } from './remoteMcp';
 import { providerFederation } from './providerFederation';
+import { mailStatusEnvironment } from './mailTransport';
 import {
   fabFileChunkQueue,
   fabFileVectorizeQueue,
@@ -601,6 +602,7 @@ export const web = new sst.aws.Nextjs(
       B4M_DEPLOYED_REVISION: process.env.B4M_DEPLOYED_REVISION || '',
       B4M_BUILD_FINGERPRINT: process.env.B4M_BUILD_FINGERPRINT || '',
       IMPERSONATION_TTL_MINUTES: process.env.IMPERSONATION_TTL_MINUTES || '60',
+      ...mailStatusEnvironment,
       ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
       ...TEST_DECISION_PROVIDER_ENVIRONMENT,
       BEDROCK_COHERE_EMBED_MODEL_ID: process.env.BEDROCK_COHERE_EMBED_MODEL_ID?.trim() || '',

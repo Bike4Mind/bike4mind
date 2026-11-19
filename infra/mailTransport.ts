@@ -10,7 +10,9 @@
  *
  * Scope: only the email-send worker receives the flag and the grant. Every other process hands
  * its mail to that worker as an email.send event (queuedMailer in
- * packages/server-utils/src/utils/mailer/queuedMailer.ts), so no other role needs either.
+ * packages/server-utils/src/utils/mailer/queuedMailer.ts), so no other role needs either. The web
+ * function only reports mail status, so it gets the transport name as MAIL_STATUS_TRANSPORT
+ * (read by packages/server-utils/src/utils/mailer/configStatus.ts) and neither the flag nor the grant.
  */
 import { otcEmailConfigurationSet } from './otcEmailMetrics';
 
@@ -50,4 +52,8 @@ export const sesSendPermissions =
 export const mailTransportEnvironment = {
   MAIL_TRANSPORT: mailTransport,
   SES_CONFIGURATION_SET: sesConfigurationSet,
+};
+
+export const mailStatusEnvironment = {
+  MAIL_STATUS_TRANSPORT: mailTransport,
 };
