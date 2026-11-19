@@ -628,11 +628,12 @@ describe('POST /api/files/createFabFile - signing boundaries', () => {
     expect(h.signUrl.mock.calls[0][2]).toMatchObject({ IfNoneMatch: '*' });
   });
 
-  it('leaves an API-key upload unconditional', async () => {
+  // S3Storage.presign.test.ts proves the storage signer binds IfNoneMatch into X-Amz-SignedHeaders.
+  it('signs an API-key upload as create-only', async () => {
     const { res } = makeRes();
     await run(body(), res, { apiKeyInfo: { keyId: 'k1', scopes: ['files:write'] } });
     expect(h.signUrl.mock.calls[0][1]).toBe('put');
-    expect(h.signUrl.mock.calls[0][2]).not.toHaveProperty('IfNoneMatch');
+    expect(h.signUrl.mock.calls[0][2]).toMatchObject({ IfNoneMatch: '*' });
   });
 
   it('never adds the create-only condition to a GET', async () => {
