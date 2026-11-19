@@ -7,7 +7,7 @@ import {
   startScheduledBrief,
   type ScheduledBriefDeps,
 } from './startBriefComposition';
-import { BRIEF_MIN_GAP_MS } from './briefSchedule';
+import { BRIEF_MIN_GAP_MS, SCHEDULED_BRIEF_MIN_GAP_MS } from './briefSchedule';
 import { BriefComposeRejectedError } from './publishBriefCompose';
 
 const now = new Date('2026-11-17T12:00:00Z');
@@ -20,7 +20,10 @@ const stored = (overrides: Partial<IAssistantBrief> = {}) =>
     ...overrides,
   }) as unknown as IAssistantBrief;
 
-const makeDeps = (over: { inFlight?: IAssistantBrief | null; latest?: IAssistantBrief | null } = {}) => ({
+const makeDeps = (
+  over: { inFlight?: IAssistantBrief | null; latest?: IAssistantBrief | null; straddling?: Date | null } = {}
+) => ({
+  runs: { findEarliestStraddlingRunCreatedAt: vi.fn().mockResolvedValue(over.straddling ?? null) },
   briefs: {
     findActiveComposing: vi.fn().mockResolvedValue(over.inFlight ?? null),
     findLatestReady: vi.fn().mockResolvedValue(over.latest ?? null),
@@ -95,6 +98,19 @@ describe('startBriefComposition', () => {
     await startBriefComposition('u1', stale);
     expect(stale.briefs.createComposing.mock.calls[0][0].periodStart).toEqual(new Date('2026-11-10T12:00:00Z'));
   });
+
+  it('moves the start back to a run that was still going when the last brief ended', async () => {
+    const lastEnd = new Date('2026-11-17T06:00:00Z');
+    const runCreated = new Date('2026-11-17T05:00:00Z');
+    const deps = makeDeps({ latest: stored({ periodEnd: lastEnd }), straddling: runCreated });
+    await startBriefComposition('u1', deps);
+    expect(deps.runs.findEarliestStraddlingRunCreatedAt).toHaveBeenCalledWith(
+      'u1',
+      lastEnd,
+      new Date('2026-11-10T12:00:00Z')
+    );
+    expect(deps.briefs.createComposing).toHaveBeenCalledWith({ userId: 'u1', periodStart: runCreated, periodEnd: now });
+  });
 });
 
 type GatedOver = {
@@ -102,12 +118,13 @@ type GatedOver = {
   inFlight?: IAssistantBrief | null;
   hasRuns?: boolean;
   claimed?: boolean;
+  straddling?: Date | null;
 };
 
 const enabledUser = { preferences: { briefSchedule: { enabled: true } } };
 
 const makeGatedDeps = (over: GatedOver = {}) => {
-  const base = makeDeps({ inFlight: over.inFlight });
+  const base = makeDeps({ inFlight: over.inFlight, straddling: over.straddling });
   return {
     ...base,
     users: {
@@ -121,9 +138,9 @@ const makeGatedDeps = (over: GatedOver = {}) => {
 const asDeps = (deps: ReturnType<typeof makeGatedDeps>) => deps as unknown as ScheduledBriefDeps;
 
 describe.each([
-  ['startEventBrief', startEventBrief],
-  ['startScheduledBrief', startScheduledBrief],
-] as const)('%s', (_name, start) => {
+  ['startEventBrief', startEventBrief, BRIEF_MIN_GAP_MS],
+  ['startScheduledBrief', startScheduledBrief, SCHEDULED_BRIEF_MIN_GAP_MS],
+] as const)('%s', (_name, start, gapMs) => {
   it.each([
     ['user_missing', { user: null }],
     ['schedule_off', { user: { preferences: { briefSchedule: { enabled: false } } } }],
@@ -142,12 +159,27 @@ describe.each([
     expect(deps.users.releaseBriefStart).not.toHaveBeenCalled();
   });
 
-  it('claims the shared gap at the gate time, then publishes a scheduled compose', async () => {
+  it('claims its gap at the gate time, then publishes a scheduled compose', async () => {
     const deps = makeGatedDeps();
     expect(await start('u1', asDeps(deps))).toBe('enqueued');
-    expect(deps.users.claimBriefStart).toHaveBeenCalledWith('u1', now, BRIEF_MIN_GAP_MS);
+    expect(deps.users.claimBriefStart).toHaveBeenCalledWith('u1', now, gapMs);
     expect(deps.publishCompose).toHaveBeenCalledWith({ briefId: 'b1', userId: 'u1', scheduled: true });
     expect(deps.users.releaseBriefStart).not.toHaveBeenCalled();
+  });
+
+  it('gives the claim back when a composition started elsewhere after the in-flight check', async () => {
+    const deps = makeGatedDeps();
+    deps.briefs.findActiveComposing.mockResolvedValueOnce(null).mockResolvedValueOnce(stored({ status: 'composing' }));
+    expect(await start('u1', asDeps(deps))).toBe('in_flight');
+    expect(deps.publishCompose).not.toHaveBeenCalled();
+    expect(deps.users.releaseBriefStart).toHaveBeenCalledWith('u1', now);
+  });
+
+  it('counts a run that finished after the last brief as activity', async () => {
+    const runCreated = new Date('2026-11-17T05:00:00Z');
+    const deps = makeGatedDeps({ straddling: runCreated });
+    await start('u1', asDeps(deps));
+    expect(deps.hasRunsSince).toHaveBeenCalledWith('u1', runCreated);
   });
 
   it('claims only after every other gate passed', async () => {

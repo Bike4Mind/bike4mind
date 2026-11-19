@@ -1,7 +1,8 @@
 import { agentExecutionRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
+import { startEventBriefForCompletedRun } from '@bike4mind/server-utils/briefs/eventBriefTrigger';
 import { startEventBrief, type ScheduledBriefOutcome } from '@bike4mind/server-utils/briefs/startBriefComposition';
-import { isTopLevelRun, type AgentPushSender } from './agentExecutor.push';
+import type { AgentPushSender } from './agentExecutor.push';
 
 // How long flush() waits for in-flight brief starts before the invocation exits (ms).
 export const BRIEF_TRIGGER_FLUSH_TIMEOUT_MS = 5_000;
@@ -38,9 +39,7 @@ export function withAgentBriefTrigger(
 
   const trigger = async (executionId: string) => {
     const execution = await deps.findExecution(executionId);
-    if (!execution || !isTopLevelRun(execution)) return;
-    const outcome = await deps.startEventBrief(execution.userId);
-    logger.info('[EventBrief] agent completion brief start', { executionId, outcome });
+    await startEventBriefForCompletedRun(executionId, execution, logger, deps.startEventBrief);
   };
 
   const send = async (action: string, payload: Record<string, unknown> = {}) => {

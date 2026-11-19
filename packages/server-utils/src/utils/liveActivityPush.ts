@@ -2,6 +2,7 @@ import { LiveActivityPushEventSchema, type LiveActivityPushEvent } from '@bike4m
 import type { Logger } from '@bike4mind/observability';
 import { isPushDeliveryConfigured } from './pushDelivery';
 import { NotificationEvents } from './eventBus';
+import { isTopLevelRun } from './isTopLevelRun';
 
 /**
  * Publish-side helpers for `notification.liveActivity` (delivered by apps/workers/src/events/sendPush.ts).
@@ -36,14 +37,7 @@ export async function publishLiveActivityUpdate(
   }
 }
 
-/** A run with no parent, spawner or DAG node: the only kind that owns a live activity or a terminal push. */
-export function isTopLevelRun(execution: {
-  parentExecutionId?: unknown;
-  spawnedByExecutionId?: unknown;
-  dagNodeId?: string;
-}): boolean {
-  return !execution.parentExecutionId && !execution.spawnedByExecutionId && !execution.dagNodeId;
-}
+export { isTopLevelRun };
 
 export async function endAgentRunLiveActivity(
   execution: {
