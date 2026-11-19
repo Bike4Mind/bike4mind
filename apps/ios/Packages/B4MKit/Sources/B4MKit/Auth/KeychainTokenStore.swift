@@ -28,20 +28,51 @@ public struct KeychainTokenStore: TokenStore {
     self.accessGroup = accessGroup
   }
 
-  private var baseQuery: [String: Any] {
+  /// Whether a failed operation against the shared access group should be retried app-private: only when a
+  /// group was requested and the system rejected it for a missing entitlement (a signed build without
+  /// Keychain Sharing). Every other failure is a real error and must surface.
+  static func shouldFallBackToPrivate(status: OSStatus, accessGroup: String?) -> Bool {
+    accessGroup != nil && status == errSecMissingEntitlement
+  }
+
+  private func query(sharedGroup: Bool) -> [String: Any] {
     var query: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: service,
       kSecAttrAccount as String: account,
     ]
-    if let accessGroup {
+    if sharedGroup, let accessGroup {
       query[kSecAttrAccessGroup as String] = accessGroup
     }
     return query
   }
 
   public func refreshToken() throws -> String? {
-    var query = baseQuery
+    do {
+      return try readToken(sharedGroup: true)
+    } catch let error as KeychainError
+      where Self.shouldFallBackToPrivate(status: error.status, accessGroup: accessGroup)
+    {
+      return try readToken(sharedGroup: false)
+    }
+  }
+
+  public func setRefreshToken(_ token: String?) throws {
+    guard let token else {
+      try deleteToken()
+      return
+    }
+    do {
+      try writeToken(token, sharedGroup: true)
+    } catch let error as KeychainError
+      where Self.shouldFallBackToPrivate(status: error.status, accessGroup: accessGroup)
+    {
+      try writeToken(token, sharedGroup: false)
+    }
+  }
+
+  private func readToken(sharedGroup: Bool) throws -> String? {
+    var query = query(sharedGroup: sharedGroup)
     query[kSecReturnData as String] = true
     query[kSecMatchLimit as String] = kSecMatchLimitOne
 
@@ -58,13 +89,19 @@ public struct KeychainTokenStore: TokenStore {
     }
   }
 
-  public func setRefreshToken(_ token: String?) throws {
-    guard let token else {
-      let status = SecItemDelete(baseQuery as CFDictionary)
-      guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError(status: status) }
-      return
+  /// Clears both locations so a session written app-private (no entitlement) cannot outlive sign-out.
+  private func deleteToken() throws {
+    for sharedGroup in accessGroup == nil ? [false] : [true, false] {
+      let status = SecItemDelete(query(sharedGroup: sharedGroup) as CFDictionary)
+      let tolerated =
+        status == errSecSuccess || status == errSecItemNotFound
+        || (sharedGroup && Self.shouldFallBackToPrivate(status: status, accessGroup: accessGroup))
+      guard tolerated else { throw KeychainError(status: status) }
     }
+  }
 
+  private func writeToken(_ token: String, sharedGroup: Bool) throws {
+    let base = query(sharedGroup: sharedGroup)
     // ThisDeviceOnly: a rotating refresh token must not ride an encrypted backup onto a second device,
     // where both copies would race to rotate it. After-first-unlock still lets the share extension and
     // background refreshes read it. The update rewrites the attribute on items stored before this change.
@@ -72,11 +109,11 @@ public struct KeychainTokenStore: TokenStore {
       kSecValueData as String: Data(token.utf8),
       kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
     ]
-    let updateStatus = SecItemUpdate(baseQuery as CFDictionary, attributes as CFDictionary)
+    let updateStatus = SecItemUpdate(base as CFDictionary, attributes as CFDictionary)
     if updateStatus == errSecSuccess { return }
     guard updateStatus == errSecItemNotFound else { throw KeychainError(status: updateStatus) }
 
-    let addStatus = SecItemAdd(baseQuery.merging(attributes) { $1 } as CFDictionary, nil)
+    let addStatus = SecItemAdd(base.merging(attributes) { $1 } as CFDictionary, nil)
     guard addStatus == errSecSuccess else { throw KeychainError(status: addStatus) }
   }
 }
