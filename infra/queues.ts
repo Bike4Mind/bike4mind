@@ -1772,10 +1772,9 @@ const libreoncologyAudioRenderQueueSubscription = libreoncologyAudioRenderQueue.
 );
 
 // Package-declared queue pairs. Core alarms the DLQ (dlqAlarms.ts) and links both URLs
-// (web.ts) but subscribes no consumer, and contributeInfra in sst.config.ts is not handed
-// these queues, so a pair has no consumer until that wiring exists. Without core names
-// nothing stops a pair from reusing a core logical name, so codegen without infra/ fails the
-// deploy here.
+// (web.ts) but subscribes no consumer: sst.config.ts hands the pairs to a package's
+// contributeInfra, which subscribes its own. Without core names nothing stops a pair from
+// reusing a core logical name, so codegen without infra/ fails the deploy here.
 const reservedContributedQueueNames = reservedQueueNames(generatedInfraResources);
 const { contributedInfraResources } = generatedInfraResources;
 if (reservedContributedQueueNames === null && contributedInfraResources.queues.length > 0) {
