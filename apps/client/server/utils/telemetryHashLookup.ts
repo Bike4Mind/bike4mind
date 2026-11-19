@@ -19,7 +19,7 @@ export function deriveTelemetrySalts(): { salt: string; dateKey: string }[] {
   if (writerKey && writerKey !== 'not-configured' && !hmacSecrets.includes(writerKey)) hmacSecrets.push(writerKey);
   if (hmacSecrets.length === 0 && process.env.NODE_ENV !== 'development') {
     console.warn(
-      '[Telemetry] SECRET_ENCRYPTION_KEY not configured — using predictable fallback salt. Hashes are reversible.'
+      '[Telemetry] Neither HMAC_SIGNING_SECRET nor SECRET_ENCRYPTION_KEY is configured - using predictable fallback salt. Hashes are reversible.'
     );
   }
   // The rolling cutoff intersects this UTC date too, even before its time of day has elapsed.

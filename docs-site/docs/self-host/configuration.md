@@ -69,7 +69,7 @@ Each of these is fully optional; leaving the variables blank disables the integr
 | Okta | `OKTA_CLIENT_ID`, `OKTA_CLIENT_SECRET`, `OKTA_AUDIENCE` | Enterprise SSO |
 | Stripe | `STRIPE_*` | Billing (hosted-service feature; not needed for self-host - credit metering is off by default) |
 | Slack | `SLACK_*` | Slack integration |
-| Signing secret | `HMAC_SIGNING_SECRET`, `HMAC_SIGNING_SECRET_PREVIOUS` | A dedicated key for signed image URLs and hashed identifiers (`openssl rand -hex 32`). While `HMAC_SIGNING_SECRET` is blank, `SECRET_ENCRYPTION_KEY` is used. Put the outgoing secret in `HMAC_SIGNING_SECRET_PREVIOUS` while older values are still honoured |
+| Signing secret | `HMAC_SIGNING_SECRET`, `HMAC_SIGNING_SECRET_PREVIOUS` | A dedicated key for signed image URLs and hashed identifiers (`openssl rand -hex 32`). While `HMAC_SIGNING_SECRET` is blank, `SECRET_ENCRYPTION_KEY` is used. Put the outgoing secret in `HMAC_SIGNING_SECRET_PREVIOUS` and keep it for at least 90 days, the telemetry retention window |
 
 ## Gotchas
 

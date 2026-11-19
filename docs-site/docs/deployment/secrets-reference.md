@@ -154,7 +154,7 @@ Signed image URLs, hashed telemetry identifiers and purge receipts use their own
 pnpm sst secret set HMAC_SIGNING_SECRET "$(openssl rand -hex 32)" --stage <stage>
 ```
 
-When you set `HMAC_SIGNING_SECRET` for the first time, move the secret that signed existing values into `HMAC_SIGNING_SECRET_PREVIOUS`. That is `SECRET_ENCRYPTION_KEY` for a stage that never had a dedicated secret. Values signed with the previous secret keep verifying while it stays set, and new values are signed with the new one. Once nothing signed with the old secret needs to verify, clear `HMAC_SIGNING_SECRET_PREVIOUS`.
+When you set `HMAC_SIGNING_SECRET` for the first time, move the secret that signed existing values into `HMAC_SIGNING_SECRET_PREVIOUS`. That is `SECRET_ENCRYPTION_KEY` for a stage that never had a dedicated secret. Values signed with the previous secret keep verifying while it stays set, and new values are signed with the new one. Keep it set for at least 90 days: telemetry export and deletion find a user's records only under the keys still configured, and telemetry is kept for 90 days. Once nothing signed with the old secret needs to verify, clear `HMAC_SIGNING_SECRET_PREVIOUS`.
 
 ---
 
