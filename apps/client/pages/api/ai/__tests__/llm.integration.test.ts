@@ -180,7 +180,7 @@ const { mockAdmitRequestCompletion, mockQuotaRelease } = vi.hoisted(() => {
     mockAdmitRequestCompletion: vi.fn(async (..._a: unknown[]) => ({ release: mockQuotaRelease })),
   };
 });
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: (...a: unknown[]) => mockAdmitRequestCompletion(...a),
 }));
 

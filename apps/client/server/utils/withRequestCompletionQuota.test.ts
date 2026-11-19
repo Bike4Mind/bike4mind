@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 
 const mocks = vi.hoisted(() => ({ admit: vi.fn(), release: vi.fn() }));
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: mocks.admit }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: mocks.admit }));
 import { withRequestCompletionQuota } from './withRequestCompletionQuota';
 
 const request = {} as Request;

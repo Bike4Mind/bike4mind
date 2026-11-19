@@ -1162,7 +1162,8 @@ const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
 );
 
 // Generated media a notebook or message delete could not purge within its request budget
-// (apps/client/server/sessions/purgeDeletedNotebookMedia.ts, purgeDeletedMessageMedia.ts) finishes here.
+// (packages/server-utils/src/sessions/purgeDeletedNotebookMedia.ts,
+// apps/client/server/sessions/purgeDeletedMessageMedia.ts) finishes here.
 const generatedMediaPurgeQueueDLQ = new sst.aws.Queue('generatedMediaPurgeQueueDLQ', {});
 const generatedMediaPurgeQueue = new sst.aws.Queue('generatedMediaPurgeQueue', {
   visibilityTimeout: '6 minutes',
@@ -1197,6 +1198,21 @@ const generatedMediaPurgeQueueSubscription = generatedMediaPurgeQueue.subscribe(
     transform: { eventSourceMapping: { scalingConfig: { maximumConcurrency: 2 } } },
   }
 );
+
+// Render Job Queue
+// The render engine step (packages/server-utils/src/generationJobs/wiring.ts resolveRenderJobQueueUrl) sends
+// {jobId} here; the render worker (apps/workers/src/render/main.ts) long-polls it, as a Fargate service on hosted
+// stages (infra/renderWorker.ts) or from the self-host chart, so there is no Lambda subscription. The visibility
+// timeout covers the whole render cap (STUDIO_RENDER_MAX_WALL_CLOCK_MS, 30 minutes) plus the hand-back, so a
+// running render is never redelivered to a second task.
+const renderJobDLQ = new sst.aws.Queue('renderJobDLQ', {});
+const renderJobQueue = new sst.aws.Queue('renderJobQueue', {
+  visibilityTimeout: '35 minutes',
+  dlq: {
+    queue: renderJobDLQ.arn,
+    retry: 3,
+  },
+});
 
 // Generation Job Queue
 // One engine step per message (submit, poll or store) for the generic GenerationJob engine; a step that
@@ -1239,6 +1255,8 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
       eventBus,
       generationCallbackQueue,
       generationJobQueue,
+      // The render submit step hands the job to the render worker.
+      renderJobQueue,
       // A masked image edit converts the mask to PNG there.
       imageProcessor,
     ],
@@ -1795,6 +1813,7 @@ export {
   imageGenerationQueue,
   imageEditQueue,
   generationJobQueue,
+  renderJobQueue,
   researchEngineQueue,
   whatsNewGenerationQueue,
   notebookCurationQueue,
@@ -1835,6 +1854,7 @@ export {
   imageGenerationDLQ,
   imageEditDLQ,
   generationJobDLQ,
+  renderJobDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
   notebookCurationQueueDLQ,

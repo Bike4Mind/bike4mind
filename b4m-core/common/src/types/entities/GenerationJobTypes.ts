@@ -7,15 +7,20 @@ import type { StoredSceneCompositionRequest } from '../../scene';
 import type { SoundGenerationVendor } from '../../soundGeneration';
 import type { ProviderJobHandle, VideoGenerationRequest, VideoProviderId } from '../../video';
 import type { VoiceGenerationVendor, VoiceOutputFormat } from '../../voiceGeneration';
+import type { StudioRenderPricing } from '../../studioComposition/render';
+import type { StudioTimeline, StudioTimelineOutput } from '../../studioComposition/timeline';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType, type CreditHoldRecord } from './CreditHolderTypes';
 
-/** `compose` renders a Scene (a video with a music track muxed in) from files the caller already has. */
-export const GENERATION_JOB_KINDS = ['video', 'music', 'image', 'speech', 'sound_effect', 'compose'] as const;
+/**
+ * `compose` renders a Scene (a video with a music track muxed in) from files the caller already has; `render` encodes a
+ * Studio Productions timeline to one output size.
+ */
+export const GENERATION_JOB_KINDS = ['video', 'music', 'image', 'speech', 'sound_effect', 'compose', 'render'] as const;
 export type GenerationJobKind = (typeof GENERATION_JOB_KINDS)[number];
 
-/** The kinds a chat message can start; every generation kind can now land on a quest. */
+/** The kinds a chat message can start. `render` is Studio-only: it exports a Production, it never lands on a quest. */
 export const QUEST_GENERATION_JOB_KINDS = ['video', 'music', 'image'] as const satisfies readonly GenerationJobKind[];
 export type QuestGenerationJobKind = (typeof QUEST_GENERATION_JOB_KINDS)[number];
 
@@ -96,6 +101,11 @@ export type GenerationJobError = {
   providerStatus?: number;
   /** For a provider at capacity (providerStatus 429): how long the caller should wait before retrying. */
   retryAfterSeconds?: number;
+  /**
+   * Set on an orphaned_submit when our own step deadline aborted the submit: an expected, handled outcome that the
+   * synchronous audio routes log at warn rather than error.
+   */
+  cutOffByStepDeadline?: boolean;
 };
 
 export type VideoJobOutput = {
@@ -253,6 +263,40 @@ export type ComposeJobPayload = {
   output?: ComposeJobOutput;
 };
 
+/**
+ * What one render job encodes, snapshotted at create: later edits to the Production do not change an export that is
+ * already queued. The timeline is the versioned spec, stored unchanged.
+ */
+export type StoredRenderRequest = {
+  compositionId: string;
+  /** The Production's title at export time; names the output file. */
+  title: string;
+  output: StudioTimelineOutput;
+  timeline: StudioTimeline;
+};
+
+/** The price snapshot the hold was computed from, so settlement charges exactly what the hold priced. */
+export type RenderJobPricing = {
+  usdPerOutputSecond: StudioRenderPricing['usdPerOutputSecond'][keyof StudioRenderPricing['usdPerOutputSecond']];
+  billedSeconds: number;
+  usd: number;
+};
+
+/**
+ * One output size per job. The render worker encodes outside the engine and reports through a status object in the
+ * generated bucket (studioRenderStatusKey); the store step then saves the MP4 to Files.
+ */
+export type RenderJobPayload = {
+  request: StoredRenderRequest;
+  pricing: RenderJobPricing;
+  /** Shared by the jobs of one export, one per selected size. */
+  groupId: string;
+  groupSize: number;
+  /** The worker's finished encode, read from its status object, until the store step saves it to Files. */
+  rendered?: { s3Key: string; bytes: number; durationSeconds: number };
+  output?: VideoJobOutput;
+};
+
 /** Each kind's payload; the job type is a union discriminated on `kind`. */
 export type GenerationJobPayloads = {
   video: VideoJobPayload;
@@ -261,6 +305,7 @@ export type GenerationJobPayloads = {
   speech: SpeechJobPayload;
   sound_effect: SoundEffectJobPayload;
   compose: ComposeJobPayload;
+  render: RenderJobPayload;
 };
 
 export const GENERATION_JOB_DELIVERY_KINDS = ['slack'] as const;
@@ -319,7 +364,7 @@ export type IGenerationJobDocumentOf<K extends GenerationJobKind> = Extract<IGen
 
 /**
  * The text a job was made from, for titles and notifications: audio kinds take `text`, a Scene (which has no prompt)
- * its optional title, the rest a prompt.
+ * its optional title, a render its title, the rest a prompt.
  */
 export const generationJobPrompt = (job: IGenerationJob): string => {
   switch (job.kind) {
@@ -328,6 +373,8 @@ export const generationJobPrompt = (job: IGenerationJob): string => {
       return job.payload.request.text;
     case 'compose':
       return job.payload.request.title ?? '';
+    case 'render':
+      return job.payload.request.title;
     default:
       return job.payload.request.prompt;
   }
@@ -385,6 +432,8 @@ export type ListByRequesterQuery = {
   source?: GenerationJobSource;
   /** Exclusive: only jobs whose id sorts before this one (the previous page's last id). */
   beforeId?: string;
+  /** Only render jobs of this Production (payload.request.compositionId); meaningful with kind 'render'. */
+  compositionId?: string;
   limit: number;
 };
 

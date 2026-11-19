@@ -18,6 +18,7 @@ import { ApprovalGate } from './tools/ApprovalGate';
 // Skill authorization tests must not depend on the user's login-shell startup.
 vi.mock('./tools/userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./tools/userPath')>()),
+  resolveLoginShellVariables: async () => ({}),
   resolveUserPath: async () => process.env.PATH ?? '',
 }));
 

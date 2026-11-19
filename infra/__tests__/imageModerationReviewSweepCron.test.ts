@@ -39,7 +39,7 @@ describe('imageModerationReviewSweep cron', () => {
   it.each([
     'imageModerationReviewSweepDeadLetter.sendPermission,',
     'transform: imageModerationReviewSweepDeadLetter.functionTarget,',
-    'transform: imageModerationReviewSweepDeadLetter.ruleTarget,',
+    'transform: { target: { ...imageModerationReviewSweepDeadLetter.ruleTarget.target, input: undefined } },',
     'imageModerationReviewSweepDeadLetter.allowRules([$util.output(imageModerationReviewSweep)]);',
   ])('dead-letters both handler and delivery failures: %s', wiring => {
     expect(CRON).toContain(wiring);

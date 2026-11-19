@@ -82,7 +82,7 @@
   "apps/client/server/memory/reembedMementos.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/middlewares/clientUsage.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/modelAccess/modelAccessStore.ts": { "b4m/require-update-validators": { "count": 3 } },
-  "apps/client/server/personas/personaAccounts.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/server-utils/src/personas/personaAccounts.ts": { "b4m/require-update-validators": { "count": 3 } },
   "apps/client/server/qa/evaluateAlarm.ts": { "b4m/require-update-validators": { "count": 3 } },
   "apps/client/server/services/publish/restrictDuplicatePublications.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/services/publish/settlePublication.ts": { "b4m/require-update-validators": { "count": 1 } },
@@ -696,11 +696,6 @@
   "apps/client/app/components/Session/AISettings/FilesSection.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 6
-    }
-  },
-  "apps/client/app/components/Session/AISettings/ImageGenerationModelSelectionModal.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 14
     }
   },
   "apps/client/app/components/Session/AISettings/InspectableSettingsButton.tsx": {
@@ -3439,7 +3434,7 @@
       "count": 3
     }
   },
-  "apps/client/server/models/UserSubscription.ts": {
+  "packages/server-utils/src/models/UserSubscription.ts": {
     "b4m/require-update-validators": { "count": 1 },
     "@typescript-eslint/no-explicit-any": {
       "count": 1
@@ -3559,16 +3554,6 @@
       "count": 23
     }
   },
-  "apps/workers/src/cron/accountCampaignSweep.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/cron/accountCampaignSweep.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
   "apps/workers/src/cron/accountDeletionSweep.test.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
@@ -3589,32 +3574,12 @@
       "count": 1
     }
   },
-  "apps/workers/src/cron/apiProbeScoring.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/cron/apiProbeScoring.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/cron/personaExpirySweep.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
   "apps/workers/src/events/dlqTriage.test.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
     }
   },
   "apps/workers/src/events/dlqTriage.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/events/sessionSummarization.test.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
     }
@@ -3636,7 +3601,7 @@
   },
   "apps/workers/src/events/stripe/customerSubscriptionUpdated.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 81
+      "count": 80
     }
   },
   "apps/workers/src/events/stripe/invoicePaymentSucceeded.test.ts": {
@@ -3665,10 +3630,7 @@
     }
   },
   "apps/workers/src/organizations/retentionCleanup.ts": {
-    "b4m/require-update-validators": { "count": 7 },
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
+    "b4m/require-update-validators": { "count": 7 }
   },
   "apps/workers/src/organizations/retentionErasure.e2e.test.ts": {
     "b4m/no-workers-server-bridge": {
@@ -3677,12 +3639,12 @@
   },
   "apps/workers/src/queueHandlers/accountDataExport.test.ts": {
     "b4m/no-workers-server-bridge": {
-      "count": 3
+      "count": 1
     }
   },
   "apps/workers/src/queueHandlers/accountDataExport.ts": {
     "b4m/no-workers-server-bridge": {
-      "count": 2
+      "count": 1
     }
   },
   "apps/workers/src/queueHandlers/accountDataExportCollections.test.ts": {
@@ -3700,16 +3662,6 @@
       "count": 1
     }
   },
-  "apps/workers/src/queueHandlers/agentExecutor.confidenceGate.e2e.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 4
-    }
-  },
-  "apps/workers/src/queueHandlers/agentExecutor.push.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
   "apps/workers/src/queueHandlers/agentExecutor.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
@@ -3720,16 +3672,6 @@
       "count": 1
     }
   },
-  "apps/workers/src/queueHandlers/generatedMediaPurge.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 4
-    }
-  },
-  "apps/workers/src/queueHandlers/generatedMediaPurge.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 2
-    }
-  },
   "apps/workers/src/queueHandlers/notebookCuration.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 3
@@ -3738,11 +3680,6 @@
   "apps/workers/src/queueHandlers/notebookCuration.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
-    }
-  },
-  "apps/workers/src/queueHandlers/researchEngineQueue.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
     }
   },
   "apps/workers/src/queueHandlers/researchEngineQueue.ts": {
@@ -3769,16 +3706,6 @@
   "apps/workers/src/queueHandlers/whatsNewHighlights.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
-    }
-  },
-  "apps/workers/src/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/selfhost/notebookCurationLive.e2e.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 2
     }
   },
   "apps/workers/src/utils/eventContext.ts": {
@@ -4236,11 +4163,6 @@
   "b4m-core/services/src/llm/ImageGeneration.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 52
-    }
-  },
-  "b4m-core/services/src/llm/ImageGeneration.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 15
     }
   },
   "b4m-core/services/src/llm/QuestMasterHistoryBudget.test.ts": {

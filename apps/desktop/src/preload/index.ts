@@ -260,7 +260,8 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatAddContextDirectory, sessionId, path),
     removeContextDirectory: (sessionId: string, directory: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatRemoveContextDirectory, sessionId, directory),
-    getSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetSession, sessionId),
+    getSession: (sessionId: string, viewed?: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatGetSession, sessionId, viewed),
     renameSession: (sessionId: string, title: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatRenameSession, sessionId, title),
     deleteSession: (sessionId: string, removeWorktree?: boolean) =>

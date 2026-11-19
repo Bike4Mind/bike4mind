@@ -1,6 +1,9 @@
 import type { LiveActivityPushEvent, PushNotificationEvent } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { createLiveActivityThrottle, LIVE_ACTIVITY_STAGE_LABEL_MAX } from '@server/utils/liveActivityPush';
+import {
+  createLiveActivityThrottle,
+  LIVE_ACTIVITY_STAGE_LABEL_MAX,
+} from '@bike4mind/server-utils/utils/liveActivityPush';
 import {
   type ConnectionLookup,
   hasLiveConnection,

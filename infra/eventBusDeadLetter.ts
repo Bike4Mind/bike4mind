@@ -19,7 +19,13 @@
 // eventBus.subscribe returns an Output, so the rule ARN is read inside apply: lifting `.nodes`
 // off the Output resolves every node, and `nodes.function` throws for a subscriber that
 // targets an existing function by ARN (slack-completion-start in infra/llm.ts).
-type RuleSubscription = $util.Output<{ nodes: { rule: { arn: $util.Output<string> } } }>;
+type RuleSubscription = $util.Output<{
+  nodes: { rule: { arn: $util.Output<string> }; target: { arn: $util.Output<string> } };
+}>;
+
+const ruleTargetArns: $util.Output<string>[] = [];
+// Read by infra/webDlqFunctionLogs.ts, which imports every allowRules caller first.
+export const deadLetterRuleTargetArns: readonly $util.Output<string>[] = ruleTargetArns;
 
 export function createEventBusDeadLetter(name: string, queue: sst.aws.Queue) {
   return {
@@ -31,8 +37,11 @@ export function createEventBusDeadLetter(name: string, queue: sst.aws.Queue) {
     functionTarget: { function: { deadLetterConfig: { targetArn: queue.arn } } },
     ruleTarget: { target: { deadLetterConfig: { arn: queue.arn } } },
     // EventBridge delivers to a rule-target DLQ as the events.amazonaws.com service principal.
-    allowRules: (subscriptions: RuleSubscription[]) =>
-      new aws.sqs.QueuePolicy(`${name}Policy`, {
+    allowRules: (subscriptions: RuleSubscription[]) => {
+      ruleTargetArns.push(
+        ...subscriptions.map(subscription => subscription.apply(subscriber => subscriber.nodes.target.arn))
+      );
+      return new aws.sqs.QueuePolicy(`${name}Policy`, {
         queueUrl: queue.url,
         policy: $util
           .all([
@@ -53,6 +62,7 @@ export function createEventBusDeadLetter(name: string, queue: sst.aws.Queue) {
               ],
             })
           ),
-      }),
+      });
+    },
   };
 }

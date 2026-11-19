@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { CreateDataLakeResearchConfigInput } from '@bike4mind/common';
 import type { ResearchFeedCursor } from '@bike4mind/common';
 import { RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT } from '@bike4mind/common';
@@ -413,6 +413,36 @@ describe('DataLakeResearchConfigRepository', () => {
       await repo.updateConfig(id, LAKE, { query: 'new topic' });
 
       expect((await repo.findByIdInLake(id, LAKE))?.feedCursor).toMatchObject({ fingerprint: 'fp-1' });
+    });
+  });
+
+  describe('error handling on by-id lookups', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('reads a malformed id as not found from find, update and delete', async () => {
+      expect(await repo.findByIdInLake('not-an-object-id', LAKE)).toBeNull();
+      expect(await repo.updateConfig('not-an-object-id', LAKE, { name: 'x' })).toBeNull();
+      expect(await repo.deleteConfig('not-an-object-id', LAKE)).toBe(false);
+    });
+
+    it('propagates a transient transaction error from find, update and delete', async () => {
+      const id = '507f1f77bcf86cd799439011';
+      const conflict = () =>
+        Object.assign(new Error('Write conflict during plan execution'), {
+          name: 'MongoServerError',
+          errorLabels: ['TransientTransactionError'],
+        });
+      vi.spyOn(DataLakeResearchConfigModel, 'findOne').mockImplementation((() => Promise.reject(conflict())) as never);
+      vi.spyOn(DataLakeResearchConfigModel, 'findOneAndUpdate').mockImplementation((() =>
+        Promise.reject(conflict())) as never);
+      vi.spyOn(DataLakeResearchConfigModel, 'deleteOne').mockImplementation((() =>
+        Promise.reject(conflict())) as never);
+
+      await expect(repo.findByIdInLake(id, LAKE)).rejects.toMatchObject({ name: 'MongoServerError' });
+      await expect(repo.updateConfig(id, LAKE, { name: 'x' })).rejects.toMatchObject({ name: 'MongoServerError' });
+      await expect(repo.deleteConfig(id, LAKE)).rejects.toMatchObject({ name: 'MongoServerError' });
     });
   });
 });

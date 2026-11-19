@@ -41,6 +41,8 @@ final class AppServices {
   let agentRuns: any AgentRunStarting
   /// Answers an agent's pending approval, on whichever server the app points at.
   let pendingActions: any PendingActionAPI
+  /// The server-composed assistant brief, on whichever server the app currently points at.
+  let briefs: any BriefAPI
   /// Answers an approval from a notification button.
   let approvalNotifications: ApprovalNotificationHandler
   /// Whether the signed-in account is waiting to be deleted; `RootView` shows the restore screen then.
@@ -92,6 +94,12 @@ final class AppServices {
       return PendingActionClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
     pendingActions = pendingActionAPI
+    briefs = ForwardingBriefAPI {
+      #if DEBUG
+        if FixtureServices.isEnabled { return FixtureServices.briefAPI }
+      #endif
+      return BriefClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
     approvalNotifications = ApprovalNotificationHandler(api: pendingActionAPI, feedback: SystemApprovalFeedback())
 
     #if DEBUG
@@ -330,5 +338,22 @@ struct ForwardingPendingActionAPI: PendingActionAPI {
 
   func respond(to target: PendingActionTarget, decision: PendingActionDecision) async throws -> PendingActionResult {
     try await provider().respond(to: target, decision: decision)
+  }
+}
+
+/// Routes brief calls to whichever server the app currently points at (it can change in debug builds).
+struct ForwardingBriefAPI: BriefAPI {
+  let provider: @MainActor @Sendable () -> any BriefAPI
+
+  func compose() async throws -> Brief {
+    try await provider().compose()
+  }
+
+  func list() async throws -> [Brief] {
+    try await provider().list()
+  }
+
+  func brief(id: String) async throws -> Brief {
+    try await provider().brief(id: id)
   }
 }

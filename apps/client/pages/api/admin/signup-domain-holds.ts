@@ -21,7 +21,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { releaseHeldSignupCredits } from '@server/security/signupDomainHoldAssessment/releaseHeldSignupCredits';
+import { releaseHeldSignupCredits } from '@bike4mind/server-utils/security/signupDomainHoldAssessment/releaseHeldSignupCredits';
 import { isSelfOrImpersonator, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const decisionSchema = z.object({

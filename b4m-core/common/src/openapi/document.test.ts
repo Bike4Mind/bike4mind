@@ -11,7 +11,7 @@ import {
   UNDOCUMENTED_API_KEY_SCOPES,
 } from '../types/entities/UserApiKeyTypes';
 import { CONTRACTS, chatContract, getMeContract, synthesizeSpeechContract } from '../api-contract';
-import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
+import { QUEST_OUTCOME_ERROR_CODES } from '../types/entities/SessionTypes';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spec doc is loosely typed for traversal
 const doc = buildOpenApiDocument('9.9.9') as any;
@@ -482,16 +482,16 @@ describe('buildOpenApiDocument', () => {
 
     const component = doc.components.schemas.sendChatMessage200PollResult;
     expect(component.properties.type.enum).toContain('error');
-    // The same vocabulary the synchronous 422s classify with, not a chat-local one.
-    expect(component.properties.errorCode.enum).toEqual([...QUEST_ERROR_CODES]);
+    // The stored quest-outcome vocabulary includes billing failures and moderation refusals.
+    expect(component.properties.errorCode.enum).toEqual([...QUEST_OUTCOME_ERROR_CODES]);
     expect(doc.components.schemas.generateMusicResponse422.properties.errorCode.enum).toContain('insufficient_credits');
   });
 
   it('tells a caller that type, not errorCode, is the failure signal', () => {
     // The failure text lands in `reply`, the same field an answer uses, so the
     // instruction is the difference between a handled failure and a consumed one.
-    // errorCode is reachable for only ONE failure class (billing), so the contract
-    // must say `type` is checked first and `errorCode`'s absence is not success.
+    // errorCode refines billing failures and moderation refusals; other failures remain unclassified.
+    // The contract must say `type` is checked first and `errorCode`'s absence is not success.
     expect(chat.description).toContain('insufficient_credits');
     expect(chat.description).toMatch(/type.*is the failure signal/i);
     expect(chat.responses['200'].description).toMatch(/errorCode/);

@@ -22,6 +22,7 @@ import BriefPanel from './BriefPanel';
 import ClipInspector from './ClipInspector';
 import HookVariationButton from './HookVariationButton';
 import { probeMediaDurationMs } from './probeMediaDuration';
+import { ExportPanel } from './ExportPanel';
 import SecondsField from './SecondsField';
 import ShotsBoard from './ShotsBoard';
 import { formatTimecode } from './timelinePlayback';
@@ -29,6 +30,7 @@ import {
   DEFAULT_IMAGE_CLIP_MS,
   addCaptionClip,
   addMediaClip,
+  setClipCrop,
   setTimelineDuration,
   toggleOutput,
   type StudioMediaTrackKind,
@@ -257,6 +259,11 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
           >
             {status.kind === 'error' ? `${STATUS_LABEL.error}: ${status.message}` : STATUS_LABEL[status.kind]}
           </Chip>
+          <ExportPanel
+            compositionId={composition.id}
+            timeline={timeline}
+            canExport={status.kind === 'saved' && dirtyFields.size === 0}
+          />
         </Toolbar>
 
         <PlanGrid>
@@ -278,6 +285,10 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
               files={files}
               clock={clock}
               onSourceDuration={reportDuration}
+              selectedClipId={selectedClipId}
+              onCropChange={(clipId, rect) =>
+                setTimeline(current => setClipCrop(current, clipId, output.aspectRatio, rect))
+              }
             />
             <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
               <PlaybackTransport clock={clock} durationMs={timeline.durationMs} />

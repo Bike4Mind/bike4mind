@@ -62,7 +62,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       knowledgeAccess: {
         userGroups: req.user.groups ?? undefined,
         resolveLakeAccess: () =>
-          (lakeAccess ??= import('@server/dataLakes/attachmentLakeAccess').then(m =>
+          (lakeAccess ??= import('@bike4mind/server-utils/dataLakes/attachmentLakeAccess').then(m =>
             m.createAttachmentLakeAccess(req.user, req.logger)()
           )),
       },

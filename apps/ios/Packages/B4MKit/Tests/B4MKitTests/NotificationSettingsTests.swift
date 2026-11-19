@@ -26,6 +26,7 @@ final class NotificationSettingsTests: XCTestCase {
       [
         "agent_completed", "agent_failed", "approval_needed", "chat_completed", "generation_ready", "agent_message",
         "session_handoff",
+        "brief_ready",
       ])
   }
 

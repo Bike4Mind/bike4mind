@@ -82,24 +82,31 @@ describe('DataLakeProposalsPanel', () => {
         ],
       });
 
-    it('names the rule condition that matched, joining several with a semicolon', () => {
+    it('names the rule condition that matched, quoting and joining several with a comma', () => {
       withReason({ kind: 'rule_match', conditions: ['it is a press release', 'the author is an employee'] });
       expect(screen.getByTestId('datalake-proposal-review-reason').textContent).toBe(
-        'Sent to review: matched it is a press release; the author is an employee'
+        'Sent to review: matched "it is a press release", "the author is an employee"'
       );
     });
 
     it('says which condition could not be checked', () => {
       withReason({ kind: 'rule_undetermined', conditions: ['the author is an employee'] });
       expect(screen.getByTestId('datalake-proposal-review-reason').textContent).toBe(
-        'Sent to review: could not check the author is an employee'
+        'Sent to review: could not tell whether "the author is an employee" applies'
+      );
+    });
+
+    it('joins several undetermined conditions with "or"', () => {
+      withReason({ kind: 'rule_undetermined', conditions: ['it is a press release', 'the author is an employee'] });
+      expect(screen.getByTestId('datalake-proposal-review-reason').textContent).toBe(
+        'Sent to review: could not tell whether "it is a press release" or "the author is an employee" applies'
       );
     });
 
     it('says the rule check failed without naming a condition', () => {
       withReason({ kind: 'rule_check_failed' });
       expect(screen.getByTestId('datalake-proposal-review-reason').textContent).toBe(
-        'Sent to review: rule check failed'
+        'Sent to review: the rule check failed'
       );
     });
 

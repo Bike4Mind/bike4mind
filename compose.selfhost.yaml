@@ -249,6 +249,33 @@ services:
     stop_grace_period: 14m
     restart: unless-stopped
 
+  # Studio render worker (optional), the same worker the chart runs as its renderWorker Deployment.
+  # Long-polls renderJobQueue, encodes with ffmpeg, writes the MP4 to
+  # object storage and hands the job back to generationJobQueue. Behind the `render` profile so a
+  # stack that does not export video never pulls the ffmpeg image; it reads RENDER_JOB_QUEUE from
+  # .env.selfhost like the app. Without it, exports wait until their deadline and are refunded. Opt in with:
+  #   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile render up -d
+  # The sst alias hook maps `Resource.*` onto the env-backed @bike4mind/resource shim, as for `worker`.
+  render-worker:
+    profiles: ['render']
+    build:
+      context: .
+      dockerfile: apps/workers/Dockerfile.renderworker
+    env_file:
+      - .env.selfhost
+    # The image CMD runs the worker with the sst alias shim, so there is no command override here.
+    depends_on:
+      mongo:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      sqs:
+        condition: service_started
+    # On SIGTERM the worker aborts an in-flight encode and hands its message back after 90s
+    # (RENDER_DRAIN_GRACE_MS); the extra time covers the upload and hand-back.
+    stop_grace_period: 150s
+    restart: unless-stopped
+
   # Always-on chatCompletion HTTP worker — the self-host equivalent of the hosted Fargate
   # ChatCompletion. The `app` container POSTs created quests to `/process` here
   # (dispatchQuest -> ${CHAT_COMPLETION}/process); this container runs
