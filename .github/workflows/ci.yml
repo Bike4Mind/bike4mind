@@ -53,6 +53,7 @@ jobs:
       deployable: ${{ github.event.pull_request.draft == true && 'false' || steps.filter.outputs.deployable }}
       docs-changed: ${{ github.event.pull_request.draft == true && 'false' || steps.filter.outputs.docs-changed }}
       published-changed: ${{ steps.filter.outputs.published-changed }}
+      changed-files: ${{ steps.changed-files.outputs.files }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -60,6 +61,27 @@ jobs:
       - name: Detect deployable / docs / published changes
         id: filter
         uses: ./.github/actions/changes-filter
+
+      # The PR's own changes (merge base to head, as the filter above reads them), for core-build to
+      # pick the packages the test legs run. Left empty, which tests every package, on push, when
+      # the range does not resolve, or past 3000 files (job outputs are capped at 1 MB).
+      - name: List the PR's changed files
+        id: changed-files
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          files=''
+          if merge_base=$(git merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA") \
+            && list=$(git -c core.quotePath=false diff --no-renames --name-only "$merge_base" "$PR_HEAD_SHA"); then
+            count=$(printf '%s' "$list" | grep -c '' || true)
+            echo "${count} file(s) changed since ${merge_base}"
+            if [ "$count" -le 3000 ]; then
+              files=$(printf '%s\n' "$list" | jq -Rsc 'split("\n") | map(select(length > 0))')
+            fi
+          fi
+          echo "files=${files}" >> "$GITHUB_OUTPUT"
 
   # Build the core packages once and publish their dist/ as an artifact. The
   # gating jobs below (lint, the test shards - one of which also carries the
@@ -78,6 +100,7 @@ jobs:
 
     outputs:
       core-content-hash: ${{ steps.core-hash.outputs.content_hash }}
+      affected: ${{ steps.affected.outputs.affected }}
 
     steps:
       # Shallow: the content hash reads only HEAD's tree. History is for repo-guards' ASCII checks.
@@ -117,6 +140,15 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --recursive
+
+      # Here rather than in `changes` because it needs turbo's package graph, which this job has
+      # installed anyway. Every test leg reads it; see the "Select affected packages" step there.
+      - name: Pick the packages to test
+        id: affected
+        continue-on-error: true
+        env:
+          CHANGED_FILES: ${{ needs.changes.outputs.changed-files }}
+        run: node scripts/ci-affected-tests.mjs plan
 
       - name: Build bike4mind core packages
         run: pnpm core:build
@@ -510,6 +542,13 @@ jobs:
   #     of the named buckets requires adding it there AND excluding it here, or it
   #     will run twice; checkClientTestShards.test.ts fails the build when the misc
   #     exclusions and the other unit buckets' filters disagree.
+  # On pull_request, each leg tests only the packages in its filters that the PR affects (the
+  # "Select affected packages" step, from core-build's `affected` output): those owning a changed
+  # file, their dependents, packages whose turbo.json inputs read a changed file, and the
+  # WHOLE_REPO_TEST_PACKAGES. Root config, lockfile, turbo global dependency, workflow and
+  # selection-code changes test everything, as do push runs and any failure to decide. A leg left
+  # with nothing skips its setup and passes in seconds. misc (root-level and repo-scan tests) and
+  # the typecheck leg always run.
   # The `test` job below aggregates these shards into the required "Run Tests"
   # status check.
   test-shards:
@@ -643,10 +682,26 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      # Narrows the leg's filters to the packages this PR affects (see the matrix comment above).
+      # `setup` gates every step below, so a leg with nothing to test skips its install too. It also
+      # fails the leg when a declared filter matches no workspace package, the same misconfiguration
+      # the test steps' "Empty test shard" guard catches, so a skipped leg still checks its filters.
+      - name: Select affected packages
+        id: select
+        env:
+          AFFECTED: ${{ needs.core-build.outputs.affected }}
+          SHARD_NAME: ${{ matrix.shard.name }}
+          SHARD_FILTER: ${{ matrix.shard.filter }}
+          INTEGRATION_FILTER: ${{ matrix.shard.integration-filter }}
+          ALWAYS_SETUP: ${{ (matrix.shard.name == 'misc' || matrix.shard.typecheck == 'true') && 'true' || 'false' }}
+        run: node scripts/ci-affected-tests.mjs shard
+
       - name: Setup pnpm
+        if: steps.select.outputs.setup == 'true'
         uses: pnpm/action-setup@v5
 
       - name: Cache pnpm dependencies
+        if: steps.select.outputs.setup == 'true'
         uses: actions/cache@v5
         with:
           path: |
@@ -658,10 +713,12 @@ jobs:
             ${{ runner.os }}-pnpm-
 
       - name: Install dependencies
+        if: steps.select.outputs.setup == 'true'
         run: pnpm install --frozen-lockfile --recursive
 
       - name: Download core build artifacts
         id: download-core
+        if: steps.select.outputs.setup == 'true'
         uses: actions/download-artifact@v7
         with:
           name: core-build-${{ needs.core-build.outputs.core-content-hash }}
@@ -675,6 +732,7 @@ jobs:
         run: pnpm core:build
 
       - name: Download ripgrep binary (for grep_search tests)
+        if: steps.select.outputs.setup == 'true'
         run: |
           POSTINSTALL_PATH=$(find node_modules/.pnpm -name "postinstall.js" -path "*/@vscode/ripgrep/lib/postinstall.js" -type f | head -1)
           if [ -n "$POSTINSTALL_PATH" ]; then
@@ -684,11 +742,12 @@ jobs:
 
       - name: Run premium glue codegen
         id: codegen
+        if: steps.select.outputs.setup == 'true'
         run: pnpm --filter @bike4mind/client run codegen
 
       - name: Generate SST types
         id: sst-types
-        if: matrix.shard.sst != 'skip'
+        if: steps.select.outputs.setup == 'true' && matrix.shard.sst != 'skip'
         run: bash scripts/ci-sst-install.sh
         env:
           CI: 'true'
@@ -700,7 +759,7 @@ jobs:
       # node_modules (~14s per evaluation, paid again by each Post step) and matches lockfiles that
       # dependencies ship, so the key drifted after install and never hit. ciCacheKeys.test.ts.
       - name: Cache mongodb-memory-server binary
-        if: matrix.shard.mongod != 'skip'
+        if: steps.select.outputs.setup == 'true' && matrix.shard.mongod != 'skip'
         uses: actions/cache@v5
         with:
           path: ~/.cache/mongodb-binaries
@@ -714,7 +773,7 @@ jobs:
       # the #1 flake in #1098. Fail-soft: tests still download on demand if this misses. Uses
       # the same package + default version as createMongoServer, so the same binary is cached.
       - name: Pre-warm mongodb-memory-server binary
-        if: matrix.shard.mongod != 'skip'
+        if: steps.select.outputs.setup == 'true' && matrix.shard.mongod != 'skip'
         continue-on-error: true
         run: >-
           pnpm --filter @bike4mind/database exec node -e
@@ -728,6 +787,7 @@ jobs:
       # `restore-keys` takes the newest save for this leg; the run attempt keeps a re-run's save
       # from colliding with the first attempt's key.
       - name: Restore turbo test cache
+        if: steps.select.outputs.setup == 'true'
         uses: actions/cache/restore@v5
         with:
           path: .turbo/cache
@@ -739,6 +799,7 @@ jobs:
       # rather than derived from the job's own start so the number is test runtime, not
       # test runtime plus install and core-build restore.
       - name: Mark shard start
+        if: steps.select.outputs.setup == 'true'
         run: echo "SHARD_START_SECONDS=$(date +%s)" >> "$GITHUB_ENV"
 
       # The unit `test` script; the real-Mongo `test:integration` lanes run in their own step
@@ -754,6 +815,7 @@ jobs:
       # `--continue=always` runs every package even after a failure, so the log names every
       # failing package and the passing ones are cached for the re-run.
       - name: Run Tests (${{ matrix.shard.name }})
+        if: steps.select.outputs.unit-filter != ''
         env:
           CI: true
           TURBO_TELEMETRY_DISABLED: '1'
@@ -768,6 +830,7 @@ jobs:
           TMPDIR: ${{ matrix.shard.tmpfs == 'true' && '/dev/shm' || '' }}
           SHARD_NAME: ${{ matrix.shard.name }}
           SHARD_FILTER: ${{ matrix.shard.filter }}
+          SELECTED_FILTER: ${{ steps.select.outputs.unit-filter }}
           SHARD_SCRIPT: 'test'
           SHARD_ARGS: ${{ matrix.shard.args }}
         run: |
@@ -776,7 +839,9 @@ jobs:
           # into this command line, and there is no `eval`, so a matrix value is only ever data.
           # `read -ra` does no quote processing - the tokens in the matrix must be bare, and
           # checkClientTestShards.test.ts fails the build if one grows a quote character.
-          read -ra filter_args <<< "$SHARD_FILTER"
+          # The guard below checks the leg's declared filter; turbo runs the affected subset of it.
+          read -ra shard_filter_args <<< "$SHARD_FILTER"
+          read -ra filter_args <<< "$SELECTED_FILTER"
           read -ra script_args <<< "$SHARD_ARGS"
 
           # A filter set matching no project is not an error to pnpm: it prints "No projects
@@ -784,7 +849,7 @@ jobs:
           # the same silent-success shape the `--dir` note below exists to close. Resolve the set
           # up front and fail loudly when it is empty. `pnpm ls` counts the workspace root as a
           # match where `pnpm run` does not, so drop it: only real packages count.
-          matched=$(pnpm --recursive "${filter_args[@]}" ls --depth -1 --parseable | grep -cvxF "$PWD" || true)
+          matched=$(pnpm --recursive "${shard_filter_args[@]}" ls --depth -1 --parseable | grep -cvxF "$PWD" || true)
           echo "${SHARD_NAME} matches ${matched} package(s)"
           if [ "$matched" -eq 0 ]; then
             echo "::error title=Empty test shard::The ${SHARD_NAME} leg's filters match no workspace package, so it would run no tests. Check the --filter tokens in the matrix."
@@ -808,7 +873,7 @@ jobs:
       # reports this lane, gated on codegen so a broken setup does not pile a second failure on.
       # Same empty-match guard and one-package-at-a-time rule as the step above.
       - name: Run integration lane (${{ matrix.shard.name }})
-        if: ${{ !cancelled() && matrix.shard.integration-filter && steps.codegen.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.select.outputs.integration-filter != '' && steps.codegen.outcome == 'success' }}
         env:
           CI: true
           TURBO_TELEMETRY_DISABLED: '1'
@@ -816,10 +881,12 @@ jobs:
           TMPDIR: /dev/shm
           SHARD_NAME: ${{ matrix.shard.name }}
           SHARD_FILTER: ${{ matrix.shard.integration-filter }}
+          SELECTED_FILTER: ${{ steps.select.outputs.integration-filter }}
           SHARD_SCRIPT: 'test:integration'
         run: |
-          read -ra filter_args <<< "$SHARD_FILTER"
-          matched=$(pnpm --recursive "${filter_args[@]}" ls --depth -1 --parseable | grep -cvxF "$PWD" || true)
+          read -ra shard_filter_args <<< "$SHARD_FILTER"
+          read -ra filter_args <<< "$SELECTED_FILTER"
+          matched=$(pnpm --recursive "${shard_filter_args[@]}" ls --depth -1 --parseable | grep -cvxF "$PWD" || true)
           echo "${SHARD_NAME} integration lane matches ${matched} package(s)"
           if [ "$matched" -eq 0 ]; then
             echo "::error title=Empty test shard::The ${SHARD_NAME} leg's integration-filter matches no workspace package, so it would run no tests. Check the --filter tokens in the matrix."
@@ -834,7 +901,7 @@ jobs:
       # The scheduler suite is a unit test, so it runs under `test` (the integration lane collects
       # only *.e2e.test.ts). It sets TZ itself at runtime; this step's TZ is for the retention file.
       - name: Verify telemetry retention and worker scheduling across DST
-        if: matrix.shard.name == 'services-workers-integration'
+        if: matrix.shard.name == 'services-workers-integration' && steps.select.outputs.integration-filter != ''
         env:
           TZ: America/New_York
           VITEST_MAX_WORKERS: '2'
