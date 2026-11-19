@@ -435,11 +435,19 @@ describe('CoachMark', () => {
     const { rerender } = render(<Page open={false} anchor="verb" />);
     await screen.findByTestId('tutorial-anchor-ring');
     expect(screen.getByTestId('tutorial-coach-card')).toBeVisible();
+    fireEvent.click(screen.getByTestId('tutorial-coach-hide'));
+    expect(screen.getByTestId('tutorial-coach-pill')).toBeVisible();
 
     rerender(<Page open anchor="verb" />);
-    await waitFor(() => expect(screen.getByTestId('tutorial-coach-card')).not.toBeVisible());
+    await waitFor(() => expect(screen.queryByTestId('tutorial-coach-pill')).toBeNull());
+    expect(screen.getByTestId('tutorial-coach-card')).not.toBeVisible();
     expect(screen.queryByTestId('tutorial-anchor-ring')).toBeNull();
-    expect(screen.queryByTestId('tutorial-coach-pill')).toBeNull();
+
+    rerender(<Page open={false} anchor="verb" />);
+    await waitFor(() => expect(screen.getByTestId('tutorial-coach-pill')).toBeVisible());
+    fireEvent.click(screen.getByTestId('tutorial-coach-pill'));
+    rerender(<Page open anchor="verb" />);
+    await waitFor(() => expect(screen.getByTestId('tutorial-coach-card')).not.toBeVisible());
 
     rerender(<Page open anchor="nav-item" />);
     await waitFor(() => expect(screen.getByTestId('tutorial-coach-card')).toBeVisible());
@@ -447,6 +455,23 @@ describe('CoachMark', () => {
 
     rerender(<Page open={false} anchor="verb" />);
     await waitFor(() => expect(screen.getByTestId('tutorial-coach-card')).toBeVisible());
+  });
+
+  it('takes focus to its primary button once a drawer that hid it closes', async () => {
+    const Page = ({ open }: { open: boolean }) => (
+      <>
+        <nav {...coachCover(open)} />
+        <button data-testid="elsewhere">Elsewhere</button>
+        <CoachMark stepKey="s" body="b" onLeave={() => undefined}>
+          <button data-tutorial-primary="">Next</button>
+        </CoachMark>
+      </>
+    );
+    const { rerender } = render(<Page open />);
+    await waitFor(() => expect(screen.getByTestId('tutorial-coach-card')).not.toBeVisible());
+    act(() => screen.getByTestId('elsewhere').focus());
+    rerender(<Page open={false} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toHaveFocus());
   });
 
   it('follows an anchor that a layout shift moves without resizing it', async () => {

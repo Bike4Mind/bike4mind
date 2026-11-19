@@ -550,11 +550,13 @@ export function CoachMark({
   useEffect(() => {
     // A step that waits on the page has no button of its own; focus stays where the user is working.
     // A panel is modal, so focus has to enter it even when it offers no primary button. preventScroll
-    // keeps a long panel opening at its top rather than at a button low down in it.
+    // keeps a long panel opening at its top rather than at a button low down in it. A hidden card cannot
+    // take focus, so it takes it when the drawer over it closes.
+    if (veiled) return;
     const primary = cardRef.current?.querySelector<HTMLElement>('[data-tutorial-primary]');
     const target = primary ?? (panel ? cardRef.current : null);
     target?.focus({ preventScroll: panel });
-  }, [stepKey, panel]);
+  }, [stepKey, panel, veiled]);
 
   // The ring pulses until the user presses its target; `click` also covers a keyboard press.
   useEffect(() => {
