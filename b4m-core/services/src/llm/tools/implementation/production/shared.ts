@@ -23,7 +23,8 @@ const issueList = (error: UnprocessableEntityError): string => {
 /** Maps the composition service's refusals to text for the model; anything else is a bug and is rethrown. */
 export function describeProductionError(error: unknown): string {
   if (error instanceof ProductionToolError) return `Error: ${error.message}`;
-  if (error instanceof NotFoundError) return 'Error: that production was not found. Use the id from your context.';
+  if (error instanceof NotFoundError)
+    return 'Error: that production was not found. Use the production id from this conversation (the Direct message names it), not a file id.';
   if (error instanceof UnprocessableEntityError) {
     const issues = issueList(error);
     return `Error: the production was not saved (${error.message}${issues ? `: ${issues}` : ''}).`;

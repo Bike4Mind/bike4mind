@@ -42,6 +42,9 @@ export const DirectDialog = ({ composition, open, onClose }: DirectDialogProps) 
       updateSessionsQueryData(queryClient, 'write', session);
       const promptContent = [
         `Direct this production: ${trimmedBrief}`,
+        // The system context reaches only this first run, so the id also sits in the visible message where a
+        // follow-up turn (the user answering the director's question) can read it.
+        `Production id: ${composition.id}`,
         ...(product ? [`Product photo (Files id): ${product.id}`] : []),
       ].join('\n');
       const dispatch: IResolvedPromptDispatch = {

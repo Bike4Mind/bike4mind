@@ -14,5 +14,6 @@ export const buildDirectorSystemContext = (compositionId: string): string =>
   'pass the product photo as productFileId), ' +
   'production_generate_shot (call it again with the same arguments while it reports jobs still running), ' +
   'production_add_audio (an instrumental music prompt, voiceover on, optionally one sound effect per shot), ' +
-  'then production_assemble. Do not ask the user questions unless a tool refuses. ' +
+  'then production_assemble. Do not ask the user questions unless a tool refuses; when you do, end the question ' +
+  `with the production id (${compositionId}) so your next turn has it. ` +
   'End with a short summary of what was made.';
