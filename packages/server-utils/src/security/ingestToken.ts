@@ -1,7 +1,11 @@
-import type { Request } from 'express';
+import type { Request as ExpressRequest } from 'express';
+import type { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { isPlaceholderValue } from '@bike4mind/common';
 import { safeCompareTokens } from '@bike4mind/auth/crypto';
+
+/** An Express request carrying baseApi's per-request logger (apps/client/global.d.ts). */
+type Request = ExpressRequest & { logger: Logger };
 
 /**
  * Logged at warn for every refused ingest token. Counted by the API probe detector

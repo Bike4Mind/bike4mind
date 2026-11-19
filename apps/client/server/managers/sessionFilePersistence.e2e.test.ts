@@ -28,7 +28,7 @@ vi.mock('@bike4mind/server-utils/managers/sessionSideEffects', async importOrigi
   notifySessionCreated: vi.fn().mockResolvedValue(undefined),
 }));
 // The agent path runs for real up to the executor hand-off, which has no deployment here.
-vi.mock('@server/utils/dispatchAgentExecution', () => ({
+vi.mock('@bike4mind/server-utils/utils/dispatchAgentExecution', () => ({
   resolveAgentExecutorTarget: () => ({ kind: 'lambda', functionName: 'agent-executor' }),
   dispatchAgentExecution: vi.fn().mockResolvedValue(undefined),
   AgentExecutorRejectedError: class extends Error {},

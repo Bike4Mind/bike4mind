@@ -10,7 +10,7 @@ import {
 
 const effects = vi.hoisted(() => ({ deleteGenerated: vi.fn(), cdnSend: vi.fn(), enqueue: vi.fn() }));
 
-vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+vi.mock('../utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ delete: effects.deleteGenerated }),
 }));
 vi.mock('./generatedMediaPurgeQueue', () => ({ enqueueGeneratedMediaPurge: effects.enqueue }));
@@ -22,7 +22,7 @@ vi.mock('@aws-sdk/client-cloudfront', () => ({
     constructor(public input: { InvalidationBatch: { Paths: { Items: string[] } } }) {}
   },
 }));
-vi.mock('@bike4mind/server-utils/security/wafSharedHelpers', () => ({
+vi.mock('../security/wafSharedHelpers', () => ({
   resolveRouterDistributionId: () => 'E1A2B3C4D5E6F',
 }));
 
@@ -235,7 +235,7 @@ describe('runGeneratedMediaPurge', () => {
     const originalFind = Quest.find.bind(Quest);
     let finds = 0;
     const find = vi.spyOn(Quest, 'find').mockImplementation(((...args: Parameters<typeof Quest.find>) => {
-      if ((args[0] as Record<string, unknown> | undefined)?.sessionId && ++finds === afterFinds) {
+      if (((args as unknown[])[0] as Record<string, unknown> | undefined)?.sessionId && ++finds === afterFinds) {
         now.mockReturnValue(start + jumpMs);
       }
       return originalFind(...args);
