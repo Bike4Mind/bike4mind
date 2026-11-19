@@ -212,9 +212,9 @@ function railSx(depth: number, first: boolean, last: boolean, guides: string, he
   // so a deep tree shows where the activity is, even folded, and every ancestor on the path glows.
   const elbowColor =
     heat === 'needs-action'
-      ? 'var(--joy-palette-warning-solidBg)'
+      ? 'var(--joy-palette-warning-400)'
       : heat === 'processing'
-        ? 'var(--joy-palette-primary-solidBg)'
+        ? 'var(--joy-palette-primary-400)'
         : RAIL_COLOR;
   return {
     marginInlineStart: `${indent}px`,
@@ -693,7 +693,7 @@ const SessionRow = memo(function SessionRow({
           // Paired with the opacity the button fades in on, so the title's edge travels with
           // the button instead of snapping the moment the pointer lands.
           transition: 'padding-inline-end 120ms',
-          ...(needsAction && { boxShadow: 'inset 2px 0 0 var(--joy-palette-warning-solidBg)' }),
+          ...(needsAction && { boxShadow: 'inset 2px 0 0 var(--joy-palette-warning-400)' }),
         }}
         data-testid="chat-session-item"
         data-session-status={status}
