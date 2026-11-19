@@ -141,11 +141,25 @@ describe('runBriefScheduleReconcile', () => {
     expect(await AssistantBriefModel.countDocuments({ userId })).toBe(0);
   });
 
-  it('counts a due user whose last brief started inside the gap as debounced and still advances the slot', async () => {
+  it('still starts the slot when an event brief started earlier inside the event gap', async () => {
     const userId = await insertUser({
       preferences: { briefSchedule: schedule },
       nextBriefAt: minutesAgo(2),
       lastBriefStartedAt: minutesAgo(30),
+    });
+    await insertRun(userId);
+
+    const result = await run();
+    expect(result.enqueued).toBe(1);
+    expect(result.debounced).toBe(0);
+    expect(publishCompose).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts a due user whose racing brief start just claimed as debounced and still advances the slot', async () => {
+    const userId = await insertUser({
+      preferences: { briefSchedule: schedule },
+      nextBriefAt: minutesAgo(2),
+      lastBriefStartedAt: minutesAgo(5),
     });
     await insertRun(userId);
 
