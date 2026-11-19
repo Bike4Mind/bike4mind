@@ -78,6 +78,11 @@ final class SpeechEchoFilterTests: XCTestCase {
       heard: "the capital of Frans Paris and the capital of Italy is Rome what about Spain",
       expected: "what about Spain",
       spoken: ["The capital of France is Paris, and the capital of Italy is Rome."]),
+    Case(
+      label: "merged and misheard words before the last word", heard: "the capital for avery lung time", expected: ""),
+    Case(
+      label: "user word equal to the reply's last word", heard: "sure I can tell you more stop it now",
+      expected: "stop it now", spoken: ["Sure.", "I can tell you more about it."]),
     Case(label: "empty transcript", heard: "", expected: ""),
     Case(label: "nothing spoken", heard: "hello there", expected: "hello there", spoken: []),
     Case(label: "blank chunks", heard: "hello there", expected: "hello there", spoken: ["", "  "]),
@@ -85,6 +90,77 @@ final class SpeechEchoFilterTests: XCTestCase {
 
   func testEveryCase() {
     for item in Self.cases {
+      XCTAssertEqual(
+        SpeechEchoFilter.residual(recognized: item.heard, spoken: item.spoken, gapTolerance: 2), item.expected,
+        item.label)
+    }
+  }
+
+  // Systematic variants of the full two-chunk reply, each expectation taken from the contract on `SpeechEchoFilter`.
+  private static func generatedCases() -> [Case] {
+    let reply = "The capital of France is Paris it has been the capital for a very long time"
+      .split(separator: " ").map(String.init)
+    let last = reply.count - 1
+    func text(_ words: [String]) -> String { words.joined(separator: " ") }
+    func replaced(_ from: Int, _ count: Int, with words: [String]) -> [String] {
+      Array(reply[..<from]) + words + Array(reply[(from + count)...])
+    }
+    var cases: [Case] = []
+    for index in reply.indices {
+      let misheard = replaced(index, 1, with: ["zzz"])
+      cases.append(
+        Case(label: "misheard word \(index)", heard: text(misheard), expected: index == last ? "zzz" : ""))
+      cases.append(
+        Case(
+          label: "misheard word \(index), then user", heard: text(misheard + ["hold", "on"]),
+          expected: index == last ? "zzz hold on" : index == last - 1 ? "zzz time hold on" : "hold on"))
+      cases.append(
+        Case(
+          label: "dropped word \(index), then user", heard: text(replaced(index, 1, with: []) + ["hold", "on"]),
+          expected: "hold on"))
+    }
+    for index in 1..<last {
+      let misheard = replaced(index, 2, with: ["zzz", "yyy"])
+      let trailing = index == last - 1
+      cases.append(
+        Case(label: "two misheard at \(index)", heard: text(misheard), expected: trailing ? "zzz yyy" : ""))
+      cases.append(
+        Case(
+          label: "two misheard at \(index), then user", heard: text(misheard + ["hold", "on"]),
+          expected: trailing ? "zzz yyy hold on" : index == last - 2 ? "zzz yyy time hold on" : "hold on"))
+    }
+    for index in 0..<last {
+      cases.append(
+        Case(
+          label: "merged words at \(index), then user",
+          heard: text(replaced(index, 2, with: ["zzz"]) + ["hold", "on"]),
+          expected: index == last - 1 ? "zzz hold on" : index == last - 2 ? "zzz time hold on" : "hold on"))
+    }
+    for offset in 0..<last - 1 {
+      let rest = Array(reply[offset...]) + ["hold", "on"]
+      cases.append(Case(label: "starts at \(offset), then user", heard: text(rest), expected: "hold on"))
+      cases.append(
+        Case(label: "stray word, starts at \(offset), then user", heard: text(["um"] + rest), expected: "hold on"))
+    }
+    // The user repeats a reply phrase after one or two words of their own, from every place it could start except
+    // right where the echo would have continued, which the contract accepts as echo.
+    let echo = Array(reply[...5])
+    for (lead, continuation) in [(["and"], 6...8), (["what", "about"], 7...8)] {
+      for offset in 0..<reply.count - 2 where !continuation.contains(offset) {
+        let user = lead + reply[offset...offset + 2]
+        cases.append(
+          Case(label: "\(text(lead)) + reply phrase at \(offset)", heard: text(echo + user), expected: text(user)))
+      }
+    }
+    for word in ["stop", "wait", "no"] {
+      cases.append(Case(label: "one-word barge-in \(word)", heard: word, expected: word))
+      cases.append(Case(label: "\(word) after the echo", heard: text(reply + [word]), expected: word))
+    }
+    return cases
+  }
+
+  func testGeneratedVariants() {
+    for item in Self.generatedCases() {
       XCTAssertEqual(
         SpeechEchoFilter.residual(recognized: item.heard, spoken: item.spoken, gapTolerance: 2), item.expected,
         item.label)

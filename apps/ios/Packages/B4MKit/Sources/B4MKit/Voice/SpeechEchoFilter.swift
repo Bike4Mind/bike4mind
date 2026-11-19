@@ -4,6 +4,16 @@ import Foundation
 ///
 /// The recognizer keeps running while the reply plays, so its transcript can open with the reply itself,
 /// misheard here and there, and starting wherever in the reply the recognition task began.
+///
+/// Contract: the echo is the longest run from the transcript's start that lines up in order with the reply, after at
+/// most `gapTolerance - 1` stray words. Inside it the recognizer may drop reply words, and a run of misheard words
+/// (one may be two merged reply words) stands for about as many reply words; the echo resumes after such a run only on
+/// two adjacent reply words near where it would have continued, or on the reply's last word when that ends the
+/// transcript after at most two misheard words. It needs two matched words, or one lone reply word, and when the
+/// user's words follow it, it must reach the chunk now playing. When unsure, words are kept as the user's.
+/// Accepted tradeoffs, since no word matcher can tell them apart: user words that continue the reply in place are
+/// stripped as echo, and misheard words at the transcript's start or end, or before a last reply word the user
+/// talks past, are kept as the user's.
 struct SpeechEchoFilter {
   /// How far ahead in the spoken text the next heard word may land, so dropped words do not break the echo.
   static let lookahead = 8
@@ -48,33 +58,28 @@ struct SpeechEchoFilter {
       let word = heard[index]
       position += 1
       if gap > 0 {
-        // After a misheard word the echo picks up again only where the next two heard words sit side by side in the
-        // reply, or on the reply's last word; one loose match would eat the user's own words ("what is the capital").
-        // A run of misheard words stands for about as many spoken words, so it resumes just past that run; one
-        // misheard word may also be two merged reply words ("France is" heard as "Frans").
+        // One loose match would eat the user's own words ("what is the capital"), so a resume needs the next heard
+        // word to follow it in the reply. A lone last reply word is weaker, so it only ends the transcript.
         guard gap < lookahead else { break }
+        let following = position < order.count ? heard[order[position]] : nil
         let candidates = next + gap - 1...next + gap + (gap == 1 ? 1 : 0)
-        if position < order.count {
-          let following = heard[order[position]]
-          let resume = candidates.first {
-            $0 + 1 < said.count && said[$0] == word && said[$0 + 1] == following
-          }
-          if let resume {
-            next = resume + 2
-            end = order[position] + 1
-            matched += 2
-            gap = 0
-            position += 1
-            continue
-          }
-        } else if next < said.count, (next...next + lookahead - 1).contains(said.count - 1), said.last == word {
+        let resume = candidates.first { $0 + 1 < said.count && said[$0] == word && said[$0 + 1] == following }
+        let lastWord =
+          following == nil && gap <= 2 && said.last == word && (next..<next + lookahead).contains(said.count - 1)
+        if lastWord {
           next = said.count
           end = index + 1
           matched += 1
           gap = 0
-          continue
+        } else if let resume {
+          next = resume + 2
+          end = order[position] + 1
+          matched += 2
+          gap = 0
+          position += 1
+        } else {
+          gap += 1
         }
-        gap += 1
         continue
       }
       // After a stray word the first two echoed words must be adjacent, or scattered reply words in the
