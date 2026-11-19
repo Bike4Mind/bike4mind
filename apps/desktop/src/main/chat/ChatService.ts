@@ -4308,7 +4308,8 @@ export class ChatService {
           toolsSupported && !!web,
           toolsSupported && !!screen,
           toolsSupported && !!simulator,
-          orchestrating
+          orchestrating,
+          toolsSupported
         );
       wire.unshift(
         deferred ? buildDeferredSystemMessage(session.project, projectContext, skillsSection) : systemMessage()
@@ -8582,7 +8583,9 @@ export function buildSystemMessage(
   screen = false,
   simulator = false,
   /** The session's Orchestrate switch; only meaningful with the host tools it steers toward. */
-  orchestrate = false
+  orchestrate = false,
+  /** todo_write is declared; false for a model without tools, or once they are shed to fit its context. */
+  plan = false
 ): CompletionMessage {
   const orchestrating = host && orchestrate;
   if (roots.length === 0) {
@@ -8590,7 +8593,7 @@ export function buildSystemMessage(
       role: 'system',
       content: [
         ...noAccessLines(ask),
-        ...PLAN_GUIDANCE,
+        ...(plan ? PLAN_GUIDANCE : []),
         // The browser is not file access and is not withheld with it: a conversation that can
         // read nothing on disk can still open a page, and needs to be told how.
         ...(browser ? BROWSER_GUIDANCE : []),
@@ -8621,7 +8624,7 @@ export function buildSystemMessage(
       ...dependencyLines,
       ...sharedRootLines(roots),
       ...localToolLines(ask, projectContext ? 'below' : null, explore, patchEdits),
-      ...PLAN_GUIDANCE,
+      ...(plan ? PLAN_GUIDANCE : []),
       ...(browser ? BROWSER_GUIDANCE : []),
       ...(screen ? SCREEN_GUIDANCE : []),
       ...(simulator ? SIMULATOR_GUIDANCE : []),

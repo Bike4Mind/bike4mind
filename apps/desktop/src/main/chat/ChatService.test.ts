@@ -88,7 +88,9 @@ describe('ChatService', () => {
     const local = {
       stream: vi.fn(async (request, emit) => {
         expect(request.tools).toEqual([]);
-        expect(String(request.messages[0].content)).not.toMatch(/call request_directory|web_search|ask_user/);
+        expect(String(request.messages[0].content)).not.toMatch(
+          /call request_directory|web_search|ask_user|todo_write/
+        );
         emit({ type: 'content', text: 'Offline answer', stopReason: 'end_turn' });
       }),
     };
