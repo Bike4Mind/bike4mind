@@ -48,7 +48,7 @@ const {
   mockPurgeMedia: vi.fn(),
 }));
 
-vi.mock('@server/sessions/purgeDeletedNotebookMedia', () => ({
+vi.mock('@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia', () => ({
   purgeDeletedNotebookMedia: (...a: unknown[]) => mockPurgeMedia(...a),
 }));
 vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({

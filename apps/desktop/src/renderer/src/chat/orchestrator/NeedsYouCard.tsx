@@ -68,7 +68,7 @@ export function NeedsYouCard({
         <AgentRequests agent={agent} />
       ) : (
         <Typography level="body-sm" textColor="text.secondary">
-          The Innkeeper is waiting on your answer in the conversation.
+          {name} is waiting on your answer in the conversation.
         </Typography>
       )}
     </Box>

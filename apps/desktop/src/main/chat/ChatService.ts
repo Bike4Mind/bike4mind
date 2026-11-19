@@ -24,6 +24,7 @@ import {
   type WorkerTask,
 } from '@shared/orchestration';
 import { randomUUID } from 'node:crypto';
+import { isUpdateOnlyTask, MISSING_TASK_RESULT_REASON } from '@shared/agentState';
 import { LOOP_HELP, parseLoop, type LoopResult, type LoopStart, type LoopState } from '@shared/loop';
 import { LoopScheduler, type LoopOutcome } from './LoopScheduler';
 import { realpath, stat } from 'node:fs/promises';
@@ -653,6 +654,8 @@ export interface ChatServiceDeps {
   local?: LocalChat;
   /** Paths kept out of reach of shell commands whatever the user granted. Enforced by the file tools, and by the shell only when SANDBOX_SHELL_COMMANDS is on. */
   protectedPaths?: readonly string[];
+  /** Folders within protectedPaths that request_directory may still share, such as chat attachments. */
+  shareableUnderProtected?: readonly string[];
   /** Protected folders not yet resolved; the file tools refuse every write while any is. */
   unresolvedProtectedPaths?: readonly string[];
   /** Folders no permission allow rule covers; a shell command reaching one asks in auto mode too. */
@@ -2579,6 +2582,7 @@ export class ChatService {
       roots: scope.roots,
       ...(scope.workingDirectory ? { workingDirectory: scope.workingDirectory } : {}),
       ...(this.deps.protectedPaths ? { protectedPaths: this.deps.protectedPaths } : {}),
+      ...(this.deps.shareableUnderProtected ? { shareableUnderProtected: this.deps.shareableUnderProtected } : {}),
       declined: [],
     });
     if (inspection.kind === 'refused') return { status: 'refused', error: inspection.message };
@@ -2705,8 +2709,17 @@ export class ChatService {
    * when they settle, so without the live part a window opening mid-turn has nothing for the
    * next event to extend, and shows the prompt alone until the turn ends.
    */
-  async getSession(sessionId: string): Promise<ChatSession | null> {
-    const session = await this.deps.store.get(sessionId);
+  async getSession(sessionId: string, viewed = false): Promise<ChatSession | null> {
+    let session = await this.deps.store.get(sessionId);
+    const task = session?.workerTask;
+    if (viewed && task && !task.attentionViewed && isUpdateOnlyTask(task.state)) {
+      const updated = await this.deps.store.updateWorkerTask(sessionId, current => {
+        if (!isUpdateOnlyTask(current.state)) return current;
+        return { ...current, attentionViewed: true };
+      });
+      if (updated) this.deps.summaryChanged?.(updated);
+      session = await this.deps.store.get(sessionId);
+    }
     const preparing = this.preparing.get(sessionId);
     if (session && preparing) return { ...session, preparingWorkspace: { ...preparing } };
     const live = this.live.get(sessionId);
@@ -5527,6 +5540,7 @@ export class ChatService {
           },
           // Read first: once it is empty, protectedPaths holds every spelling.
           unresolvedProtectedPaths: this.deps.unresolvedProtectedPaths,
+          shareableUnderProtected: this.deps.shareableUnderProtected,
           protectedPaths: this.deps.protectedPaths,
           uncoverablePaths: this.deps.uncoverablePaths,
           sessionId,
@@ -7138,7 +7152,7 @@ export class ChatService {
                 ...task,
                 state: {
                   status: 'blocked',
-                  reason: 'The attempt stopped without a structured result.',
+                  reason: MISSING_TASK_RESULT_REASON,
                   evidence: ['Read the attempt transcript and request missing acceptance evidence.'],
                 },
               }
@@ -7843,6 +7857,7 @@ export class ChatService {
       roots: context.roots,
       ...(context.workingDirectory ? { workingDirectory: context.workingDirectory } : {}),
       ...(context.protectedPaths ? { protectedPaths: context.protectedPaths } : {}),
+      ...(context.shareableUnderProtected ? { shareableUnderProtected: context.shareableUnderProtected } : {}),
       declined: turn.declined,
     });
     if (inspection.kind === 'refused') {

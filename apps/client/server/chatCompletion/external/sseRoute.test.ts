@@ -110,7 +110,7 @@ vi.mock('@bike4mind/server-utils/cli/resolveContractAuth', () => ({ resolveContr
 
 const quotaRelease = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockAdmitApiKeyCompletion = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitApiKeyCompletion: mockAdmitApiKeyCompletion,
   NO_COMPLETION_QUOTA: { release: () => Promise.resolve() },
 }));

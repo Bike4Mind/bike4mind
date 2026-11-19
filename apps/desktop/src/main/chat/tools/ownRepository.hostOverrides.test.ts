@@ -5,6 +5,7 @@ const execFile = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', () => ({ execFile }));
 vi.mock('./userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./userPath')>()),
+  resolveLoginShellVariables: async () => ({}),
   hostProgram: async (name: string) => `C:\\Git\\cmd\\${name}.exe`,
 }));
 

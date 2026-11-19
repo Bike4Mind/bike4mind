@@ -67,7 +67,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   withTransaction: async (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: vi.fn() }));
 vi.mock('@bike4mind/database/content', () => ({ Quest: {} }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: {},
