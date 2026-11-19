@@ -383,6 +383,18 @@ struct ForwardingPendingActionAPI: PendingActionAPI {
   }
 }
 
+struct ForwardingBriefScheduleAPI: BriefScheduleAPI {
+  let provider: @MainActor @Sendable () -> any BriefScheduleAPI
+
+  func schedule() async throws -> BriefSchedule? {
+    try await provider().schedule()
+  }
+
+  func save(_ schedule: BriefSchedule) async throws -> BriefSchedule {
+    try await provider().save(schedule)
+  }
+}
+
 /// Routes brief calls to whichever server the app currently points at (it can change in debug builds).
 struct ForwardingBriefAPI: BriefAPI {
   let provider: @MainActor @Sendable () -> any BriefAPI
@@ -418,17 +430,5 @@ struct ForwardingInstructionAPI: InstructionAPI {
 
   func remove(id: String) async throws {
     try await provider().remove(id: id)
-  }
-}
-
-struct ForwardingBriefScheduleAPI: BriefScheduleAPI {
-  let provider: @MainActor @Sendable () -> any BriefScheduleAPI
-
-  func schedule() async throws -> BriefSchedule? {
-    try await provider().schedule()
-  }
-
-  func save(_ schedule: BriefSchedule) async throws -> BriefSchedule {
-    try await provider().save(schedule)
   }
 }

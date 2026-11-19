@@ -24,9 +24,9 @@
     static let account: any AccountAPI = FixtureAccountAPI()
     static let pendingActionAPI: any PendingActionAPI = FixturePendingActionAPI()
     static let stepUp: any StepUpAPI = FixtureStepUpAPI()
+    static let briefSchedule: any BriefScheduleAPI = FixtureBriefScheduleAPI()
     static let briefAPI: any BriefAPI = FixtureBriefAPI()
     static let instructionAPI: any InstructionAPI = FixtureInstructionAPI()
-    static let briefSchedule: any BriefScheduleAPI = FixtureBriefScheduleAPI()
     /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
     static let workingQuestID = "fixture-0-q4"
 

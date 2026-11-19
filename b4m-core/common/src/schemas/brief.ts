@@ -182,6 +182,8 @@ export const BriefScheduleResponseSchema = z.object({
 export type Brief = z.infer<typeof BriefSchema>;
 export type BriefItem = z.infer<typeof BriefItemSchema>;
 export type BriefDecision = z.infer<typeof BriefDecisionSchema>;
+export type BriefSchedule = z.infer<typeof BriefScheduleSchema>;
+export type BriefScheduleResponse = z.infer<typeof BriefScheduleResponseSchema>;
 export type BriefApprovalRef = z.infer<typeof BriefApprovalRefSchema>;
 export type BriefQuestionRef = z.infer<typeof BriefQuestionRefSchema>;
 export type BriefReplyRequest = z.infer<typeof BriefReplyRequestSchema>;
@@ -194,5 +196,3 @@ export type StoredBriefDecision = Omit<BriefDecision, 'approval' | 'question'> &
 };
 export type BriefSourceRef = z.infer<typeof BriefSourceRefSchema>;
 export type BriefDraftReply = z.infer<typeof BriefDraftReplySchema>;
-export type BriefSchedule = z.infer<typeof BriefScheduleSchema>;
-export type BriefScheduleResponse = z.infer<typeof BriefScheduleResponseSchema>;

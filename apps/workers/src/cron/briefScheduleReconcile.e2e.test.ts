@@ -8,6 +8,7 @@ import {
   User,
   agentExecutionRepository,
   assistantBriefRepository,
+  emailTriageItemRepository,
   userRepository,
 } from '@bike4mind/database';
 import {
@@ -245,6 +246,7 @@ describe('runBriefScheduleReconcile', () => {
           now: () => new Date(),
           users: userRepository,
           briefs: assistantBriefRepository,
+          emails: emailTriageItemRepository,
           loadActivity: async brief => ({
             periodStart: brief.periodStart,
             periodEnd: brief.periodEnd,
