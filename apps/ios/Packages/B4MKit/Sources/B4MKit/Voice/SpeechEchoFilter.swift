@@ -47,23 +47,33 @@ struct SpeechEchoFilter {
       let index = order[position]
       let word = heard[index]
       position += 1
-      if gap > 0, gap >= tolerance {
-        // A run of misheard words stands for about as many spoken ones, so the echo picks up again only where the
-        // next two heard words sit side by side just past that run; a looser match would eat the user's own words.
-        guard gap < lookahead, position < order.count else { break }
-        let following = heard[order[position]]
-        let resume = (next + gap - 1...next + gap).first {
-          $0 >= next && $0 + 1 < said.count && said[$0] == word && said[$0 + 1] == following
-        }
-        if let resume {
-          next = resume + 2
-          end = order[position] + 1
-          matched += 2
+      if gap > 0 {
+        // After a misheard word the echo picks up again only where the next two heard words sit side by side in the
+        // reply, or on the reply's last word; one loose match would eat the user's own words ("what is the capital").
+        // A run as long as the tolerance stands for about as many spoken words, so it resumes just past that run.
+        guard gap < lookahead else { break }
+        let candidates = gap >= tolerance ? next + gap - 1...next + gap : next...next + lookahead - 1
+        if position < order.count {
+          let following = heard[order[position]]
+          let resume = candidates.first {
+            $0 + 1 < said.count && said[$0] == word && said[$0 + 1] == following
+          }
+          if let resume {
+            next = resume + 2
+            end = order[position] + 1
+            matched += 2
+            gap = 0
+            position += 1
+            continue
+          }
+        } else if next < said.count, (next...next + lookahead - 1).contains(said.count - 1), said.last == word {
+          next = said.count
+          end = index + 1
+          matched += 1
           gap = 0
-          position += 1
-        } else {
-          gap += 1
+          continue
         }
+        gap += 1
         continue
       }
       // After a stray word the first two echoed words must be adjacent, or scattered reply words in the
