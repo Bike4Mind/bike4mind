@@ -203,6 +203,20 @@ describe('toMcpPlatformConnectionMemberView', () => {
   it('reports blocked_by_policy when the viewer policy denies the host', () => {
     expect(toMcpPlatformConnectionMemberView(doc, { allowed: false }).status).toBe('blocked_by_policy');
   });
+
+  it('carries only the tools the admin reviewed and switched on', () => {
+    const tools = [
+      tool,
+      { ...tool, name: 'draft_unreviewed', description: 'Awaiting review', state: 'pending_review' as const },
+      { ...tool, name: 'drop_switched_off', description: 'Switched off', enabled: false },
+    ];
+    const view = toMcpPlatformConnectionMemberView({ ...doc, tools }, { allowed: true });
+
+    expect(view.tools).toEqual([tool]);
+    for (const hidden of ['draft_unreviewed', 'Awaiting review', 'drop_switched_off', 'Switched off']) {
+      expect(JSON.stringify(view)).not.toContain(hidden);
+    }
+  });
 });
 
 describe('mcpConnectionOwnerProblem for a platform connection', () => {

@@ -451,7 +451,8 @@ export function toMcpConnectionPublic(
 
 /**
  * What every user sees of a platform connector: enough for a Tools-menu row. It leaves out the
- * admin who created it, the URL beyond its host, every key detail, the last error and the last use.
+ * admin who created it, the URL beyond its host, every key detail, the last error, the last use,
+ * and every tool the admin has not reviewed and switched on.
  */
 export interface IMcpPlatformConnectionMemberView {
   id: string;
@@ -479,7 +480,7 @@ export function toMcpPlatformConnectionMemberView(
     displayName: doc.displayName,
     urlHost: doc.urlHost,
     status: effectiveMcpConnectionStatus(doc, policyVerdict),
-    tools: doc.tools ?? [],
+    tools: (doc.tools ?? []).filter(tool => tool.enabled && tool.state === 'active'),
     enabled: doc.enabled,
   };
 }
