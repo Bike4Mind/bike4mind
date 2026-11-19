@@ -35,10 +35,12 @@ const migration: MigrationFile = {
   up: async () => {
     const organizations = Organization.db.collection<OrganizationRow>(Organization.collection.collectionName);
 
+    // update-validators-off: native driver on the raw collection has no schema
     const billingInitialized = await organizations.updateMany(
       { billingManagerUserIds: null },
       { $set: { billingManagerUserIds: [] } }
     );
+    // update-validators-off: native driver on the raw collection has no schema
     const adminsInitialized = await organizations.updateMany({ adminUserIds: null }, { $set: { adminUserIds: [] } });
 
     await organizations.createIndex(BILLING_MANAGER_INDEX_KEY);
