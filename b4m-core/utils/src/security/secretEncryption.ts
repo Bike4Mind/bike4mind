@@ -100,6 +100,41 @@ export function decryptSecret(encrypted: string, key: string, context?: string):
   return decrypted;
 }
 
+export type RotationOutcome = { state: 'current' } | { state: 'rotated'; value: string } | { state: 'unreadable' };
+
+/**
+ * Moves one stored ciphertext from `previousKey` to `currentKey`, with explicit keys.
+ * - `current`: `currentKey` already opens it, nothing to write.
+ * - `rotated`: only `previousKey` opens it; `value` is the same plaintext under `currentKey` with
+ *   the same context, so a context-bound value stays bound to its owner.
+ * - `unreadable`: no supplied key opens it. Without `previousKey` this only answers whether the
+ *   value is current.
+ */
+export function rotateSecret(
+  encrypted: string,
+  currentKey: string,
+  previousKey?: string,
+  context?: string
+): RotationOutcome {
+  // An unbound value stays unbound: rotation changes the key, never the stored format.
+  const boundContext = encrypted.startsWith(ciphertextVersionPrefix) ? context : undefined;
+  try {
+    decryptSecret(encrypted, currentKey, boundContext);
+    return { state: 'current' };
+  } catch {
+    // Not under the current key: try the previous one.
+  }
+  if (!previousKey) return { state: 'unreadable' };
+  try {
+    return {
+      state: 'rotated',
+      value: encryptSecret(decryptSecret(encrypted, previousKey, boundContext), currentKey, boundContext),
+    };
+  } catch {
+    return { state: 'unreadable' };
+  }
+}
+
 /** Regex source (case-insensitive) matching the at-rest ciphertext format. */
 export const ciphertextPatternSource = `^(?:${ciphertextVersionPrefix})?[a-f0-9]{32}:[a-f0-9]{32}:[a-f0-9]+$`;
 
