@@ -110,6 +110,24 @@ final class VoiceCatalogTests: XCTestCase {
     XCTAssertEqual(api.voiceListCalls, 0)
   }
 
+  func testNoSelectionDoesNotWaitOnALoadSettingsStarted() async {
+    api.voices = .success([alice])
+    let (gate, open) = AsyncStream<Void>.makeStream()
+    api.flagGate = gate
+    let model = makeModel(premiumVoiceWait: .seconds(30))
+    let settingsLoad = Task { await model.load() }
+    while model.state != .loading { await Task.yield() }
+
+    let clock = ContinuousClock()
+    let started = clock.now
+    let voice = await model.premiumVoice()
+    XCTAssertNil(voice)
+    XCTAssertLessThan(clock.now - started, .seconds(5), "no stored pick must not wait out the running load")
+
+    open.yield(())
+    await settingsLoad.value
+  }
+
   func testASlowCatalogStartsTheConversationOnDevice() async {
     api.voices = .success([alice])
     store.setSelection(VoiceSelection(id: "v1", name: "Alice"), for: VoiceAccount(userID: "user-1", baseURL: base))
