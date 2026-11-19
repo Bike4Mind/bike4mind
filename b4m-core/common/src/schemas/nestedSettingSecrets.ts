@@ -16,7 +16,7 @@ export interface NestedSecretGroup {
  * What a set nested secret is replaced with on its way out of the server. Coming back on a write
  * it means "keep what is stored" (apps/client/pages/api/settings/update.ts). Eight U+2022 bullets.
  */
-export const NESTED_SECRET_PLACEHOLDER = '•'.repeat(8);
+export const NESTED_SECRET_PLACEHOLDER = '\u2022'.repeat(8);
 
 const RESERVED_FIELD_NAMES = new Set(['__proto__', 'constructor', 'prototype']);
 
