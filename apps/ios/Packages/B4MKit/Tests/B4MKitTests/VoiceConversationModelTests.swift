@@ -477,8 +477,8 @@ final class VoiceConversationModelTests: XCTestCase {
     let model = await startedModel()
     await say("Tell me about Paris")
     await until { model.phase == .failed(.signedOut) }
-    let deactivations = await audio.deactivations
-    XCTAssertEqual(deactivations, 1)
+    // The phase flips before the teardown's awaits release the audio session.
+    await until { await audio.deactivations == 1 }
     await until { await realtime.listenerCount == 0 }
 
     // Trying again leaves exactly one realtime subscriber.
