@@ -191,11 +191,20 @@ public enum BriefVoiceCommand: Hashable, Sendable {
     let words = normalized(utterance)
     guard let verb = words.first else { return nil }
     let short = words.count <= maxCommandWords
+    // While an answer waits for a yes, approve agrees and deny refuses, so "yes approve" is one command.
+    let command: (String) -> BriefVoiceCommand? = { word in
+      guard confirming, let command = commandWords[word] else { return commandWords[word] }
+      switch command {
+      case .approve: return .confirm
+      case .deny: return .cancel
+      default: return command
+      }
+    }
     // Words of two different commands ("deny it approve", "yes no") are most likely the tail of the app's own
     // prompt heard ahead of the answer, so neither is acted on.
-    let mixed = Set(words.compactMap { commandWords[$0] }).count > 1
-    if confirming, short, !mixed, let command = commandWords[verb], command == .confirm || command == .cancel {
-      return command
+    let mixed = Set(words.compactMap(command)).count > 1
+    if confirming, short, !mixed, let verbCommand = command(verb), verbCommand == .confirm || verbCommand == .cancel {
+      return verbCommand
     }
     let spoken = words.joined(separator: " ")
     if let index = options.firstIndex(where: { normalized($0).joined(separator: " ") == spoken }) {

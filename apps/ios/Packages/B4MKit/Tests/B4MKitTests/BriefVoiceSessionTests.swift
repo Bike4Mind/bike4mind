@@ -144,6 +144,28 @@ final class BriefVoiceSessionTests: XCTestCase {
     XCTAssertTrue(calls.isEmpty)
   }
 
+  func testApproveAndDenyAnswerAWaitingConfirmation() {
+    for (utterance, expected) in [
+      ("yes approve", BriefVoiceCommand.confirm), ("yes I approve", .confirm), ("approve", .confirm),
+      ("no, deny it", .cancel), ("deny", .cancel), ("no don't approve", nil), ("yes deny", nil),
+    ] {
+      XCTAssertEqual(BriefVoiceCommand.parse(utterance, confirming: true), expected, utterance)
+    }
+    XCTAssertNil(BriefVoiceCommand.parse("yes approve"))
+  }
+
+  func testYesApproveConfirmsAndNoDenyItCancels() async {
+    let (session, _, pending) = await loaded([approval("d1", "Ship it"), approval("d2", "Merge it")])
+    _ = await session.handle("approve")
+    let done = await session.handle("yes, I approve")
+    XCTAssertEqual(done?.hasPrefix("Approved."), true)
+    _ = await session.handle("approve")
+    let cancelled = await session.handle("no, deny it")
+    XCTAssertEqual(cancelled?.hasPrefix("Okay, not approved."), true)
+    let calls = await pending.calls
+    XCTAssertEqual(calls, [.approve])
+  }
+
   func testApproveAsksForConfirmationAndYesApproves() async {
     let (session, _, pending) = await loaded([approval("d1", "Ship the **release**.")])
     let ask = await session.handle("approve")
