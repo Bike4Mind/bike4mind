@@ -14,14 +14,18 @@ import UniformTypeIdentifiers
 let brandMarkPath = "../client/public/images/logos/Colored_Favicon.svg"
 let catalog = "Bike4Mind/Resources/Assets.xcassets"
 
-/// The brand SVG's 380x380 viewBox and the disc's gradient, in viewBox units.
-/// Must stay in sync with the `paint*_linear` gradients in the brand SVG: the icon background reuses
-/// them so the disc's edge vanishes into a full-bleed square.
+/// The brand SVG's 380x380 viewBox and the disc's gradient, in viewBox units. The icon background
+/// reuses the gradient so the disc's edge all but disappears into a full-bleed square.
 let viewBoxSide: CGFloat = 380
 let gradientStart = CGPoint(x: 190, y: -15)
 let gradientEnd = CGPoint(x: 185.5, y: 435.5)
 let gradientTop = CGColor(srgbRed: 0x1A / 255, green: 0x38 / 255, blue: 0x96 / 255, alpha: 1)
 let gradientBottom = CGColor(srgbRed: 0x0A / 255, green: 0x85 / 255, blue: 0xB4 / 255, alpha: 1)
+/// The SVG markup the constants above copy; a brand update that changes it fails the run instead of
+/// rendering the disc over a mismatched background.
+let expectedGradientMarkup = [
+  #"x1="190" y1="-15" x2="185.5" y2="435.5""#, ##"stop-color="#1A3896""##, ##"stop-color="#0A85B4""##,
+]
 
 let iconPixels = 1024
 /// The disc's share of the icon width; leaves the glyph about 70% wide, clear of the corner mask.
@@ -30,8 +34,13 @@ let iconDiscFraction: CGFloat = 0.82
 let iconRimClipFraction: CGFloat = 0.01
 let launchMarkPoints = 120
 
-guard let brandMark = NSImage(contentsOfFile: brandMarkPath) else {
+guard let brandMarkSource = try? String(contentsOfFile: brandMarkPath, encoding: .utf8),
+  let brandMark = NSImage(contentsOfFile: brandMarkPath)
+else {
   fatalError("could not load \(brandMarkPath); run from apps/ios")
+}
+for markup in expectedGradientMarkup where !brandMarkSource.contains(markup) {
+  fatalError("\(brandMarkPath) no longer contains \(markup); update the gradient constants to match")
 }
 
 func makeContext(pixels: Int, opaque: Bool) -> CGContext {
