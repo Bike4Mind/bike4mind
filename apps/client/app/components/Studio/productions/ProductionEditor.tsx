@@ -30,6 +30,7 @@ import {
   DEFAULT_IMAGE_CLIP_MS,
   addCaptionClip,
   addMediaClip,
+  setClipCrop,
   setTimelineDuration,
   toggleOutput,
   type StudioMediaTrackKind,
@@ -284,6 +285,10 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
               files={files}
               clock={clock}
               onSourceDuration={reportDuration}
+              selectedClipId={selectedClipId}
+              onCropChange={(clipId, rect) =>
+                setTimeline(current => setClipCrop(current, clipId, output.aspectRatio, rect))
+              }
             />
             <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
               <PlaybackTransport clock={clock} durationMs={timeline.durationMs} />

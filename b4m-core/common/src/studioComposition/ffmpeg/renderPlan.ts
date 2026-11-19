@@ -1,3 +1,4 @@
+import { studioClipCropFor, studioCropFfmpegFilter } from '../crop';
 import type {
   StudioAudioClip,
   StudioCaptionClip,
@@ -138,8 +139,11 @@ const addAudioChain = (graph: GraphBuilder, inputIndex: number, clip: MediaClip,
   graph.audioLabels.push(`[${label}]`);
 };
 
-const fitFilters = (fit: StudioVideoClip['fit'], width: number, height: number): string[] =>
-  fit === 'cover'
+const fitFilters = (clip: StudioVideoClip, output: StudioTimelineOutput, width: number, height: number): string[] => {
+  const crop = studioClipCropFor(clip, output.aspectRatio);
+  // The crop already has the output's shape, so a plain scale fills the frame exactly.
+  if (crop) return [studioCropFfmpegFilter(crop, { width, height }), `scale=${width}:${height}`, 'format=yuva420p'];
+  return clip.fit === 'cover'
     ? [
         `scale=${width}:${height}:force_original_aspect_ratio=increase:force_divisible_by=2`,
         `crop=${width}:${height}`,
@@ -150,6 +154,7 @@ const fitFilters = (fit: StudioVideoClip['fit'], width: number, height: number):
         'format=yuva420p',
         `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black@0`,
       ];
+};
 
 const videoFades = (clip: StudioVideoClip, durationSec: number): string[] => {
   const fadeIn = Math.min(clip.fadeInMs / 1000, durationSec);
@@ -167,7 +172,8 @@ const enableDuring = (window: ClipWindow, fps: number): string =>
 
 const sourceFor = (sources: StudioRenderPlanInput['sources'], fileId: string): StudioRenderSource => {
   const source = sources.get(fileId);
-  if (!source) throw new StudioRenderPlanError(`A timeline clip references a file that could not be loaded (${fileId})`);
+  if (!source)
+    throw new StudioRenderPlanError(`A timeline clip references a file that could not be loaded (${fileId})`);
   return source;
 };
 
@@ -311,7 +317,7 @@ export const buildStudioRenderPlan = (input: StudioRenderPlanInput): StudioRende
         const clipLabel = `v${inputIndex}`;
         const filters = [
           ...imageHoldFilters(source, window),
-          ...fitFilters(clip.fit, width, height),
+          ...fitFilters(clip, input.output, width, height),
           'setsar=1',
           `fps=${fps}`,
           `trim=duration=${seconds(window.durationSec)}`,

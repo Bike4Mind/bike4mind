@@ -3,7 +3,7 @@ import { existsSync, statSync } from 'node:fs';
 import { COMMAND_TAG_ENV } from './commandTree';
 import { resolveGitBash } from './gitBash';
 import { wslCommand, wslCommandEnv, wslEnvNames, wslLocation } from '../../wsl/wslPath';
-import { resolveUserPath } from './userPath';
+import { resolveLoginShellVariables, resolveUserPath } from './userPath';
 import { sandboxAvailable, sandboxCommand, type SandboxedCommand } from './sandbox';
 
 /**
@@ -116,7 +116,10 @@ function withoutName(env: NodeJS.ProcessEnv, name: string): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(env).filter(([key]) => key.toUpperCase() !== name));
 }
 
-/** The user's own environment, with the PATH a terminal would have rather than Finder's. */
+/**
+ * The user's own environment, with the PATH and exported variables a terminal would have rather than Finder's.
+ * The app's own environment wins over the login shell's, so only what a Finder launch lacks is filled in.
+ */
 export async function commandEnv(launch: SandboxedCommand, extra: NodeJS.ProcessEnv = {}): Promise<NodeJS.ProcessEnv> {
   if (launch.wslDistro) {
     const crossing: NodeJS.ProcessEnv = { ...process.env, ...extra, [COMMAND_TAG_ENV]: launch.processTag };
@@ -131,7 +134,8 @@ export async function commandEnv(launch: SandboxedCommand, extra: NodeJS.Process
     const bare = withExplicitBareRepositories(counted);
     return wslCommandEnv(bare.env, launch.wslDistro, [...Object.keys(extra), COMMAND_TAG_ENV, ...bare.names]);
   }
-  const base: NodeJS.ProcessEnv = { ...process.env, PATH: await resolveUserPath(), ...extra, ...launch.env };
+  const [login, path] = await Promise.all([resolveLoginShellVariables(), resolveUserPath()]);
+  const base: NodeJS.ProcessEnv = { ...login, ...process.env, PATH: path, ...extra, ...launch.env };
   const env = withExplicitBareRepositories(base).env;
   if (SANDBOX_SHELL_COMMANDS) env.B4M_DESKTOP_SANDBOX = '1';
   if (launch.processTag) env[COMMAND_TAG_ENV] = launch.processTag;

@@ -152,16 +152,17 @@ let any app or page open Bike4Mind with that URL. Server URIs are exact-match.
 - **Voice** records with `AVAudioRecorder` and transcribes through `POST /api/v1/transcriptions/uploads` + `POST /api/v1/transcriptions`.
 - **Shared access**: both targets carry the `group.com.bike4mind.app` App Group and the `$(AppIdentifierPrefix)com.bike4mind.shared`
   keychain group so the extension can read the app's refresh token. The team prefix is resolved at runtime; with no entitlement in
-  effect (an unsigned build) the keychain item stays private to the app, the App Group falls back to Application Support, and the
-  extension simply reports it is signed out. The share flow works end to end only on a signed build with both capabilities enabled.
+  effect (an unsigned build, or a signed build without Keychain Sharing) the keychain item stays private to the app, the App Group
+  falls back to Application Support, and the extension simply reports it is signed out. The share flow works end to end only on a
+  signed build with both capabilities enabled.
 - `B4M_UI_FIXTURES=1` swaps in fixture destinations, submission and transcription, in the app and in the extension.
 
 ## App icon and launch screen
 
-The icon is a generated **placeholder** (three connected nodes on a brand-blue gradient, no text) so builds look finished.
-Replace it with real artwork whenever it exists: drop a 1024x1024 PNG over
-`Bike4Mind/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png` and the launch mark in `LaunchMark.imageset`.
-To regenerate the placeholder: `swift Tools/GenerateAppIcon.swift`. The launch screen is `AppSupport/Info.plist` (`UILaunchScreen`:
+The app icon and launch mark are rendered from the official brand mark, `apps/client/public/images/logos/Colored_Favicon.svg`
+(the mark the web NotebookSplash shows), by `swift Tools/GenerateAppIcon.swift` (macOS 14+). The icon fills the square with the
+mark's own gradient so the disc's edge all but disappears; the launch mark is the disc as-is and doubles as the Chat home greeting and sign-in mark.
+Re-run the script when the brand SVG changes and commit the PNGs. The launch screen is `AppSupport/Info.plist` (`UILaunchScreen`:
 `LaunchBackground` colour plus the centered `LaunchMark` image).
 
 ## Privacy manifests and App Privacy answers

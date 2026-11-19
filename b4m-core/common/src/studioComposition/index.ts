@@ -1,5 +1,6 @@
 export * from './timeline';
 export * from './validateTimeline';
+export * from './crop';
 export * from './composition';
 export * from './validateComposition';
 export * from './render';

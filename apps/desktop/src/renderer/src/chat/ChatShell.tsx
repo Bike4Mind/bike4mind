@@ -132,6 +132,7 @@ import { useCreationTools } from './useCreationTools';
 import { OrchestratePill } from './orchestrator/OrchestratePill';
 import { OrchestrateToggle } from './orchestrator/OrchestrateToggle';
 import { ExampleQuestStrip } from './orchestrator/exampleQuests';
+import { markSessionViewed } from './markSessionViewed';
 import { ambientHeld, isEditable, isPrintableKey, useAmbientSettle } from './orchestrator/ambient';
 import type { AgentActions, InnkeeperDesk, StageAmbient } from './orchestrator/OrchestratorStage';
 import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
@@ -513,6 +514,7 @@ export function ChatShell({
       if (selected) setMode(selected.mode);
       setScreen('conversation');
       setActiveId(sessionId);
+      markSessionViewed(sessionId);
     },
     [sessions]
   );
@@ -795,19 +797,22 @@ export function ChatShell({
     canSpawnDeeper(orchestrationSession) &&
     modelSupportsTools(orchestrationSession.model, findModelOption(catalog.models, orchestrationSession.model));
   const delegating = orchestrationSession?.orchestrate === true;
-  // The stage exists only once there is an agent to show, whatever the Orchestrate behaviour: a fresh
-  // orchestrating session gets its example quests above the composer instead (ExampleQuestStrip).
   const hasAgents = spawnedStates.length > 0;
-  const orchestrating = orchestratorPrefs.surface === 'orchestrate' && hasAgents;
+  const agentsSurfaceAvailable = hasAgents || (delegating && orchestrateCapable);
+  const orchestrating = orchestratorPrefs.surface === 'orchestrate' && agentsSurfaceAvailable;
   const { setOrchestrate } = conversation;
-  // A stored 'orchestrate' with nothing to show (agents deleted, or left from an empty stage) is dropped,
-  // so the stage never pops up later on its own. Not while the list loads: it has no agents yet either.
-  const staleAgentsSurface = !settling && !hasAgents && orchestratorPrefs.surface === 'orchestrate';
+  const staleAgentsSurface = !settling && !agentsSurfaceAvailable && orchestratorPrefs.surface === 'orchestrate';
   useEffect(() => {
     if (staleAgentsSurface) setOrchestratorSurface('chat');
   }, [staleAgentsSurface, setOrchestratorSurface]);
   const showExampleQuests =
-    !opening && orchestrateCapable && delegating && !hasAgents && !turnOpen && conversation.messages.length === 0;
+    !opening &&
+    !orchestrating &&
+    orchestrateCapable &&
+    delegating &&
+    !hasAgents &&
+    !turnOpen &&
+    conversation.messages.length === 0;
 
   // Derived during render, not in an effect: TavernView only plays its intro if introPlaying is
   // already true when it mounts, which is the same commit that enters orchestrate mode.
@@ -1514,12 +1519,20 @@ export function ChatShell({
       sx={chatShellRootSx}
       {...drop.handlers}
       data-testid="chat-shell"
+      onFocusCapture={event => {
+        if (!sceneConversation || !(event.target instanceof Element)) return;
+        if (!event.target.matches('[data-testid="chat-composer-input"]')) return;
+        wakeAmbient();
+        setDockOpen(true);
+        setConversationRequest(request => request + 1);
+      }}
       onClickCapture={event => {
         handledConversationClicks.current.add(event.nativeEvent);
         if (!sceneConversation || !dockVisible || !(event.target instanceof Element)) return;
         if (!event.currentTarget.contains(event.target)) return;
         if (threadHost.current?.contains(event.target)) return;
         if (event.target.closest('[data-conversation-toggle]')) return;
+        if (event.target.closest('[data-testid="chat-composer-input"]')) return;
         closeDock();
       }}
     >
@@ -1658,8 +1671,8 @@ export function ChatShell({
                 </Box>
                 <OrchestrateToggle
                   states={spawnedStates}
+                  enabled={delegating && orchestrateCapable}
                   parentNeedsYou={!!activeId && statuses.get(activeId) === 'needs-action'}
-                  // The surface shown, which is Chat when a stored 'orchestrate' has nothing to show.
                   surface={orchestrating ? 'orchestrate' : 'chat'}
                   onSurfaceChange={orchestratorPrefs.setSurface}
                 />
@@ -1911,7 +1924,7 @@ export function ChatShell({
                     }}
                     data-testid="orchestrator-ambient-talk-btn"
                   >
-                    Type to talk to the Innkeeper
+                    {orchestratorView === 'office' ? 'Type to talk to Manager' : 'Type to talk to the Innkeeper'}
                   </Button>
                   {ambientHint && (
                     <Typography level="body-xs" textColor="text.tertiary" data-testid="orchestrator-ambient-hint">
