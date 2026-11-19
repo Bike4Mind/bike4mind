@@ -1,11 +1,5 @@
-import {
-  desktopStagesOf,
-  type ILoop,
-  type IWorkItem,
-  type LoopUnsureFields,
-  type WorkItemBlocker,
-} from '@bike4mind/common';
-import { loopRepository, workItemRepository, type IPendingGate } from '@bike4mind/database';
+import { desktopStagesOf, type ILoop, type WorkItemBlocker } from '@bike4mind/common';
+import { loopRepository, workItemRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLoopsEnabled } from './loopValidation';
 
@@ -69,19 +63,4 @@ export async function makeDueIfReady(loop: ILoop, now = new Date()): Promise<boo
   return ready ? loopRepository.makeDueNow(loop.id, now) : false;
 }
 
-/**
- * The `unsure` loop event for a gate. Written by the loop scheduler (on detach) and by `gate_response`
- * (on resolve); both upsert on `executionId` + `requestedAt`, so whichever lands first creates it.
- */
-export const unsureEventFields = (
-  run: { loopId: string; userId: string; executionId: string },
-  gate: IPendingGate,
-  ticket: Pick<IWorkItem, 'id' | 'title'> | null
-): LoopUnsureFields => ({
-  ...run,
-  iteration: gate.iteration,
-  confidence: gate.confidence,
-  reason: gate.reason,
-  requestedAt: gate.requestedAt,
-  ...(ticket && { workItemId: ticket.id, ticketTitle: ticket.title }),
-});
+export { unsureEventFields } from '@bike4mind/server-utils/utils/loopUnsureEventFields';

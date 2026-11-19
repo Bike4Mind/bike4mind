@@ -42,6 +42,7 @@ import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
 import './businessMetricAlerts';
+import './sideAppHealthAlerts';
 import './imageModerationReviewSweep';
 import './adminMorningBrief';
 import './organizationRetention';

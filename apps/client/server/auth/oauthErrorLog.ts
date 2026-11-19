@@ -1,5 +1,6 @@
 import type { Logger } from '@bike4mind/observability';
-import { recordSideAppRefusal } from '@bike4mind/server-utils/auth/sideAppRefusal';
+import { SIDE_APP_MINT_OUR_FAULT_EVENT } from '@bike4mind/server-utils/auth/sideAppMintEvent';
+import { classifySideAppRefusal, recordSideAppRefusal } from '@bike4mind/server-utils/auth/sideAppRefusal';
 
 // Route and client can come from request input, so anything that could forge a log line or bloat it
 // is stripped. A value with nothing left logs as `unknown`. Only the route keeps `[]`, for templates
@@ -45,11 +46,19 @@ export function logAndRecordSideAppMintRefusal(
   }
 ): void {
   logOAuthError(logger, input);
+  const reason = input.recordAs ?? input.error;
+  if (classifySideAppRefusal(reason) === 'our_fault') {
+    try {
+      logger?.warn(SIDE_APP_MINT_OUR_FAULT_EVENT, { route: sanitize(input.route), status: input.status });
+    } catch {
+      // Logging must never turn an error response into a 500.
+    }
+  }
   recordSideAppRefusal({
     verified: input.verified,
     clientId: typeof input.clientId === 'string' ? input.clientId : undefined,
     stage: 'mint',
-    reason: input.recordAs ?? input.error,
+    reason,
     status: input.status,
     userId: input.userId,
   });

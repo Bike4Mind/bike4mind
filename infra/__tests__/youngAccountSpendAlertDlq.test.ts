@@ -54,7 +54,7 @@ function loadCron(source = declaration, runsScheduledJobs = true, youngAccountSp
     queue as unknown as Parameters<typeof createEventBusDeadLetter>[1]
   );
   const cron = vi.fn(function (_name: string, _args: Record<string, unknown>) {
-    return { nodes: { rule: { arn: 'spend-alert-rule' } } };
+    return { nodes: { rule: { arn: 'spend-alert-rule' }, target: { arn: 'spend-alert-fn' } } };
   });
   runInNewContext(source, {
     runsScheduledJobs,

@@ -21,7 +21,7 @@ const h = vi.hoisted(() => ({
   assertRequestCanAfford: vi.fn(),
 }));
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: h.quotaAdmission }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: h.quotaAdmission }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {

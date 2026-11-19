@@ -1,26 +1,32 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import type { ChatMessage, ChatQueueEvent, ChatQueuedMessage, ChatToolCall } from '@shared/chat';
+import type { ChatModelOption, ChatMessage, ChatQueueEvent, ChatQueuedMessage, ChatToolCall } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AgentPeekDrawer } from './AgentPeekDrawer';
+import { AgentPeekDrawer, useSessionMessages } from './AgentPeekDrawer';
 import type { AgentView } from './roster';
-import type { WorkerTask } from '@shared/orchestration';
+import { inheritancePolicy, type WorkerTask } from '@shared/orchestration';
 import { assignPersonas } from '@shared/agentPersona';
 import { agentFixture, createThemedMount, el, query, typeInto } from './testUtils';
 
 let queueListener: ((event: ChatQueueEvent) => void) | null = null;
+const queueListeners = new Set<(event: ChatQueueEvent) => void>();
 const queueUnsubscribe = vi.fn();
 const chat = {
+  onStreamEvent: vi.fn(() => () => undefined),
   onQueueChanged: vi.fn((listener: (event: ChatQueueEvent) => void) => {
-    queueListener = listener;
-    return queueUnsubscribe;
+    queueListeners.add(listener);
+    queueListener = event => queueListeners.forEach(notify => notify(event));
+    return () => {
+      queueListeners.delete(listener);
+      queueUnsubscribe();
+    };
   }),
   getSession: vi.fn(),
   sendMessage: vi.fn(),
   cancelQueuedMessage: vi.fn(),
   sendQueuedMessageNow: vi.fn(),
   respondToApproval: vi.fn(),
-  listModels: vi.fn(async () => ({ models: [] })),
+  listModels: vi.fn(async (): Promise<{ models: ChatModelOption[] }> => ({ models: [] })),
   taskAction: vi.fn(),
 };
 const actions = { open: vi.fn(), stop: vi.fn(), archive: vi.fn() };
@@ -112,16 +118,23 @@ const pressEnter = (init: KeyboardEventInit = {}) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  Element.prototype.scrollIntoView = vi.fn();
+  vi.spyOn(document, 'hasFocus').mockReturnValue(false);
   queueListener = null;
+  queueListeners.clear();
   chat.getSession.mockResolvedValue(sessionWith('message 1', 'message 2', 'message 3', 'message 4'));
   chat.sendMessage.mockResolvedValue({ ok: true, messageId: 'x' });
   chat.cancelQueuedMessage.mockResolvedValue(undefined);
   chat.sendQueuedMessageNow.mockResolvedValue(undefined);
   chat.respondToApproval.mockResolvedValue(undefined);
+  chat.listModels.mockResolvedValue({ models: [] });
   (window as unknown as { b4m: unknown }).b4m = { chat };
 });
 
-afterEach(() => themed.unmount());
+afterEach(() => {
+  themed.unmount();
+  vi.restoreAllMocks();
+});
 
 describe('AgentPeekDrawer', () => {
   it('shows a non-session roster entry without loading a session or offering session actions', async () => {
@@ -143,71 +156,75 @@ describe('AgentPeekDrawer', () => {
     }
   });
 
-  it('keeps the task title as the heading and shows the persona beneath it', async () => {
-    const agent = agentFixture('a1', 'working', { title: 'Fix the flaky login test' });
-    await renderDrawer(agent);
-    expect(el('orchestrator-peek-persona').textContent).toBe(
-      `${assignPersonas([agent]).get('a1')?.label} \u00B7 Fix the flaky login test`
-    );
-    expect(el('orchestrator-peek-persona').textContent).toMatch(/ the Tinkerer/);
-    expect(document.body.textContent).toContain('Fix the flaky login test');
+  it('acknowledges a focused opening once, not refreshes or stream events', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    function Messages({ refreshKey, visible }: { refreshKey: string; visible: boolean }) {
+      useSessionMessages('a1', refreshKey, visible);
+      return null;
+    }
+    await themed.render(<Messages refreshKey="first" visible />);
+    const acknowledgements = () => chat.getSession.mock.calls.filter(([, viewed]) => viewed === true);
+    expect(acknowledgements()).toHaveLength(1);
+    await themed.render(<Messages refreshKey="next" visible />);
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        queueListener?.({ sessionId: 'a1', queued: [] });
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(acknowledgements()).toHaveLength(1);
+      expect(chat.getSession).toHaveBeenLastCalledWith('a1', false);
+    } finally {
+      vi.useRealTimers();
+    }
+    await themed.render(<Messages refreshKey="next" visible={false} />);
+    await themed.render(<Messages refreshKey="next" visible />);
+    expect(acknowledgements()).toHaveLength(2);
   });
 
-  it('shows the last three messages', async () => {
+  it('keeps the task title and state without a redundant persona subtitle', async () => {
+    const agent = agentFixture('a1', 'working', { title: 'Fix the flaky login test' });
+    await renderDrawer(agent);
+    expect(query('orchestrator-peek-persona')).toBeNull();
+    expect(document.body.textContent).toContain('Fix the flaky login test');
+    expect(el('orchestrator-peek-conversation')).not.toBeNull();
+  });
+
+  it('shows the full conversation instead of only the last three messages', async () => {
     await renderDrawer(agentFixture('a1'));
     const text = document.body.textContent ?? '';
-    expect(text).not.toContain('message 1');
+    expect(text).toContain('message 1');
     expect(text).toContain('message 2');
     expect(text).toContain('message 4');
   });
 
-  it('starts compact with expandable context and leaves reply and task actions outside it', async () => {
+  it('keeps reply and actions outside the scrollable conversation', async () => {
     await renderDrawer(agentFixture('a1', 'working'));
-    const context = el('orchestrator-peek-context') as HTMLDetailsElement;
-    expect(context.open).toBe(false);
-    expect(el('orchestrator-peek-context-toggle').tagName).toBe('SUMMARY');
+    const context = el('orchestrator-peek-conversation');
+    expect(query('orchestrator-peek-context-toggle')).toBeNull();
     for (const action of ['reply-input', 'send-btn', 'open-btn', 'actions-menu-btn', 'close-btn']) {
       expect(context.contains(el(`orchestrator-peek-${action}`))).toBe(false);
     }
-    act(() => el('orchestrator-peek-context-toggle').click());
-    expect(context.open).toBe(true);
     expect(context.textContent).toContain('message 4');
     const style = getComputedStyle(el('orchestrator-peek-drawer'));
     expect(style.maxWidth).toBe('100%');
     expect(style.maxHeight).toBe('100%');
-    expect(style.overflowY).toBe('auto');
+    expect(style.overflowY).toBe('hidden');
+    expect(getComputedStyle(el('chat-thread')).overflowY).toBe('auto');
   });
 
-  it('collapses a long structured report but keeps status, approvals and assessment actions accessible', async () => {
+  it('keeps approvals answerable without task-management sections', async () => {
     const workerTask = longTask();
     chat.getSession.mockResolvedValue(sessionWithMessages({ toolCalls: [awaitingCall('urgent', 'pnpm test')] }));
     chat.taskAction.mockResolvedValue({ workerTask });
     await renderDrawer(agentFixture('a1', 'needs-you', { workerTask }));
-    const details = el('agent-task-details') as HTMLDetailsElement;
-    expect(details.open).toBe(false);
-    expect(details.textContent).toContain(workerTask.contract.acceptanceCriteria[7]);
-    expect(details.textContent).toContain('Attempts: worker (initial), worker (initial), worker (initial)');
-    expect(details.textContent).toContain('Measured artwork bounds');
-    expect(el('agent-task-state').textContent).toContain('awaiting assessment');
-    for (const id of [
-      'agent-task-state',
-      'agent-task-note',
-      'agent-task-accept-btn',
-      'agent-task-revise-btn',
-      'agent-task-cancel-btn',
-      'orchestrator-peek-pending',
-      'orchestrator-peek-reply-input',
-      'orchestrator-peek-open-btn',
-      'orchestrator-peek-actions-menu-btn',
-    ]) {
-      expect(details.contains(el(id))).toBe(false);
-    }
-    await typeInto(el('agent-task-note').querySelector('textarea') as HTMLTextAreaElement, 'Evidence reviewed');
-    await act(async () => el('agent-task-accept-btn').click());
-    expect(chat.taskAction).toHaveBeenCalledWith('a1', { kind: 'accept', assessment: 'Evidence reviewed' });
-    expect(details.open).toBe(false);
-    act(() => el('agent-task-details-toggle').click());
-    expect(details.open).toBe(true);
+    expect(query('agent-task-details')).toBeNull();
+    expect(query('agent-task-state')).toBeNull();
+    expect(el('orchestrator-peek-conversation').contains(el('chat-tool-approval'))).toBe(true);
+    await act(async () => el('chat-tool-approve-once').click());
+    expect(chat.respondToApproval).toHaveBeenCalledWith('urgent', { decision: 'once' });
+    expect(chat.taskAction).not.toHaveBeenCalled();
   });
 
   it('refetches when the agent updatedAt changes', async () => {
@@ -293,7 +310,7 @@ describe('AgentPeekDrawer', () => {
     chat.sendMessage.mockResolvedValue({ ok: true, queued: true, message });
     await renderDrawer(agentFixture('a1'));
     await typeAndSend('hello');
-    expect(chat.onQueueChanged).toHaveBeenCalledTimes(1);
+    expect(chat.onQueueChanged.mock.calls.length).toBeGreaterThanOrEqual(2);
 
     const emit = (event: ChatQueueEvent) => act(async () => queueListener?.(event));
     await emit({ sessionId: 'other', queued: [] });
@@ -322,7 +339,7 @@ describe('AgentPeekDrawer', () => {
     await renderDrawer(agentFixture('a1'));
     await typeAndSend('x');
     themed.unmount();
-    expect(queueUnsubscribe).toHaveBeenCalledTimes(1);
+    expect(queueUnsubscribe.mock.calls.length).toBe(chat.onQueueChanged.mock.calls.length);
   });
 
   it('keeps the queued note and shows the error when settling it fails', async () => {
@@ -391,8 +408,8 @@ describe('AgentPeekDrawer', () => {
     it('shows the pending approval of a session that is not the active one', async () => {
       chat.getSession.mockResolvedValue(pendingSession());
       await renderDrawer(agentFixture('child-1', 'needs-you'));
-      expect(chat.getSession).toHaveBeenCalledWith('child-1');
-      const pending = el('orchestrator-peek-pending');
+      expect(chat.getSession).toHaveBeenCalledWith('child-1', false);
+      const pending = el('orchestrator-peek-conversation');
       expect(pending.querySelector('[data-testid="chat-tool-approval"]')).not.toBeNull();
       expect(pending.textContent).toContain('rm -rf build');
     });
@@ -400,15 +417,20 @@ describe('AgentPeekDrawer', () => {
     it('answers through the same approval IPC the thread uses, then drops the card', async () => {
       chat.getSession.mockResolvedValue(pendingSession());
       await renderDrawer(agentFixture('child-1', 'needs-you'));
+      chat.getSession.mockResolvedValue(
+        sessionWithMessages({
+          toolCalls: [{ ...awaitingCall('ap-1', 'rm -rf build'), status: 'done', approvalId: undefined }],
+        })
+      );
       await act(async () => el('chat-tool-approve-once').click());
       expect(chat.respondToApproval).toHaveBeenCalledWith('ap-1', { decision: 'once' });
-      expect(query('orchestrator-peek-pending')).toBeNull();
+      expect(query('chat-tool-approval')).toBeNull();
     });
 
     it('drops the card once the agent no longer needs the user', async () => {
       chat.getSession.mockResolvedValue(pendingSession());
       await renderDrawer(agentFixture('child-1', 'needs-you'));
-      expect(query('orchestrator-peek-pending')).not.toBeNull();
+      expect(query('chat-tool-approval')).not.toBeNull();
       chat.getSession.mockResolvedValue(
         sessionWithMessages({
           toolCalls: [{ ...awaitingCall('ap-1', 'ls'), status: 'running', approvalId: undefined }],
@@ -416,7 +438,7 @@ describe('AgentPeekDrawer', () => {
       );
       await renderDrawer(agentFixture('child-1', 'working'));
       expect(chat.getSession).toHaveBeenCalledTimes(2);
-      expect(query('orchestrator-peek-pending')).toBeNull();
+      expect(query('chat-tool-approval')).toBeNull();
     });
 
     it('refetches while waiting so a second request shows up', async () => {
@@ -427,7 +449,7 @@ describe('AgentPeekDrawer', () => {
       await renderDrawer(waiting);
       chat.getSession.mockResolvedValue(sessionWithMessages({ toolCalls: [awaitingCall('ap-2', 'git push')] }));
       await renderDrawer({ ...waiting, activity: { kind: 'tool', tool: 'bash_execute', detail: 'git push' } });
-      expect(el('orchestrator-peek-pending').textContent).toContain('git push');
+      expect(el('orchestrator-peek-conversation').textContent).toContain('git push');
     });
 
     it('puts the card back with the error when the answer cannot be delivered', async () => {
@@ -435,7 +457,7 @@ describe('AgentPeekDrawer', () => {
       chat.respondToApproval.mockRejectedValue(new Error('gate gone'));
       await renderDrawer(agentFixture('child-1', 'needs-you'));
       await act(async () => el('chat-tool-approve-once').click());
-      expect(el('orchestrator-peek-pending-error').textContent).toBe('gate gone');
+      expect(el('orchestrator-peek-load-error').textContent).toBe('gate gone');
       expect(query('chat-tool-approval')).not.toBeNull();
     });
 
@@ -464,13 +486,13 @@ describe('AgentPeekDrawer', () => {
         })
       );
       await renderDrawer(agentFixture('child-1', 'needs-you'));
-      expect(el('orchestrator-peek-pending').textContent).toContain('Which branch?');
+      expect(el('orchestrator-peek-conversation').textContent).toContain('Which branch?');
       await act(async () => el('chat-question-skip').click());
       expect(chat.respondToApproval).toHaveBeenCalledWith('ap-q', { decision: 'deny' });
     });
   });
 
-  it('never renders an empty role line, and summarizes a tool-call-only message', async () => {
+  it('renders user text and tool-call-only messages through the shared thread', async () => {
     chat.getSession.mockResolvedValue(
       sessionWithMessages(
         { role: 'user', content: 'go' },
@@ -479,13 +501,9 @@ describe('AgentPeekDrawer', () => {
       )
     );
     await renderDrawer(agentFixture('a1'));
-    const lines = [...document.querySelectorAll('[data-testid="orchestrator-peek-message"]')].map(
-      line => line.textContent ?? ''
-    );
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toBe('You: go');
-    expect(lines[1]).toMatch(/^Agent: \S/);
-    expect(lines[1]).toContain('ls');
+    expect(el('chat-message-user-text').textContent).toBe('go');
+    expect(el('orchestrator-peek-conversation').textContent).toContain('ls');
+    expect(query('orchestrator-peek-message')).toBeNull();
   });
 
   it('labels the drawer as a region and names the close button', async () => {
@@ -517,18 +535,138 @@ describe('AgentPeekDrawer', () => {
     expect(document.activeElement).not.toBe(opener);
   });
 
-  it('maps message roles to reader-friendly names and capitalises others', async () => {
+  it('renders user and assistant turns with the shared message renderer', async () => {
     chat.getSession.mockResolvedValue(
-      sessionWithMessages(
-        { role: 'user', content: 'go' },
-        { role: 'assistant', content: 'on it' },
-        { role: 'tool' as ChatMessage['role'], content: 'note' }
-      )
+      sessionWithMessages({ role: 'user', content: 'go' }, { role: 'assistant', content: 'on it' })
     );
     await renderDrawer(agentFixture('a1'));
-    const lines = [...document.querySelectorAll('[data-testid="orchestrator-peek-message"]')].map(
-      line => line.textContent ?? ''
+    expect(el('chat-message-user-text').textContent).toBe('go');
+    expect(el('chat-message-assistant').textContent).toContain('on it');
+  });
+});
+
+describe('structured task actions in the conversation drawer', () => {
+  const openTaskControls = () => act(async () => el('orchestrator-peek-task-toggle').click());
+  const taskNote = () => el('agent-task-note').querySelector('textarea') as HTMLTextAreaElement;
+
+  it('keeps completed tasks reviewable after viewing and preserves the assessment while collapsed', async () => {
+    const workerTask = longTask();
+    if (workerTask.state.status !== 'completed') throw new Error('Expected a completed task fixture');
+    chat.taskAction.mockResolvedValue({
+      workerTask: { ...workerTask, state: { ...workerTask.state, accepted: true, assessment: 'Reviewed evidence' } },
+    });
+    await renderDrawer(agentFixture('a1', 'done', { workerTask }));
+    expect(query('agent-task-panel')).toBeNull();
+    expect(el('orchestrator-peek-task-toggle').getAttribute('aria-expanded')).toBe('false');
+    await openTaskControls();
+    expect(el('orchestrator-peek-task-toggle').getAttribute('aria-controls')).toBe(
+      el('orchestrator-peek-task-controls').id
     );
-    expect(lines).toEqual(['You: go', 'Agent: on it', 'Tool: note']);
+    expect(el('orchestrator-peek-conversation').textContent).toContain('message 1');
+    expect(el('orchestrator-peek-task-controls').contains(el('orchestrator-peek-reply-input'))).toBe(false);
+    await typeInto(taskNote(), 'Reviewed evidence');
+    await openTaskControls();
+    expect(el('orchestrator-peek-task-controls').hidden).toBe(true);
+    await openTaskControls();
+    expect(taskNote().value).toBe('Reviewed evidence');
+    await act(async () => el('agent-task-accept-btn').click());
+    expect(chat.taskAction).toHaveBeenCalledTimes(1);
+    expect(chat.taskAction).toHaveBeenCalledWith('a1', { kind: 'accept', assessment: 'Reviewed evidence' });
+    expect(query('agent-task-accept-btn')).toBeNull();
+  });
+
+  it.each(['approve', 'deny'] as const)('makes an escalation %s reachable with its exact decision', async answer => {
+    const workerTask: WorkerTask = {
+      ...longTask(),
+      state: {
+        status: 'escalation-requested',
+        reason: 'The current model needs help',
+        evidence: ['Observed the missing capability'],
+        decisionId: 'upgrade-one',
+        requestedModelId: 'premium',
+      },
+    };
+    chat.listModels.mockResolvedValue({ models: [{ id: 'premium', name: 'Approved premium' }] });
+    chat.taskAction.mockResolvedValue({ workerTask });
+    await renderDrawer(
+      agentFixture('a1', 'needs-you', {
+        workerTask,
+        orchestrationPolicy: {
+          rootSessionId: 'parent',
+          rootRunId: 'run',
+          policy: {
+            ...inheritancePolicy(),
+            escalation: {
+              mode: 'ask',
+              allowedModels: ['premium'],
+              allowedRoles: ['implementation'],
+              maxAutomaticUpgrades: 0,
+            },
+          },
+        },
+      })
+    );
+    await openTaskControls();
+    if (answer === 'approve') {
+      const selectRoot = el('agent-task-upgrade-select');
+      const select = selectRoot.querySelector('button') ?? selectRoot;
+      await act(async () => select.click());
+      await act(async () => el('agent-task-upgrade-option-premium').click());
+      await act(async () => el('agent-task-upgrade-btn').click());
+      expect(chat.taskAction).toHaveBeenCalledWith('a1', {
+        kind: 'upgrade',
+        modelId: 'premium',
+        decisionId: 'upgrade-one',
+      });
+    } else {
+      await act(async () => el('agent-task-deny-btn').click());
+      expect(chat.taskAction).toHaveBeenCalledWith('a1', {
+        kind: 'deny',
+        decisionId: 'upgrade-one',
+        reason: 'User declined the model upgrade.',
+      });
+    }
+    expect(chat.taskAction).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['revise', 'cancel'] as const)('keeps blocked task %s reachable', async action => {
+    const workerTask: WorkerTask = {
+      ...longTask(),
+      state: { status: 'blocked', reason: 'Need input', evidence: ['Observed missing detail'] },
+    };
+    chat.taskAction.mockResolvedValue({ workerTask });
+    await renderDrawer(agentFixture('a1', 'needs-you', { workerTask }));
+    await openTaskControls();
+    await typeInto(taskNote(), 'Use the documented interface');
+    await act(async () => el(`agent-task-${action}-btn`).click());
+    expect(chat.taskAction).toHaveBeenCalledWith(
+      'a1',
+      action === 'revise'
+        ? { kind: 'revise', contract: workerTask.contract, instruction: 'Use the documented interface' }
+        : { kind: 'cancel', reason: 'Use the documented interface' }
+    );
+  });
+
+  it('keeps cancellation reachable while the task is running', async () => {
+    const workerTask: WorkerTask = { ...longTask(), state: { status: 'running' } };
+    chat.taskAction.mockResolvedValue({
+      workerTask: { ...workerTask, state: { status: 'canceled', reason: 'Canceled by user.' } },
+    });
+    await renderDrawer(agentFixture('a1', 'working', { workerTask }));
+    await openTaskControls();
+    await act(async () => el('agent-task-cancel-btn').click());
+    expect(chat.taskAction).toHaveBeenCalledWith('a1', { kind: 'cancel', reason: 'Canceled by user.' });
+  });
+
+  it('starts closed with a fresh assessment when selecting another agent', async () => {
+    await renderDrawer(agentFixture('a1', 'needs-you', { workerTask: longTask() }));
+    await openTaskControls();
+    await typeInto(taskNote(), 'Only for the first agent');
+    await renderDrawer(agentFixture('a2', 'needs-you', { workerTask: longTask() }));
+    expect(el('orchestrator-peek-task-toggle').getAttribute('aria-expanded')).toBe('false');
+    expect(query('agent-task-panel')).toBeNull();
+    await openTaskControls();
+    expect(taskNote().value).toBe('');
+    expect(chat.taskAction).not.toHaveBeenCalled();
   });
 });

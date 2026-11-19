@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
 
 /**
@@ -23,10 +23,6 @@ const mockUpdateConnectionId = vi.fn();
 const mockAddViewer = vi.fn();
 const mockRemoveViewer = vi.fn();
 const mockFindSessionById = vi.fn();
-const mockMarkComplete = vi.fn();
-const mockResolveUnsure = vi.fn();
-const mockFindTicketByExecutionId = vi.fn();
-const mockResumeBlockedRun = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
@@ -41,7 +37,6 @@ vi.mock('@bike4mind/database', () => ({
     updateStatus: (...args: unknown[]) => mockUpdateStatus(...args),
     restoreRejectedResume: (...args: unknown[]) => mockRestoreRejectedResume(...args),
     clearPendingGate: (...args: unknown[]) => mockClearPendingGate(...args),
-    markComplete: (...args: unknown[]) => mockMarkComplete(...args),
     approvePendingPermission: (...args: unknown[]) => mockApprovePendingPermission(...args),
     denyPendingPermission: (...args: unknown[]) => mockDenyPendingPermission(...args),
     findActiveBySessionId: (...args: unknown[]) => mockFindActiveBySessionId(...args),
@@ -55,13 +50,6 @@ vi.mock('@bike4mind/database', () => ({
   sessionToolApprovalRepository: {
     rememberDecision: (...args: unknown[]) => mockRememberDecision(...args),
   },
-  loopEventRepository: {
-    resolveUnsure: (...args: unknown[]) => mockResolveUnsure(...args),
-  },
-  workItemRepository: {
-    findByExecutionId: (...args: unknown[]) => mockFindTicketByExecutionId(...args),
-    resumeBlockedRun: (...args: unknown[]) => mockResumeBlockedRun(...args),
-  },
 }));
 
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
@@ -73,18 +61,16 @@ vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
 vi.mock('@server/utils/childExecutionSnapshot', () => ({
   buildChildExecutionSnapshots: vi.fn().mockResolvedValue([]),
 }));
-vi.mock('@server/utils/liveActivityPush', () => ({ endAgentRunLiveActivity: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/liveActivityPush', () => ({ endAgentRunLiveActivity: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/persistRunAsQuest', () => ({
   persistRunAsQuest: vi.fn(),
-}));
-vi.mock('@bike4mind/server-utils/utils/extractFinalAnswer', () => ({
-  extractFinalAnswer: vi.fn(),
 }));
 vi.mock('@server/utils/startAgentExecution', () => ({
   startAgentExecution: vi.fn(),
 }));
-vi.mock('@bike4mind/server-utils/utils/publishMementoCompletion', () => ({
-  resolveAndPublishMementoCompletion: vi.fn(),
+vi.mock('@bike4mind/server-utils/agentExecution/gateResponse', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/agentExecution/gateResponse')>()),
+  handleGateResponse: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@server/websocket/reconnectBudget', () => ({
   decideInlineBudgets: vi.fn().mockReturnValue({ includeStepsInline: true, includeChildrenInline: true }),
@@ -132,14 +118,15 @@ import {
   checkRateLimit,
 } from '@bike4mind/server-utils/cli/auth';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
-import { endAgentRunLiveActivity } from '@server/utils/liveActivityPush';
+import { endAgentRunLiveActivity } from '@bike4mind/server-utils/utils/liveActivityPush';
 import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 const mockRecordUserActivity = vi.hoisted(() => vi.fn());
 vi.mock('@server/users/recordUserActivity', () => ({ recordUserActivity: mockRecordUserActivity }));
 
-import { func, handlePermissionResponse, handleGateResponse } from './agentExecute';
+import { handleGateResponse } from '@bike4mind/server-utils/agentExecution/gateResponse';
+import { func, handlePermissionResponse } from './agentExecute';
 
 const noopLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), updateMetadata: vi.fn() };
 
@@ -597,158 +584,6 @@ describe('container resume rejection', () => {
       vi.unstubAllEnvs();
       vi.unstubAllGlobals();
     }
-  });
-});
-
-describe('container confidence resume', () => {
-  it('routes through HTTP and atomically restores a rejected gate', async () => {
-    const pendingGate = { iteration: 1, confidence: 0.1, reason: 'test', requestedAt: new Date() };
-    mockFindById.mockResolvedValue({ ...baseExecution, status: 'paused', pendingGate });
-    mockClearPendingGate.mockResolvedValue(true);
-    mockRestoreRejectedResume.mockClear();
-    vi.stubEnv('AGENT_EXECUTOR_SERVICE', 'http://agentexecutor:8080');
-    vi.stubEnv('AGENT_EXECUTOR_INTERNAL_SECRET', 'test-secret');
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
-    try {
-      await expect(
-        handleGateResponse(
-          {
-            accessToken: 'token',
-            action: 'agent_execute',
-            command: 'gate_response',
-            executionId: 'exec-1',
-            decision: 'continue',
-          },
-          'user-1',
-          'conn-1',
-          'http://ws',
-          noopLogger as never
-        )
-      ).rejects.toThrow('401');
-      expect(mockRestoreRejectedResume).toHaveBeenCalledWith('exec-1', { status: 'paused', pendingGate });
-    } finally {
-      vi.unstubAllEnvs();
-      vi.unstubAllGlobals();
-    }
-  });
-});
-
-describe('gate response on a loop run', () => {
-  const pendingGate = { iteration: 2, confidence: 0.3, reason: 'thin results', requestedAt: new Date(1000) };
-  const gateCmd = (decision: 'continue' | 'stop') => ({
-    accessToken: 'token',
-    action: 'agent_execute' as const,
-    command: 'gate_response' as const,
-    executionId: 'exec-1',
-    decision,
-  });
-  const respond = (decision: 'continue' | 'stop') =>
-    handleGateResponse(gateCmd(decision), 'user-1', 'conn-1', 'http://ws', noopLogger as never);
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockClearPendingGate.mockResolvedValue(true);
-    mockFindTicketByExecutionId.mockResolvedValue({ id: 'ticket-1', title: 'Research X' });
-    vi.stubEnv('AGENT_EXECUTOR_SERVICE', 'http://agentexecutor:8080');
-    vi.stubEnv('AGENT_EXECUTOR_INTERNAL_SECRET', 'test-secret');
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 202 })));
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    vi.unstubAllGlobals();
-  });
-
-  const loopRun = { ...baseExecution, status: 'paused', pendingGate, loopId: 'loop-1' };
-  const expectedEvent = {
-    loopId: 'loop-1',
-    userId: 'user-1',
-    executionId: 'exec-1',
-    iteration: 2,
-    confidence: 0.3,
-    reason: 'thin results',
-    requestedAt: pendingGate.requestedAt,
-    workItemId: 'ticket-1',
-    ticketTitle: 'Research X',
-  };
-
-  it('continue records the event as resumed and moves the parked ticket back to in_progress', async () => {
-    mockFindById.mockResolvedValue(loopRun);
-    await respond('continue');
-
-    expect(mockClearPendingGate).toHaveBeenCalledWith('exec-1', 'resumed', 'user-1', undefined);
-    expect(mockResolveUnsure).toHaveBeenCalledWith(expectedEvent, {
-      outcome: 'resumed',
-      by: 'user-1',
-      at: expect.any(Date),
-    });
-    expect(mockResumeBlockedRun).toHaveBeenCalledWith('ticket-1', 'exec-1');
-  });
-
-  it('stop records the event as rejected and leaves the ticket blocked', async () => {
-    mockFindById.mockResolvedValue(loopRun);
-    await respond('stop');
-
-    expect(mockClearPendingGate).toHaveBeenCalledWith('exec-1', 'rejected', 'user-1', undefined);
-    expect(mockMarkComplete).toHaveBeenCalledWith('exec-1', expect.objectContaining({ stoppedByGate: true }));
-    expect(mockResolveUnsure).toHaveBeenCalledWith(expectedEvent, expect.objectContaining({ outcome: 'rejected' }));
-    expect(mockResumeBlockedRun).not.toHaveBeenCalled();
-  });
-
-  describe('with a held completion', () => {
-    const heldLoopRun = {
-      ...loopRun,
-      pendingCompletion: { answer: 'held answer', replyText: 'held reply', canReconsider: false },
-    };
-
-    it('stop accepts the held answer and records the event as rejected', async () => {
-      mockFindById.mockResolvedValue(heldLoopRun);
-      await respond('stop');
-
-      expect(mockClearPendingGate).toHaveBeenCalledWith('exec-1', 'rejected', 'user-1', { keepCompletion: true });
-      expect(mockResolveUnsure).toHaveBeenCalledWith(expectedEvent, expect.objectContaining({ outcome: 'rejected' }));
-      expect(mockResumeBlockedRun).not.toHaveBeenCalled();
-    });
-
-    it('continue with nothing to reopen accepts the held answer and records the event as resumed', async () => {
-      mockFindById.mockResolvedValue(heldLoopRun);
-      await respond('continue');
-
-      expect(mockClearPendingGate).toHaveBeenCalledWith('exec-1', 'resumed', 'user-1', { keepCompletion: true });
-      expect(mockResolveUnsure).toHaveBeenCalledWith(expectedEvent, expect.objectContaining({ outcome: 'resumed' }));
-      expect(mockResumeBlockedRun).toHaveBeenCalledWith('ticket-1', 'exec-1');
-    });
-  });
-
-  it('a rejected resume dispatch writes nothing to the loop log or ticket', async () => {
-    mockFindById.mockResolvedValue(loopRun);
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
-    await expect(respond('continue')).rejects.toThrow('401');
-
-    expect(mockResolveUnsure).not.toHaveBeenCalled();
-    expect(mockResumeBlockedRun).not.toHaveBeenCalled();
-  });
-
-  it('still resolves the gate when the loop log write fails', async () => {
-    mockFindById.mockResolvedValue(loopRun);
-    mockResolveUnsure.mockRejectedValueOnce(new Error('db down'));
-    await respond('stop');
-
-    expect(mockMarkComplete).toHaveBeenCalledWith('exec-1', expect.objectContaining({ stoppedByGate: true }));
-    expect(noopLogger.warn).toHaveBeenCalledWith(
-      '[Gate] Could not record the gate answer in the loop log',
-      expect.objectContaining({ executionId: 'exec-1' })
-    );
-  });
-
-  it.each(['continue', 'stop'] as const)('%s on a chat run touches no loop event or ticket', async decision => {
-    mockFindById.mockResolvedValue({ ...loopRun, loopId: undefined });
-    await respond(decision);
-
-    expect(mockClearPendingGate).toHaveBeenCalled();
-    expect(mockFindTicketByExecutionId).not.toHaveBeenCalled();
-    expect(mockResolveUnsure).not.toHaveBeenCalled();
-    expect(mockResumeBlockedRun).not.toHaveBeenCalled();
   });
 });
 
@@ -1339,82 +1174,31 @@ describe('WebSocket live activity settlement', () => {
     expect(endAgentRunLiveActivity).toHaveBeenCalledWith(execution, { status: 'stopped' }, noopLogger);
   });
 
-  it('ends the activity when a confidence gate is stopped', async () => {
-    const execution = { ...baseExecution, status: 'paused' };
-    mockFindById.mockResolvedValue(execution);
-    mockClearPendingGate.mockResolvedValue(true);
-    await handleGateResponse(
+  it('routes a gate_response message to handleGateResponse', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new UnauthorizedError('JWT required'));
+    vi.mocked(verifyJwtToken).mockResolvedValueOnce({ id: 'user-1' } as never);
+    const handle = func as unknown as (event: unknown, context: unknown, logger: typeof noopLogger) => Promise<unknown>;
+    await handle(
       {
-        accessToken: 'token',
-        action: 'agent_execute',
-        command: 'gate_response',
-        executionId: 'exec-1',
-        decision: 'stop',
-      },
-      'user-1',
-      'conn-1',
-      'https://endpoint',
-      noopLogger as never
-    );
-    expect(endAgentRunLiveActivity).toHaveBeenCalledWith(execution, { status: 'completed' }, noopLogger);
-  });
-
-  describe('held low-confidence completion', () => {
-    const pendingCompletion = {
-      answer: 'held answer',
-      replyText: 'held reply',
-      totalTokens: 10,
-      totalIterations: 2,
-      reachedMaxIterations: false,
-      lowConfidence: true,
-      canReconsider: false,
-    };
-    const heldExecution = { ...baseExecution, status: 'paused', pendingCompletion };
-
-    it('ends the activity when the held completion is accepted via Stop', async () => {
-      mockFindById.mockResolvedValue(heldExecution);
-      mockClearPendingGate.mockResolvedValue(true);
-      await handleGateResponse(
-        {
+        body: JSON.stringify({
           accessToken: 'token',
           action: 'agent_execute',
           command: 'gate_response',
           executionId: 'exec-1',
           decision: 'stop',
-        },
-        'user-1',
-        'conn-1',
-        'https://endpoint',
-        noopLogger as never
-      );
-      expect(endAgentRunLiveActivity).toHaveBeenCalledTimes(1);
-      expect(endAgentRunLiveActivity).toHaveBeenCalledWith(heldExecution, { status: 'completed' }, noopLogger);
-    });
-
-    it('ends the activity when Continue has nothing to reopen and accepts the held completion', async () => {
-      mockFindById.mockResolvedValue(heldExecution);
-      mockClearPendingGate.mockResolvedValue(true);
-      vi.stubEnv('AGENT_EXECUTOR_SERVICE', 'http://agentexecutor:8080');
-      vi.stubEnv('AGENT_EXECUTOR_INTERNAL_SECRET', 'test-secret');
-      try {
-        await handleGateResponse(
-          {
-            accessToken: 'token',
-            action: 'agent_execute',
-            command: 'gate_response',
-            executionId: 'exec-1',
-            decision: 'continue',
-          },
-          'user-1',
-          'conn-1',
-          'https://endpoint',
-          noopLogger as never
-        );
-      } finally {
-        vi.unstubAllEnvs();
-      }
-      expect(endAgentRunLiveActivity).toHaveBeenCalledTimes(1);
-      expect(endAgentRunLiveActivity).toHaveBeenCalledWith(heldExecution, { status: 'completed' }, noopLogger);
-    });
+        }),
+        requestContext: { connectionId: 'conn-1', domainName: 'example.test', stage: 'test' },
+      } as never,
+      {} as never,
+      noopLogger as never
+    );
+    expect(handleGateResponse).toHaveBeenCalledTimes(1);
+    expect(handleGateResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ executionId: 'exec-1', decision: 'stop' }),
+      'user-1',
+      'conn-1',
+      'https://example.test/test',
+      noopLogger
+    );
   });
 });

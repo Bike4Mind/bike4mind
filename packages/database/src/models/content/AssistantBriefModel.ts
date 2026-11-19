@@ -23,14 +23,35 @@ export type IAssistantBrief = {
 
 export type AssistantBriefContent = Pick<IAssistantBrief, 'headline' | 'happened' | 'handled' | 'decisions'>;
 
+// Every field of the wire item must be declared here: strict mode drops undeclared keys on write.
+const sourceSchema = new Schema(
+  { kind: { type: String, enum: ['email'], required: true }, emailId: { type: String, required: true } },
+  { _id: false }
+);
 const itemSchema = new Schema(
-  { id: { type: String, required: true }, text: { type: String, required: true } },
+  {
+    id: { type: String, required: true },
+    text: { type: String, required: true },
+    source: { type: sourceSchema, required: false },
+  },
   { _id: false }
 );
 const decisionSchema = new Schema(
   {
     id: { type: String, required: true },
     text: { type: String, required: true },
+    source: { type: sourceSchema, required: false },
+    draftReply: {
+      type: new Schema(
+        {
+          to: { type: String, required: true },
+          subject: { type: String, required: true },
+          body: { type: String, required: true },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
     approval: {
       type: new Schema(
         {
@@ -107,7 +128,8 @@ export const assistantBriefRepository = {
   async markReady(id: string, content: AssistantBriefContent, composedAt: Date): Promise<boolean> {
     const result = await AssistantBriefModel.updateOne(
       { _id: id, status: 'composing' },
-      { $set: { ...content, status: 'ready', composedAt } }
+      { $set: { ...content, status: 'ready', composedAt } },
+      { runValidators: true }
     );
     return result.modifiedCount === 1;
   },
@@ -115,9 +137,29 @@ export const assistantBriefRepository = {
   async markFailed(id: string, failureReason: string): Promise<boolean> {
     const result = await AssistantBriefModel.updateOne(
       { _id: id, status: 'composing' },
-      { $set: { status: 'failed', failureReason } }
+      { $set: { status: 'failed', failureReason } },
+      { runValidators: true }
     );
     return result.modifiedCount === 1;
+  },
+
+  /** Removes the items sourced from these ingested emails from every brief of the owner, so a deleted email leaves no copy behind. */
+  async removeEmailSourcedItems(userId: string, emailIds: string[]): Promise<number> {
+    if (emailIds.length === 0) return 0;
+    const fromEmails = { 'source.emailId': { $in: emailIds } };
+    const result = await AssistantBriefModel.updateMany(
+      {
+        userId,
+        $or: [
+          { 'happened.source.emailId': { $in: emailIds } },
+          { 'handled.source.emailId': { $in: emailIds } },
+          { 'decisions.source.emailId': { $in: emailIds } },
+        ],
+      },
+      { $pull: { happened: fromEmails, handled: fromEmails, decisions: fromEmails } },
+      { runValidators: true }
+    );
+    return result.modifiedCount;
   },
 
   async findById(id: string): Promise<IAssistantBrief | null> {

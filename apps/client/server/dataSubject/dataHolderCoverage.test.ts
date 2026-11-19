@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { mongoose } from '@bike4mind/database';
 // Registered outside the `@bike4mind/database` barrel, so they register only when imported.
 import '@bike4mind/server-utils/models/Subscription';
-import '@server/models/UserSubscription';
-import { DATA_HOLDER_REGISTRY, findUnclassifiedModels } from './registry';
+import '@bike4mind/server-utils/models/UserSubscription';
+import { DATA_HOLDER_REGISTRY, assertContributedRegistryValid, findUnclassifiedModels } from './registry';
 import {
   listSchemaLeaves,
   listSchemaPaths,
@@ -11,64 +11,22 @@ import {
   looksLikeUserReference,
   schemaDeclaresPath,
 } from './schemaPaths';
-import type { DataHolder, UserReference } from './types';
+import type { DataHolder } from './types';
 import { uniqueIndexPaths } from './placeholder';
+import {
+  alsoRedactOf,
+  declaredPathsOf,
+  discriminatorMismatch,
+  hasMisplacedExportFields,
+  hasUnscopedAnonymizeFallback,
+  isArrayOrArrayKey,
+  referencesOf,
+  walkParentChain,
+  whereValueProblem,
+} from './registryStructure';
 
 const registeredModels = mongoose.modelNames().sort();
 const classifiedModels = Object.keys(DATA_HOLDER_REGISTRY).sort();
-
-function referencePaths(reference: UserReference): string[] {
-  const scopePaths = reference.scope === 'personal' ? ['organizationId'] : [];
-  return [
-    reference.path,
-    ...Object.keys(reference.where ?? {}),
-    ...scopePaths,
-    ...alsoRedactOf(reference),
-    ...(reference.identifies ?? []),
-  ];
-}
-
-function alsoRedactOf(reference: UserReference): readonly string[] {
-  return reference.action === 'anonymize' || reference.action === 'retain' ? (reference.alsoRedact ?? []) : [];
-}
-
-function referencesOf(holder: DataHolder): readonly UserReference[] {
-  switch (holder.kind) {
-    case 'subject':
-    case 'holder':
-      return holder.references;
-    case 'viaParent':
-      return holder.attribution ?? [];
-    default:
-      return [];
-  }
-}
-
-function declaredPathsOf(holder: DataHolder): string[] {
-  switch (holder.kind) {
-    case 'subject':
-      return [...holder.references.flatMap(referencePaths), ...holder.secretPaths, ...(holder.unrelatedPaths ?? [])];
-    case 'holder':
-      return [
-        ...holder.references.flatMap(referencePaths),
-        ...(holder.secretPaths ?? []),
-        ...(holder.unrelatedPaths ?? []),
-        ...Object.keys(holder.unmatchedPaths ?? {}),
-      ];
-    case 'viaParent':
-      return [
-        holder.foreignKey,
-        ...(holder.attribution ?? []).flatMap(referencePaths),
-        ...(holder.secretPaths ?? []),
-        ...(holder.unrelatedPaths ?? []),
-      ];
-    case 'pseudonymous':
-    case 'noUserData':
-      return [...(holder.unrelatedPaths ?? [])];
-    case 'discriminator':
-      return [];
-  }
-}
 
 /** Paths the entry has said how to erase, or said are not a person. A secret is neither. */
 function acknowledgedPathsOf(holder: DataHolder): Set<string> {
@@ -100,25 +58,14 @@ function isExported(holder: DataHolder): boolean {
   return holder.kind === 'subject' || holder.kind === 'holder' || holder.kind === 'viaParent';
 }
 
-function baseModelNameOf(modelName: string): string | undefined {
-  return (mongoose.model(modelName) as { baseModelName?: string }).baseModelName;
-}
-
-// `where` targets whose schema declares no enum, so the value cannot be checked against it.
-const WHERE_WITHOUT_ENUM: readonly string[] = [
-  // Written as a Mongoose model name (`User.modelName`) by ActivityRepository callers.
-  'Activity.ownerType',
-  // Plain strings; every writer passes CreditHolderType, whose user member is 'User'.
-  'CreditTransaction.recipientType',
-  'CreditTransaction.senderType',
-  // No writer in the repo; typed string, mirrors CreditTransaction.ownerType (CreditHolderType).
-  'FailedRefund.ownerType',
-];
-
 describe('data holder registry', () => {
   it('sanity: the model barrels registered a realistic number of models', () => {
     // Guards the tests below against passing vacuously if the side-effect imports stop registering.
     expect(registeredModels.length).toBeGreaterThan(200);
+  });
+
+  it('has no contributed entry that collides with core or is otherwise rejected', () => {
+    expect(() => assertContributedRegistryValid()).not.toThrow();
   });
 
   it('classifies every registered model', () => {
@@ -151,12 +98,7 @@ describe('data holder registry', () => {
   );
 
   it('classifies a model as a discriminator exactly when Mongoose registered it as one', () => {
-    const mismatched = registeredModels.filter(name => {
-      const holder = DATA_HOLDER_REGISTRY[name];
-      const base = baseModelNameOf(name);
-      if (holder?.kind === 'discriminator') return holder.base !== base;
-      return base !== undefined;
-    });
+    const mismatched = registeredModels.filter(name => discriminatorMismatch(name, DATA_HOLDER_REGISTRY[name]));
     expect(mismatched).toEqual([]);
   });
 
@@ -230,7 +172,7 @@ describe('data holder registry', () => {
     // erasure clears those fields; the two export-only fields would silently mean nothing there.
     const misplaced = classifiedModels.flatMap(name =>
       referencesOf(DATA_HOLDER_REGISTRY[name])
-        .filter(reference => reference.action !== 'retain' && (reference.exportScope || reference.identifies))
+        .filter(hasMisplacedExportFields)
         .map(reference => `${name}.${reference.path}`)
     );
     expect(misplaced).toEqual([]);
@@ -259,22 +201,7 @@ describe('data holder registry', () => {
       )
     )
   )('%s: where %s = %s is a value the schema allows', (modelName, key, value) => {
-    const schemaPath = mongoose.model(modelName).schema.path(key) as
-      { enumValues?: unknown[]; isRequired?: boolean } | undefined;
-    if (value === null) {
-      // Matching an absent field is only meaningful on a declared path that may be absent.
-      expect(schemaPath, `${modelName}.${key} is not a schema path`).toBeDefined();
-      expect(schemaPath?.isRequired).not.toBe(true);
-      return;
-    }
-    const enumValues = schemaPath?.enumValues;
-    if (!enumValues?.length) {
-      expect(WHERE_WITHOUT_ENUM, `${modelName}.${key} has no enum to check ${value} against`).toContain(
-        `${modelName}.${key}`
-      );
-      return;
-    }
-    expect(enumValues).toContain(value);
+    expect(whereValueProblem(modelName, key, value)).toBeUndefined();
   });
 
   it.each(
@@ -284,12 +211,11 @@ describe('data holder registry', () => {
         .map(reference => [name, reference.path, reference.action] as const)
     )
   )('%s: personal-scoped %s %s has an unscoped anonymize for organization rows', (modelName, referencePath) => {
-    // Without the fallback, the person's id would survive on every row their organization owns.
-    const fallback = referencesOf(DATA_HOLDER_REGISTRY[modelName]).find(
-      reference =>
-        reference.path === referencePath && reference.action === 'anonymize' && !reference.scope && !reference.where
+    const holder = DATA_HOLDER_REGISTRY[modelName];
+    const reference = referencesOf(holder).find(
+      candidate => candidate.path === referencePath && candidate.scope === 'personal'
     );
-    expect(fallback).toBeDefined();
+    expect(reference && hasUnscopedAnonymizeFallback(holder, reference)).toBe(true);
   });
 
   it.each(
@@ -305,14 +231,9 @@ describe('data holder registry', () => {
   it.each(classifiedModels.filter(name => DATA_HOLDER_REGISTRY[name].kind === 'viaParent'))(
     '%s: its parent chain ends at a holder without a cycle',
     modelName => {
-      const seen = [modelName];
-      let current: DataHolder | undefined = DATA_HOLDER_REGISTRY[modelName];
-      while (current?.kind === 'viaParent') {
-        expect(seen, `parent cycle through ${seen.join(' -> ')}`).not.toContain(current.parent);
-        seen.push(current.parent);
-        current = DATA_HOLDER_REGISTRY[current.parent];
-      }
-      expect(current?.kind, `chain ${seen.join(' -> ')} does not end at a holder`).toBe('holder');
+      const chain = walkParentChain(modelName, DATA_HOLDER_REGISTRY);
+      const current: DataHolder | undefined = DATA_HOLDER_REGISTRY[chain[chain.length - 1]];
+      expect(current?.kind, `chain ${chain.join(' -> ')} does not end at a holder`).toBe('holder');
     }
   );
 
@@ -324,9 +245,7 @@ describe('data holder registry', () => {
     })
   )('%s: pullFromArray path %s is an array or a key inside one', (modelName, path) => {
     const { schema } = mongoose.model(modelName);
-    const isArray = (candidate: string) => /Array/.test(schema.path(candidate)?.instance ?? '');
-    const parentPath = path.includes('.') ? path.slice(0, path.lastIndexOf('.')) : '';
-    expect(isArray(path) || (parentPath !== '' && isArray(parentPath))).toBe(true);
+    expect(isArrayOrArrayKey(schema, path)).toBe(true);
   });
 });
 

@@ -2,7 +2,8 @@ import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
 import { getTestUsers } from './helpers/test-users';
 import { seedAuthOnPage } from './helpers/auth-seed';
-import { apiCreateThrowawayUser, apiGetOtcCode, apiLoginViaOtc } from './helpers/api';
+import { apiCreateThrowawayUser, apiLoginViaOtc } from './helpers/api';
+import { signInWithTotp } from './helpers/mfa';
 
 test.describe('Authentication', () => {
   test('authenticated session loads the app', async ({ basePage, page }) => {
@@ -26,13 +27,10 @@ test.describe('Authentication', () => {
     // back via the non-prod /api/test/otc-code endpoint (no mailbox). Requires E2E_CLEANUP_SECRET + non-prod stage.
     // Own user: that endpoint returns the LAST code sent to the email, so a parallel test sending to
     // the same address would hand this one a code the browser's pending token does not match.
+    // The account is enrolled in MFA like every test account, so the code is followed by a TOTP code.
     const user = await apiCreateThrowawayUser(request, 'otcflow');
     await basePage.clearAllStorage();
-    await loginPage.goto();
-    await loginPage.fillEmail(user.email); // advances to the OTC step and sends the code
-    const code = await apiGetOtcCode(request, user.email);
-    await loginPage.fillOtc(code);
-    await loginPage.submit();
+    await signInWithTotp(loginPage, request, user.email);
     await basePage.dismissModals();
 
     await expect(page).not.toHaveURL(/.*login.*/);

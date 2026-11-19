@@ -83,6 +83,8 @@ export const ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS = [
   'accountSegment',
   'systemPrompt',
   'storageLimit',
+  'storageLimitOverride',
+  'planStorageLimit',
   'currentStorageSize',
   'serviceAccountUserId',
   'redactPushContent',

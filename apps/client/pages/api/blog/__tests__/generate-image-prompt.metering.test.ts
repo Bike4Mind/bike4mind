@@ -9,7 +9,7 @@ import { createMocks } from 'node-mocks-http';
 import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError, insufficientCreditsError } from '@bike4mind/common';
 
 const quotaAdmission = vi.hoisted(() => vi.fn().mockResolvedValue({ release: async () => {} }));
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quotaAdmission }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quotaAdmission }));
 
 const m = vi.hoisted(() => ({
   enforce: true,

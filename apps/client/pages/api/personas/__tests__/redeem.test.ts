@@ -41,7 +41,7 @@ vi.mock('@server/auth/issueSession', () => ({
 }));
 vi.mock('@server/auth/signInSecondFactor', () => ({ logSignInSuccess: h.logSignInSuccess }));
 vi.mock('@server/auth/tokenGenerator', () => ({ ACCESS_TOKEN_TTL_SECONDS: 1800 }));
-vi.mock('@server/personas/personaAccounts', () => ({
+vi.mock('@bike4mind/server-utils/personas/personaAccounts', () => ({
   loadPersonaSettings: async () => h.settings,
   redeemPersonaLoginCode: h.redeemPersonaLoginCode,
 }));

@@ -60,6 +60,13 @@ import { UpdateSettings } from './UpdateSettings';
 import { useAppUpdate, type AppUpdateController } from './useAppUpdate';
 import { useWorktreeByDefault, worktreeDefaultSummary } from './worktreeDefault';
 
+const settingsColumnSx = {
+  ...contentColumnSx,
+  maxWidth: 1040,
+  boxSizing: 'border-box',
+  px: { xs: 3, md: 5 },
+} as const;
+
 /** What the General page is for, said on the page so it does not have to be inferred from a name. */
 const SETTINGS_INTRO = 'How the app looks, behaves, connects, and keeps itself up to date.';
 
@@ -731,15 +738,16 @@ export function SettingsScreen({
   return (
     <Stack sx={{ height: '100vh', bgcolor: 'background.body' }} data-testid="settings-panel">
       {/* ProfileScreen's header, with its column set over the page beside the nav rather than the
-          whole window, so the back button and title line up with the page below them. */}
+          whole window, so the back button lines up with the page below it: shares settingsColumnSx with the page column. */}
       <Box sx={{ borderBottom: '1px solid', borderColor: 'divider', pl: `${SETTINGS_NAV_WIDTH}px`, ...columnStackSx }}>
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ ...contentColumnSx, py: 1.25 }}>
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ ...settingsColumnSx, py: 1.25 }}>
           <IconButton
             size="sm"
             variant="plain"
             color="neutral"
             aria-label="Back to conversations"
             onClick={onClose}
+            sx={{ ml: -0.75 }}
             data-testid="settings-close-btn"
           >
             <ArrowLeftIcon />
@@ -782,10 +790,7 @@ export function SettingsScreen({
         </List>
 
         <Box sx={{ flex: 1, minWidth: 0, overflowY: 'auto', scrollbarGutter: 'stable', ...thinScrollbarSx }}>
-          <Box
-            sx={{ ...contentColumnSx, maxWidth: 1040, boxSizing: 'border-box', px: { xs: 3, md: 5 }, py: 4 }}
-            data-testid={`settings-page-${section}`}
-          >
+          <Box sx={{ ...settingsColumnSx, py: 4 }} data-testid={`settings-page-${section}`}>
             <SectionPage section={section} entries={entries[section]} />
           </Box>
         </Box>

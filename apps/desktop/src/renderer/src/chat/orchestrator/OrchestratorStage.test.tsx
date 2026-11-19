@@ -3,7 +3,6 @@ import { act, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ambientHeld } from './ambient';
 import { OrchestratorStage, type OrchestratorViewProps } from './OrchestratorStage';
-import { EXAMPLE_QUESTS } from './exampleQuests';
 import type { AgentView } from './roster';
 import { TavernView } from './tavern/TavernView';
 import { Aquarium } from './aquarium/Aquarium';
@@ -44,9 +43,11 @@ const pressEscape = (init: KeyboardEventInit = {}) =>
   });
 
 beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn();
   (window as unknown as { b4m: unknown }).b4m = {
     chat: {
       getSession: vi.fn().mockResolvedValue(null),
+      onStreamEvent: vi.fn(() => () => undefined),
       onQueueChanged: vi.fn(() => () => undefined),
       getRunSpend: vi.fn().mockResolvedValue({ status: 'unattributed' }),
     },
@@ -71,9 +72,9 @@ describe('OrchestratorStage', () => {
     expect(query('orchestrator-table-row-w')).not.toBeNull();
   });
 
-  describe('example quests', () => {
+  describe('empty stage', () => {
     const onExampleQuest = vi.fn();
-    const renderEmpty = (view: 'tavern' | 'board' | 'table') =>
+    const renderEmpty = (view: 'tavern' | 'office' | 'board' | 'table') =>
       themed.render(
         <OrchestratorStage
           agents={[]}
@@ -98,16 +99,22 @@ describe('OrchestratorStage', () => {
       );
     });
 
-    it.each(['tavern', 'board', 'table'] as const)('offers three example quests in the %s view', async view => {
+    it('renders the Office scene with zero agents without suggestions', async () => {
+      await renderEmpty('office');
+      expect(el('orchestrator-empty-state').contains(el('fake-office'))).toBe(true);
+      expect(el('orchestrator-empty-state').textContent).toContain(
+        'No agents yet. Describe the work and it will be split across agents.'
+      );
+      expect(query('orchestrator-example-quest-1')).toBeNull();
+    });
+
+    it.each(['tavern', 'board', 'table'] as const)('omits suggestion buttons in the %s view', async view => {
       await renderEmpty(view);
       expect(query(`fake-${view}`)).toBeNull();
-      expect(EXAMPLE_QUESTS.map((_quest, index) => el(`orchestrator-example-quest-${index + 1}`).textContent)).toEqual([
-        'Audit this repo',
-        'Write missing tests',
-        'Compare approaches',
-      ]);
-      act(() => el('orchestrator-example-quest-2').click());
-      expect(onExampleQuest).toHaveBeenLastCalledWith(EXAMPLE_QUESTS[1].prompt);
+      for (const index of [1, 2, 3]) {
+        expect(query(`orchestrator-example-quest-${index}`)).toBeNull();
+      }
+      expect(onExampleQuest).not.toHaveBeenCalled();
     });
 
     it('keeps the plain empty line in the board and table views', async () => {
@@ -171,7 +178,7 @@ describe('OrchestratorStage', () => {
     expect(query('orchestrator-peek-drawer')).toBeNull();
   });
 
-  it.each(['tavern', 'aquarium'] as const)(
+  it.each(['tavern', 'aquarium', 'office'] as const)(
     'keeps the %s parent scene action distinct from attention focus',
     async view => {
       const onParentFocus = vi.fn();
@@ -189,7 +196,7 @@ describe('OrchestratorStage', () => {
         />
       );
       await act(async () => el('scene-parent-action').click());
-      expect(onParentToggle).toHaveBeenCalledTimes(view === 'tavern' ? 1 : 0);
+      expect(onParentToggle).toHaveBeenCalledTimes(view !== 'aquarium' ? 1 : 0);
       expect(onParentFocus).toHaveBeenCalledTimes(view === 'aquarium' ? 1 : 0);
     }
   );
@@ -232,7 +239,7 @@ describe('OrchestratorStage', () => {
     expect(query('orchestrator-peek-drawer')).not.toBeNull();
   });
 
-  it.each(['tavern', 'aquarium', 'table'] as const)(
+  it.each(['tavern', 'aquarium', 'office', 'table'] as const)(
     'overlays details within the %s viewport without adding a layout column',
     async view => {
       await themed.render(
@@ -327,10 +334,16 @@ describe('OrchestratorStage', () => {
     expect(reachedWindow).toEqual([true]);
   });
 
-  it('opens the drawer when a table row is clicked', async () => {
+  it('opens the agent conversation when a table row is clicked', async () => {
+    vi.mocked(window.b4m.chat.getSession).mockResolvedValueOnce({
+      messages: [{ id: 'reply-w2', role: 'assistant', content: 'Working on the second task.' }],
+    } as Awaited<ReturnType<typeof window.b4m.chat.getSession>>);
     await renderStage(FIXTURE);
     await act(async () => el('orchestrator-table-row-w2').click());
     expect(el('orchestrator-peek-drawer').textContent).toContain('Agent w2');
+    expect(el('orchestrator-peek-conversation').contains(el('chat-message-assistant'))).toBe(true);
+    expect(el('chat-message-assistant').textContent).toContain('Working on the second task.');
+    expect(window.b4m.chat.getSession).toHaveBeenCalledWith('w2', false);
   });
 
   it('starts a fresh reply box when another agent is selected', async () => {
@@ -346,6 +359,38 @@ describe('OrchestratorStage', () => {
     act(() => el('orchestrator-view-menu-btn').click());
     act(() => el('orchestrator-view-option-board').click());
     expect(onViewChange).toHaveBeenCalledWith('board');
+  });
+
+  it('reports Office selection from the stage picker', async () => {
+    await renderStage(FIXTURE);
+    act(() => el('orchestrator-view-menu-btn').click());
+    act(() => el('orchestrator-view-option-office').click());
+    expect(onViewChange).toHaveBeenCalledWith('office');
+  });
+
+  it('uses Office ambient copy and opens the parent attention request', async () => {
+    const onParentFocus = vi.fn();
+    const wake = vi.fn();
+    await themed.render(
+      <OrchestratorStage
+        agents={[]}
+        parent={{ status: 'needs-action' }}
+        view="office"
+        onViewChange={onViewChange}
+        actions={actions}
+        introPlaying={false}
+        onParentFocus={onParentFocus}
+        ambient={{ settled: true, wake, on: true, onToggle: vi.fn() }}
+        renderView={(_id, props) => <div data-testid="office-settled" data-settled={props.settled} />}
+      />
+    );
+    expect(el('orchestrator-ambient-status').textContent).toBe('The office is quiet');
+    expect(el('office-settled').dataset.settled).toBe('true');
+    expect(el('orchestrator-needs-you-card').textContent).toContain('The orchestrator needs you');
+    expect(el('orchestrator-stage').textContent).not.toContain('Innkeeper');
+    act(() => el('orchestrator-needs-you-open-btn').click());
+    expect(wake).toHaveBeenCalledTimes(1);
+    expect(onParentFocus).toHaveBeenCalledTimes(1);
   });
 
   it('renders the dock control in the header', async () => {
@@ -408,6 +453,7 @@ describe('OrchestratorStage', () => {
           ],
         }),
         respondToApproval: vi.fn().mockResolvedValue(undefined),
+        onStreamEvent: vi.fn(() => () => undefined),
         onQueueChanged: vi.fn(() => () => undefined),
       };
       (window as unknown as { b4m: unknown }).b4m = { chat };
@@ -690,6 +736,32 @@ describe('OrchestratorStage', () => {
       await settle();
       expect(el('orchestrator-tavern').contains(el('orchestrator-finale'))).toBe(true);
       expect(el('orchestrator-finale').getAttribute('data-placement')).toBe('scene');
+    });
+
+    it('passes the finale overlay to Office and keeps it inline in Focus mode', async () => {
+      const renderOffice = (focus = false) =>
+        themed.render(
+          <OrchestratorStage
+            agents={finished}
+            rootId="root"
+            report={REPORT}
+            view="office"
+            onViewChange={onViewChange}
+            actions={actions}
+            introPlaying={false}
+            focus={{ on: focus, onToggle: vi.fn() }}
+            renderView={(_id, props) => <div data-testid="office-scene">{props.sceneOverlay}</div>}
+          />
+        );
+      await renderOffice();
+      await settle();
+      expect(el('office-scene').contains(el('orchestrator-finale'))).toBe(true);
+      expect(el('orchestrator-finale').getAttribute('data-placement')).toBe('scene');
+
+      await renderOffice(true);
+      expect(query('office-scene')).toBeNull();
+      expect(el('orchestrator-finale').getAttribute('data-placement')).toBe('inline');
+      expect(query('orchestrator-focus-panel')).not.toBeNull();
     });
 
     it('waits for the parent to write its summary', async () => {

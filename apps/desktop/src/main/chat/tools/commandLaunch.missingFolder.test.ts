@@ -6,7 +6,10 @@ import { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
 import { launchCommand, spawnFailure } from './commandLaunch';
 import { bashExecute } from './shellTools';
 
-vi.mock('./userPath', () => ({ resolveUserPath: async () => process.env.PATH ?? '' }));
+vi.mock('./userPath', () => ({
+  resolveUserPath: async () => process.env.PATH ?? '',
+  resolveLoginShellVariables: async () => ({}),
+}));
 vi.mock('./commandLaunch', async importOriginal => {
   const actual = await importOriginal<typeof import('./commandLaunch')>();
   return { ...actual, launchCommand: vi.fn(actual.launchCommand) };

@@ -75,6 +75,7 @@ import {
   completionUsd,
   assertOwnerCanAfford,
   assertRequestCanAfford,
+  createCompletionMeter,
   createModelAdmission,
   createRequestCompletionMeter,
   isCreditsEnforced,
@@ -687,6 +688,19 @@ describe('createModelAdmission', () => {
       });
       await expect(scoped.assert('claude')).resolves.toBeUndefined();
       await expect((await createModelAdmission(user(), catalog)).assert('gpt')).resolves.toBeUndefined();
+    });
+
+    it("admits the meter's model against a caller-supplied snapshot without loading the org", async () => {
+      m.orgFindById.mockRejectedValue(new Error('precomputed policy must not be reloaded'));
+      const meter = createCompletionMeter(user({ organizationId: 'org1' }), logger as never, 'scheduled', {
+        orgModelPolicy: policy,
+      });
+
+      await expect(meter(catalog[0], [], 1000, catalog)).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { errorCode: 'org_model_not_allowed' },
+      });
+      expect(m.orgFindById).not.toHaveBeenCalled();
     });
 
     it('does not apply the org policy to a platform-chosen model', async () => {

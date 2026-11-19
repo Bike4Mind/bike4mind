@@ -24,16 +24,21 @@ internal object PushNotifications {
 
     /**
      * FCM hands a notification message to the app instead of the system tray while the app is in the foreground,
-     * so it is shown here. Tapping it opens the app.
+     * so it is shown here. Tapping it opens the app with [data] as extras, as a system-tray tap would, so
+     * MainActivity routes both the same way.
      */
     @SuppressLint("MissingPermission") // Guarded by areNotificationsEnabled(), which covers POST_NOTIFICATIONS.
-    fun show(context: Context, title: String?, body: String?, tag: String?) {
+    fun show(context: Context, title: String?, body: String?, tag: String?, data: Map<String, String> = emptyMap()) {
         val manager = NotificationManagerCompat.from(context)
         if (!manager.areNotificationsEnabled()) return
+        val launch = Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        data.forEach { (key, value) -> launch.putExtra(key, value) }
         val open = PendingIntent.getActivity(
             context,
-            0,
-            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            // Distinct per notification: with one request code, FLAG_UPDATE_CURRENT would give every earlier
+            // notification the newest one's extras.
+            tag?.hashCode() ?: 0,
+            launch,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)

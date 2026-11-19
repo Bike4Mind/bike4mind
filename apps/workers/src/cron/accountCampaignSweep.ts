@@ -7,7 +7,7 @@
  * It then runs the ban-evasion device rule over the same window; that rule hands its detections to
  * the abuse assessment and automated containment, which act only as autoContainmentConfig allows.
  *
- * The same run also auto-grades stale signup bursts: see server/security/shadowDetectionAutoGrade.ts.
+ * The same run also auto-grades stale signup bursts: see apps/workers/src/security/shadowDetectionAutoGrade.ts.
  */
 
 import { Context } from 'aws-lambda';
@@ -34,7 +34,7 @@ import {
   liveDeviceLinkDeps,
   sweepDeviceLinks,
 } from '@workers/security/autoContainment/deviceLink';
-import { gradeStaleSignupBursts, liveStaleDetectionGradeDeps } from '@server/security/shadowDetectionAutoGrade';
+import { gradeStaleSignupBursts, liveStaleDetectionGradeDeps } from '@workers/security/shadowDetectionAutoGrade';
 import { systemAuditWriter } from '@workers/utils/systemAuditWriter';
 
 const AUTO_GRADE_ACTOR = 'shadow-detection-auto-grade';

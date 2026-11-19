@@ -8,6 +8,7 @@ import {
 import type { DlqDescriptor, InspectableDlqDescriptor, DlqResolvers } from '@bike4mind/infra';
 import * as generatedInfraResources from '../premium-generated/infraResources.generated';
 import { Logger } from '@bike4mind/observability';
+import { parseScheduledEvent } from './dlqScheduleRule';
 
 // Mirrored by DlqReplaySafety in apps/client/app/hooks/data/dlqManagement.ts; keep both in sync.
 export const DLQ_REPLAY_SAFETY = ['safe', 'side-effects', 'unsafe'] as const;
@@ -34,7 +35,18 @@ export type DlqMessageEntity = { type: string; id: string };
 /** Reads the entity from a parsed message body; null when the body does not name one. */
 export type DlqDescribe = (body: unknown) => DlqMessageEntity | null;
 
-export type CoreDlqDescriptor = InspectableDlqDescriptor & DlqQueueHelp & { describe: DlqDescribe };
+/**
+ * When a dead letter is safe to discard. superseded-schedule: a scheduled job whose handler ignores the
+ * event time, so any later run covers it. self-healing: normal use retries the work until it succeeds.
+ * Must stay in sync with DlqRecommendationFacts.staleWhen in b4m-core/common dlqPolicy.ts.
+ */
+export const DLQ_STALE_WHEN = ['superseded-schedule', 'self-healing'] as const;
+export type DlqStaleWhen = (typeof DLQ_STALE_WHEN)[number];
+
+/** Limits staleWhen to bodies whose EventBridge detail-type is listed, for a queue shared by several jobs. */
+export type DlqStaleScope = { staleWhen?: DlqStaleWhen; staleDetailTypes?: readonly string[] };
+
+export type CoreDlqDescriptor = InspectableDlqDescriptor & DlqQueueHelp & { describe: DlqDescribe } & DlqStaleScope;
 
 const readPath = (value: unknown, path: string): unknown =>
   path
@@ -71,19 +83,25 @@ export function firstEntity(...describers: DlqDescribe[]): DlqDescribe {
 /** For a queue whose bodies name no record, such as a scheduled event. */
 export const noEntity: DlqDescribe = () => null;
 
-/** The entity a raw DLQ body is about; null for a body that is not JSON or names none. */
+/**
+ * The entity a raw DLQ body is about; null for a body that is not JSON or names none. Any queue's
+ * EventBridge Scheduled Event body the queue's own describe does not name falls back to its run time.
+ */
 export function describeDlqMessage(
   entry: Pick<RegisteredDlqDescriptor, 'describe'>,
   rawBody: string | undefined
 ): DlqMessageEntity | null {
-  if (!entry.describe || !rawBody) return null;
+  if (!rawBody) return null;
   let body: unknown;
   try {
     body = JSON.parse(rawBody);
   } catch {
     return null;
   }
-  return entry.describe(body);
+  const entity = entry.describe?.(body) ?? null;
+  if (entity) return entity;
+  const scheduled = parseScheduledEvent(rawBody);
+  return scheduled ? { type: 'Scheduled run', id: scheduled.time } : null;
 }
 
 /** Names each DlqQueueHelp field that is missing, blank, or (for replay) outside DLQ_REPLAY_SAFETY. */
@@ -311,6 +329,18 @@ const DLQ_REGISTRY = [
     replay: 'side-effects',
     replayNote:
       'Each step reads the stored job state, but a replay can call the model again. Only the step that claims the finished job sends the ready push.',
+    owner: 'Generation jobs',
+    describe: entityAt('Job', 'jobId'),
+  },
+  {
+    label: 'render-job',
+    displayName: 'Studio Render Job',
+    application: 'GenerationJob',
+    sourceQueue: 'renderJobQueue',
+    description: 'Encodes a Studio composition to video on the render worker.',
+    replay: 'safe',
+    replayNote:
+      'The worker skips a job that is no longer running and treats an already succeeded render as done, so a replay only re-encodes a job that never finished.',
     owner: 'Generation jobs',
     describe: entityAt('Job', 'jobId'),
   },
@@ -615,6 +645,7 @@ const DLQ_REGISTRY = [
     replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
     owner: 'LiveOps',
     describe: noEntity,
+    staleWhen: 'superseded-schedule',
   },
   {
     label: 'young-account-spend-alert',
@@ -671,6 +702,7 @@ const DLQ_REGISTRY = [
     replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
     owner: 'Moderation',
     describe: noEntity,
+    staleWhen: 'superseded-schedule',
   },
   {
     label: 'spend-monitor',
@@ -693,6 +725,7 @@ const DLQ_REGISTRY = [
     replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
     owner: 'Accounts',
     describe: noEntity,
+    staleWhen: 'superseded-schedule',
   },
   {
     label: 'revenue-snapshot',
@@ -715,6 +748,7 @@ const DLQ_REGISTRY = [
     replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
     owner: 'Billing',
     describe: noEntity,
+    staleWhen: 'superseded-schedule',
   },
   {
     label: 'account-deletion-sweep',
@@ -726,6 +760,7 @@ const DLQ_REGISTRY = [
     replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
     owner: 'Accounts',
     describe: noEntity,
+    staleWhen: 'superseded-schedule',
   },
   {
     label: 'organization-retention',
@@ -737,6 +772,7 @@ const DLQ_REGISTRY = [
     replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
     owner: 'Organizations',
     describe: noEntity,
+    staleWhen: 'superseded-schedule',
   },
   {
     label: 'fab-file-moderation',
@@ -770,6 +806,9 @@ const DLQ_REGISTRY = [
     replayNote: 'No SQS replay destination; inspect the event before manual recovery.',
     owner: 'Chat',
     describe: entityAt('Notebook', 'detail.sessionId'),
+    staleWhen: 'self-healing',
+    // Only summarize re-runs on its own (while summaryAt lags); a session.tag job is user-requested.
+    staleDetailTypes: ['session.summarize'],
   },
   {
     label: 'billing-events',
@@ -838,6 +877,17 @@ const DLQ_REGISTRY = [
     describe: noEntity,
   },
   {
+    label: 'side-app-health-alerts',
+    displayName: 'Side App Health Alerts',
+    application: 'SideApps',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed connected app health alert invocations for inspection.',
+    replayNote: 'No SQS replay destination; the next hourly run re-evaluates, so inspect the failure instead.',
+    owner: 'Platform ops',
+    describe: noEntity,
+  },
+  {
     label: 'alarm-handler',
     displayName: 'DLQ Alarm Handler',
     application: 'AlarmPipeline',
@@ -877,7 +927,11 @@ export type SourceQueueName = CoreSourceQueueName | ContributedSourceQueueName;
 
 /** An entry the registry holds; a null source queue has no SQS replay destination. */
 export type RegisteredDlqDescriptor = InspectableDlqDescriptor &
-  Partial<DlqQueueHelp> & { label: DlqLabel; sourceQueue: SourceQueueName | null; describe?: DlqDescribe };
+  Partial<DlqQueueHelp> & {
+    label: DlqLabel;
+    sourceQueue: SourceQueueName | null;
+    describe?: DlqDescribe;
+  } & DlqStaleScope;
 
 type LinkableQueues = {
   dlqUrls: Record<string, string>;

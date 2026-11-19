@@ -26,6 +26,7 @@ import {
   CreditHolderType,
   isOrgMember,
   MAX_STORAGE_LIMIT_MB,
+  resolveOrganizationStorageLimit,
   toSafeOrganization,
   OrganizationSharingPolicySchema,
   orgDomainPathIdSchema,
@@ -106,13 +107,17 @@ const AUDITED_SETTINGS_FIELDS = [
   'systemPrompt',
   'redactPushContent',
   'maxCreditsPerMember',
-  'storageLimit',
   'loopsGreenCiMergeDisabled',
 ] as const;
 
 // The system prompt can run to 10,000 characters, so the entry records its length, not its text.
 const settingsAuditValue = (field: (typeof AUDITED_SETTINGS_FIELDS)[number], value: unknown) =>
   field === 'systemPrompt' ? { characters: typeof value === 'string' ? value.length : 0 } : (value ?? null);
+
+const resolvedStorageOverride = (organization: Parameters<typeof resolveOrganizationStorageLimit>[0]) => {
+  const resolved = resolveOrganizationStorageLimit(organization);
+  return resolved.source === 'override' ? resolved.limitMb : null;
+};
 
 const handler = baseApi()
   .get(
@@ -168,7 +173,9 @@ const handler = baseApi()
 
       const sent = { ...profile, loopsGreenCiMergeDisabled };
       const auditedFields = AUDITED_SETTINGS_FIELDS.filter(field => sent[field] !== undefined);
-      const before = auditedFields.length > 0 ? await organizationRepository.findById(orgId) : null;
+      const auditsStorageOverride = req.user!.isAdmin && profile.storageLimit !== undefined;
+      const before =
+        auditedFields.length > 0 || auditsStorageOverride ? await organizationRepository.findById(orgId) : null;
 
       const profileSent =
         loopsGreenCiMergeDisabled === undefined ||
@@ -197,7 +204,7 @@ const handler = baseApi()
       }
       if (!updatedOrganization) throw new NotFoundError('Organization not found');
 
-      const changes = before
+      const changes: { field: string; before: unknown; after: unknown }[] = before
         ? auditedFields
             .filter(field => (before[field] ?? null) !== (updatedOrganization[field] ?? null))
             .map(field => ({
@@ -206,6 +213,14 @@ const handler = baseApi()
               after: settingsAuditValue(field, updatedOrganization[field]),
             }))
         : [];
+      if (before && auditsStorageOverride) {
+        // storageLimit mirrors the effective limit, so the override itself is what gets audited.
+        const overrideBefore = resolvedStorageOverride(before);
+        const overrideAfter = resolvedStorageOverride(updatedOrganization);
+        if (overrideBefore !== overrideAfter) {
+          changes.push({ field: 'storageLimitOverride', before: overrideBefore, after: overrideAfter });
+        }
+      }
       if (changes.length > 0) {
         await recordAdminActionFromRequest(req, {
           action: 'org.settings.updated',

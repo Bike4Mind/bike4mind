@@ -86,6 +86,7 @@ async function seedUser() {
   return String(id);
 }
 const erasureRegistry: ErasureRegistry = {
+  assertReady: () => {},
   scope: async () => [],
   erase: async () => {},
   audit: async () => ({ remaining: [], unclassified: [] }),

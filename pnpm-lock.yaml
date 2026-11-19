@@ -2300,6 +2300,9 @@ importers:
       web-tree-sitter:
         specifier: 0.25.10
         version: 0.25.10(@types/emscripten@1.41.5)
+      wrap-ansi:
+        specifier: ^9.0.2
+        version: 9.0.2
       ws:
         specifier: ^8.21.3
         version: 8.21.3
@@ -2385,6 +2388,9 @@ importers:
       '@types/yargs':
         specifier: ^17.0.35
         version: 17.0.35
+      '@xterm/headless':
+        specifier: 6.0.0
+        version: 6.0.0
       ink-testing-library:
         specifier: ^4.0.0
         version: 4.0.0(@types/react@19.3.0)
@@ -2825,6 +2831,9 @@ importers:
       dayjs:
         specifier: ^1.11.23
         version: 1.11.23
+      escape-string-regexp:
+        specifier: ^5.0.0
+        version: 5.0.0
       file-type:
         specifier: ^22.1.0
         version: 22.1.0
@@ -7258,6 +7267,9 @@ packages:
 
   '@xterm/addon-web-links@0.12.0':
     resolution: {integrity: sha512-4Smom3RPyVp7ZMYOYDoC/9eGJJJqYhnPLGGqJ6wOBfB8VxPViJNSKdgRYb8NpaM6YSelEKbA2SStD7lGyqaobw==}
+
+  '@xterm/headless@6.0.0':
+    resolution: {integrity: sha512-5Yj1QINYCyzrZtf8OFIHi47iQtI+0qYFPHmouEfG8dHNxbZ9Tb9YGSuLcsEwj9Z+OL75GJqPyJbyoFer80a2Hw==}
 
   '@xterm/xterm@6.0.0':
     resolution: {integrity: sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==}
@@ -19474,6 +19486,8 @@ snapshots:
   '@xterm/addon-fit@0.11.0': {}
 
   '@xterm/addon-web-links@0.12.0': {}
+
+  '@xterm/headless@6.0.0': {}
 
   '@xterm/xterm@6.0.0': {}
 

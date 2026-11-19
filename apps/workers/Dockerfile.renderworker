@@ -1,0 +1,50 @@
+# syntax=docker/dockerfile:1.7-labs
+#
+# Studio render worker: a long-running process that drains the render queue and encodes Production timelines with
+# ffmpeg (apps/workers/src/render/main.ts). Build context is the monorepo root; the root .dockerignore keeps
+# node_modules / dist / .turbo / .sst / .env* / .git out. Layer order follows Dockerfile.chatcompletion
+# (manifests -> install -> source -> build) so a source-only commit reuses the install layer, and the base image is
+# pinned by the same digest.
+
+FROM public.ecr.aws/docker/library/node:24-slim@sha256:b31e7a42fdf8b8aa5f5ed477c72d694301273f1069c5a2f71d53c6482e99a2fc AS base
+
+# Toolchain for native addons in the workers dependency graph, plus ffmpeg and the caption fonts the render plan
+# names (STUDIO_CAPTION_FONTS in b4m-core/common/src/studioComposition/ffmpeg/renderPlan.ts).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 make g++ ca-certificates ffmpeg fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
+# The render plan relies on filter options from ffmpeg 5 (amix normalize, scale force_divisible_by); Debian
+# bookworm ships 5.1. The worker reads the version at startup to pick how it passes the filter script.
+RUN major="$(ffmpeg -version | sed -n 's/^ffmpeg version n\{0,1\}\([0-9]*\).*/\1/p')" \
+    && [ "${major:-0}" -ge 5 ] || { echo "ffmpeg >= 5 required, found: $(ffmpeg -version | head -1)"; exit 1; }
+
+RUN corepack enable
+WORKDIR /app
+
+# 1) Manifests only: the install layer's cache key is the lockfile + workspace package.json files.
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
+COPY --parents **/package.json ./
+
+# 1a) pnpm hashes every patchedDependencies entry during install, so patches/ must exist first.
+COPY patches ./patches
+
+# 2) The workers workspace and its workspace dependencies, INCLUDING devDeps (tsx lives there).
+RUN pnpm install --frozen-lockfile --filter @bike4mind/workers...
+
+# 3) Source.
+COPY . .
+
+# 4) Build the workers' upstream @bike4mind/* packages (TS -> dist), not the workers app itself (it runs from source).
+RUN pnpm turbo build --filter=@bike4mind/workers^...
+
+ENV NODE_ENV=production
+# tsx applies strict mode only to files its tsconfig includes; this one also covers packages/server-utils.
+ENV TSX_TSCONFIG_PATH=tsconfig.selfhost.json
+WORKDIR /app/apps/workers
+USER node
+
+# PID 1 is node itself (not the tsx CLI, which SIGKILLs a script that is slow to ack SIGTERM), so the drain in
+# main.ts runs. The second --import aliases `sst` to the env-backed @bike4mind/resource shim, as for the
+# self-host worker: every Resource.* read resolves from env (RENDER_JOB_QUEUE, GENERATION_JOB_QUEUE, ...).
+CMD ["node", "--import", "tsx", "--import", "../client/server/chatCompletion/selfhostSstAlias.mjs", "src/render/main.ts"]

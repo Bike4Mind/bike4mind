@@ -410,6 +410,7 @@ export const workerTaskSchema = z.strictObject({
   /** The user's answers to the task's decisions, kept as evidence; absent on tasks stored before. */
   decisions: z.array(decisionRecordSchema).max(MAX_RESOLVED_DECISIONS).optional(),
   state: taskStateSchema,
+  attentionViewed: z.boolean().optional(),
 });
 export type WorkerTask = z.infer<typeof workerTaskSchema>;
 
