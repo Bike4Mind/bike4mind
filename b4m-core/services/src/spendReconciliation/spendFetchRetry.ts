@@ -186,7 +186,7 @@ export async function fetchSpendJson<T>(
       .map(([name, value]) => waitFromHeader(name, value, Date.now()) ?? 0);
     const rateLimited = status === 429;
     const attemptLimit = rateLimited ? MAX_RATE_LIMIT_ATTEMPTS : MAX_ATTEMPTS;
-    const baseMs = rateLimited && waits.length === 0 ? RATE_LIMIT_BACKOFF_BASE_MS : BACKOFF_BASE_MS;
+    const baseMs = rateLimited && !waits.some(ms => ms > 0) ? RATE_LIMIT_BACKOFF_BASE_MS : BACKOFF_BASE_MS;
     const backoffMs = Math.min(MAX_BACKOFF_MS, baseMs * 2 ** (attempt - 1) * (1 + Math.random()));
     const delayMs = Math.max(backoffMs, ...waits);
     if (retryable && attempt < attemptLimit && Date.now() + delayMs < deadline) {

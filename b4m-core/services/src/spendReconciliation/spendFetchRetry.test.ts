@@ -101,6 +101,17 @@ describe('spend GET retry', () => {
     expect(await pending).toEqual({ total: 12 });
     expect(diagnostics[0].delayMs).toBe(1000);
   });
+  it('uses the longer schedule when a rate limit names a zero wait', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(rateLimited({ 'retry-after': '0' }))
+      .mockResolvedValueOnce(success());
+    const diagnostics: ProviderSpendDiagnostic[] = [];
+    const pending = request(fetchFn, { onDiagnostic: (value: ProviderSpendDiagnostic) => diagnostics.push(value) });
+    await vi.runAllTimersAsync();
+    expect(await pending).toEqual({ total: 12 });
+    expect(diagnostics[0].delayMs).toBe(2000);
+  });
   it('fails a rate limit on the deadline rather than waiting past it', async () => {
     const fetchFn = vi.fn(async () => rateLimited());
     const diagnostics: ProviderSpendDiagnostic[] = [];
