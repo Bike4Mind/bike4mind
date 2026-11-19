@@ -345,6 +345,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           owner: apiKeyInfo.userId,
           ownerUntrusted: apiKeyInfo.ownerUntrusted,
           billingOwnerType: apiKeyInfo.billingOwnerType,
+          unpaidAccountLimits: apiKeyInfo.unpaidAccountLimits,
           holdSlot: true,
         });
       } else {
