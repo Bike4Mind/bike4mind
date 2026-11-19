@@ -9,8 +9,10 @@ final class FakeVoiceAPI: VoiceAPI, @unchecked Sendable {
   /// When set, the flag read waits for the first element.
   var flagGate: AsyncStream<Void>?
   private(set) var voiceListCalls = 0
+  private(set) var flagCalls = 0
 
   func voiceSessionsEnabled() async throws -> Bool {
+    flagCalls += 1
     if let flagGate { for await _ in flagGate { break } }
     return try flag.get()
   }
@@ -42,10 +44,11 @@ final class VoiceCatalogTests: XCTestCase {
     api = FakeVoiceAPI()
   }
 
-  private func makeModel() -> VoiceCatalogModel {
-    VoiceCatalogModel(wire: api, store: store) { [unowned self] in
-      userID.map { VoiceAccount(userID: $0, baseURL: base) }
-    }
+  private func makeModel(premiumVoiceWait: Duration = .seconds(3)) -> VoiceCatalogModel {
+    VoiceCatalogModel(
+      wire: api, store: store,
+      currentAccount: { [unowned self] in userID.map { VoiceAccount(userID: $0, baseURL: base) } },
+      premiumVoiceWait: premiumVoiceWait)
   }
 
   func testFlagOffIsUnavailableAndSkipsTheCatalog() async {
@@ -103,6 +106,37 @@ final class VoiceCatalogTests: XCTestCase {
     api.voices = .success([alice])
     let voice = await makeModel().premiumVoice()
     XCTAssertNil(voice)
+    XCTAssertEqual(api.flagCalls, 0, "no stored pick answers without the network")
+    XCTAssertEqual(api.voiceListCalls, 0)
+  }
+
+  func testASlowCatalogStartsTheConversationOnDevice() async {
+    api.voices = .success([alice])
+    store.setSelection(VoiceSelection(id: "v1", name: "Alice"), for: VoiceAccount(userID: "user-1", baseURL: base))
+    let (gate, open) = AsyncStream<Void>.makeStream()
+    api.flagGate = gate
+    let model = makeModel(premiumVoiceWait: .milliseconds(50))
+
+    let voice = await model.premiumVoice()
+    XCTAssertNil(voice)
+
+    open.yield(())
+    await model.load()
+    let warm = await model.premiumVoice()
+    XCTAssertEqual(warm, "v1", "the load kept running and the next conversation uses the pick")
+  }
+
+  func testAFirstLoadThatFailedBeforeTheFlagIsRetried() async {
+    api.flag = .failure(.offline)
+    api.voices = .success([alice])
+    store.setSelection(VoiceSelection(id: "v1", name: "Alice"), for: VoiceAccount(userID: "user-1", baseURL: base))
+    let model = makeModel()
+    await model.load()
+    XCTAssertEqual(model.state, .failed(.offline))
+
+    api.flag = .success(true)
+    let voice = await model.premiumVoice()
+    XCTAssertEqual(voice, "v1")
   }
 
   func testAVoiceRemovedFromTheWorkspaceIsForgotten() async {

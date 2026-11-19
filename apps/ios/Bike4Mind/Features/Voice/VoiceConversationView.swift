@@ -209,6 +209,7 @@ struct VoiceConversationView: View {
       (opening, context) = await made.prepare()
     }
     let voiceID = await services.voiceCatalog.premiumVoice()
+    // Done may have been tapped during the lookup; onDisappear then had no model to stop.
     guard !Task.isCancelled, model == nil else { return }
     var handler: VoiceConversationModel.UtteranceHandler?
     if let session {

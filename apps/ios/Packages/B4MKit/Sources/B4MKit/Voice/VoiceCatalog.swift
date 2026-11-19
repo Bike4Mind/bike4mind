@@ -80,6 +80,7 @@ public final class VoiceCatalogModel {
   @ObservationIgnored private let wire: any VoiceAPI
   @ObservationIgnored private let store: any VoiceSelectionStore
   @ObservationIgnored private let currentAccount: @MainActor () async -> VoiceAccount?
+  @ObservationIgnored private let premiumVoiceWait: Duration
   @ObservationIgnored private var account: VoiceAccount?
   /// The last flag reading and catalog this app session saw; a later failed load keeps them.
   private var flagEnabled: Bool?
@@ -90,11 +91,13 @@ public final class VoiceCatalogModel {
 
   public init(
     wire: any VoiceAPI, store: any VoiceSelectionStore,
-    currentAccount: @escaping @MainActor () async -> VoiceAccount?
+    currentAccount: @escaping @MainActor () async -> VoiceAccount?,
+    premiumVoiceWait: Duration = .seconds(3)
   ) {
     self.wire = wire
     self.store = store
     self.currentAccount = currentAccount
+    self.premiumVoiceWait = premiumVoiceWait
   }
 
   /// Fetches the flag and the catalog. Concurrent callers share one fetch.
@@ -118,10 +121,18 @@ public final class VoiceCatalogModel {
     if let account { store.setSelection(picked, for: account) }
   }
 
-  /// The voice id replies should be spoken in, or `nil` for on-device speech. Loads the catalog on first use and
-  /// waits out a load already running (e.g. one Settings started).
+  /// The voice id replies should be spoken in, or `nil` for on-device speech. With no stored pick it answers
+  /// without the network. Otherwise it loads the catalog (or joins a running load) for at most `premiumVoiceWait`;
+  /// past that the conversation starts on-device and the load finishes in the background.
   public func premiumVoice() async -> String? {
-    if state == .idle || state == .loading { await load() }
+    if state == .idle {
+      guard let account = await currentAccount(), store.selection(for: account) != nil else { return nil }
+    }
+    var flagUnread = false
+    if case .failed = state, flagEnabled == nil { flagUnread = true }
+    if state == .idle || state == .loading || flagUnread {
+      guard await loadFinished(within: premiumVoiceWait) else { return nil }
+    }
     guard flagEnabled == true, let selection else { return nil }
     switch state {
     case .loaded, .failed:
@@ -144,6 +155,21 @@ public final class VoiceCatalogModel {
     account = nil
     flagEnabled = nil
     lastCatalog = nil
+  }
+
+  private func loadFinished(within limit: Duration) async -> Bool {
+    let race = LoadRace()
+    return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+      race.timer = Task {
+        try? await Task.sleep(for: limit)
+        race.finish(false, continuation)
+      }
+      Task {
+        await load()
+        race.timer?.cancel()
+        race.finish(true, continuation)
+      }
+    }
   }
 
   private func performLoad(generation started: Int) async {
@@ -185,5 +211,18 @@ public final class VoiceCatalogModel {
     guard case .loaded(let voices) = state, let current = selection, !voices.contains(where: { $0.id == current.id })
     else { return }
     select(nil)
+  }
+}
+
+/// Resumes `loadFinished`'s continuation once, from whichever of the load or the timer ends first.
+@MainActor
+private final class LoadRace {
+  var timer: Task<Void, Never>?
+  private var finished = false
+
+  func finish(_ loaded: Bool, _ continuation: CheckedContinuation<Bool, Never>) {
+    guard !finished else { return }
+    finished = true
+    continuation.resume(returning: loaded)
   }
 }
