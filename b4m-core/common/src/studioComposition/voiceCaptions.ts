@@ -85,9 +85,11 @@ const endsPhraseAfter = (phrase: Word[], word: Word, next: Word | undefined): bo
   if (!next) return true;
   if (SENTENCE_END.test(word.text)) return true;
   if (CLAUSE_END.test(word.text) && phrase.length >= VOICE_CAPTION_PHRASING.minWordsBeforeClauseBreak) return true;
-  if (phrase.length >= VOICE_CAPTION_PHRASING.maxWords) return true;
   const charsWithNext = joinWords([...phrase, next]).length;
   if (charsWithNext > VOICE_CAPTION_PHRASING.maxChars) return true;
+  // One word over the cap is kept when it ends the sentence, so it is not left as a flash-length caption alone.
+  const finishesSentence = phrase.length === VOICE_CAPTION_PHRASING.maxWords && SENTENCE_END.test(next.text);
+  if (phrase.length >= VOICE_CAPTION_PHRASING.maxWords && !finishesSentence) return true;
   const gapMs = next.startMs !== undefined && word.endMs !== undefined ? next.startMs - word.endMs : 0;
   return gapMs >= VOICE_CAPTION_PHRASING.pauseBreakMs;
 };

@@ -56,6 +56,17 @@ describe('splitCaptionPhrases', () => {
     ]);
   });
 
+  it('keeps a sentence-final word with a full phrase instead of leaving it alone', () => {
+    expect(splitCaptionPhrases('We all ride up the hill too. Then rest')).toEqual([
+      'We all ride up the hill too.',
+      'Then rest',
+    ]);
+    expect(splitCaptionPhrases('We all ride up the big hill and rest')).toEqual([
+      'We all ride up the big',
+      'hill and rest',
+    ]);
+  });
+
   it('breaks at a clause once the phrase has a few words, not on a lone word', () => {
     expect(splitCaptionPhrases('Yes, the new bike rides lighter, faster and quieter')).toEqual([
       'Yes, the new bike rides lighter,',
