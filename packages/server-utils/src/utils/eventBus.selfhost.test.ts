@@ -23,6 +23,28 @@ const { SessionEvents, EmailEvents, NotebookCurationEvents, StripeEvents } = awa
 
 const startDetail = { sessionId: 's1', userId: 'u1', curationJobId: 'j1' };
 
+describe('EmailEvents.Send schema', () => {
+  it('keeps text, mirror and logRecipient instead of stripping them', () => {
+    const detail = {
+      to: 'a@b.com',
+      subject: 'Hi',
+      body: '<p>hello</p>',
+      text: 'hello',
+      category: 'otc' as const,
+      mirror: false,
+      logRecipient: false,
+    };
+
+    expect(EmailEvents.Send.schema.parse(detail)).toEqual(detail);
+  });
+
+  it('does not require any of the optional fields', () => {
+    const detail = { to: 'a@b.com', subject: 'Hi', body: '<p>hello</p>' };
+
+    expect(EmailEvents.Send.schema.parse(detail)).toEqual(detail);
+  });
+});
+
 describe('eventBus publishSelfHost', () => {
   const originalSelfHost = process.env.B4M_SELF_HOST;
   const originalQueue = process.env.SELF_HOST_EVENT_QUEUE;
@@ -47,7 +69,35 @@ describe('eventBus publishSelfHost', () => {
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     expect(sendEmailMock).toHaveBeenCalledWith(
       'a@b.com',
-      expect.objectContaining({ subject: 'Hi', html: '<p>hello</p>' })
+      expect.objectContaining({ subject: 'Hi', html: '<p>hello</p>' }),
+      {}
+    );
+    expect(sendEmailMock.mock.calls[0][1]).not.toHaveProperty('text');
+    expect(sendToQueueMock).not.toHaveBeenCalled();
+  });
+
+  it('passes the plain-text body and the send options through to the mailer', async () => {
+    delete process.env.SELF_HOST_EVENT_QUEUE;
+    await EmailEvents.Send.publish({
+      to: 'a@b.com',
+      subject: 'Hi',
+      body: '<p>hello</p>',
+      text: 'hello',
+      category: 'otc',
+      mirror: false,
+      logRecipient: false,
+      attachments: [{ filename: 'a.txt', content: Buffer.from('hi').toString('base64'), contentType: 'text/plain' }],
+    });
+
+    expect(sendEmailMock).toHaveBeenCalledExactlyOnceWith(
+      'a@b.com',
+      {
+        subject: 'Hi',
+        html: '<p>hello</p>',
+        text: 'hello',
+        attachments: [{ filename: 'a.txt', content: Buffer.from('hi'), contentType: 'text/plain' }],
+      },
+      { category: 'otc', mirror: false, logRecipient: false }
     );
     expect(sendToQueueMock).not.toHaveBeenCalled();
   });

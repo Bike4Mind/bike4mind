@@ -5,6 +5,7 @@ import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { getAllowedOrigins } from './allowedOrigins';
 import { BLOCK_ALL_PUBLIC_ACCESS, encryptBucketAtRest } from './bucketSecurity';
 import { lambdaVpc } from './vpc';
+import { eventBus } from './bus';
 
 // Bucket options:  Named buckets are named, and kept; otherwise, they're auto-deleted.
 // Buckets in production and dev (staging) are retained on deletion for data safety,
@@ -447,7 +448,16 @@ const uploadCompleteFunction = new sst.aws.Function('HistoryUploadCompleteFuncti
 const notebookImportFunction = new sst.aws.Function('NotebookImportCompleteFunction', {
   handler: 'apps/workers/src/s3/notebookImportComplete.dispatch',
   runtime: 'nodejs24.x',
-  link: [...allSecrets, fabFileBucket, appFilesBucket, generatedImagesBucket, historyImportBucket, websocketApi],
+  // eventBus: a recorded moderation incident queues its reviewer alert as an email.send event.
+  link: [
+    ...allSecrets,
+    fabFileBucket,
+    appFilesBucket,
+    generatedImagesBucket,
+    historyImportBucket,
+    websocketApi,
+    eventBus,
+  ],
   vpc: lambdaVpc,
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,

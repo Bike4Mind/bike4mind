@@ -3,7 +3,7 @@ import { dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/da
 import { userRepository } from '@bike4mind/database/auth';
 import { orgAclRowConfersMembership } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import mailer from '@bike4mind/server-utils/utils/mailer/index';
+import { queuedMailer } from '@bike4mind/server-utils/utils/mailer/queuedMailer';
 
 /**
  * Reads the departing member's surviving personal-lake shares and best-effort emails their owners,
@@ -57,7 +57,7 @@ export async function reportAndNotifyKeptPersonalLakeShares(
   await dataLakeService.notifyKeptPersonalLakeShares(
     shares,
     { departedUserId, organizationName: organization.name, appUrl: process.env.APP_URL },
-    { db: { users: userRepository }, mailer, logger }
+    { db: { users: userRepository }, mailer: queuedMailer, logger }
   );
 
   return shares.lakeCount;

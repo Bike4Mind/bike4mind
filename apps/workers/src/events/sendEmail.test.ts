@@ -1,16 +1,28 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ send: vi.fn(), logger: { updateMetadata: vi.fn(), info: vi.fn(), error: vi.fn() } }));
-vi.mock('@workers/utils/eventContext', () => ({ withEventContext: (fn: unknown) => fn }));
+const mocks = vi.hoisted(() => ({
+  send: vi.fn(),
+  sendTestEmail: vi.fn(),
+  logger: { updateMetadata: vi.fn(), info: vi.fn(), error: vi.fn() },
+}));
+// Adapts an EventBridge-shaped event into the (event, logger) call the wrapped callback receives.
+vi.mock('@workers/utils/eventContext', () => ({
+  withEventContext:
+    (fn: (event: unknown, logger: unknown) => unknown) => (event: { 'detail-type': string; detail: unknown }) =>
+      fn({ event: event['detail-type'], properties: event.detail }, mocks.logger),
+}));
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   EmailEvents: { Send: { schema: { parse: (value: unknown) => value } } },
 }));
-vi.mock('@bike4mind/server-utils/utils/mailer/index', () => ({ default: { sendEmail: mocks.send } }));
+vi.mock('@bike4mind/server-utils/utils/mailer/index', () => ({
+  default: { sendEmail: mocks.send, sendTestEmail: mocks.sendTestEmail, transport: { kind: 'ses' } },
+}));
 import { handler } from './sendEmail';
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.send.mockResolvedValue({ messageId: 'synthetic-id' });
+  mocks.sendTestEmail.mockResolvedValue({ success: true, messageId: 'test-id' });
 });
 
 afterEach(() => {
@@ -18,12 +30,16 @@ afterEach(() => {
 });
 
 type Attachment = { filename: string; content: string; contentType: string };
+type Detail = Record<string, unknown>;
+
+const deliver = (detail: Detail) => handler({ 'detail-type': 'email.send', detail } as never);
 
 async function send(category?: 'otc', attachments?: Attachment[], to = 'test@example.org') {
-  // The wrapper supplies event context; this test exercises only its wrapped callback.
-  const callback = handler as unknown as (event: unknown, logger: typeof mocks.logger) => Promise<void>;
-  await callback({ properties: { to, subject: 'Test', body: 'Body', category, attachments } }, mocks.logger);
+  await deliver({ to, subject: 'Test', body: 'Body', category, attachments });
 }
+
+const everyLoggedValue = () =>
+  JSON.stringify([mocks.logger.updateMetadata.mock.calls, mocks.logger.info.mock.calls, mocks.logger.error.mock.calls]);
 
 it('passes the category through so the transport can pick the configuration set', async () => {
   await send('otc');
@@ -83,4 +99,120 @@ it('delivers everything when no sink list is set', async () => {
   vi.stubEnv('MAIL_SINK_DOMAINS', '');
   await send(undefined, undefined, 'alice-e2e@test.com');
   expect(mocks.send).toHaveBeenCalledTimes(1);
+});
+
+it('passes the plain-text body into the mail data', async () => {
+  await deliver({ to: 'test@example.org', subject: 'Test', body: 'Body', text: 'Plain body' });
+  expect(mocks.send).toHaveBeenCalledWith(
+    'test@example.org',
+    { subject: 'Test', html: 'Body', text: 'Plain body' },
+    expect.anything()
+  );
+});
+
+it('leaves the text key off the mail data when the event has none', async () => {
+  await send();
+  expect(mocks.send.mock.calls[0][1]).not.toHaveProperty('text');
+});
+
+it('passes mirror and logRecipient through as send options', async () => {
+  await deliver({
+    to: 'test@example.org',
+    subject: 'Test',
+    body: 'Body',
+    category: 'otc',
+    mirror: false,
+    logRecipient: false,
+  });
+  expect(mocks.send).toHaveBeenCalledWith(
+    'test@example.org',
+    { subject: 'Test', html: 'Body' },
+    { category: 'otc', mirror: false, logRecipient: false }
+  );
+});
+
+it('names the recipient in its logs by default', async () => {
+  await send();
+  expect(mocks.logger.updateMetadata).toHaveBeenCalledWith(expect.objectContaining({ to: 'test@example.org' }));
+  expect(mocks.logger.info).toHaveBeenCalledWith(
+    'Email delivered successfully',
+    expect.objectContaining({ to: 'test@example.org' })
+  );
+  mocks.send.mockResolvedValue(false);
+  await send();
+  expect(mocks.logger.error).toHaveBeenCalledWith(
+    expect.stringContaining('Email delivery failed'),
+    expect.objectContaining({ to: 'test@example.org' })
+  );
+});
+
+it('keeps the recipient out of every log line after a delivery when logRecipient is false', async () => {
+  await deliver({ to: 'private@example.org', subject: 'Test', body: 'Body', logRecipient: false });
+  expect(mocks.send).toHaveBeenCalledTimes(1);
+  expect(mocks.logger.updateMetadata).toHaveBeenCalledWith(expect.objectContaining({ to: '[redacted]' }));
+  expect(mocks.logger.info).toHaveBeenCalledWith(
+    'Email delivered successfully',
+    expect.objectContaining({ to: '[redacted]' })
+  );
+  expect(everyLoggedValue()).not.toContain('private@example.org');
+});
+
+it('keeps the recipient out of every log line after a failed delivery when logRecipient is false', async () => {
+  mocks.send.mockResolvedValue(false);
+  await deliver({ to: 'private@example.org', subject: 'Test', body: 'Body', logRecipient: false });
+  expect(mocks.logger.error).toHaveBeenCalledWith(
+    expect.stringContaining('Email delivery failed'),
+    expect.objectContaining({ to: '[redacted]' })
+  );
+  expect(everyLoggedValue()).not.toContain('private@example.org');
+});
+
+it('keeps the recipient out of every log line on a sink skip when logRecipient is false', async () => {
+  vi.stubEnv('MAIL_SINK_DOMAINS', 'test.com');
+  await deliver({ to: 'private@test.com', subject: 'Test', body: 'Body', logRecipient: false });
+  expect(mocks.send).not.toHaveBeenCalled();
+  expect(mocks.logger.info).toHaveBeenCalledWith(
+    expect.stringContaining('sink domain'),
+    expect.objectContaining({ to: '[redacted]', sinkDomain: 'test.com' })
+  );
+  expect(everyLoggedValue()).not.toContain('private@test.com');
+});
+
+it('still names the recipient when logRecipient is true', async () => {
+  await deliver({ to: 'test@example.org', subject: 'Test', body: 'Body', logRecipient: true });
+  expect(mocks.logger.updateMetadata).toHaveBeenCalledWith(expect.objectContaining({ to: 'test@example.org' }));
+});
+
+it('answers a mail test request with the transport result and the transport name, without sending mail', async () => {
+  const result = await handler({ mailTest: { to: 'qa@example.org' } });
+  expect(result).toEqual({ success: true, messageId: 'test-id', transport: 'ses' });
+  expect(mocks.sendTestEmail).toHaveBeenCalledWith('qa@example.org');
+  expect(mocks.send).not.toHaveBeenCalled();
+});
+
+it('returns a failed test send as the result, with the transport name', async () => {
+  mocks.sendTestEmail.mockResolvedValue({ success: false, error: 'relay refused the sender' });
+  await expect(handler({ mailTest: { to: 'qa@example.org' } })).resolves.toEqual({
+    success: false,
+    error: 'relay refused the sender',
+    transport: 'ses',
+  });
+});
+
+it('refuses a mail test to a sink domain without sending it', async () => {
+  vi.stubEnv('MAIL_SINK_DOMAINS', 'test.com');
+  await expect(handler({ mailTest: { to: 'qa@test.com' } })).resolves.toEqual({
+    success: false,
+    error: 'Mail to test.com is not delivered on this stage.',
+    transport: 'ses',
+  });
+  expect(mocks.sendTestEmail).not.toHaveBeenCalled();
+  expect(mocks.send).not.toHaveBeenCalled();
+});
+
+it('does not let an email.send event ask for the test path', async () => {
+  await deliver({ to: 'test@example.org', subject: 'Test', body: 'Body', mailTest: { to: 'other@example.org' } });
+  expect(mocks.sendTestEmail).not.toHaveBeenCalled();
+  expect(mocks.send).toHaveBeenCalledTimes(1);
+  expect(mocks.send.mock.calls[0][0]).toBe('test@example.org');
 });

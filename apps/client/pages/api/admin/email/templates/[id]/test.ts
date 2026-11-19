@@ -1,7 +1,7 @@
 import { emailTemplateRepository } from '@bike4mind/database';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import mailer from '@bike4mind/server-utils/utils/mailer/index';
+import { queuedMailer } from '@bike4mind/server-utils/utils/mailer/queuedMailer';
 import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { ApiKeyScope } from '@bike4mind/common';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
@@ -54,7 +54,7 @@ const handler = adminApi({
   subject = `[TEST] ${subject}`;
 
   try {
-    const result = await mailer.sendEmail(email, {
+    const result = await queuedMailer.sendEmail(email, {
       subject,
       html: htmlContent,
       text: template.textContent || undefined,

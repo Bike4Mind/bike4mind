@@ -32,9 +32,9 @@ export interface IncidentReviewAlertDeps {
   logger: { warn(msg: string, meta: unknown): void; error(msg: string, meta: unknown): void };
 }
 
-// Recording sits on the image request path, and the SMTP transport's own timeouts add up to tens
-// of seconds, so the alert gets a short budget. A send that misses it is best-effort (it may still
-// land, unstamped) until the send moves onto the email event with its retries.
+// Recording sits on the image request path, so the alert gets a short budget. Self-host sends over
+// SMTP in-process, whose own timeouts add up to tens of seconds; a send that misses the budget is
+// best-effort (it may still land, unstamped).
 export const REVIEW_ALERT_TIMEOUT_MS = 5_000;
 
 /**

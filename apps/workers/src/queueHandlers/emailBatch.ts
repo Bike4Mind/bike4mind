@@ -14,7 +14,7 @@ import {
   requireEnv,
 } from '@bike4mind/common';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
-import mailer from '@bike4mind/server-utils/utils/mailer/index';
+import { queuedMailer } from '@bike4mind/server-utils/utils/mailer/queuedMailer';
 import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { SQSBatchResponse } from 'aws-lambda';
 import { z } from 'zod';
@@ -158,11 +158,12 @@ async function processAttempt(
 
   for (let retryAttempt = 0; retryAttempt < MAX_RETRY_ATTEMPTS; retryAttempt++) {
     try {
-      const result = await mailer.sendEmail(attempt.recipientEmail, {
+      const result = await queuedMailer.sendEmail(attempt.recipientEmail, {
         subject: finalSubject,
         html: rendered.html,
       });
 
+      // On a hosted stage a truthy result means the email-send worker took the mail; delivery is logged there.
       if (result) {
         await emailSendAttemptRepository.updateStatus(attempt.id, EmailSendStatus.SENT, {
           sentAt: new Date(),
