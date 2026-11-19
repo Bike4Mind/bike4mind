@@ -17,6 +17,7 @@ import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useReferralModal } from '@client/app/components/referrals/ReferralModal';
 import { useBillingView } from '@client/app/components/subscription/BillingDeepLinkModals';
 import { useUser } from '@client/app/contexts/UserContext';
+import { userIsDeveloper } from '@client/app/utils/user';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
@@ -274,6 +275,7 @@ const ProfileMenu = () => {
   const modeToggleEnabled = theme.branding.modeToggleEnabled;
 
   const currentUser = useUser(s => s.currentUser);
+  const isAdmin = useUser(s => s.isAdmin);
   const avatarVersion = useUser(s => s.avatarVersion);
   // Delegated admins too: the console admits anyone it has a tab to show.
   const canOpenAdmin = canEnterAdminConsole(currentUser);
@@ -282,11 +284,15 @@ const ProfileMenu = () => {
   const { isFeatureEnabled } = useFeatureEnabled();
   const isHearthEnabled = isFeatureEnabled('enableHearth');
   // Premium-overlay launch points (codegen glue - empty array in the open-core
-  // fork). Visibility semantics (STRICT - no admin/developer bypass, hidden
-  // while entitlements load, hidden-not-redirected on denial) live in
-  // filterVisiblePremiumNavItems - see its doc comment and unit tests.
+  // fork). Visibility semantics live in filterVisiblePremiumNavItems.
+  const isStaff = isAdmin || userIsDeveloper(currentUser);
   const { data: entitlements } = useEntitlements();
-  const visiblePremiumNavItems = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags);
+  const visiblePremiumNavItems = filterVisiblePremiumNavItems(
+    premiumNavItems,
+    entitlements,
+    currentUser?.tags,
+    isStaff
+  );
   const isCreditsEnabled = !!useGetSettingsValue('enforceCredits');
   const isDesktopPromoEnabled = useDesktopPromoEnabled();
   const isPreferenceArenaEnabled = usePreferenceArenaEnabled();
