@@ -157,6 +157,19 @@ describe('POST /api/admin/dlq/discard-group', () => {
       invoke({ queueLabel: 'cron', failureSignature: 'c'.repeat(16), reason: 'Job obsolete' })
     ).rejects.toThrow('throttled');
     expect(h.changeMessageVisibility).toHaveBeenCalledWith('cron-dlq-url', 'receipt-o1', 0);
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('still audits what earlier rounds discarded when a later receive fails', async () => {
+    h.receive.mockResolvedValueOnce([sqsMessage('m1', 'boom')]).mockRejectedValueOnce(new Error('throttled'));
+    await expect(invoke({ queueLabel: 'cron', failureSignature: MATCH, reason: 'Job obsolete' })).rejects.toThrow(
+      'throttled'
+    );
+    expect(h.deleteFromQueue).toHaveBeenCalledWith('cron-dlq-url', 'receipt-m1');
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'ops.dlq.discarded',
+      details: { messageCount: 1, discardedMessageIds: ['m1'], stoppedBy: 'error', error: 'throttled' },
+    });
   });
 
   it.each([

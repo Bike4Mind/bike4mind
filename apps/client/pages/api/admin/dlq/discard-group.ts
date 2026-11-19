@@ -6,11 +6,7 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDlqByLabel, getDlqUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { changeMessageVisibility, receiveFromQueue } from '@bike4mind/server-utils/utils/sqs';
 import { DLQ_BROWSE_MESSAGE_ATTRIBUTES, findDlqFailures } from '@bike4mind/server-utils/utils/dlqMessages';
-import {
-  DLQ_SIGNATURE_UNAVAILABLE,
-  dlqFailureSignature,
-  rowFailure,
-} from '@bike4mind/server-utils/utils/dlqMessageRow';
+import { dlqFailureSignature, rowFailure } from '@bike4mind/server-utils/utils/dlqMessageRow';
 import { discardDlqMessages, type DlqDiscardOutcome } from '@server/admin/dlq/discardMessages';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
@@ -50,7 +46,6 @@ const handler = adminApi({
   const parsed = BodySchema.safeParse(req.body);
   if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message || 'Invalid request body');
   const { queueLabel, failureSignature } = parsed.data;
-  if (failureSignature === DLQ_SIGNATURE_UNAVAILABLE) throw new BadRequestError('This group cannot be discarded');
   const limit = parsed.data.limit ?? GROUP_DISCARD_MAX_PER_CALL;
   const reason = parseAdminActionReason(parsed.data.reason);
   const adminUserId = req.user?.id;
@@ -66,6 +61,7 @@ const handler = adminApi({
   let examined = 0;
   let emptyReceives = 0;
   let stoppedBy: DlqGroupDiscardStop = 'budget';
+  let thrown: unknown;
   try {
     for (let receives = 0; receives < MAX_RECEIVES && Date.now() - startedAt < TIME_BUDGET_MS; receives++) {
       if (results.length >= limit) {
@@ -121,9 +117,13 @@ const handler = adminApi({
         }))
       );
     }
+  } catch (error) {
+    thrown = error;
   } finally {
     await releaseHeld(dlqUrl, queueLabel, held);
   }
+  // Earlier rounds may already have deleted messages, so a failed call still records what it discarded.
+  if (thrown !== undefined && results.length === 0) throw thrown;
   if (stoppedBy === 'budget' && results.length >= limit) stoppedBy = 'limit';
 
   const discardedIds = results.filter(result => result.status === 'discarded').map(result => result.messageId);
@@ -138,11 +138,13 @@ const handler = adminApi({
       messageCount: discardedIds.length,
       failed: results.length - discardedIds.length,
       examined,
-      stoppedBy,
+      stoppedBy: thrown === undefined ? stoppedBy : 'error',
+      ...(thrown !== undefined ? { error: thrown instanceof Error ? thrown.message : String(thrown) } : {}),
       discardedMessageIds: discardedIds,
       historyPendingMessageIds: results.filter(result => result.historyPending).map(result => result.messageId),
     },
   });
+  if (thrown !== undefined) throw thrown;
   return res.json({
     discarded: discardedIds.length,
     failed: results.length - discardedIds.length,

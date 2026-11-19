@@ -56,7 +56,9 @@ export function groupDlqRows(rows: readonly DlqRow[], now = Date.now()): DlqGrou
       signature === DLQ_SIGNATURE_UNAVAILABLE
         ? `${row.queueLabel}:${signature}:${row.messageId}`
         : `${row.queueLabel}:${signature}`;
-    byKey.set(key, [...(byKey.get(key) ?? []), row]);
+    const members = byKey.get(key);
+    if (members) members.push(row);
+    else byKey.set(key, [row]);
   }
   const groups = [...byKey].map(([id, members]): DlqGroup => {
     const sent = members.map(row => Number(row.sentTimestamp)).filter(Number.isFinite);
