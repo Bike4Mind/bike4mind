@@ -139,7 +139,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   gap('event:infra/eventBus.ts:email-send', '40cede96442960f5755c7d052801a7b0cb29bdc640db787a181dbe2fbc66ff10'),
   gap(
     'event:infra/eventBus.ts:moderation-escalation-alert',
-    '6db5f1d6798bc7d470c7f75f12252468da84d878a780d70014dc960bb6922882',
+    'f4299c61eaf67b9ece980f6321d71fa95378cba3efb8def5e95c279e4b5bb9a7',
     ['ssm:GetParameter']
   ),
   gap(
