@@ -1015,7 +1015,16 @@ describe('unpaid account limits', () => {
 
 describe('unpaid limits payload', () => {
   const limits = { requestsPerMinute: 30, requestsPerDay: 600, tokensPerMinute: 400000, maxConcurrent: 4 };
-  const base = { ...client, unpaidAccountLimits: limits } as never;
+  const federated = {
+    ...client,
+    federatedIdp: {
+      subjectSource: 'sub' as const,
+      issuer: 'https://b4m.example.test',
+      audience: client.clientId,
+      jwksUri: 'https://b4m.example.test/api/oauth/jwks',
+    },
+  } as never;
+  const base = { ...(federated as object), unpaidAccountLimits: limits } as never;
 
   it('reads stored limits into the form', () => {
     expect(editFormFromClient(base).unpaidLimits).toEqual({
@@ -1025,7 +1034,7 @@ describe('unpaid limits payload', () => {
       tpm: '400,000',
       concurrent: '4',
     });
-    expect(editFormFromClient(client as never).unpaidLimits).toMatchObject({ enabled: false, rpm: '20' });
+    expect(editFormFromClient(federated).unpaidLimits).toMatchObject({ enabled: false, rpm: '20' });
   });
 
   it('sends the full object only when it differs from stored', () => {
@@ -1034,10 +1043,8 @@ describe('unpaid limits payload', () => {
     expect(buildEditPayload(base, { ...form, unpaidLimits: { ...form.unpaidLimits, concurrent: '5' } })).toEqual({
       unpaidAccountLimits: { ...limits, maxConcurrent: 5 },
     });
-    const fresh = editFormFromClient(client as never);
-    expect(
-      buildEditPayload(client as never, { ...fresh, unpaidLimits: { ...fresh.unpaidLimits, enabled: true } })
-    ).toEqual({
+    const fresh = editFormFromClient(federated);
+    expect(buildEditPayload(federated, { ...fresh, unpaidLimits: { ...fresh.unpaidLimits, enabled: true } })).toEqual({
       unpaidAccountLimits: { requestsPerMinute: 20, requestsPerDay: 0, tokensPerMinute: 0, maxConcurrent: 0 },
     });
   });
@@ -1047,6 +1054,22 @@ describe('unpaid limits payload', () => {
     expect(buildEditPayload(base, { ...form, unpaidLimits: { ...form.unpaidLimits, enabled: false } })).toEqual({
       unpaidAccountLimits: null,
     });
-    expect(buildEditPayload(client as never, editFormFromClient(client as never))).toEqual({});
+    expect(buildEditPayload(federated, editFormFromClient(federated))).toEqual({});
+  });
+
+  it('drops the override along with federation, since the server refuses it on a non-federated client', () => {
+    const form = editFormFromClient(base);
+    expect(buildEditPayload(base, { ...form, federated: { ...form.federated, enabled: false } })).toEqual({
+      federatedIdp: null,
+      unpaidAccountLimits: null,
+    });
+    const fresh = editFormFromClient(federated);
+    expect(
+      buildEditPayload(federated, {
+        ...fresh,
+        federated: { ...fresh.federated, enabled: false },
+        unpaidLimits: { ...fresh.unpaidLimits, enabled: true },
+      })
+    ).toEqual({ federatedIdp: null });
   });
 });

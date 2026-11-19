@@ -296,7 +296,8 @@ export function buildEditPayload(client: OAuthClientView, form: EditForm): Updat
   }
 
   const storedLimits = client.unpaidAccountLimits;
-  if (form.unpaidLimits.enabled) {
+  // The server refuses unpaid limits on a non-federated client, so dropping federation drops them too.
+  if (form.federated.enabled && form.unpaidLimits.enabled) {
     const wanted = unpaidLimitsFromForm(form.unpaidLimits);
     if (wanted && (!storedLimits || UNPAID_LIMIT_FIELDS.some(f => wanted[f.key] !== storedLimits[f.key]))) {
       payload.unpaidAccountLimits = wanted;
