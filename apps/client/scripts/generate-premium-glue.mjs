@@ -13,7 +13,6 @@
  *   pages/api/<stub>.ts (per-package)                  - Next.js API stubs
  *   server/premium-generated/<stub>.ts (per-package)   - SST Lambda handler stubs
  *   server/premium-generated/premiumPartnerSignupHooks.generated.ts - post-signup partner-rule hooks
- *   server/premium-generated/premiumDataSubjectRegistry.generated.ts - overlay data-subject classifications
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
  *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
  *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
@@ -37,6 +36,7 @@
  *   premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
  *   premiumEntitlementGrants.generated.ts - entitlement registry rows
  *   premiumApiKeyScopes.generated.ts - contributed API-key scopes
+ *   premiumDataSubjectRegistry.generated.ts - overlay data-subject classifications
  *
  * Two distinct "empty" forms when no premium packages are present:
  *   SPA/nav   -> emit the file with an empty exported array
@@ -1531,11 +1531,11 @@ function generatePartnerSignupHooks(packages) {
 // Premium packages can classify their own models for data-subject erasure and export
 // (b4mContributions.dataSubjectRegistryExport -> a module whose import registers the package's
 // mongoose models and which exports `dataSubjectRegistry: ContributedDataHolderRegistry`).
-// server/dataSubject/registry/index.ts statically imports this file, so it must exist in BOTH forms.
+// packages/server-utils/src/dataSubject/registry/index.ts statically imports this file, so it must exist in BOTH forms.
 // One entry per package, not a spread, so the registry merge sees a model two packages both claim.
 function generateDataSubjectRegistry(packages) {
-  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumDataSubjectRegistry.generated.ts');
-  const typeImport = `import type { ContributedDataHolderRegistry } from '@server/dataSubject/types';`;
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumDataSubjectRegistry.generated.ts');
+  const typeImport = `import type { ContributedDataHolderRegistry } from '../dataSubject/types';`;
   const declaration = 'export const premiumDataSubjectRegistries: readonly ContributedDataHolderRegistry[]';
 
   const contributors = packages.filter(p => p.contributions.dataSubjectRegistryExport);

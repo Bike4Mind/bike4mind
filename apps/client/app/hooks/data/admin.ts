@@ -10,7 +10,7 @@ import type {
   IncidentRange,
   IncidentSignals,
   IncidentState,
-} from '@client/app/components/admin/SecurityDashboard/incidentTypes';
+} from '@bike4mind/server-utils/app/components/admin/SecurityDashboard/incidentTypes';
 import type { SignupAnomalySnapshot } from '@bike4mind/server-utils/app/utils/signupAnomaly';
 import type { SecopsTriageStatusResponse } from '@client/pages/api/admin/secops-triage/status';
 

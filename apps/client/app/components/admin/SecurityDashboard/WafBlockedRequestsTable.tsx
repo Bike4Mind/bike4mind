@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Autocomplete, AutocompleteOption, Box, Button, Stack, Typography } from '@mui/joy';
 import type { SecurityDashboardWafBlockedRequestsResult } from '@/app/hooks/data/admin';
-import type { WafRangeInput } from '@/server/security/wafTraffic';
+import type { WafRangeInput } from '@bike4mind/server-utils/security/wafTraffic';
 import { DataTable, EmptyState, ErrorState, StatusChip } from '../shared';
 import { formatRangeLabel } from './wafRangeLabel';
 

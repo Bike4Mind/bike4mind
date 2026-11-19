@@ -2,7 +2,7 @@
 import { cancelVideoGenerationContract, NotFoundError } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { cancelOwnGenerationJob } from '@server/generations/cancelOwnGenerationJob';
-import { findOwnGenerationJob } from '@server/generations/findOwnGenerationJob';
+import { findOwnGenerationJob } from '@bike4mind/server-utils/generations/findOwnGenerationJob';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
 import { VIDEO_GENERATION_PROJECTION, toPublicGenerationJob } from '@server/generations/toPublicGenerationJob';

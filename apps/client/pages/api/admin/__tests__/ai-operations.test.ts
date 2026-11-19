@@ -36,7 +36,7 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@server/admin/ai/operations', () => ({ getAdminAiOperations: h.read, loadAdminAiConfig: h.config }));
-vi.mock('@server/admin/ai/readiness', () => ({
+vi.mock('@bike4mind/server-utils/admin/ai/readiness', () => ({
   validateAdminAiConfigPromotion: h.validate,
   ADMIN_AI_CLASS_REGISTRY: [],
 }));

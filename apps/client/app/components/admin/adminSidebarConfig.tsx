@@ -1,5 +1,5 @@
 import type { ElementType } from 'react';
-import type { AdminActionCountKey } from './adminActionCounts';
+import type { AdminActionCountKey } from '@bike4mind/server-utils/app/components/admin/adminActionCounts';
 import {
   Activity,
   AppWindow,

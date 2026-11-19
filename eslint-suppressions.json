@@ -74,7 +74,7 @@
   "apps/client/server/auth/withAccountNotPurging.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/credits/orgInviteBonus.ts": { "b4m/require-update-validators": { "count": 2 } },
   "apps/client/server/credits/recordActiveSession.ts": { "b4m/require-update-validators": { "count": 1 } },
-  "apps/client/server/dataSubject/subjectErasureExecutor.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/server-utils/src/dataSubject/subjectErasureExecutor.ts": { "b4m/require-update-validators": { "count": 2 } },
   "apps/client/server/feedback/bulk.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/integrations/slack/reactionFeedback.ts": { "b4m/require-update-validators": { "count": 3 } },
   "apps/client/server/integrations/stripe/attachOrgStripeCustomer.ts": { "b4m/require-update-validators": { "count": 1 } },
@@ -3542,26 +3542,6 @@
       "count": 23
     }
   },
-  "apps/workers/src/cron/accountDeletionSweep.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/cron/accountDeletionSweep.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/cron/adminMorningBrief.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/cron/adminMorningBrief.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
   "apps/workers/src/events/sessionSummarization.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
@@ -3609,41 +3589,6 @@
   },
   "apps/workers/src/organizations/retentionCleanup.ts": {
     "b4m/require-update-validators": { "count": 7 }
-  },
-  "apps/workers/src/organizations/retentionErasure.e2e.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/queueHandlers/accountDataExport.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/queueHandlers/accountDataExport.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/queueHandlers/accountDataExportCollections.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/queueHandlers/accountErasure.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/queueHandlers/accountErasure.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/queueHandlers/agentExecutor.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
   },
   "apps/workers/src/queueHandlers/emailJobOrchestrator.ts": {
     "@typescript-eslint/no-explicit-any": {

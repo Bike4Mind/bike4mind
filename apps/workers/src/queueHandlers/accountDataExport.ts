@@ -43,7 +43,10 @@ import {
   adminDataExportKey,
   isMissingObjectError,
 } from '@bike4mind/server-utils/utils/accountDataExport';
-import { SubjectRecordExport, assertEveryModelClassified } from '@server/dataSubject/subjectRecordExport';
+import {
+  SubjectRecordExport,
+  assertEveryModelClassified,
+} from '@bike4mind/server-utils/dataSubject/subjectRecordExport';
 import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 import { createLedgerMemoryStore } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
