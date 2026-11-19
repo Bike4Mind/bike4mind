@@ -234,6 +234,23 @@ describe('plan adapters', () => {
     expect(result.plan.items[5].children).toEqual([]);
   });
 
+  it('derives quest status only from retained normalized children', () => {
+    const result = fromQuestMaster([
+      {
+        id: 'q',
+        title: 'Quest',
+        subQuests: [
+          ...Array.from({ length: 50 }, (_, index) => ({ id: String(index), title: 'Done', status: 'completed' })),
+          { id: 'overflow', title: 'Not retained', status: 'in_progress' },
+        ],
+      },
+      { id: 'empty', title: 'Empty', subQuests: [{ title: ' ', status: 'completed' }] },
+    ]);
+    expect(result.plan.items.map(entry => entry.status)).toEqual(['completed', 'pending']);
+    expect(result.plan.items[0].children).toHaveLength(50);
+    expect(result.plan.items[1].children).toEqual([]);
+  });
+
   it.each(Object.entries(PLAN_TOOL_ADAPTERS))('registry adapter %s repairs malformed input', (_name, adapter) => {
     const result = adapter(null);
     expect(PlanSchema.safeParse(result.plan).success).toBe(true);

@@ -245,10 +245,14 @@ export function fromQuestMaster(input: unknown, options: PlanAdapterOptions = {}
         status: child.status === 'not_started' ? 'pending' : child.status === 'skipped' ? 'cancelled' : child.status,
         note: child.evidence,
       }));
-    return { id: quest.id, content: quest.title, note: quest.description, status: questStatus(children), children };
+    return { id: quest.id, content: quest.title, note: quest.description, status: 'pending', children };
   });
   const result = adapt('quest_master', items, options);
-  return { plan: result.plan, warnings: [...warnings, ...result.warnings] };
+  const derived = normalizePlan({
+    ...result.plan,
+    items: result.plan.items.map(item => ({ ...item, status: questStatus(item.children ?? []) })),
+  });
+  return { plan: derived.plan, warnings: [...warnings, ...result.warnings, ...derived.warnings] };
 }
 
 export const PLAN_TOOL_ADAPTERS = {
