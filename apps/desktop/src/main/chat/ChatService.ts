@@ -204,6 +204,7 @@ import {
   type CompletionMessage,
   type CompletionRequest,
 } from './completions';
+import { PrefixWarmGate, prefixKey } from './prefixWarmGate';
 import { readCompletionRunUsage, type CompletionRunMinter } from './completionRuns';
 import { describeAlways, outsideFoldersReason } from './approvalScope';
 import { ensureScratchDirectory, isScratchDirectory, removeScratchDirectory } from './scratchDirectory';
@@ -1126,6 +1127,7 @@ export class ChatService {
    * round trip, and the next turn is coming anyway. Consumed once, never stored on a message.
    */
   private readonly pendingPlanReminder = new Map<string, string>();
+  private readonly prefixWarm = new PrefixWarmGate();
 
   /** Resolved serverConfig fields, cached per environment URL (it is one round trip). */
   private serverConfigCache: { environmentUrl: string; config: ResolvedServerConfig } | null = null;
@@ -3975,6 +3977,23 @@ export class ChatService {
     });
   }
 
+  /** Runs `send` through the prefix gate when `key` names a cacheable prefix; see PrefixWarmGate. */
+  private async withPrefixWarm<T>(
+    key: string | null,
+    signal: AbortSignal,
+    hold: (release: () => void) => void,
+    send: () => Promise<T>
+  ): Promise<T> {
+    if (key === null) return send();
+    const release = await this.prefixWarm.enter(key, signal);
+    hold(release);
+    try {
+      return await send();
+    } finally {
+      release();
+    }
+  }
+
   /** Only reached with `turnTiming` on; see createRoundProbe. */
   private logRoundPhases(sessionId: string, model: string, round: number, phases: RoundPhases): void {
     const line = `CHAT_TIMING ${JSON.stringify({ model, round, ...phases })}`;
@@ -4520,6 +4539,7 @@ export class ChatService {
           this.emit({ type: 'phase', sessionId, messageId: replyId, phase })
         );
         setPhase(WAITING);
+        let releasePrefix: (() => void) | undefined;
         const onCompletionEvent = (event: CompletionStreamEvent): void => {
           // `error` never reaches here (the transport throws on it); `meta` and `settled` carry no reply.
           if (event.type === 'meta') {
@@ -4537,7 +4557,10 @@ export class ChatService {
             return;
           }
           if (event.type === 'error') return;
-          if (event.text || event.type === 'tool_use') timer.firstToken();
+          if (event.text || event.type === 'tool_use') {
+            timer.firstToken();
+            releasePrefix?.();
+          }
           if (event.text) {
             const split = splitThinking.push(event.text);
             // An empty split is either a bare thinking marker or text the filter is holding
@@ -4581,31 +4604,37 @@ export class ChatService {
               dropped => this.emit({ type: 'context-trimmed', sessionId, dropped }),
               (message, kind) => this.emit({ type: 'context-notice', sessionId, message, ...(kind ? { kind } : {}) })
             )
-          : await streamRound(() =>
-              withRunFallback(
-                run,
-                attribution =>
-                  streamCompletion(
-                    api!.getAxiosInstance(),
-                    serverConfig.endpoint,
-                    {
-                      model: session.model,
-                      messages: cacheable ? withCacheBreakpoints(wire) : wire,
-                      tools,
-                      thinking: askForThinking,
-                      // Ties the turn's ledger row to this session. See CompletionRequest.sessionId.
-                      sessionId,
-                      ...(attribution ? { run: attribution } : {}),
-                      ...effortField,
-                      ...generationField,
-                      ...cacheTtlField,
-                      ...(maxTokens ? { maxTokens } : {}),
-                    },
-                    onCompletionEvent,
-                    controller.signal
-                  ),
-                dropRun
-              )
+          : await this.withPrefixWarm(
+              cacheable && roundIndex === 0 ? prefixKey(session.model, tools, wire[0]) : null,
+              controller.signal,
+              release => (releasePrefix = release),
+              () =>
+                streamRound(() =>
+                  withRunFallback(
+                    run,
+                    attribution =>
+                      streamCompletion(
+                        api!.getAxiosInstance(),
+                        serverConfig.endpoint,
+                        {
+                          model: session.model,
+                          messages: cacheable ? withCacheBreakpoints(wire) : wire,
+                          tools,
+                          thinking: askForThinking,
+                          // Ties the turn's ledger row to this session. See CompletionRequest.sessionId.
+                          sessionId,
+                          ...(attribution ? { run: attribution } : {}),
+                          ...effortField,
+                          ...generationField,
+                          ...cacheTtlField,
+                          ...(maxTokens ? { maxTokens } : {}),
+                        },
+                        onCompletionEvent,
+                        controller.signal
+                      ),
+                    dropRun
+                  )
+                )
             );
         append(splitThinking.flush());
         const timing = timer.end();
@@ -8665,40 +8694,40 @@ export function buildSystemMessage(
     };
   }
 
-  return {
-    role: 'system',
-    content: [
-      'You can read and change files on the user machine, and run bash commands on it, with the',
-      'provided tools.',
-      ...localToolLines(ask, projectContext ? 'below' : null, explore, patchEdits),
-      ...(plan ? PLAN_GUIDANCE : []),
-      ...(browser ? BROWSER_GUIDANCE : []),
-      ...(screen ? SCREEN_GUIDANCE : []),
-      ...(simulator ? SIMULATOR_GUIDANCE : []),
-      ...(web ? WEB_GUIDANCE : []),
-      ...HONESTY_LINES,
-      ...(media ? MEDIA_GUIDANCE : []),
-      ...(host ? HOST_GUIDANCE : []),
-      ...(orchestrating ? ORCHESTRATOR_GUIDANCE : []),
-      ...(memory ? MEMORY_GUIDANCE : []),
-      ...(ask ? ASK_GUIDANCE : []),
-      ...(/gpt/i.test(modelId) ? GPT_GUIDANCE : []),
-      ...desktopAppGuidance(mcpServers ? (ask ? 'manage' : 'read') : null),
-      ...(skillsSection ? [skillsSection] : []),
-      '',
-      DESKTOP_ARTIFACT_PROMPT,
-      ...(projectContext ? ['', projectContext] : []),
-      // Per-session lines after everything sessions share, so sibling agents in their own
-      // worktrees share the cached prefix up to here; see ChatService.promptPrefix.test.ts.
-      '',
-      ...(project ? projectPreamble(project) : []),
-      ...dependencyLines,
-      ...sharedRootLines(roots),
-      ...(host ? AGENT_WORKTREE_LINES : []),
-      // Last, after everything stable: see mcpServerLines for when it changes.
-      ...(mcpServers ? ['', ...mcpServerLines(mcpServers)] : []),
-    ].join('\n'),
-  };
+  const shared = [
+    'You can read and change files on the user machine, and run bash commands on it, with the',
+    'provided tools.',
+    ...localToolLines(ask, projectContext ? 'below' : null, explore, patchEdits),
+    ...(plan ? PLAN_GUIDANCE : []),
+    ...(browser ? BROWSER_GUIDANCE : []),
+    ...(screen ? SCREEN_GUIDANCE : []),
+    ...(simulator ? SIMULATOR_GUIDANCE : []),
+    ...(web ? WEB_GUIDANCE : []),
+    ...HONESTY_LINES,
+    ...(media ? MEDIA_GUIDANCE : []),
+    ...(host ? HOST_GUIDANCE : []),
+    ...(orchestrating ? ORCHESTRATOR_GUIDANCE : []),
+    ...(memory ? MEMORY_GUIDANCE : []),
+    ...(ask ? ASK_GUIDANCE : []),
+    ...(/gpt/i.test(modelId) ? GPT_GUIDANCE : []),
+    ...desktopAppGuidance(mcpServers ? (ask ? 'manage' : 'read') : null),
+    ...(skillsSection ? [skillsSection] : []),
+    '',
+    DESKTOP_ARTIFACT_PROMPT,
+    ...(projectContext ? ['', projectContext] : []),
+    '',
+  ].join('\n');
+  // Per-session lines after everything sessions share, so sibling agents in their own worktrees
+  // read the shared half from one cache entry; see ChatService.promptPrefix.test.ts.
+  const tail = [
+    ...(project ? projectPreamble(project) : []),
+    ...dependencyLines,
+    ...sharedRootLines(roots),
+    ...(host ? AGENT_WORKTREE_LINES : []),
+    // Last, after everything stable: see mcpServerLines for when it changes.
+    ...(mcpServers ? ['', ...mcpServerLines(mcpServers)] : []),
+  ].join('\n');
+  return { role: 'system', content: `${shared}\n${tail}`, cacheSplitAt: shared.length + 1 };
 }
 
 /**

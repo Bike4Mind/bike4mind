@@ -5,7 +5,7 @@ import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
-import { ChatService } from './ChatService';
+import { ChatService, buildSystemMessage } from './ChatService';
 import { MessageQueue } from './MessageQueue';
 import { git } from './project/git';
 import { appWorktreeRoot } from './project/workspace';
@@ -184,5 +184,40 @@ describe('ChatService prompt prefix', () => {
     expect(b.system.startsWith(shared)).toBe(true);
     expect(shared).toContain(DESKTOP_ARTIFACT_PROMPT);
     expect(shared).not.toContain(worktrees);
+  });
+
+  it('splits the system prompt where the per-session lines start, so siblings cache one shared half', () => {
+    const agent = (name: string) =>
+      buildSystemMessage(
+        [join(worktrees, name)],
+        false,
+        true,
+        false,
+        null,
+        {
+          directory: project,
+          name: 'project',
+          branch: '',
+          workspace: true,
+          workspaceBranch: `b4m/${name}`,
+          workingDirectory: join(worktrees, name),
+          contextDirectories: [],
+        },
+        [],
+        'Files in the working directory:\na.ts'
+      );
+    const [left, right] = [agent('agent-left'), agent('agent-right')];
+    const halves = (message: typeof left) => {
+      const content = message.content as string;
+      return [content.slice(0, message.cacheSplitAt), content.slice(message.cacheSplitAt)];
+    };
+    const [leftShared, leftTail] = halves(left);
+    const [rightShared, rightTail] = halves(right);
+
+    expect(leftShared).toBe(rightShared);
+    expect(leftShared).toContain('Files in the working directory:');
+    expect(leftShared).not.toContain(worktrees);
+    expect(leftTail).toMatch(/^This conversation is about the project /);
+    expect(leftTail).not.toBe(rightTail);
   });
 });
