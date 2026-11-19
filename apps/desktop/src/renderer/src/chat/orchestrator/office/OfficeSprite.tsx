@@ -5,6 +5,7 @@ import { OFFICE_CAST, OFFICE_PARENT } from './officeCast';
 const workingMotion = keyframes`0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1px); }`;
 const typingMotion = keyframes`0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); }`;
 const attentionMotion = keyframes`0%, 70%, 100% { transform: rotate(0deg); } 78% { transform: rotate(-8deg); } 88% { transform: rotate(8deg); }`;
+const steamMotion = keyframes`0% { opacity: 0; transform: translate(0, 1px); } 25% { opacity: .7; } 100% { opacity: 0; transform: translate(1px, -6px); }`;
 
 const PALETTES = [
   ['#65432e', '#c9dce5', '#e3b28c'],
@@ -60,9 +61,12 @@ export function OfficeSprite({
           transformOrigin: '18px 17px',
           animation: attention && !resting ? `${attentionMotion} 1800ms steps(3, end) infinite` : 'none',
         },
+        '& [data-coffee-steam]': { animation: `${steamMotion} 2200ms linear infinite`, pointerEvents: 'none' },
+        '& [data-coffee-steam="second"]': { animationDelay: '-1100ms' },
         '@media (prefers-reduced-motion: reduce)': {
           animation: 'none',
           '& [data-hand], & [data-attention-arm]': { animation: 'none' },
+          '& [data-coffee-steam]': { animation: 'none', opacity: 0.5 },
         },
       }}
     >
@@ -90,6 +94,9 @@ export function OfficeSprite({
         <>
           <path d="M17 20H22V25H17Z" fill="#f4edd5" />
           <path d="M22 21H24V24H22" fill="none" stroke="#e2d9be" />
+          <path d="M18 20H21" stroke="#71503a" />
+          <path data-coffee-steam="first" d="M18 18V16H19V14" fill="none" stroke="#f4edd5" opacity="0" />
+          <path data-coffee-steam="second" d="M21 18V15H20V13" fill="none" stroke="#f4edd5" opacity="0" />
           <rect x="17" y="25" width="4" height="2" fill={skin} />
         </>
       ) : (

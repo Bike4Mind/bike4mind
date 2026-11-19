@@ -138,10 +138,6 @@ export function OfficeBackdrop() {
       <path d="M41 320H141V350H109V407H41Z" fill="#c5a775" />
       <rect x="54" y="306" width="30" height="21" fill="#3e504d" />
       <rect x="58" y="309" width="22" height="13" fill="#8fa99c" />
-      <rect x="30" y="280" width="90" height="19" fill="#ede7cf" />
-      <text x="75" y="293" textAnchor="middle" fill="#354849" fontSize="9" fontFamily="monospace" fontWeight="bold">
-        DUNDER MIFFLIN
-      </text>
       <rect x="43" y="520" width="115" height="37" fill="#515e4e" />
       <rect x="46" y="516" width="109" height="31" fill="#78816b" />
       <rect x="43" y="567" width="65" height="29" fill="#b69b6d" />
@@ -150,17 +146,46 @@ export function OfficeBackdrop() {
       <Plant x={185} y={587} />
       <Plant x={505} y={285} />
       <Plant x={29} y={460} />
-      <rect x="749" y="108" width="33" height="94" fill="#b6996d" />
-      <rect x="748" y="104" width="36" height="6" fill="#eee5c9" />
-      <rect x="750" y="111" width="29" height="27" fill="#354744" />
-      <rect x="757" y="116" width="15" height="12" fill="#b0bca5" />
-      <rect x="923" y="108" width="40" height="76" fill="#526d61" />
-      <rect x="928" y="114" width="25" height="51" fill="#293e39" />
-      <path d="M932 124H949M932 136H949M932 148H949" stroke="#b5a466" strokeWidth="5" />
-      <rect x="957" y="128" width="3" height="12" fill="#ddd1a6" />
-      <rect x="925" y="196" width="38" height="77" fill="#786154" />
-      <rect x="930" y="202" width="23" height="53" fill="#3d3d38" />
-      <path d="M934 211H949M934 224H949M934 237H949" stroke="#a4704d" strokeWidth="5" />
+      <g data-testid="office-coffee-maker" transform="translate(558 101)">
+        <rect x="0" y="42" width="53" height="30" fill="#ad8b5d" />
+        <path d="M26 48V69" stroke="#806a48" strokeWidth="2" />
+        <rect x="-3" y="38" width="59" height="6" fill="#ece2c5" />
+        <path d="M3 0H32V8H14V33H34V38H3Z" fill="#303d3c" />
+        <rect x="6" y="3" width="23" height="7" fill="#6d817a" />
+        <rect x="8" y="5" width="3" height="3" fill="#b6d18b" />
+        <path d="M18 10H29V15H18Z" fill="#242f2e" />
+        <path d="M18 18H29L32 23V31H16V23Z" fill="#abc5b9" />
+        <path d="M17 25H31V31H17Z" fill="#65452f" />
+        <path d="M30 21H35V29H31" fill="none" stroke="#303d3c" strokeWidth="3" />
+        <path d="M17 18H30" stroke="#303d3c" strokeWidth="3" />
+        <rect x="39" y="29" width="9" height="9" fill="#f3ead0" />
+        <path d="M48 31H51V36H48" fill="none" stroke="#f3ead0" strokeWidth="2" />
+        <path d="M40 29H47" stroke="#72513a" strokeWidth="2" />
+      </g>
+      {[
+        { x: 865, color: '#426c72' },
+        { x: 922, color: '#98584b' },
+      ].map(({ x, color }, index) => (
+        <g key={x} data-testid={`office-vending-machine-${index + 1}`} transform={`translate(${x} 101)`}>
+          <rect x="3" y="5" width="47" height="88" fill="#354139" opacity=".25" />
+          <rect width="47" height="88" fill="#303e3c" />
+          <rect x="3" y="3" width="41" height="80" fill={color} />
+          <rect x="6" y="7" width="26" height="55" fill="#243b3b" />
+          {[14, 29, 44].map(y => (
+            <g key={y}>
+              <rect x="9" y={y} width="5" height="9" fill="#d5af65" />
+              <rect x="17" y={y} width="5" height="9" fill="#c87b58" />
+              <rect x="25" y={y} width="4" height="9" fill="#9fbc96" />
+              <path d={`M7 ${y + 11}H31`} stroke="#83978b" strokeWidth="2" />
+            </g>
+          ))}
+          <rect x="35" y="17" width="6" height="8" fill="#c7d99b" />
+          <path d="M36 30H40M36 35H40M36 40H40" stroke="#e2d8b8" strokeWidth="2" />
+          <rect x="35" y="49" width="6" height="3" fill="#202d2c" />
+          <rect x="8" y="69" width="24" height="9" fill="#1e2e2c" />
+          <path d="M5 85H12M35 85H42" stroke="#26332e" strokeWidth="5" />
+        </g>
+      ))}
       <g fill="#b8a073" stroke="#7f7659" strokeWidth="3">
         <rect x="805" y="178" width="73" height="42" />
         <rect x="805" y="271" width="73" height="42" />
