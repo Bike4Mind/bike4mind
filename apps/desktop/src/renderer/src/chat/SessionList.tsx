@@ -45,7 +45,15 @@ import type { PrSummary } from '@shared/pullRequest';
 import { pendingDecisionOf } from '@shared/orchestration';
 import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
 import { capRows, raisedRows, setGroupLimit, useGroupLimit } from './groupCap';
-import { descendantsOf, groupSessions, orderedSessions, type CustomGroup, type ProjectGroup } from './grouping';
+import {
+  descendantsOf,
+  groupSessions,
+  orderedSessions,
+  parentHints,
+  type CustomGroup,
+  type ParentHint,
+  type ProjectGroup,
+} from './grouping';
 import { ImportedBadge } from './ImportedBadge';
 import { useImportedInline } from './importedInline';
 import { keepMenuOpen } from './keepMenuOpen';
@@ -181,6 +189,8 @@ interface NestProps {
   subFolded?: boolean;
   /** False while a search holds every branch open, when folding could not show. */
   subFoldable?: boolean;
+  /** "via X" / "from X", for a spawned session whose direct parent is not the row above it. */
+  parentHint?: ParentHint;
 }
 
 type SubActivity = 'needs-action' | 'processing' | undefined;
@@ -498,6 +508,7 @@ const SessionRow = memo(function SessionRow({
   subActivity,
   subFolded = false,
   subFoldable = true,
+  parentHint,
   refChip,
 }: RowProps) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -693,6 +704,18 @@ const SessionRow = memo(function SessionRow({
               data-testid="chat-session-title-text"
             >
               {session.title}
+            </Typography>
+          )}
+          {!editing && parentHint && (
+            <Typography
+              level="body-xs"
+              noWrap
+              textColor="text.tertiary"
+              sx={{ flexShrink: 1000, minWidth: 0, fontSize: '0.75rem', fontWeight: 'normal' }}
+              title={`${parentHint.kind} ${parentHint.title}`}
+              data-testid="chat-session-parent-hint"
+            >
+              {parentHint.kind} {parentHint.title}
             </Typography>
           )}
           {!editing && session.importOrigin && <ImportedBadge origin={session.importOrigin} />}
@@ -1092,10 +1115,13 @@ export function SessionList({
 
   const searching = query.trim() !== '';
   const sections = useMemo(() => {
-    const grouped = groupSessions(matching, mode, userSections, importedInline, nested);
+    // A search lists matches flat: a tree would hide a match inside a parent that did not match.
+    const grouped = groupSessions(matching, mode, userSections, importedInline, nested && !searching);
     // An empty section under a search is only noise; with no query it stays so it can be found.
     return searching ? { ...grouped, custom: grouped.custom.filter(group => group.sessions.length > 0) } : grouped;
   }, [matching, mode, userSections, searching, importedInline, nested]);
+
+  const hints = useMemo(() => parentHints(sessions, sections.children), [sessions, sections.children]);
 
   const descendants = useMemo(() => {
     const cache = new Map<string, ChatSessionSummary[]>();
@@ -1297,6 +1323,7 @@ export function SessionList({
         subActivity={loudestActivity(under, statuses)}
         subFolded={folded}
         subFoldable={!searching}
+        parentHint={hints.get(session.id)}
       />,
       ...(folded
         ? []
@@ -1317,6 +1344,7 @@ export function SessionList({
       sectionId={sectionOf(userSections, session.id)}
       actions={actions}
       subFoldable={false}
+      parentHint={hints.get(session.id)}
       refChip={refLabel(match.ref)}
     />
   );

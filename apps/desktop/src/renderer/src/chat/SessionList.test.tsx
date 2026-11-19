@@ -469,12 +469,15 @@ describe('sub-sessions an agent spawned', () => {
     setNestingEnabled(true);
   });
 
-  it('draw indented under their parent, which counts them on its fold pill', async () => {
+  const hintOf = (title: string) =>
+    rowOf(title).closest('li')?.querySelector('[data-testid="chat-session-parent-hint"]')?.textContent ?? null;
+
+  it('draw one level under their top-level ancestor, which counts them on its fold pill', async () => {
     await mount(sessions());
-    expect(titles()).toEqual(['Root', 'Kid A', 'Grandkid', 'Kid B']);
-    expect([depthOf('Root'), depthOf('Kid A'), depthOf('Grandkid'), depthOf('Kid B')]).toEqual([null, '1', '2', '1']);
-    const pills = all('chat-session-fold-btn');
-    expect(pills.map(pill => pill.textContent)).toEqual(['3', '1']);
+    expect(titles()).toEqual(['Root', 'Kid A', 'Kid B', 'Grandkid']);
+    expect([depthOf('Root'), depthOf('Kid A'), depthOf('Kid B'), depthOf('Grandkid')]).toEqual([null, '1', '1', '1']);
+    expect(all('chat-session-fold-btn').map(pill => pill.textContent)).toEqual(['3']);
+    expect([hintOf('Kid A'), hintOf('Kid B'), hintOf('Grandkid')]).toEqual([null, null, 'via Kid A']);
   });
 
   it('fold away and come back from the pill, without opening the parent', async () => {
@@ -485,7 +488,7 @@ describe('sub-sessions an agent spawned', () => {
     expect(onSelect).not.toHaveBeenCalled();
 
     act(() => foldButton().click());
-    expect(titles()).toEqual(['Root', 'Kid A', 'Grandkid', 'Kid B']);
+    expect(titles()).toEqual(['Root', 'Kid A', 'Kid B', 'Grandkid']);
   });
 
   it('fold and unfold from the keyboard on the parent row', async () => {
@@ -497,7 +500,7 @@ describe('sub-sessions an agent spawned', () => {
     key('ArrowLeft');
     expect(titles()).toEqual(['Root']);
     key('ArrowRight');
-    expect(titles()).toEqual(['Root', 'Kid A', 'Grandkid', 'Kid B']);
+    expect(titles()).toEqual(['Root', 'Kid A', 'Kid B', 'Grandkid']);
   });
 
   it('open up under a search so a matching child is never hidden', async () => {
@@ -510,8 +513,10 @@ describe('sub-sessions an agent spawned', () => {
       setter?.call(input, 'Kid');
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    // The parent does not match, so its children stand on their own rows.
-    expect(titles()).toEqual(['Kid A', 'Grandkid', 'Kid B']);
+    // A search is a flat list: no tree, and each result says where it came from.
+    expect(titles()).toEqual(['Kid A', 'Kid B', 'Grandkid']);
+    expect([depthOf('Kid A'), depthOf('Grandkid')]).toEqual([null, null]);
+    expect([hintOf('Kid A'), hintOf('Grandkid')]).toEqual(['from Root', 'from Kid A']);
   });
 
   it('leave the pill inert under a search, where a fold could not show', async () => {
@@ -522,15 +527,15 @@ describe('sub-sessions an agent spawned', () => {
       setter?.call(input, 'Kid');
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    act(() => foldButton().click());
+    expect(query('chat-session-fold-btn')).toBeNull();
     expect(foldedParents().has('kid-a')).toBe(false);
-    expect(titles()).toEqual(['Kid A', 'Grandkid', 'Kid B']);
+    expect(titles()).toEqual(['Kid A', 'Kid B', 'Grandkid']);
   });
 
   it('unfold the branches holding the open session, and still fold on request', async () => {
     toggleFolded('root');
     await mount(sessions(), 'chat', {}, 'grandkid');
-    expect(titles()).toEqual(['Root', 'Kid A', 'Grandkid', 'Kid B']);
+    expect(titles()).toEqual(['Root', 'Kid A', 'Kid B', 'Grandkid']);
     expect(foldedParents().has('root')).toBe(false);
 
     act(() => all('chat-session-fold-btn')[0].click());
