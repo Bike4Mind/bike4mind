@@ -2064,8 +2064,8 @@ export interface paths {
       cookie?: never;
     };
     /**
-     * Get an organization's Claude Code plugin marketplace
-     * @description Returns a Claude Code `marketplace.json` listing the organization's approved Organization-visibility Skill Market listings, one `archive` plugin each, pinned by `sha256`, followed by one `archive` plugin per skill bundle whose `version` is a hash prefix, not a semantic version. Public and unlisted listings are not included. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `skills:read`, sent as `Authorization: Bearer`. Claude Code sends that header when it is set as the marketplace source's `headers` in its settings, and forwards it to the same-origin plugin archives.
+     * Get an organization's or Space's Claude Code plugin marketplace
+     * @description Returns a Claude Code `marketplace.json` listing the organization's (`orgId`) or Space's (`spaceId`) approved Skill Market listings, one `archive` plugin each, pinned by `sha256`, followed by one `archive` plugin per skill bundle whose `version` is a hash prefix, not a semantic version. Send exactly one of `orgId` and `spaceId`. A Space feed is named `b4m-space-<id>`. Public and unlisted listings are not included. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `skills:read`, sent as `Authorization: Bearer`. Claude Code sends that header when it is set as the marketplace source's `headers` in its settings, and forwards it to the same-origin plugin archives.
      */
     get: operations['getClaudeMarketplace'];
     put?: never;
@@ -2125,13 +2125,13 @@ export interface paths {
     };
     /**
      * Browse Skill Market listings
-     * @description Lists the approved Public listings and the Organization listings of your organizations, with search and filters. Unlisted listings never appear. Cursor-paginated: pass `next_cursor` back as `cursor` until it is `null`, keeping the same filters.
+     * @description Lists the approved Public listings, the Organization listings of your organizations and the Space listings of your Spaces, with search and filters. Unlisted listings never appear. Cursor-paginated: pass `next_cursor` back as `cursor` until it is `null`, keeping the same filters.
      */
     get: operations['listSkillMarketListings'];
     put?: never;
     /**
      * Publish a skill to the Skill Market
-     * @description Creates a listing from a skill you own and submits its first version. Every version is safety-scanned. A clean version goes live at once; one that needs a human waits in review, and importers keep receiving the previous approved version until it is approved. A skill has at most one live listing: to publish a change, submit a new version instead. Unknown body fields are rejected.
+     * @description Creates a listing from a skill you own and submits its first version. Every version is safety-scanned. A clean version goes live at once; one that needs a human waits in review, and importers keep receiving the previous approved version until it is approved. A skill has at most one live listing: to publish a change, submit a new version instead. `space` visibility needs `space_id` and membership of that Space. Unknown body fields are rejected.
      */
     post: operations['publishSkillMarketListing'];
     delete?: never;
@@ -2317,7 +2317,7 @@ export interface paths {
     };
     /**
      * List Skill Market versions awaiting review
-     * @description Lists the held versions you can review, oldest first, each with its listing and the approved version it would replace. Under an API key without `admin:*` this is the Organization listings of the organizations you administer. Cursor-paginated, but a page can be shorter than `limit`, even empty, while `next_cursor` is non-null: keep passing `next_cursor` back as `cursor` until it is `null`. A version that finishes scanning after you paged past its creation time shows up on the next pass that starts without a cursor.
+     * @description Lists the held versions you can review, oldest first, each with its listing and the approved version it would replace. Under an API key without `admin:*` this is the Organization listings of the organizations you administer and the Space listings of Spaces you own or administer. Cursor-paginated, but a page can be shorter than `limit`, even empty, while `next_cursor` is non-null: keep passing `next_cursor` back as `cursor` until it is `null`. A version that finishes scanning after you paged past its creation time shows up on the next pass that starts without a cursor.
      */
     get: operations['listSkillMarketReviewQueue'];
     put?: never;
@@ -11102,8 +11102,9 @@ export interface components {
         name: string;
         description: string;
         /** @enum {string} */
-        visibility: 'public' | 'organization' | 'unlisted';
+        visibility: 'public' | 'organization' | 'space' | 'unlisted';
         organization_id: string | null;
+        space_id: string | null;
         tags: string[];
         /** @enum {string} */
         status: 'in_review' | 'approved' | 'rejected' | 'delisted' | 'withdrawn';
@@ -11141,8 +11142,9 @@ export interface components {
         name: string;
         description: string;
         /** @enum {string} */
-        visibility: 'public' | 'organization' | 'unlisted';
+        visibility: 'public' | 'organization' | 'space' | 'unlisted';
         organization_id: string | null;
+        space_id: string | null;
         tags: string[];
         /** @enum {string} */
         status: 'in_review' | 'approved' | 'rejected' | 'delisted' | 'withdrawn';
@@ -11252,8 +11254,9 @@ export interface components {
         name: string;
         description: string;
         /** @enum {string} */
-        visibility: 'public' | 'organization' | 'unlisted';
+        visibility: 'public' | 'organization' | 'space' | 'unlisted';
         organization_id: string | null;
+        space_id: string | null;
         tags: string[];
         /** @enum {string} */
         status: 'in_review' | 'approved' | 'rejected' | 'delisted' | 'withdrawn';
@@ -11352,9 +11355,11 @@ export interface components {
       /** @description A skill you own. Imported skills cannot be republished. */
       skill_id: string;
       /** @enum {string} */
-      visibility: 'public' | 'organization' | 'unlisted';
+      visibility: 'public' | 'organization' | 'space' | 'unlisted';
       /** @description Required for `organization` visibility, unless you belong to exactly one organization. */
       organization_id?: string;
+      /** @description Required for `space` visibility; you must belong to the Space. */
+      space_id?: string;
       /** @description Up to 5 tags: 1-24 lowercase letters, digits or hyphens. */
       tags?: string[];
     };
@@ -11364,8 +11369,9 @@ export interface components {
         name: string;
         description: string;
         /** @enum {string} */
-        visibility: 'public' | 'organization' | 'unlisted';
+        visibility: 'public' | 'organization' | 'space' | 'unlisted';
         organization_id: string | null;
+        space_id: string | null;
         tags: string[];
         /** @enum {string} */
         status: 'in_review' | 'approved' | 'rejected' | 'delisted' | 'withdrawn';
@@ -11459,8 +11465,9 @@ export interface components {
         name: string;
         description: string;
         /** @enum {string} */
-        visibility: 'public' | 'organization' | 'unlisted';
+        visibility: 'public' | 'organization' | 'space' | 'unlisted';
         organization_id: string | null;
+        space_id: string | null;
         tags: string[];
         /** @enum {string} */
         status: 'in_review' | 'approved' | 'rejected' | 'delisted' | 'withdrawn';
@@ -11872,8 +11879,9 @@ export interface components {
           name: string;
           description: string;
           /** @enum {string} */
-          visibility: 'public' | 'organization' | 'unlisted';
+          visibility: 'public' | 'organization' | 'space' | 'unlisted';
           organization_id: string | null;
+          space_id: string | null;
           tags: string[];
           /** @enum {string} */
           status: 'in_review' | 'approved' | 'rejected' | 'delisted' | 'withdrawn';
@@ -34371,8 +34379,11 @@ export interface operations {
   };
   getClaudeMarketplace: {
     parameters: {
-      query: {
-        orgId: string;
+      query?: {
+        /** @description The organization whose feed to return. Send this or `spaceId`. */
+        orgId?: string;
+        /** @description The Space whose feed to return. Send this or `orgId`. */
+        spaceId?: string;
       };
       header?: never;
       path?: never;
@@ -34414,7 +34425,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `skills:read`, or the caller is not a member of the organization. */
+      /** @description The API key lacks `skills:read`, or the caller is not a member of the organization or Space (or Spaces are not enabled). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -34880,7 +34891,9 @@ export interface operations {
         cursor?: string;
         /** @description Full-text search over name, description and summary. */
         q?: string;
-        scope?: 'public' | 'org';
+        scope?: 'public' | 'org' | 'space';
+        /** @description With `scope=space`, only this Space. Empty when you do not belong to it. */
+        space_id?: string;
         /** @description Comma-separated; matches listings carrying any of the first 5. */
         tags?: string;
         tools?: 'with' | 'without';
@@ -35071,7 +35084,7 @@ export interface operations {
           'application/json': components['schemas']['publishSkillMarketListingResponse201'];
         };
       };
-      /** @description The skill was imported from the market, no organization was chosen, a tag is invalid, or you have reached your active listing cap. */
+      /** @description The skill was imported from the market, no organization or Space was chosen, a tag is invalid, or you have reached your active listing cap. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -35105,7 +35118,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `skills:write`, or the caller may not act on this listing. Also: you are not in the organization, your account is too new for a Public listing, or moderators removed this skill from the market. */
+      /** @description The API key lacks `skills:write`, or the caller may not act on this listing. Also: you are not in the organization or Space (or Spaces are not enabled), your account is too new for a Public listing, or moderators removed this skill from the market. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -37307,7 +37320,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `skills:review`, or you administer no organization. */
+      /** @description The API key lacks `skills:review`, or you administer no organization or Space. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -37486,7 +37499,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `skills:review`, or you may not review this listing: it is not an Organization listing of an organization you administer, or it is your own Public listing. */
+      /** @description The API key lacks `skills:review`, or you may not review this listing: it is not an Organization or Space listing you administer, or it is your own Public listing. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

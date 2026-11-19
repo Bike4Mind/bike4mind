@@ -19,3 +19,6 @@ export const claudeSkillNameFor = (skillName: string): string => claudeNameSlug(
  * `<plugin>@<marketplace>`, so renaming the org must never rename the marketplace.
  */
 export const claudeMarketplaceNameFor = (orgId: string): string => `b4m-org-${orgId}`;
+
+/** `b4m-space-<space id>`, id-based for the same reason as `claudeMarketplaceNameFor`. */
+export const claudeMarketplaceNameForSpace = (spaceId: string): string => `b4m-space-${spaceId}`;
