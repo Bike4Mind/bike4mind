@@ -651,7 +651,7 @@ final class VoiceConversationModelTests: XCTestCase {
   func testStoppingDuringTheOpeningReleasesEverything() async throws {
     await speaker.setHolding(true)
     let model = await startedModel(opening: opening)
-    await until { model.phase == .speaking }
+    await until { await speaker.spoken == [opening[0]] }
 
     await model.stop()
     XCTAssertEqual(model.phase, .idle)
