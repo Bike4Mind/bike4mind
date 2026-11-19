@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { soleMatch, stripComments } from './helpers/infraSource';
+import { balanced, soleMatch, stripComments } from './helpers/infraSource';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (rel: string) => stripComments(readFileSync(path.join(REPO_ROOT, rel), 'utf8'));
@@ -40,11 +40,11 @@ describe('contributeInfra context', () => {
   });
 
   it('hands all three to a contributeInfra call', () => {
-    const calls = [...config.matchAll(/\bcontribute\w*Infra\(\{([\s\S]*?)\n {4}\}\);/g)].map(match => match[1]);
-    expect(calls.length).toBeGreaterThan(0);
-    const complete = calls.filter(
-      body => /\beventBus,/.test(body) && /\bcontributedQueues,/.test(body) && /\balarmTopic: dlqAlarmTopic,/.test(body)
-    );
-    expect(complete).toHaveLength(1);
+    const declaration = soleMatch(config, /const infrastructureContext = /g, 'infrastructure context');
+    const context = balanced(config, declaration.index, '{', '}');
+    expect(context).toMatch(/\beventBus,/);
+    expect(context).toMatch(/\bcontributedQueues,/);
+    expect(context).toMatch(/\balarmTopic: dlqAlarmTopic,/);
+    soleMatch(config, /\bcontribute\w*Infra\(infrastructureContext\);/g, 'context contribution');
   });
 });

@@ -259,14 +259,15 @@ export default $config({
     // alarmTopic is undefined on a stage without monitoring (infra/dlqAlarms.ts).
     const { contributeInfra: contributeSentinelInfra } =
       await import('./infra/premium-generated/sentinel-infra.generated');
-    contributeSentinelInfra({
+    const infrastructureContext = {
       lambdaVpc,
       allSecrets,
       defaultLambdaEnvironment: DEFAULT_LAMBDA_ENVIRONMENT,
       eventBus,
       contributedQueues,
       alarmTopic: dlqAlarmTopic,
-    });
+    };
+    contributeSentinelInfra(infrastructureContext);
 
     return {
       appName: $app.name,
