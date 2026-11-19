@@ -273,8 +273,8 @@ describe('organization detail page - ?tab= deep link', () => {
     expect(selectedTabName()).toBe('Overview');
     expect(screen.queryByRole('tab', { name: 'Settings' })).toBeNull();
     expect(screen.queryByTestId('model-policy-editor')).toBeNull();
-    expect(screen.getByTestId('organization-tab-denied-notice').textContent).toContain(
-      'Your account cannot open Settings.'
+    expect(screen.getByTestId('organization-tab-denied-notice').textContent).toBe(
+      'Only the team owner and managers can open Settings. Ask the owner if you need it.'
     );
   });
 
@@ -315,7 +315,7 @@ describe('organization detail page - ?tab= deep link', () => {
     );
   });
 
-  it('gives a read-only member a precise Settings refusal without claiming managers-only access', () => {
+  it('tells a read-only member that Settings is for the owner and managers', () => {
     searchParams.current = { tab: 'settings' };
     user.current = { id: 'reader1' };
 
@@ -324,7 +324,7 @@ describe('organization detail page - ?tab= deep link', () => {
     expect(selectedTabName()).toBe('Overview');
     expect(screen.queryByRole('tab', { name: 'Settings' })).toBeNull();
     expect(screen.getByTestId('organization-tab-denied-notice').textContent).toBe(
-      'Your account cannot open Settings. Ask the team owner if you need access.'
+      'Only the team owner and managers can open Settings. Ask the owner if you need it.'
     );
     expect(searchParams.current).toEqual({ tab: 'settings' });
     expect(navigateSpy).not.toHaveBeenCalled();
