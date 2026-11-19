@@ -15,6 +15,7 @@ import {
 import { emitProductEvent, HOST_PRODUCT_ID } from '@bike4mind/server-utils/analytics/emitActiveEvent';
 import { isBlockedInviter, type RewardParty } from '@bike4mind/server-utils/referrals/firstAnswerReward';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
+import { WEBSITE_URL } from '@client/config/general';
 
 /**
  * Share links: every user can hand out `/r/<code>`. A visit stores the code in a first-party cookie
@@ -87,6 +88,23 @@ export interface ReferralLinkResponse {
 
 export function referralLinkUrl(code: string): string {
   return `${requireEnv('APP_URL', process.env.APP_URL).replace(/\/+$/, '')}/r/${code}`;
+}
+
+/** The links on a published page that carry its author's share link (pages/api/publish/serve/[...path].ts). */
+export const SHARE_LINK_VIA = ['embed-badge', 'share-bar'] as const;
+export type ShareLinkVia = (typeof SHARE_LINK_VIA)[number];
+
+/** The marketing site, tagged with the publish campaign, for a published-page link; null when no site is configured. */
+export function publishMarketingUrl(via: ShareLinkVia): string | null {
+  return WEBSITE_URL
+    ? `${WEBSITE_URL.replace(/\/+$/, '')}/?utm_source=shared-artifact&utm_medium=${via}&utm_campaign=publish`
+    : null;
+}
+
+/** Where a share-link visit goes: a published-page link keeps its marketing landing, anything else signs up. */
+export function shareLinkDestination(via: unknown): string {
+  const known = SHARE_LINK_VIA.find(value => value === via);
+  return (known && publishMarketingUrl(known)) || '/register';
 }
 
 /** The user's share-link code, minted on first use. Idempotent: concurrent first calls return one code. */
@@ -197,6 +215,28 @@ async function decide(code: string, userId: string, now: Date): Promise<ShareLin
     );
     return write.modifiedCount === 1 ? 'credited' : 'already_referred';
   });
+}
+
+/**
+ * The author's share link for a link on their published page, so a signup that starts there credits them.
+ * Mints the author's code on first need when they may have one. Null when they may not, or on any failure:
+ * the page then links where it did before. Never throws.
+ */
+export async function publishedAuthorShareLink(
+  ownerId: string,
+  owner: { referralCode: string | null; canRefer: boolean },
+  via: ShareLinkVia
+): Promise<string | null> {
+  try {
+    const code = owner.referralCode ?? (owner.canRefer ? await getOrCreateReferralCode(ownerId) : null);
+    return code ? `${referralLinkUrl(code)}?via=${via}` : null;
+  } catch (error) {
+    Logger.warn('[referral] published page links without a share link', {
+      ownerId,
+      errorName: error instanceof Error ? error.name : typeof error,
+    });
+    return null;
+  }
 }
 
 /**

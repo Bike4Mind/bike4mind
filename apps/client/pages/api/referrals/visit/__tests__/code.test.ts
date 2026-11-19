@@ -7,6 +7,13 @@ const h = vi.hoisted(() => ({
   exists: vi.fn(),
   emit: vi.fn(),
   setCookie: vi.fn(),
+  website: '',
+}));
+
+vi.mock('@client/config/general', () => ({
+  get WEBSITE_URL() {
+    return h.website;
+  },
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -45,6 +52,7 @@ describe('GET /r/<code>', () => {
     h.exists.mockReset().mockResolvedValue({ _id: 'u1' });
     h.emit.mockReset().mockResolvedValue(undefined);
     h.setCookie.mockReset();
+    h.website = '';
   });
 
   it('is public and rate limited per client', () => {
@@ -60,7 +68,7 @@ describe('GET /r/<code>', () => {
     expect(res.setHeader).toHaveBeenCalledWith('Cache-Control', 'no-store');
     expect(res.redirect).toHaveBeenCalledWith(302, '/register');
     expect(h.emit).toHaveBeenCalledWith(
-      expect.objectContaining({ event: 'referral_link_visit', metadata: { known: true } })
+      expect.objectContaining({ event: 'referral_link_visit', metadata: { known: true, via: 'direct' } })
     );
   });
 
@@ -70,7 +78,7 @@ describe('GET /r/<code>', () => {
     await h.handler!({ query: { code: 'abcd2345' } }, res);
     expect(h.setCookie).not.toHaveBeenCalled();
     expect(res.redirect).toHaveBeenCalledWith(302, '/register');
-    expect(h.emit).toHaveBeenCalledWith(expect.objectContaining({ metadata: { known: false } }));
+    expect(h.emit).toHaveBeenCalledWith(expect.objectContaining({ metadata: { known: false, via: 'direct' } }));
   });
 
   it('skips the lookup for a malformed code', async () => {
@@ -79,5 +87,25 @@ describe('GET /r/<code>', () => {
     expect(h.exists).not.toHaveBeenCalled();
     expect(h.setCookie).not.toHaveBeenCalled();
     expect(res.redirect).toHaveBeenCalledWith(302, '/register');
+  });
+
+  it('lands a published-page badge click on the tagged marketing site, cookie set', async () => {
+    h.website = 'https://www.example.test';
+    const res = makeRes();
+    await h.handler!({ query: { code: 'abcd2345', via: 'embed-badge' } }, res);
+    expect(h.setCookie).toHaveBeenCalledWith(res, 'abcd2345');
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      'https://www.example.test/?utm_source=shared-artifact&utm_medium=embed-badge&utm_campaign=publish'
+    );
+    expect(h.emit).toHaveBeenCalledWith(expect.objectContaining({ metadata: { known: true, via: 'embed-badge' } }));
+  });
+
+  it('never redirects off-site for a via it does not know', async () => {
+    h.website = 'https://www.example.test';
+    const res = makeRes();
+    await h.handler!({ query: { code: 'abcd2345', via: 'https://evil.example' } }, res);
+    expect(res.redirect).toHaveBeenCalledWith(302, '/register');
+    expect(h.emit).toHaveBeenCalledWith(expect.objectContaining({ metadata: { known: true, via: 'direct' } }));
   });
 });

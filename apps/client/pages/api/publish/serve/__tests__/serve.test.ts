@@ -2431,6 +2431,49 @@ describe('GET /api/publish/serve - embed allowlist', () => {
     expect(data).not.toContain('<span class="b4m-reg">');
   });
 
+  describe("the author's share link", () => {
+    const withOwner = (owner: Record<string, unknown>) =>
+      mockUserFindById.mockImplementation((id: string) => (id === 'owner1' ? owner : {}));
+
+    beforeEach(() => {
+      vi.stubEnv('APP_URL', 'https://app.bike4mind.com');
+      mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+    });
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('points the own-tab bar CTA at it, so a signup from the page credits the author', async () => {
+      withOwner({ referralCode: 'abcd2345' });
+      mockArtifactFindOne.mockReturnValue(bundle());
+      const { res, promise } = run(['u', 'scope123', 'my-slug']);
+      await promise;
+      expect(res._getData()).toMatch(
+        /<a class="b4m-bar-cta" href="https:\/\/app\.bike4mind\.com\/r\/abcd2345\?via=share-bar"/
+      );
+    });
+
+    it('points the embed pill at it', async () => {
+      withOwner({ referralCode: 'abcd2345' });
+      mockArtifactFindOne.mockReturnValue(bundle({ embedOrigins: ['https://erikbethke.com'] }));
+      const { res, promise } = run(['u', 'scope123', 'my-slug'], { embed: true });
+      await promise;
+      expect(res._getData()).toContain(
+        '<a class="b4m-brand" href="https://app.bike4mind.com/r/abcd2345?via=embed-badge"'
+      );
+    });
+
+    it('leaves the links as they were for an author with no code who may not have one', async () => {
+      withOwner({ emailVerified: false });
+      mockArtifactFindOne.mockReturnValue(bundle());
+      const { res, promise } = run(['u', 'scope123', 'my-slug']);
+      await promise;
+      const data = res._getData() as string;
+      expect(data).toContain('class="b4m-bar-cta"');
+      expect(data).not.toContain('/r/');
+    });
+  });
+
   it('own-tab bar ships the built-in spoke logo + registered mark when opted in', async () => {
     // The logo/(R) are gated on NEXT_PUBLIC_SHARE_BUILTIN_LOGO (read at module load),
     // so import a fresh copy of the handler with the flag set. The vi.mock factories
