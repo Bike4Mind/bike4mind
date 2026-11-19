@@ -158,10 +158,10 @@ let any app or page open Bike4Mind with that URL. Server URIs are exact-match.
 
 ## App icon and launch screen
 
-The icon is a generated **placeholder** (three connected nodes on a brand-blue gradient, no text) so builds look finished.
-Replace it with real artwork whenever it exists: drop a 1024x1024 PNG over
-`Bike4Mind/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png` and the launch mark in `LaunchMark.imageset`.
-To regenerate the placeholder: `swift Tools/GenerateAppIcon.swift`. The launch screen is `AppSupport/Info.plist` (`UILaunchScreen`:
+The app icon and launch mark are rendered from the official brand mark, `apps/client/public/images/logos/Colored_Favicon.svg`
+(the mark the web NotebookSplash shows), by `swift Tools/GenerateAppIcon.swift` (macOS 14+). The icon fills the square with the
+mark's own gradient so the disc's edge all but disappears; the launch mark is the disc as-is and doubles as the Chat home greeting and sign-in mark.
+Re-run the script when the brand SVG changes and commit the PNGs. The launch screen is `AppSupport/Info.plist` (`UILaunchScreen`:
 `LaunchBackground` colour plus the centered `LaunchMark` image).
 
 ## Privacy manifests and App Privacy answers

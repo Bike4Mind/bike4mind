@@ -50,7 +50,10 @@ export const chatContract = defineEndpoint({
     'synchronously with 403 before a quest exists; an older queued start can instead settle as an ' +
     'error quest with `free_quest_limit_reached`. ' +
     "`spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which " +
-    'fires outside the process try/catch that would classify it onto a quest. A ' +
+    'fires outside the process try/catch that would classify it onto a quest. A turn that ' +
+    'prompt moderation refuses settles as `type: "error"` with `errorCode: "content_blocked"` ' +
+    'and the refusal text in `reply`, on the 200 `wait: true` body and on the polled quest alike; ' +
+    'do not resend it unchanged. A ' +
     'caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when ' +
     '`errorCode` is absent, and must not read `reply` as an answer without checking those first. ' +
     'Organization-policy preflight refusals use 403 with `errorCode: "org_model_not_allowed"` ' +
@@ -120,7 +123,8 @@ export const chatContract = defineEndpoint({
           '`QUEST_ERROR_CODES` has four members; its other code is `spend_cap_exceeded`, but no current ' +
           'throw site on this endpoint raises it as a quest errorCode: its only one, the embed ' +
           "chat route's pre-flight 422, fires outside the process try/catch that would classify " +
-          'it onto the quest. Most `type: "error"` turns - an abort, a provider timeout or ' +
+          'it onto the quest. A turn that prompt moderation refuses arrives as `content_blocked`; ' +
+          'do not resend it unchanged. Most `type: "error"` turns - an abort, a provider timeout or ' +
           'overload - have NO `errorCode`; its absence does not mean success, only that the ' +
           'failure is unclassified. A recovered stuck quest that still has renderable content is ' +
           'not a failure at all: it keeps `type: "message"` even though it did not finish, so a ' +
