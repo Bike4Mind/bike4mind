@@ -270,6 +270,16 @@ describe('AdminGrowthPricingTab', () => {
     );
   });
 
+  it('totals the referral milestones per inviter in dollars at the floor rate', () => {
+    const floor = formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD);
+    expect(describeDerivedValue('ReferralMilestones', '5:500, 10:1500')).toBe(
+      `2 milestones, 2,000 credits per inviter in all = ${formatUsdAmount(2000 * MIN_PRICE_PER_CREDIT_USD)} at the floor ${floor} per credit`
+    );
+    expect(describeDerivedValue('ReferralMilestones', '3:300')).toMatch(/^1 milestone, 300 credits per inviter/);
+    expect(describeDerivedValue('ReferralMilestones', '')).toBeNull();
+    expect(describeDerivedValue('ReferralMilestones', '5 friends')).toBeNull();
+  });
+
   it('shows the unit and floor for the price per credit', () => {
     renderTab();
     expect(screen.getByTestId('admin-growth-pricing-derived-pricePerCredit').textContent).toBe(

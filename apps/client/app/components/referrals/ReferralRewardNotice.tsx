@@ -32,8 +32,18 @@ const formatDate = (iso: string) =>
 export const rewardNoticeMessage = (rewards: InviterRecentReward[]): string => {
   const total = rewards.reduce((sum, reward) => sum + reward.credits, 0);
   const soonest = rewards.map(reward => reward.expiresAt).sort()[0];
-  const subject = rewards.length === 1 ? 'a friend you invited' : `${rewards.length} friends you invited`;
-  return `You earned ${total.toLocaleString('en-US')} credits for ${subject}. They are ready to use and expire on ${formatDate(soonest)}.`;
+  const [only] = rewards;
+  const reason =
+    rewards.length === 1 && only.milestoneFriends
+      ? only.milestoneFriends === 1
+        ? 'your first active friend'
+        : `reaching ${only.milestoneFriends.toLocaleString('en-US')} active friends you invited`
+      : rewards.some(reward => reward.milestoneFriends)
+        ? 'your referrals'
+        : rewards.length === 1
+          ? 'a friend you invited'
+          : `${rewards.length} friends you invited`;
+  return `You earned ${total.toLocaleString('en-US')} credits for ${reason}. They are ready to use and expire on ${formatDate(soonest)}.`;
 };
 
 /**
