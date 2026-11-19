@@ -143,8 +143,8 @@ export async function executeApprovedAdminDelete(req: Request, params: DeleteAdm
   }
   // Early fail only; the stamp transaction re-checks the role.
   await assertStillAdmin(params.userId);
-  await deleteUserAsAdmin(req, params.userId, params.reason, approval);
-  return { deletedUserId: params.userId };
+  const { user } = await deleteUserAsAdmin(req, params.userId, params.reason, approval);
+  return { deletedUserId: user.id };
 }
 
 // Approval was only required because the target was an admin; one demoted since then is no longer what was approved.
