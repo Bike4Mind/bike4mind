@@ -227,6 +227,21 @@ final class VoiceConversationModelTests: XCTestCase {
     await model.stop()
   }
 
+  func testABargeInShowsTheUsersWordsWhileTheReplyIsStillStopping() async throws {
+    await speaker.setHolding(true)
+    await speaker.setStopDelay(.milliseconds(200))
+    let model = await startedModel()
+    await say("Tell me about Paris")
+    await until { await api.sentMessages.count == 1 }
+    await realtime.emit(frame(reply: longReply, status: .running))
+    await until { model.phase == .speaking }
+
+    await listener.emit("the capital of France is Paris what about Rome")
+    await until { model.phase == .listening }
+    XCTAssertEqual(model.liveTranscript, "what about Rome")
+    await model.stop()
+  }
+
   func testAFinishedReplyStartsAFreshRecognizer() async throws {
     let model = await startedModel()
     await say("Tell me about Paris")

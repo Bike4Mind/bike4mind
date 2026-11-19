@@ -297,6 +297,8 @@ public final class VoiceConversationModel {
       guard !isEcho, !heard.isEmpty else { return }
       let isCommandWord = words.count == 1 && !localSpeech.isEmpty && bargeInWords.contains(words[0])
       guard isCommandWord || heard.split(separator: " ").count >= bargeInMinimumWords else { return }
+      // Set before abandonTurn flips to listening and awaits the speaker, so listening never shows an empty transcript.
+      liveTranscript = heard
       await abandonTurn()
     default:
       return
