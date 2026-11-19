@@ -155,12 +155,13 @@ export function fromClaudeTodoWrite(input: unknown, options: PlanAdapterOptions 
 export function fromCliTodos(input: unknown, options: PlanAdapterOptions = {}): NormalizedPlan {
   const todos = Array.isArray(input) ? input : record(input).todos;
   if (!Array.isArray(todos)) return adapt('write_todos', todos, options);
-  const usesAlias = todos.some(item => record(item).description !== undefined);
+  const usesAlias = todos.some(item => typeof record(item).description === 'string');
   const result = adapt(
     'write_todos',
     todos.map(item => {
       const { description, ...rest } = record(item);
-      return { ...rest, content: rest.content ?? description };
+      const content = typeof rest.content === 'string' && rest.content.trim() ? rest.content : undefined;
+      return { ...rest, content: content ?? (typeof description === 'string' ? description : rest.content) };
     }),
     options
   );

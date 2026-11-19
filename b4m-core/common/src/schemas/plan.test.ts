@@ -185,6 +185,15 @@ describe('plan adapters', () => {
     expect(fromCliTodos([{ content: 'Only', status: 'pending' }]).warnings).toEqual([]);
   });
 
+  it('falls back to a string description only, and warns only for one', () => {
+    const empty = fromCliTodos([{ content: '', description: 'Kept', status: 'pending' }]);
+    expect(empty.plan.items.map(i => i.content)).toEqual(['Kept']);
+    expect(empty.warnings).toEqual(["description is deprecated; use 'content'."]);
+    const nulled = fromCliTodos([{ content: 'Real', description: null, status: 'pending' }]);
+    expect(nulled.plan.items.map(i => i.content)).toEqual(['Real']);
+    expect(nulled.warnings).toEqual([]);
+  });
+
   it('keeps activeForm and demotes extra in_progress CLI todos without throwing', () => {
     const result = fromCliTodos([
       { content: 'A', activeForm: 'Doing A', status: 'in_progress' },

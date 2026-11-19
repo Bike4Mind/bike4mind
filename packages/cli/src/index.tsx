@@ -177,6 +177,7 @@ import { deferredToolRegistry } from './tools/deferredToolRegistry.js';
 import {
   createWriteTodosTool,
   createTodoStore,
+  resetTodoStore,
   createSkillTool,
   createFindDefinitionTool,
   createGetFileStructureTool,
@@ -1109,8 +1110,7 @@ function CliApp() {
 
       // Create write_todos tool for task tracking
       const todoStore = todoStoreRef.current;
-      todoStore.todos = [];
-      todoStore.onUpdate?.([]);
+      resetTodoStore(todoStore);
       const writeTodosTool = createWriteTodosTool(todoStore);
 
       // Create durable workflow tools (Q-inspired agentic patterns)

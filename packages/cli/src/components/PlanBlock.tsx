@@ -4,56 +4,98 @@ import { planProgress, type PlanItem, type PlanItemStatus } from '@bike4mind/com
 import { useCliStore } from '../store';
 import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 
+/** Expanded plan never takes more rows than this, however long the list. */
+export const MAX_PLAN_ROWS = 8;
+
+// Glyphs match Desktop's TodoPanel; cancelled is CLI-only (Desktop has no such status).
 const GLYPH: Record<PlanItemStatus, { symbol: string; color?: string }> = {
-  completed: { symbol: '\u2714', color: 'green' },
-  in_progress: { symbol: '\u25B6', color: 'cyan' },
+  completed: { symbol: '\u2713' },
+  in_progress: { symbol: '\u25CF', color: 'cyan' },
   pending: { symbol: '\u25CB' },
   cancelled: { symbol: '\u2715', color: 'gray' },
 };
 
-function Row({ item, indent }: { item: PlanItem; indent: boolean }) {
+interface FlatRow {
+  item: PlanItem;
+  indent: boolean;
+}
+
+const flatten = (items: PlanItem[]): FlatRow[] =>
+  items.flatMap(item => [
+    { item, indent: false },
+    ...(item.children ?? []).map(child => ({ item: child, indent: true })),
+  ]);
+
+/** Rows the expanded block occupies for a given cap, so App can take them off the live budget. */
+export function expandedPlanRows(items: PlanItem[], maxRows: number): number {
+  return Math.min(flatten(items).length, Math.max(0, maxRows));
+}
+
+const oneLine = (text: string) => sanitizeTerminalText(text).replace(/\s+/g, ' ');
+
+function Row({ item, indent }: FlatRow) {
   const { symbol, color } = GLYPH[item.status];
-  const label = sanitizeTerminalText(item.status === 'in_progress' ? (item.activeForm ?? item.content) : item.content);
+  const label = oneLine(item.status === 'in_progress' ? (item.activeForm ?? item.content) : item.content);
   return (
     <Box marginLeft={indent ? 2 : 0}>
-      <Text color={color}>{symbol} </Text>
-      <Text
-        color={item.status === 'in_progress' ? 'cyan' : undefined}
-        dimColor={item.status === 'pending' || item.status === 'cancelled'}
-        strikethrough={item.status === 'cancelled'}
-      >
-        {label}
+      <Text wrap="truncate-end">
+        <Text color={color} dimColor={item.status === 'completed'}>
+          {symbol}{' '}
+        </Text>
+        <Text
+          color={item.status === 'in_progress' ? 'cyan' : undefined}
+          dimColor={item.status !== 'in_progress'}
+          strikethrough={item.status === 'completed' || item.status === 'cancelled'}
+        >
+          {label}
+        </Text>
       </Text>
     </Box>
   );
 }
 
-/** Plan above the prompt: full list while a turn runs, `n/m - current` once it ends. */
-export function PlanBlock() {
+/** Plan above the prompt: list while a turn runs (capped to `maxRows`), `n/m - current` once it ends. */
+export function PlanBlock({ maxRows = MAX_PLAN_ROWS }: { maxRows?: number }) {
   const items = useCliStore(state => state.plan);
   const active = useCliStore(state => state.isThinking || state.turnInFlight);
   if (items.length === 0) return null;
 
   if (!active) {
-    const { done, total, current } = planProgress({ version: 1, source: 'write_todos', items, updatedAt: 0 });
+    const leaves = items.flatMap(item => (item.children?.length ? item.children : [item]));
+    const live = leaves.filter(item => item.status !== 'cancelled');
+    if (live.every(item => item.status === 'completed')) return null;
+    const { done, total } = planProgress({ version: 1, source: 'write_todos', items, updatedAt: 0 });
+    const current = live.find(item => item.status === 'in_progress') ?? live.find(item => item.status === 'pending');
     return (
-      <Text dimColor>
+      <Text dimColor wrap="truncate-end">
         {done}/{total}
-        {current ? ` - ${sanitizeTerminalText(current)}` : ''}
+        {current ? ` - ${oneLine(current.content)}` : ''}
       </Text>
     );
   }
 
+  const rows = flatten(items);
+  const budget = Math.max(0, maxRows);
+  if (budget === 0) return null;
+  let shown = rows;
+  let hidden = 0;
+  if (rows.length > budget) {
+    const visible = budget - 1;
+    const current = Math.max(
+      0,
+      rows.findIndex(row => row.item.status === 'in_progress')
+    );
+    const start = Math.min(Math.max(0, current - 1), rows.length - visible);
+    shown = rows.slice(start, start + visible);
+    hidden = rows.length - visible;
+  }
+
   return (
     <Box flexDirection="column">
-      {items.map(item => (
-        <React.Fragment key={item.id}>
-          <Row item={item} indent={false} />
-          {item.children?.map(child => (
-            <Row key={child.id} item={child} indent />
-          ))}
-        </React.Fragment>
+      {shown.map(row => (
+        <Row key={row.item.id} {...row} />
       ))}
+      {hidden > 0 && <Text dimColor>+{hidden} more</Text>}
     </Box>
   );
 }

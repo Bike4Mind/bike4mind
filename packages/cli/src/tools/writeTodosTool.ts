@@ -1,7 +1,6 @@
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import { fromCliTodos, type PlanItem, type PlanItemStatus } from '@bike4mind/common';
 
-/** Todo item status values */
 export type TodoStatus = PlanItemStatus;
 
 /** Todo items are shared-schema plan items. */
@@ -61,13 +60,19 @@ export function createWriteTodosTool(todoStore: TodoStore): ICompletionOptionToo
       }
 
       const { plan, warnings } = fromCliTodos(todos);
+      const notes = warnings.length > 0 ? `\n\nNotes:\n${warnings.map(w => `- ${w}`).join('\n')}` : '';
 
-      // Update the store (replaces existing list)
+      // Nothing usable: keep the prior plan rather than wiping it on a malformed write.
+      if (todos.length > 0 && plan.items.length === 0) {
+        throw new Error(`write_todos: no valid todo items; the existing list was kept.${notes}`);
+      }
+
       todoStore.todos = plan.items;
       todoStore.onUpdate?.(plan.items);
 
+      if (plan.items.length === 0) return 'Todo list cleared.';
+
       const output = formatTodosOutput(plan.items);
-      const notes = warnings.length > 0 ? `\n\nNotes:\n${warnings.map(w => `- ${w}`).join('\n')}` : '';
 
       return `Todo list updated successfully:\n\n${output}${notes}`;
     },
@@ -140,6 +145,12 @@ export function createTodoStore(onUpdate?: (todos: TodoItem[]) => void): TodoSto
     todos: [],
     onUpdate,
   };
+}
+
+/** Empty the plan and tell listeners (the Ink plan block) it is gone. */
+export function resetTodoStore(store: TodoStore): void {
+  store.todos = [];
+  store.onUpdate?.([]);
 }
 
 /**
