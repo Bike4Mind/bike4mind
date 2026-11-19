@@ -31,6 +31,7 @@ export const LINEAGE_ROLE_LABELS: Record<GeneratedAssetLineageRole, string> = {
   scene_video: 'Scene video',
   scene_audio: 'Soundtrack',
   scene_cover: 'Cover art',
+  timeline_clip: 'Timeline clip',
 };
 
 // null: no Studio form takes the generator's request back (a Scene is composed, not generated from a form).
@@ -105,9 +106,17 @@ type StepProps = {
   roles: GeneratedAssetLineageRole[];
   isCurrent?: boolean;
   onRestore?: StepRestore;
+  /** False for an export: its stored request is not a Create form's, so there is nothing to restore. */
+  restorable?: boolean;
 };
 
-const VisibleStep = ({ node, roles, isCurrent, onRestore }: StepProps & { node: VisibleLineageNode }) => {
+const VisibleStep = ({
+  node,
+  roles,
+  isCurrent,
+  onRestore,
+  restorable = true,
+}: StepProps & { node: VisibleLineageNode }) => {
   const medium = restorableMedium(node);
   const content = (
     <>
@@ -141,7 +150,7 @@ const VisibleStep = ({ node, roles, isCurrent, onRestore }: StepProps & { node: 
     </>
   );
 
-  if (!onRestore || !medium || !node.request) {
+  if (!onRestore || !restorable || !medium || !node.request) {
     return (
       <ListItem data-testid={`studio-trail-step-${node.fileId}`} data-restorable="false">
         {content}
@@ -202,6 +211,10 @@ const ancestorEdges = (lineage: FileLineage) => lineage.edges.filter(edge => edg
 const rolesInto = (edges: LineageEdge[], parentId: string, childId: string) =>
   edges.filter(edge => edge.parentId === parentId && edge.childId === childId).map(edge => edge.role);
 
+/** Files an export produced: a timeline clip feeds only a render, and a render's request is not a Create form's. */
+const exportedFileIds = (lineage: FileLineage): Set<string> =>
+  new Set(lineage.edges.filter(edge => edge.role === 'timeline_clip').map(edge => edge.childId));
+
 /** Oldest generation first, so the list reads top to bottom in the order the take was made. */
 const stepsInOrder = (lineage: FileLineage) => [...lineage.ancestors].sort((a, b) => b.depth - a.depth);
 
@@ -215,41 +228,46 @@ const fileNamesOf = (lineage: FileLineage): Record<string, string | null> =>
     [...lineage.ancestors, ...lineage.children].map(node => [node.fileId, node.redacted ? null : node.fileName])
   );
 
-const TrailBody = ({ lineage, onRestore }: { lineage: FileLineage; onRestore?: StepRestore }) => (
-  <Stack gap={2}>
-    {lineage.truncated && (
-      <Typography level="body-xs" textColor="text.tertiary" data-testid="studio-trail-truncated">
-        Earlier steps are not shown.
-      </Typography>
-    )}
-    <List data-testid="studio-trail-ancestors" sx={{ '--ListItem-paddingX': 0, gap: 0.5 }}>
-      {stepsInOrder(lineage).map(node => (
-        <Step
-          key={node.fileId}
-          node={node}
-          roles={rolesFrom(ancestorEdges(lineage), node.fileId)}
-          isCurrent={node.fileId === lineage.fileId}
-          onRestore={onRestore}
-        />
-      ))}
-    </List>
-    {lineage.children.length > 0 && (
-      <Stack gap={0.5}>
-        <Typography level="title-sm">Made from this</Typography>
-        <List data-testid="studio-trail-children" sx={{ '--ListItem-paddingX': 0, gap: 0.5 }}>
-          {lineage.children.map(child => (
-            <Step
-              key={child.fileId}
-              node={child}
-              roles={rolesInto(lineage.edges, lineage.fileId, child.fileId)}
-              onRestore={onRestore}
-            />
-          ))}
-        </List>
-      </Stack>
-    )}
-  </Stack>
-);
+const TrailBody = ({ lineage, onRestore }: { lineage: FileLineage; onRestore?: StepRestore }) => {
+  const exported = exportedFileIds(lineage);
+  return (
+    <Stack gap={2}>
+      {lineage.truncated && (
+        <Typography level="body-xs" textColor="text.tertiary" data-testid="studio-trail-truncated">
+          Earlier steps are not shown.
+        </Typography>
+      )}
+      <List data-testid="studio-trail-ancestors" sx={{ '--ListItem-paddingX': 0, gap: 0.5 }}>
+        {stepsInOrder(lineage).map(node => (
+          <Step
+            key={node.fileId}
+            node={node}
+            roles={rolesFrom(ancestorEdges(lineage), node.fileId)}
+            isCurrent={node.fileId === lineage.fileId}
+            onRestore={onRestore}
+            restorable={!exported.has(node.fileId)}
+          />
+        ))}
+      </List>
+      {lineage.children.length > 0 && (
+        <Stack gap={0.5}>
+          <Typography level="title-sm">Made from this</Typography>
+          <List data-testid="studio-trail-children" sx={{ '--ListItem-paddingX': 0, gap: 0.5 }}>
+            {lineage.children.map(child => (
+              <Step
+                key={child.fileId}
+                node={child}
+                roles={rolesInto(lineage.edges, lineage.fileId, child.fileId)}
+                onRestore={onRestore}
+                restorable={!exported.has(child.fileId)}
+              />
+            ))}
+          </List>
+        </Stack>
+      )}
+    </Stack>
+  );
+};
 
 /**
  * How a generated file was made: its ancestors oldest first, each labelled with the role it played (first

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -33,6 +33,7 @@ const orgQuery = vi.hoisted(() => ({
 const searchParams = vi.hoisted(() => ({ current: {} as { tab?: string; section?: string } }));
 const user = vi.hoisted(() => ({ current: { id: 'owner1' } as { id: string; isAdmin?: boolean } | null }));
 const navigateSpy = vi.hoisted(() => vi.fn());
+const seats = vi.hoisted(() => ({ current: { currentSeats: 1, maxSeats: 5, pendingSeats: 0, availableSeats: 4 } }));
 const libraryRender = vi.hoisted(() => vi.fn());
 vi.mock('@client/app/components/organizations/OrganizationLibrarySection', () => ({
   default: () => {
@@ -47,11 +48,16 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
 
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useGetOrganization: () => orgQuery.current,
-  useOrganizationSeats: () => ({ currentSeats: 1, maxSeats: 5, pendingSeats: 0, activeSeats: 1, availableSeats: 4 }),
+  useOrganizationSeats: () => ({
+    ...seats.current,
+    activeSeats: seats.current.currentSeats - seats.current.pendingSeats,
+  }),
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.current }) }));
 
+const mobile = vi.hoisted(() => ({ current: false }));
+vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => mobile.current }));
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: () => undefined }));
 vi.mock('@client/app/components/organizations/OrganizationAvatar', () => ({ default: () => null }));
 
@@ -105,6 +111,7 @@ const ORG = {
     { userId: 'owner1' },
     // Holds update on the sharing ACL but is neither owner nor manager, so no admin tab opens.
     { userId: 'manager2', permissions: [Permission.read, Permission.update] },
+    { userId: 'reader1', permissions: [Permission.read] },
   ],
 } as unknown as IOrganizationDocument;
 
@@ -266,6 +273,9 @@ describe('organization detail page - ?tab= deep link', () => {
     expect(selectedTabName()).toBe('Overview');
     expect(screen.queryByRole('tab', { name: 'Settings' })).toBeNull();
     expect(screen.queryByTestId('model-policy-editor')).toBeNull();
+    expect(screen.getByTestId('organization-tab-denied-notice').textContent).toBe(
+      'Only the team owner and managers can open Settings. Ask the owner if you need it.'
+    );
   });
 
   it('shows the policy editor to a platform administrator without requiring an organization ACL row', () => {
@@ -294,6 +304,71 @@ describe('organization detail page - ?tab= deep link', () => {
     expect(screen.queryByRole('tab', { name: 'Billing' })).toBeNull();
   });
 
+  it('says why a refused deep link landed on Overview', () => {
+    searchParams.current = { tab: 'usage' };
+    user.current = { id: 'manager2' };
+
+    renderThroughLoad();
+
+    expect(screen.getByTestId('organization-tab-denied-notice').textContent).toBe(
+      'Only the team owner and managers can open Usage. Ask the owner if you need it.'
+    );
+  });
+
+  it('tells a read-only member that Settings is for the owner and managers', () => {
+    searchParams.current = { tab: 'settings' };
+    user.current = { id: 'reader1' };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Overview');
+    expect(screen.queryByRole('tab', { name: 'Settings' })).toBeNull();
+    expect(screen.getByTestId('organization-tab-denied-notice').textContent).toBe(
+      'Only the team owner and managers can open Settings. Ask the owner if you need it.'
+    );
+    expect(searchParams.current).toEqual({ tab: 'settings' });
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it('names the owner as the only one who can open Billing', () => {
+    searchParams.current = { tab: 'billing' };
+    user.current = { id: 'manager2' };
+
+    renderThroughLoad();
+
+    expect(screen.getByTestId('organization-tab-denied-notice').textContent).toBe(
+      'Only the team owner can open Billing. Ask the owner if you need it.'
+    );
+  });
+
+  it.each(['groups', 'domains'])('does not tell the owner of a personal team to ask the owner for %s', tab => {
+    searchParams.current = { tab };
+    orgQuery.current = { data: { ...ORG, personal: true }, isLoading: false, isError: false, error: undefined };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(selectedTabName()).toBe('Overview');
+    expect(screen.queryByTestId('organization-tab-denied-notice')).toBeNull();
+  });
+
+  it('does not tell a platform admin to ask the owner for Audit', () => {
+    searchParams.current = { tab: 'audit' };
+    user.current = { id: 'staff1', isAdmin: true };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Overview');
+    expect(screen.queryByTestId('organization-tab-denied-notice')).toBeNull();
+  });
+
+  it('shows no notice when the requested tab opens', () => {
+    searchParams.current = { tab: 'usage' };
+
+    renderThroughLoad();
+
+    expect(screen.queryByTestId('organization-tab-denied-notice')).toBeNull();
+  });
+
   it('falls back to Overview for a non-member', () => {
     searchParams.current = { tab: 'settings' };
     user.current = { id: 'stranger9' };
@@ -308,6 +383,118 @@ describe('organization detail page - ?tab= deep link', () => {
     renderThroughLoad();
 
     expect(selectedTabName()).toBe('Overview');
+  });
+});
+
+describe('organization detail page - what a manager cannot do', () => {
+  const managedOrg = {
+    ...ORG,
+    adminUserIds: ['mgr1'],
+    users: [...ORG.users, { userId: 'mgr1', permissions: [Permission.read] }],
+  } as unknown as IOrganizationDocument;
+
+  beforeEach(() => {
+    searchParams.current = {};
+    user.current = { id: 'mgr1' };
+    seats.current = { currentSeats: 1, maxSeats: 5, pendingSeats: 0, availableSeats: 4 };
+    navigateSpy.mockClear();
+    orgQuery.current = { data: managedOrg, isLoading: false, isError: false, error: undefined };
+  });
+
+  it('lists Billing as a locked entry rather than hiding it', () => {
+    render(wrapper(<OrganizationPage />));
+
+    expect(screen.getByTestId('organization-tab-locked-billing')).toBeTruthy();
+  });
+
+  it('opens the locked Billing tab on a read-only summary with no billing controls', () => {
+    searchParams.current = { tab: 'billing' };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(selectedTabName()).toContain('Billing');
+    expect(screen.queryByTestId('organization-tab-denied-notice')).toBeNull();
+    expect(screen.getByTestId('organization-billing-owner-only')).toBeTruthy();
+    expect(screen.getByTestId('organization-billing-locked-credits').textContent).toBe('100');
+    expect(screen.getByTestId('organization-billing-locked-seats').textContent).toBe('1 of 5');
+    expect(screen.getByText('Credits and seats for this team, read-only.')).toBeTruthy();
+    expect(screen.queryByText('Subscription, seats and payment details.')).toBeNull();
+  });
+
+  it('shows only the seat count on a plan with no seat cap', () => {
+    searchParams.current = { tab: 'billing' };
+    seats.current = { currentSeats: 3, maxSeats: 0, pendingSeats: 0, availableSeats: 0 };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(screen.getByTestId('organization-billing-locked-seats').textContent).toBe('3');
+  });
+
+  it('explains the owner-only Integrations sections', () => {
+    searchParams.current = { tab: 'integrations' };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(screen.getByTestId('organization-integrations-owner-only').textContent).toContain(
+      'Setting up Slack, GitHub and webhooks'
+    );
+  });
+
+  it('locks Billing for a platform admin who is not the owner or a manager', () => {
+    user.current = { id: 'staff1', isAdmin: true };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(screen.getByTestId('organization-tab-locked-billing')).toBeTruthy();
+  });
+
+  it('does not show the owner a locked Billing entry or the Integrations note', () => {
+    user.current = { id: 'owner1' };
+    searchParams.current = { tab: 'integrations' };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(screen.queryByTestId('organization-tab-locked-billing')).toBeNull();
+    expect(screen.queryByTestId('organization-integrations-owner-only')).toBeNull();
+  });
+});
+
+describe('organization detail page - phone section picker', () => {
+  const managedOrg = {
+    ...ORG,
+    adminUserIds: ['mgr1'],
+    users: [...ORG.users, { userId: 'mgr1', permissions: [Permission.read] }],
+  } as unknown as IOrganizationDocument;
+
+  beforeEach(() => {
+    mobile.current = true;
+    searchParams.current = {};
+    navigateSpy.mockClear();
+    orgQuery.current = { data: managedOrg, isLoading: false, isError: false, error: undefined };
+  });
+
+  afterEach(() => {
+    mobile.current = false;
+  });
+
+  it('marks Billing as locked for a manager', () => {
+    user.current = { id: 'mgr1' };
+    render(wrapper(<OrganizationPage />));
+
+    fireEvent.click(screen.getByTestId('organization-tabs-select'));
+
+    expect(screen.getByTestId('organization-tabs-option-locked-billing')).toBeTruthy();
+    expect(screen.queryByTestId('organization-tabs-option-billing')).toBeNull();
+  });
+
+  it('leaves Billing plain for the owner', () => {
+    user.current = { id: 'owner1' };
+    render(wrapper(<OrganizationPage />));
+
+    fireEvent.click(screen.getByTestId('organization-tabs-select'));
+
+    expect(screen.getByTestId('organization-tabs-option-billing')).toBeTruthy();
+    expect(screen.queryByTestId('organization-tabs-option-locked-billing')).toBeNull();
   });
 });
 

@@ -122,6 +122,10 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   { shape: 'sst.aws.SnsTopic', reason: 'Topic only; subscribe() is inventoried as snsSubscription.' },
   { shape: 'aws.sns.Topic', reason: 'Topic only; aws.sns.TopicSubscription is inventoried as snsSubscription.' },
   { shape: 'aws.cloudwatch.MetricAlarm', reason: 'Alarm only; delivery is inventoried at the topic subscription.' },
+  {
+    shape: 'aws.appautoscaling.Policy',
+    reason: 'Desired-count rule for an inventoried service, no compute of its own.',
+  },
   { shape: 'aws.cloudwatch.Dashboard', reason: 'Observability view, no compute.' },
   { shape: 'aws.cloudwatch.LogMetricFilter', reason: 'Metric extraction feeding alarms, no compute.' },
   {
