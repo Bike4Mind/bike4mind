@@ -55,7 +55,8 @@ export const getBriefContract = defineEndpoint({
   summary: 'Get a brief',
   description:
     'Reads one brief. Decision items that reference an agent approval carry its `questId` and ' +
-    '`pendingActionTs`; answer it through the pending-actions endpoints. ' +
+    '`pendingActionTs`; answer it through the pending-actions endpoints. Items triaged from an ingested email ' +
+    'carry a `source`, and an email decision may carry a `draftReply` for you to review; nothing sends it. ' +
     JWT_ONLY_NOTE,
   tags: ['AI'],
   auth: 'jwtOnly',

@@ -30,5 +30,5 @@ if (businessMetricAlertsDLQ) {
     },
     transform: deadLetter.ruleTarget,
   });
-  deadLetter.allowRules([$util.output({ nodes: { rule: cron.nodes.rule } })]);
+  deadLetter.allowRules([$util.output(cron)]);
 }

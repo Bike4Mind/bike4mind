@@ -1,3 +1,4 @@
+{{- if eq .Values.mode "full" }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -200,3 +201,4 @@ spec:
                   name: {{ .Release.Name }}-config
                   key: APP_STAGE
           resources: {{ .Values.resources.subscriberFanout | toJson }}
+{{- end }}

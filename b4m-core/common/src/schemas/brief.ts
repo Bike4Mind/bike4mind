@@ -16,12 +16,32 @@ export const BRIEF_LIMITS = {
   headline: 160,
   itemText: 400,
   itemsPerSection: 12,
+  draftTo: 320,
+  draftSubject: 200,
+  draftBody: 4000,
 } as const;
+
+export const BriefSourceRefSchema = z.object({
+  kind: z.enum(['email']),
+  emailId: z.string().min(1).describe('The ingested email the item was triaged from.'),
+});
 
 export const BriefItemSchema = z.object({
   id: z.string().min(1).describe('Stable within the brief.'),
   text: z.string().min(1).max(BRIEF_LIMITS.itemText),
+  source: BriefSourceRefSchema.optional().describe('The record the item came from, when it was not agent activity.'),
 });
+
+export const BriefDraftReplySchema = z
+  .object({
+    to: z.string().min(1).max(BRIEF_LIMITS.draftTo).describe("The source email's sender as received, unverified."),
+    subject: z.string().min(1).max(BRIEF_LIMITS.draftSubject),
+    body: z.string().min(1).max(BRIEF_LIMITS.draftBody),
+  })
+  .describe(
+    'Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, ' +
+      'so treat every field as untrusted text.'
+  );
 
 /** The pending agent approval a decision refers to; answer it through `/api/v1/pending-actions/{questId}`. */
 export const BriefApprovalRefSchema = z.object({
@@ -35,6 +55,7 @@ export const BriefDecisionSchema = BriefItemSchema.extend({
     'Present when the decision is an agent approval. The approval may have lapsed or been answered since the ' +
       'brief was composed; the pending-actions endpoints are authoritative.'
   ),
+  draftReply: BriefDraftReplySchema.optional(),
 });
 
 export const BriefSchema = z.object({
@@ -61,3 +82,5 @@ export const BriefListResponseSchema = z.object({
 export type Brief = z.infer<typeof BriefSchema>;
 export type BriefItem = z.infer<typeof BriefItemSchema>;
 export type BriefDecision = z.infer<typeof BriefDecisionSchema>;
+export type BriefSourceRef = z.infer<typeof BriefSourceRefSchema>;
+export type BriefDraftReply = z.infer<typeof BriefDraftReplySchema>;

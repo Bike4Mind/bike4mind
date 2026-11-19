@@ -4,6 +4,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
+import en from '@client/app/locales/en.json';
+import i18next from 'i18next';
 import OrganizationSettingsSection from './OrganizationSettingsSection';
 
 const currentUser = vi.fn();
@@ -23,6 +25,12 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetOrganizationUsers: () => (members.loaded ? { data: members.list, isSuccess: true } : { isSuccess: false }),
 }));
+
+const i18n = vi.hoisted(() => ({ t: (key: string): string => key }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: i18n.t, i18n: { language: 'en' } }) }));
+const i18nInstance = i18next.createInstance();
+void i18nInstance.init({ lng: 'en', resources: { en: { translation: en } }, initAsync: false });
+i18n.t = i18nInstance.t.bind(i18nInstance) as (key: string) => string;
 
 vi.mock('./OrganizationGeneralSection', () => ({ default: () => null }));
 vi.mock('./DeleteOrganizationDialog', () => ({
@@ -110,6 +118,20 @@ describe('OrganizationSettingsSection - Danger Zone visibility', () => {
     renderAs({ id: 'member1', isAdmin: false });
 
     expect(screen.queryByTestId('organization-settings-delete-btn')).toBeNull();
+  });
+
+  it('explains the missing Danger Zone to a non-owner instead of rendering nothing', () => {
+    renderAs({ id: 'member1', isAdmin: false });
+
+    expect(screen.getByTestId('organization-settings-owner-only').textContent).toContain(
+      'Owner only: Exporting team data, transferring ownership and deleting the team. Ask the team owner'
+    );
+  });
+
+  it('shows no owner-only note to the owner', () => {
+    renderAs({ id: OWNER_ID, isAdmin: false });
+
+    expect(screen.queryByTestId('organization-settings-owner-only')).toBeNull();
   });
 
   it('hides Delete Team when there is no resolved user', () => {
