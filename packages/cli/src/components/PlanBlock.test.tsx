@@ -3,7 +3,7 @@ import React from 'react';
 import { render } from 'ink-testing-library';
 import { PlanBlock } from './PlanBlock';
 import { useCliStore } from '../store';
-import { fromCliTodos } from '@bike4mind/common';
+import { fromCliTodos, type PlanItem } from '@bike4mind/common';
 
 const plan = fromCliTodos([
   { content: 'Write schema', status: 'completed' },
@@ -73,6 +73,40 @@ describe('PlanBlock', () => {
     ]).plan.items;
     useCliStore.setState({ plan: items, turnInFlight: true });
     expect(render(<PlanBlock maxRows={2} />).lastFrame()).toBe('\u25CF IP\n+3 more');
+  });
+
+  it('shows only the current row when maxRows is 1', () => {
+    const items = fromCliTodos([
+      { content: 'a', status: 'completed' },
+      { content: 'b', status: 'in_progress' },
+      { content: 'c', status: 'pending' },
+      { content: 'd', status: 'pending' },
+    ]).plan.items;
+    useCliStore.setState({ plan: items, turnInFlight: true });
+    expect(render(<PlanBlock maxRows={1} />).lastFrame()).toBe('\u25CF b');
+  });
+
+  it('keeps the live in-progress leaf visible in a nested plan', () => {
+    const leaf = (id: string, status: PlanItem['status']): PlanItem => ({ id, content: id, status });
+    const nested: PlanItem[] = [
+      leaf('A', 'completed'),
+      {
+        ...leaf('G', 'in_progress'),
+        children: [leaf('G1', 'completed'), leaf('G2', 'completed'), leaf('G3', 'in_progress')],
+      },
+      leaf('B', 'pending'),
+    ];
+    useCliStore.setState({ plan: nested, turnInFlight: true });
+    expect(render(<PlanBlock maxRows={3} />).lastFrame()).toBe('  \u2713 G2\n  \u25CF G3\n+4 more');
+
+    const cancelled: PlanItem[] = [
+      { ...leaf('X', 'cancelled'), children: [leaf('X1', 'in_progress')] },
+      leaf('P', 'pending'),
+      leaf('Q', 'pending'),
+      leaf('Live', 'in_progress'),
+    ];
+    useCliStore.setState({ plan: cancelled });
+    expect(render(<PlanBlock maxRows={2} />).lastFrame()).toBe('\u25CF Live\n+4 more');
   });
 
   it('windows from the top when nothing is in progress', () => {

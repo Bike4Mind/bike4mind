@@ -54,6 +54,20 @@ function Row({ item, indent }: FlatRow) {
   );
 }
 
+// Same leaf set as planProgress: a cancelled group drops its whole subtree.
+// Keep in sync with planProgress in @bike4mind/common.
+const liveLeaves = (items: PlanItem[]): PlanItem[] =>
+  items
+    .filter(item => item.status !== 'cancelled')
+    .flatMap(item => (item.children?.length ? item.children : [item]))
+    .filter(item => item.status !== 'cancelled');
+
+/** Leaf the summary and the expanded window both centre on: first in progress, else first pending. */
+const currentLeaf = (items: PlanItem[]): PlanItem | undefined => {
+  const live = liveLeaves(items);
+  return live.find(item => item.status === 'in_progress') ?? live.find(item => item.status === 'pending');
+};
+
 /** Plan above the prompt: list while a turn runs (capped to `maxRows`), `n/m - current` once it ends. */
 export function PlanBlock({ maxRows = MAX_PLAN_ROWS }: { maxRows?: number }) {
   const items = useCliStore(state => state.plan);
@@ -61,14 +75,9 @@ export function PlanBlock({ maxRows = MAX_PLAN_ROWS }: { maxRows?: number }) {
   if (items.length === 0) return null;
 
   if (!active) {
-    // Same leaf set as planProgress: a cancelled group drops its whole subtree.
-    const live = items
-      .filter(item => item.status !== 'cancelled')
-      .flatMap(item => (item.children?.length ? item.children : [item]))
-      .filter(item => item.status !== 'cancelled');
-    if (live.every(item => item.status === 'completed')) return null;
+    if (liveLeaves(items).every(item => item.status === 'completed')) return null;
     const { done, total } = planProgress({ version: 1, source: 'write_todos', items, updatedAt: 0 });
-    const current = live.find(item => item.status === 'in_progress') ?? live.find(item => item.status === 'pending');
+    const current = currentLeaf(items);
     return (
       <Text dimColor wrap="truncate-end">
         {done}/{total}
@@ -83,15 +92,21 @@ export function PlanBlock({ maxRows = MAX_PLAN_ROWS }: { maxRows?: number }) {
   let shown = rows;
   let hidden = 0;
   if (rows.length > budget) {
-    const visible = budget - 1;
-    const current = Math.max(
+    const target = currentLeaf(items);
+    const anchor = Math.max(
       0,
-      rows.findIndex(row => row.item.status === 'in_progress')
+      rows.findIndex(row => row.item === target)
     );
-    // One row of context above the current item, unless that would hide the item itself.
-    const start = Math.min(Math.max(0, current - (visible > 1 ? 1 : 0)), rows.length - visible);
-    shown = rows.slice(start, start + visible);
-    hidden = rows.length - visible;
+    if (budget === 1) {
+      // No room for "+N more": the current row alone keeps the height at 1.
+      shown = [rows[anchor]];
+    } else {
+      const visible = budget - 1;
+      // One row of context above the current item, unless that would hide the item itself.
+      const start = Math.min(Math.max(0, anchor - (visible > 1 ? 1 : 0)), rows.length - visible);
+      shown = rows.slice(start, start + visible);
+      hidden = rows.length - visible;
+    }
   }
 
   return (
