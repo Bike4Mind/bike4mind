@@ -152,7 +152,8 @@ describe('resolveSearchRedirect', () => {
 
     it('reports a 5xx without reading a body', async () => {
       const result = await run(vi.fn(async () => new Response('oops', { status: 503 })));
-      expect(result.detail).toEqual({ reason: 'status', status: 503 });
+      expect(result.detail).toMatchObject({ reason: 'status', status: 503 });
+      expect(result.detail?.bodyHint).toBeUndefined();
     });
 
     it('reports a timeout', async () => {
