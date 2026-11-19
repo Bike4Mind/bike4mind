@@ -7,6 +7,9 @@ import { convertSessionToMarkdown } from '@client/app/utils/sessionMarkdownExpor
 /**
  * Supplies the Markdown for a chat that is not the main chat's current session (e.g. a
  * premium overlay's own chat). Return null, undefined or '' when there is nothing to copy.
+ * Keep it fast and local (e.g. read from state you already hold): the clipboard write runs
+ * after it resolves, and Safari rejects a write that lands after a slow await (such as a
+ * network fetch) because the click's user activation has expired by then.
  */
 export type GetCopyMarkdown = () => string | null | undefined | Promise<string | null | undefined>;
 

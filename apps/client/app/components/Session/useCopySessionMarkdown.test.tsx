@@ -70,20 +70,42 @@ describe('useCopySessionMarkdown', () => {
     expect(result.current.copied).toBe(false);
   });
 
-  it('does not show the tick when getMarkdown throws', async () => {
+  it('does not show the tick when getMarkdown throws, and logs the error', async () => {
+    const boom = new Error('boom');
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const { result } = renderHook(
-      () =>
-        useCopySessionMarkdown(() => {
-          throw new Error('boom');
-        }),
-      { wrapper }
-    );
+    try {
+      const { result } = renderHook(
+        () =>
+          useCopySessionMarkdown(() => {
+            throw boom;
+          }),
+        { wrapper }
+      );
 
-    await act(() => result.current.copyMarkdown());
+      await act(() => result.current.copyMarkdown());
 
-    expect(writeText).not.toHaveBeenCalled();
-    expect(result.current.copied).toBe(false);
-    consoleError.mockRestore();
+      expect(writeText).not.toHaveBeenCalled();
+      expect(result.current.copied).toBe(false);
+      expect(consoleError).toHaveBeenCalledWith('Failed to copy markdown:', boom);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it('does not show the tick when the clipboard write is rejected', async () => {
+    const denied = new Error('NotAllowedError');
+    writeText.mockRejectedValueOnce(denied);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { result } = renderHook(() => useCopySessionMarkdown(() => 'ASK BOB CHAT'), { wrapper });
+
+      await act(() => result.current.copyMarkdown());
+
+      expect(writeText).toHaveBeenCalledWith('ASK BOB CHAT');
+      expect(result.current.copied).toBe(false);
+      expect(consoleError).toHaveBeenCalledWith('Failed to copy markdown:', denied);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });
