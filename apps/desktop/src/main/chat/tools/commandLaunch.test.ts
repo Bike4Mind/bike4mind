@@ -15,7 +15,10 @@ vi.mock('./gitBash', async importOriginal => ({
   ...(await importOriginal<typeof import('./gitBash')>()),
   resolveGitBash: async () => 'C:\\Program Files\\Git\\bin\\bash.exe',
 }));
-vi.mock('./userPath', () => ({ resolveUserPath: async () => 'C:\\Tools' }));
+vi.mock('./userPath', () => ({
+  resolveUserPath: async () => 'C:\\Tools',
+  resolveLoginShellVariables: async () => ({}),
+}));
 vi.mock('node:child_process', async importOriginal => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return {
