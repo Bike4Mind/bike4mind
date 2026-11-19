@@ -118,15 +118,15 @@
         let center = NotificationCenter.default
         observers = [
           center.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main) {
-            [weak self] _ in MainActor.assumeIsolated { self?.finish(nil) }
+            [weak self] _ in MainActor.assumeIsolated { self?.finish(nil, for: started) }
           },
           center.addObserver(forName: AVPlayerItem.failedToPlayToEndTimeNotification, object: item, queue: .main) {
-            [weak self] _ in MainActor.assumeIsolated { self?.finish(SampleFailed()) }
+            [weak self] _ in MainActor.assumeIsolated { self?.finish(SampleFailed(), for: started) }
           },
         ]
         status = item.observe(\.status) { [weak self] item, _ in
           guard item.status == .failed else { return }
-          Task { @MainActor in self?.finish(SampleFailed()) }
+          Task { @MainActor in self?.finish(SampleFailed(), for: started) }
         }
         player.play()
       }
@@ -134,6 +134,11 @@
 
     public func stop() async {
       finish(nil)
+    }
+
+    private func finish(_ error: (any Error)?, for started: Int) {
+      guard started == plays else { return }
+      finish(error)
     }
 
     private func finish(_ error: (any Error)?) {
