@@ -1,4 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { hasAdminPermission } from '@bike4mind/common';
 // The same module instance the handler imports, so the assertion below pins identity, not a copy.
 import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
@@ -549,4 +550,71 @@ describe('processQuest', () => {
       settle.mockRestore();
     });
   });
+});
+
+describe('processQuest role-held admin permissions', () => {
+  const ROLE_ID = 'a'.repeat(24);
+  const DELETED_ROLE_ID = 'c'.repeat(24);
+  const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+  let findRoles: {
+    mockRestore: () => void;
+    mockResolvedValue: (value: never) => unknown;
+    mockRejectedValue: (e: Error) => unknown;
+  };
+
+  beforeEach(async () => {
+    processOptions.mockClear();
+    mockProcess.mockClear();
+    const { adminRoleRepository } = await import('@bike4mind/database');
+    findRoles = vi
+      .spyOn(adminRoleRepository, 'findByIds')
+      .mockResolvedValue([{ permissions: ['settings:manage'] }] as never) as unknown as typeof findRoles;
+  });
+
+  afterEach(() => findRoles.mockRestore());
+
+  async function run(fields: Record<string, unknown>, adminRoleWithheld?: boolean) {
+    const { User } = await import('@bike4mind/database');
+    vi.mocked(User.findById).mockResolvedValueOnce({ _id: 'user-1', id: 'user-1', ...fields } as never);
+    const { processQuest } = await import('./questProcessor');
+    await processQuest(
+      { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, adminRoleWithheld } as never,
+      logger as never
+    );
+    return processOptions.mock.calls.at(-1)?.[0].user as Parameters<typeof hasAdminPermission>[0];
+  }
+
+  it('hands the completion a user whose only grant comes from a role', async () => {
+    expect(hasAdminPermission(await run({ adminRoleIds: [ROLE_ID] }), 'settings:manage')).toBe(true);
+  }, 120_000);
+
+  it('refuses the permission on the next call once the role is removed', async () => {
+    expect(hasAdminPermission(await run({ adminRoleIds: [ROLE_ID] }), 'settings:manage')).toBe(true);
+    expect(hasAdminPermission(await run({ adminRoleIds: [] }), 'settings:manage')).toBe(false);
+  }, 120_000);
+
+  it('grants nothing for a deleted or malformed role id', async () => {
+    findRoles.mockResolvedValue([] as never);
+
+    const user = await run({ adminRoleIds: [DELETED_ROLE_ID, 'not-an-id'] });
+
+    expect(findRoles).toHaveBeenCalledWith([DELETED_ROLE_ID]);
+    expect(hasAdminPermission(user, 'settings:manage')).toBe(false);
+  }, 120_000);
+
+  it('does not start the completion when the role lookup throws', async () => {
+    findRoles.mockRejectedValue(new Error('db down'));
+
+    await expect(run({ adminRoleIds: [ROLE_ID] })).rejects.toThrow('db down');
+
+    expect(processOptions).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+  }, 120_000);
+
+  it('keeps the withheld admin role withheld for a role-only delegate', async () => {
+    const user = await run({ adminRoleIds: [ROLE_ID] }, true);
+
+    expect(findRoles).toHaveBeenCalledWith([ROLE_ID]);
+    expect(hasAdminPermission(user, 'settings:manage')).toBe(false);
+  }, 120_000);
 });

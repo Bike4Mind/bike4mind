@@ -268,6 +268,45 @@ describe('OAuthClientsTab', () => {
     );
   });
 
+  it('registers post-logout redirect URIs from the form', async () => {
+    api.createOAuthClient.mockResolvedValue({ client, clientSecret: SECRET });
+    renderTab();
+    fireEvent.click(await screen.findByTestId('oauth-client-add-btn'));
+    fireEvent.change(screen.getByTestId('oauth-client-name-input'), { target: { value: 'My App' } });
+    fireEvent.change(screen.getByTestId('oauth-client-redirect-uris-input'), {
+      target: { value: 'https://app.example.test/cb' },
+    });
+    fireEvent.change(screen.getByTestId('oauth-client-post-logout-uris-input'), {
+      target: { value: 'https://app.example.test/signed-out\n' },
+    });
+    fireEvent.click(screen.getByTestId('oauth-client-create-submit-btn'));
+    await waitFor(() =>
+      expect(api.createOAuthClient).toHaveBeenCalledWith({
+        name: 'My App',
+        redirectUris: ['https://app.example.test/cb'],
+        postLogoutRedirectUris: ['https://app.example.test/signed-out'],
+        clientType: 'relying-party',
+      })
+    );
+  });
+
+  it('edits post-logout redirect URIs', async () => {
+    api.fetchOAuthClients.mockResolvedValue([{ ...client, postLogoutRedirectUris: ['https://app.example.test/out'] }]);
+    api.updateOAuthClient.mockResolvedValue(client);
+    renderTab();
+    await openRowAction('edit');
+    const input = screen.getByTestId('oauth-client-edit-post-logout-uris-input');
+    expect(input).toHaveValue('https://app.example.test/out');
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
+    await waitFor(() =>
+      expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', {
+        postLogoutRedirectUris: [],
+        expectedUpdatedAt: client.updatedAt,
+      })
+    );
+  });
+
   it('re-activates an inactive client directly, without the deactivate confirmation', async () => {
     api.fetchOAuthClients.mockResolvedValue([{ ...client, isActive: false }]);
     api.updateOAuthClient.mockResolvedValue(client);
@@ -525,6 +564,7 @@ describe('buildCreatePayload', () => {
   const form = {
     name: 'App',
     redirectUris: 'https://a.example.test/cb',
+    postLogoutRedirectUris: ' \n',
     firstParty: true,
     unpaidAccountsAllowed: true,
     federated: {
@@ -750,6 +790,19 @@ describe('edit modal scopes and federated trust', () => {
 
 describe('buildEditPayload', () => {
   const stored = { ...client, allowedScopes: ['openid', 'legacy:x'] } as never;
+
+  it('sends post-logout redirect URIs only when they changed', () => {
+    const withUris = { ...client, postLogoutRedirectUris: ['https://n.example.test/out'] } as never;
+    const form = editFormFromClient(withUris);
+    expect(form.postLogoutRedirectUris).toBe('https://n.example.test/out');
+    expect(buildEditPayload(withUris, form)).toEqual({});
+    expect(buildEditPayload(withUris, { ...form, postLogoutRedirectUris: '' })).toEqual({ postLogoutRedirectUris: [] });
+    expect(
+      buildEditPayload(stored, { ...editFormFromClient(stored), postLogoutRedirectUris: 'https://x.example.test/o' })
+    ).toEqual({
+      postLogoutRedirectUris: ['https://x.example.test/o'],
+    });
+  });
 
   it('sends only the changed fields', () => {
     const form = editFormFromClient(stored);

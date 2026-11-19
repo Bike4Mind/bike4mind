@@ -8005,12 +8005,19 @@ export class ChatCompletionProcess {
         quest.replies = combined;
         quest.reply = combined.join('');
       };
+      const moderationRefused = err instanceof FlaggedContentError;
       // Provider text on a restricted-tier turn can name the substitute. Credit errors keep their
-      // message, as does an account refusal (fixed text from accountState); the categorized branches
-      // below overwrite this reply with fixed text anyway.
+      // message, as do an account refusal (fixed text from accountState) and a moderation refusal
+      // (fixed text from promptModeration); the categorized branches below overwrite this reply
+      // with fixed text anyway.
       const masksMessage =
         this.shadowSubstitution &&
-        !(err instanceof InsufficientCreditsError || err instanceof AiAccessRefusedError || resolveQuestErrorCode(err));
+        !(
+          err instanceof InsufficientCreditsError ||
+          err instanceof AiAccessRefusedError ||
+          moderationRefused ||
+          resolveQuestErrorCode(err)
+        );
       setErrorReply(masksMessage ? MODEL_UNAVAILABLE_ERROR_REPLY : (err as Error).message);
       quest.type = 'error';
       setTerminalQuestStatus(quest, 'done');
@@ -8022,6 +8029,8 @@ export class ChatCompletionProcess {
       const questErrorCode = resolveQuestErrorCode(err);
       if (questErrorCode) {
         quest.errorCode = questErrorCode;
+      } else if (moderationRefused) {
+        quest.errorCode = 'content_blocked';
       }
 
       const errorSaveStartTime = Date.now();
@@ -8030,7 +8039,12 @@ export class ChatCompletionProcess {
         `⏱️ [${Date.now() - processStartTime}ms] Error quest save completed in ${Date.now() - errorSaveStartTime}ms`
       );
 
-      if (err instanceof InsufficientCreditsError || questErrorCode) {
+      if (moderationRefused) {
+        // Expected user outcome, already logged once at warn by the moderation service. Settled
+        // rather than rethrown: a queue retry would only repeat the refusal, and the /api/chat
+        // wait route answers with the quest body, where `errorCode` names the reason.
+        return;
+      } else if (err instanceof InsufficientCreditsError || questErrorCode) {
         // Terminal: nothing to retry until credits are added, so return without re-throwing
         // (a throw would route the queue handler to DLQ/retry). Quest already saved above.
         logger.log(`Insufficient credits for quest ${questId}`);

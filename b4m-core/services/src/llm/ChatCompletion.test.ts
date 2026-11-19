@@ -15709,9 +15709,7 @@ describe('prompt moderation', () => {
       this.checkPrompt = vi.fn().mockRejectedValue(new FlaggedContentError('blocked', ['violence']));
     } as any);
 
-    await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
-      FlaggedContentError
-    );
+    await service.process({ body: startParams, logger: mockLogger });
 
     expect(applyModerationHit).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -15734,9 +15732,7 @@ describe('prompt moderation', () => {
       const notify = vi.fn().mockResolvedValue(undefined);
       service.notifyModerationEscalation = notify;
 
-      await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
-        FlaggedContentError
-      );
+      await service.process({ body: startParams, logger: mockLogger });
 
       await vi.waitFor(() =>
         expect(notify).toHaveBeenCalledWith(
@@ -15756,9 +15752,7 @@ describe('prompt moderation', () => {
       const notify = vi.fn().mockResolvedValue(undefined);
       service.notifyModerationEscalation = notify;
 
-      await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
-        FlaggedContentError
-      );
+      await service.process({ body: startParams, logger: mockLogger });
 
       await vi.waitFor(() =>
         expect(notify).toHaveBeenCalledWith(expect.objectContaining({ reasons: ['suspend_pending'], hitsInWindow: 5 }))
@@ -15770,9 +15764,7 @@ describe('prompt moderation', () => {
       const notify = vi.fn().mockResolvedValue(undefined);
       service.notifyModerationEscalation = notify;
 
-      await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
-        FlaggedContentError
-      );
+      await service.process({ body: startParams, logger: mockLogger });
 
       expect(applyModerationHit).toHaveBeenCalled();
       expect(notify).not.toHaveBeenCalled();
@@ -15783,9 +15775,7 @@ describe('prompt moderation', () => {
       const notify = vi.fn().mockRejectedValue(new Error('event bus down'));
       service.notifyModerationEscalation = notify;
 
-      await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
-        FlaggedContentError
-      );
+      await service.process({ body: startParams, logger: mockLogger });
 
       await vi.waitFor(() =>
         expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -15801,9 +15791,7 @@ describe('prompt moderation', () => {
         throw new Error('not wired');
       };
 
-      await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
-        FlaggedContentError
-      );
+      await service.process({ body: startParams, logger: mockLogger });
 
       await vi.waitFor(() =>
         expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -15818,9 +15806,7 @@ describe('prompt moderation', () => {
       const notify = vi.fn().mockReturnValue(new Promise(() => undefined));
       service.notifyModerationEscalation = notify;
 
-      await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
-        FlaggedContentError
-      );
+      await service.process({ body: startParams, logger: mockLogger });
 
       expect(notify).toHaveBeenCalledTimes(1);
     });
@@ -15829,13 +15815,55 @@ describe('prompt moderation', () => {
       blockWith(['sexual/minors']);
       service.notifyModerationEscalation = undefined;
 
-      await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
-        FlaggedContentError
-      );
+      await service.process({ body: startParams, logger: mockLogger });
 
       expect(applyModerationHit).toHaveBeenCalled();
       expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('escalation alert'), expect.anything());
     });
+  });
+
+  it.each([
+    ['openai', { openaiKey: 'demo-key', guardrailId: null }, OpenaiModerationsService],
+    ['bedrock', { openaiKey: null, guardrailId: 'my-guardrail' }, BedrockGuardrailsService],
+  ] as const)(
+    'settles a turn the %s check refuses as a content_blocked error quest',
+    async (_source, knobs, Service) => {
+      wireModMocks(knobs);
+      enableAdminFlags('ModerationEnabled');
+      vi.mocked(Service).mockImplementation(function (this: { checkPrompt: unknown }) {
+        this.checkPrompt = vi.fn().mockRejectedValue(new FlaggedContentError('refusal text', ['violence']));
+      } as never);
+
+      // Resolves: a rethrow would send the queue path to retry and the wait route to a 500.
+      await service.process({ body: startParams, logger: mockLogger });
+
+      const quest = await service.db.quests.findById('q1');
+      expect(quest).toMatchObject({
+        type: 'error',
+        status: 'done',
+        errorCode: 'content_blocked',
+        reply: 'refusal text',
+        replies: ['refusal text'],
+      });
+      expect(mockedGetLlmWithFallback).not.toHaveBeenCalled();
+    }
+  );
+
+  it('leaves errorCode unset on a turn that fails for an unclassified reason', async () => {
+    wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+    enableAdminFlags('ModerationEnabled');
+    vi.mocked(OpenaiModerationsService).mockImplementation(function (this: { checkPrompt: unknown }) {
+      this.checkPrompt = vi.fn().mockRejectedValue(new Error('moderation service unreachable'));
+    } as never);
+
+    await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toThrow(
+      'moderation service unreachable'
+    );
+
+    const quest = await service.db.quests.findById('q1');
+    expect(quest?.type).toBe('error');
+    expect(quest?.errorCode).toBeUndefined();
+    expect(applyModerationHit).not.toHaveBeenCalled();
   });
 
   it('records a provider moderation hit (Hook A) when the Anthropic safety classifier throws', async () => {

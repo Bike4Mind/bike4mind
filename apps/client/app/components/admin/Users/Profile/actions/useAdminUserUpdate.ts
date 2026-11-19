@@ -44,7 +44,6 @@ export const useAdminUserUpdate = (userId: string) => {
       void queryClient.invalidateQueries({ queryKey: ['admin', 'users', userId] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'user-credit-adjustments', userId] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'user-entitlements', userId] });
-      void queryClient.invalidateQueries({ queryKey: ['admin', 'credit-adjustments'] });
       // A suspend deactivates every API key server-side (adminUpdateUser).
       void queryClient.invalidateQueries({ queryKey: ['admin', 'user-api-keys', userId] });
     },

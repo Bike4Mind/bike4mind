@@ -46,6 +46,7 @@ describe('every EventBridge subscription dead-letters its failures', () => {
   it('finds every subscription', () => {
     expect(allSubscriptions.map(s => s.name).sort()).toEqual(
       [
+        'brief-compose',
         'create-memento',
         'email-send',
         'moderation-escalation-alert',

@@ -61,6 +61,11 @@ export type ModelEngine = {
   saveRecording(sessionId: string | null, bytes: Uint8Array): Promise<string | null>;
   openFile(): Promise<void>;
   /**
+   * Builds a kept version's source on an engine of its own, for the pane's version preview and
+   * compare; nothing is shown, written or reported. Rejects with the build error.
+   */
+  buildSource(source: string): Promise<THREE.Group>;
+  /**
    * What the pane's measure and section tools show now (null with neither on), so the agent's
    * screenshots of this conversation's model carry them too.
    */
@@ -109,10 +114,13 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
   const posedPath = useRef<string | null>(null);
   const engine = useRef<ModelEngineFrame | null>(null);
   const captureEngine = useRef<ModelEngineFrame | null>(null);
+  const versionEngine = useRef<ModelEngineFrame | null>(null);
   const fileBuild = useRef<Promise<ModelBuildOutcome | null> | null>(null);
   const darkRef = useRef(dark);
   darkRef.current = dark;
   const objectRef = useRef<THREE.Group | null>(null);
+  const jointAnglesRef = useRef(jointAngles);
+  jointAnglesRef.current = jointAngles;
   const inspectionRef = useRef<ModelInspection | null>(null);
   const stateRef = useRef(state);
   const sessionRef = useRef(sessionId);
@@ -129,6 +137,8 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
       engine.current = null;
       captureEngine.current?.dispose();
       captureEngine.current = null;
+      versionEngine.current?.dispose();
+      versionEngine.current = null;
     };
   }, []);
 
@@ -197,7 +207,11 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
       setParams(outcome.params);
       setStatus('ok');
       setError(null);
-      if (writeGlb) await reportGoodFileBuild(session, generation, next, nextSummary);
+      if (writeGlb)
+        await reportGoodFileBuild(session, generation, next, nextSummary, {
+          dark: darkRef.current,
+          jointAngles: jointAnglesRef.current,
+        });
     },
     []
   );
@@ -351,6 +365,15 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
     if (sessionRef.current !== null) await window.b4m.model.openDialog(sessionRef.current);
   }, []);
 
+  const buildSource = useCallback(async (source: string) => {
+    versionEngine.current ??= new ModelEngineFrame();
+    const built = await versionEngine.current.build(source, {}, false);
+    if (!built) throw new Error('Another version build replaced this one.');
+    const outcome = checkedOutcome(built);
+    if (!outcome.ok) throw new Error(outcome.error);
+    return buildModelObject(outcome.parts, outcome.units);
+  }, []);
+
   const setJointAngles = useCallback((angles: Record<string, number>) => setJointAnglesState(angles), []);
   const setInspection = useCallback((inspection: ModelInspection | null) => {
     inspectionRef.current = inspection;
@@ -375,6 +398,7 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
     exportFile,
     saveRecording,
     openFile,
+    buildSource,
     setInspection,
   };
 }

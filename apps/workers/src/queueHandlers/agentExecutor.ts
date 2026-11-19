@@ -91,6 +91,7 @@ import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index'
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { runDecisionTool } from '@bike4mind/server-utils/decisions/runDecisionTool';
 import { executionTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
@@ -244,6 +245,7 @@ import { buildAgentImageToolConfig, getAgentImageToolConfigDeps } from './agentE
 import { buildAgentRecentImagesNote, withRecentImagesNote } from './agentExecutor.recentImagesNote';
 import { resolveImageJobFiles } from '@server/generations/resolveImageJobFiles';
 import { publishRunGenerationJobs } from './agentExecutor.generationJobs';
+import { resolveMediaRoot } from './agentExecutor.mediaRoot';
 import {
   resolveTopLevelProfile,
   pickEffectiveMaxIterations,
@@ -1134,6 +1136,7 @@ async function runExecution(
     // as the HTTP doors do through apiKeyAuth.
     const storedUser = await User.findById(execution.userId);
     if (!storedUser) throw new Error(`User ${execution.userId} not found`);
+    await resolveRoleAdminPermissions(storedUser);
     const user = execution.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
     const thinkingVisibility = await resolveThinkingVisibility(user as IUserDocument);
 
@@ -4378,6 +4381,7 @@ async function processSubagentDispatch(
       });
       return;
     }
+    await resolveRoleAdminPermissions(storedUser);
     const user = child.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
     const thinkingVisibility = await resolveThinkingVisibility(user as IUserDocument);
     const loadedSession = await sessionRepository.findById(child.sessionId);
@@ -4637,6 +4641,30 @@ async function processSubagentDispatch(
     const parentRun = child.parentExecutionId
       ? await agentExecutionRepository.findById(child.parentExecutionId)
       : undefined;
+    const mediaRoot = await resolveMediaRoot(child, id => agentExecutionRepository.findById(id));
+    const mediaQuestId = mediaRoot?.linkedQuestId;
+    const mediaToolNames =
+      mediaRoot && mediaQuestId
+        ? applySessionToolPolicy({
+            toolNames: (mediaRoot.resolvedEnabledTools ?? []).filter(
+              name =>
+                ['image_generation', 'edit_image', 'audio_generation', 'video_generation', 'music_generation'].includes(
+                  name
+                ) && !mediaRoot.profileDeniedTools?.includes(name)
+            ),
+            session,
+            profileDeniedTools: mediaRoot.profileDeniedTools,
+            scopeDeniedTools: child.scopeDeniedTools,
+            hasAttachments: false,
+            logger,
+          })
+        : [];
+    const mediaCaller = {
+      userId: child.userId,
+      organizationId: child.organizationId,
+      apiKeyId: mediaRoot?.apiKeyId ?? child.apiKeyId,
+      questId: mediaQuestId,
+    };
     // A dispatched child (subagent or DAG node) cannot pause for approval, so its tool calls
     // are refused unless the parent's lists, copied onto its row at creation, allow them.
     const childToolPermissions = {
@@ -4808,6 +4836,14 @@ async function processSubagentDispatch(
       });
     const toolCallbacks: ToolBuilderCallbacks = {
       onStatusUpdate: async changes => {
+        await publishRunGenerationJobs({
+          jobs: changes?.generationJobs,
+          questId: mediaQuestId,
+          executionId: mediaRoot?.id ?? parentId ?? childExecutionId,
+          questRepository,
+          sendWs,
+          logger,
+        });
         // KNOWN GAP (#1867): a dispatched subagent's retrieval calls are not accumulated here.
         // Unlike images (addImagesByAgentExecutionId below), there is no equivalent
         // mergeRetrievalByAgentExecutionId write path onto the parent's Quest, so a nested
@@ -4854,11 +4890,7 @@ async function processSubagentDispatch(
           },
         }),
       sessionId: child.sessionId,
-      // Inherited from the parent at create time (see baseFields / nodeDefaults). Inert today -
-      // this dispatch passes no `enabledTools`, so no knowledge tool can fire and nothing writes
-      // a lake-access row - but wired now so the native-tool path anticipated below does not
-      // start emitting half-linked audit rows. NEVER `child.questId` (#1867).
-      questId: child.linkedQuestId,
+      questId: mediaQuestId ?? child.linkedQuestId,
       // This subagent's own in-process delegations (no tracker is wired here, so the
       // orchestrator never dispatches them and this is their only charge).
       onSubagentCredits: async (credits, meta) => {
@@ -4878,10 +4910,28 @@ async function processSubagentDispatch(
     const subagentToolConfig = buildSubagentToolConfig({
       model: runModel,
       apiKeyTable: shadowSettings ? undefined : (apiKeyTable as ApiKeyTable),
-      imageConfig: child.imageConfig,
-      audioConfig: child.audioConfig,
-      // No imageJobConfig, videoConfig or musicConfig: this path offers no native tools (see the buildSharedTools call
-      // below), and the per-run caps live in agentExecutor.generationJobCap.ts for when it does.
+      imageConfig: child.imageConfig ?? mediaRoot?.imageConfig,
+      audioConfig: child.audioConfig ?? mediaRoot?.audioConfig,
+      audioJobs: await buildAgentAudioToolJobs(
+        { ...mediaCaller, toolEnabled: mediaToolNames.includes('audio_generation') },
+        getAgentAudioToolJobsDeps(logger)
+      ),
+      imageJobConfig: await buildAgentImageToolConfig(
+        {
+          ...mediaCaller,
+          selection: child.imageConfig ?? mediaRoot?.imageConfig,
+          toolEnabled: mediaToolNames.includes('image_generation') || mediaToolNames.includes('edit_image'),
+        },
+        getAgentImageToolConfigDeps(logger)
+      ),
+      videoConfig: await buildAgentVideoToolConfig(
+        { ...mediaCaller, toolEnabled: mediaToolNames.includes('video_generation') },
+        getAgentVideoToolConfigDeps(logger)
+      ),
+      musicConfig: await buildAgentMusicToolConfig(
+        { ...mediaCaller, toolEnabled: mediaToolNames.includes('music_generation') },
+        getAgentMusicToolConfigDeps(logger)
+      ),
       imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });
 
@@ -4926,10 +4976,9 @@ async function processSubagentDispatch(
     });
 
     const builtTools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
+      enabledTools: mediaToolNames,
       getAbortSignal: () => abortController.signal,
       config: subagentToolConfig,
-      // This site passes no `enabledTools`, so the denylist is the only thing standing between a
-      // session-forbidden MCP tool and a dispatched subagent.
       orgToolPolicy: orgModelPolicy,
       sessionDisabledTools: [...sessionDeniedTools(session), ...(child.scopeDeniedTools ?? [])],
       mcpToolsByServer,
@@ -4940,10 +4989,6 @@ async function processSubagentDispatch(
       // them. Marking them agent-only here would hide them and reproduce the
       // 0-tools bug.
       agentOnlyMcpServers: [],
-      // Wired for parity with the parent path, but inert as long as this call passes no
-      // `enabledTools`: buildSharedTools applies the offerable filter only to that list, so today
-      // this site materializes MCP tools plus delegate/coordinate and nothing key-gated. Kept so a
-      // future change that gives this path native tools cannot silently bypass the filter.
       toolAvailability,
     });
     if (!builtTools) throw new Error('Failed to build tools for dispatched subagent');

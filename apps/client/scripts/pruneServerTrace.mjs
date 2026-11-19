@@ -21,6 +21,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+/**
+ * The one isolated-vm prebuild the hosted server function loads: linux x86_64 (SST's default
+ * server architecture; infra/web.ts sets none) on nodejs24.x (NODE_MODULE_VERSION 137), glibc
+ * (AL2023). Must stay in sync with the `server` block in infra/web.ts;
+ * packages/scripts/src/pruneServerTrace.test.ts fails when they drift.
+ */
+export const HOSTED_SERVER_RUNTIME = 'nodejs24.x';
+export const HOSTED_SERVER_PREBUILD = 'linux-x64/isolated-vm.abi137.glibc.node';
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 export const PRUNED_TRACE_PATTERNS = [
   // Browser automation runs only in a separate queue worker Lambda that installs its own copy
   // (infra/queues.ts). The server traces it because a shared module names it in a lazy import();
@@ -30,6 +43,12 @@ export const PRUNED_TRACE_PATTERNS = [
   // encoding's ranks. lite/ is the `tiktoken/lite` entry point and encoders/ the rank files it is
   // fed; nothing here imports either. About 18 MB.
   /\/node_modules\/tiktoken\/(?:encoders|lite)(?:\/|$)/,
+  // isolated-vm IS loaded here (the REPL sandbox routes), but node-gyp-build picks exactly one
+  // prebuild for the running platform and ABI. next.config.mjs includes every linux glibc
+  // prebuild because the self-host image (which copies the untouched standalone tree) may be
+  // either arch; this function only ever loads the one matching HOSTED_SERVER_PREBUILD.
+  // About 3.2 MB on a linux build. The optional hash suffix is Turbopack's alias for externals.
+  new RegExp(`/node_modules/isolated-vm(?:-[0-9a-f]+)?/prebuilds/(?!${escapeRegExp(HOSTED_SERVER_PREBUILD)}$)`),
 ];
 
 /** True when a traced path (relative to its .nft.json, any separator) must not ship. */

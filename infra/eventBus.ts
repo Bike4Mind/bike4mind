@@ -301,7 +301,36 @@ const sessionTaggingSubscription = eventBus.subscribe(
   }
 );
 
+const briefComposeSubscription = eventBus.subscribe(
+  'brief-compose',
+  {
+    handler: 'apps/workers/src/events/briefCompose.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus],
+    vpc: lambdaVpc,
+    timeout: '2 minutes',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:*'],
+        resources: ['*'],
+      },
+      sessionEnrichmentDeadLetter.sendPermission,
+    ],
+    transform: sessionEnrichmentDeadLetter.functionTarget,
+  },
+  {
+    pattern: {
+      detailType: ['brief.compose'],
+    },
+    transform: sessionEnrichmentDeadLetter.ruleTarget,
+  }
+);
+
 sessionEnrichmentDeadLetter.allowRules([
+  briefComposeSubscription,
   sessionAutoNamingSubscription,
   sessionSummarizationSubscription,
   sessionContextSummarizationSubscription,
@@ -563,6 +592,7 @@ export {
   sessionEnrichmentDeadLetter,
   sreFixDispatchSubscription,
   riskEvidenceCompletionSubscription,
+  briefComposeSubscription,
   sessionAutoNamingSubscription,
   sessionSummarizationSubscription,
   sessionContextSummarizationSubscription,

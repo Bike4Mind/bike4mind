@@ -238,6 +238,7 @@ export const authHolders = {
     references: [{ path: 'userId', matchBy: 'userId', action: 'anonymize' }],
     unrelatedPaths: ['keyId'],
   },
+  SideAppAlertState: { kind: 'noUserData', note: 'Alert state per connected app or platform; no user fields.' },
   SideAppRefusalCounter: { kind: 'noUserData', note: 'Hourly refusal counts per reason; aggregate only.' },
   SignupDomainReview: {
     kind: 'holder',

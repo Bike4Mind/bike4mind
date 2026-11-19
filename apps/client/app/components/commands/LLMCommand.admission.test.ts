@@ -13,6 +13,7 @@ vi.mock('@client/app/utils/llm', () => ({
 }));
 
 import { handleLLMCommand, isModelAccessRefusal } from './LLMCommand';
+import { useQuestMasterUpgrade } from '../subscription/questMasterUpgrade';
 
 type HandlerArgs = Parameters<typeof handleLLMCommand>[0];
 
@@ -46,6 +47,18 @@ describe('handleLLMCommand - a model turned off after the picker loaded', () => 
   beforeEach(() => {
     post.mockReset();
     toastError.mockReset();
+    useQuestMasterUpgrade.getState().close();
+  });
+
+  it('opens the Questmaster upgrade prompt for the typed second-quest refusal without a generic toast', async () => {
+    const error = refusal(403, 'Free quest already started');
+    error.response!.data = { errorCode: 'free_quest_limit_reached' };
+    post.mockRejectedValue(error);
+
+    await expect(send(vi.fn())).rejects.toBe(error);
+
+    expect(useQuestMasterUpgrade.getState().isOpen).toBe(true);
+    expect(toastError).not.toHaveBeenCalled();
   });
 
   it('refetches model access on the admission refusal, so the picker drops the model', async () => {
@@ -66,6 +79,7 @@ describe('handleLLMCommand - a model turned off after the picker loaded', () => 
 
     expect(invalidateQueries).not.toHaveBeenCalled();
     expect(toastError).toHaveBeenCalledWith('session.errors.noPermission');
+    expect(useQuestMasterUpgrade.getState().isOpen).toBe(false);
   });
 });
 

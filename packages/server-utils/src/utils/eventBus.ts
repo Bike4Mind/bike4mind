@@ -169,6 +169,17 @@ export const StripeEvents = {
   ),
 };
 
+/** Published by POST /api/v1/briefs; consumed by apps/workers/src/events/briefCompose.ts. */
+export const BriefEvents = {
+  Compose: event(
+    'brief.compose',
+    z.object({
+      briefId: z.string(),
+      userId: z.string(),
+    })
+  ),
+};
+
 export const SessionEvents = {
   AutoName: event(
     'session.auto_name',

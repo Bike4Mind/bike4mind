@@ -32,6 +32,7 @@ const handler = baseApi({ auth: false })
       throw new BadRequestError('Invalid request body');
     }
 
+    // Bare event name: infra/turnstileAlarms.ts counts it with an exact-message metric filter.
     req.logger.warn('turnstile-client-failure', { ...parsed.data, ip: getClientIp(req) });
     return res.status(204).send();
   });

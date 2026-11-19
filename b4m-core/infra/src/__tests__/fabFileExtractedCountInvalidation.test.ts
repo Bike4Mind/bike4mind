@@ -47,6 +47,9 @@ const NOT_A_REWRITE = new Set([
   'b4m-core/services/src/fabFileService/createByUrl.ts',
   // Stages an admin audit-log CSV under exports/ (no FabFile row); nothing to invalidate.
   'apps/client/server/utils/adminAuditExportStorage.ts',
+  // Writes its status object and MP4 under studio-render/ in the generated media bucket (no FabFile row);
+  // the generation job engine creates the output FabFile from that MP4 as a new row.
+  'apps/workers/src/render/main.ts',
   // Uploads the account data export zip under exports/ (no FabFile row); nothing to invalidate.
   'apps/workers/src/queueHandlers/accountDataExport.ts',
   // Shared ZIP upload fence for account and metadata-only organization exports; no FabFile rewrite.

@@ -2,13 +2,20 @@ import { TaskDecisionPanel } from './TaskDecisionPanel';
 import { TaskDecisionCard } from '../TaskDecisionCards';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
+import ButtonGroup from '@mui/joy/ButtonGroup';
+import Dropdown from '@mui/joy/Dropdown';
+import Menu from '@mui/joy/Menu';
+import MenuButton from '@mui/joy/MenuButton';
+import MenuItem from '@mui/joy/MenuItem';
 import IconButton from '@mui/joy/IconButton';
 import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
+import { useTheme } from '@mui/joy/styles';
 import { snippetOf } from '@shared/agentOutcome';
 import { isStoppableState } from '@shared/agentState';
 import type { ChatApprovalAnswer, ChatMessage, ChatQueuedMessage, ChatToolCall } from '@shared/chat';
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { CaretDownIcon } from '../icons';
 import { ToolCallList } from '../ToolCallList';
 import { groupToolCalls } from '../toolRows';
 import { pendingCallsIn } from '@shared/needsYou';
@@ -22,11 +29,18 @@ const RECENT_MESSAGES = 3;
 const MESSAGE_SNIPPET_MAX = 280;
 const QUEUED_NOTE = 'Queued - it will send when this agent finishes its current step.';
 
+export interface AgentDetailsSkin {
+  light: { background: string; border: string };
+  dark: { background: string; border: string };
+}
+
 interface AgentPeekDrawerProps {
   agent: AgentView;
   persona: AgentPersona | undefined;
   onClose(): void;
   actions: AgentActions;
+  skin?: AgentDetailsSkin;
+  visible?: boolean;
 }
 
 function roleLabel(role: string): string {
@@ -127,7 +141,7 @@ export function PendingRequests({ calls }: { calls: ChatToolCall[] }) {
   );
 }
 
-function ReplyBox({ agentId }: { agentId: string }) {
+function ReplyBox({ agentId, actionButton }: { agentId: string; actionButton: ReactNode }) {
   const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [queued, setQueued] = useState<ChatQueuedMessage | null>(null);
@@ -195,7 +209,7 @@ function ReplyBox({ agentId }: { agentId: string }) {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       <Textarea
-        minRows={2}
+        minRows={1}
         maxRows={6}
         placeholder="Reply to this agent"
         value={text}
@@ -231,19 +245,31 @@ function ReplyBox({ agentId }: { agentId: string }) {
           </Box>
         </Box>
       )}
-      <Button
-        size="sm"
-        disabled={!text.trim() || sending}
-        data-testid="orchestrator-peek-send-btn"
-        onClick={() => void send()}
+      <Box
+        data-testid="orchestrator-peek-action-row"
+        sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}
       >
-        Send
-      </Button>
+        {actionButton}
+        <Button
+          size="sm"
+          disabled={!text.trim() || sending}
+          data-testid="orchestrator-peek-send-btn"
+          onClick={() => void send()}
+        >
+          Send
+        </Button>
+      </Box>
     </Box>
   );
 }
 
-export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekDrawerProps) {
+export function AgentPeekDrawer({ agent, persona, onClose, actions, skin, visible = true }: AgentPeekDrawerProps) {
+  const mode = useTheme().palette.mode;
+  const palette = skin?.[mode];
+  const [actionsOpen, setActionsOpen] = useState(false);
+  useEffect(() => {
+    if (!visible) setActionsOpen(false);
+  }, [visible]);
   const { messages, loadError } = useSessionMessages(agent.id, refreshKeyOf(agent));
   // The snapshot can trail the status push, so the state decides whether anything is still waiting.
   const pending = agent.state === 'needs-you' ? pendingCallsIn(messages) : [];
@@ -261,7 +287,11 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     drawerRef.current?.focus();
     return () => {
-      if (opener && opener.isConnected) opener.focus();
+      if (
+        opener?.isConnected &&
+        (document.activeElement === document.body || drawerRef.current?.contains(document.activeElement))
+      )
+        opener.focus();
     };
   }, []);
 
@@ -272,9 +302,14 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
       aria-label={`Agent details: ${agent.title}`}
       tabIndex={-1}
       data-testid="orchestrator-peek-drawer"
+      data-agent-details-panel
       sx={{
         outline: 'none',
-        width: 340,
+        width: 320,
+        maxWidth: '100%',
+        maxHeight: '100%',
+        boxSizing: 'border-box',
+        pointerEvents: 'auto',
         flexShrink: 0,
         overflowY: 'auto',
         overflowX: 'hidden',
@@ -282,17 +317,20 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
         overflowWrap: 'anywhere',
         display: 'flex',
         flexDirection: 'column',
-        gap: 1.5,
-        p: 1.5,
-        borderLeft: '1px solid',
-        borderColor: 'divider',
-        bgcolor: 'background.surface',
+        gap: 1,
+        p: 1.25,
+        border: '1px solid',
+        borderRadius: 'md',
+        borderColor: palette?.border ?? 'divider',
+        bgcolor: palette?.background ?? 'background.surface',
+        boxShadow: 'md',
+        '& > *': { flexShrink: 0 },
       }}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography
-            level="title-md"
+            level="title-sm"
             sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
             title={agent.title}
           >
@@ -321,15 +359,8 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
       </Box>
 
       {agent.decision && <TaskDecisionCard sessionId={agent.id} title={agent.title} decision={agent.decision} />}
-      <TaskDecisionPanel agent={agent} />
       {pending.length > 0 && <PendingRequests calls={pending} />}
-
-      <Typography
-        level="body-xs"
-        sx={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
-      >
-        {agent.seedPrompt}
-      </Typography>
+      <TaskDecisionPanel agent={agent} compact />
 
       {agent.activity && (
         <Typography level="body-sm" color="primary" data-testid="orchestrator-peek-activity">
@@ -337,54 +368,68 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
         </Typography>
       )}
 
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-        {loadError && (
-          <Typography level="body-xs" color="danger" data-testid="orchestrator-peek-load-error">
-            {loadError}
-          </Typography>
-        )}
-        {recent.map(message => (
-          <Typography key={message.id} level="body-xs" data-testid="orchestrator-peek-message">
-            <b>{roleLabel(message.role)}</b>: {message.line}
-          </Typography>
-        ))}
+      {loadError && (
+        <Typography level="body-xs" color="danger" data-testid="orchestrator-peek-load-error">
+          {loadError}
+        </Typography>
+      )}
+      <Box component="details" data-testid="orchestrator-peek-context">
+        <Box
+          component="summary"
+          data-testid="orchestrator-peek-context-toggle"
+          sx={{ cursor: 'pointer', fontFamily: 'body', fontSize: 'xs', color: 'text.secondary', py: 0.5 }}
+        >
+          Task and recent messages
+        </Box>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, pt: 0.75 }}>
+          <Typography level="body-xs">{agent.seedPrompt}</Typography>
+          {recent.map(message => (
+            <Typography key={message.id} level="body-xs" data-testid="orchestrator-peek-message">
+              <b>{roleLabel(message.role)}</b>: {message.line}
+            </Typography>
+          ))}
+        </Box>
       </Box>
 
-      <ReplyBox agentId={agent.id} />
-
-      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-        <Button
-          size="sm"
-          variant="outlined"
-          data-testid="orchestrator-peek-open-btn"
-          onClick={() => actions.open(agent.id)}
-        >
-          Open
-        </Button>
-        {canStop && (
-          <Button
-            size="sm"
-            variant="outlined"
-            color="danger"
-            data-testid="orchestrator-peek-stop-btn"
-            onClick={() => void actions.stop(agent.id)}
-          >
-            Stop
-          </Button>
-        )}
-        <Button
-          size="sm"
-          variant="outlined"
-          color="neutral"
-          data-testid="orchestrator-peek-archive-btn"
-          onClick={() => {
-            actions.archive(agent.id);
-            onClose();
-          }}
-        >
-          Archive
-        </Button>
-      </Box>
+      <ReplyBox
+        agentId={agent.id}
+        actionButton={
+          <Dropdown open={visible && actionsOpen} onOpenChange={(_event, open) => setActionsOpen(visible && open)}>
+            <ButtonGroup size="sm" variant="outlined" color="neutral" data-testid="orchestrator-peek-actions">
+              <Button data-testid="orchestrator-peek-open-btn" onClick={() => actions.open(agent.id)}>
+                Open
+              </Button>
+              <MenuButton
+                aria-label="More agent actions"
+                data-testid="orchestrator-peek-actions-menu-btn"
+                sx={{ px: 0.75 }}
+              >
+                <CaretDownIcon />
+              </MenuButton>
+            </ButtonGroup>
+            <Menu size="sm" placement="top-start" data-testid="orchestrator-peek-actions-menu">
+              {canStop && (
+                <MenuItem
+                  color="danger"
+                  data-testid="orchestrator-peek-stop-btn"
+                  onClick={() => void actions.stop(agent.id)}
+                >
+                  Stop
+                </MenuItem>
+              )}
+              <MenuItem
+                data-testid="orchestrator-peek-archive-btn"
+                onClick={() => {
+                  actions.archive(agent.id);
+                  onClose();
+                }}
+              >
+                Archive
+              </MenuItem>
+            </Menu>
+          </Dropdown>
+        }
+      />
     </Box>
   );
 }

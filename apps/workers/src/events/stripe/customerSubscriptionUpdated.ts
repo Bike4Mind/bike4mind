@@ -141,10 +141,13 @@ export const handler = withEventContext(async (event, logger) => {
     await emitSubscriptionChangeEvents(before, subscription);
   }
 
-  // Owner from the stored row, not metadata: legacy metadata loses ownerType. Org-owned subscriptions
-  // have no plan storage mapping yet; the org pool keeps its own limit.
-  if (owned && before && before.ownerType === SubscriptionOwnerType.User) {
-    await applyPlanStorageLimit(subscription, before.ownerId, logger);
+  // Owner from the stored row, not metadata: legacy metadata loses ownerType.
+  if (owned && before) {
+    if (before.ownerType === SubscriptionOwnerType.Organization) {
+      await applyPlanStorageLimit(subscription, before.ownerId, logger, SubscriptionOwnerType.Organization);
+    } else if (before.ownerType === SubscriptionOwnerType.User) {
+      await applyPlanStorageLimit(subscription, before.ownerId, logger);
+    }
   }
 
   // sendToClient calls must be outside the transaction to avoid

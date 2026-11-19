@@ -8,9 +8,10 @@ import {
   type Session,
   type WebContents,
 } from 'electron';
+import { paneDocument } from '@shared/artifactPaneDocument';
 import type { CookieImportState } from '@shared/browserCookies';
 import { browserSnapshotSchema, type BrowserSnapshot } from '@shared/browserPage';
-import type { ChatMedia } from '@shared/chat';
+import type { ChatArtifact, ChatMedia } from '@shared/chat';
 import { browserTabShortcut, MAX_BROWSER_TABS, type BrowserTabShortcut } from '@shared/browserTabs';
 import { normalizeUrl } from '@shared/browserUrl';
 import type {
@@ -859,6 +860,29 @@ export class BrowserManager implements BrowserProvider {
     }
     this.apply();
     return this.stateOf(sessionId);
+  }
+
+  /**
+   * Show a reply's updated artifacts in the tabs of `sessionId` still on an older version of them,
+   * matched by the model's identifier. Each tab reloads where it is: none is opened, activated or
+   * focused, and an artifact no tab is showing is left alone.
+   *
+   * The page is rebuilt with the same paneDocument the renderer opens it with, so the recorded
+   * content still matches when the updated version is picked again.
+   */
+  refreshArtifacts(sessionId: string, artifacts: readonly ChatArtifact[]): void {
+    const tabs = this.sessions.get(sessionId)?.list ?? [];
+    for (const artifact of artifacts) {
+      if (!artifact.identifier) continue;
+      const content = paneDocument(artifact);
+      for (const tab of tabs) {
+        const opened = this.artifactTabs.get(tab);
+        if (opened?.key !== artifact.identifier || tab.currentUrl() !== opened.url) continue;
+        if (!this.artifactViews.replace(opened.url, artifact.title, content)) continue;
+        opened.content = content;
+        tab.go('reload');
+      }
+    }
   }
 
   private artifactTab(sessionId: string, key: string, content: string): ElectronPage | undefined {
