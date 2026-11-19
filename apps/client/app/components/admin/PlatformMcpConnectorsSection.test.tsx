@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   confirm: vi.fn(),
   impersonating: false,
   featureOn: true,
+  settingsLoaded: true,
   currentUser: { isAdmin: true } as { isAdmin: boolean; adminPermissions?: string[] },
 }));
 
@@ -26,7 +27,7 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({
 }));
 vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => h.confirm }));
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
-  useAdminSettingsCache: () => ({ isFeatureEnabled: () => h.featureOn }),
+  useAdminSettingsCache: () => ({ isFeatureEnabled: () => h.featureOn, authedSettingsLoaded: h.settingsLoaded }),
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
@@ -124,6 +125,7 @@ beforeEach(() => {
   h.confirm.mockImplementation(({ onOk }: { onOk: () => void }) => onOk());
   h.impersonating = false;
   h.featureOn = true;
+  h.settingsLoaded = true;
   h.currentUser = { isAdmin: true };
 });
 
@@ -165,7 +167,7 @@ describe('PlatformMcpConnectorsSection', () => {
       expect(second).toHaveTextContent('No authentication');
       expect(within(second).getByTestId('platform-mcp-disabled-p2')).toHaveTextContent('Disabled');
       expect(within(second).getByTestId('platform-mcp-tools-p2')).toHaveTextContent(
-        '1 of 2 tools offered to users1 waiting for review'
+        'Not offered to users1 waiting for review'
       );
       expect(within(second).getByTestId('platform-mcp-status-p2')).toHaveTextContent('Pending review');
 
@@ -178,6 +180,19 @@ describe('PlatformMcpConnectorsSection', () => {
 
       expect(screen.getByTestId('platform-mcp-table')).not.toHaveTextContent(KEY_LAST4);
       expect(document.body.textContent).not.toContain('/mcp');
+    });
+
+    it('counts the tools offered only on a connected connector that is on, and says none are offered otherwise', async () => {
+      listReturns([
+        connection(),
+        connection({ id: 'p2', status: 'error', lastError: { message: 'The server did not respond' } }),
+        connection({ id: 'p3', enabled: false }),
+      ]);
+      renderSection();
+
+      expect(await screen.findByTestId('platform-mcp-tools-p1')).toHaveTextContent(/^1 of 2 tools offered to users$/);
+      expect(screen.getByTestId('platform-mcp-tools-p2')).toHaveTextContent(/^Not offered to users$/);
+      expect(screen.getByTestId('platform-mcp-tools-p3')).toHaveTextContent(/^Not offered to users$/);
     });
 
     it('keeps text actions in one row menu, Remove last after a divider', async () => {
@@ -292,6 +307,17 @@ describe('PlatformMcpConnectorsSection', () => {
       expect(within(menu).getByTestId('platform-mcp-toggle-p1')).not.toHaveAttribute('aria-disabled', 'true');
       fireEvent.click(within(menu).getByTestId('platform-mcp-refresh-p1'));
       expect(api.post).not.toHaveBeenCalled();
+    });
+
+    it('shows neither the note nor a disabled Add connector before the signed-in settings arrive', async () => {
+      h.featureOn = false;
+      h.settingsLoaded = false;
+      listReturns([connection()]);
+      renderSection();
+
+      await screen.findByTestId('platform-mcp-row-p1');
+      expect(screen.queryByTestId('platform-mcp-feature-off')).not.toBeInTheDocument();
+      expect(screen.getByTestId('platform-mcp-add-btn')).toBeEnabled();
     });
   });
 

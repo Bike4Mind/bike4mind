@@ -140,7 +140,9 @@ const columns: DataColumn<Connection>[] = [
       return (
         <Stack data-testid={`platform-mcp-tools-${connection.id}`}>
           <span>
-            {`${offeredToolCount(connection)} of ${plural(connection.tools.length, 'tool', 'tools')} offered to users`}
+            {connection.enabled && connection.status === 'connected'
+              ? `${offeredToolCount(connection)} of ${plural(connection.tools.length, 'tool', 'tools')} offered to users`
+              : 'Not offered to users'}
           </span>
           {pending > 0 && (
             <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
@@ -340,7 +342,7 @@ function ReplaceKeyDialog({
 /** Platform MCP connectors: set up once by an admin, offered in every user's Tools menu. */
 const PlatformMcpConnectorsSection = () => {
   const impersonating = useAccessToken(s => s.impersonating);
-  const { isFeatureEnabled } = useAdminSettingsCache();
+  const { isFeatureEnabled, authedSettingsLoaded } = useAdminSettingsCache();
   const { data, isPending, isError, refetch } = usePlatformMcpConnections();
   const missingPermission = useMissingAdminPermission('settings:manage');
   const remove = useDeleteMcpConnection('platform');
@@ -350,7 +352,9 @@ const PlatformMcpConnectorsSection = () => {
   const focusTarget = useRef<string | null>(null);
   const sectionRef = useRef<HTMLDivElement>(null);
   const connections = data ?? [];
-  const featureOff = !isFeatureEnabled('EnableMCPServer') || !isFeatureEnabled('EnableCustomMcpConnectors');
+  // Both flags read as off until the signed-in settings arrive.
+  const featureOff =
+    authedSettingsLoaded && (!isFeatureEnabled('EnableMCPServer') || !isFeatureEnabled('EnableCustomMcpConnectors'));
   const featureOffReason = featureOff ? FEATURE_OFF_REASON : null;
 
   // Runs after the commit that unmounts a dialog, so it wins over the dialog's own focus return.
