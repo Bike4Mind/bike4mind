@@ -12,6 +12,7 @@ const resources = vi.hoisted(() => {
     output,
     filter: vi.fn(function (_name: string, _args: Record<string, unknown>) {}),
     alarm: vi.fn(function (_name: string, _args: Record<string, unknown>) {}),
+    insightRule: vi.fn(function (_name: string, _args: Record<string, unknown>) {}),
     logGroup: { name: 'server-logs' } as { name: string } | undefined,
     topic: { arn: 'alarm-topic' } as { arn: string } | undefined,
     hasServer: true,
@@ -49,7 +50,13 @@ beforeEach(() => {
   vi.stubEnv('SIGNUP_CODE_SEND_ALARM_PER_HOUR', '12');
   vi.stubEnv('ENABLE_MONITORING', undefined);
   vi.stubEnv('SIGNUP_GRANT_REVIEW_ALARM_PER_5MIN', undefined);
-  vi.stubGlobal('aws', { cloudwatch: { LogMetricFilter: resources.filter, MetricAlarm: resources.alarm } });
+  vi.stubGlobal('aws', {
+    cloudwatch: {
+      LogMetricFilter: resources.filter,
+      MetricAlarm: resources.alarm,
+      ContributorInsightRule: resources.insightRule,
+    },
+  });
   resources.logGroup = { name: 'server-logs' };
   resources.topic = { arn: 'alarm-topic' };
   resources.hasServer = true;
@@ -135,6 +142,28 @@ describe('signup code send alarm wiring', () => {
         prefix + JSON.stringify({ path: '/api/otc/send?message="otc-code-dispatched"', message: 'req-timing' })
       )
     ).toBe(false);
+  });
+
+  it('counts distinct client IPs on dispatch lines with a Contributor Insights rule', async () => {
+    await loadAlarms();
+    const args = callFor(resources.insightRule, 'signupCodeSendSourcesRule');
+    expect(args).toMatchObject({ ruleName: 'test-app-production-signup-code-send-sources', ruleState: 'ENABLED' });
+    const definition = JSON.parse((args?.ruleDefinition as { value: string }).value);
+    expect(definition).toEqual({
+      Schema: { Name: 'CloudWatchLogRule', Version: 1 },
+      LogGroupNames: ['server-logs'],
+      LogFormat: 'JSON',
+      Contribution: {
+        Keys: ['$.clientIp'],
+        Filters: [{ Match: '$.message', In: ['otc-code-dispatched'] }],
+      },
+      AggregateOn: 'Count',
+    });
+  });
+
+  it('keeps the dispatch log message the rule and the metric filter both match', () => {
+    const source = readFileSync(new URL('../../apps/client/pages/api/otc/send.ts', import.meta.url), 'utf8');
+    expect(source).toContain("req.logger.info('otc-code-dispatched')");
   });
 
   it('counts sign-in codes held back from refused addresses', async () => {
@@ -293,6 +322,7 @@ describe('signup code send alarm wiring', () => {
   it('creates no resources on an unmonitored stage', async () => {
     await loadAlarms('preview');
     expect(resources.filter).not.toHaveBeenCalled();
+    expect(resources.insightRule).not.toHaveBeenCalled();
     expect(resources.alarm).not.toHaveBeenCalled();
   });
   it('allows a preview to opt in to monitoring', async () => {
