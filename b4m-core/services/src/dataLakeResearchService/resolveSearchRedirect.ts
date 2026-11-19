@@ -1,5 +1,20 @@
 export type SearchRedirectResolution = 'not_redirect' | 'decoded' | 'followed' | 'unresolved';
 
+export interface UnresolvedDetail {
+  reason:
+    'status' | 'no_location' | 'google_location' | 'bad_location' | 'no_meta_refresh' | 'timeout' | 'network_error';
+  status?: number;
+  contentType?: string;
+  locationHost?: string;
+  bodyHint?: 'consent' | 'redirect_notice' | 'captcha' | 'other';
+}
+
+export interface SearchRedirectResult {
+  url: string;
+  resolved: SearchRedirectResolution;
+  detail?: UnresolvedDetail;
+}
+
 export interface ResolveSearchRedirectOptions {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
@@ -57,6 +72,15 @@ const readCapped = async (response: Response): Promise<string> => {
   return text.slice(0, MAX_BODY_BYTES);
 };
 
+// Coarse classification only, so a log line can tell a throttle page from a consent page.
+const bodyHintFor = (body: string): NonNullable<UnresolvedDetail['bodyHint']> => {
+  const text = body.toLowerCase();
+  if (text.includes('unusual traffic') || text.includes('/sorry/') || text.includes('captcha')) return 'captcha';
+  if (text.includes('consent.google') || text.includes('before you continue')) return 'consent';
+  if (text.includes('redirect notice')) return 'redirect_notice';
+  return 'other';
+};
+
 /**
  * Resolves a search-provider redirect link (Google /goto or /url) to the site it points at, so
  * source rules classify the real destination. Single hop, never throws, and only ever requests the
@@ -65,7 +89,7 @@ const readCapped = async (response: Response): Promise<string> => {
 export async function resolveSearchRedirect(
   url: string,
   opts: ResolveSearchRedirectOptions = {}
-): Promise<{ url: string; resolved: SearchRedirectResolution }> {
+): Promise<SearchRedirectResult> {
   const parsed = parseHttpUrl(url);
   if (!parsed || !isRedirectLink(parsed)) return { url, resolved: 'not_redirect' };
 
@@ -77,6 +101,7 @@ export async function resolveSearchRedirect(
   const fetchImpl = opts.fetchImpl ?? fetch;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  let status: number | undefined;
   try {
     const response = await fetchImpl(parsed.toString(), {
       method: 'GET',
@@ -84,17 +109,40 @@ export async function resolveSearchRedirect(
       credentials: 'omit',
       signal: controller.signal,
     });
+    status = response.status;
+    const contentType = response.headers.get('content-type')?.slice(0, 100) ?? undefined;
+    const unresolved = (detail: UnresolvedDetail): SearchRedirectResult => ({
+      url,
+      resolved: 'unresolved',
+      detail: { ...detail, status: response.status, ...(contentType ? { contentType } : {}) },
+    });
     if (response.status >= 300 && response.status < 400) {
-      const location = nonGoogleDestination(response.headers.get('location'));
+      const rawLocation = response.headers.get('location');
+      const location = nonGoogleDestination(rawLocation);
       if (location) return { url: location, resolved: 'followed' };
-    } else if (response.status === 200) {
-      // Body reads share the timeout: a slow body must not stall the run.
-      const target = metaRefreshTarget(await readCapped(response));
-      if (target) return { url: target, resolved: 'followed' };
+      if (!rawLocation) return unresolved({ reason: 'no_location' });
+      const locationHost = parseHttpUrl(rawLocation)?.hostname.toLowerCase();
+      if (locationHost && isGoogleHost(locationHost)) return unresolved({ reason: 'google_location', locationHost });
+      return unresolved({ reason: 'bad_location', ...(locationHost ? { locationHost } : {}) });
     }
-    return { url, resolved: 'unresolved' };
-  } catch {
-    return { url, resolved: 'unresolved' };
+    if (response.status === 200) {
+      // Body reads share the timeout: a slow body must not stall the run.
+      const body = await readCapped(response);
+      const target = metaRefreshTarget(body);
+      if (target) return { url: target, resolved: 'followed' };
+      return unresolved({ reason: 'no_meta_refresh', bodyHint: bodyHintFor(body) });
+    }
+    if (response.status >= 400 && response.status < 500) {
+      return unresolved({ reason: 'status', bodyHint: bodyHintFor(await readCapped(response)) });
+    }
+    return unresolved({ reason: 'status' });
+  } catch (error) {
+    const timedOut = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError');
+    return {
+      url,
+      resolved: 'unresolved',
+      detail: { reason: timedOut ? 'timeout' : 'network_error', ...(status !== undefined ? { status } : {}) },
+    };
   } finally {
     clearTimeout(timer);
   }

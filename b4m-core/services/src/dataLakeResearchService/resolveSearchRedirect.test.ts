@@ -55,7 +55,7 @@ describe('resolveSearchRedirect', () => {
     ['a missing location', undefined],
   ])('is unresolved when the 302 points at %s', async (_label, location) => {
     const fetchImpl = vi.fn(async () => redirect(302, location));
-    expect(await resolveSearchRedirect(GOTO, { fetchImpl })).toEqual({ url: GOTO, resolved: 'unresolved' });
+    expect(await resolveSearchRedirect(GOTO, { fetchImpl })).toMatchObject({ url: GOTO, resolved: 'unresolved' });
   });
 
   it('follows a 200 meta refresh to a non-Google site', async () => {
@@ -75,7 +75,7 @@ describe('resolveSearchRedirect', () => {
 
   it('is unresolved for a 200 without a meta refresh', async () => {
     const fetchImpl = vi.fn(async () => page('<html>hello</html>'));
-    expect(await resolveSearchRedirect(GOTO, { fetchImpl })).toEqual({ url: GOTO, resolved: 'unresolved' });
+    expect(await resolveSearchRedirect(GOTO, { fetchImpl })).toMatchObject({ url: GOTO, resolved: 'unresolved' });
   });
 
   it('ignores a meta refresh past the 64 KB read cap', async () => {
@@ -88,7 +88,7 @@ describe('resolveSearchRedirect', () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error('ECONNRESET');
     });
-    expect(await resolveSearchRedirect(GOTO, { fetchImpl })).toEqual({ url: GOTO, resolved: 'unresolved' });
+    expect(await resolveSearchRedirect(GOTO, { fetchImpl })).toMatchObject({ url: GOTO, resolved: 'unresolved' });
   });
 
   it('is unresolved when the request outlives the timeout', async () => {
@@ -102,6 +102,90 @@ describe('resolveSearchRedirect', () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
       timeoutMs: 10,
     });
-    expect(result).toEqual({ url: GOTO, resolved: 'unresolved' });
+    expect(result).toMatchObject({ url: GOTO, resolved: 'unresolved' });
+  });
+
+  describe('unresolved detail', () => {
+    const run = (fetchImpl: unknown, timeoutMs?: number) =>
+      resolveSearchRedirect(GOTO, { fetchImpl: fetchImpl as typeof fetch, timeoutMs });
+    const noToken = (result: { detail?: unknown }) =>
+      expect(JSON.stringify(result.detail)).not.toContain('opaque-token');
+
+    it('reports a 429 captcha page as a status failure with a body hint', async () => {
+      const result = await run(
+        vi.fn(async () => new Response('Our systems have detected unusual traffic', { status: 429 }))
+      );
+      expect(result.detail).toEqual(expect.objectContaining({ reason: 'status', status: 429, bodyHint: 'captcha' }));
+      noToken(result);
+    });
+
+    it('reports a 302 back to Google with the location host only', async () => {
+      const result = await run(vi.fn(async () => redirect(302, 'https://consent.google.com/m?continue=opaque-token')));
+      expect(result.detail).toEqual({ reason: 'google_location', status: 302, locationHost: 'consent.google.com' });
+      noToken(result);
+    });
+
+    it('reports a 302 without a Location', async () => {
+      const result = await run(vi.fn(async () => redirect(302)));
+      expect(result.detail).toEqual({ reason: 'no_location', status: 302 });
+    });
+
+    it('reports a 302 to a non-http location', async () => {
+      const result = await run(vi.fn(async () => redirect(302, '/somewhere')));
+      expect(result.detail).toEqual({ reason: 'bad_location', status: 302 });
+    });
+
+    it('reports a 200 consent page without a meta refresh', async () => {
+      const result = await run(vi.fn(async () => page('<html>Before you continue to Google</html>')));
+      expect(result.detail).toEqual({
+        reason: 'no_meta_refresh',
+        status: 200,
+        contentType: 'text/html',
+        bodyHint: 'consent',
+      });
+    });
+
+    it('reports a redirect notice page', async () => {
+      const result = await run(vi.fn(async () => page('<title>Redirect Notice</title>')));
+      expect(result.detail?.bodyHint).toBe('redirect_notice');
+    });
+
+    it('reports a 5xx without reading a body', async () => {
+      const result = await run(vi.fn(async () => new Response('oops', { status: 503 })));
+      expect(result.detail).toMatchObject({ reason: 'status', status: 503 });
+      expect(result.detail?.bodyHint).toBeUndefined();
+    });
+
+    it('reports a timeout', async () => {
+      const fetchImpl = (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        });
+      expect((await run(fetchImpl, 10)).detail).toEqual({ reason: 'timeout' });
+    });
+
+    it('keeps the status when the body read times out', async () => {
+      const fetchImpl = (_url: string, init?: RequestInit) => {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            init?.signal?.addEventListener('abort', () => controller.error(new Error('aborted')));
+          },
+        });
+        return Promise.resolve(new Response(body, { status: 429 }));
+      };
+      const result = await run(fetchImpl, 20);
+      expect(result.resolved).toBe('unresolved');
+      expect(result.detail).toEqual({ reason: 'timeout', status: 429 });
+    });
+
+    it('reports other thrown errors as network errors', async () => {
+      const result = await run(
+        vi.fn(async () => {
+          throw new Error(`ECONNRESET ${GOTO}`);
+        })
+      );
+      expect(result.detail).toEqual({ reason: 'network_error' });
+      noToken(result);
+    });
   });
 });
