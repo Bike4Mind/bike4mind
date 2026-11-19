@@ -35,7 +35,9 @@ const fakeHold = (params: { userId: string; requiredCredits: number }): CreditHo
 const validRequest = { model: 'test-music', prompt: 'a folk song', durationSeconds: 5 };
 
 // creditHold is module-mocked, so the adapters are never touched.
-const unusedCredits = {} as CreditHoldAdapters;
+const unusedCredits = {
+  spendFreezes: { findActiveForSubject: vi.fn(async () => null) },
+} as unknown as CreditHoldAdapters;
 
 // Registered as ElevenLabs so a priced, per-second model can be held against.
 const elevenLabsStub: MusicProvider = {

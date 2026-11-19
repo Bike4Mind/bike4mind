@@ -712,6 +712,7 @@ export const SettingKeySchema = z.enum([
 
   // EMAIL ANALYSIS SETTINGS
   'EnableEmailAnalysis',
+  'EnableEmailTriage',
   'EmailAnalysisModel',
   'EmailAnalysisTemperature',
   'EmailAnalysisPrompt',
@@ -784,6 +785,8 @@ export const SettingKeySchema = z.enum([
   'minimumClientVersions',
   // SERVED AT /.well-known/assetlinks.json (apps/client/pages/api/well-known/assetlinks.ts)
   'androidAppCertFingerprints',
+  // SERVED AT /.well-known/apple-app-site-association (apps/client/pages/api/well-known/apple-app-site-association.ts)
+  'iosAppTeamId',
   'fileUploadLimitFreePerHour',
   'fileUploadLimitPaidPerHour',
   'pendingUploadLimit',
@@ -1470,6 +1473,7 @@ function makeBooleanSetting({
 
 // A SHA-256 certificate fingerprint as Digital Asset Links expects it: 32 colon-separated uppercase hex bytes.
 const ANDROID_CERT_FINGERPRINT_RE = /^[0-9A-F]{2}(?::[0-9A-F]{2}){31}$/;
+const APPLE_TEAM_ID_RE = /^[A-Z0-9]{10}$/;
 const AndroidCertFingerprintsSchema = z
   .array(z.string().regex(ANDROID_CERT_FINGERPRINT_RE, 'Expected 32 colon-separated uppercase hex bytes'))
   .max(10);
@@ -1924,6 +1928,8 @@ export const SIGNUP_RISK_SIGNALS = [
   'quickApiKey',
   'fastSpend',
   'generatedLocalPart',
+  'wafAnonIp',
+  'wafBotSignal',
 ] as const;
 export type SignupRiskSignal = (typeof SIGNUP_RISK_SIGNALS)[number];
 
@@ -1944,6 +1950,9 @@ export const SignupRiskScoringSchema = z
         quickApiKey: signupRiskWeight(15),
         fastSpend: signupRiskWeight(20),
         generatedLocalPart: signupRiskWeight(10),
+        // Edge labels on signupMeta, recorded only where label forwarding is on. Off until a weight is set.
+        wafAnonIp: signupRiskWeight(0),
+        wafBotSignal: signupRiskWeight(0),
       })
       .strict()
       .prefault({}),
@@ -2834,9 +2843,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'blockedEmailDomains', order: 3 },
       { key: 'signupGrantRiskPolicy', order: 8 },
       { key: 'signupGrantUnprotectedMaxCredits', order: 8.1 },
-      { key: 'signupGrantActivityMinActiveSeconds', order: 11.5 },
-      { key: 'signupGrantActivityPreviewTestMode', order: 14.5 },
-      { key: 'signupUnlockPaymentHoldHours', order: 14.6 },
       { key: 'maxSignupsPerIpPerDay', order: 15 },
       { key: 'maxSignupsPerAsnPerHour', order: 16 },
       { key: 'newAccountSpendCapDays', order: 19.1 },
@@ -3190,6 +3196,7 @@ export const API_SERVICE_GROUPS = {
     settings: [
       { key: 'minimumClientVersions', order: 1 },
       { key: 'androidAppCertFingerprints', order: 2 },
+      { key: 'iosAppTeamId', order: 3 },
     ],
   },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
@@ -4269,6 +4276,22 @@ export const settingsMap = {
     order: 2,
     schema: AndroidCertFingerprintsSchema,
   }),
+  // Read by apps/client/pages/api/well-known/apple-app-site-association.ts.
+  iosAppTeamId: {
+    ...makeStringSetting({
+      key: 'iosAppTeamId',
+      name: 'iOS App Team ID',
+      defaultValue: '',
+      description:
+        'Apple Developer Team ID (10 uppercase letters or digits, e.g. "AB12CD34EF") that signs the iOS app (bundle id com.bike4mind.app). Served in /.well-known/apple-app-site-association so iOS lets the app complete its https sign-in callback and open universal links. Empty means no app is associated and signed builds cannot sign in. Public by design, not a secret.',
+      category: 'Admin',
+      group: API_SERVICE_GROUPS.API_CLIENTS.id,
+      order: 3,
+    }),
+    schema: z.string().refine(value => value === '' || APPLE_TEAM_ID_RE.test(value), {
+      message: 'Use a 10-character Apple Team ID such as AB12CD34EF, or leave it empty.',
+    }),
+  },
   // Both read by apps/client/server/files/fileUploadBudget.ts.
   fileUploadLimitFreePerHour: makeNumberSetting({
     key: 'fileUploadLimitFreePerHour',
@@ -5681,7 +5704,6 @@ export const settingsMap = {
     userReadable: true,
     description:
       'Active time in a UTC day, counted from heartbeat pings while the app is open and in use, before the activity drip pays. Invalid values fall back to 60.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantActivityPreviewTestMode: makeBooleanSetting({
@@ -5691,7 +5713,6 @@ export const settingsMap = {
     description:
       'PR previews only: use five-minute earning windows instead of UTC days to test the activity drip. Each window still requires the configured active time; use a minimum below five minutes. Production, staging and personal environments always use UTC days. The platform daily budget is unchanged. Reload the test user tab after toggling this switch.',
     hideOnProductionStages: true,
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupUnlockPaymentHoldHours: makeNumberSetting({
@@ -5704,7 +5725,6 @@ export const settingsMap = {
     userReadable: true,
     description:
       'Hours a subscription, credit pack or card payment must settle before it releases the locked signup credits. A dispute, refund or early fraud warning in that window cancels the release. Zero releases them on payment.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantInitialCredits: makeNumberSetting({
@@ -8078,6 +8098,16 @@ export const settingsMap = {
     order: 200,
     // The Integrations page derives the inbound-email analysis capability's status from it.
     userReadable: true,
+  }),
+  EnableEmailTriage: makeBooleanSetting({
+    key: 'EnableEmailTriage',
+    name: 'Enable Email Triage',
+    defaultValue: false,
+    description:
+      'After an ingested email is analyzed, sort it into needs-a-decision, handled or FYI and draft a reply for ' +
+      "decisions, for the owner's next assistant brief. Drafts are never sent. Runs only when analysis runs.",
+    category: 'AI',
+    order: 205,
   }),
   EmailAnalysisModel: makeStringSetting({
     key: 'EmailAnalysisModel',

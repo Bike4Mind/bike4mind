@@ -15,6 +15,7 @@ import {
   fabFileChunkRepository,
   projectRepository,
   organizationRepository,
+  spendFreezeRepository,
   mcpServerRepository,
   creditTransactionRepository,
   agentRepository,
@@ -46,6 +47,7 @@ import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from '@bike4mind/server-utils/queueHandlers/latticeChatTools';
 import { adminAssistantToolDefinitions } from '@server/adminAssistant';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
 import { coreTutorialTurns } from '@bike4mind/server-utils/tutorials/chatTurns';
@@ -63,7 +65,14 @@ import { admitQuestStart, releaseQuestStart } from '@bike4mind/server-utils/enti
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { operationalBillingAdapters } from '@bike4mind/server-utils/billing/operationalBilling';
 import { accessibleBy } from '@casl/mongoose';
-import { FREE_QUEST_LIMIT_REACHED_ERROR_CODE, getQuestErrorCode, IUserDocument, Permission } from '@bike4mind/common';
+import {
+  FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
+  getQuestErrorCode,
+  IUserDocument,
+  Permission,
+  SPEND_FROZEN_ERROR_CODE,
+  isSpendFrozenError,
+} from '@bike4mind/common';
 import { LLMEvents, SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   getSharedTokenizer,
@@ -93,6 +102,8 @@ import {
   checkFreeTierDailySpendCap,
   isFreeTierDailyCapError,
 } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 
 // Cache static ChatCompletion options (DB repos, storage clients, config) across invocations;
@@ -130,6 +141,7 @@ export const getStaticOptions = () => {
       mementos: mementoRepository,
       projects: projectRepository,
       organizations: organizationRepository,
+      spendFreezes: spendFreezeRepository,
       mcpServers: mcpServerRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
       recordLimitEvent: recordUserLimitEvent,
@@ -315,6 +327,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
   logger.debug('User and session queries completed', { durationMs: Date.now() - queryStartTime });
 
   if (!storedUser) throw new NotFoundError('User not found');
+  await resolveRoleAdminPermissions(storedUser);
 
   logger.updateMetadata({
     userId: params.userId,
@@ -349,6 +362,17 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     // is the cap's backstop. A capped turn is the user's limit, not a processing failure: settle the
     // quest with the reason instead of throwing into the route's generic-failure reply and metric.
     try {
+      // Ahead of the cap and the turn: a frozen subject is refused before any context is assembled.
+      await assertSpendNotFrozen(
+        spendFreezeSubjectForRequest(
+          {
+            user: { id: params.userId },
+            apiKeyInfo: params.apiKeyId ? { keyId: params.apiKeyId } : undefined,
+          },
+          params.organizationId ?? null
+        ),
+        { db: { spendFreezes: spendFreezeRepository } }
+      );
       await checkFreeTierDailySpendCap({
         user: storedUser,
         billingOrganizationId: params.organizationId,
@@ -356,13 +380,17 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
         logger,
       });
     } catch (error) {
-      if (!isFreeTierDailyCapError(error)) throw error;
-      logger.info('Quest refused by the free-tier daily spend cap', { questId: params.questId });
+      const frozen = isSpendFrozenError(error);
+      if (!frozen && !isFreeTierDailyCapError(error)) throw error;
+      logger.info(`Quest refused by the ${frozen ? 'spend freeze' : 'free-tier daily spend cap'}`, {
+        questId: params.questId,
+      });
       await questRepository.settleIfUnfinished(params.questId, {
         status: 'stopped',
         type: 'error',
         reply: error.message,
         replies: [error.message],
+        ...(frozen ? { errorCode: SPEND_FROZEN_ERROR_CODE } : {}),
       });
       await liveActivity.end('failed');
       return;
@@ -410,6 +438,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
           sessionId: params.sessionId,
           organizationId,
           apiKeyId: params.apiKeyId,
+          apiKeyBillingOwnerType: params.apiKeyBillingOwnerType,
         }),
     });
     logger.debug('ChatCompletionProcess instantiation', { durationMs: Date.now() - optionsStartTime });

@@ -1,4 +1,10 @@
-import { IOrganizationDocument, WithId, hasOrgPermission, isOrgOwnerOrPlatformAdmin } from '@bike4mind/common';
+import {
+  IOrganizationDocument,
+  WithId,
+  hasOrgPermission,
+  isOrgOwnerOrCurrentAdmin,
+  isOrgOwnerOrPlatformAdmin,
+} from '@bike4mind/common';
 import { AdminPageHeader, SegmentedControl } from '@client/app/components/admin/shared';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
@@ -20,6 +26,7 @@ import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSe
 import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
 import OrganizationAuditSection from '@client/app/components/organizations/OrganizationAuditSection';
 import TeamOnboardingChecklist from '@client/app/components/organizations/TeamOnboardingChecklist';
+import OwnerOnlyNote from '@client/app/components/organizations/OwnerOnlyNote';
 import { readTeamPreference, recentTeamsKey, rememberTeam } from '@client/app/components/organizations/teamPreferences';
 import { isAxiosError } from 'axios';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
@@ -61,6 +68,7 @@ import LanguageOutlinedIcon from '@mui/icons-material/LanguageOutlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
 import LocalLibraryOutlinedIcon from '@mui/icons-material/LocalLibraryOutlined';
+import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import {
   canManageOrgApiKeys,
   canManageOrgConnectors,
@@ -73,10 +81,12 @@ import {
   canViewOrgAudit,
   canViewOrgUsage,
   IntegrationSections,
+  isOrgTabLocked,
   LEGACY_INTEGRATION_TABS,
+  ORG_TAB_AUDIENCE,
   OrganizationTabs,
-  resolveAccessibleTab,
   resolveIntegrationSection,
+  resolveOrgTabView,
   visibleIntegrationSections,
   type OrgTabAccess,
 } from '@client/app/routes/organizations/orgTabAccess';
@@ -133,6 +143,7 @@ const RAIL_GROUPS: ReadonlyArray<{ key: 'team' | 'insights' | 'integrations' | '
         visible: a => a.canManageDomains,
         testId: 'org-tab-domains',
       },
+      // A manager gets it as a locked entry: plan, credits and seats read-only, changes owner-only.
       { tab: OrganizationTabs.Billing, icon: <CreditCardOutlinedIcon />, visible: a => a.canViewBilling },
       { tab: OrganizationTabs.ApiKeys, icon: <KeyOutlinedIcon />, visible: a => a.canManageApiKeys },
       {
@@ -209,6 +220,7 @@ const OrganizationPage: FC = () => {
       canManageApiKeys: canManageOrgApiKeys(currentUser, organization),
       canManageDomains: canManageOrgDomains(currentUser, organization),
       canViewAudit: canViewOrgAudit(currentUser, organization),
+      seesLockedTabs: !!currentUser && !!organization && isOrgOwnerOrCurrentAdmin(currentUser, organization),
     }),
     [currentUser, organization]
   );
@@ -226,11 +238,19 @@ const OrganizationPage: FC = () => {
   // The answer is deliberately not written back to the URL - rewriting ?tab=usage to ?tab=overview
   // would break the link for this caller the day they are granted access, and make one shared URL
   // mean different things to different people.
-  const selectedTab = resolveAccessibleTab(requestedTab, access);
+  // A refused tab is named in a notice on Overview, so the link does not silently land elsewhere.
+  // Not for a caller who already manages the team: they were refused for another reason (a personal
+  // team has no Groups or Domains; Audit excludes platform admins), so "ask the owner" would mislead.
+  const tabView = resolveOrgTabView(requestedTab, access);
+  const selectedTab = tabView.tab;
+  const audience = tabView.denied && currentUser ? ORG_TAB_AUDIENCE[tabView.denied] : undefined;
+  const deniedAudience = audience === 'managers' && access.seesLockedTabs ? undefined : audience;
   const selectedSection = resolveIntegrationSection(requestedSection, access);
   const integrationSections = visibleIntegrationSections(access);
   // Share current grouped tab order and access rules across the rail and phone selector.
-  const visibleTabs = RAIL_GROUPS.flatMap(group => group.tabs.filter(entry => entry.visible(access)));
+  const visibleTabs = RAIL_GROUPS.flatMap(group =>
+    group.tabs.filter(entry => entry.visible(access) || isOrgTabLocked(entry.tab, access))
+  );
   const tabId = (tab: OrganizationTabs) => `${sectionId}-tab-${tab}`;
   const panelId = (tab: OrganizationTabs) => `${sectionId}-panel-${tab}`;
   const panelAccessibility = (
@@ -374,11 +394,31 @@ const OrganizationPage: FC = () => {
                   listbox: { 'aria-label': 'Team sections' },
                 }}
               >
-                {visibleTabs.map(entry => (
-                  <Option key={entry.tab} value={entry.tab} data-testid={`organization-tabs-option-${entry.tab}`}>
-                    {t(`organization.tabs.${entry.tab}`)}
-                  </Option>
-                ))}
+                {visibleTabs.map(entry => {
+                  const locked = isOrgTabLocked(entry.tab, access);
+                  return (
+                    <Option
+                      key={entry.tab}
+                      value={entry.tab}
+                      // Joy takes a non-string child's label from innerText, so name it explicitly: the
+                      // closed Select then shows the tab name alone, without the lock icon's title.
+                      label={t(`organization.tabs.${entry.tab}`)}
+                      data-testid={
+                        locked
+                          ? `organization-tabs-option-locked-${entry.tab}`
+                          : `organization-tabs-option-${entry.tab}`
+                      }
+                    >
+                      {t(`organization.tabs.${entry.tab}`)}
+                      {locked && (
+                        <LockOutlinedIcon
+                          titleAccess={t('organization.access_notice.owner_only')}
+                          sx={{ ml: 'auto', color: 'text.tertiary' }}
+                        />
+                      )}
+                    </Option>
+                  );
+                })}
               </Select>
             </Box>
           ) : (
@@ -391,6 +431,12 @@ const OrganizationPage: FC = () => {
                 borderRight: '1px solid',
                 borderColor: 'divider',
                 p: 2,
+                // The rail is as tall as the page, which can be shorter than its entries; scroll it
+                // rather than letting the last entries (Settings) fall off-screen. Entries keep their
+                // height so the column overflows instead of squashing them.
+                overflowY: 'auto',
+                flexWrap: 'nowrap',
+                '& > *': { flexShrink: 0 },
                 '& .MuiTab-root': {
                   justifyContent: 'flex-start',
                   px: 2,
@@ -407,7 +453,7 @@ const OrganizationPage: FC = () => {
               }}
             >
               {RAIL_GROUPS.map(group => {
-                const tabs = group.tabs.filter(entry => entry.visible(access));
+                const tabs = group.tabs.filter(entry => entry.visible(access) || isOrgTabLocked(entry.tab, access));
                 if (tabs.length === 0) return null;
                 return (
                   <Fragment key={group.key}>
@@ -419,22 +465,31 @@ const OrganizationPage: FC = () => {
                     >
                       {t(`organization.tab_groups.${group.key}`)}
                     </Typography>
-                    {tabs.map(entry => (
-                      <Tab
-                        key={entry.tab}
-                        value={entry.tab}
-                        id={tabId(entry.tab)}
-                        aria-controls={
-                          entry.tab === OrganizationTabs.Audit && selectedTab !== OrganizationTabs.Audit
-                            ? undefined
-                            : panelId(entry.tab)
-                        }
-                        data-testid={entry.testId}
-                      >
-                        {entry.icon}
-                        {t(`organization.tabs.${entry.tab}`)}
-                      </Tab>
-                    ))}
+                    {tabs.map(entry => {
+                      const locked = isOrgTabLocked(entry.tab, access);
+                      return (
+                        <Tab
+                          key={entry.tab}
+                          value={entry.tab}
+                          id={tabId(entry.tab)}
+                          aria-controls={
+                            entry.tab === OrganizationTabs.Audit && selectedTab !== OrganizationTabs.Audit
+                              ? undefined
+                              : panelId(entry.tab)
+                          }
+                          data-testid={locked ? `organization-tab-locked-${entry.tab}` : entry.testId}
+                        >
+                          {entry.icon}
+                          {t(`organization.tabs.${entry.tab}`)}
+                          {locked && (
+                            <LockOutlinedIcon
+                              titleAccess={t('organization.access_notice.owner_only')}
+                              sx={{ ml: 'auto', color: 'text.tertiary' }}
+                            />
+                          )}
+                        </Tab>
+                      );
+                    })}
                   </Fragment>
                 );
               })}
@@ -443,6 +498,19 @@ const OrganizationPage: FC = () => {
 
           <Box sx={{ p: { xs: 1, sm: 3 }, flex: 1, overflow: 'auto', minWidth: 0 }}>
             <TabPanel value={OrganizationTabs.Overview} {...panelAccessibility(OrganizationTabs.Overview)}>
+              {tabView.denied && deniedAudience && (
+                <Alert
+                  color="warning"
+                  variant="soft"
+                  startDecorator={<LockOutlinedIcon />}
+                  sx={{ mb: 3 }}
+                  data-testid="organization-tab-denied-notice"
+                >
+                  {t(`organization.access_notice.denied_${deniedAudience}`, {
+                    tab: t(`organization.tabs.${tabView.denied}`),
+                  })}
+                </Alert>
+              )}
               {header(OrganizationTabs.Overview)}
               {currentUser?.id === organization.userId && !organization.personal && (
                 <TeamOnboardingChecklist
@@ -491,6 +559,13 @@ const OrganizationPage: FC = () => {
             {selectedSection && (
               <TabPanel value={OrganizationTabs.Integrations} {...panelAccessibility(OrganizationTabs.Integrations)}>
                 {header(OrganizationTabs.Integrations)}
+                {!access.canManageIntegrations && (
+                  <Box sx={{ mb: 3 }}>
+                    <OwnerOnlyNote testId="organization-integrations-owner-only">
+                      {t('organization.access_notice.integrations_locked')}
+                    </OwnerOnlyNote>
+                  </Box>
+                )}
                 {integrationSections.length > 1 && (
                   <Box sx={{ mb: 3 }}>
                     <SegmentedControl
@@ -512,6 +587,14 @@ const OrganizationPage: FC = () => {
               <TabPanel value={OrganizationTabs.Billing} {...panelAccessibility(OrganizationTabs.Billing)}>
                 {header(OrganizationTabs.Billing)}
                 <OrganizationBillingSection organization={organization} />
+              </TabPanel>
+            )}
+            {isOrgTabLocked(OrganizationTabs.Billing, access) && (
+              <TabPanel value={OrganizationTabs.Billing} {...panelAccessibility(OrganizationTabs.Billing)}>
+                {header(OrganizationTabs.Billing, {
+                  description: t('organization.access_notice.billing_locked_description'),
+                })}
+                <LockedBillingSummary organization={organization} />
               </TabPanel>
             )}
             {access.canManageDomains && (
@@ -577,6 +660,46 @@ const IntegrationSection: FC<{ section: IntegrationSections; organization: WithI
       {section === IntegrationSections.Connectors && (
         <OrgCustomMcpPolicySection key={organization.id} organization={organization} />
       )}
+    </Stack>
+  );
+};
+
+/**
+ * The Billing tab for a manager: credits and seats read-only, with every change left to the owner.
+ * Until granular roles land, the owner is the only one the Billing routes accept.
+ */
+const LockedBillingSummary: FC<{ organization: WithId<IOrganizationDocument> }> = ({ organization }) => {
+  const { t } = useTranslation();
+  const { currentSeats, maxSeats } = useOrganizationSeats(organization.id);
+  return (
+    <Stack spacing={2} data-testid="organization-billing-locked">
+      <OwnerOnlyNote testId="organization-billing-owner-only">
+        {t('organization.access_notice.billing_locked')}
+      </OwnerOnlyNote>
+      <Card variant="outlined" sx={{ p: 3 }}>
+        <Typography level="title-sm">{t('organization.access_notice.billing_summary')}</Typography>
+        <Stack direction="row" spacing={4} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+          <Stack spacing={0.5}>
+            <Typography level="body-xs" color="neutral">
+              {t('organization.access_notice.credits_remaining')}
+            </Typography>
+            <Typography level="h4" data-testid="organization-billing-locked-credits">
+              {formatCreditAmount(organization.currentCredits)}
+            </Typography>
+          </Stack>
+          <Stack spacing={0.5}>
+            <Typography level="body-xs" color="neutral">
+              {t('organization.access_notice.seats_used')}
+            </Typography>
+            <Typography level="h4" data-testid="organization-billing-locked-seats">
+              {/* maxSeats 0 is a plan with no seat cap, so there is no "of" to show. */}
+              {maxSeats > 0
+                ? t('organization.access_notice.seats_value', { current: currentSeats, max: maxSeats })
+                : currentSeats}
+            </Typography>
+          </Stack>
+        </Stack>
+      </Card>
     </Stack>
   );
 };

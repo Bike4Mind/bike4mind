@@ -94,6 +94,7 @@ function buildDb() {
       creditTransactions: {} as any,
       users: users as any,
       usageEvents: usageEvents as any,
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
       organizations: organizations as any,
     },
     users,

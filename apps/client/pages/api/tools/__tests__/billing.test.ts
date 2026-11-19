@@ -75,6 +75,7 @@ vi.mock('@bike4mind/database', async orig => {
   const RealUser = actual.User as Record<string, unknown>;
   return {
     ...actual,
+    spendFreezeRepository: { findActiveForSubject: async () => null },
     connectDB: vi.fn().mockResolvedValue(undefined),
     User: Object.assign(Object.create(RealUser), { findById: async () => USER }),
     cacheRepository: {

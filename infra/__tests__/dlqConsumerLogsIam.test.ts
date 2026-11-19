@@ -60,7 +60,7 @@ describe('web function DLQ consumer log permissions', () => {
     expect(expected.filter(name => !listed.has(name))).toEqual([]);
   });
 
-  it('grants GetFunctionConfiguration nowhere else', () => {
+  it('grants GetFunctionConfiguration in web.ts only to the consumers', () => {
     expect(source.match(/lambda:GetFunctionConfiguration/g)).toHaveLength(1);
   });
 

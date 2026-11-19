@@ -24,6 +24,7 @@ import { dlqAlarmHandlerDlq } from './dlqAlarmHandlerDeadLetter';
 import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { llmSpendLogSources } from './llmSpendLogGroups';
 import { businessMetricAlertsDLQ } from './businessMetricAlerts';
+import { sideAppHealthAlertsDLQ } from './sideAppHealthAlerts';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import {
   fabFileVectorizeQueueDLQ,
@@ -788,6 +789,15 @@ if (businessMetricAlertsDLQ && dlqAlarmTopic) {
     displayName: 'Business Metric Alerts',
     application: 'Analytics',
     queue: businessMetricAlertsDLQ,
+  });
+}
+
+if (sideAppHealthAlertsDLQ && dlqAlarmTopic) {
+  createDlqAlarms({
+    label: 'side-app-health-alerts',
+    displayName: 'Side App Health Alerts',
+    application: 'SideApps',
+    queue: sideAppHealthAlertsDLQ,
   });
 }
 

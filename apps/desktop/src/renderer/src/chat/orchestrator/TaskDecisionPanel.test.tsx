@@ -127,8 +127,13 @@ it('shows disproven assumptions and denies an upgrade without starting another a
       },
     },
   });
-  await themed.render(<TaskDecisionPanel agent={agent} />);
+  await themed.render(<TaskDecisionPanel agent={agent} compact />);
   expect(document.body.textContent).toContain('Observed the incompatible signature');
+  const details = el('agent-task-details') as HTMLDetailsElement;
+  expect(details.open).toBe(false);
+  for (const id of ['agent-task-state', 'agent-task-upgrade-btn', 'agent-task-deny-btn', 'agent-task-cancel-btn']) {
+    expect(details.contains(el(id))).toBe(false);
+  }
   await act(async () => el('agent-task-deny-btn').click());
   expect(taskAction).toHaveBeenCalledTimes(1);
   expect(taskAction).toHaveBeenLastCalledWith('child', {

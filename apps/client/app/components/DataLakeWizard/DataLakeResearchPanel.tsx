@@ -41,6 +41,7 @@ import {
   RESEARCH_ITEM_RULE_ACTIONS,
   RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS,
   RESEARCH_ITEM_RULES_MAX,
+  researchItemRuleKey,
   RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
   RESEARCH_COST_CEILING_MICRO_USD_LIMIT,
   RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
@@ -263,6 +264,25 @@ const isHttpUrl = (value: string): boolean => {
   }
 };
 
+/** Row index -> index of the earlier row with the same rule (the server merges them, so a row would vanish). */
+const duplicateRuleRows = (rules: readonly ItemRuleDraft[]): Map<number, number> => {
+  const firstByKey = new Map<string, number>();
+  const duplicates = new Map<number, number>();
+  rules.forEach((rule, index) => {
+    if (!cleanResearchItemRuleCondition(rule.condition)) return;
+    const key = researchItemRuleKey(rule);
+    const first = firstByKey.get(key);
+    if (first === undefined) firstByKey.set(key, index);
+    else duplicates.set(index, first);
+  });
+  return duplicates;
+};
+
+/** Rules that will be saved: distinct and non-empty after cleaning. Invisible-only rows do not count. */
+const distinctRuleCount = (rules: readonly ItemRuleDraft[]): number =>
+  new Set(rules.filter(rule => cleanResearchItemRuleCondition(rule.condition)).map(rule => researchItemRuleKey(rule)))
+    .size;
+
 const validateDraft = (draft: ConfigDraft): DraftErrors => {
   const errors: DraftErrors = {
     // A blank address is a missing field (see `missingRequired`), not an error shown on a fresh form.
@@ -322,6 +342,10 @@ const validateDraft = (draft: ConfigDraft): DraftErrors => {
     )
   ) {
     errors.itemRules = `Keep each rule to ${RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS} characters or fewer.`;
+  } else if (duplicateRuleRows(draft.itemRules).size > 0) {
+    errors.itemRules = 'Remove the repeated rules.';
+  } else if (distinctRuleCount(draft.itemRules) > RESEARCH_ITEM_RULES_MAX) {
+    errors.itemRules = `Keep to ${RESEARCH_ITEM_RULES_MAX} rules or fewer.`;
   }
   // Ignoring other sites with nothing listed would ignore every result.
   if (draft.unlistedSources === 'drop' && parseList(draft.reviewDomains).length === 0) {
@@ -573,6 +597,7 @@ const SCHEDULE_SKIP_LABEL: Partial<Record<ResearchScheduleSkipReason, string>> =
   daily_cap: 'the lake reached its daily run limit',
   insufficient_credits: 'the lake owner did not have enough credits',
   lake_inactive: 'the data lake is not active',
+  spend_frozen: 'spending is paused for the lake owner',
 };
 
 /**
@@ -858,6 +883,7 @@ export function DataLakeResearchPanel({
   const formOpen = editingId !== null;
   const saveBusy = editingId ? savingConfigId === editingId : !!isCreating;
   const errors = validateDraft(draft);
+  const duplicateRows = duplicateRuleRows(draft.itemRules);
   const missingRequired =
     !draft.name.trim() || !draft.query.trim() || (draft.source === 'feed' && !draft.feedUrl.trim());
   const canSave = !missingRequired && Object.keys(errors).length === 0;
@@ -1385,14 +1411,21 @@ export function DataLakeResearchPanel({
                 <Stack spacing={1}>
                   {draft.itemRules.map((rule, index) => (
                     <Stack key={index} direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
-                      <Input
-                        size="sm"
-                        sx={{ flex: 1 }}
-                        placeholder="For example: the author works for a named company"
-                        value={rule.condition}
-                        onChange={e => setItemRule(index, { condition: e.target.value })}
-                        slotProps={{ input: { 'data-testid': `datalake-research-rule-condition-${index}` } }}
-                      />
+                      <Box sx={{ flex: 1 }}>
+                        <Input
+                          size="sm"
+                          error={duplicateRows.has(index)}
+                          placeholder="For example: the author works for a named company"
+                          value={rule.condition}
+                          onChange={e => setItemRule(index, { condition: e.target.value })}
+                          slotProps={{ input: { 'data-testid': `datalake-research-rule-condition-${index}` } }}
+                        />
+                        {duplicateRows.has(index) && (
+                          <FormHelperText data-testid={`datalake-research-rule-error-${index}`}>
+                            {`Same as rule ${(duplicateRows.get(index) ?? 0) + 1}`}
+                          </FormHelperText>
+                        )}
+                      </Box>
                       <Select
                         size="sm"
                         value={rule.action}
@@ -1421,7 +1454,7 @@ export function DataLakeResearchPanel({
                       size="sm"
                       variant="outlined"
                       color="neutral"
-                      disabled={draft.itemRules.length >= RESEARCH_ITEM_RULES_MAX}
+                      disabled={distinctRuleCount(draft.itemRules) >= RESEARCH_ITEM_RULES_MAX}
                       onClick={addItemRule}
                       data-testid="datalake-research-rule-add"
                     >

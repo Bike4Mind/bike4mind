@@ -5,6 +5,10 @@ const { mockOctokit, mockRepository, mockConfig, mockDecryptToken, mockEncryptSe
   vi.hoisted(() => ({
     mockOctokit: {
       paginate: vi.fn(),
+      request: vi.fn(),
+      pulls: {
+        get: vi.fn(),
+      },
       issues: {
         create: vi.fn(),
         get: vi.fn(),
@@ -22,6 +26,7 @@ const { mockOctokit, mockRepository, mockConfig, mockDecryptToken, mockEncryptSe
         get: vi.fn(),
         getContent: vi.fn(),
         listForAuthenticatedUser: vi.fn(),
+        listCommits: vi.fn(),
       },
       apps: {
         getAuthenticated: vi.fn(),
@@ -29,6 +34,7 @@ const { mockOctokit, mockRepository, mockConfig, mockDecryptToken, mockEncryptSe
       },
       users: {
         getAuthenticated: vi.fn(),
+        getByUsername: vi.fn(),
       },
       rateLimit: {
         get: vi.fn(),
@@ -94,14 +100,9 @@ vi.mock('../security/tokenEncryption', () => ({
 }));
 
 // Mock @bike4mind/common
-vi.mock('@bike4mind/common', () => ({
-  parseRateLimitHeaders: vi.fn(() => ({
-    limit: 5000,
-    remaining: 4999,
-    resetAt: new Date(),
-    retryAfterMs: null,
-    usagePercent: 0,
-  })),
+vi.mock('@bike4mind/common', async importOriginal => ({
+  // Real header parsing, so rate-limit classification is exercised end to end.
+  parseRateLimitHeaders: (await importOriginal<typeof import('@bike4mind/common')>()).parseRateLimitHeaders,
   isNearLimit: vi.fn(() => false),
   buildRateLimitLogEntry: vi.fn(() => ({})),
 }));
@@ -113,7 +114,7 @@ vi.mock('@bike4mind/observability', () => ({
   }),
 }));
 
-import { GitHubService, GitHubRateLimitError } from './githubService';
+import { GitHubService, GitHubRateLimitError, GitHubRepoNotAllowedError, GitHubRequestError } from './githubService';
 import { Logger } from '@bike4mind/observability';
 import type { ITestConnectionFailure, ITestConnectionSuccess } from '@bike4mind/common';
 
@@ -1440,6 +1441,411 @@ describe('GitHubService', () => {
       // Error should propagate, but health metrics should be updated
       await expect(service.getRepository('owner/repo')).rejects.toMatchObject({ status: 500 });
       expect(mockRepository.updateHealthInfo).toHaveBeenCalled();
+    });
+  });
+  describe('forOrganizationResult', () => {
+    it('reports missing, disabled and suspended connections', async () => {
+      mockRepository.findByOrganizationIdWithCredentials.mockResolvedValueOnce(null);
+      expect(await GitHubService.forOrganizationResult('org-1', logger)).toEqual({ ok: false, reason: 'missing' });
+
+      mockRepository.findByOrganizationIdWithCredentials.mockResolvedValueOnce({ ...mockConnection, enabled: false });
+      expect(await GitHubService.forOrganizationResult('org-1', logger)).toEqual({ ok: false, reason: 'disabled' });
+
+      mockRepository.findByOrganizationIdWithCredentials.mockResolvedValueOnce({
+        ...mockConnection,
+        suspendedAt: new Date(),
+      });
+      expect(await GitHubService.forOrganizationResult('org-1', logger)).toEqual({ ok: false, reason: 'suspended' });
+    });
+
+    it('reports error when the lookup throws, while forOrganization still returns null', async () => {
+      mockRepository.findByOrganizationIdWithCredentials.mockRejectedValue(new Error('db down'));
+
+      expect(await GitHubService.forOrganizationResult('org-1', logger)).toEqual({ ok: false, reason: 'error' });
+      expect(await GitHubService.forOrganization('org-1', logger)).toBeNull();
+    });
+
+    it('reports misconfigured for a missing key and error for a DB throw', async () => {
+      mockConfig.SECRET_ENCRYPTION_KEY = '';
+      mockRepository.findByOrganizationIdWithCredentials.mockResolvedValueOnce(mockConnection);
+      expect(await GitHubService.forOrganizationResult('org-1', logger)).toEqual({
+        ok: false,
+        reason: 'misconfigured',
+      });
+
+      mockConfig.SECRET_ENCRYPTION_KEY = 'a'.repeat(64);
+      mockRepository.findByOrganizationIdWithCredentials.mockResolvedValueOnce({
+        ...mockAppConnection,
+        privateKey: undefined,
+      });
+      expect(await GitHubService.forOrganizationResult('org-1', logger)).toEqual({
+        ok: false,
+        reason: 'misconfigured',
+      });
+
+      mockRepository.findByOrganizationIdWithCredentials.mockRejectedValueOnce(new Error('db down'));
+      expect(await GitHubService.forOrganizationResult('org-1', logger)).toEqual({ ok: false, reason: 'error' });
+    });
+
+    it('returns the service and connection type for service account and app connections', async () => {
+      mockRepository.findByOrganizationIdWithCredentials.mockResolvedValueOnce(mockConnection);
+      const pat = await GitHubService.forOrganizationResult('org-1', logger);
+      expect(pat).toMatchObject({ ok: true, connectionType: 'service_account' });
+      expect(pat.ok && pat.service).toBeInstanceOf(GitHubService);
+
+      mockRepository.findByOrganizationIdWithCredentials.mockResolvedValueOnce(mockAppConnection);
+      const app = await GitHubService.forOrganizationResult('org-1', logger);
+      expect(app).toMatchObject({ ok: true, connectionType: 'github_app' });
+    });
+  });
+
+  describe('Read methods', () => {
+    let service: GitHubService;
+
+    beforeEach(async () => {
+      mockRepository.findByOrganizationIdWithCredentials.mockResolvedValue(mockConnection);
+      service = (await GitHubService.forOrganization('org-1', logger)) as GitHubService;
+    });
+
+    describe('listContributors', () => {
+      const contributor = (login: string | null) => ({
+        login,
+        contributions: 3,
+        avatar_url: `https://a/${login}`,
+        html_url: `https://h/${login}`,
+      });
+
+      it('walks every page and skips entries without a login', async () => {
+        const page1 = Array.from({ length: 100 }, (_, i) => contributor(`user${i}`));
+        mockOctokit.request
+          .mockResolvedValueOnce({ status: 200, data: page1 })
+          .mockResolvedValueOnce({ status: 200, data: [contributor(null), contributor('last')] });
+
+        const result = await service.listContributors('owner/repo');
+
+        expect(result).toHaveLength(101);
+        expect(result[100]).toEqual({
+          login: 'last',
+          contributions: 3,
+          avatarUrl: 'https://a/last',
+          htmlUrl: 'https://h/last',
+        });
+        expect(mockOctokit.request).toHaveBeenCalledTimes(2);
+      });
+
+      it('returns [] for a 204 empty repository', async () => {
+        mockOctokit.request.mockResolvedValue({ status: 204, data: undefined });
+
+        expect(await service.listContributors('owner/repo')).toEqual([]);
+      });
+    });
+
+    describe('getCommitActivity', () => {
+      it('returns pending on 202', async () => {
+        mockOctokit.request.mockResolvedValue({ status: 202, data: {} });
+
+        expect(await service.getCommitActivity('owner/repo')).toEqual({ status: 'pending' });
+      });
+
+      it('returns weeks on 200 and an empty list on 204', async () => {
+        mockOctokit.request.mockResolvedValueOnce({
+          status: 200,
+          data: [{ total: 4, week: 1700000000, days: [0, 1, 2, 1, 0, 0, 0] }],
+        });
+        expect(await service.getCommitActivity('owner/repo')).toEqual({
+          status: 'ok',
+          weeks: [{ total: 4, week: 1700000000, days: [0, 1, 2, 1, 0, 0, 0] }],
+        });
+
+        mockOctokit.request.mockResolvedValueOnce({ status: 204, data: undefined });
+        expect(await service.getCommitActivity('owner/repo')).toEqual({ status: 'ok', weeks: [] });
+      });
+    });
+
+    describe('getPullRequest', () => {
+      it('maps a pull request', async () => {
+        mockOctokit.pulls.get.mockResolvedValue({
+          data: {
+            number: 7,
+            title: 'T',
+            body: null,
+            state: 'closed',
+            html_url: 'https://h/7',
+            merged_at: '2024-01-02T00:00:00Z',
+            created_at: '2024-01-01T00:00:00Z',
+            updated_at: '2024-01-02T00:00:00Z',
+            closed_at: '2024-01-02T00:00:00Z',
+            user: { login: 'dev' },
+            labels: [{ name: 'bug' }],
+            draft: false,
+            merged: true,
+            additions: 10,
+            deletions: 2,
+            changed_files: 3,
+            commits: 1,
+            base: { ref: 'main' },
+            head: { ref: 'feat/x' },
+          },
+        });
+
+        const pr = await service.getPullRequest('owner/repo', 7);
+
+        expect(mockOctokit.pulls.get).toHaveBeenCalledWith({ owner: 'owner', repo: 'repo', pull_number: 7 });
+        expect(pr).toMatchObject({
+          number: 7,
+          user: { login: 'dev' },
+          labels: [{ name: 'bug' }],
+          merged: true,
+          base_ref: 'main',
+          head_ref: 'feat/x',
+          additions: 10,
+        });
+      });
+    });
+
+    describe('getUser', () => {
+      it('maps a user', async () => {
+        mockOctokit.users.getByUsername.mockResolvedValue({
+          data: { login: 'dev', name: null, avatar_url: 'https://a', html_url: 'https://h' },
+        });
+
+        expect(await service.getUser('dev')).toEqual({
+          login: 'dev',
+          name: null,
+          avatarUrl: 'https://a',
+          htmlUrl: 'https://h',
+        });
+      });
+    });
+
+    describe('listCommitsByAuthor', () => {
+      it('keeps the GitHub login and passes the filters', async () => {
+        mockOctokit.repos.listCommits.mockResolvedValue({
+          data: [
+            {
+              sha: 'abc1234567',
+              commit: { message: 'm1', author: { name: 'Dev', date: 'd1' } },
+              author: { login: 'dev' },
+            },
+            { sha: 'def7654321', commit: { message: 'm2', author: { name: 'Dev', date: 'd2' } }, author: null },
+          ],
+        });
+        const since = new Date('2024-01-01T00:00:00Z');
+        const until = new Date('2024-02-01T00:00:00Z');
+
+        const result = await service.listCommitsByAuthor('owner/repo', { author: 'dev', since, until });
+
+        expect(mockOctokit.repos.listCommits).toHaveBeenCalledWith(
+          expect.objectContaining({
+            author: 'dev',
+            since: since.toISOString(),
+            until: until.toISOString(),
+            per_page: 100,
+          })
+        );
+        expect(result).toEqual([
+          { sha: 'abc1234567', message: 'm1', authorName: 'Dev', authorLogin: 'dev', date: 'd1' },
+          { sha: 'def7654321', message: 'm2', authorName: 'Dev', authorLogin: null, date: 'd2' },
+        ]);
+      });
+    });
+
+    it('returns [] from listCommitsByAuthor for an empty repository (409)', async () => {
+      mockOctokit.repos.listCommits.mockRejectedValue(
+        Object.assign(new Error('Git Repository is empty.'), { status: 409 })
+      );
+
+      await expect(service.listCommitsByAuthor('owner/repo', { author: 'dev' })).resolves.toEqual([]);
+    });
+
+    describe('searchIssuesAndPulls', () => {
+      const item = (number: number, pr: boolean) => ({
+        number,
+        title: `t${number}`,
+        body: null,
+        state: 'open',
+        html_url: `https://h/${number}`,
+        repository_url: 'https://api.github.com/repos/owner/repo',
+        user: { login: 'dev' },
+        labels: [{ name: 'bug' }, 'plain'],
+        created_at: 'c',
+        updated_at: 'u',
+        closed_at: null,
+        ...(pr ? { pull_request: {} } : {}),
+      });
+
+      it('returns both kinds with totalCount and one query over all repos', async () => {
+        mockOctokit.search.issuesAndPullRequests.mockResolvedValue({
+          data: { total_count: 42, items: [item(1, false), item(2, true)] },
+        });
+
+        mockRepository.findByOrganizationIdWithCredentials.mockResolvedValue(mockAppConnection);
+        const appService = (await GitHubService.forOrganization('org-1', logger)) as GitHubService;
+
+        const result = await appService.searchIssuesAndPulls(['owner/repo', 'owner/repo1'], 'is:open');
+
+        expect(mockOctokit.search.issuesAndPullRequests).toHaveBeenCalledTimes(1);
+        expect(mockOctokit.search.issuesAndPullRequests.mock.calls[0][0].q).toBe(
+          'repo:owner/repo repo:owner/repo1 is:open'
+        );
+        expect(result.totalCount).toBe(42);
+        expect(result.items.map(i => [i.number, i.isPullRequest])).toEqual([
+          [1, false],
+          [2, true],
+        ]);
+        expect(result.items[0]).toMatchObject({ repo: 'owner/repo', labels: ['bug', 'plain'], user: 'dev' });
+      });
+
+      it('drops items from non-whitelisted or unrequested repos and keeps mixed-case matches', async () => {
+        const inRepo = (n: number, url: string) => ({ ...item(n, false), repository_url: url });
+        mockOctokit.search.issuesAndPullRequests.mockResolvedValue({
+          data: {
+            total_count: 99,
+            items: [
+              inRepo(1, 'https://api.github.com/repos/other/secret'),
+              inRepo(2, 'https://api.github.com/repos/owner/repo1'),
+              inRepo(3, 'https://api.github.com/repos/Owner/Repo'),
+            ],
+          },
+        });
+        mockRepository.findByOrganizationIdWithCredentials.mockResolvedValue(mockAppConnection);
+        const appService = (await GitHubService.forOrganization('org-1', logger)) as GitHubService;
+
+        const result = await appService.searchIssuesAndPulls(['owner/repo'], 'x');
+
+        expect(result.items.map(i => i.number)).toEqual([3]);
+        expect(result.totalCount).toBe(99);
+      });
+
+      it('rejects a repo outside the whitelist without searching', async () => {
+        await expect(service.searchIssuesAndPulls(['owner/repo', 'other/repo'], 'x')).rejects.toBeInstanceOf(
+          GitHubRepoNotAllowedError
+        );
+        expect(mockOctokit.search.issuesAndPullRequests).not.toHaveBeenCalled();
+      });
+
+      it('strips repo-escaping qualifiers from the user query', async () => {
+        mockOctokit.search.issuesAndPullRequests.mockResolvedValue({ data: { total_count: 0, items: [] } });
+
+        await service.searchIssuesAndPulls(['owner/repo'], 'bug org:evil repo:evil/x user:evil is:open');
+
+        expect(mockOctokit.search.issuesAndPullRequests.mock.calls[0][0].q).toBe('repo:owner/repo bug    is:open');
+      });
+    });
+
+    describe('listAllRepositories', () => {
+      it('paginates installation repositories for a GitHub App without the whitelist filter', async () => {
+        mockRepository.findByOrganizationIdWithCredentials.mockResolvedValue(mockAppConnection);
+        const appService = (await GitHubService.forOrganization('org-1', logger)) as GitHubService;
+        mockOctokit.paginate.mockResolvedValue([
+          { id: 1, name: 'a', full_name: 'x/a', private: false, html_url: 'u', description: null },
+          { id: 2, name: 'b', full_name: 'x/b', private: true, html_url: 'u', description: 'd', archived: true },
+        ]);
+
+        const repos = await appService.listAllRepositories();
+
+        expect(mockOctokit.paginate).toHaveBeenCalledWith(
+          mockOctokit.apps.listReposAccessibleToInstallation,
+          expect.objectContaining({ per_page: 100 })
+        );
+        expect(repos.map(r => r.full_name)).toEqual(['x/a', 'x/b']);
+      });
+
+      it('paginates the PAT owner repositories for a service account', async () => {
+        mockOctokit.paginate.mockResolvedValue([]);
+
+        await service.listAllRepositories();
+
+        expect(mockOctokit.paginate).toHaveBeenCalledWith(
+          mockOctokit.repos.listForAuthenticatedUser,
+          expect.objectContaining({ per_page: 100 })
+        );
+      });
+    });
+
+    describe('whitelist', () => {
+      it('throws GitHubRepoNotAllowedError from every repo-scoped method', async () => {
+        const denied = 'other/repo';
+        await expect(service.listContributors(denied)).rejects.toBeInstanceOf(GitHubRepoNotAllowedError);
+        await expect(service.getCommitActivity(denied)).rejects.toBeInstanceOf(GitHubRepoNotAllowedError);
+        await expect(service.getPullRequest(denied, 1)).rejects.toBeInstanceOf(GitHubRepoNotAllowedError);
+        await expect(service.listCommitsByAuthor(denied, { author: 'a' })).rejects.toBeInstanceOf(
+          GitHubRepoNotAllowedError
+        );
+      });
+    });
+
+    describe('error classification', () => {
+      const failWith = (status: number, headers: Record<string, string> = {}, message = 'boom') => {
+        mockOctokit.pulls.get.mockRejectedValue(
+          Object.assign(new Error(message), { status, response: { headers, data: { message } } })
+        );
+        return service.getPullRequest('owner/repo', 1);
+      };
+
+      it('treats 429 as a rate limit', async () => {
+        await expect(failWith(429)).rejects.toBeInstanceOf(GitHubRateLimitError);
+      });
+
+      it('treats 403 with remaining 0 as a rate limit and exposes the reset time', async () => {
+        const error = await failWith(403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1700000000' }).catch(
+          e => e
+        );
+        expect(error).toBeInstanceOf(GitHubRateLimitError);
+        expect(error.resetAt).toBe(new Date(1700000000 * 1000).toISOString());
+      });
+
+      it('treats 403 with retry-after as a rate limit and exposes the delay', async () => {
+        const error = await failWith(403, { 'retry-after': '30' }).catch(e => e);
+        expect(error).toBeInstanceOf(GitHubRateLimitError);
+        expect(error.retryAfterSeconds).toBe(30);
+      });
+
+      it('treats 403 with a rate limit message as a rate limit', async () => {
+        await expect(failWith(403, {}, 'You have exceeded a secondary rate limit')).rejects.toBeInstanceOf(
+          GitHubRateLimitError
+        );
+      });
+
+      it('does not treat a plain 403 as a rate limit', async () => {
+        const error = await failWith(403, { 'x-ratelimit-remaining': '4000' }, 'Resource not accessible').catch(e => e);
+        expect(error).not.toBeInstanceOf(GitHubRateLimitError);
+        expect(error).toBeInstanceOf(GitHubRequestError);
+        expect(error.status).toBe(403);
+      });
+
+      it('agrees with asRateLimitedErrorOrRethrow on the same response', async () => {
+        const cases: Array<[number, Record<string, string>]> = [
+          [429, {}],
+          [403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1700000000' }],
+          [403, { 'retry-after': '30' }],
+          [403, { 'x-ratelimit-remaining': '4000' }],
+        ];
+        for (const [status, headers] of cases) {
+          const raw = Object.assign(new Error('boom'), { status, response: { headers, data: { message: 'boom' } } });
+          const shared = (
+            service as unknown as { asRateLimitedErrorOrRethrow(e: unknown): unknown }
+          ).asRateLimitedErrorOrRethrow(raw) as { retryAfterSeconds?: number | null; resetAt?: string | null };
+          const error = await failWith(status, headers).catch(e => e);
+
+          expect(error instanceof GitHubRateLimitError).toBe(shared !== raw);
+          if (error instanceof GitHubRateLimitError) {
+            expect(error.retryAfterSeconds).toBe(shared.retryAfterSeconds ?? undefined);
+            expect(error.resetAt).toBe(shared.resetAt ?? undefined);
+          }
+        }
+      });
+
+      it('keeps the original error as cause', async () => {
+        const error = await failWith(404, {}, 'Not Found upstream').catch(e => e);
+        expect(error).toBeInstanceOf(GitHubRequestError);
+        expect((error.cause as Error).message).toBe('Not Found upstream');
+        expect(error.message).toBe('GitHub API error (404)');
+      });
+
+      it('wraps other non-2xx responses in GitHubRequestError', async () => {
+        await expect(failWith(404)).rejects.toMatchObject({ name: 'GitHubRequestError', status: 404 });
+      });
     });
   });
 });
