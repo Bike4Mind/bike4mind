@@ -123,7 +123,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/sideAppHealthAlerts.ts:sideAppHealthAlerts',
-    '38ed4dcf02cdb3fbb4562be4a387be0bc349129eeeeee84c405d00a2505e2924',
+    '18f792d2b462b13828669cb6c228fc81357bd0fd1e8942de644488d1ddd60401',
     'Hosted operator alerting on connected-app traffic; not applicable to a portable deployment.'
   ),
   wired(
