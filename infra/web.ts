@@ -544,7 +544,8 @@ export const web = new sst.aws.Nextjs(
       {
         // Admin DLQ "View logs": finds the Lambda consumers of a source queue. ListEventSourceMappings
         // has no resource-level permissions, so it cannot be scoped. GetFunctionConfiguration is
-        // granted per consumer by dlqConsumerLogsPolicy below.
+        // granted per consumer by dlqConsumerLogsPolicy below and per dead-letter rule target in
+        // infra/webDlqFunctionLogs.ts.
         actions: ['lambda:ListEventSourceMappings'],
         resources: ['*'],
       },
@@ -787,5 +788,25 @@ if (web.nodes.server) {
   new aws.iam.RolePolicyAttachment('WebDlqConsumerLogsPolicyAttachment', {
     role: web.nodes.server.nodes.role.name,
     policyArn: dlqConsumerLogsPolicy.arn,
+  });
+  // The admin DLQ listing reads a scheduled job's rule (state, schedule) to tell when a later run superseded it.
+  // SST's prefixName (naming.ts) names a rule <app>-<stage>-<name>, truncating the app name (possibly to
+  // nothing) or dropping it on long names; one exact prefix per form keeps other stages' rules out.
+  const stageRulePrefixes = [
+    $app.stage,
+    ...Array.from({ length: $app.name.length + 1 }, (_, n) => `${$app.name.slice(0, n)}-${$app.stage}`),
+  ];
+  const stageRuleArns = stageRulePrefixes.map(
+    prefix =>
+      $interpolate`arn:${aws.getPartitionOutput().partition}:events:${aws.getRegionOutput().name}:${aws.getCallerIdentityOutput().accountId}:rule/${prefix}-*`
+  );
+  const dlqScheduleRulePolicy = new aws.iam.Policy('WebDlqScheduleRulePolicy', {
+    policy: aws.iam.getPolicyDocumentOutput({
+      statements: [{ actions: ['events:DescribeRule', 'events:ListTargetsByRule'], resources: stageRuleArns }],
+    }).json,
+  });
+  new aws.iam.RolePolicyAttachment('WebDlqScheduleRulePolicyAttachment', {
+    role: web.nodes.server.nodes.role.name,
+    policyArn: dlqScheduleRulePolicy.arn,
   });
 }
