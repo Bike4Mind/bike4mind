@@ -48,9 +48,9 @@ public enum BriefNotificationOutcome: Equatable, Sendable {
   case listen(briefID: String)
 }
 
-/// Answers a brief's single decision from a notification button. The push only names the brief: the handler
-/// re-fetches it with the user's token and acts only when exactly one decision is still pending, so a stale
-/// notification never answers something that moved on.
+/// Handles a brief notification's buttons. Listen only names the brief for voice mode, with no fetch. The
+/// others answer the brief's single decision: the handler re-fetches it with the user's token and acts only
+/// when exactly one decision is still pending, so a stale notification never answers something that moved on.
 @MainActor
 public final class BriefNotificationHandler {
   private let briefs: any BriefAPI

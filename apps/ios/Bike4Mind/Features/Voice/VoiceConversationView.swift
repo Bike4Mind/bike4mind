@@ -6,13 +6,13 @@ import SwiftUI
 /// also the VoiceOver reading order, since the user may never look at it.
 struct VoiceConversationView: View {
   @Environment(AppServices.self) private var services
+  @Environment(AuthController.self) private var auth
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.openURL) private var openURL
   @ScaledMetric(relativeTo: .largeTitle) private var orbSize: CGFloat = 132
 
   let request: VoiceRequest
   @State private var model: VoiceConversationModel?
-  @State private var briefSession: BriefVoiceSession?
 
   var body: some View {
     VStack(spacing: Tokens.Spacing.l) {
@@ -29,7 +29,10 @@ struct VoiceConversationView: View {
     .padding(Tokens.Spacing.m)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(Tokens.Palette.background)
-    .task { await run() }
+    // Nothing is loaded, read out or listened for until App Lock is lifted (Listen can arrive from a notification).
+    .task(id: auth.state == .locked) {
+      if auth.state != .locked { await run() }
+    }
     .onDisappear { Task { await model?.stop() } }
     .onChange(of: model?.phase) { _, phase in announce(phase) }
   }
@@ -172,23 +175,35 @@ struct VoiceConversationView: View {
 
   // MARK: - Behavior
 
+  /// Runs in the view's task, which is cancelled when the screen goes away: a brief still loading then never
+  /// gets a model, and one dismissed while starting is stopped again.
   private func run() async {
-    guard model == nil, briefSession == nil else { return }
+    guard model == nil else { return }
     var opening: [String] = []
     var context: String?
+    var session: BriefVoiceSession?
     if let briefID = request.briefID {
-      let session = BriefVoiceSession(briefID: briefID, api: services.briefs, pendingActions: services.pendingActions)
-      briefSession = session
-      (opening, context) = await session.prepare()
+      let auth = auth
+      let made = BriefVoiceSession(
+        briefID: briefID, api: services.briefs, pendingActions: services.pendingActions,
+        canAnswer: { auth.state != .locked && UIApplication.shared.applicationState == .active })
+      session = made
+      (opening, context) = await made.prepare()
     }
+    guard !Task.isCancelled else { return }
     var handler: VoiceConversationModel.UtteranceHandler?
-    if let session = briefSession {
+    if let session {
       handler = { utterance in await session.handle(utterance) }
     }
     let model = Self.makeModel(
-      request: request, services: services, opening: opening, context: context, handler: handler)
+      request: request, services: services, opening: opening, context: context,
+      bargeInWords: session == nil ? [] : BriefVoiceSession.bargeInWords, handler: handler)
     self.model = model
     await model.start()
+    if Task.isCancelled {
+      await model.stop()
+      self.model = nil
+    }
   }
 
   private func end() {
@@ -216,7 +231,7 @@ struct VoiceConversationView: View {
   }
 
   private static func makeModel(
-    request: VoiceRequest, services: AppServices, opening: [String], context: String?,
+    request: VoiceRequest, services: AppServices, opening: [String], context: String?, bargeInWords: Set<String>,
     handler: VoiceConversationModel.UtteranceHandler?
   ) -> VoiceConversationModel {
     let model: VoiceConversationModel
@@ -228,7 +243,8 @@ struct VoiceConversationView: View {
       if FixtureServices.isEnabled || environment["B4M_VOICE_SCRIPTED_SPEECH"] == "1" {
         let script = environment["B4M_VOICE_SCRIPT"].map { $0.split(separator: "|").map(String.init) }
         model = VoiceFixtures.makeModel(
-          target: request.target, api: services.api, realtime: services.realtime, opening: opening,
+          target: request.target, api: services.api, realtime: services.realtime, bargeInWords: bargeInWords,
+          opening: opening,
           firstTurnContext: context, utteranceHandler: handler,
           script: script ?? ["What can you help me with today"])
         return model
@@ -236,8 +252,8 @@ struct VoiceConversationView: View {
     #endif
     model = VoiceConversationModel(
       target: request.target, api: services.api, realtime: services.realtime, listener: SFSpeechListener(),
-      speaker: AVSpeechSpeaker(), audioSession: AVVoiceAudioSession(), opening: opening, firstTurnContext: context,
-      utteranceHandler: handler)
+      speaker: AVSpeechSpeaker(), audioSession: AVVoiceAudioSession(), bargeInWords: bargeInWords, opening: opening,
+      firstTurnContext: context, utteranceHandler: handler)
     return model
   }
 

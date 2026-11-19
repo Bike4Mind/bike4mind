@@ -260,6 +260,25 @@ final class VoiceNavigationTests: XCTestCase {
     XCTAssertNil(navigator.voiceRequest?.briefID)
   }
 
+  func testListeningFromABriefKeepsTheBriefOnScreen() {
+    let navigator = AppNavigator()
+    navigator.apply(.brief(id: "b1"))
+
+    navigator.startVoiceConversation(.newConversation, briefID: "b1")
+
+    XCTAssertTrue(navigator.isShowing(.brief(id: "b1")))
+    XCTAssertFalse(navigator.isShowing(.home))
+  }
+
+  func testListeningFromANotificationLandsOnThatBrief() {
+    let navigator = AppNavigator()
+    navigator.apply(.settings)
+
+    navigator.startVoiceConversation(.newConversation, briefID: "b2")
+
+    XCTAssertTrue(navigator.isShowing(.brief(id: "b2")))
+  }
+
   func testStartingFromTheDrawerLandsOnHomeAndPresentsTheConversation() {
     let navigator = AppNavigator()
     navigator.apply(.settings)
