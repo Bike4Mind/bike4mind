@@ -57,6 +57,21 @@ public final class ThumbnailCache: @unchecked Sendable {
     }
   }
 
+  /// Drops every thumbnail and cancels every download, so nothing from the previous account outlives a sign-out.
+  public func removeAll() {
+    let running = lock.withLock {
+      defer { inFlight.removeAll() }
+      return inFlight.values.map(\.task)
+    }
+    running.forEach { $0.cancel() }
+    images.removeAllObjects()
+  }
+
+  /// How many callers are waiting on the download for `url`; 0 when none is running. For tests.
+  func waiterCount(for url: URL) -> Int {
+    lock.withLock { inFlight[Self.key(for: url)]?.waiters ?? 0 }
+  }
+
   private func join(key: String, url: URL) -> (UInt64, Task<Entry, any Error>) {
     lock.withLock {
       if var flight = inFlight[key] {

@@ -154,6 +154,7 @@ final class AppServices {
     await questActivities.sessionWillEnd()
     studioTrackerState?.tracker.reset()
     studioTrackerState = nil
+    ThumbnailCache.shared.removeAll()
     await agentRunMonitor.stopAll()
     await push.unregisterBeforeSignOut()
     await auth.signOut(reason: reason)

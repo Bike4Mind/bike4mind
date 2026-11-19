@@ -50,6 +50,20 @@ private func pngData(width: Int, height: Int) throws -> Data {
   return output as Data
 }
 
+/// Polls instead of sleeping a fixed time, so a slow runner cannot reorder the steps a test depends on.
+private func waitUntil(
+  timeout: Duration = .seconds(5), _ condition: @escaping @Sendable () -> Bool
+) async throws {
+  let deadline = ContinuousClock.now + timeout
+  while !condition() {
+    guard ContinuousClock.now < deadline else {
+      XCTFail("condition not met within \(timeout)")
+      return
+    }
+    try await Task.sleep(for: .milliseconds(5))
+  }
+}
+
 final class ThumbnailCacheTests: XCTestCase {
   private let url = URL(string: "https://s3.example/files/f1.png?X-Amz-Signature=aaa&X-Amz-Date=1")!
   private let resigned = URL(string: "https://s3.example/files/f1.png?X-Amz-Signature=bbb&X-Amz-Date=2")!
@@ -97,7 +111,7 @@ final class ThumbnailCacheTests: XCTestCase {
     let cache = ThumbnailCache(downloader: downloader)
     let url = url
     let waiter = Task { try await cache.image(for: url) }
-    try await Task.sleep(for: .milliseconds(50))
+    try await waitUntil { cache.waiterCount(for: url) == 1 }
     waiter.cancel()
     _ = try? await waiter.value
     XCTAssertEqual(downloader.cancellations, 1)
@@ -105,18 +119,40 @@ final class ThumbnailCacheTests: XCTestCase {
   }
 
   func testCancellingOneWaiterKeepsTheSharedDownloadForTheOther() async throws {
-    let downloader = CountingDownloader(
-      result: .success(try pngData(width: 10, height: 10)), delay: .milliseconds(200))
+    let downloader = CountingDownloader(result: .success(try pngData(width: 10, height: 10)), delay: .seconds(1))
     let cache = ThumbnailCache(downloader: downloader)
     let (url, resigned) = (url, resigned)
     let leaving = Task { try await cache.image(for: url) }
     let staying = Task { try await cache.image(for: resigned) }
-    try await Task.sleep(for: .milliseconds(50))
+    // Cancel only once both have joined; otherwise `leaving` could be the sole waiter and cancel the download.
+    try await waitUntil { cache.waiterCount(for: url) == 2 }
     leaving.cancel()
     _ = try await staying.value
     XCTAssertEqual(downloader.calls, 1)
     XCTAssertEqual(downloader.cancellations, 0)
     XCTAssertNotNil(cache.cachedImage(for: url))
+  }
+
+  func testRemoveAllDropsThumbnailsAndCancelsDownloads() async throws {
+    let png = try pngData(width: 10, height: 10)
+    let cache = ThumbnailCache(downloader: CountingDownloader(result: .success(png)))
+    let url = url
+    _ = try await cache.image(for: url)
+    XCTAssertNotNil(cache.cachedImage(for: url))
+
+    let slow = CountingDownloader(result: .success(png), delay: .seconds(10))
+    let pending = ThumbnailCache(downloader: slow)
+    let waiter = Task { try await pending.image(for: url) }
+    try await waitUntil { pending.waiterCount(for: url) == 1 }
+
+    cache.removeAll()
+    pending.removeAll()
+    _ = try? await waiter.value
+
+    XCTAssertNil(cache.cachedImage(for: url))
+    XCTAssertEqual(slow.cancellations, 1)
+    XCTAssertEqual(pending.waiterCount(for: url), 0)
+    XCTAssertNil(pending.cachedImage(for: url))
   }
 
   func testFailureIsNotCachedSoTheNextRequestRetries() async throws {
