@@ -1723,6 +1723,36 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   /**
+   * Claims the shared brief-start debounce: true only when no brief started within `minGapMs` of `now`.
+   * A stored value in the future (clock skew) counts as a recent start.
+   */
+  async claimBriefStart(userId: string, now: Date, minGapMs: number): Promise<boolean> {
+    const result = await this.model.updateOne(
+      {
+        _id: userId,
+        $or: [
+          { lastBriefStartedAt: { $exists: false } },
+          { lastBriefStartedAt: null },
+          { lastBriefStartedAt: { $lte: new Date(now.getTime() - minGapMs) } },
+        ],
+      },
+      { $set: { lastBriefStartedAt: now } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /** Gives back a claim, only while `lastBriefStartedAt` still holds this caller's `claimedAt`. */
+  async releaseBriefStart(userId: string, claimedAt: Date): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, lastBriefStartedAt: claimedAt },
+      { $unset: { lastBriefStartedAt: 1 } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
    * Find a user by their Slack user ID
    * Used for OAuth user linking to prevent duplicate Slack ID associations
    */
@@ -1924,6 +1954,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     disputePending: { type: Boolean, required: false, default: false },
     deletion: { type: UserDeletionSchema, required: false, default: undefined },
     nextBriefAt: { type: Date },
+    lastBriefStartedAt: { type: Date },
     accountFilePurge: {
       type: new Schema(
         {

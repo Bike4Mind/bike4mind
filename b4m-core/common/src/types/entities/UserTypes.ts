@@ -533,6 +533,8 @@ export interface IUser extends ICreditHolder {
   deletion?: IUserDeletion | null;
   /** When the next scheduled brief is due; unset while the brief schedule is off. See `preferences.briefSchedule`. */
   nextBriefAt?: Date;
+  /** When the last scheduled or event-triggered brief started; the debounce both paths claim. */
+  lastBriefStartedAt?: Date;
   /** Private erasure retry state, including restored accounts with no deletion schedule. */
   accountFilePurge?: {
     startedAt?: Date;
