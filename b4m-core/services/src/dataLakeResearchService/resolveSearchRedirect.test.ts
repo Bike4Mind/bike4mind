@@ -164,6 +164,20 @@ describe('resolveSearchRedirect', () => {
       expect((await run(fetchImpl, 10)).detail).toEqual({ reason: 'timeout' });
     });
 
+    it('keeps the status when the body read times out', async () => {
+      const fetchImpl = (_url: string, init?: RequestInit) => {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            init?.signal?.addEventListener('abort', () => controller.error(new Error('aborted')));
+          },
+        });
+        return Promise.resolve(new Response(body, { status: 429 }));
+      };
+      const result = await run(fetchImpl, 20);
+      expect(result.resolved).toBe('unresolved');
+      expect(result.detail).toEqual({ reason: 'timeout', status: 429 });
+    });
+
     it('reports other thrown errors as network errors', async () => {
       const result = await run(
         vi.fn(async () => {

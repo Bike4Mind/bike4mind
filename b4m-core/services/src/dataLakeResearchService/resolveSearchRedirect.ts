@@ -101,6 +101,7 @@ export async function resolveSearchRedirect(
   const fetchImpl = opts.fetchImpl ?? fetch;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  let status: number | undefined;
   try {
     const response = await fetchImpl(parsed.toString(), {
       method: 'GET',
@@ -108,6 +109,7 @@ export async function resolveSearchRedirect(
       credentials: 'omit',
       signal: controller.signal,
     });
+    status = response.status;
     const contentType = response.headers.get('content-type')?.slice(0, 100) ?? undefined;
     const unresolved = (detail: UnresolvedDetail): SearchRedirectResult => ({
       url,
@@ -136,7 +138,11 @@ export async function resolveSearchRedirect(
     return unresolved({ reason: 'status' });
   } catch (error) {
     const timedOut = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError');
-    return { url, resolved: 'unresolved', detail: { reason: timedOut ? 'timeout' : 'network_error' } };
+    return {
+      url,
+      resolved: 'unresolved',
+      detail: { reason: timedOut ? 'timeout' : 'network_error', ...(status !== undefined ? { status } : {}) },
+    };
   } finally {
     clearTimeout(timer);
   }
