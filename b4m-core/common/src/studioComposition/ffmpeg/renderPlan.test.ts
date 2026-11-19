@@ -103,6 +103,19 @@ describe('buildStudioRenderPlan', () => {
     );
   });
 
+  it('holds an image before cropping it', () => {
+    const tracks: StudioTimelineInput['tracks'] = [
+      {
+        id: 'v',
+        kind: 'video',
+        clips: [{ id: 'c', fileId: IMAGE, startMs: 0, durationMs: 2000, crop: { '9:16': CROP_9X16 } }],
+      },
+    ];
+    expect(graphOf(plan(tracks, portraitOutput))).toContain(
+      "[0:v]tpad=stop_mode=clone:stop_duration=2,crop=w='min(0.316406*iw,1*ih*1080/1920)'"
+    );
+  });
+
   it('renders exactly as before when the crop rect is for another size or the clip is contained', () => {
     const uncropped: StudioTimelineInput['tracks'] = [
       { id: 'v', kind: 'video', clips: [{ id: 'c', fileId: VIDEO, startMs: 0, durationMs: 2000 }] },

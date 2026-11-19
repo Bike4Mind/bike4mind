@@ -10,9 +10,9 @@ import { z } from 'zod';
  * - Frames: a clip edge in ms lands on frame Math.round(ms * fps / 1000), at the start and at the end.
  * - Compositing: video tracks draw bottom to top over `backgroundColor`. Anything a clip leaves uncovered
  *   (letterbox bars from `fit: 'contain'`, a fade, a gap between clips) is transparent, so what is below shows.
-- Framing: a `cover` clip shows the largest region of the output's shape that fits inside its `crop` rect for that
-  output's aspect ratio, centred in the rect; with no rect the rect is the whole source, which is a centre crop.
-  `contain` ignores `crop`. One helper computes this for both consumers: ./crop.
+ * - Framing: a `cover` clip shows the largest region of the output's shape that fits inside its `crop` rect for
+ *   that output's aspect ratio, centred in the rect; with no rect the rect is the whole source, a centre crop.
+ *   `contain` ignores `crop`. One helper computes this for both consumers: ./crop.
  * - Media: a video track takes video or image files (an image ignores `trimStartMs` and has no audio); the
  *   voice, sfx and music tracks take audio or video files (a video contributes only its audio).
  * - Captions wrap at word boundaries to `maxWidthPct` of the output width and honor explicit line breaks.

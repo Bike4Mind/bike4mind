@@ -54,8 +54,10 @@ export const studioCropShownRect = (
 const decimal = (value: number): string => String(Number(value.toFixed(6)));
 
 /**
- * `studioCropRegion` as an ffmpeg `crop` filter. The source size is left to ffmpeg (`iw`/`ih`, after it applies any
- * rotation metadata, as a browser does), so the worker needs no probe. Quoted, so the commas survive a filter graph.
+ * `studioCropRegion` as an ffmpeg `crop` filter. The source size is left to ffmpeg (`iw`/`ih`, after it applies a
+ * video's rotation metadata, as a browser does), so the worker needs no probe. A source the two size differently
+ * (non-square pixels; an image whose EXIF orientation only the browser applies) frames differently, as the centre
+ * crop already did. Quoted, so the commas survive a filter graph.
  */
 export const studioCropFfmpegFilter = (rect: StudioCropRect, output: StudioPixelSize): string => {
   const rectWidth = `${decimal(rect.width)}*iw`;

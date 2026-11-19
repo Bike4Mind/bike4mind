@@ -126,6 +126,11 @@ const TimelinePreview = ({
       ? { clip: selectedClip, sourceSize: selectedSize, onCropChange }
       : undefined;
   const reframing = reframable && reframeClipId === reframable.clip.id ? reframable : undefined;
+  // Offered even when the clip cannot be reframed (say, a stored rect on a same-shape source), so it can be cleared.
+  const resettable =
+    onCropChange && selectedClip && studioClipCropFor(selectedClip, output.aspectRatio)
+      ? () => onCropChange(selectedClip.id, undefined)
+      : undefined;
 
   const size = useFittedSize(viewportRef, aspectOf(reframing ? reframing.sourceSize : output));
   const tracks = enabledTracks(timeline);
@@ -138,29 +143,31 @@ const TimelinePreview = ({
 
   return (
     <Viewport ref={viewportRef} data-testid="production-preview">
-      {reframable && (
+      {(reframable || resettable) && (
         <ReframeControls direction="row" spacing={1}>
-          {reframing && reframable.clip.crop?.[output.aspectRatio] && (
+          {resettable && (
             <Button
               size="sm"
               variant="soft"
               color="neutral"
               data-testid="production-preview-reframe-reset"
-              onClick={() => reframable.onCropChange(reframable.clip.id, undefined)}
+              onClick={resettable}
             >
               Centre
             </Button>
           )}
-          <Button
-            size="sm"
-            variant={reframing ? 'solid' : 'soft'}
-            color={reframing ? 'primary' : 'neutral'}
-            data-testid="production-preview-reframe-toggle"
-            aria-pressed={Boolean(reframing)}
-            onClick={() => (reframing ? setReframeClipId(null) : startReframe(reframable.clip))}
-          >
-            {reframing ? 'Done' : `Reframe ${output.aspectRatio}`}
-          </Button>
+          {reframable && (
+            <Button
+              size="sm"
+              variant={reframing ? 'solid' : 'soft'}
+              color={reframing ? 'primary' : 'neutral'}
+              data-testid="production-preview-reframe-toggle"
+              aria-pressed={Boolean(reframing)}
+              onClick={() => (reframing ? setReframeClipId(null) : startReframe(reframable.clip))}
+            >
+              {reframing ? 'Done' : `Reframe ${output.aspectRatio}`}
+            </Button>
+          )}
         </ReframeControls>
       )}
       <Stage

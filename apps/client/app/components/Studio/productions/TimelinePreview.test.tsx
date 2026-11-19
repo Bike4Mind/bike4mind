@@ -90,10 +90,25 @@ const storedCrop = (): StudioCropRect | undefined =>
     .crop?.['9:16'];
 
 describe('TimelinePreview reframing', () => {
-  it('offers no reframe until the source size is known, and none when the shapes match', () => {
+  it('offers a reframe only once the source size is known', () => {
+    render(<Harness initial={timelineWith()} clock={makeClock()} />, { wrapper: Wrapper });
+    expect(screen.queryByTestId('production-preview-reframe-toggle')).toBeNull();
+    loadLandscapeSource();
+    expect(screen.getByTestId('production-preview-reframe-toggle')).toBeTruthy();
+  });
+
+  it('offers no reframe when the shapes match', () => {
     render(<Harness initial={timelineWith()} clock={makeClock()} outputIndex={1} />, { wrapper: Wrapper });
     loadLandscapeSource();
     expect(screen.queryByTestId('production-preview-reframe-toggle')).toBeNull();
+  });
+
+  it('still lets a stored rect be cleared when the clip cannot be reframed', () => {
+    const rect = { x: 0, y: 0, width: 0.31640625, height: 1 };
+    render(<Harness initial={timelineWith({ crop: { '9:16': rect } })} clock={makeClock()} />, { wrapper: Wrapper });
+    // Source size never reported, so the clip is not reframable yet.
+    fireEvent.click(screen.getByTestId('production-preview-reframe-reset'));
+    expect(storedCrop()).toBeUndefined();
   });
 
   it('offers no reframe on a contained clip', () => {
