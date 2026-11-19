@@ -177,6 +177,58 @@ final class VoiceConversationModelTests: XCTestCase {
     await model.stop()
   }
 
+  func testTheReplysOwnEchoDoesNotInterruptIt() async throws {
+    await speaker.setHolding(true)
+    let model = await startedModel()
+    await say("Tell me about Paris")
+    await until { await api.sentMessages.count == 1 }
+    await realtime.emit(frame(reply: longReply, status: .running))
+    await until { model.phase == .speaking }
+
+    await listener.emit("the capital of France is")
+    await listener.emit("the capital of France is Paris", isFinal: true)
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertEqual(model.phase, .speaking)
+    XCTAssertEqual(model.liveTranscript, "")
+    let stops = await speaker.stopCount
+    XCTAssertEqual(stops, 0)
+    let sent = await api.sentMessages
+    XCTAssertEqual(sent.count, 1)
+    await speaker.finishCurrent()
+    await model.stop()
+  }
+
+  func testTalkingOverTheReplyKeepsOnlyTheUsersWords() async throws {
+    await speaker.setHolding(true)
+    let model = await startedModel()
+    await say("Tell me about Paris")
+    await until { await api.sentMessages.count == 1 }
+    await realtime.emit(frame(reply: longReply, status: .running))
+    await until { model.phase == .speaking }
+
+    await listener.emit("the capital of France is Paris what about Rome")
+    await until { model.phase == .listening }
+    XCTAssertEqual(model.liveTranscript, "what about Rome")
+
+    await api.setSendResult(.success(ChatSendReceipt(questID: "quest-2", sessionID: "s1")))
+    await listener.emit("the capital of France is Paris what about Rome", isFinal: true)
+    await until { await api.sentMessages.count == 2 }
+    let sent = await api.sentMessages
+    XCTAssertEqual(sent.last?.message, "what about Rome")
+    await model.stop()
+  }
+
+  func testAFinishedReplyStartsAFreshRecognizer() async throws {
+    let model = await startedModel()
+    await say("Tell me about Paris")
+    await until { await listener.startCount == 2 }
+    await realtime.emit(frame(reply: longReply, status: .done))
+    await until { model.phase == .listening }
+    await until { await listener.startCount == 3 }
+    XCTAssertEqual(model.liveTranscript, "")
+    await model.stop()
+  }
+
   func testTappingInterruptStopsTheReply() async throws {
     await speaker.setHolding(true)
     let model = await startedModel()
