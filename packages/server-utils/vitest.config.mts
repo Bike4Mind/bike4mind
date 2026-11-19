@@ -16,7 +16,7 @@ const REPO_LANE_GLOB = '**/*.repo.test.?(c|m)[jt]s?(x)';
 const laneFiles = INTEGRATION_LANE
   ? { include: ['**/*.e2e.test.ts'], exclude: ['**/node_modules/**', REPO_LANE_GLOB] }
   : REPO_LANE
-    ? { include: [REPO_LANE_GLOB], exclude: ['**/node_modules/**'] }
+    ? { include: [REPO_LANE_GLOB], exclude: ['**/node_modules/**', '**/*.e2e.test.ts'] }
     : { exclude: ['**/node_modules/**', '**/*.e2e.test.ts', REPO_LANE_GLOB] };
 
 export default defineConfig({
