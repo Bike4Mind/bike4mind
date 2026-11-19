@@ -2,7 +2,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join, parse, resolve } from 'node:path';
 import { parseDirectoryOutcome, REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
-import { isWithin, PathAccessDenied, withinGuarded } from './paths';
+import { guardForm, guardFormWithin, isWithin, PathAccessDenied, withinGuarded } from './paths';
 import { requireString, type ToolDefinition } from './types';
 
 /** Long enough for a real sentence, short enough that the card cannot be filled with prose. */
@@ -121,7 +121,14 @@ export async function inspectDirectory(
       message: 'The filesystem root cannot be shared. Share the specific folder that is needed.',
     };
   }
-  const shareable = (context.shareableUnderProtected ?? []).some(dir => real !== dir && isWithin(dir, real));
+  const realShareable = await Promise.all(
+    (context.shareableUnderProtected ?? []).map(dir => realpath(dir).catch(() => resolve(dir)))
+  );
+  const candidate = guardForm(real);
+  const shareable = realShareable.some(dir => {
+    const root = guardForm(dir);
+    return candidate !== root && guardFormWithin(root, candidate);
+  });
   if (!shareable && withinGuarded(context.protectedPaths ?? [], [real])) {
     return { kind: 'refused', message: `${requested} belongs to this app and cannot be shared.` };
   }
