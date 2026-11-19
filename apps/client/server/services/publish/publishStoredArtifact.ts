@@ -11,7 +11,7 @@ import {
   type PublishVisibility,
   type ValidationViolation,
 } from '@bike4mind/common';
-import { PublishedArtifact } from '@bike4mind/database';
+import { PublishedArtifact, liveShareTokens, type PublishedArtifactShareToken } from '@bike4mind/database';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { deletePublishThumbnails, enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
@@ -89,6 +89,7 @@ interface PreviousPage {
   size: { totalBytes: number; fileCount: number };
   sha256Index?: string;
   versions?: Array<{ sha256Index: string; indexBytes?: number }>;
+  shareTokens?: PublishedArtifactShareToken[];
 }
 
 // Keep in sync with DOMAIN_RE in pages/api/publish/artifacts/[id].ts, which gates the same field.
@@ -167,7 +168,7 @@ function findPreviousPage(artifactId: string, userId: string) {
     scopeId: userId,
     deletedAt: null,
   })
-    .select('publicId slug publishedAt ownerId lastPublishedBy visibility size sha256Index versions')
+    .select('publicId slug publishedAt ownerId lastPublishedBy visibility size sha256Index versions shareTokens')
     .lean<PreviousPage | null>();
 }
 
@@ -372,8 +373,8 @@ export async function republishStoredArtifact(input: PublishCommon): Promise<Pub
   const { user, artifact } = input;
   const previous = await findPreviousPage(artifact.id, user.id);
   if (!previous) throw new NotFoundError('Artifact is not published');
-  // A republish can re-expose a page whose owner has since made it public.
-  if (previous.visibility === 'public') {
+  // A republish can push new content to a page that is public or reachable through a live share link.
+  if (previous.visibility === 'public' || liveShareTokens(previous).length > 0) {
     await assertPublicationPublicLink({ tier: 'user', scopeId: user.id, source: { artifactId: artifact.id } });
   }
   const page = await renderPage(artifact, input.content);
