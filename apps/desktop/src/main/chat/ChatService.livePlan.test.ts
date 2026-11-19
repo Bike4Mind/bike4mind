@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { ChatModels } from '@bike4mind/common';
+import { summarizeSession } from '@shared/agentOutcome';
 import type { ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
@@ -75,47 +76,83 @@ describe('ChatService live plan', () => {
   const nextRequest = (n: number) => vi.waitUntil(() => streams.length === n, { timeout: 3000, interval: 5 });
   const planOf = (summary: ChatSessionSummary | undefined) => summary?.plan?.done + '/' + summary?.plan?.total;
 
-  it('pushes plan progress per plan call mid-turn, keeps it over other summaries, and hands over at settle', async () => {
+  const endTurn = async (stream: PassThrough) => {
+    const before = events.filter(event => event.type === 'done').length;
+    stream.write(frame({ type: 'content', text: 'ok' }));
+    stream.write(frame('[DONE]'));
+    await vi.waitUntil(() => events.filter(event => event.type === 'done').length > before, {
+      timeout: 3000,
+      interval: 5,
+    });
+  };
+  // livePlans is private; the clear-at-turn-end contract is only observable through it.
+  const overlaid = (id: string) => (service as unknown as { livePlans: Map<string, unknown> }).livePlans.has(id);
+  const listed = async (id: string) => (await service.listSessions()).find(entry => entry.id === id);
+
+  it('overlays the live plan on every summary and list mid-turn, then hands over to the stored one', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'do it');
     await nextRequest(1);
     streams[0].write(frame(todoCall('c1', ['in_progress', 'pending'])));
     streams[0].write(frame('[DONE]'));
-
     await nextRequest(2);
     await vi.waitUntil(() => summaries.some(summary => summary.plan), { timeout: 3000, interval: 5 });
     expect(planOf(summaries.findLast(summary => summary.plan))).toBe('0/2');
-
-    // Another summary pushed mid-turn must not revert the plan to the (empty) stored one.
-    await service.setSessionModel(id, ChatModels.CLAUDE_5_SONNET);
-    expect(summaries.at(-1)?.plan).toMatchObject({ done: 0, total: 2, current: 'Step 1', next: 'Step 2' });
 
     streams[1].write(frame(todoCall('c2', ['completed', 'in_progress'])));
     streams[1].write(frame('[DONE]'));
     await nextRequest(3);
     await vi.waitUntil(() => planOf(summaries.at(-1)) === '1/2', { timeout: 3000, interval: 5 });
 
-    streams[2].write(frame({ type: 'content', text: 'done' }));
-    streams[2].write(frame('[DONE]'));
-    await vi.waitUntil(() => events.some(event => event.type === 'done'), { timeout: 3000, interval: 5 });
+    // The reply is not stored yet, so a summary built from the store alone has no plan.
+    const pushed = summaries.length;
+    await service.setSessionHistory(id, false);
+    expect(summaries.length).toBeGreaterThan(pushed);
+    expect(summaries.at(-1)?.plan).toMatchObject({ done: 1, total: 2, current: 'Step 2' });
+    expect((await listed(id))?.plan).toMatchObject({ done: 1, total: 2 });
 
-    // After the turn the stored transcript carries the same plan, and nothing is overlaid any more.
+    await endTurn(streams[2]);
+    expect(overlaid(id)).toBe(false);
     const stored = await store.get(id);
-    expect(stored && (await import('@shared/agentOutcome')).summarizeSession(stored).plan).toMatchObject({
-      done: 1,
-      total: 2,
+    const storedPlan = stored && summarizeSession(stored).plan;
+    expect(storedPlan).toMatchObject({ done: 1, total: 2 });
+    await vi.waitUntil(() => summaries.at(-1)?.plan !== undefined && summaries.length > pushed + 1, {
+      timeout: 3000,
+      interval: 5,
     });
-    await service.setSessionModel(id, 'test-model');
-    expect(planOf(summaries.at(-1))).toBe('1/2');
+    expect(summaries.at(-1)?.plan).toEqual(storedPlan);
+    expect((await listed(id))?.plan).toEqual(storedPlan);
+  });
+
+  it('keeps a plan from before a context boundary through the next turn', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'plan it');
+    await nextRequest(1);
+    streams[0].write(frame(todoCall('c1', ['completed', 'pending'])));
+    streams[0].write(frame('[DONE]'));
+    await nextRequest(2);
+    await endTurn(streams[1]);
+    expect(await service.clearContext(id)).toMatchObject({ ok: true });
+
+    await service.send(id, 'again');
+    await nextRequest(3);
+    streams[2].write(frame({ type: 'tool_use', tools: [{ id: 'c2', name: 'not_a_real_tool', arguments: '{}' }] }));
+    streams[2].write(frame('[DONE]'));
+    await nextRequest(4);
+
+    await service.setSessionHistory(id, false);
+    expect(summaries.at(-1)?.plan).toMatchObject({ done: 1, total: 2 });
+    await endTurn(streams[3]);
+    expect(overlaid(id)).toBe(false);
   });
 
   it('pushes nothing extra for a turn without a plan', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'hi');
     await nextRequest(1);
-    streams[0].write(frame({ type: 'content', text: 'hello' }));
-    streams[0].write(frame('[DONE]'));
-    await vi.waitUntil(() => events.some(event => event.type === 'done'), { timeout: 3000, interval: 5 });
+    await endTurn(streams[0]);
+    await service.setSessionHistory(id, false);
+    expect(summaries.length).toBeGreaterThan(0);
     expect(summaries.every(summary => summary.plan === undefined)).toBe(true);
   });
 });

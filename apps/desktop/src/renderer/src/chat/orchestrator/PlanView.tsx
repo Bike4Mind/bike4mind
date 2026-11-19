@@ -35,12 +35,21 @@ function PlanRow({ agent, onAction }: { agent: SnapshotAgent; onAction(action: V
   const hasPlan = !!plan?.total;
   const current = currentLine(agent);
   const next = hasPlan ? plan.next : undefined;
+  // An aria-label replaces the button's contents as its name, so the plan has to be in it.
+  const label = [
+    `${agent.title}: ${AGENT_STATE_LABEL[agent.state]}`,
+    hasPlan ? `${plan.done} of ${plan.total} done` : 'no plan yet',
+    current?.text,
+    next && `next ${next}`,
+  ]
+    .filter(Boolean)
+    .join(', ');
   return (
     <Box
       component="button"
       type="button"
       onClick={() => onAction({ kind: 'open-agent', agentId: agent.id })}
-      aria-label={`${agent.title}: ${AGENT_STATE_LABEL[agent.state]}`}
+      aria-label={label}
       data-testid={`plan-view-row-${agent.id}`}
       data-state={agent.state}
       sx={{
