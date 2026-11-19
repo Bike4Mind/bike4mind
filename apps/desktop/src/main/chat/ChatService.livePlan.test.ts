@@ -160,6 +160,21 @@ describe('ChatService live plan', () => {
     expect((await service.setSessionArchived(id, false))?.plan).toMatchObject({ done: 1, total: 3 });
   });
 
+  it('returns the live plan when a context folder is added or removed mid-turn', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'do it');
+    await nextRequest(1);
+    streams[0].write(frame(todoCall('c1', ['completed', 'in_progress', 'pending'])));
+    streams[0].write(frame('[DONE]'));
+    await nextRequest(2);
+    await vi.waitUntil(() => planOf(summaries.at(-1)) === '1/3', { timeout: 3000, interval: 5 });
+
+    const folder = await realpath(await mkdtemp(join(tmpdir(), 'b4m-liveplan-folder-')));
+    const added = await service.shareDirectory(id, folder);
+    expect(added.status === 'added' && added.session?.plan).toMatchObject({ done: 1, total: 3 });
+    expect((await service.removeContextDirectory(id, folder, false))?.plan).toMatchObject({ done: 1, total: 3 });
+  });
+
   it('hands over to the stored plan when the turn errors', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'do it');
