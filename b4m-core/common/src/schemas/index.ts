@@ -11,6 +11,7 @@ export * from './decisionMaker';
 export * from './file';
 export * from './openai';
 export * from './password';
+export * from './plan';
 export * from './username';
 export * from './oauthClient';
 export * from './partnerSignupRule';

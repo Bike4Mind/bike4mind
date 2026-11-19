@@ -12,7 +12,7 @@ import { runDecision } from '@bike4mind/server-utils/decisions/runDecision';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
-import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 
 /**
  * Per-user ceiling, in its own bucket: decision calls are cheap and bursty (routing, triage), so they must not share

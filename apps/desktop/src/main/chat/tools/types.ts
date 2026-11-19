@@ -405,6 +405,8 @@ export interface ToolContext {
    * the access token. A granted home folder would otherwise expose the vault to a shell command.
    */
   protectedPaths?: readonly string[];
+  /** Folders inside protectedPaths that request_directory may still share, such as chat attachments. */
+  shareableUnderProtected?: readonly string[];
   /** Protected folders not yet resolved: where a write lands relative to them is unknown, so every write is refused. */
   unresolvedProtectedPaths?: readonly string[];
   /**
@@ -512,6 +514,12 @@ export interface PullRequestContext {
  */
 export interface SkillContext {
   available(): Promise<readonly CustomCommand[]>;
+  /**
+   * True when `name` exists but is withheld from the model by `disable-model-invocation`, so a
+   * refusal can say the user has to start it rather than that it is missing. Optional: without it
+   * the tool reports a plain miss.
+   */
+  isUserOnly?(name: string): Promise<boolean>;
 }
 
 /** What one session looks like to the host-control tools. */

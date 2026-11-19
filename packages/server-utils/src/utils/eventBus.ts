@@ -148,7 +148,7 @@ export const EmailEvents = {
  */
 export const NotificationEvents = {
   Push: event('notification.push', PushNotificationEventSchema),
-  /** Live activity progress for a quest; publish via apps/client/server/utils/liveActivityPush.ts. */
+  /** Live activity progress for a quest; publish via packages/server-utils/src/utils/liveActivityPush.ts. */
   LiveActivity: event('notification.liveActivity', LiveActivityPushEventSchema),
 };
 

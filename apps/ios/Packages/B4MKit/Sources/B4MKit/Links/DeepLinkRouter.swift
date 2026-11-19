@@ -28,6 +28,9 @@ public enum DeepLinkRouter {
       return identifier == nil ? .lakes : .web(url)
     case "media":
       return .media
+    case "briefs":
+      guard let identifier, isValidIdentifier(identifier) else { return .web(url) }
+      return .brief(id: identifier)
     case "settings":
       return .settings
     default:

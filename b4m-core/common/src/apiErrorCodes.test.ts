@@ -81,7 +81,7 @@ describe('API_ERROR_CODES', () => {
     // API_KEY_TRUST_REQUIRED_ERROR_CODE likewise; proven by userApiKeyService/__tests__/trust.test.ts.
     // ACCOUNT_TRUST_REQUIRED_ERROR_CODE likewise; proven by apps/client/server/auth/assertOutboundActionAllowed.test.ts.
     // TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE and CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE likewise; proven by
-    // apps/client/server/utils/untrustedCompletionQuota.test.ts.
+    // packages/server-utils/src/utils/untrustedCompletionQuota.test.ts.
     // MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE likewise; proven by services/src/llm/modelAdmission.test.ts.
     // DAILY_FREE_LIMIT_REACHED_ERROR_CODE likewise; proven by packages/server-utils/src/billing/freeTierDailyCapGate.test.ts.
     // UPGRADE_REQUIRED_ERROR_CODE likewise; proven by packages/server-utils/src/middlewares/clientVersionGate.test.ts.

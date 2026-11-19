@@ -177,7 +177,7 @@ export function createSceneJobHandler(deps: SceneJobDeps): GenerationJobHandler<
     try {
       const { bytes, durationSeconds, derivedFrom } = await render(job, workDir, signal);
       const { request } = job.payload;
-      const { location } = await storeGeneratedOutput(
+      const { location, filesSkipReason } = await storeGeneratedOutput(
         {
           job,
           noun: 'scene',
@@ -194,7 +194,8 @@ export function createSceneJobHandler(deps: SceneJobDeps): GenerationJobHandler<
           derivedFrom,
           bucketFolder: 'generated-video',
           extension: 'mp4',
-          // Nothing is billed, so a failed Files save retries the whole render rather than parking the Scene outside Files.
+          // A save that throws retries the whole render (nothing is billed). A refusal (size limit, quota) does not
+          // throw: the Scene is kept in the generated bucket and filesSkipReason says why.
           onFilesError: 'rethrow',
           signal,
         },
@@ -202,7 +203,13 @@ export function createSceneJobHandler(deps: SceneJobDeps): GenerationJobHandler<
       );
       const payload: ComposeJobPayload = {
         ...job.payload,
-        output: { ...location, contentType: SCENE_CONTENT_TYPE, bytes: bytes.byteLength, durationSeconds },
+        output: {
+          ...location,
+          contentType: SCENE_CONTENT_TYPE,
+          bytes: bytes.byteLength,
+          durationSeconds,
+          ...(filesSkipReason && { filesSkipReason }),
+        },
       };
       return { next: 'succeeded', payload };
     } finally {

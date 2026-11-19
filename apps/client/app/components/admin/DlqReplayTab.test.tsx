@@ -11,6 +11,7 @@ type TestMessage = {
   queueLabel: string;
   messageId: string;
   body: string;
+  failureSignature?: string;
   entity: { type: string; id: string } | null;
   sentTimestamp: string;
   approximateReceiveCount: string;
@@ -49,6 +50,9 @@ const state = vi.hoisted(() => ({
 
 const h = vi.hoisted(() => ({
   discard: vi.fn(),
+  groupDiscard: vi.fn(),
+  groupDiscardPending: false,
+  ceilings: {} as Record<string, { ceiling: number; until: number }>,
   replay: vi.fn(),
   user: null as null | { isAdmin?: boolean; adminPermissions?: string[] },
   search: {} as Record<string, unknown>,
@@ -59,7 +63,12 @@ const h = vi.hoisted(() => ({
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: h.user }) }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 vi.mock('@tanstack/react-router', () => ({ useSearch: () => h.search, useNavigate: () => h.navigate }));
-vi.mock('@client/app/hooks/data/dlqManagement', () => ({
+vi.mock('@client/app/hooks/data/dlqManagement', async importOriginal => ({
+  DLQ_SIGNATURE_UNAVAILABLE: 'unavailable',
+  applyDlqCountCeiling: (await importOriginal<typeof import('@client/app/hooks/data/dlqManagement')>())
+    .applyDlqCountCeiling,
+  useDlqCountCeilings: () => ({ data: h.ceilings }),
+  useDlqGroupDiscard: () => ({ mutateAsync: h.groupDiscard, isPending: h.groupDiscardPending }),
   useDlqQueues: () => ({
     data: state.queues.map(q => ({ messageRetentionSeconds: state.retentionSeconds, ...q })),
     isLoading: false,
@@ -127,12 +136,16 @@ const message = (queueLabel: string, messageId: string, ageHours: number, extra:
 
 const theme = extendTheme({ ...getThemeConfig() });
 
-function renderTab() {
-  return render(
+/** Renders the tab on the All messages view unless `view` says otherwise; By failure is the default. */
+function renderTab({ view = 'messages' }: { view?: 'messages' | 'groups' } = {}) {
+  const result = render(
     <CssVarsProvider theme={theme}>
       <DlqReplayTab />
     </CssVarsProvider>
   );
+  const toggle = screen.queryByTestId('dlq-view-messages');
+  if (view === 'messages' && toggle && toggle.getAttribute('aria-pressed') !== 'true') fireEvent.click(toggle);
+  return result;
 }
 
 const rowIds = () =>
@@ -154,6 +167,9 @@ const confirmReplay = async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.ceilings = {};
+  h.groupDiscardPending = false;
+  sessionStorage.clear();
   state.queues = [BILLING_QUEUE, FILES_QUEUE, CRON_QUEUE];
   // Server order: newest first across queues.
   state.messages = [
@@ -249,7 +265,7 @@ describe('DlqReplayTab bulk replay', () => {
     await confirmReplay();
     expect(h.replay).toHaveBeenCalledTimes(1);
     expect(Object.fromEntries(h.replay.mock.calls[0][0].messageIdsByQueue)).toEqual({ billing: ['b2'], files: ['f1'] });
-    expect(toast.success).toHaveBeenCalledWith('2 of 2 replayed.');
+    expect(toast.success).toHaveBeenCalledWith('2 of 2 replayed. Queue counts catch up within about a minute.');
   });
 
   it('selects every message in the filtered feature and replays only those', async () => {
@@ -300,7 +316,9 @@ describe('DlqReplayTab bulk replay', () => {
     selectRow('b2');
     await userEvent.click(screen.getByTestId('dlq-bulk-replay'));
     await confirmReplay();
-    expect(toast.warning).toHaveBeenCalledWith('1 of 2 replayed; 1 not found in the queue.');
+    expect(toast.warning).toHaveBeenCalledWith(
+      '1 of 2 replayed; 1 not found in the queue. Queue counts catch up within about a minute.'
+    );
   });
 
   it('requires a reason when any selected queue is not safe to replay, and sends it', async () => {
@@ -348,7 +366,7 @@ describe('DlqReplayTab bulk outcomes', () => {
     await confirmReplay();
     expect(toast.success).not.toHaveBeenCalled();
     expect(toast.warning).toHaveBeenCalledWith(
-      '1 of 1 replayed; 1 replayed but still in the DLQ (do not replay them again). Warning: delete from DLQ failed'
+      '1 of 1 replayed; 1 replayed but still in the DLQ (do not replay them again). Warning: delete from DLQ failed Queue counts catch up within about a minute.'
     );
   });
 
@@ -421,11 +439,18 @@ describe('DlqReplayTab all-clear and stage', () => {
     expect(screen.getByTestId('dlq-all-clear')).toBeTruthy();
   });
 
-  it('counts only queues this stage creates', () => {
-    state.queues = [BILLING_QUEUE, { ...CRON_QUEUE, deployed: false, approximateMessageCount: -1 }];
+  it('counts only queues this stage creates and says what the rest of the registry is', () => {
+    state.queues = [
+      BILLING_QUEUE,
+      { ...FILES_QUEUE, approximateMessageCount: -1 },
+      { ...CRON_QUEUE, deployed: false, approximateMessageCount: -1 },
+    ];
     state.messages = [message('billing', 'b1', 1)];
     renderTab();
-    expect(screen.getByTestId('dlq-stats-total')).toHaveTextContent('1');
+    expect(screen.getByTestId('dlq-stats-total')).toHaveTextContent('2');
+    expect(screen.getByTestId('dlq-stats-registry')).toHaveTextContent(
+      'of 3 registered; 1 not on this stage; 1 unreadable'
+    );
   });
 
   it('explains a deep link to a queue this stage does not create', () => {
@@ -471,7 +496,7 @@ describe('DlqReplayTab bulk discard', () => {
       ['cron', ['c1']],
     ]);
     await waitFor(() => expect(screen.queryByTestId('dlq-discard-dialog-confirm-btn')).not.toBeInTheDocument());
-    expect(toast.success).toHaveBeenCalledWith('2 of 2 discarded.');
+    expect(toast.success).toHaveBeenCalledWith('2 of 2 discarded. Queue counts catch up within about a minute.');
   });
 
   it('keeps the dialog open when nothing was discarded', async () => {
@@ -570,9 +595,9 @@ describe('DlqReplayTab message details', () => {
     expect(screen.queryByTestId('dlq-drawer-close')).not.toBeInTheDocument();
   });
 
-  it('explains that browser views contribute to the receive count', () => {
+  it('labels the receive count as including views', () => {
     renderTab();
-    expect(screen.getByRole('columnheader', { name: /Receives/ })).toBeTruthy();
+    expect(screen.getByRole('columnheader', { name: /Receives \(incl\. views\)/ })).toBeTruthy();
   });
 });
 
@@ -760,5 +785,131 @@ describe('DlqReplayTab history table', () => {
     fireEvent.click(screen.getByTestId('dlq-toggle-history'));
     expect(within(screen.getByTestId('dlq-history-row-discard-1')).getAllByText('Discarded')).toHaveLength(2);
     expect(screen.getByText('Job obsolete')).toBeTruthy();
+  });
+});
+
+const TIMEOUT = { errorMessage: 'Task timed out', category: 'unknown' as const, source: 'attributes' as const };
+const OBSOLETE = { action: 'discard' as const, label: 'Job obsolete, discard', basis: 'Superseded by a later run.' };
+const SIG = 'a'.repeat(16);
+
+const groupedMessages = () => [
+  message('cron', 'c1', 1, { failureSignature: SIG, failure: TIMEOUT, recommendation: OBSOLETE }),
+  message('cron', 'c2', 2, { failureSignature: SIG, failure: TIMEOUT, recommendation: OBSOLETE }),
+  message('cron', 'c3', 3, { failureSignature: SIG, failure: TIMEOUT, recommendation: OBSOLETE }),
+  message('billing', 'b1', 4, { failureSignature: 'b'.repeat(16) }),
+];
+
+describe('DlqReplayTab grouped by failure', () => {
+  beforeEach(() => {
+    state.messages = groupedMessages();
+    h.user = manager;
+  });
+
+  it('opens on one row per queue and failure, with its count and burst state', () => {
+    renderTab({ view: 'groups' });
+    expect(screen.getByTestId('dlq-view-groups')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByTestId('dlq-messages-table')).not.toBeInTheDocument();
+    const group = `cron:${SIG}`;
+    expect(screen.getByTestId(`dlq-group-count-${group}`)).toHaveTextContent('3');
+    expect(screen.getByTestId(`dlq-group-failure-${group}`)).toHaveTextContent('Task timed out');
+    expect(screen.getByTestId(`dlq-group-burst-${group}`)).toHaveTextContent('Stopped');
+    expect(
+      within(screen.getByTestId('dlq-groups-table'))
+        .getAllByRole('row')
+        .filter(row => row.dataset.rowId)
+    ).toHaveLength(2);
+  });
+
+  it('opens the messages of a group filtered to its queue and failure', async () => {
+    renderTab({ view: 'groups' });
+    await userEvent.click(screen.getByTestId(`dlq-group-show-cron:${SIG}`));
+    expect(screen.getByTestId('dlq-messages-table')).toBeTruthy();
+    const search = h.navigate.mock.calls.at(-1)?.[0].search({});
+    expect(search).toMatchObject({ dlqQueue: 'cron', dlqFailure: SIG });
+  });
+
+  it('opens on the messages view, filtered and labelled, for a failure-group link', () => {
+    h.search = { dlqQueue: 'cron', dlqFailure: SIG };
+    renderTab({ view: 'groups' });
+    expect(rowIds()).toEqual(['c1', 'c2', 'c3']);
+    expect(screen.getByTestId('dlq-failure-filter')).toHaveTextContent('Task timed out');
+  });
+
+  it('discards a whole group on the server with the reason its recommendation implies', async () => {
+    h.groupDiscard.mockResolvedValue({ discarded: 71, failed: 0, historyPending: 0, complete: true });
+    renderTab({ view: 'groups' });
+    await userEvent.click(screen.getByTestId(`dlq-group-discard-cron:${SIG}`));
+    expect(screen.getByTestId('dlq-group-discard-failure')).toHaveTextContent('Task timed out');
+    await userEvent.click(screen.getByTestId('dlq-group-discard-dialog-confirm-btn'));
+    expect(h.groupDiscard).toHaveBeenCalledWith(
+      expect.objectContaining({ queueLabel: 'cron', failureSignature: SIG, reason: 'Job obsolete' })
+    );
+    await waitFor(() => expect(screen.queryByTestId('dlq-group-discard-dialog-confirm-btn')).not.toBeInTheDocument());
+    expect(toast.success).toHaveBeenCalledWith(
+      'Discarded 71 messages; none of this group is left. Queue counts catch up within about a minute.'
+    );
+  });
+
+  it('shows progress while the group discard runs and the outcome when it stops short', async () => {
+    let finish: (value: unknown) => void = () => undefined;
+    h.groupDiscard.mockImplementation(({ onProgress }: { onProgress: (done: number) => void }) => {
+      onProgress(50);
+      return new Promise(resolve => {
+        finish = resolve;
+      });
+    });
+    renderTab({ view: 'groups' });
+    await userEvent.click(screen.getByTestId(`dlq-group-discard-cron:${SIG}`));
+    await userEvent.click(screen.getByTestId('dlq-group-discard-dialog-confirm-btn'));
+    expect(await screen.findByTestId('dlq-group-discard-progress')).toHaveTextContent('50 so far');
+    finish({ discarded: 50, failed: 0, historyPending: 0, complete: false, stopped: 'no_progress' });
+    await waitFor(() => expect(screen.queryByTestId('dlq-group-discard-progress')).not.toBeInTheDocument());
+    expect(toast.warning).toHaveBeenCalledWith(
+      'Discarded 50 messages; no more matching messages were found this time. Queue counts catch up within about a minute.'
+    );
+  });
+
+  it('offers no group discard for a message whose failure could not be looked up', () => {
+    state.messages = [message('cron', 'u1', 1, { failureSignature: 'unavailable', failureLookupFailed: true })];
+    renderTab({ view: 'groups' });
+    expect(screen.getByTestId('dlq-group-discard-cron:unavailable:u1')).toBeDisabled();
+  });
+
+  it('shows the selected-discard progress in the dialog', async () => {
+    let finish: (value: unknown) => void = () => undefined;
+    h.discard.mockImplementation(({ onProgress }: { onProgress: (done: number) => void }) => {
+      onProgress(1);
+      return new Promise(resolve => {
+        finish = resolve;
+      });
+    });
+    renderTab();
+    selectRow('c1');
+    selectRow('c2');
+    await userEvent.click(screen.getByTestId('dlq-bulk-discard'));
+    // A shared discard recommendation fills in the reason, so the confirm is ready.
+    await userEvent.click(screen.getByTestId('dlq-discard-dialog-confirm-btn'));
+    expect(await screen.findByTestId('dlq-discard-progress')).toHaveTextContent('1 of 2 done');
+    finish([
+      { messageId: 'c1', queueLabel: 'cron', status: 'discarded' },
+      { messageId: 'c2', queueLabel: 'cron', status: 'discarded' },
+    ]);
+    await waitFor(() => expect(screen.queryByTestId('dlq-discard-progress')).not.toBeInTheDocument());
+  });
+});
+
+describe('DlqReplayTab counts after a discard', () => {
+  it('never shows more messages than the discard left while SQS catches up', () => {
+    h.ceilings = { billing: { ceiling: 0, until: Date.now() + 60_000 } };
+    renderTab();
+    // billing reports 2 (lagging) but the discard left 0; files and cron hold 1 each.
+    expect(screen.getByTestId('dlq-stats-failed')).toHaveTextContent('2');
+    expect(screen.getByTestId('dlq-stats-with-messages')).toHaveTextContent('2');
+  });
+
+  it('goes back to the SQS count once the lag window ends', () => {
+    h.ceilings = { billing: { ceiling: 0, until: Date.now() - 1 } };
+    renderTab();
+    expect(screen.getByTestId('dlq-stats-failed')).toHaveTextContent('4');
   });
 });

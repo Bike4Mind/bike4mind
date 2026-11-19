@@ -3,6 +3,7 @@ import type {
   StudioCompositionResponse,
   StudioShot,
   StudioTimeline,
+  StudioVideoClip,
 } from '@bike4mind/common';
 import { shotTimelineFileId } from './shotListEdits';
 
@@ -27,7 +28,7 @@ const swapOpeningVideoFile = (timeline: StudioTimeline, fromFileId: string, toFi
       track.kind === 'video'
         ? {
             ...track,
-            clips: track.clips.map(clip => (clip === opening ? { ...clip, fileId: toFileId, trimStartMs: 0 } : clip)),
+            clips: track.clips.map(clip => (clip === opening ? swapClipFile(clip, toFileId) : clip)),
           }
         : track
     ),
@@ -78,4 +79,10 @@ export const hookVariationBody = (
     timeline: swapped,
     ...(source.projectId && { projectId: source.projectId }),
   };
+};
+
+/** A new take may have another shape, so the old take's framing (crop rects) does not carry over. */
+const swapClipFile = (clip: StudioVideoClip, fileId: string): StudioVideoClip => {
+  const { crop: _previousFraming, ...rest } = clip;
+  return { ...rest, fileId, trimStartMs: 0 };
 };
