@@ -112,9 +112,9 @@ final class BriefVoiceSessionTests: XCTestCase {
   func testYesAndNoKeepTheirMeaningWhileAnAnswerWaits() {
     let options = ["Yes", "No"]
     XCTAssertEqual(BriefVoiceCommand.parse("yes", options: options), .choose(0))
-    XCTAssertEqual(BriefVoiceCommand.parse("yes", options: options, confirming: true), .confirm)
-    XCTAssertEqual(BriefVoiceCommand.parse("no", options: options, confirming: true), .cancel)
-    XCTAssertNil(BriefVoiceCommand.parse("yes no", options: options, confirming: true))
+    XCTAssertEqual(BriefVoiceCommand.parse("yes", options: options, confirming: .answer), .confirm)
+    XCTAssertEqual(BriefVoiceCommand.parse("no", options: options, confirming: .answer), .cancel)
+    XCTAssertNil(BriefVoiceCommand.parse("yes no", options: options, confirming: .answer))
   }
 
   func testAYesOptionCanBeChosenAndThenConfirmed() async {
@@ -149,9 +149,22 @@ final class BriefVoiceSessionTests: XCTestCase {
       ("yes approve", BriefVoiceCommand.confirm), ("yes I approve", .confirm), ("approve", .confirm),
       ("no, deny it", .cancel), ("deny", .cancel), ("no don't approve", nil), ("yes deny", nil),
     ] {
-      XCTAssertEqual(BriefVoiceCommand.parse(utterance, confirming: true), expected, utterance)
+      XCTAssertEqual(BriefVoiceCommand.parse(utterance, confirming: .approval), expected, utterance)
     }
     XCTAssertNil(BriefVoiceCommand.parse("yes approve"))
+    XCTAssertEqual(BriefVoiceCommand.parse("approve", confirming: .answer), .approve)
+  }
+
+  func testAnApproveOptionIsChosenWhileAnotherChoiceWaits() async {
+    let (session, api, _) = await loaded([question("d1", "Ship it?", options: ["Approve", "Reject"])])
+    _ = await session.handle("reject")
+    let rechose = await session.handle("approve")
+    XCTAssertEqual(rechose, "Choose Approve? Say yes to send it.")
+    var replies = await api.replies
+    XCTAssertTrue(replies.isEmpty)
+    _ = await session.handle("yes")
+    replies = await api.replies
+    XCTAssertEqual(replies.map(\.text), ["Approve"])
   }
 
   func testYesApproveConfirmsAndNoDenyItCancels() async {
