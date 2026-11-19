@@ -123,16 +123,14 @@ export function latestTodos(messages: readonly ChatMessage[]): PlanItem[] | null
  */
 export function activeTodos(messages: readonly ChatMessage[], turnOpen: boolean): PlanItem[] | null {
   const window = turnOpen ? 2 : 1;
-  // The window's oldest assistant reply (`start`) and the newest (`first`), as thread indices.
-  let first = -1;
+  // Thread index of the oldest assistant reply inside the window.
   let start = -1;
   for (let m = messages.length - 1, seen = 0; m >= 0 && seen < window; m -= 1) {
     if (messages[m].role !== 'assistant') continue;
-    if (first < 0) first = m;
     start = m;
     seen += 1;
   }
-  if (first < 0) return null;
+  if (start < 0) return null;
   // Recency is judged on the call the plan is read from, so a rejected newest call cannot revive
   // an older plan; the task fold still reads the whole thread.
   const plan = planFrom(planCalls(messages));
