@@ -109,6 +109,14 @@ describe('Claude Code task stream', () => {
     expect(slim(plan)).toEqual([{ content: 'a', status: 'completed' }]);
   });
 
+  it('reads a create result that is exactly "Task #7"', () => {
+    const plan = latestTodos([
+      reply(create('c1', 'a', 'Task #7')),
+      reply(update('u1', { taskId: '7', status: 'completed' })),
+    ]);
+    expect(plan).toEqual([{ id: '7', content: 'a', activeForm: 'Doing a', status: 'completed' }]);
+  });
+
   it('keeps cancelled tasks, which todoProgress leaves out of the count', () => {
     const plan = latestTodos([
       reply(create('c1', 'a'), create('c2', 'b'), update('u1', { taskId: '2', status: 'cancelled' })),
@@ -157,6 +165,12 @@ describe('activeTodos', () => {
     // The user asked something else and the reply in flight has not touched the plan.
     const messages = [user('u1'), reply(plan('p1', 'in_progress')), user('u2'), reply(other('g1'))];
     expect(activeTodos(messages, true)).toHaveLength(1);
+    expect(activeTodos(messages, false)).toBeNull();
+  });
+
+  it('does not revive an older plan when the newest todo_write is rejected by the parser', () => {
+    const tooLong = call('p2', { todos: [{ content: 'x'.repeat(201), status: 'pending' }] });
+    const messages = [user('u1'), reply(plan('p1', 'pending')), user('u2'), reply(tooLong)];
     expect(activeTodos(messages, false)).toBeNull();
   });
 
