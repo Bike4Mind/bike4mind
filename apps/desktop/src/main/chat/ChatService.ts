@@ -1003,7 +1003,7 @@ export class ChatService {
   /**
    * The plan progress of each session with a turn in flight, `null` once its thread has no plan.
    * A reply is stored only when it settles, so a stored summary lags a plan the model updates
-   * mid-turn; every summary pushed, listed or returned by a setter goes through withLivePlan, which lays this over it.
+   * mid-turn; every summary pushed, listed or returned by a setter or folder grant goes through withLivePlan, which lays this over it.
    */
   private readonly livePlans = new Map<string, PlanProgress | null>();
 
@@ -2875,7 +2875,7 @@ export class ChatService {
     return {
       status: 'added',
       path: inspection.path,
-      session: granted.session,
+      session: this.withLivePlan(granted.session),
       ...(inspection.warning ? { warning: inspection.warning } : {}),
     };
   }
@@ -2904,7 +2904,7 @@ export class ChatService {
           )
           .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit folder revocation: ${String(error)}`));
     }
-    return updated;
+    return updated && this.withLivePlan(updated);
   }
 
   refreshAccessScopes(): void {
@@ -4303,7 +4303,7 @@ export class ChatService {
     if (!session) return null;
     const settled = await this.settleDeviceLocal(session, (await this.deps.models?.listLocal?.()) ?? []);
     if ('error' in settled || !settled.summary) return null;
-    return { session: settled.summary, ...(settled.notice ? { notice: settled.notice } : {}) };
+    return { session: this.withLivePlan(settled.summary), ...(settled.notice ? { notice: settled.notice } : {}) };
   }
 
   /**
