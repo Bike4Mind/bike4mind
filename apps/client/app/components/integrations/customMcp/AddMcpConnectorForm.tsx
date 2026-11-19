@@ -138,7 +138,7 @@ const AddMcpConnectorForm = ({
           data-testid="custom-mcp-add-warning"
         >
           {platform
-            ? 'Bike4Mind has not reviewed this server. Every user can turn its tools on, and they act with the key you enter here. Their descriptions come from the server.'
+            ? 'Bike4Mind has not reviewed this server. Any user who switches it on can use its tools, and every call uses the authentication set here. Tool descriptions come from the server.'
             : 'Bike4Mind has not reviewed this server. Its tools can read and change data in the account you connect, and their descriptions come from the server.'}
         </Alert>
       )}
@@ -148,6 +148,7 @@ const AddMcpConnectorForm = ({
           size="sm"
           value={displayName}
           onChange={event => setDisplayName(event.target.value)}
+          autoFocus={platform}
           slotProps={{ input: { maxLength: 100, 'data-testid': 'custom-mcp-add-name-input' } }}
         />
       </FormControl>
@@ -196,10 +197,7 @@ const AddMcpConnectorForm = ({
             slotProps={{ input: { 'data-testid': 'custom-mcp-add-api-key-input' } }}
           />
           <FormHelperText>
-            {keyProblem ??
-              (platform
-                ? 'Stored encrypted and never shown again.'
-                : 'Stored encrypted. Only its last four characters are shown again.')}
+            {keyProblem ?? 'Stored encrypted. Only its last four characters are shown again.'}
           </FormHelperText>
         </FormControl>
       )}
@@ -281,7 +279,7 @@ const AddMcpConnectorForm = ({
       )}
 
       {error && (
-        <Typography level="body-sm" color="danger" data-testid="custom-mcp-add-error">
+        <Typography level="body-sm" color="danger" role="alert" data-testid="custom-mcp-add-error">
           {error}
         </Typography>
       )}

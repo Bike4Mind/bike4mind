@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Box, Button, Chip, Divider, Option, Select, Stack, Switch, Typography } from '@mui/joy';
+import { useState, type ReactElement } from 'react';
+import { Box, Button, Chip, Divider, Option, Select, Stack, Switch, Tooltip, Typography } from '@mui/joy';
 import { toast } from 'sonner';
 import { isReadOnlyMcpConnectionTool, type IMcpConnectionPublic, type McpToolApprovalMode } from '@bike4mind/common';
 import { useQueryClient } from '@tanstack/react-query';
@@ -18,20 +18,41 @@ const APPROVAL_LABELS: Record<McpToolApprovalMode, string> = {
   always_ask: 'Always ask',
 };
 
+const ALL_APPROVALS = Object.keys(APPROVAL_LABELS) as McpToolApprovalMode[];
+// The server never asks before a read-only tool under `default`, so it reads as Always allow.
+const READ_ONLY_APPROVALS: McpToolApprovalMode[] = ['always_allow', 'always_ask'];
+
+/** A control the viewer may not use: disabled, with the reason on hover and focus. */
+const Locked = ({ reason, children }: { reason: string | null | undefined; children: ReactElement }) =>
+  reason ? (
+    <Tooltip title={reason}>
+      {/* A disabled control fires no pointer events, so the tooltip needs a focusable wrapper. */}
+      <span tabIndex={0} aria-label={reason} data-testid="mcp-review-locked">
+        {children}
+      </span>
+    </Tooltip>
+  ) : (
+    children
+  );
+
 /**
  * Review of one connection's tools: what each does (as the server describes it), read or write,
  * on or off, and when to ask before a call. Saving marks every listed tool reviewed; until then
- * a new or changed tool is not offered to the model.
+ * a new or changed tool is not offered to the model. `readOnlyReason` shows the review with every
+ * control disabled and that reason on each.
  */
 const McpToolReview = ({
   connection,
   scope = 'user',
+  readOnlyReason,
   onDone,
 }: {
   connection: IMcpConnectionPublic;
   scope?: McpConnectionScope;
+  readOnlyReason?: string | null;
   onDone: () => void;
 }) => {
+  const platform = scope === 'platform';
   // The tools as they were when the review opened. A refetch while it is open (Refresh tools, a background
   // update) must not swap in versions the user never saw: saving names these versions, so a change made
   // since fails with tool_version_conflict instead of being approved unseen.
@@ -88,6 +109,8 @@ const McpToolReview = ({
           const draft = drafts[tool.name]!;
           const readOnly = isReadOnlyMcpConnectionTool(tool);
           const toolTestId = `${testId}-tool-${tool.name}`;
+          const approvals = platform && readOnly ? READ_ONLY_APPROVALS : ALL_APPROVALS;
+          const approvalShown = approvals.includes(draft.approval) ? draft.approval : 'always_allow';
           return (
             <Box key={tool.name} data-testid={toolTestId} sx={{ px: '12px', py: '10px' }}>
               <Stack direction="row" alignItems="center" gap="8px">
@@ -107,13 +130,17 @@ const McpToolReview = ({
                 >
                   {readOnly ? 'Read' : 'Write'}
                 </Chip>
-                <Switch
-                  size="sm"
-                  checked={draft.enabled}
-                  disabled={!tool.versionHash}
-                  onChange={event => setDraft(tool.name, { enabled: event.target.checked })}
-                  slotProps={{ input: { 'aria-label': `Enable ${tool.name}`, 'data-testid': `${toolTestId}-switch` } }}
-                />
+                <Locked reason={readOnlyReason}>
+                  <Switch
+                    size="sm"
+                    checked={draft.enabled}
+                    disabled={!tool.versionHash || !!readOnlyReason}
+                    onChange={event => setDraft(tool.name, { enabled: event.target.checked })}
+                    slotProps={{
+                      input: { 'aria-label': `Enable ${tool.name}`, 'data-testid': `${toolTestId}-switch` },
+                    }}
+                  />
+                </Locked>
               </Stack>
               {tool.description && (
                 <Typography level="body-xs" sx={{ mt: '4px', color: 'text.secondary', wordBreak: 'break-word' }}>
@@ -124,23 +151,34 @@ const McpToolReview = ({
                 <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
                   Approval
                 </Typography>
-                <Select<McpToolApprovalMode>
-                  size="sm"
-                  value={draft.approval}
-                  disabled={!draft.enabled}
-                  onChange={(_, value) => value && setDraft(tool.name, { approval: value })}
-                  slotProps={{
-                    button: { 'aria-label': `Approval for ${tool.name}`, 'data-testid': `${toolTestId}-approval` },
-                  }}
-                  sx={{ minWidth: '150px' }}
-                >
-                  {(Object.keys(APPROVAL_LABELS) as McpToolApprovalMode[]).map(mode => (
-                    <Option key={mode} value={mode} data-testid={`${toolTestId}-approval-${mode}`}>
-                      {APPROVAL_LABELS[mode]}
-                    </Option>
-                  ))}
-                </Select>
+                <Locked reason={readOnlyReason}>
+                  <Select<McpToolApprovalMode>
+                    size="sm"
+                    value={approvalShown}
+                    disabled={!draft.enabled || !!readOnlyReason}
+                    onChange={(_, value) => value && setDraft(tool.name, { approval: value })}
+                    slotProps={{
+                      button: { 'aria-label': `Approval for ${tool.name}`, 'data-testid': `${toolTestId}-approval` },
+                    }}
+                    sx={{ minWidth: '150px' }}
+                  >
+                    {approvals.map(mode => (
+                      <Option key={mode} value={mode} data-testid={`${toolTestId}-approval-${mode}`}>
+                        {APPROVAL_LABELS[mode]}
+                      </Option>
+                    ))}
+                  </Select>
+                </Locked>
               </Stack>
+              {platform && !readOnly && (
+                <Typography
+                  level="body-xs"
+                  sx={{ mt: '4px', color: 'text.tertiary' }}
+                  data-testid={`${toolTestId}-approval-note`}
+                >
+                  Always allow lets every user who turned this connector on run this tool without being asked.
+                </Typography>
+              )}
             </Box>
           );
         })}
@@ -156,15 +194,17 @@ const McpToolReview = ({
         </Typography>
       )}
       <Stack direction="row" gap="8px">
-        <Button
-          size="sm"
-          loading={update.isPending}
-          disabled={entries.length === 0}
-          onClick={save}
-          data-testid={`${testId}-save-btn`}
-        >
-          Save review
-        </Button>
+        <Locked reason={readOnlyReason}>
+          <Button
+            size="sm"
+            loading={update.isPending}
+            disabled={entries.length === 0 || !!readOnlyReason}
+            onClick={save}
+            data-testid={`${testId}-save-btn`}
+          >
+            Save review
+          </Button>
+        </Locked>
         <Button size="sm" variant="plain" color="neutral" onClick={onDone} data-testid={`${testId}-cancel-btn`}>
           Cancel
         </Button>
