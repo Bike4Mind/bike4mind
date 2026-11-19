@@ -190,18 +190,24 @@ export async function handler(event: unknown): Promise<{ status: 'ok' | 'disable
   logger.log('spend-monitor-evaluated', { breaches, posted });
 
   // After evaluateSpend, so incidents opened or escalated by this run are paused in the same run.
-  const autoPause = await runAutoPause(
-    now,
-    {
-      alerts: spendAlertRepository,
-      freeze: autoPauseFreeze(now, logger),
-      post,
-      adminUrl: `${appUrlFromEnv()}/admin?tab=spend-monitor`,
-      logger,
-    },
-    readAutoPauseConfig(settings)
-  );
-  logger.log('spend-monitor-auto-pause-evaluated', autoPause);
+  // A failure is rethrown only after the margin check, so it still fails the run without skipping it.
+  let autoPauseFailure: unknown;
+  try {
+    const autoPause = await runAutoPause(
+      now,
+      {
+        alerts: spendAlertRepository,
+        freeze: autoPauseFreeze(now, logger),
+        post,
+        adminUrl: `${appUrlFromEnv()}/admin?tab=spend-monitor`,
+        logger,
+      },
+      readAutoPauseConfig(settings)
+    );
+    logger.log('spend-monitor-auto-pause-evaluated', autoPause);
+  } catch (error) {
+    autoPauseFailure = error;
+  }
 
   if (isMarginCheckSlot(now) && getSettingsValue('spendMonitorMarginEnabled', settings)) {
     const marginThresholds = readMarginThresholds(settings);
@@ -220,5 +226,6 @@ export async function handler(event: unknown): Promise<{ status: 'ok' | 'disable
       logger.error('spend-monitor-margin-failed', { error });
     }
   }
+  if (autoPauseFailure !== undefined) throw autoPauseFailure;
   return { status: 'ok', rolled: buckets.length };
 }

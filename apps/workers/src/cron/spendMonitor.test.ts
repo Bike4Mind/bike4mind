@@ -408,6 +408,15 @@ describe('spendMonitor handler margin check', () => {
     expect(mocks.error).toHaveBeenCalledWith('spend-monitor-margin-failed', { error: failure });
   });
 
+  it('still runs the margin check when the automatic pause fails, then fails the run', async () => {
+    const failure = new AggregateError([new Error('slack down')], 'automatic pause failed');
+    mocks.runAutoPause.mockRejectedValue(failure);
+
+    await expect(handler(midnightEvent)).rejects.toBe(failure);
+
+    expect(mocks.runMarginCheck).toHaveBeenCalledOnce();
+  });
+
   it('fails loudly when a margin threshold resolves to no value', async () => {
     useSettings({ spendMonitorMarginWindowHours: undefined });
 

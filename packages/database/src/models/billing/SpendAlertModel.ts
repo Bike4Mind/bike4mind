@@ -97,7 +97,8 @@ export class SpendAlertRepository extends BaseRepository<ISpendAlertDocument> im
       autoPause.mode === 'enforce' ? { 'autoPause.mode': { $ne: 'enforce' } } : { autoPause: { $exists: false } };
     const result = await this.model.updateOne(
       { _id: id, status: { $in: ACTIVE_STATUSES }, ...undecided },
-      { $set: { autoPause } }
+      { $set: { autoPause } },
+      { runValidators: true }
     );
     return result.matchedCount === 1;
   }
