@@ -187,6 +187,42 @@ describe('logApiKeyUsageOnResponse', () => {
     expect(mockLogUsage.mock.calls[0][0]).toMatchObject({ completionObservation: { outcome: 'completed' } });
   });
 
+  describe('completion failure code', () => {
+    const finishWith = async (outcome: 'failed' | 'completed', failureCode: string) => {
+      const res = makeRes({ headersSent: true, writableFinished: true });
+      const { ready, track } = register(res, {
+        requestId: 'synthetic-request',
+        requestedModel: 'model-alpha',
+        outcome: () => outcome,
+        failureCode: () => failureCode,
+      });
+      await ready;
+      res.emit('finish');
+      await track.mock.calls[1][0];
+    };
+
+    it('stores the code on a failed completion', async () => {
+      await finishWith('failed', 'http_503');
+      expect(mockLogUsage.mock.calls[0][0].completionObservation).toMatchObject({
+        outcome: 'failed',
+        failureCode: 'http_503',
+      });
+    });
+
+    it('stores none on a completed one', async () => {
+      await finishWith('completed', 'http_503');
+      expect(mockLogUsage.mock.calls[0][0].completionObservation).not.toHaveProperty('failureCode');
+    });
+
+    it('drops an invalid code and still writes the row', async () => {
+      await finishWith('failed', 'provider said: bad prompt text');
+      expect(mockLogUsage).toHaveBeenCalledTimes(1);
+      const observation = mockLogUsage.mock.calls[0][0].completionObservation;
+      expect(observation).toMatchObject({ outcome: 'failed' });
+      expect(observation).not.toHaveProperty('failureCode');
+    });
+  });
+
   it('logs immediately when the response is already finished', async () => {
     const res = makeRes({ headersSent: true, writableFinished: true });
     register(res);
