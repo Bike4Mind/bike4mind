@@ -93,11 +93,17 @@ drawBrandMark(icon, in: discRect)
 icon.restoreGState()
 write(icon, to: "\(catalog)/AppIcon.appiconset/AppIcon-1024.png")
 
-// Launch mark: the brand mark as-is on transparency, centered on the launch background and reused
-// as the welcome-screen mark.
+// Launch mark: the brand mark on transparency, centered on the launch background and reused as the
+// Chat home greeting and sign-in mark.
 for scale in 1...3 {
   let pixels = launchMarkPoints * scale
   let mark = makeContext(pixels: pixels, opaque: false)
-  drawBrandMark(mark, in: CGRect(x: 0, y: 0, width: pixels, height: pixels))
+  let rect = CGRect(x: 0, y: 0, width: pixels, height: pixels)
+  let side = CGFloat(pixels)
+  mark.saveGState()
+  mark.addEllipse(in: rect.insetBy(dx: side * iconRimClipFraction, dy: side * iconRimClipFraction))
+  mark.clip()
+  drawBrandMark(mark, in: rect)
+  mark.restoreGState()
   write(mark, to: "\(catalog)/LaunchMark.imageset/LaunchMark@\(scale)x.png")
 }
