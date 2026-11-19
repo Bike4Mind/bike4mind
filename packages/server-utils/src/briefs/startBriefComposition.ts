@@ -5,7 +5,7 @@ import {
   userRepository,
   type IAssistantBrief,
 } from '@bike4mind/database';
-import { briefWindow } from './briefSchedule';
+import { BRIEF_MIN_GAP_MS, briefWindow } from './briefSchedule';
 import { BriefComposeRejectedError, publishBriefCompose } from './publishBriefCompose';
 import { Logger } from '@bike4mind/observability';
 
@@ -72,10 +72,10 @@ export async function startBriefComposition(
 }
 
 export type ScheduledBriefOutcome =
-  'enqueued' | 'in_flight' | 'no_activity' | 'push_off' | 'schedule_off' | 'user_missing';
+  'debounced' | 'enqueued' | 'in_flight' | 'no_activity' | 'push_off' | 'schedule_off' | 'user_missing';
 
 export type ScheduledBriefDeps = Deps & {
-  users: Pick<typeof userRepository, 'findById'>;
+  users: Pick<typeof userRepository, 'findById' | 'claimBriefStart' | 'releaseBriefStart'>;
   /** Whether the user started any agent run at or after `since`. */
   hasRunsSince(userId: string, since: Date): Promise<boolean>;
 };
@@ -90,25 +90,50 @@ const defaultScheduledDeps: ScheduledBriefDeps = {
 };
 
 /**
- * The scheduled path into the composer: skips users whose schedule is now off, users who turned brief
- * pushes off, and windows with no agent runs (the worker derives approvals from those runs' sessions, so
- * no runs means nothing to report), so none of them costs a model call or leaves a row behind.
+ * The automatic path into the composer, shared by the schedule and agent-run completion: skips users whose
+ * schedule is off, users who turned brief pushes off, and windows with no agent runs (the worker derives
+ * approvals from those runs' sessions, so no runs means nothing to report), so none of them costs a model
+ * call or leaves a row behind. Then claims the per-user debounce so the two paths start one brief per gap.
  */
-export async function startScheduledBrief(
-  userId: string,
-  deps: ScheduledBriefDeps = defaultScheduledDeps
-): Promise<ScheduledBriefOutcome> {
+async function startGatedBrief(userId: string, deps: ScheduledBriefDeps): Promise<ScheduledBriefOutcome> {
   const user = await deps.users.findById(userId);
   if (!user) return 'user_missing';
   // The reconciler claims the slot before this re-read, so a PUT that just disabled the schedule wins here.
   if (!user.preferences?.briefSchedule?.enabled) return 'schedule_off';
   if (!isPushCategoryEnabled(user.preferences?.pushNotifications, 'brief_ready')) return 'push_off';
-  if (await deps.briefs.findActiveComposing(userId, deps.now())) return 'in_flight';
+  const now = deps.now();
+  if (await deps.briefs.findActiveComposing(userId, now)) return 'in_flight';
 
   const latest = await deps.briefs.findLatestReady(userId);
-  const { periodStart } = briefWindow(latest?.periodEnd, deps.now());
+  const { periodStart } = briefWindow(latest?.periodEnd, now);
   if (!(await deps.hasRunsSince(userId, periodStart))) return 'no_activity';
 
-  await startBriefComposition(userId, deps, { scheduled: true });
+  if (!(await deps.users.claimBriefStart(userId, now, BRIEF_MIN_GAP_MS))) return 'debounced';
+  try {
+    await startBriefComposition(userId, deps, { scheduled: true });
+  } catch (err) {
+    // Same rule as the reconciler's slot retry: keep the claim only when the event may have been delivered.
+    if (!(err instanceof BriefComposeStartError && !err.retrySafe)) {
+      await deps.users.releaseBriefStart(userId, now).catch((releaseError: unknown) => {
+        logger.error('Failed to release a brief start claim', { userId, releaseError });
+      });
+    }
+    throw err;
+  }
   return 'enqueued';
+}
+
+export function startScheduledBrief(
+  userId: string,
+  deps: ScheduledBriefDeps = defaultScheduledDeps
+): Promise<ScheduledBriefOutcome> {
+  return startGatedBrief(userId, deps);
+}
+
+/** Starts a brief when an agent run completes, under the same gates and debounce as the schedule. */
+export function startEventBrief(
+  userId: string,
+  deps: ScheduledBriefDeps = defaultScheduledDeps
+): Promise<ScheduledBriefOutcome> {
+  return startGatedBrief(userId, deps);
 }

@@ -115,6 +115,9 @@ export function computeNextBriefAt(schedule: BriefScheduleTiming, after: Date): 
   return null;
 }
 
+// Minimum gap between two automatic brief starts for one user, shared by the scheduled and event paths (ms).
+export const BRIEF_MIN_GAP_MS = 4 * 60 * 60 * 1000;
+
 /**
  * The activity window a brief covers: from the end of the last ready brief, capped at a week back, or
  * the last day when there is none. Shared by on-demand composition and the scheduler's pre-check.

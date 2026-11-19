@@ -55,6 +55,7 @@ export async function runBriefScheduleReconcile(
     claimedElsewhere: 0,
     unscheduled: 0,
     failed: 0,
+    debounced: 0,
     enqueued: 0,
     in_flight: 0,
     no_activity: 0,
