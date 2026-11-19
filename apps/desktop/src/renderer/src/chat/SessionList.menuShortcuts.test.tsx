@@ -44,6 +44,7 @@ interface Handlers {
   onTogglePin: (s: ChatSessionSummary) => void;
   onToggleArchived: (s: ChatSessionSummary) => void;
   onDelete: (id: string) => void;
+  onDownload: (s: ChatSessionSummary) => void;
 }
 
 let host: HTMLDivElement | null = null;
@@ -75,7 +76,7 @@ async function mount(sessions: ChatSessionSummary[], handlers: Partial<Handlers>
           onTogglePin={handlers.onTogglePin ?? (() => {})}
           onToggleArchived={handlers.onToggleArchived ?? (() => {})}
           onRename={() => {}}
-          onDownload={() => {}}
+          onDownload={handlers.onDownload ?? (() => {})}
           userSections={EMPTY_SIDEBAR_SECTIONS}
           sectionActions={{ create: () => {}, rename: () => {}, remove: () => {}, move: () => {} }}
         />
@@ -176,6 +177,20 @@ describe('SessionList row menu shortcuts', () => {
     await press('r');
 
     expect(query('chat-session-rename-input')).not.toBeNull();
+  });
+
+  it('runs Download on L and opens Message session on M', async () => {
+    const onDownload = vi.fn();
+    const session = summary('a', 'Alpha');
+    await mount([session], { onDownload });
+
+    await openMenu();
+    await press('l');
+    expect(onDownload).toHaveBeenCalledWith(session);
+
+    await openMenu();
+    await press('m');
+    expect(query('message-session-dialog')).not.toBeNull();
   });
 
   it('ignores a letter with a modifier held', async () => {
