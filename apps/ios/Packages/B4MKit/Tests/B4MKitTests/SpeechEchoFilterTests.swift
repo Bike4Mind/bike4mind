@@ -59,4 +59,11 @@ final class SpeechEchoFilterTests: XCTestCase {
       residual("the capital of France is Paris what about the capital of Italy"), "what about the capital of Italy")
     XCTAssertEqual(residual("Paris what about it"), "Paris what about it")
   }
+
+  func testAQuestionThatReusesTheReplysWordsIsTheUser() {
+    XCTAssertEqual(residual("what is the capital of Italy"), "what is the capital of Italy")
+    let reply = ["The capital of France is Paris.", "It is known for art and food."]
+    XCTAssertEqual(residual("the capital of Italy", spoken: reply), "the capital of Italy")
+    XCTAssertEqual(residual("the capital of Italy", spoken: [reply[0]]), "Italy")
+  }
 }
