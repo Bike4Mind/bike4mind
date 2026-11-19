@@ -50,37 +50,37 @@
     public struct UnplayableClip: Error {}
 
     private var player: AVAudioPlayer?
-    private var finished: CheckedContinuation<Void, Never>?
+    private var finished: CheckedContinuation<Void, any Error>?
 
     public override init() {
       super.init()
     }
 
     public func play(_ clip: Data) async throws {
-      complete()
+      complete(nil)
       let player = try AVAudioPlayer(data: clip)
       player.delegate = self
       guard player.play() else { throw UnplayableClip() }
       self.player = player
-      await withCheckedContinuation { finished = $0 }
+      try await withCheckedThrowingContinuation { finished = $0 }
     }
 
     public func stop() async {
       player?.stop()
-      complete()
+      complete(nil)
     }
 
     public func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-      complete()
+      complete(flag ? nil : UnplayableClip())
     }
 
     public func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: (any Error)?) {
-      complete()
+      complete(UnplayableClip())
     }
 
-    private func complete() {
+    private func complete(_ error: (any Error)?) {
       player = nil
-      finished?.resume()
+      if let error { finished?.resume(throwing: error) } else { finished?.resume() }
       finished = nil
     }
   }

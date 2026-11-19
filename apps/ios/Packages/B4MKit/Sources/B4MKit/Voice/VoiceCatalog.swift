@@ -27,8 +27,6 @@ public struct VoiceSelection: Codable, Equatable, Sendable {
 public protocol VoiceSelectionStore: AnyObject, Sendable {
   func selection(for account: VoiceAccount) -> VoiceSelection?
   func setSelection(_ selection: VoiceSelection?, for account: VoiceAccount)
-  /// Forgets every account's selection (sign-out).
-  func removeAll()
 }
 
 public final class UserDefaultsVoiceSelectionStore: VoiceSelectionStore, @unchecked Sendable {
@@ -50,12 +48,6 @@ public final class UserDefaultsVoiceSelectionStore: VoiceSelectionStore, @unchec
       return
     }
     defaults.set(data, forKey: Self.key(account))
-  }
-
-  public func removeAll() {
-    for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(Self.prefix) {
-      defaults.removeObject(forKey: key)
-    }
   }
 
   private static func key(_ account: VoiceAccount) -> String {
@@ -126,9 +118,10 @@ public final class VoiceCatalogModel {
     if let account { store.setSelection(picked, for: account) }
   }
 
-  /// The voice id replies should be spoken in, or `nil` for on-device speech. Loads the catalog on first use.
+  /// The voice id replies should be spoken in, or `nil` for on-device speech. Loads the catalog on first use and
+  /// waits out a load already running (e.g. one Settings started).
   public func premiumVoice() async -> String? {
-    if state == .idle { await load() }
+    if state == .idle || state == .loading { await load() }
     guard flagEnabled == true, let selection else { return nil }
     switch state {
     case .loaded, .failed:
@@ -140,7 +133,8 @@ public final class VoiceCatalogModel {
     }
   }
 
-  /// Drops the cached catalog and every stored selection (sign-out or server switch).
+  /// Drops the cached catalog and in-memory pick (sign-out, session expiry or server switch). Stored picks stay:
+  /// they are keyed per account and server, so the next account never reads them and the same one gets its pick back.
   public func reset() {
     generation += 1
     inFlight?.cancel()
@@ -150,7 +144,6 @@ public final class VoiceCatalogModel {
     account = nil
     flagEnabled = nil
     lastCatalog = nil
-    store.removeAll()
   }
 
   private func performLoad(generation started: Int) async {

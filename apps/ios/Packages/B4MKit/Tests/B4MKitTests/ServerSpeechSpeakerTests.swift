@@ -142,9 +142,23 @@ final class ServerSpeechSpeakerTests: XCTestCase {
     XCTAssertEqual(requested.count, ServerSpeechSpeaker.prefetchLimit)
     XCTAssertEqual(Set(requested), ["One.", "Two."])
 
-    await speaker.speak("Three.")
-    let after = await wire.requested
-    XCTAssertEqual(after.last, "Three.", "an unprepared chunk is fetched when spoken")
+    await speaker.speak("One.")
+    try await waitFor { await self.wire.requested.contains("Three.") }
+    let afterOne = await wire.requested
+    XCTAssertEqual(afterOne.count, 3, "a queued chunk starts fetching once a slot frees, not when it is spoken")
+
+    for text in ["Two.", "Three.", "Four."] { await speaker.speak(text) }
+    let all = await wire.requested
+    let played = await player.played
+    XCTAssertEqual(all.count, 4, "no chunk is fetched twice")
+    XCTAssertEqual(played, ["One.", "Two.", "Three.", "Four."].map { "clip:v1:\($0)" })
+  }
+
+  func testAnUnpreparedChunkIsFetchedWhenSpoken() async {
+    let speaker = makeSpeaker()
+    await speaker.speak("Solo.")
+    let requested = await wire.requested
+    XCTAssertEqual(requested, ["Solo."])
   }
 
   func testNothingIsPreparedOnceDegraded() async throws {
