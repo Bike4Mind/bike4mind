@@ -54,6 +54,8 @@ export interface DirectoryInspectionContext {
   roots: readonly string[];
   workingDirectory?: string;
   protectedPaths?: readonly string[];
+  /** Folders inside a protected path that may still be shared; the folder itself may not. Writes stay blocked by the file tools. */
+  shareableUnderProtected?: readonly string[];
   /** Real paths the user said "Not now" to earlier in this turn. */
   declined: readonly string[];
   /** Injected so tests do not depend on the machine's own home folder. */
@@ -119,7 +121,8 @@ export async function inspectDirectory(
       message: 'The filesystem root cannot be shared. Share the specific folder that is needed.',
     };
   }
-  if (withinGuarded(context.protectedPaths ?? [], [real])) {
+  const shareable = (context.shareableUnderProtected ?? []).some(dir => real !== dir && isWithin(dir, real));
+  if (!shareable && withinGuarded(context.protectedPaths ?? [], [real])) {
     return { kind: 'refused', message: `${requested} belongs to this app and cannot be shared.` };
   }
 

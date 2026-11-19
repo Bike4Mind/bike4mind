@@ -503,7 +503,8 @@ export function registerChat(
       await capabilityLedger.migrate({ roots, trustedProjects, permissions: stored });
     })
     .catch(error => logger.warn(`CAPABILITIES: could not migrate grants: ${String(error)}`));
-  const attachments = new AttachmentStore(join(userData, 'attachments'), logger, shrinkImage);
+  const attachmentsDir = join(userData, 'attachments');
+  const attachments = new AttachmentStore(attachmentsDir, logger, shrinkImage);
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
   registerArtifactProtocol();
@@ -818,6 +819,9 @@ export function registerChat(
     get protectedPaths() {
       return toolProtected.paths();
     },
+    // Attachments sit inside userData but hold only what the user attached, so the agent may be
+    // given a folder of them to hand to another tool; the file tools still refuse every write there.
+    shareableUnderProtected: [attachmentsDir],
     get unresolvedProtectedPaths() {
       return toolProtected.unresolved();
     },
