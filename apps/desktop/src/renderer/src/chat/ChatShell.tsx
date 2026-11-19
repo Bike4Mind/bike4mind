@@ -796,7 +796,7 @@ export function ChatShell({
     modelSupportsTools(orchestrationSession.model, findModelOption(catalog.models, orchestrationSession.model));
   const delegating = orchestrationSession?.orchestrate === true;
   const hasAgents = spawnedStates.length > 0;
-  const agentsSurfaceAvailable = hasAgents || delegating;
+  const agentsSurfaceAvailable = hasAgents || (delegating && orchestrateCapable);
   const orchestrating = orchestratorPrefs.surface === 'orchestrate' && agentsSurfaceAvailable;
   const { setOrchestrate } = conversation;
   const staleAgentsSurface = !settling && !agentsSurfaceAvailable && orchestratorPrefs.surface === 'orchestrate';
@@ -1675,7 +1675,7 @@ export function ChatShell({
                 </Box>
                 <OrchestrateToggle
                   states={spawnedStates}
-                  enabled={delegating}
+                  enabled={delegating && orchestrateCapable}
                   parentNeedsYou={!!activeId && statuses.get(activeId) === 'needs-action'}
                   surface={orchestrating ? 'orchestrate' : 'chat'}
                   onSurfaceChange={orchestratorPrefs.setSurface}
