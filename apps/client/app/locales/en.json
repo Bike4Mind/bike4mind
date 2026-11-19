@@ -206,6 +206,28 @@
     },
     "api_keys": {
       "member_keys": "Member API keys"
+    },
+    "access_notice": {
+      "owner_only": "Owner only",
+      "denied_owner": "Only the team owner can open {{tab}}. Ask the owner if you need it.",
+      "denied_managers": "Only the team owner and managers can open {{tab}}. Ask the owner if you need it.",
+      "denied_settings": "Your account cannot open {{tab}}. Ask the team owner if you need access.",
+      "billing_locked": "Changing the plan, seats and payment details",
+      "billing_locked_description": "Credits and seats for this team, read-only.",
+      "billing_summary": "What you can see from here",
+      "credits_remaining": "Credits remaining",
+      "seats_used": "Seats used",
+      "seats_value": "{{current}} of {{max}}",
+      "integrations_locked": "Setting up Slack, GitHub and webhooks",
+      "owner_only_label": "Owner only:",
+      "owner_only_detail": "{{what}}. Ask the team owner; the Members tab shows who that is.",
+      "settings_locked": "Exporting team data, transferring ownership and deleting the team",
+      "no_seats_ask_owner": "No seats available. Ask the team owner to add seats.",
+      "seat_limit_add_seats": "All seats are in use. <addSeats>Add seats</addSeats>.",
+      "seat_limit_ask_owner": "All seats are in use. Ask the team owner to add seats.",
+      "add_limit_ask_owner": "You can only add up to {{available}} more members. Ask the team owner to add seats.",
+      "seat_limit_upgrade": "You've reached your seat limit. Upgrade your plan to add more members.",
+      "add_limit_upgrade": "You can only add up to {{available}} more members with your current plan"
     }
   },
   "session": {

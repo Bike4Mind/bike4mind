@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   lakeFindById: vi.fn(),
   batchFindById: vi.fn(),
   userFindById: vi.fn(),
+  findAdminRoles: vi.fn(),
   getSettingByName: vi.fn(),
   getGitHubLakeAppConfig: vi.fn(),
   getInstallationOctokit: vi.fn(),
@@ -29,6 +30,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/database', () => ({
   User: { findById: h.userFindById },
+  adminRoleRepository: { findByIds: (ids: string[]) => h.findAdminRoles(ids) },
   adminSettingsRepository: {},
   dataLakeRepository: { findById: h.lakeFindById },
   dataLakeBatchRepository: { findById: h.batchFindById },
@@ -60,6 +62,7 @@ vi.mock('@workers/queueHandlers/githubLakeSlice', () => ({ runGitHubLakeSlice: h
 vi.mock('@workers/queueHandlers/lakeIngestShared', () => ({ settleLakeIngestBatch: h.settle }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 
+import { hasAdminPermission } from '@bike4mind/common';
 import {
   dispatch,
   GITHUB_LAKE_CHAIN_BUDGET_MS,
@@ -678,5 +681,58 @@ describe('githubLakeIngest - chain safety', () => {
     h.runGitHubLakeSlice.mockRejectedValueOnce(new Error('boom'));
     await expect(run()).rejects.toThrow('boom');
     expect(h.recordSynced).not.toHaveBeenCalled();
+  });
+});
+
+describe('githubLakeIngest - role-held admin permissions', () => {
+  const ROLE_ID = 'a'.repeat(24);
+  const DELETED_ROLE_ID = 'c'.repeat(24);
+  const connectingUserWith = (adminRoleIds: unknown[]) =>
+    h.userFindById.mockResolvedValue({ id: 'user1', adminRoleIds });
+  const userHandedToSlice = () =>
+    (h.runGitHubLakeSlice.mock.calls[0][0] as { user: Parameters<typeof hasAdminPermission>[0] }).user;
+
+  beforeEach(() => {
+    h.findAdminRoles.mockResolvedValue([{ permissions: ['settings:manage'] }]);
+  });
+
+  it('counts a permission held only through a role on the user the slice builds its ability from', async () => {
+    connectingUserWith([ROLE_ID]);
+
+    await run();
+
+    expect(h.findAdminRoles).toHaveBeenCalledWith([ROLE_ID]);
+    expect(hasAdminPermission(userHandedToSlice(), 'settings:manage')).toBe(true);
+  });
+
+  it('refuses the permission on the next run once the role is removed', async () => {
+    connectingUserWith([ROLE_ID]);
+    await run();
+    expect(hasAdminPermission(userHandedToSlice(), 'settings:manage')).toBe(true);
+
+    h.runGitHubLakeSlice.mockClear();
+    connectingUserWith([]);
+    await run();
+
+    expect(hasAdminPermission(userHandedToSlice(), 'settings:manage')).toBe(false);
+  });
+
+  it('grants nothing for a deleted or malformed role id', async () => {
+    h.findAdminRoles.mockResolvedValue([]);
+    connectingUserWith([DELETED_ROLE_ID, 'not-an-id']);
+
+    await run();
+
+    expect(h.findAdminRoles).toHaveBeenCalledWith([DELETED_ROLE_ID]);
+    expect(hasAdminPermission(userHandedToSlice(), 'settings:manage')).toBe(false);
+  });
+
+  it('runs no slice when the role lookup fails', async () => {
+    connectingUserWith([ROLE_ID]);
+    h.findAdminRoles.mockRejectedValue(new Error('db down'));
+
+    await run().catch(() => undefined);
+
+    expect(h.runGitHubLakeSlice).not.toHaveBeenCalled();
   });
 });

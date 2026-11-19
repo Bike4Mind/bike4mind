@@ -4,6 +4,7 @@ import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
 
 type AccountRow = { _id: unknown; name?: string; username?: string; email?: string | null };
@@ -48,11 +49,46 @@ const handler = adminApi({
       }
       res.setHeader('Cache-Control', 'private, no-store');
       const user = await User.findOne({ providerEndUserId: parsed.data.id }).select('_id name username email').lean();
-      if (user) return res.json({ kind: 'user', ...accountSummary(user) });
+      type Resolution =
+        | { kind: 'user'; account: AccountRow }
+        | { kind: 'platformEndUser'; account: AccountRow | null }
+        | { kind: 'unknown'; account: null };
+      const auditResolution = async (resolution: Resolution) => {
+        const account = resolution.account;
+        const summaries: Record<Resolution['kind'], string> = {
+          user: 'Resolved a provider end-user identifier to an account',
+          platformEndUser: 'Resolved a provider end-user identifier to a platform end user',
+          unknown: 'Looked up an unknown provider end-user identifier',
+        };
+        await recordAdminActionFromRequest(req, {
+          action: 'user.provider_id.resolved',
+          target: account
+            ? {
+                kind: 'user',
+                id: String(account._id),
+                displayName: account.email ?? account.username ?? String(account._id),
+              }
+            : { kind: 'system', id: 'provider-end-user-id', displayName: 'Provider end-user identifier' },
+          summary: summaries[resolution.kind],
+          details: {
+            providerEndUserId: parsed.data.id,
+            matched: resolution.kind !== 'unknown',
+            source: 'by_provider_id',
+          },
+        });
+      };
+      if (user) {
+        await auditResolution({ kind: 'user', account: user });
+        return res.json({ kind: 'user', ...accountSummary(user) });
+      }
 
       const endUser = await platformEndUserRepository.findByProviderEndUserId(parsed.data.id);
-      if (!endUser) throw new NotFoundError('No account has this provider end-user identifier');
+      if (!endUser) {
+        await auditResolution({ kind: 'unknown', account: null });
+        throw new NotFoundError('No account has this provider end-user identifier');
+      }
       const owner = await User.findById(endUser.keyOwnerId).select('_id name username email').lean();
+      await auditResolution({ kind: 'platformEndUser', account: owner });
       return res.json({
         kind: 'platformEndUser',
         account: owner ? accountSummary(owner) : null,

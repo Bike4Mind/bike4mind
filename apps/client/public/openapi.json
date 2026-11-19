@@ -7796,6 +7796,27 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 400
+                },
+                "source": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "email"
+                      ]
+                    },
+                    "emailId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The ingested email the item was triaged from."
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "emailId"
+                  ],
+                  "description": "The record the item came from, when it was not agent activity."
                 }
               },
               "required": [
@@ -7819,6 +7840,27 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 400
+                },
+                "source": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "email"
+                      ]
+                    },
+                    "emailId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The ingested email the item was triaged from."
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "emailId"
+                  ],
+                  "description": "The record the item came from, when it was not agent activity."
                 }
               },
               "required": [
@@ -7843,6 +7885,27 @@
                   "minLength": 1,
                   "maxLength": 400
                 },
+                "source": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "email"
+                      ]
+                    },
+                    "emailId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The ingested email the item was triaged from."
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "emailId"
+                  ],
+                  "description": "The record the item came from, when it was not agent activity."
+                },
                 "approval": {
                   "type": "object",
                   "properties": {
@@ -7866,6 +7929,33 @@
                     "pendingActionTs"
                   ],
                   "description": "Present when the decision is an agent approval. The approval may have lapsed or been answered since the brief was composed; the pending-actions endpoints are authoritative."
+                },
+                "draftReply": {
+                  "type": "object",
+                  "properties": {
+                    "to": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 320,
+                      "description": "The source email's sender as received, unverified."
+                    },
+                    "subject": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "body": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4000
+                    }
+                  },
+                  "required": [
+                    "to",
+                    "subject",
+                    "body"
+                  ],
+                  "description": "Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text."
                 }
               },
               "required": [
@@ -7949,6 +8039,27 @@
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 400
+                      },
+                      "source": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "email"
+                            ]
+                          },
+                          "emailId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "The ingested email the item was triaged from."
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "emailId"
+                        ],
+                        "description": "The record the item came from, when it was not agent activity."
                       }
                     },
                     "required": [
@@ -7972,6 +8083,27 @@
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 400
+                      },
+                      "source": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "email"
+                            ]
+                          },
+                          "emailId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "The ingested email the item was triaged from."
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "emailId"
+                        ],
+                        "description": "The record the item came from, when it was not agent activity."
                       }
                     },
                     "required": [
@@ -7996,6 +8128,27 @@
                         "minLength": 1,
                         "maxLength": 400
                       },
+                      "source": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "email"
+                            ]
+                          },
+                          "emailId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "The ingested email the item was triaged from."
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "emailId"
+                        ],
+                        "description": "The record the item came from, when it was not agent activity."
+                      },
                       "approval": {
                         "type": "object",
                         "properties": {
@@ -8019,6 +8172,33 @@
                           "pendingActionTs"
                         ],
                         "description": "Present when the decision is an agent approval. The approval may have lapsed or been answered since the brief was composed; the pending-actions endpoints are authoritative."
+                      },
+                      "draftReply": {
+                        "type": "object",
+                        "properties": {
+                          "to": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 320,
+                            "description": "The source email's sender as received, unverified."
+                          },
+                          "subject": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "body": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4000
+                          }
+                        },
+                        "required": [
+                          "to",
+                          "subject",
+                          "body"
+                        ],
+                        "description": "Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text."
                       }
                     },
                     "required": [
@@ -8104,6 +8284,27 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 400
+                },
+                "source": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "email"
+                      ]
+                    },
+                    "emailId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The ingested email the item was triaged from."
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "emailId"
+                  ],
+                  "description": "The record the item came from, when it was not agent activity."
                 }
               },
               "required": [
@@ -8127,6 +8328,27 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 400
+                },
+                "source": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "email"
+                      ]
+                    },
+                    "emailId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The ingested email the item was triaged from."
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "emailId"
+                  ],
+                  "description": "The record the item came from, when it was not agent activity."
                 }
               },
               "required": [
@@ -8151,6 +8373,27 @@
                   "minLength": 1,
                   "maxLength": 400
                 },
+                "source": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "email"
+                      ]
+                    },
+                    "emailId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The ingested email the item was triaged from."
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "emailId"
+                  ],
+                  "description": "The record the item came from, when it was not agent activity."
+                },
                 "approval": {
                   "type": "object",
                   "properties": {
@@ -8174,6 +8417,33 @@
                     "pendingActionTs"
                   ],
                   "description": "Present when the decision is an agent approval. The approval may have lapsed or been answered since the brief was composed; the pending-actions endpoints are authoritative."
+                },
+                "draftReply": {
+                  "type": "object",
+                  "properties": {
+                    "to": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 320,
+                      "description": "The source email's sender as received, unverified."
+                    },
+                    "subject": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "body": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4000
+                    }
+                  },
+                  "required": [
+                    "to",
+                    "subject",
+                    "body"
+                  ],
+                  "description": "Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text."
                 }
               },
               "required": [
@@ -10384,7 +10654,7 @@
                 },
                 "role": {
                   "type": "string",
-                  "description": "How the parent was used. Known values: first_frame, last_frame, reference, style, extend_of, variation_of, edit_source, mask, scene_video, scene_audio, scene_cover. Treat others as generic."
+                  "description": "How the parent was used. Known values: first_frame, last_frame, reference, style, extend_of, variation_of, edit_source, mask, scene_video, scene_audio, scene_cover, timeline_clip. Treat others as generic."
                 }
               },
               "required": [
@@ -36551,7 +36821,7 @@
       "get": {
         "operationId": "getBrief",
         "summary": "Get a brief",
-        "description": "Reads one brief. Decision items that reference an agent approval carry its `questId` and `pendingActionTs`; answer it through the pending-actions endpoints. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call. ",
+        "description": "Reads one brief. Decision items that reference an agent approval carry its `questId` and `pendingActionTs`; answer it through the pending-actions endpoints. Items triaged from an ingested email carry a `source`, and an email decision may carry a `draftReply` for you to review; nothing sends it. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call. ",
         "tags": [
           "AI"
         ],
@@ -41789,7 +42059,7 @@
       "get": {
         "operationId": "getFileLineage",
         "summary": "Get what a generated file was made from and into",
-        "description": "Returns the trail around a file: `ancestors` (the file itself first, then what it was made from, walked up to 8 generations and 32 files) and `children` (up to 24 readable files made directly from it, newest first), with one `edges` entry per link naming the `role` the parent played (`first_frame`, `last_frame`, `reference`, `style`, `extend_of`, `variation_of`, `edit_source`, `mask`, `scene_video`, `scene_audio`, `scene_cover`). An ancestor you cannot read is returned `redacted` with only its id and depth, and its own inputs are not followed. `request` on a node is the stored generation request, for re-running it with different settings. Safe (GET) requests are exempt from the per-day API-key quota; only the per-minute burst limit applies. Authenticate with an API key (`b4m_live_`) carrying `files:read`, or a JWT.",
+        "description": "Returns the trail around a file: `ancestors` (the file itself first, then what it was made from, walked up to 8 generations and 32 files) and `children` (up to 24 readable files made directly from it, newest first), with one `edges` entry per link naming the `role` the parent played (`first_frame`, `last_frame`, `reference`, `style`, `extend_of`, `variation_of`, `edit_source`, `mask`, `scene_video`, `scene_audio`, `scene_cover`, `timeline_clip`). An ancestor you cannot read is returned `redacted` with only its id and depth, and its own inputs are not followed. `request` on a node is the stored generation request, for re-running it with different settings. Safe (GET) requests are exempt from the per-day API-key quota; only the per-minute burst limit applies. Authenticate with an API key (`b4m_live_`) carrying `files:read`, or a JWT.",
         "tags": [
           "Files"
         ],
