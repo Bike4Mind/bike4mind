@@ -73,6 +73,11 @@ final class SpeechEchoFilterTests: XCTestCase {
     Case(
       label: "one-word interjection, then a phrase from later in the reply",
       heard: "the capital of France is Paris and the capital of Spain", expected: "and the capital of Spain"),
+    Case(
+      label: "two reply words merged into one misheard word",
+      heard: "the capital of Frans Paris and the capital of Italy is Rome what about Spain",
+      expected: "what about Spain",
+      spoken: ["The capital of France is Paris, and the capital of Italy is Rome."]),
     Case(label: "empty transcript", heard: "", expected: ""),
     Case(label: "nothing spoken", heard: "hello there", expected: "hello there", spoken: []),
     Case(label: "blank chunks", heard: "hello there", expected: "hello there", spoken: ["", "  "]),

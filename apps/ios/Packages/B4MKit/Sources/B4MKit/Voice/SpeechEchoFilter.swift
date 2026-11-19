@@ -50,9 +50,10 @@ struct SpeechEchoFilter {
       if gap > 0 {
         // After a misheard word the echo picks up again only where the next two heard words sit side by side in the
         // reply, or on the reply's last word; one loose match would eat the user's own words ("what is the capital").
-        // A run of misheard words stands for about as many spoken words, so it resumes just past that run.
+        // A run of misheard words stands for about as many spoken words, so it resumes just past that run; one
+        // misheard word may also be two merged reply words ("France is" heard as "Frans").
         guard gap < lookahead else { break }
-        let candidates = next + gap - 1...next + gap
+        let candidates = next + gap - 1...next + gap + (gap == 1 ? 1 : 0)
         if position < order.count {
           let following = heard[order[position]]
           let resume = candidates.first {
