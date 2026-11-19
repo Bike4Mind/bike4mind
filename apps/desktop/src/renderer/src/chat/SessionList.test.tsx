@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type { ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import type { ChatSessionMode, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
@@ -53,6 +53,7 @@ const summary = (id: string, title: string, extra: Partial<ChatSessionSummary> =
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 let onSelect = vi.fn<(id: string) => void>();
+let statuses = new Map<string, ChatSessionStatus>();
 let renameSession = vi.fn<(id: string, title: string) => Promise<ChatSessionSummary | null>>();
 
 /** The real sessions owner under the list, so a rename travels the same path it does in the app. */
@@ -65,7 +66,7 @@ function Harness({ activeId, mode }: { activeId: string | null; mode: ChatSessio
       onModeChange={() => {}}
       loading={loading}
       activeId={activeId}
-      statuses={new Map()}
+      statuses={statuses}
       prSummaries={new Map()}
       collapsed={false}
       onToggleCollapsed={() => {}}
@@ -164,6 +165,7 @@ const settle = () => act(async () => undefined);
 beforeEach(() => {
   badgeRenders.count = 0;
   onSelect = vi.fn();
+  statuses = new Map();
   renameSession = vi.fn(async (id: string, title: string) => summary(id, title));
 });
 
@@ -489,6 +491,36 @@ describe('sub-sessions an agent spawned', () => {
     expect(rowOf('Level 5').closest('li')?.querySelector('[data-testid="chat-session-depth-chip"]')?.textContent).toBe(
       'level 5'
     );
+  });
+
+  it('keeps the level-3 rail running past a deeper row', async () => {
+    await mount([
+      summary('s0', 'Top'),
+      spawned('s1', 'L1', 's0'),
+      spawned('s2', 'L2', 's1'),
+      spawned('a', 'A', 's2'),
+      spawned('b', 'B', 's2'),
+      spawned('d', 'D', 'a'),
+    ]);
+    expect(depthOf('D')).toBe('3');
+    const guides = rowOf('D').closest('li')?.getAttribute('data-nest-guides') ?? '';
+    expect(guides).toHaveLength(3);
+    expect(guides.endsWith('1')).toBe(true);
+  });
+
+  it('lights the elbows on the path to a waiting or working descendant', async () => {
+    statuses = new Map([
+      ['grandkid', 'needs-action'],
+      ['kid-b', 'processing'],
+    ]);
+    await mount(sessions());
+    const heat = (title: string) => rowOf(title).closest('li')?.getAttribute('data-nest-heat') ?? null;
+    expect([heat('Root'), heat('Kid A'), heat('Grandkid'), heat('Kid B')]).toEqual([
+      null,
+      'needs-action',
+      'needs-action',
+      'processing',
+    ]);
   });
 
   it('fold away and come back from the pill, without opening the parent', async () => {

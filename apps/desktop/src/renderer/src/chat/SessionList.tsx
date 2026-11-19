@@ -549,6 +549,8 @@ const SessionRow = memo(function SessionRow({
   return (
     <ListItem
       data-nest-depth={nestDepth || undefined}
+      data-nest-guides={nestGuides || undefined}
+      data-nest-heat={nestDepth > 0 ? nestHeat : undefined}
       sx={{
         ...(nestDepth > 0 && railSx(nestDepth, nestFirst, nestLast, nestGuides, nestHeat, nestDeeper === 0)),
         ...(editing
@@ -746,7 +748,7 @@ const SessionRow = memo(function SessionRow({
               noWrap
               textColor="text.tertiary"
               sx={{ flexShrink: 0, fontSize: '0.6875rem' }}
-              title={`${nestDeeper} levels deep`}
+              title={`level ${nestDeeper + 1} of the tree`}
               data-testid="chat-session-depth-chip"
             >
               level {nestDeeper + 1}
@@ -1343,7 +1345,7 @@ export function SessionList({
     const children = sections.children.get(session.id) ?? [];
     const under = descendants(session);
     const folded = isFolded(session.id);
-    const childGuides = depth > 0 && depth < MAX_NEST_DEPTH ? guides + (last ? '0' : '1') : guides;
+    const childGuides = depth > 0 && depth <= MAX_NEST_DEPTH ? guides + (last ? '0' : '1') : guides;
     return [
       <SessionRow
         key={session.id}
