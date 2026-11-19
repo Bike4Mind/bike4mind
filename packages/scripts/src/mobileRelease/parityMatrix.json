@@ -93,6 +93,14 @@
       "android": "red"
     },
     {
+      "id": "assistant-brief",
+      "title": "Assistant brief, opened from the brief_ready push and in-app",
+      "web": "red",
+      "ios": "yellow",
+      "android": "yellow",
+      "notes": "Android: green once the brief items in apps/android/DEVICE_TESTING.md pass on a device."
+    },
+    {
       "id": "live-agent-progress",
       "title": "Live agent progress outside the app (Live Activities)",
       "web": "na",
