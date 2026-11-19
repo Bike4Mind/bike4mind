@@ -15769,8 +15769,10 @@ describe('prompt moderation', () => {
       flagWith(OpenaiModerationsService, [...flagged]);
       arrange();
 
-      await expect(service.process({ body: keyTurn, logger: mockLogger })).rejects.toBeInstanceOf(FlaggedContentError);
+      await service.process({ body: keyTurn, logger: mockLogger });
+
       expect(completeModel).not.toHaveBeenCalled();
+      expect(await service.db.quests.findById('q1')).toMatchObject({ type: 'error', errorCode: 'content_blocked' });
 
       expect(mockLogger.info).not.toHaveBeenCalledWith(
         expect.stringContaining('continued under its API key exception'),
@@ -15788,10 +15790,10 @@ describe('prompt moderation', () => {
       flagWith(OpenaiModerationsService, ['violence']);
       const find = keyWith(['violence']);
 
-      await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
-        FlaggedContentError
-      );
+      await service.process({ body: startParams, logger: mockLogger });
+
       expect(completeModel).not.toHaveBeenCalled();
+      expect(await service.db.quests.findById('q1')).toMatchObject({ type: 'error', errorCode: 'content_blocked' });
 
       expect(find).not.toHaveBeenCalled();
       expect(applyModerationHit).toHaveBeenCalledTimes(1);
