@@ -10,6 +10,7 @@ import {
   ProviderNotConfiguredErrorSchema,
   CompletionsBadRequestErrorSchema,
   RunNotFoundErrorSchema,
+  SPEND_FROZEN_FORBIDDEN_NOTE,
 } from '../../schemas/chat';
 
 /**
@@ -43,6 +44,10 @@ export const createCompletionContract = defineEndpoint({
     "Check the model's " +
     '`supports_assistant_prefill` field from `GET /api/v1/models` before sending one. ' +
     'Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
+    'END USERS. A key that serves many end users of your own product, and that an administrator has granted ' +
+    '`ai:end-user-id`, may send `end_user_id` (your opaque id for the end user) so that, on models served directly by ' +
+    'OpenAI or Anthropic, the model provider sees each end user separately rather than your whole account as one ' +
+    '(other providers receive no end-user identifier).\n\n' +
     'RUNS AND SETTLEMENT. To group the spend of a multi-agent run (a root session and the workers it spawns), ' +
     'mint a run id with `POST /api/v1/completion-runs` and send it as `run` on each request. Spend is recorded ' +
     'against the run, never charged twice. The `settled` event (`{ type, requestId, creditsCharged, usdCost, runId }`) ' +
@@ -65,7 +70,7 @@ export const createCompletionContract = defineEndpoint({
     '`400` rather than run without it.\n\n' +
     'ERRORS. Everything checked before the model provider is called fails with a JSON error body and ' +
     'a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad ' +
-    'credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a model the caller\'s organization policy does not allow `403` with `errorCode: "org_model_not_allowed"`, a body over 25 MB ' +
+    'credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a model the caller\'s organization policy does not allow `403` with `errorCode: "org_model_not_allowed"`, paused spending `403` with `errorCode: "spend_frozen"`, a body over 25 MB ' +
     '`413`, any other body that fails schema validation `422`, insufficient credits `422` with ' +
     '`errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: "run_not_found"`, and a catalogued model ' +
     'whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). ' +
@@ -111,14 +116,16 @@ export const createCompletionContract = defineEndpoint({
         'naming a tool not in `tools`, or carrying no string `tool_name`). Mid-conversation tool changes are refused with: ' +
         '`tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it ' +
         'here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and ' +
-        '`unknown_tool_reference` (a changed tool not in `tools`).',
+        '`unknown_tool_reference` (a changed tool not in `tools`). `end_user_id` sent on a credential other than an ' +
+        'API key holding `ai:end-user-id` is refused with `end_user_id_not_allowed`; a malformed `end_user_id` is ' +
+        'refused with `invalid_end_user_id`.',
       schema: CompletionsBadRequestErrorSchema,
     },
     403: {
       description:
         'The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), ' +
         'a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), ' +
-        'or the caller\'s organization policy does not allow the model (`errorCode: "org_model_not_allowed"`).',
+        `or the caller's organization policy does not allow the model (\`errorCode: "org_model_not_allowed"\`). ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
       schema: ModelPolicyForbiddenErrorSchema,
     },
     404: {

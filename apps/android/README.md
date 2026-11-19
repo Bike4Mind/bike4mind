@@ -59,6 +59,10 @@ Every request carries `X-Client-Name: b4m-android` and `X-Client-Version` (the a
 `MAJOR.MINOR.PATCH`), so `minimumClientVersions["b4m-android"]` can refuse an old build with a 426. Keep `versionName`
 to one to three integers; anything else sends neither header.
 
+## Releases
+
+Release builds ship on the monthly mobile train: `.github/workflows/android-play-internal.yml` builds a signed bundle and uploads it to the Play internal testing track on a `mobile-v*` tag. `versionName` and `versionCode` come from `-Pb4m.versionName` / `-Pb4m.versionCode`, and signing from `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`; without them a release build is unsigned at `0.1.0` (1). Process, version scheme and secrets: [docs/mobile-release-train.md](../../docs/mobile-release-train.md).
+
 ## Generated API client
 
 `client/` is generated from the backend's OpenAPI spec with [openapi-generator](https://openapi-generator.tech)'s

@@ -70,6 +70,9 @@ describe('OverviewTab internal account row', () => {
     [{ isInternal: false }, 'Customer'],
     [{ isInternal: true }, 'Internal account'],
     [{ isInternal: false, isAdmin: true }, 'Internal account (admin)'],
+    [{ accountSegment: 'partner' as const }, 'Partner account'],
+    [{ accountSegment: 'partner' as const, isAdmin: true }, 'Internal account (admin)'],
+    [{ accountSegment: 'partner' as const, isInternal: true }, 'Internal account'],
   ])('shows %o as %s and opens the internal-account action', (flags, text) => {
     const onAction = vi.fn();
     render(
@@ -80,6 +83,28 @@ describe('OverviewTab internal account row', () => {
     expect(screen.getByTestId('user-profile-fact-internal')).toHaveTextContent(text);
     fireEvent.click(screen.getByTestId('user-profile-internal-btn'));
     expect(onAction).toHaveBeenCalledWith('internalAccount');
+  });
+});
+
+describe('OverviewTab partner mark', () => {
+  it.each([
+    [undefined, 'Mark partner'],
+    ['partner' as const, 'Unmark partner'],
+  ])('with segment %s the button reads %s and opens the partner action', (accountSegment, label) => {
+    const onAction = vi.fn();
+    render(
+      <OverviewTab
+        user={buildProfile({ accountSegment })}
+        onAction={onAction}
+        onViewActivity={vi.fn()}
+        onViewCredits={vi.fn()}
+      />,
+      { wrapper: ProfileTestWrapper }
+    );
+
+    expect(screen.getByTestId('user-profile-partner-btn')).toHaveTextContent(label);
+    fireEvent.click(screen.getByTestId('user-profile-partner-btn'));
+    expect(onAction).toHaveBeenCalledWith('partnerAccount');
   });
 });
 

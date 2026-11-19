@@ -14,6 +14,7 @@ vi.mock('./modelScene', () => ({
   openPose: () => ({}),
   partsToStl: () => new Uint8Array([2]),
   renderContactSheet: vi.fn(async () => new Uint8Array([9])),
+  renderThumbnail: vi.fn(async () => new Uint8Array([7])),
   summarizeObject: vi.fn(),
   summarizeParts: () => ({ parts: ['body'], size: [1, 1, 1], units: 'mm', triangles: 0, params: {} }),
 }));
@@ -48,6 +49,8 @@ let model: {
   writeGlb: ReturnType<typeof vi.fn>;
   reportBuild: ReturnType<typeof vi.fn>;
   saveExport: ReturnType<typeof vi.fn>;
+  wantsVersion: ReturnType<typeof vi.fn>;
+  recordVersion: ReturnType<typeof vi.fn>;
 };
 
 function Harness() {
@@ -83,6 +86,8 @@ beforeEach(() => {
     writeGlb: vi.fn(async () => '/project/chest.glb'),
     reportBuild: vi.fn(async () => {}),
     saveExport: vi.fn(async () => '/project/chest.stl'),
+    wantsVersion: vi.fn(async () => true),
+    recordVersion: vi.fn(async () => null),
   };
   (window as unknown as { b4m: unknown }).b4m = {
     model: {
@@ -133,6 +138,43 @@ describe('useModelEngine', () => {
     expect(model.writeGlb).toHaveBeenCalledWith('chat-a', expect.objectContaining({ generation: 1 }));
     expect(model.reportBuild).toHaveBeenCalledWith('chat-a', expect.objectContaining({ generation: 1, ok: true }));
     expect(requests.at(-1)).toEqual(expect.objectContaining({ type: 'build', id: 2, print: false }));
+  });
+
+  it('keeps each good file build as a version with its thumbnail and the pane pose, after the report', async () => {
+    const { frame } = await mountWithEngine();
+    act(() => engine.setJointAngles({ lid: 30 }));
+    reply(frame, { type: 'built', id: 1, outcome: BUILT });
+    await flush();
+    expect(model.recordVersion).toHaveBeenCalledExactlyOnceWith('chat-a', {
+      generation: 1,
+      jointAngles: { lid: 30 },
+      thumbnail: new Uint8Array([7]),
+    });
+    expect(model.reportBuild.mock.invocationCallOrder[0]).toBeLessThan(model.recordVersion.mock.invocationCallOrder[0]);
+  });
+
+  it('renders no thumbnail when main already has this build, as another window kept it', async () => {
+    const { renderThumbnail } = await import('./modelScene');
+    vi.mocked(renderThumbnail).mockClear();
+    model.wantsVersion.mockResolvedValueOnce(false);
+    const { frame } = await mountWithEngine();
+    reply(frame, { type: 'built', id: 1, outcome: BUILT });
+    await flush();
+    expect(model.wantsVersion).toHaveBeenCalledWith('chat-a', 1);
+    expect(renderThumbnail).not.toHaveBeenCalled();
+    expect(model.recordVersion).not.toHaveBeenCalled();
+    expect(engine.status).toBe('ok');
+  });
+
+  it('still reports a good build when keeping its version fails', async () => {
+    model.recordVersion.mockRejectedValueOnce(new Error('disk full'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { frame } = await mountWithEngine();
+    reply(frame, { type: 'built', id: 1, outcome: BUILT });
+    await flush();
+    expect(engine.status).toBe('ok');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('disk full'));
+    warn.mockRestore();
   });
 
   it('mounts the engine frame when the hook mounts, before any model is open', async () => {

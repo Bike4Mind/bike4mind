@@ -7,6 +7,9 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { IOrganizationDocument, Permission } from '@bike4mind/common';
 import OrganizationMembers from './Member';
+import i18next from 'i18next';
+import { I18nextProvider } from 'react-i18next';
+import en from '@client/app/locales/en.json';
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -87,16 +90,18 @@ vi.mock('./BulkInviteModal', () => ({
     </div>
   ),
 }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
+
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }));
 vi.mock('./UserCard', () => ({
   default: (p: {
     user: { id: string; role: string; creditUsage: { used: number } | null; permissions: string[] };
     canRevokeMembers: boolean;
     canManageManagers: boolean;
+    showEmails: boolean;
   }) => (
     <div
       data-testid={`member-card-${p.user.id}`}
+      data-show-emails={String(p.showEmails)}
       data-revoke={String(p.canRevokeMembers)}
       data-manage-managers={String(p.canManageManagers)}
       data-credit-usage={p.user.creditUsage?.used ?? 'hidden'}
@@ -160,10 +165,15 @@ vi.mock('@client/app/components/common/UserCard', () => ({
   ),
 }));
 
+const i18nInstance = i18next.createInstance();
+void i18nInstance.init({ lng: 'en', resources: { en: { translation: en } }, initAsync: false });
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
   <QueryClientProvider client={new QueryClient()}>
-    <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+    <I18nextProvider i18n={i18nInstance}>
+      <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+    </I18nextProvider>
   </QueryClientProvider>
 );
 
@@ -418,6 +428,43 @@ describe('OrganizationMembers roster controls', () => {
     expect(screen.getByTestId('organization-members-add-no-seats-btn')).toBeDisabled();
     expect(screen.getByTestId('organization-members-seats-card')).toBeTruthy();
     expect(screen.queryByTestId('member-add-modal')).toBeNull();
+  });
+});
+
+describe('OrganizationMembers roster email visibility', () => {
+  beforeEach(() => {
+    mocks.members = [{ id: 'm1', name: 'Member One', email: 'm1@example.test' }];
+    mocks.searchUsers = [];
+    mocks.invitations = [];
+    mocks.seats = { maxSeats: 0, currentSeats: 0, availableSeats: 0 };
+  });
+
+  const memberRow = (userId: string) => ({ userId, permissions: [Permission.read] });
+
+  it.each([
+    ['owner', { id: 'owner1', isAdmin: false }, {}],
+    [
+      'manager',
+      { id: 'viewer', isAdmin: false },
+      { adminUserIds: ['viewer'], users: [memberRow('viewer')] as IOrganizationDocument['users'] },
+    ],
+    ['staff (site admin)', { id: 'staff1', isAdmin: true }, {}],
+  ])('shows the %s the email column', (_role, viewer, org) => {
+    mocks.viewer = viewer;
+    renderMembers(buildOrg(org as Partial<IOrganizationDocument>));
+    expect(screen.getByTestId('organization-members-header-email')).toBeTruthy();
+    expect(screen.getByTestId('member-card-m1').getAttribute('data-show-emails')).toBe('true');
+  });
+
+  it('gives a plain member a names-only roster', () => {
+    mocks.viewer = { id: 'viewer', isAdmin: false };
+    renderMembers(buildOrg({ users: [memberRow('viewer'), memberRow('m1')] as IOrganizationDocument['users'] }));
+    expect(screen.queryByTestId('organization-members-header-email')).toBeNull();
+    expect(screen.getByTestId('member-card-m1').getAttribute('data-show-emails')).toBe('false');
+    expect(screen.getByTestId('organization-members-search-input')).toHaveAttribute(
+      'aria-label',
+      'Search members by name'
+    );
   });
 });
 
@@ -691,6 +738,50 @@ describe('OrganizationMembers invite plumbing', () => {
     expect(screen.getByText(text)).toBeTruthy();
   });
 
+  it.each(['owner', 'manager'] as const)('renders a whole alternate-locale seat notice for the %s', async role => {
+    i18nInstance.addResourceBundle('fr', 'translation', {
+      organization: {
+        access_notice: {
+          seat_limit_add_seats: '<addSeats>Capacity action</addSeats> follows a complete translated notice.',
+          seat_limit_ask_owner: 'This complete notice points to the owner.',
+        },
+      },
+    });
+    await i18nInstance.changeLanguage('fr');
+    mocks.seats = { maxSeats: 1, currentSeats: 1, availableSeats: 0 };
+    mocks.navigate.mockReset();
+    const organization =
+      role === 'owner'
+        ? buildOrg({})
+        : buildOrg({
+            adminUserIds: ['manager1'],
+            users: [{ userId: 'manager1', permissions: [Permission.read] }] as IOrganizationDocument['users'],
+          });
+    if (role === 'manager') mocks.viewer = { id: 'manager1', isAdmin: false };
+    const view = renderMembers(organization);
+    try {
+      expect(screen.getByTestId('organization-members-seats-limit').textContent).toBe(
+        role === 'owner'
+          ? 'Capacity action follows a complete translated notice.'
+          : 'This complete notice points to the owner.'
+      );
+      expect(screen.getByTestId('organization-members-add-no-seats-btn')).toBeDisabled();
+      if (role === 'owner') {
+        const link = screen.getByTestId('organization-members-add-seats-link');
+        expect(link.textContent).toBe('Capacity action');
+        fireEvent.click(link);
+        expect(mocks.navigate).toHaveBeenCalledWith(
+          expect.objectContaining({ to: '/organizations/$id', params: { id: 'org1' }, search: { tab: 'billing' } })
+        );
+      } else {
+        expect(screen.queryByTestId('organization-members-add-seats-link')).toBeNull();
+      }
+    } finally {
+      view.unmount();
+      await i18nInstance.changeLanguage('en');
+    }
+  });
+
   it('disables Add Member at the seat limit and sends the owner to Billing to add seats', () => {
     mocks.seats = { maxSeats: 1, currentSeats: 1, availableSeats: 0 };
     mocks.navigate.mockReset();
@@ -719,6 +810,35 @@ describe('OrganizationMembers invite plumbing', () => {
     );
     expect(screen.queryByTestId('organization-members-add-seats-link')).toBeNull();
     expect(screen.queryByText(/upgrade/i)).toBeNull();
+  });
+
+  it('points a manager at the owner rather than an upgrade they cannot make', () => {
+    mocks.viewer = { id: 'mgr1', isAdmin: false };
+    mocks.seats = { maxSeats: 1, currentSeats: 1, availableSeats: 0 };
+    renderMembers(
+      buildOrg({
+        adminUserIds: ['mgr1'],
+        users: [{ userId: 'mgr1', permissions: [Permission.read] }] as IOrganizationDocument['users'],
+      })
+    );
+    expect(screen.getByTestId('organization-members-seats-limit')).toHaveTextContent(
+      'All seats are in use. Ask the team owner to add seats.'
+    );
+    expect(screen.getByTestId('organization-members-add-no-seats-btn')).toBeDisabled();
+    expect(screen.queryByTestId('organization-members-add-seats-link')).toBeNull();
+    expect(mocks.toast.error).not.toHaveBeenCalled();
+  });
+
+  it('points a platform admin who is not the owner at the owner, since only the owner can buy seats', () => {
+    mocks.viewer = { id: 'staff1', isAdmin: true };
+    mocks.seats = { maxSeats: 1, currentSeats: 1, availableSeats: 0 };
+    renderMembers(buildOrg({}));
+    expect(screen.getByTestId('organization-members-seats-limit')).toHaveTextContent(
+      'All seats are in use. Ask the team owner to add seats.'
+    );
+    expect(screen.getByTestId('organization-members-add-no-seats-btn')).toBeDisabled();
+    expect(screen.queryByTestId('organization-members-add-seats-link')).toBeNull();
+    expect(mocks.toast.error).not.toHaveBeenCalled();
   });
 
   it('says when pending invitations fail to load', () => {
@@ -956,9 +1076,11 @@ describe('OrganizationMembers MFA policy save ownership', () => {
     const invalidate = vi.spyOn(client, 'invalidateQueries').mockReturnValue(refetch);
     const renderOrganization = (organization: IOrganizationDocument) => (
       <QueryClientProvider client={client}>
-        <CssVarsProvider theme={appTheme}>
-          <OrganizationMembers organization={organization} />
-        </CssVarsProvider>
+        <I18nextProvider i18n={i18nInstance}>
+          <CssVarsProvider theme={appTheme}>
+            <OrganizationMembers organization={organization} />
+          </CssVarsProvider>
+        </I18nextProvider>
       </QueryClientProvider>
     );
     const organization = buildOrg({ mfaPolicy: { required: false, graceEndsAt: null } });

@@ -346,6 +346,7 @@ describe('ChatCompletionProcess', () => {
       creditTransactions: {},
       agents: {},
       projects: { findById: vi.fn() },
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
     };
     service = new ChatCompletionProcess(baseOptions as any);
     service.db = mockDb;
@@ -6288,6 +6289,131 @@ describe('ChatCompletionProcess', () => {
         'text_generation_usage',
         expect.objectContaining({ apiKeyId: 'key-1' })
       );
+    });
+
+    describe('spend freeze', () => {
+      const freezeRecord = (scopeType: 'User' | 'Organization' | 'apiKey') => ({
+        scopeType,
+        frozenAt: new Date('2026-11-16T00:00:00.000Z'),
+        reason: 'admin review',
+      });
+
+      it.each([
+        ['user', { userId: 'user1', organizationId: 'org1', apiKeyId: undefined }, 'User' as const],
+        ['organization', { userId: 'user1', organizationId: 'org1', apiKeyId: undefined }, 'Organization' as const],
+        ['api key', { userId: 'user1', organizationId: 'org1', apiKeyId: 'key-1' }, 'apiKey' as const],
+      ])(
+        'settles the quest as spend_frozen for a frozen %s, with no hold and no provider call',
+        async (_label, subject, scopeType) => {
+          const { complete } = reservationOrgSetup();
+          fundedOrg();
+          mockQuest.sessionId = 'session1';
+          mockDb.users.incrementCredits = vi.fn();
+          mockDb.spendFreezes.findActiveForSubject.mockResolvedValue(freezeRecord(scopeType));
+
+          await service.process({
+            body: {
+              ...reservationBody(),
+              ...(subject.apiKeyId ? { authOrigin: 'apiKey', apiKeyId: subject.apiKeyId } : {}),
+            },
+            logger: mockLogger,
+          });
+
+          expect(mockDb.spendFreezes.findActiveForSubject).toHaveBeenCalledWith(
+            expect.objectContaining({ userId: 'user1', organizationId: 'org1', apiKeyId: subject.apiKeyId })
+          );
+          expect(mockQuest.type).toBe('error');
+          expect(mockQuest.errorCode).toBe('spend_frozen');
+          expect(JSON.stringify(mockQuest.replies)).not.toContain('admin review');
+          expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
+          expect(mockDb.users.incrementCredits).not.toHaveBeenCalled();
+          expect(complete).not.toHaveBeenCalled();
+        }
+      );
+
+      it('keeps the acting user in the subject of an org-billed key turn', async () => {
+        reservationOrgSetup();
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        mockDb.spendFreezes.findActiveForSubject.mockResolvedValue(freezeRecord('apiKey'));
+
+        await service.process({
+          body: {
+            ...reservationBody(),
+            authOrigin: 'apiKey',
+            apiKeyId: 'key-1',
+            apiKeyBillingOwnerType: CreditHolderType.Organization,
+          },
+          logger: mockLogger,
+        });
+
+        expect(mockDb.spendFreezes.findActiveForSubject).toHaveBeenCalledWith({
+          userId: 'user1',
+          organizationId: 'org1',
+          apiKeyId: 'key-1',
+        });
+      });
+
+      // A JWT voice turn carries the caller's home org as `organizationId` and reserves against it, so the
+      // freeze subject must be that org, never a separately computed one.
+      const frozenOnlyFor = (frozenOrgId: string) =>
+        mockDb.spendFreezes.findActiveForSubject.mockImplementation(
+          async ({ organizationId }: { organizationId: string | null }) =>
+            organizationId === frozenOrgId ? freezeRecord('Organization') : null
+        );
+
+      it('refuses a turn billed to a frozen home org with spend_frozen, before any hold', async () => {
+        const { complete } = reservationOrgSetup();
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        frozenOnlyFor('org1');
+
+        await service.process({ body: reservationBody(), logger: mockLogger });
+
+        expect(mockDb.spendFreezes.findActiveForSubject).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: 'user1', organizationId: 'org1' })
+        );
+        expect(mockQuest.errorCode).toBe('spend_frozen');
+        expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
+        expect(complete).not.toHaveBeenCalled();
+      });
+
+      it('lets the turn through when only an unrelated org is frozen', async () => {
+        const { complete } = reservationOrgSetup();
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        frozenOnlyFor('other-org');
+
+        await service.process({ body: reservationBody(), logger: mockLogger });
+
+        expect(mockQuest.errorCode).toBeUndefined();
+        expect(mockDb.organizations.incrementCredits).toHaveBeenCalled();
+        expect(complete).toHaveBeenCalled();
+      });
+
+      it('checks the billed org even when a queued body still carries the retired spendFreezeOrganizationId', async () => {
+        reservationOrgSetup();
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        frozenOnlyFor('org1');
+
+        await service.process({
+          body: { ...reservationBody(), spendFreezeOrganizationId: null } as ReturnType<typeof reservationBody>,
+          logger: mockLogger,
+        });
+
+        expect(mockQuest.errorCode).toBe('spend_frozen');
+      });
+
+      it('propagates a freeze lookup failure instead of treating the subject as unfrozen', async () => {
+        const { complete } = reservationOrgSetup();
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        mockDb.spendFreezes.findActiveForSubject.mockRejectedValue(new Error('mongo down'));
+
+        await expect(service.process({ body: reservationBody(), logger: mockLogger })).rejects.toThrow('mongo down');
+        expect(complete).not.toHaveBeenCalled();
+      });
     });
 
     it('refunds the whole hold when a tool call is refused for credits before anything was spent', async () => {
@@ -15423,6 +15549,7 @@ describe('prompt moderation', () => {
       creditTransactions: {},
       agents: {},
       projects: { findById: vi.fn() },
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
     };
     mockLogger = {
       log: vi.fn(),
@@ -15577,15 +15704,57 @@ describe('prompt moderation', () => {
       this.checkPrompt = vi.fn().mockRejectedValue(new FlaggedContentError('blocked', ['violence']));
     } as any);
 
-    await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
-      FlaggedContentError
-    );
+    await service.process({ body: startParams, logger: mockLogger });
 
     expect(applyModerationHit).toHaveBeenCalledWith(
       expect.objectContaining({
         hit: expect.objectContaining({ source: 'bedrock', categories: ['violence'] }),
       })
     );
+  });
+
+  it.each([
+    ['openai', { openaiKey: 'demo-key', guardrailId: null }, OpenaiModerationsService],
+    ['bedrock', { openaiKey: null, guardrailId: 'my-guardrail' }, BedrockGuardrailsService],
+  ] as const)(
+    'settles a turn the %s check refuses as a content_blocked error quest',
+    async (_source, knobs, Service) => {
+      wireModMocks(knobs);
+      enableAdminFlags('ModerationEnabled');
+      vi.mocked(Service).mockImplementation(function (this: { checkPrompt: unknown }) {
+        this.checkPrompt = vi.fn().mockRejectedValue(new FlaggedContentError('refusal text', ['violence']));
+      } as never);
+
+      // Resolves: a rethrow would send the queue path to retry and the wait route to a 500.
+      await service.process({ body: startParams, logger: mockLogger });
+
+      const quest = await service.db.quests.findById('q1');
+      expect(quest).toMatchObject({
+        type: 'error',
+        status: 'done',
+        errorCode: 'content_blocked',
+        reply: 'refusal text',
+        replies: ['refusal text'],
+      });
+      expect(mockedGetLlmWithFallback).not.toHaveBeenCalled();
+    }
+  );
+
+  it('leaves errorCode unset on a turn that fails for an unclassified reason', async () => {
+    wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+    enableAdminFlags('ModerationEnabled');
+    vi.mocked(OpenaiModerationsService).mockImplementation(function (this: { checkPrompt: unknown }) {
+      this.checkPrompt = vi.fn().mockRejectedValue(new Error('moderation service unreachable'));
+    } as never);
+
+    await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toThrow(
+      'moderation service unreachable'
+    );
+
+    const quest = await service.db.quests.findById('q1');
+    expect(quest?.type).toBe('error');
+    expect(quest?.errorCode).toBeUndefined();
+    expect(applyModerationHit).not.toHaveBeenCalled();
   });
 
   it('records a provider moderation hit (Hook A) when the Anthropic safety classifier throws', async () => {

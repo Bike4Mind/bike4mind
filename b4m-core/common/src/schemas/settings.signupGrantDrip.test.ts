@@ -9,7 +9,8 @@ describe('signup activity drip settings', () => {
     expect(setting.schema.parse('true')).toBe(true);
     expect('userReadable' in setting && setting.userReadable).toBeFalsy();
     expect(SettingKeySchema.parse(setting.key)).toBe(setting.key);
-    expect(API_SERVICE_GROUPS.CREDITS.settings).toContainEqual(expect.objectContaining({ key: setting.key }));
+    expect(API_SERVICE_GROUPS.CREDITS.settings).not.toContainEqual(expect.objectContaining({ key: setting.key }));
+    expect('group' in setting ? setting.group : undefined).toBeUndefined();
   });
 });
 

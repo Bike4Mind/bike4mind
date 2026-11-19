@@ -4,6 +4,8 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { ADMIN_USERS_LIST_MAX, AdminUsersQuerySchema } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import { adminUsersDomainGroups, listAdminUsers } from '@bike4mind/server-utils/admin/usersList/listAdminUsers';
+import { providerIdSearchAudit } from '@bike4mind/server-utils/admin/usersList/providerIdSearchAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import qs from 'qs';
 
 /**
@@ -31,11 +33,28 @@ const handler = adminApi({
       }
       res.setHeader('Cache-Control', 'private, no-store');
       const { groupBy, ...params } = parsed.data;
-      if (groupBy) return res.json(await adminUsersDomainGroups(params));
+      const audit = async (matches?: Parameters<typeof providerIdSearchAudit>[2]) => {
+        const input = providerIdSearchAudit(params.search, 'users_list', matches);
+        if (input) await recordAdminActionFromRequest(req, input);
+      };
+      if (groupBy) {
+        const groups = await adminUsersDomainGroups(params);
+        await audit();
+        return res.json(groups);
+      }
       const viewer = { userId: String(req.user.id), isAdmin: req.user.isAdmin === true };
-      return res.json(
-        await listAdminUsers(params, viewer, { logError: (message, error) => req.logger.error(message, error) })
-      );
+      const list = await listAdminUsers(params, viewer, {
+        logError: (message, error) => req.logger.error(message, error),
+      });
+      const [only] = list.users;
+      await audit({
+        count: list.totalUsers,
+        sole:
+          list.totalUsers === 1 && list.users.length === 1
+            ? { id: only.id, displayName: only.email ?? only.username }
+            : undefined,
+      });
+      return res.json(list);
     })
   );
 

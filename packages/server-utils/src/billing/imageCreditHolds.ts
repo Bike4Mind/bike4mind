@@ -10,10 +10,10 @@ import { CREDIT_HOLD_TTL_MS, holdAdapters, releaseHeldCredits, settleHeldCredits
  * row, so exactly one of settle, release and the sweep moves balance.
  */
 export const imageCreditHolds: ImageCreditHolds = {
-  hold: ({ userId, organizationId, requiredCredits, featureLabel, logger }) =>
+  hold: ({ userId, organizationId, requiredCredits, featureLabel, logger, apiKeyId, apiKeyBillingOwnerType }) =>
     withTransaction(async () => {
       const hold = await creditService.holdCredits(
-        { userId, organizationId, requiredCredits, featureLabel, logger },
+        { userId, organizationId, requiredCredits, featureLabel, logger, apiKeyId, apiKeyBillingOwnerType },
         holdAdapters
       );
       const pending = await pendingCreditHoldRepository.record(

@@ -4,6 +4,7 @@ export const ACCOUNT_TRUST_REQUIRED_ERROR_CODE = 'account_trust_required';
 export const AGENT_LIMIT_REACHED_ERROR_CODE = 'agent_limit_reached';
 export const UNKNOWN_MODEL_ERROR_CODE = 'unknown_model';
 export const MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE = 'model_requires_subscription';
+export const FREE_QUEST_LIMIT_REACHED_ERROR_CODE = 'free_quest_limit_reached';
 export const BILLING_ORGANIZATION_MISMATCH_ERROR_CODE = 'billing_organization_mismatch';
 export const REQUEST_TIMEOUT_ERROR_CODE = 'request_timeout';
 export const TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE = 'token_rate_limit_exceeded';
@@ -11,6 +12,7 @@ export const CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE = 'concurrency_limit_exceeded
 export const OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE = 'output_budget_exhausted';
 export const DAILY_FREE_LIMIT_REACHED_ERROR_CODE = 'daily_free_limit_reached';
 export const UPGRADE_REQUIRED_ERROR_CODE = 'upgrade_required';
+export const SPEND_FROZEN_ERROR_CODE = 'spend_frozen';
 export const ACCOUNT_SUSPENDED_ERROR_CODE = 'account_suspended';
 export const RUN_NOT_FOUND_ERROR_CODE = 'run_not_found';
 export const ORG_MODEL_NOT_ALLOWED_ERROR_CODE = 'org_model_not_allowed';
@@ -18,6 +20,8 @@ export const ORG_TOOL_NOT_ALLOWED_ERROR_CODE = 'org_tool_not_allowed';
 export const MCP_ACTION_REPLACED_ERROR_CODE = 'action_replaced';
 export const PENDING_ACTION_EXPIRED_ERROR_CODE = 'action_expired';
 export const PENDING_ACTION_ALREADY_RESOLVED_ERROR_CODE = 'action_already_resolved';
+export const END_USER_ID_NOT_ALLOWED_ERROR_CODE = 'end_user_id_not_allowed';
+export const INVALID_END_USER_ID_ERROR_CODE = 'invalid_end_user_id';
 
 /**
  * The one enumerated vocabulary for the `errorCode` field on a public error body
@@ -44,6 +48,8 @@ export const API_ERROR_CODES = [
   ACCOUNT_TRUST_REQUIRED_ERROR_CODE,
   /** The credential is valid but its owner's account is suspended; the body carries `suspension` (category, terms, appeal). Not retryable. */
   ACCOUNT_SUSPENDED_ERROR_CODE,
+  /** An admin paused new metered spend for the user, organization or API key; the body carries `frozenScope` and `frozenAt`, never the reason. Not retryable. */
+  SPEND_FROZEN_ERROR_CODE,
   /** The user owns as many agents as their tier allows; remediation is deleting one or upgrading. */
   AGENT_LIMIT_REACHED_ERROR_CODE,
   /** The caller cannot afford the request; remediation is buying credits. */
@@ -60,6 +66,7 @@ export const API_ERROR_CODES = [
   UNKNOWN_MODEL_ERROR_CODE,
   /** The model is outside the free-tier allowlist; remediation is a paid plan or a model from GET /api/v1/models. */
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+  FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
   /** An organization-billed API key named a different billing organization; remediation is omitting it. */
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   /** A blocking request ran past its server-side deadline; the turn was ended and the body names it for polling. */
@@ -117,6 +124,10 @@ export const API_ERROR_CODES = [
   'lyrics_too_long',
   /** A cancel that arrived after the provider started (and so billed) the song; returned with a 409. */
   'not_cancellable',
+  // Scene compositions (POST /api/v1/scene-compositions). Must stay in sync with SCENE_COMPOSITION_API_ERROR_CODES;
+  // the codes it shares with video and music are listed above.
+  /** A 404: an input file id is not one of the caller's readable files. */
+  'input_file_not_found',
   // Decisions (POST /api/v1/decisions); see DECISIONS_ERROR_CODES.
   /** The provider stayed overloaded or timed out through our one retry; the response carries Retry-After. */
   'provider_overloaded',
@@ -148,6 +159,11 @@ export const API_ERROR_CODES = [
   'tool_changes_unsupported',
   /** A tool change message was malformed or sat where the provider does not accept one. */
   'invalid_tool_change',
+  // AI routes that take `end_user_id` (completions, TTS).
+  /** `end_user_id` was sent on a credential other than an API key holding `ai:end-user-id`. */
+  END_USER_ID_NOT_ALLOWED_ERROR_CODE,
+  /** `end_user_id` was not 1-64 characters of letters, digits, `_`, `:` and `-`. */
+  INVALID_END_USER_ID_ERROR_CODE,
   // Skill Market import conflicts (POST /api/v1/skills/market/listings/{id}/import); see
   // SKILL_MARKET_IMPORT_ERROR_CODES in schemas/skillMarketPublic.ts.
   /** A newer version was approved since the one the caller reviewed. */

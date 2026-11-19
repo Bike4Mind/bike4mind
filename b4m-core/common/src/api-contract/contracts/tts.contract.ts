@@ -22,6 +22,7 @@ import {
   BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION,
   BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
 } from '../../schemas/billingOrganization';
+import { SPEND_FROZEN_FORBIDDEN_NOTE } from '../../schemas/chat';
 
 const exampleOutlastedJob = {
   id: EXAMPLE_RESOURCE_ID,
@@ -96,13 +97,16 @@ export const synthesizeSpeechContract = defineEndpoint({
       schema: ttsErrorResponseSchema,
     },
     400: {
-      description: `The billing organization could not be resolved. ${BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION}`,
+      description:
+        `The billing organization could not be resolved. ${BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION} ` +
+        'Also `end_user_id` sent on a credential other than an API key holding `ai:end-user-id` ' +
+        '(`errorCode: "end_user_id_not_allowed"`), or a malformed `end_user_id` (`errorCode: "invalid_end_user_id"`).',
       schema: ttsErrorResponseSchema,
     },
     403: {
       description:
         'The API key lacks the `ai:generate` scope (`required_scopes` names it), or ' +
-        `${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION}`,
+        `${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION} ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
       schema: ttsForbiddenResponseSchema,
     },
     404: {

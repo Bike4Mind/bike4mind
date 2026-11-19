@@ -4,9 +4,10 @@ import WarningIcon from '@mui/icons-material/Warning';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import { SettingsDraftProvider } from '../../SettingsDraftProvider';
 import { ErrorState, LoadingState } from '../../shared';
-import { FREE_TIER_LIMIT_KEYS, SIGNUP_SCHEDULE_KEYS } from '../../settingHomes';
+import { FREE_TIER_LIMIT_KEYS, SIGNUP_SCHEDULE_KEYS, SIGNUP_TIMING_KEYS } from '../../settingHomes';
 import { SettingBlocks, type SettingBlock } from '../shared/SettingBlocks';
 import { useStoredByKey } from '../shared/useStoredByKey';
+import { useStageHiddenSettingKeys } from '../../useStageHiddenSettingKeys';
 import {
   INVITE_SEND_LIMITS_LIVE,
   describeNewAccountGrant,
@@ -24,6 +25,13 @@ const BLOCKS: readonly SettingBlock[] = [
     keys: SIGNUP_SCHEDULE_KEYS,
   },
   {
+    id: 'timing',
+    title: 'Activity and payment unlock',
+    description:
+      'Qualifying active time for each drip and the settlement hold before a payment unlocks the remaining credits.',
+    keys: SIGNUP_TIMING_KEYS,
+  },
+  {
     id: 'free-tier',
     title: 'Free-tier limits',
     description: 'Daily spend caps for free accounts: the first day, days 2 to 7, and every day after.',
@@ -33,6 +41,11 @@ const BLOCKS: readonly SettingBlock[] = [
 
 export function ScheduleSection() {
   const { data, isLoading, isError, isFetching, refetch } = useSettingsFromServer();
+  const hiddenKeys = useStageHiddenSettingKeys();
+  const blocks = useMemo(
+    () => BLOCKS.map(block => ({ ...block, keys: block.keys.filter(key => !hiddenKeys.has(key)) })),
+    [hiddenKeys]
+  );
 
   const storedByKey = useStoredByKey(data);
 
@@ -77,7 +90,7 @@ export function ScheduleSection() {
         </Alert>
       )}
       <SettingsDraftProvider>
-        <SettingBlocks blocks={BLOCKS} storedByKey={storedByKey} testIdPrefix="invite-center-schedule" />
+        <SettingBlocks blocks={blocks} storedByKey={storedByKey} testIdPrefix="invite-center-schedule" />
       </SettingsDraftProvider>
     </Stack>
   );

@@ -336,6 +336,40 @@ export function AquariumIcon() {
   );
 }
 
+/** The Swimlanes view: stacked, indented lanes. */
+export function SwimlanesIcon() {
+  return (
+    <Glyph>
+      <path d="M2 3.5h12M4.5 8h9.5M7 12.5h7" />
+    </Glyph>
+  );
+}
+
+/** The Constellation view: a hub linked to satellites. */
+export function ConstellationIcon() {
+  return (
+    <Glyph>
+      <circle cx="8" cy="8" r="1.75" />
+      <circle cx="3" cy="3.5" r="1" />
+      <circle cx="13" cy="4.5" r="1" />
+      <circle cx="11.5" cy="13" r="1" />
+      <path d="M6.7 6.7 3.7 4.2M9.7 7 12.3 5M9.2 9.5l1.6 2.7" />
+    </Glyph>
+  );
+}
+
+/** The Transit view: a line with stops. */
+export function TransitIcon() {
+  return (
+    <Glyph>
+      <path d="M1.5 8h13" />
+      <circle cx="3.5" cy="8" r="1.5" />
+      <circle cx="8" cy="8" r="1.5" />
+      <circle cx="12.5" cy="8" r="1.5" />
+    </Glyph>
+  );
+}
+
 /**
  * The header's way to the agents stage: a grid of agent cards. Kept apart from AgentsIcon, which is
  * the composer's Orchestrate behaviour, so the view switch never reads as a second copy of it.
@@ -703,6 +737,26 @@ export function WireframeIcon() {
       <path d="M8 1.75 13.75 5v6L8 14.25 2.25 11V5z" />
       <path d="M2.25 5 8 8.25 13.75 5M8 8.25v6" />
       <path d="M8 1.75v6.5M2.25 11 8 8.25l5.75 2.75" strokeDasharray="1.5 1.5" strokeWidth="1" />
+    </Glyph>
+  );
+}
+
+/** The model pane's measure tool: a ruler laid across, with ticks. */
+export function MeasureIcon() {
+  return (
+    <Glyph>
+      <path d="M1.75 10.25 10.25 1.75l4 4-8.5 8.5z" />
+      <path d="M4.5 7.5l1.5 1.5M6.75 5.25l1.5 1.5M9 3l1.5 1.5" strokeWidth="1" />
+    </Glyph>
+  );
+}
+
+/** The model pane's section tool: a cube with a plane cutting through it. */
+export function SectionIcon() {
+  return (
+    <Glyph>
+      <path d="M8 1.75 13.75 5v6L8 14.25 2.25 11V5z" />
+      <path d="M1 8.75 8 5l7 3.75L8 12.5z" strokeWidth="1" />
     </Glyph>
   );
 }

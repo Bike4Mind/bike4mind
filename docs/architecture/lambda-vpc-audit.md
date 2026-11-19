@@ -130,6 +130,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/cron/secopsTriageWorker.handler` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/secretRotationNotifier.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. Retires the expired JWT previous key and posts the quarterly access-review reminder. |
 | `apps/workers/src/cron/securityScanScheduler.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
+| `apps/workers/src/cron/sideAppHealthAlerts.handler` | `infra/sideAppHealthAlerts.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/signupBaselineReport.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/signupDomainHoldTriage.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/signupGrantHeldRelease.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
@@ -153,6 +154,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/deepAgent/wakeHandler.dispatch` | `infra/queues.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/emailIngestion/emailAnalyzer.dispatch` | `infra/emailIngestion.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `fabFileBucket`, `generatedImagesBucket` | Yes | Connects to MongoDB. |
 | `apps/workers/src/emailIngestion/emailParser.dispatch` | `infra/emailIngestion.ts` | MongoDB; linked: `allSecrets`, `emailIngestionBucket`, `emailIngestionQueue`, `emailAnalysisQueue`, `fabFileBucket`, `generatedImagesBucket`, `websocketApi` | Yes | Connects to MongoDB. |
+| `apps/workers/src/events/briefCompose.handler` | `infra/eventBus.ts` | MongoDB; linked: `allSecrets`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket`, `eventBus` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/createMemento.handler` | `infra/llm.ts` | MongoDB; linked: `allSecrets`, `eventBus` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/dlqAlarmToSlack.handler` | `infra/dlqAlarms.ts` | MongoDB, CloudWatch, SQS and Slack | Yes | Reads DLQ triage configuration and records delivery claims before forwarding alarms. |
 | `apps/workers/src/cron/dlqTriage.handler` | `infra/cron.ts` | MongoDB, CloudWatch, SQS and Slack | Yes | Reads DLQ triage configuration and records delivery claims for the scheduled sweep. |
@@ -178,7 +180,6 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/mcp/remoteMcpCall.handler` | `infra/remoteMcp.ts` | none | No | Already outside the VPC by design: calls user-supplied hosts, so it must hold no private route. |
 | `apps/workers/src/media/imageProcessor.handler` | `infra/imageProcessor.ts` | linked: `allSecrets`, `generatedImagesBucket`, `appFilesBucket`, `fabFileBucket` | No | Removed in this change. Pure compute: image arrives in the invoke payload and is returned in the response; no database, no network call. |
 | `apps/workers/src/media/publishThumbnailRenderer.handler` | `infra/queues.ts` | none | No | Already outside the VPC by design: renders untrusted documents with no credentials and no private route. |
-| `apps/workers/src/turboCache/handler.handler` | `infra/turborepoCache.ts` | linked: `turboCacheBucket`, `TURBO_CACHE_TOKEN`, `TURBO_CACHE_READ_TOKEN` | No | Outside the VPC by design: only presigns S3 URLs for the Turborepo cache bucket; no database, no private route. |
 | `apps/workers/src/queueHandlers/accountDataExport.dispatch` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `fabFileBucket`, `generatedImagesBucket`, `eventBus` | Yes | Connects to MongoDB. |
 | `apps/workers/src/queueHandlers/accountErasure.dispatch` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `eventBus`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket`, `historyImportBucket`, `publishedArtifactsBucket`, `routerDistributionId` | Yes | Connects to MongoDB. |
 | `apps/workers/src/queueHandlers/agentExecutor.handler` | `infra/agentExecutor.ts` | MongoDB; SearXNG (in-VPC, where deployed); linked: `allSecrets`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket`, `websocketApi`, `mcpHandler`, `remoteMcpHandler`, `eventBus`, `imageProcessor`, `agentContinuationQueue`, `generationJobQueue` | Yes | Connects to MongoDB and calls the in-VPC SearXNG service. |

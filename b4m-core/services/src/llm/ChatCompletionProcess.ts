@@ -1,3 +1,5 @@
+import { isQuestMasterCompatible } from './questMasterEligibility';
+import { resolveSuccessorChain } from '@bike4mind/llm-adapters';
 import {
   type EmbeddingCredential,
   type EmbeddingRuntime,
@@ -280,6 +282,7 @@ import { SkillsFeature, type QuestWithSkillCatalog } from './features/SkillsFeat
 import { StatusManager } from './StatusManager';
 import { DEFAULT_VERBATIM_WINDOW_FRACTION, SYSTEM_PROMPT_RESERVE_TOKENS } from './historyBudgetConstants';
 import { buildContextOverflowMessage, ContextOverflowError, isContextOverflowError } from './contextOverflowMessage';
+import { asUserApiKeyRejection, UserApiKeyRejectedError, userApiKeyRejectedReply } from './userApiKeyRejection';
 import {
   ALWAYS_ON_FLOOR_SOURCES,
   buildTaggedContextMessages,
@@ -325,6 +328,8 @@ import {
   isMemberCreditCapExceeded,
   checkNewAccountSpendCap,
 } from '../creditService';
+import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
+import { spendFreezeSubjectForHold } from '../spendFreezeService/spendFreezeSubjectForHold';
 import {
   TelemetryBuilder,
   mapBackendToProvider,
@@ -728,6 +733,7 @@ export function isAbortError(error: unknown): boolean {
 export function isOperatorFault(error: unknown): boolean {
   if (resolveQuestErrorCode(error)) return false;
   if (isOutputBudgetExhaustedError(error)) return false;
+  if (error instanceof UserApiKeyRejectedError) return false;
   if (error instanceof HTTPError && error.statusCode >= 400 && error.statusCode < 500) return false;
   if (!(error instanceof Error)) return true;
   return !(
@@ -1397,6 +1403,7 @@ export class ChatCompletionProcess {
     this.coreTutorialTurns = options.coreTutorialTurns;
     this.getScopeFilter = options.getScopeFilter;
     this.getEntitlements = options.getEntitlements;
+    this.admitQuestStart = options.admitQuestStart;
     this.getThinkingVisibility = options.getThinkingVisibility;
     this.getMcpClient = options.getMcpClient;
     this.customMcp = options.customMcp;
@@ -2187,6 +2194,8 @@ export class ChatCompletionProcess {
     return resolveRecentImageJobFiles({ recentImageJobs, resolver, userId: this.user.id, logger });
   }
 
+  private admitQuestStart: IChatCompletionServiceOptions['admitQuestStart'];
+
   public async process({
     body,
     logger,
@@ -2244,6 +2253,21 @@ export class ChatCompletionProcess {
     if (prefetchedQuest?.type === 'error') {
       logger.info(`Skipping process: quest ${prefetchedQuest.id} was already saved as an error`);
       return;
+    }
+
+    if (
+      body.enableQuestMaster &&
+      !body.questMaster &&
+      isQuestMasterCompatible(resolveSuccessorChain(body.params.model)) &&
+      (await this.db.adminSettings.getSettingsValue('EnableQuestMaster')) === true
+    ) {
+      // A message queued without admission (sent before this check shipped, or EnableQuestMaster turned on
+      // after invoke) is admitted here; the quest id stays the same across redelivery.
+      if (!body.questMasterStartId || !body.questAdmittedAs) {
+        await this.admitQuestStart(this.user, body.questId);
+      } else if (body.questAdmittedAs === 'free') {
+        await this.admitQuestStart(this.user, body.questMasterStartId);
+      }
     }
 
     // Started now so its reads overlap context assembly instead of delaying the first token.
@@ -3117,6 +3141,17 @@ export class ChatCompletionProcess {
           );
         }
       }
+
+      // Before any credit gate and whether or not credits are enforced: a frozen subject spends nothing new.
+      // The org is the loaded `organization` the reservation below holds against, so the two cannot diverge.
+      await assertSpendNotFrozen(
+        spendFreezeSubjectForHold({
+          userId: this.user.id,
+          organizationId: organization?.id ?? null,
+          apiKeyId: this.turnApiKeyId,
+        }),
+        { db: { spendFreezes: this.db.spendFreezes } }
+      );
 
       if (adminModerationEnabled) {
         const moderationStartTime = Date.now();
@@ -6193,8 +6228,13 @@ export class ChatCompletionProcess {
               break;
             }
             lastError = attemptError as Error;
+            // Same message and status, so the fallback classifiers below see the provider error unchanged.
+            lastError = asUserApiKeyRejection(lastError, currentModel, apiKeyTable) ?? lastError;
             // Recoverable interruptions keep their stack at warn; unexpected failures page.
-            if (isExpectedCompletionError(lastError)) {
+            if (lastError instanceof UserApiKeyRejectedError) {
+              // The user's own saved key, not ours: an expected user-side outcome, logged once here.
+              logger.warn('[User API Key] Provider rejected the user-supplied API key', lastError.logFields);
+            } else if (isExpectedCompletionError(lastError)) {
               // Already warned by the backend or the attempt summary below.
             } else if (
               isAbortError(lastError) ||
@@ -6257,15 +6297,18 @@ export class ChatCompletionProcess {
               isSafetyRefusalError(lastError) || isLlmTimeoutError(lastError)
                 ? logger.debug.bind(logger)
                 : logger.warn.bind(logger);
-            logAttempt(
-              `\u274C [${Date.now() - processStartTime}ms] LLM completion failed with ${
-                currentModel.id
-              } (attempt ${fallbackAttempt}):`,
-              {
-                error: lastError.message,
-                shouldRetry: isRetryableError,
-              }
-            );
+            // A rejected user key was logged once above; the summary would repeat the provider message.
+            if (!(lastError instanceof UserApiKeyRejectedError)) {
+              logAttempt(
+                `\u274C [${Date.now() - processStartTime}ms] LLM completion failed with ${
+                  currentModel.id
+                } (attempt ${fallbackAttempt}):`,
+                {
+                  error: lastError.message,
+                  shouldRetry: isRetryableError,
+                }
+              );
+            }
 
             // Tool pairing recovery: if this is a tool_use/tool_result pairing error,
             // strip all tool blocks from history and retry with the same model
@@ -7954,12 +7997,19 @@ export class ChatCompletionProcess {
         quest.replies = combined;
         quest.reply = combined.join('');
       };
+      const moderationRefused = err instanceof FlaggedContentError;
       // Provider text on a restricted-tier turn can name the substitute. Credit errors keep their
-      // message, as does an account refusal (fixed text from accountState); the categorized branches
-      // below overwrite this reply with fixed text anyway.
+      // message, as do an account refusal (fixed text from accountState) and a moderation refusal
+      // (fixed text from promptModeration); the categorized branches below overwrite this reply
+      // with fixed text anyway.
       const masksMessage =
         this.shadowSubstitution &&
-        !(err instanceof InsufficientCreditsError || err instanceof AiAccessRefusedError || resolveQuestErrorCode(err));
+        !(
+          err instanceof InsufficientCreditsError ||
+          err instanceof AiAccessRefusedError ||
+          moderationRefused ||
+          resolveQuestErrorCode(err)
+        );
       setErrorReply(masksMessage ? MODEL_UNAVAILABLE_ERROR_REPLY : (err as Error).message);
       quest.type = 'error';
       setTerminalQuestStatus(quest, 'done');
@@ -7971,6 +8021,8 @@ export class ChatCompletionProcess {
       const questErrorCode = resolveQuestErrorCode(err);
       if (questErrorCode) {
         quest.errorCode = questErrorCode;
+      } else if (moderationRefused) {
+        quest.errorCode = 'content_blocked';
       }
 
       const errorSaveStartTime = Date.now();
@@ -7979,7 +8031,12 @@ export class ChatCompletionProcess {
         `⏱️ [${Date.now() - processStartTime}ms] Error quest save completed in ${Date.now() - errorSaveStartTime}ms`
       );
 
-      if (err instanceof InsufficientCreditsError || questErrorCode) {
+      if (moderationRefused) {
+        // Expected user outcome, already logged once at warn by the moderation service. Settled
+        // rather than rethrown: a queue retry would only repeat the refusal, and the /api/chat
+        // wait route answers with the quest body, where `errorCode` names the reason.
+        return;
+      } else if (err instanceof InsufficientCreditsError || questErrorCode) {
         // Terminal: nothing to retry until credits are added, so return without re-throwing
         // (a throw would route the queue handler to DLQ/retry). Quest already saved above.
         logger.log(`Insufficient credits for quest ${questId}`);
@@ -8049,6 +8106,14 @@ export class ChatCompletionProcess {
       } else if (err instanceof Error && isOverloadedError(err)) {
         logger.error(`[Overloaded Error] Quest ${questId}: ${err.message}`);
         setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
+        quest.type = 'error';
+        setTerminalQuestStatus(quest, 'done');
+        finalQuest = await saveQuest(quest);
+        return;
+      } else if (err instanceof UserApiKeyRejectedError) {
+        // Expected user-side outcome, already warned once in the attempt loop. Settled rather than
+        // rethrown, so /process logs no processing failure and emits no ProcessingFailed metric.
+        setErrorReply(userApiKeyRejectedReply(err.provider));
         quest.type = 'error';
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);

@@ -72,6 +72,7 @@ vi.mock('@bike4mind/database', async orig => {
       markSettled: async () => true,
       findSettlement: async () => null,
     },
+    spendFreezeRepository: { findActiveForSubject: async () => null },
     withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
     newAccountSpendCapAdapters: {
       adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },

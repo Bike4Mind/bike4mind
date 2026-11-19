@@ -55,6 +55,8 @@ interface MemberRosterProps {
   canRevokeMember: (userId: string) => boolean;
   canManageCreditBudgets: boolean;
   canManageManagers: boolean;
+  /** Owner, manager or site admin (`canAdministerOrganization`); plain members get a names-only roster. */
+  showEmails: boolean;
 }
 
 const MemberRoster: FC<MemberRosterProps> = ({
@@ -68,6 +70,7 @@ const MemberRoster: FC<MemberRosterProps> = ({
   canRevokeMember,
   canManageCreditBudgets,
   canManageManagers,
+  showEmails,
 }) => {
   const { t } = useTranslation();
   const [searchInput, setSearchInput] = useState('');
@@ -231,6 +234,7 @@ const MemberRoster: FC<MemberRosterProps> = ({
         canManageCreditBudgets={canManageCreditBudgets}
         canManageManagers={canManageManagers}
         selectable={canRevokeMembers}
+        showEmails={showEmails}
         selected={selectedIds.has(member.id)}
         onToggleSelect={isRemovable(member) ? () => toggleOne(member.id) : undefined}
       />
@@ -246,12 +250,12 @@ const MemberRoster: FC<MemberRosterProps> = ({
     >
       <Input
         className="organization-members-search-input"
-        placeholder="Search by name or email"
+        placeholder={showEmails ? 'Search by name or email' : 'Search by name'}
         value={searchInput}
         slotProps={{
           input: {
             'data-testid': 'organization-members-search-input',
-            'aria-label': 'Search members by name or email',
+            'aria-label': showEmails ? 'Search members by name or email' : 'Search members by name',
           },
         }}
         onChange={e => {
@@ -328,7 +332,9 @@ const MemberRoster: FC<MemberRosterProps> = ({
           sx={{
             display: { xs: 'none', sm: 'grid' },
             gridTemplateColumns: `${canRevokeMembers ? '32px ' : ''}minmax(0, 1fr)`,
-            [ROSTER_TABLE_QUERY]: { gridTemplateColumns: rosterGridColumns(canRevokeMembers) },
+            [ROSTER_TABLE_QUERY]: {
+              gridTemplateColumns: rosterGridColumns({ selectable: canRevokeMembers, showEmails }),
+            },
             columnGap: '12px',
             alignItems: 'center',
             borderBottom: '1px solid',
@@ -355,7 +361,14 @@ const MemberRoster: FC<MemberRosterProps> = ({
             />
           )}
           <Box>Name</Box>
-          <Box sx={{ display: 'none', [ROSTER_TABLE_QUERY]: { display: 'block' } }}>Email</Box>
+          {showEmails && (
+            <Box
+              data-testid="organization-members-header-email"
+              sx={{ display: 'none', [ROSTER_TABLE_QUERY]: { display: 'block' } }}
+            >
+              Email
+            </Box>
+          )}
           <Box sx={{ display: 'none', [ROSTER_TABLE_QUERY]: { display: 'block' } }}>Role</Box>
           <Box
             data-testid="organization-members-header-credits"

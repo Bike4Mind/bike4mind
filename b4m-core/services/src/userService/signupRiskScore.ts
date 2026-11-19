@@ -9,6 +9,10 @@ export interface SignupRiskFacts {
   burstCohort?: boolean | null;
   /** The signup came from a hosting or datacenter network (`signupMeta.isDatacenter`). */
   isDatacenter?: boolean | null;
+  /** The edge labeled the signup request as an anonymous IP (`signupMeta.wafAnonIp`). */
+  wafAnonIp?: boolean | null;
+  /** The edge labeled the signup request as bot traffic (`signupMeta.wafBotSignal`). */
+  wafBotSignal?: boolean | null;
   /** Minutes from signup to the first API key; null when no key was minted. */
   minutesToFirstApiKey?: number | null;
   /** Credits spent in the first 24 hours after signup. */
@@ -53,6 +57,8 @@ export function scoreSignupRisk(facts: SignupRiskFacts, scoring: SignupRiskScori
   if (facts.riskyDomain) add('riskyDomain', 1, 'Disposable, blocklisted or newly registered email domain');
   if (facts.burstCohort) add('burstCohort', 1, 'Part of a held signup burst');
   if (facts.isDatacenter) add('datacenterNetwork', 1, 'Signed up from a hosting or datacenter network');
+  if (facts.wafAnonIp) add('wafAnonIp', 1, 'Signup request labeled as an anonymous IP (VPN, proxy or hosting)');
+  if (facts.wafBotSignal) add('wafBotSignal', 1, 'Signup request labeled as bot traffic');
   const minutes = facts.minutesToFirstApiKey;
   if (minutes != null && minutes >= 0 && minutes <= scoring.quickApiKeyMinutes) {
     add('quickApiKey', 1, `First API key created ${Math.round(minutes)} minutes after signup`);

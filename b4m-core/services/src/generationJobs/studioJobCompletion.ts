@@ -8,12 +8,17 @@ import {
 } from '@bike4mind/common';
 import type { GroupCompletionSubscriber } from './groupCompletion';
 
-const MEDIUM_BY_KIND: Record<GenerationJobKind, StudioCompletionMedium> = {
+// A render reports on the Productions export panel, not as a Studio Create completion.
+type AnnouncedKind = Exclude<GenerationJobKind, 'render'>;
+
+const MEDIUM_BY_KIND: Record<AnnouncedKind, StudioCompletionMedium> = {
   image: 'image',
   video: 'video',
   music: 'music',
   speech: 'speech',
   sound_effect: 'sound-effects',
+  // A Scene is a rendered video clip.
+  compose: 'video',
 };
 
 const UNTITLED = 'Untitled';
@@ -46,8 +51,9 @@ export const studioCompletionSubscriber = (
   publish: (event: StudioJobCompletedEvent) => Promise<void>
 ): GroupCompletionSubscriber => ({
   name: 'studio_event',
-  wants: job => job.source === 'studio' && !INLINE_KINDS.includes(job.kind),
+  wants: job => job.source === 'studio' && !INLINE_KINDS.includes(job.kind) && job.kind !== 'render',
   deliver: async ({ groupId, members, anchor, readyCount, failedCount, cancelledCount, completedAt }) => {
+    if (anchor.kind === 'render') return;
     const medium = MEDIUM_BY_KIND[anchor.kind];
     await publish({
       version: 1,

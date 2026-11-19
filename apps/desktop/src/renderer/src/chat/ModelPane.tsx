@@ -28,7 +28,8 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
-import type { ModelLighting, ModelUnits, ModelView } from '@shared/model3d';
+import type * as THREE from 'three';
+import { versionLabel, type ModelLighting, type ModelUnits, type ModelView } from '@shared/model3d';
 import {
   CaretDownIcon,
   CheckIcon,
@@ -39,7 +40,9 @@ import {
   FolderIcon,
   FrameIcon,
   GridIcon,
+  MeasureIcon,
   RecordIcon,
+  SectionIcon,
   SunIcon,
   WarningIcon,
   WireframeIcon,
@@ -67,6 +70,13 @@ import {
 } from './model3d/modelPaneWidth';
 import { ResizeHandle } from './ResizeHandle';
 import { TURNTABLE_SECONDS } from './model3d/turntable';
+import type { ModelTool } from './model3d/inspection';
+import { ModelToolPanel } from './model3d/ModelToolPanel';
+import { DEFAULT_SECTION, type SectionState } from './model3d/section';
+import { ModelVersionBanner, ModelVersionStrip } from './model3d/ModelVersionStrip';
+import { ModelVersionCompare } from './model3d/ModelVersionCompare';
+import { useModelVersions } from './model3d/useModelVersions';
+import { useVersionPreview } from './model3d/useVersionPreview';
 
 /** First-run prompts: game-asset shaped, since that is who this pane is for first. */
 export const MODEL_EXAMPLE_PROMPTS = [
@@ -138,7 +148,7 @@ export const MODEL_LIGHTING_PRESETS: readonly { lighting: ModelLighting; label: 
   { lighting: 'night', label: 'Night' },
 ];
 const KEY_HELP =
-  'Arrow keys orbit (or move a picked moving part), plus and minus zoom, 0 to 4 pick a view, F fits the model, W wireframe, G grid, E explode, L lighting, N night, [ and ] pick a part, Enter edits it.';
+  'Arrow keys orbit (or move a picked moving part), plus and minus zoom, 0 to 4 pick a view, F fits the model, W wireframe, G grid, E explode, L lighting, N night, M measure, S section, Esc leaves either, [ and ] pick a part, Enter edits it.';
 
 function nextLighting(lighting: ModelLighting): ModelLighting {
   const index = MODEL_LIGHTING_PRESETS.findIndex(preset => preset.lighting === lighting);
@@ -217,6 +227,8 @@ function formatSize(size: [number, number, number], units: string): string {
   return `${size.map(value => Number(value.toFixed(value < 10 ? 2 : 1))).join(' x ')} ${units}`;
 }
 
+const ignorePick = () => undefined;
+
 export function ModelPane({
   engine,
   dark,
@@ -276,6 +288,10 @@ export function ModelPane({
   const [grid, setGrid] = useState(false);
   const [lighting, setLighting] = useState<ModelLighting>('studio');
   const [exploded, setExploded] = useState(false);
+  // The measure or section tool, if on; both are view-only and leave the file alone.
+  const [tool, setTool] = useState<ModelTool | null>(null);
+  const [section, setSection] = useState<SectionState>(DEFAULT_SECTION);
+  const [measurePoints, setMeasurePoints] = useState<THREE.Vector3[]>([]);
   // The model grew past a camera the user placed (ModelViewport never moves that one on a rebuild).
   const [cropped, setCropped] = useState(false);
   const [adjusting, setAdjusting] = useState(false);
@@ -331,6 +347,11 @@ export function ModelPane({
     setPicked(null);
     setPrompt(null);
   };
+  // Measuring takes the clicks that would pick parts, so a selection would only sit there stale.
+  const toggleTool = (next: ModelTool) => {
+    if (next === 'measure' && tool !== 'measure') clearPick();
+    setTool(current => (current === next ? null : next));
+  };
   const pickPart = ({ name: part, additive, point }: ViewportPick) => {
     // Empty space, or a second plain click on the only picked part, clears the selection.
     if (part === null || (!additive && pickedNames.length === 1 && pickedNames[0] === part)) {
@@ -354,7 +375,16 @@ export function ModelPane({
     const all = summary?.parts ?? [];
     if (!all.length) return;
     const at = pickedNames.length ? all.indexOf(pickedNames[pickedNames.length - 1]) : -1;
-    const next = all[(at + direction + all.length) % all.length] ?? all[0];
+    const kept = viewportHandle.current?.partKept;
+    let next: string | undefined;
+    for (let step = 1; step <= all.length; step++) {
+      const candidate = all[(((at + direction * step) % all.length) + all.length) % all.length];
+      if (!kept || kept(candidate)) {
+        next = candidate;
+        break;
+      }
+    }
+    if (!next) return;
     setPicked({ path: state.path, names: [next] });
     setPrompt(null);
   };
@@ -390,6 +420,36 @@ export function ModelPane({
   const [note, setNote] = useState<Note>(null);
   const name = state.path ? (state.path.split(/[\\/]/).pop() ?? state.path) : null;
   const paramEntries = Object.entries(params);
+  const versions = useModelVersions(engine.sessionId, state);
+  const versionPreview = useVersionPreview(engine, versions);
+  const previewed = versionPreview.selected;
+  const previewObject = previewed ? versionPreview.object : null;
+  const restoreVersion = async () => {
+    const failed = await versionPreview.restore();
+    if (failed) setNote({ kind: 'error', text: failed });
+    stageRef.current?.focus();
+  };
+  const closeVersion = () => {
+    versionPreview.close();
+    stageRef.current?.focus();
+  };
+  // A preview only looks: joint and clip playback would pose the file's build behind it, and every
+  // pose change would rebuild the compare view's GL context.
+  const previewing = previewed !== null;
+  useEffect(() => {
+    if (!previewing) return;
+    setJointsPlaying(false);
+    setPlaying(null);
+  }, [previewing]);
+  // The current pose as the compare opened; the joints are hidden while previewing, so it holds.
+  const compareSubjects = useMemo(() => {
+    if (!previewed || !previewObject || !object) return null;
+    const currentLabel = versions.current === null ? 'Now' : `${versionLabel(versions.current)} (current)`;
+    return {
+      first: { object: previewObject, angles: previewed.jointAngles, label: versionLabel(previewed.number) },
+      second: { object, angles: jointAnglesRef.current, label: currentLabel },
+    };
+  }, [previewed, previewObject, object, versions.current]);
   const canExport = !!object && status !== 'building';
   // A failed build leaves the last good model on show, dimmed; a clip of it would pass for the current one.
   const canRecord = canExport && status !== 'error';
@@ -441,6 +501,25 @@ export function ModelPane({
     return true;
   };
 
+  // Another model (or a recording) leaves the tools: a cut or dimension belongs to what it was made on.
+  useEffect(() => setTool(null), [state.path]);
+  useEffect(() => {
+    if (recording) setTool(null);
+  }, [recording]);
+  const units = summary?.units ?? 'mm';
+  const { setInspection } = engine;
+  useEffect(() => {
+    setInspection(
+      tool
+        ? {
+            section: tool === 'section' ? section : null,
+            measure: tool === 'measure' && measurePoints.length ? { points: measurePoints, units } : null,
+          }
+        : null
+    );
+  }, [setInspection, tool, section, measurePoints, units]);
+  useEffect(() => () => setInspection(null), [setInspection]);
+
   // Shortcuts act only while the view itself has focus, so they never steal a letter from a field.
   const onViewKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget || !object || recording) return;
@@ -449,10 +528,10 @@ export function ModelPane({
     const preset = MODEL_VIEW_PRESETS.find(entry => entry.key === event.key);
     const big = event.shiftKey;
     const actions: Record<string, () => void> = {
-      ArrowLeft: () => nudgePickedJoint(-1, big) || handle?.orbit(-ORBIT_STEP, 0),
-      ArrowRight: () => nudgePickedJoint(1, big) || handle?.orbit(ORBIT_STEP, 0),
-      ArrowUp: () => nudgePickedJoint(1, big) || handle?.orbit(0, -ORBIT_STEP),
-      ArrowDown: () => nudgePickedJoint(-1, big) || handle?.orbit(0, ORBIT_STEP),
+      ArrowLeft: () => (!previewed && nudgePickedJoint(-1, big)) || handle?.orbit(-ORBIT_STEP, 0),
+      ArrowRight: () => (!previewed && nudgePickedJoint(1, big)) || handle?.orbit(ORBIT_STEP, 0),
+      ArrowUp: () => (!previewed && nudgePickedJoint(1, big)) || handle?.orbit(0, -ORBIT_STEP),
+      ArrowDown: () => (!previewed && nudgePickedJoint(-1, big)) || handle?.orbit(0, ORBIT_STEP),
       '+': () => handle?.zoom(ZOOM_STEP),
       '=': () => handle?.zoom(ZOOM_STEP),
       '-': () => handle?.zoom(1 / ZOOM_STEP),
@@ -465,7 +544,9 @@ export function ModelPane({
       '[': () => stepPick(-1),
       ']': () => stepPick(1),
       Enter: () => editable && pickedNames.length > 0 && openPrompt(handle?.partPoint(pickedNames) ?? null),
-      Escape: () => clearPick(),
+      m: () => toggleTool('measure'),
+      s: () => toggleTool('section'),
+      Escape: () => (tool ? setTool(null) : previewed ? closeVersion() : clearPick()),
     };
     const action = preset
       ? () => handle?.setView(preset.view)
@@ -606,27 +687,65 @@ export function ModelPane({
         {name ? (
           <>
             <ModelViewport
-              object={object}
+              object={previewed ? previewObject : object}
               wireframe={wireframe}
               grid={grid}
               lighting={lighting}
               dark={dark}
-              dimmed={status === 'error'}
+              dimmed={!previewed && status === 'error'}
               frameKey={state.path}
-              pose={jointAngles}
+              pose={previewed ? previewed.jointAngles : jointAngles}
               exploded={exploded && explodable}
-              picked={pickedNames}
-              onPick={pickPart}
-              onPoseChange={setJointAngle}
+              picked={previewed ? NO_PARTS : pickedNames}
+              // A previewed version is only looked at: its parts are not the file's to edit or pose.
+              onPick={previewed ? ignorePick : pickPart}
+              onPoseChange={previewed ? undefined : setJointAngle}
               onJointDragStart={stopJointsPlaying}
               editing={editingNames}
               onEditSettled={onEditSettled}
-              clip={playingClip}
+              clip={previewed ? null : playingClip}
               onCroppedChange={setCropped}
               adjusting={adjusting}
               handleRef={viewportHandle}
+              tool={tool}
+              section={section}
+              units={units}
+              onMeasure={setMeasurePoints}
             />
-            {promptOpen && (
+            {object && tool && !recording && (
+              <ModelToolPanel
+                tool={tool}
+                section={section}
+                onSectionChange={setSection}
+                measurePoints={measurePoints}
+                units={units}
+                onClose={() => {
+                  setTool(null);
+                  stageRef.current?.focus();
+                }}
+              />
+            )}
+            {previewed && versionPreview.compare && compareSubjects && (
+              <ModelVersionCompare mode={versionPreview.compare} dark={dark} {...compareSubjects} />
+            )}
+            {previewed && (
+              <ModelVersionBanner
+                version={previewed}
+                current={versions.current}
+                compare={versionPreview.compare}
+                status={versionPreview.status}
+                restoring={versionPreview.restoring}
+                onCompareChange={versionPreview.setCompare}
+                onRestore={() => void restoreVersion()}
+                onClose={closeVersion}
+              />
+            )}
+            {previewed && versionPreview.status === 'building' && (
+              <Stack alignItems="center" justifyContent="center" sx={{ position: 'absolute', inset: 0 }}>
+                <CircularProgress size="sm" />
+              </Stack>
+            )}
+            {promptOpen && !previewed && (
               <PartEditPrompt
                 key={`${promptOpen.point.x},${promptOpen.point.y}`}
                 parts={pickedNames}
@@ -701,6 +820,26 @@ export function ModelPane({
                     <ExplodeIcon />
                   </ViewToggle>
                 )}
+                <ViewToggle
+                  label="Measure"
+                  shortcut="M"
+                  pressed={tool === 'measure'}
+                  disabled={recording}
+                  onToggle={() => toggleTool('measure')}
+                  testId="model-pane-measure-btn"
+                >
+                  <MeasureIcon />
+                </ViewToggle>
+                <ViewToggle
+                  label="Section"
+                  shortcut="S"
+                  pressed={tool === 'section'}
+                  disabled={recording}
+                  onToggle={() => toggleTool('section')}
+                  testId="model-pane-section-btn"
+                >
+                  <SectionIcon />
+                </ViewToggle>
                 <Dropdown>
                   <Tooltip title="Lighting (L)" size="sm" placement="bottom" variant="solid">
                     <MenuButton
@@ -905,6 +1044,16 @@ export function ModelPane({
         )}
       </Box>
 
+      {state.kind === 'model' && (
+        <ModelVersionStrip
+          versions={versions.versions}
+          current={versions.current}
+          selected={previewed?.number ?? null}
+          onSelect={versionPreview.select}
+          onClose={closeVersion}
+        />
+      )}
+
       {paramEntries.length > 0 && (
         <Stack spacing={0.5} sx={{ px: 1.5, pt: 1, maxHeight: 220, overflowY: 'auto' }} data-testid="model-pane-params">
           {paramEntries.map(([key, param]) => (
@@ -943,14 +1092,14 @@ export function ModelPane({
         </Stack>
       )}
 
-      {clips.length > 0 && (
+      {clips.length > 0 && !previewed && (
         <ModelClips
           clips={clips}
           playing={playingClip}
           onPlay={clip => setPlaying(clip === null ? null : { path: state.path, clip })}
         />
       )}
-      {joints.length > 0 && (
+      {joints.length > 0 && !previewed && (
         <ModelJoints
           joints={joints}
           units={summary?.units ?? 'mm'}

@@ -61,6 +61,7 @@ const AdminLiveOpsTriageMultiConfigTab = dynamic(() => import('./AdminLiveOpsTri
 const WebhookAuditLogsTab = dynamic(() => import('./WebhookAuditLogs'), { ssr: false });
 const AuditLogTab = dynamic(() => import('./AuditLog'), { ssr: false });
 const AccessReviewTab = dynamic(() => import('./AccessReview'), { ssr: false });
+const SpendExplorerTab = dynamic(() => import('./SpendExplorer'), { ssr: false });
 const ApprovalsTab = dynamic(() => import('./Approvals'), { ssr: false });
 const RolesTab = dynamic(() => import('./Roles'), { ssr: false });
 
@@ -101,7 +102,6 @@ const TutorialsTab = dynamic(() => import('./TutorialsTab'), { ssr: false });
 const IntegrationHealthTab = dynamic(() => import('./IntegrationHealth'), { ssr: false });
 const IntegrationDemandTab = dynamic(() => import('./IntegrationDemandTab'), { ssr: false });
 const SreAgentTab = dynamic(() => import('./SreAgentTab'), { ssr: false });
-const SecopsTriageTab = dynamic(() => import('./SecopsTriageTab'), { ssr: false });
 const PublishedArtifactsTab = dynamic(() => import('./PublishedArtifactsTab'), { ssr: false });
 const PrReportTab = dynamic(() => import('./PrReport/PrReportTab'), { ssr: false });
 const ArchitectureDiagramsTab = dynamic(() => import('./ArchitectureDiagramsTab'), { ssr: false });
@@ -324,6 +324,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.AccessReview}>
             {activeTab === AdminTab.AccessReview && <AccessReviewTab />}
           </TabPanel>
+          <TabPanel value={AdminTab.SpendExplorer}>
+            {activeTab === AdminTab.SpendExplorer && <SpendExplorerTab />}
+          </TabPanel>
           <TabPanel value={AdminTab.Approvals}>{activeTab === AdminTab.Approvals && <ApprovalsTab />}</TabPanel>
           <TabPanel value={AdminTab.Roles}>{activeTab === AdminTab.Roles && <RolesTab />}</TabPanel>
           <TabPanel value={AdminTab.Tutorials}>{activeTab === AdminTab.Tutorials && <TutorialsTab />}</TabPanel>
@@ -348,9 +351,6 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
             {activeTab === AdminTab.IntegrationDemand && <IntegrationDemandTab />}
           </TabPanel>
           <TabPanel value={AdminTab.SreAgent}>{activeTab === AdminTab.SreAgent && <SreAgentTab />}</TabPanel>
-          <TabPanel value={AdminTab.SecOpsTriage}>
-            {activeTab === AdminTab.SecOpsTriage && <SecopsTriageTab />}
-          </TabPanel>
           <TabPanel value={AdminTab.PublishedPages}>
             {activeTab === AdminTab.PublishedPages && <PublishedArtifactsTab />}
           </TabPanel>

@@ -13,6 +13,7 @@ import { isAwaitingGenerationOutput, isTerminalGenerationState } from '@client/a
 import { patchMusicGeneration } from '@client/app/hooks/data/musicGenerationCache';
 import { musicGenerationKeys } from '@client/app/hooks/data/musicGenerationKeys';
 import { patchStudioImageJob, studioImageJobKeys } from '@client/app/hooks/data/studioImageJobs';
+import { studioRenderKeys } from '@client/app/hooks/data/studioRenders';
 import { patchVideoGeneration } from '@client/app/hooks/data/videoGenerationCache';
 import { videoGenerationKeys } from '@client/app/hooks/data/videoGenerationKeys';
 
@@ -30,8 +31,8 @@ type KindCache = {
 };
 
 // Image jobs are cached in two places, not through KIND_CACHES: Studio's gallery list and the chat card's per-id
-// detail (handleImageUpdate). Speech and sound effects have no job gallery yet, so their frames only refresh the
-// credit balance.
+// detail (handleImageUpdate). Speech, sound effects and Scenes (compose) have no web job cache yet, so their frames
+// only refresh the credit balance. Render jobs live only in the Productions export panel (handleRenderUpdate).
 type CachedKind = Extract<GenerationJobKind, 'video' | 'music'>;
 
 const KIND_CACHES: Record<CachedKind, KindCache> = {
@@ -63,9 +64,20 @@ const handleImageUpdate = async (queryClient: QueryClient, job: JobUpdate): Prom
   await Promise.all(pending);
 };
 
+// The export panel's list carries the progress, output file and public error, none of which a frame has.
+const handleRenderUpdate = async (queryClient: QueryClient, job: JobUpdate): Promise<void> => {
+  const pending: Promise<void>[] = [queryClient.invalidateQueries({ queryKey: studioRenderKeys.all })];
+  if (isTerminalGenerationState(job.state)) pending.push(invalidateGenerationCreditBalances(queryClient));
+  await Promise.all(pending);
+};
+
 const handleUpdate = async (queryClient: QueryClient, job: JobUpdate): Promise<void> => {
   if (job.kind === 'image') {
     await handleImageUpdate(queryClient, job);
+    return;
+  }
+  if (job.kind === 'render') {
+    await handleRenderUpdate(queryClient, job);
     return;
   }
   if (!isCachedKind(job.kind)) {
@@ -128,6 +140,7 @@ const GenerationUpdatesListener = () => {
         invalidateUnfinishedDetails(queryClient, keys.details);
       }
       void queryClient.invalidateQueries({ queryKey: studioImageJobKeys.list });
+      void queryClient.invalidateQueries({ queryKey: studioRenderKeys.all });
       invalidateUnfinishedDetails(queryClient, chatImageJobKeys.details);
     }
     if (isOpen) hasOpenedRef.current = true;

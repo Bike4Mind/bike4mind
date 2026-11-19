@@ -68,6 +68,7 @@ const makeAdapters = (
       disputePending?: boolean;
     } | null;
     organization?: { id: string; currentCredits?: number } | null;
+    freeze?: { scopeType: 'User' | 'Organization' | 'apiKey'; frozenAt: Date } | null;
   } = {}
 ) => {
   const configs = {
@@ -84,6 +85,7 @@ const makeAdapters = (
   const organizations = {
     findById: vi.fn(async () => (overrides.organization === undefined ? null : overrides.organization)),
   };
+  const spendFreezes = { findActiveForSubject: vi.fn(async () => overrides.freeze ?? null) };
   const adapters = {
     db: {
       dataLakeResearchConfigs: configs,
@@ -92,10 +94,11 @@ const makeAdapters = (
       adminSettings: {},
       users,
       organizations,
+      spendFreezes,
     },
     now: () => NOW,
   } as unknown as StartResearchRunAdapters;
-  return { adapters, configs, runs, record, users, organizations };
+  return { adapters, configs, runs, record, users, organizations, spendFreezes };
 };
 
 /** Comfortably more than the default $0.05 ceiling is worth, so the pre-flight passes. */
@@ -282,6 +285,29 @@ describe('startResearchRun', () => {
       const { adapters, runs } = makeAdapters({ owner: fundedOwner(state) });
 
       await expect(startResearchRun('config-1', lake(), onDemand(), adapters)).rejects.toBeInstanceOf(ForbiddenError);
+      expect(runs.createRun).not.toHaveBeenCalled();
+    });
+
+    it('refuses a frozen owner with 403 spend_frozen before a run row exists, even with credits off', async () => {
+      areCreditsEnforcedMock.mockResolvedValue(false);
+      const { adapters, runs, spendFreezes } = makeAdapters({
+        owner: fundedOwner({ organizationId: 'org-1' }),
+        freeze: { scopeType: 'Organization', frozenAt: NOW },
+      });
+
+      const refusal = await startResearchRun('config-1', lake(), PERIODIC, adapters).catch(e => e);
+
+      expect(refusal).toBeInstanceOf(ForbiddenError);
+      expect(getQuestErrorCode(refusal)).toBe('spend_frozen');
+      expect(spendFreezes.findActiveForSubject).toHaveBeenCalledWith({ userId: ACTOR, organizationId: 'org-1' });
+      expect(runs.createRun).not.toHaveBeenCalled();
+    });
+
+    it('propagates a freeze read error rather than starting the run', async () => {
+      const { adapters, runs, spendFreezes } = makeAdapters();
+      spendFreezes.findActiveForSubject.mockRejectedValue(new Error('db down'));
+
+      await expect(startResearchRun('config-1', lake(), onDemand(), adapters)).rejects.toThrow('db down');
       expect(runs.createRun).not.toHaveBeenCalled();
     });
 

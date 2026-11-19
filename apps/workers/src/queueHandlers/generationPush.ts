@@ -21,18 +21,31 @@ export type GenerationJobPushDeps = {
   publish: Publish;
 };
 
-type PushedKind = 'video' | 'music';
+type PushedKind = 'video' | 'music' | 'compose' | 'render';
 
 const JOB_TITLES: Record<PushedKind, string> = {
   video: 'Video ready',
   music: 'Song ready',
+  compose: 'Scene ready',
+  render: 'Export ready',
+};
+
+const JOB_NOUNS: Record<PushedKind, string> = {
+  video: 'video',
+  music: 'music',
+  compose: 'Scene',
+  render: 'export',
 };
 
 const isPushedJob = (job: IGenerationJobDocument): job is IGenerationJobDocumentOf<PushedKind> =>
   Object.hasOwn(JOB_TITLES, job.kind);
 
+// A Scene and a render have no prompt; their title stands in.
+const pushTextOf = (job: IGenerationJobDocumentOf<PushedKind>): string | undefined =>
+  job.kind === 'compose' || job.kind === 'render' ? job.payload.request.title : job.payload.request.prompt;
+
 /**
- * For a video or music job the engine just finished. Pushed regardless of websocket presence: these run
+ * For a video, music, Scene or render job the engine just finished. Pushed regardless of websocket presence: these run
  * for minutes, long enough that the requester has usually moved on. Failed and cancelled jobs are not
  * pushed (there is no failure category), and neither is a job with a Slack delivery, which already
  * reports back in its own thread. Image jobs are not pushed per job: a "make N" batch is pushed once,
@@ -54,9 +67,9 @@ export async function publishGenerationJobReadyPush(
       userId: job.requestedBy,
       category: 'generation_ready',
       title: JOB_TITLES[job.kind],
-      body: generationPushBody(job.payload.request.prompt, `Your ${job.kind} is ready.`),
+      body: generationPushBody(pushTextOf(job), `Your ${JOB_NOUNS[job.kind]} is ready.`),
       deepLink: sessionId ? deps.sessionDeepLink(sessionId) : deps.appRootDeepLink(),
-      collapseId: `generation:${job.id}`,
+      collapseId: job.kind === 'render' ? `generation:${job.payload.groupId}` : `generation:${job.id}`,
       ...(job.questId && { questId: job.questId }),
       ...(sessionId && { sessionId }),
     });

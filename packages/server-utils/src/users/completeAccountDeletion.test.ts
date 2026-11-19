@@ -1,3 +1,4 @@
+import type { ClaimedAccountDeletionNotice } from '@bike4mind/database';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
@@ -11,8 +12,13 @@ const h = vi.hoisted(() => ({
   hardDeleteUser: vi.fn(),
   purgeFiles: vi.fn(),
   purgeContent: vi.fn(),
+  redactStripe: vi.fn(),
   endRealtimeConnections: vi.fn(),
   sendComplete: vi.fn(),
+  noticeRecord: vi.fn(),
+  noticeClaim: vi.fn<(idHash: string, dueBefore: Date) => Promise<ClaimedAccountDeletionNotice | null>>(),
+  noticeMarkFailed: vi.fn(),
+  noticeRemove: vi.fn(),
   recordAdminAction: vi.fn(),
   collections: vi.fn(),
   assertClassified: vi.fn(),
@@ -29,7 +35,15 @@ vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: {},
   mongoose: { modelNames: () => ['Alpha', 'Beta'] },
   adminAuditLogRepository: { append: vi.fn() },
+  ACCOUNT_DELETION_NOTICE_RETRY_DELAY_MS: 60 * 60 * 1000,
+  accountDeletionNoticeRepository: {
+    record: h.noticeRecord,
+    claimDue: h.noticeClaim,
+    markFailed: h.noticeMarkFailed,
+    remove: h.noticeRemove,
+  },
 }));
+vi.mock('../privacy/erasureHash', () => ({ erasureIdHash: (id: string) => `hash-${id}` }));
 vi.mock('@bike4mind/services', () => ({
   authSessionService: { endRealtimeConnections: h.endRealtimeConnections },
   adminAuditService: { recordAdminAction: h.recordAdminAction },
@@ -40,6 +54,7 @@ vi.mock('./ownedOrganizations', () => ({
   deleteSoleOwnedOrganizations: h.deleteSoleOwned,
 }));
 vi.mock('./purgeAccountFiles', () => ({ purgeAccountFiles: h.purgeFiles }));
+vi.mock('../billing/redactAccountStripeCustomer', () => ({ redactAccountStripeCustomer: h.redactStripe }));
 vi.mock('./purgeAccountContent', () => ({ purgeAccountContent: h.purgeContent }));
 vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: h.sendComplete }));
 vi.mock('../utils/adminAudit', () => ({
@@ -58,6 +73,7 @@ const users = {
 };
 // Stands in for apps/client/server/dataSubject/erasureRegistry.ts: classify, then plan; audit re-plans.
 const erasureRegistry: ErasureRegistry = {
+  assertReady: vi.fn(),
   async scope(_subject, assertLease) {
     h.assertClassified(['Alpha', 'Beta']);
     return h.collections(assertLease);
@@ -80,9 +96,21 @@ type HardDeleteContext = {
 };
 const deletedTarget = { name: 'Leaving User', username: 'leaving', email: 'leaving@example.com' };
 
+const claimedNotice = (idHash: string): ClaimedAccountDeletionNotice => ({
+  idHash,
+  email: 'leaving@example.com',
+  attempts: 0,
+  nextAttemptAt: NOW,
+  createdAt: NOW,
+  leaseToken: 'notice-owner',
+  leaseExpiresAt: new Date(NOW.getTime() + 60 * 60 * 1000),
+});
+
 beforeEach(() => {
   vi.resetAllMocks();
   h.order.length = 0;
+  h.noticeClaim.mockImplementation(async idHash => claimedNotice(idHash));
+  h.noticeMarkFailed.mockResolvedValue(1);
   h.exists.mockResolvedValue({ _id: USER_ID });
   h.claimUser.mockResolvedValue({ email: 'leaving@example.com' });
   h.organizationExists.mockResolvedValue(null);
@@ -96,6 +124,9 @@ beforeEach(() => {
   });
   h.purgeContent.mockImplementation(async () => {
     h.order.push('content');
+  });
+  h.redactStripe.mockImplementation(async () => {
+    h.order.push('stripe');
   });
   h.collections.mockResolvedValue([]);
   h.updateOne.mockResolvedValue({ matchedCount: 1 });
@@ -170,6 +201,7 @@ describe('completeAccountDeletion', () => {
       'orgs',
       'files',
       'content',
+      'stripe',
       'realtime',
       'erase:beforeDelete',
       'delete',
@@ -236,11 +268,44 @@ describe('completeAccountDeletion', () => {
     }
   );
 
+  it('redacts the Stripe customer after the content purge and keeps the account when that fails', async () => {
+    h.redactStripe.mockRejectedValueOnce(new Error('stripe unavailable'));
+    await expect(complete()).rejects.toThrow('stripe unavailable');
+    expect(h.order).toEqual(['orgs', 'files', 'content']);
+    expect(h.hardDeleteUser).not.toHaveBeenCalled();
+    expect(h.updateOne).toHaveBeenCalledWith(
+      { _id: USER_ID, 'deletion.purgeLeaseId': expect.any(String) },
+      { $unset: { 'deletion.purgeLeaseId': 1, 'deletion.purgeLeaseExpiresAt': 1 } }
+    );
+    expect(h.redactStripe).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ logger, assertLease: expect.any(Function) })
+    );
+  });
+
+  it('hands the Stripe step the purge lease check', async () => {
+    await complete();
+    const { assertLease } = h.redactStripe.mock.calls[0][1] as { assertLease: () => Promise<void> };
+    h.exists.mockResolvedValue(null);
+    await expect(assertLease()).rejects.toThrow('purge lease lost');
+  });
+
   it('does not delete or email after losing its lease', async () => {
     h.exists.mockResolvedValueOnce({ _id: USER_ID }).mockResolvedValue(null);
     await expect(complete()).rejects.toThrow('purge lease lost');
     expect(h.hardDeleteUser).not.toHaveBeenCalled();
     expect(h.sendComplete).not.toHaveBeenCalled();
+  });
+
+  it('purges and claims nothing when the registry is not ready', async () => {
+    vi.mocked(erasureRegistry.assertReady).mockImplementation(() => {
+      throw new Error('registry invalid');
+    });
+    await expect(complete()).rejects.toThrow('registry invalid');
+    expect(h.claimUser).not.toHaveBeenCalled();
+    for (const purge of [h.deleteSoleOwned, h.purgeFiles, h.purgeContent, h.redactStripe, h.hardDeleteUser]) {
+      expect(purge).not.toHaveBeenCalled();
+    }
   });
 
   it('refuses an owner of an organization with other members before claiming the purge', async () => {
@@ -289,13 +354,57 @@ describe('completeAccountDeletion', () => {
     await expect(complete()).resolves.toEqual({ deleted: true });
     expect(users.delete).toHaveBeenCalledWith(USER_ID);
     expect(h.sendComplete).toHaveBeenCalledWith('leaving@example.com');
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('bus down'));
+    // The address stays in the outbox for the sweep's retry, and no log line carries it or the id.
+    expect(h.noticeMarkFailed).toHaveBeenCalledWith(`hash-${USER_ID}`, 'notice-owner', expect.any(Date));
+    expect(h.noticeRemove).not.toHaveBeenCalled();
+    // Every argument, Errors by name and message, as the real Logger writes them.
+    for (const arg of [...logger.warn.mock.calls, ...logger.error.mock.calls].flat()) {
+      const text = arg instanceof Error ? `${arg.name}: ${arg.message}` : String(arg);
+      expect(text).not.toContain('leaving@example.com');
+      expect(text).not.toContain(USER_ID);
+    }
+  });
+
+  it('records the notice inside the delete transaction and clears it after a successful send', async () => {
+    h.noticeClaim.mockImplementation(async idHash => {
+      h.order.push('claim');
+      return claimedNotice(idHash);
+    });
+    h.noticeRecord.mockImplementation(async () => {
+      h.order.push('notice');
+    });
+    h.hardDeleteUser.mockImplementation(async (_id: string, context: HardDeleteContext) => {
+      await context.recordInTransaction?.(deletedTarget);
+      h.order.push('committed');
+      return { result: undefined, subscriptionCancellation: null };
+    });
+    await complete();
+    expect(h.noticeRecord).toHaveBeenCalledWith({
+      idHash: `hash-${USER_ID}`,
+      email: 'leaving@example.com',
+      now: expect.any(Date),
+    });
+    expect(h.order).toEqual([
+      'orgs',
+      'files',
+      'content',
+      'stripe',
+      'realtime',
+      'erase:beforeDelete',
+      'notice',
+      'audit',
+      'committed',
+      'claim',
+      'email',
+    ]);
+    expect(h.noticeRemove).toHaveBeenCalledWith(`hash-${USER_ID}`, 'notice-owner');
   });
 
   it('sends no completion email without an address', async () => {
     h.claimUser.mockResolvedValue({ email: null });
     await expect(complete()).resolves.toEqual({ deleted: true });
     expect(h.sendComplete).not.toHaveBeenCalled();
+    expect(h.noticeRecord).not.toHaveBeenCalled();
   });
 
   it('records the completed deletion in the admin audit log inside the delete transaction', async () => {
@@ -368,7 +477,7 @@ describe('completeAccountDeletion for an admin data subject erasure', () => {
   it('snapshots the scope before the purge and stores it under the lease', async () => {
     await expect(complete()).resolves.toEqual({ deleted: true });
 
-    expect(h.order.slice(0, 4)).toEqual(['plan', 'orgs', 'files', 'content']);
+    expect(h.order.slice(0, 5)).toEqual(['plan', 'orgs', 'files', 'content', 'stripe']);
     expect(h.collections.mock.calls[0]).toEqual([expect.any(Function)]);
     expect(h.updateOne).toHaveBeenCalledWith(
       expect.objectContaining({ _id: USER_ID, 'deletion.purgeLeaseId': expect.any(String) }),
@@ -498,6 +607,7 @@ describe('completeAccountDeletion for an admin data subject erasure', () => {
     await complete();
 
     expect(h.sendComplete).not.toHaveBeenCalled();
+    expect(h.noticeRecord).not.toHaveBeenCalled();
   });
 
   it('keeps the self path emailing and planning nothing', async () => {

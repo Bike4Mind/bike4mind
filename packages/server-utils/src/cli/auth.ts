@@ -8,12 +8,14 @@ import {
   type ApiKeyBillingOwnerType,
   type CompletionSource,
   type IEmbedBranding,
+  type PayerStanding,
 } from '@bike4mind/common';
 import { User, userApiKeyRepository, cacheRepository } from '@bike4mind/database';
 import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '../utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '../auth/consentGate';
 import { assertAccountStateUsable } from '../auth/assertAccountStateUsable';
+import { resolveRoleAdminPermissions } from '../auth/adminRoles';
 import { assertNoPendingDeletion } from '../auth/deletionPendingGate';
 import {
   API_KEY_ACCESS_DENIED_MESSAGE,
@@ -25,6 +27,7 @@ import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '../util
 import { toApiKeyAuthError } from '../auth/apiKeyAuthFailure';
 import { resolveUntrustedKeyLimits } from '../utils/apiKeyTrust';
 import { z } from 'zod';
+import { recordSideAppRefusal } from '../auth/sideAppRefusal';
 import { refuseIfSuspendedOwner } from '../auth/suspendedApiKeyRefusal';
 import { Logger } from '@bike4mind/observability';
 
@@ -71,6 +74,8 @@ export interface ApiKeyInfo {
   createdByUserId?: string;
   /** OAuth client that minted this key, present only for a federated exchange key. */
   oauthExchangeClientId?: string;
+  /** The exchange key owner's paid standing at mint; absent when the mint could not read it. */
+  payerStanding?: PayerStanding;
 }
 
 /**
@@ -169,6 +174,8 @@ export async function verifyJwtToken(
       throw toApiKeyAuthError(error);
     }
 
+    await resolveRoleAdminPermissions(user);
+
     return {
       id: user.id,
       email: user.email,
@@ -228,6 +235,7 @@ function toApiKeyInfo(v: {
   currentSpend?: number;
   createdByUserId?: string;
   oauthExchangeClientId?: string;
+  payerStanding?: PayerStanding;
 }): ApiKeyInfo {
   return {
     keyId: v.keyId!,
@@ -244,6 +252,7 @@ function toApiKeyInfo(v: {
     currentSpend: v.currentSpend,
     createdByUserId: v.createdByUserId,
     oauthExchangeClientId: v.oauthExchangeClientId,
+    payerStanding: v.payerStanding,
   };
 }
 
@@ -283,7 +292,19 @@ async function assertOwnerAccountUsable(info: ApiKeyInfo) {
     Logger.globalInstance.warn('API key rejected: apiKeyAccess setting denies this owner', {
       keyId: info.keyId,
       userId: info.userId,
+      ...(info.oauthExchangeClientId ? { oauthClientId: info.oauthExchangeClientId } : {}),
     });
+    if (info.oauthExchangeClientId) {
+      recordSideAppRefusal({
+        verified: true,
+        clientId: info.oauthExchangeClientId,
+        stage: 'use',
+        reason: 'subscription_required',
+        status: 403,
+        userId: info.userId,
+        keyId: info.keyId,
+      });
+    }
     throw new ForbiddenError(API_KEY_ACCESS_DENIED_MESSAGE);
   }
   return user;
@@ -321,6 +342,20 @@ export async function verifyApiKey(
     }
 
     if (validation.oauthExchangeClientId && !options?.allowExchangeKeys) {
+      Logger.globalInstance.warn('API key rejected: exchange key used on a route that does not accept it', {
+        keyId: validation.keyId,
+        userId: validation.userId,
+        oauthClientId: validation.oauthExchangeClientId,
+      });
+      recordSideAppRefusal({
+        verified: true,
+        clientId: validation.oauthExchangeClientId,
+        stage: 'use',
+        reason: 'insufficient_scope',
+        status: 403,
+        userId: validation.userId,
+        keyId: validation.keyId,
+      });
       throw new ForbiddenError('This key cannot be used for this endpoint');
     }
 
@@ -334,6 +369,23 @@ export async function verifyApiKey(
 
     if (!hasRequiredScope) {
       const list = requiredScopes.join(' or ');
+      if (validation.oauthExchangeClientId) {
+        Logger.globalInstance.warn('API key rejected: missing required scope', {
+          keyId: validation.keyId,
+          userId: validation.userId,
+          oauthClientId: validation.oauthExchangeClientId,
+          requiredScopes,
+        });
+        recordSideAppRefusal({
+          verified: true,
+          clientId: validation.oauthExchangeClientId,
+          stage: 'use',
+          reason: 'insufficient_scope',
+          status: 403,
+          userId: validation.userId,
+          keyId: validation.keyId,
+        });
+      }
       throw new ForbiddenError(`API key does not have permission for this endpoint (requires ${list})`, {
         required_scopes: requiredScopes,
       });
