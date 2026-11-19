@@ -327,7 +327,51 @@ describe('production director tools', () => {
 
     const replaced = JSON.parse(await run(productionStoryboardTool, harness, { ...reprompted, replace: true }));
     expect(replaced.shots).toHaveLength(3);
+    expect(replaced.takesDropped).toEqual(['shot-2']);
     expect(harness.composition().shots.map(shot => shot.fileIds.length > 0)).toEqual([true, false, true]);
+  });
+
+  it('carries a shot over by id with keep, without its prompt, and refuses a stand-in prompt', async () => {
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID });
+    const before = harness.composition().shots;
+
+    const placeholder = {
+      compositionId: COMPOSITION_ID,
+      shots: [{ title: 'Hook', prompt: 'KEEP_EXISTING_SHOT_1', durationSeconds: 3 }],
+      replace: true,
+    };
+    expect(await run(productionStoryboardTool, harness, placeholder)).toMatch(
+      /^Error: "KEEP_EXISTING_SHOT_1" is not an image prompt/
+    );
+    expect(
+      await run(productionStoryboardTool, harness, { compositionId: COMPOSITION_ID, shots: [{ keep: 'shot-9' }] })
+    ).toMatch(/^Error: there is no current shot-9 to keep; the current shots are shot-1, shot-2, shot-3/);
+    expect(harness.composition().shots).toEqual(before);
+
+    const result = JSON.parse(
+      await run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [
+          { keep: 'shot-1' },
+          { keep: 'shot-2', voiceLine: 'Meet it.' },
+          { keep: 'shot-3', voiceLine: 'Shop the' },
+          { title: 'CTA end', prompt: 'The bottle beside a shop sign', durationSeconds: 2, voiceLine: 'spring sale.' },
+        ],
+      })
+    );
+    expect(result.shots.map((shot: { takesKept?: boolean }) => shot.takesKept ?? false)).toEqual([
+      true,
+      true,
+      true,
+      false,
+    ]);
+    expect(result.takesDropped).toBeUndefined();
+    const after = harness.composition().shots;
+    expect(after.slice(0, 3).map(shot => [shot.prompt, shot.clipFileId, shot.durationMs])).toEqual(
+      before.map(shot => [shot.prompt, shot.clipFileId, shot.durationMs])
+    );
+    expect(after.map(shot => shot.voiceLine)).toEqual(['Spring is here.', 'Meet it.', 'Shop the', 'spring sale.']);
   });
 
   it('keeps the takes and clips of shots that move when a shot is inserted before them', async () => {
