@@ -132,7 +132,8 @@ export const productionStoryboardTool: ToolDefinition = {
             throw new ProductionToolError(
               `${outgrown.join(', ')} would run longer than its clip, which a shot with a clip cannot do. Keep it at ` +
                 'its length: to fit a long voice line, move part of it to a neighbouring shot or shorten it. If the ' +
-                'line must stay word for word and does not fit, tell the user and ask which part to shorten.'
+                'line must stay word for word and does not fit, ask the user which to do: split it over two shots, ' +
+                'shorten it, or add a shot. Do not offer a longer clip; a clip cannot be lengthened.'
             );
           }
           const tooShort = shotsTooShortForVoice(current.timeline, current.shots, shots);
@@ -178,7 +179,11 @@ export const productionStoryboardTool: ToolDefinition = {
             totalSeconds: totalMs / 1000,
             next:
               'Call production_generate_shot to make the takes and clips; a shot that kept its takes is skipped ' +
-              'unless it needs a clip.',
+              'unless it needs a clip.' +
+              (staleCut
+                ? " The old cut's voiceover and sound effects were cleared: call production_add_audio again with " +
+                  'them, and with the music, which is remade only if the cut grew past it.'
+                : ''),
           });
         } catch (error) {
           return describeProductionError(error);

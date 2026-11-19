@@ -141,6 +141,20 @@ export function keptMusic(timeline: StudioTimeline, timelineMs: number): StudioA
   });
 }
 
+// A gap shorter than this under the end of the cut is lost in the bed's own fade-out.
+const MUSIC_SHORT_TOLERANCE_MS = 500;
+
+/**
+ * How long the cut runs on past the end of the director's music bed, or 0 when the bed covers it (or there is none).
+ * keptMusic only shortens a bed, so a re-time that grows the cut leaves this gap for production_add_audio to fill.
+ */
+export function musicShortfallMs(timeline: StudioTimeline, timelineMs: number): number {
+  const clips = directorClips(timeline, 'music');
+  if (clips.length === 0) return 0;
+  const gapMs = timelineMs - Math.max(...clips.map(clip => clip.startMs + clip.durationMs));
+  return gapMs > MUSIC_SHORT_TOLERANCE_MS ? gapMs : 0;
+}
+
 /**
  * Shots a re-timed storyboard leaves too short for their voice line: the line is unchanged, so its placed clip's
  * length still holds, and it has until the next spoken shot starts (buildVoiceClips cuts it there).

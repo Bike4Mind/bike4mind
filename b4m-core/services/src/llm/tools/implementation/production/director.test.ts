@@ -375,6 +375,27 @@ describe('production director tools', () => {
     expect(harness.counts.music).toBe(1);
   });
 
+  it('remakes the music bed when a re-time grows the cut past it', async () => {
+    const shorter = { ...STORYBOARD, shots: STORYBOARD.shots.map(shot => ({ ...shot, durationSeconds: 2 })) };
+    await run(productionStoryboardTool, harness, shorter);
+    await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
+    await run(productionAddAudioTool, harness, { compositionId: COMPOSITION_ID, music: { prompt: 'bright acoustic' } });
+    expect(harness.counts.music).toBe(1);
+
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    const audio = JSON.parse(
+      await run(productionAddAudioTool, harness, {
+        compositionId: COMPOSITION_ID,
+        music: { prompt: 'bright acoustic' },
+      })
+    );
+    expect(harness.counts.music).toBe(2);
+    expect(audio.notes).toContain('the music bed ended 6000 ms before the cut, so a new one was made.');
+    const music = directorClips(harness.composition().timeline, 'music');
+    expect(music).toHaveLength(1);
+    expect(music[0]!.startMs + music[0]!.durationMs).toBeGreaterThanOrEqual(12_000 - 500);
+  });
+
   it('refuses a re-time that leaves a shot too short for its voice line', async () => {
     await run(productionStoryboardTool, harness, STORYBOARD);
     await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
@@ -452,7 +473,9 @@ describe('production director tools', () => {
       ['production_assemble', productionAssembleTool, {}],
     ])('%s for an unknown composition', async (_name, tool, extra) => {
       const result = await run(tool, harness, { compositionId: unknownComposition, ...extra });
-      expect(result).toBe('Error: that production was not found. Use the id from your context.');
+      expect(result).toBe(
+        'Error: that production was not found. Use the production id from this conversation (the Direct message names it), not a file id.'
+      );
     });
 
     it('assemble before any take exists', async () => {
