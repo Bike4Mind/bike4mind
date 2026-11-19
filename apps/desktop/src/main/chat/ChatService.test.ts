@@ -415,9 +415,11 @@ describe('ChatService', () => {
     expect(preamble.content).toMatch(/NO access/);
     expect(preamble.content).toMatch(/never invent a file name/i);
     expect(preamble.content).toMatch(/call request_directory/);
-    // Only the tools that read no files survive the missing grant: the server-side web tools, the
-    // question, the request for a folder, which is how the conversation gets one, and the loop.
+    expect(preamble.content).toMatch(/Keep one with todo_write/);
+    // Only the tools that read no files survive the missing grant: the plan, the server-side web
+    // tools, the question, the request for a folder, which is how the conversation gets one, and the loop.
     expect(post.mock.calls[0][1].options.tools).toEqual([
+      expect.objectContaining({ toolSchema: expect.objectContaining({ name: 'todo_write' }) }),
       expect.objectContaining({ toolSchema: expect.objectContaining({ name: 'web_search' }) }),
       expect.objectContaining({ toolSchema: expect.objectContaining({ name: 'web_fetch' }) }),
       expect.objectContaining({ toolSchema: expect.objectContaining({ name: 'ask_user' }) }),

@@ -8590,6 +8590,7 @@ export function buildSystemMessage(
       role: 'system',
       content: [
         ...noAccessLines(ask),
+        ...PLAN_GUIDANCE,
         // The browser is not file access and is not withheld with it: a conversation that can
         // read nothing on disk can still open a page, and needs to be told how.
         ...(browser ? BROWSER_GUIDANCE : []),
@@ -8620,6 +8621,7 @@ export function buildSystemMessage(
       ...dependencyLines,
       ...sharedRootLines(roots),
       ...localToolLines(ask, projectContext ? 'below' : null, explore, patchEdits),
+      ...PLAN_GUIDANCE,
       ...(browser ? BROWSER_GUIDANCE : []),
       ...(screen ? SCREEN_GUIDANCE : []),
       ...(simulator ? SIMULATOR_GUIDANCE : []),
@@ -8721,14 +8723,6 @@ function localToolLines(
     'why - including the first batch of the turn, which otherwise draws as tool rows with nothing',
     'above them. One sentence per round of work, not per call, with no label in front of it, and',
     'none at all when a single call speaks for itself.',
-    'Most work needs no plan. Keep one with todo_write only when the user gave you several separate',
-    'things to do, or the work clearly runs to five or more steps, usually across several files.',
-    'Never for a question, an explanation, an investigation, a piece of research, a single fix or a',
-    'small edit: answer those directly.',
-    'When you do keep one, send the whole list each time and mark one item in_progress before',
-    'starting it. Before writing the message that ends a turn, make the plan match what actually',
-    'happened: an item whose result you are about to report as done is marked completed in that',
-    'same reply, not left for later. Never end a turn with an item still in_progress.',
     ...(patchEdits
       ? [
           'An older file_read result may show as a [stale: ...] placeholder once the file was replaced',
@@ -8845,6 +8839,7 @@ export function buildToolStateText(state: {
           ...sharedRootLines(roots),
           ...localToolLines(ask, state.projectContext ? 'in the system prompt' : null, state.explore, state.patchEdits),
         ]),
+    ...PLAN_GUIDANCE,
     ...(state.browser ? BROWSER_GUIDANCE : []),
     ...(state.screen ? SCREEN_GUIDANCE : []),
     ...(state.simulator ? SIMULATOR_GUIDANCE : []),
@@ -8927,6 +8922,18 @@ function pruneScreenshots(wire: CompletionMessage[], turns: number[]): void {
     };
   }
 }
+
+/** todo_write is declared in every conversation, folder or not; see toolsForRequest. */
+const PLAN_GUIDANCE: readonly string[] = [
+  'Most work needs no plan. Keep one with todo_write only when the user gave you several separate',
+  'things to do, or the work clearly runs to five or more steps, usually across several files.',
+  'Never for a question, an explanation, an investigation, a piece of research, a single fix or a',
+  'small edit: answer those directly.',
+  'When you do keep one, send the whole list each time and mark one item in_progress before',
+  'starting it. Before writing the message that ends a turn, make the plan match what actually',
+  'happened: an item whose result you are about to report as done is marked completed in that',
+  'same reply, not left for later. Never end a turn with an item still in_progress.',
+];
 
 const BROWSER_GUIDANCE: readonly string[] = [
   'You also have a browser (browser_navigate, browser_click, browser_type, browser_scroll,',
