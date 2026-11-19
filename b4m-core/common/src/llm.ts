@@ -281,6 +281,12 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
    */
   edit_regions: BflEditRegionsSchema.optional(),
   callbackUrl: GenerationCallbackUrlSchema.optional(),
+  run: CompletionRunAttributionSchema.optional().describe(
+    "The completion run this call is made for. Its cost is claimed against that run's budget when the " +
+      'edit is held, and the call is refused with 422 `run_budget_exhausted` when it does not fit: ' +
+      'synchronously when the run cannot cover the edit, otherwise on the polled quest ' +
+      '(`type: "error"`, `errorCode: "run_budget_exhausted"`). The run bills its own account.'
+  ),
 });
 
 /**

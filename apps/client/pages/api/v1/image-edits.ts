@@ -16,13 +16,16 @@ import { armGenerationCallback, resolveGenerationCallback } from '@server/genera
 import { assertReferenceImagesSupported } from '@server/utils/assertReferenceImagesSupported';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
+import type { ImageGenerationRun } from '@bike4mind/services/llm/ImageGeneration';
+import { assertRunBudgetHeadroom } from '@bike4mind/server-utils/billing/runBudgetClaim';
+import { resolvePaidCallRun } from '@server/completionRuns/paidCallRun';
 
 const handler = nextRouteForContract(editImageContract).post(async (req, res) => {
   assertAiAccessAllowed(req.user);
   assertNoStrayBillingOrgKeys(req.body);
   // organization_id is the request alias; only the mapped value goes on to the queue.
   const requestedOrgId = resolveBillingOrgInput(req.validated);
-  const { callbackUrl, organization_id: _orgAlias, ...body } = req.validated;
+  const { callbackUrl, organization_id: _orgAlias, run: requestedRun, ...body } = req.validated;
   assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds);
 
   if (isFlux3ImageModel(body.model) && body.fabFileIds.length)
@@ -39,6 +42,19 @@ const handler = nextRouteForContract(editImageContract).post(async (req, res) =>
   }
   const callback = await resolveGenerationCallback(req, callbackUrl);
 
+  // Before getOrCreateSession, so someone else's run or a mismatched payer is refused before any session
+  // work. A run bills the account it is bound to, so the charge lands where the run's usage read looks.
+  const paidRun = await resolvePaidCallRun(
+    { user: req.user, apiKeyInfo: req.apiKeyInfo },
+    requestedRun,
+    requestedOrgId
+  );
+  // The worker's credit hold claims the run budget; this only refuses up front what cannot fit.
+  const run: ImageGenerationRun | undefined = paidRun && {
+    attribution: paidRun.attribution,
+    assertHeadroom: credits => assertRunBudgetHeadroom(paidRun.attribution.runId, credits),
+  };
+
   // Reject a session the caller can't write to before the service appends a quest to it.
   await getOrCreateSession({
     sessionId: body.sessionId,
@@ -49,7 +65,7 @@ const handler = nextRouteForContract(editImageContract).post(async (req, res) =>
   });
 
   // An org-billed API key bills its org; otherwise null = personal, undefined = the caller's own org.
-  const effectiveOrgId = await resolveMediaBillingOrgId(req, requestedOrgId);
+  const effectiveOrgId = paidRun ? paidRun.billingOrganizationId : await resolveMediaBillingOrgId(req, requestedOrgId);
 
   const quest = await getImageEdit().invoke({
     adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
@@ -59,6 +75,7 @@ const handler = nextRouteForContract(editImageContract).post(async (req, res) =>
       ...body,
       organizationId: effectiveOrgId,
     },
+    run,
   });
 
   await armGenerationCallback(quest.id, callback, req.logger);

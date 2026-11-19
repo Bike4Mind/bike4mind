@@ -539,7 +539,7 @@ export interface paths {
     put?: never;
     /**
      * Edit an image
-     * @description Queues an edit of an existing image and returns the quest that will carry the result, before the render runs. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `editImage200PollResult` schema). `image` is the URL of the source image; `fabFileIds` must name at least one file except on FLUX.2 and FLUX 3 models, which edit from the prompt with no mask and reject `fabFileIds` with a 400; elsewhere the first is the inpainting mask. `referenceImageFabFileIds` adds reference images after the source image, so the mask always applies to the source: up to 15 on gpt-image models, 7 on FLUX.2 models other than klein, 3 on FLUX.2 klein, and 9 on FLUX 3 (the source takes one input slot). Sending any with another model, or more than the model's limit, is rejected with a 400 rather than ignored; more than 15 ids fails schema validation with a 422. Both id fields take ids from `POST /api/v1/files`: upload each file, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean`, then pass its `id`. An id that is not yet `clean` fails the edit on the polled quest. `image` takes a URL rather than an id, so a source uploaded the same way is passed as its `download_url`, which must still be unexpired when the render runs. The edited image is not a file id: read it from `files[].url` on the polled quest, not from `GET /api/v1/files/{id}`. `seed` makes an edit reproducible on BFL models that support seeds; FLUX 3 Image (not Klein), gpt-image and Gemini ignore it. `edit_regions` carries region-edit bounding boxes: each entry has a `prompt` and a `bbox` of `[y_min, x_min, y_max, x_max]` in normalised [0, 1] coordinates (BFL convention, vertical axis first). At most 8 regions per request. Accepted on FLUX 3 models only (non-FLUX-3 → 400); schema-validated on ingress (422 on bad coordinates / degenerate boxes / over-cap count, or a box that collapses after rounding to the 0-1000 grid), then converted to BFL's prompt-inline edit layout (`from`, `src_bbox`, `tgt_bbox`, `desc`) before provider submission. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/edit-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @description Queues an edit of an existing image and returns the quest that will carry the result, before the render runs. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `editImage200PollResult` schema). `image` is the URL of the source image; `fabFileIds` must name at least one file except on FLUX.2 and FLUX 3 models, which edit from the prompt with no mask and reject `fabFileIds` with a 400; elsewhere the first is the inpainting mask. `referenceImageFabFileIds` adds reference images after the source image, so the mask always applies to the source: up to 15 on gpt-image models, 7 on FLUX.2 models other than klein, 3 on FLUX.2 klein, and 9 on FLUX 3 (the source takes one input slot). Sending any with another model, or more than the model's limit, is rejected with a 400 rather than ignored; more than 15 ids fails schema validation with a 422. Both id fields take ids from `POST /api/v1/files`: upload each file, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean`, then pass its `id`. An id that is not yet `clean` fails the edit on the polled quest. `image` takes a URL rather than an id, so a source uploaded the same way is passed as its `download_url`, which must still be unexpired when the render runs. The edited image is not a file id: read it from `files[].url` on the polled quest, not from `GET /api/v1/files/{id}`. `seed` makes an edit reproducible on BFL models that support seeds; FLUX 3 Image (not Klein), gpt-image and Gemini ignore it. `edit_regions` carries region-edit bounding boxes: each entry has a `prompt` and a `bbox` of `[y_min, x_min, y_max, x_max]` in normalised [0, 1] coordinates (BFL convention, vertical axis first). At most 8 regions per request. Accepted on FLUX 3 models only (non-FLUX-3 → 400); schema-validated on ingress (422 on bad coordinates / degenerate boxes / over-cap count, or a box that collapses after rounding to the 0-1000 grid), then converted to BFL's prompt-inline edit layout (`from`, `src_bbox`, `tgt_bbox`, `desc`) before provider submission. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. A `run` budget is checked before queueing as well, so a run with too little left is usually a synchronous 422 (`errorCode: "run_budget_exhausted"`). `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/edit-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
      *
      *     Optional `callbackUrl`: an https URL that receives a signed POST when the quest settles (success, failure, or a stop; a failed render is `type: "error"` in the body, same as the poll). The body is the `GET /api/v1/quests/{id}` response. Headers: `X-Webhook-Event-ID` (the same on every attempt for one settlement; delivery is at-least-once, so dedupe on it, and a retried quest settles again under a new one), `X-Webhook-Delivery-ID` (unique per attempt), `X-Webhook-Timestamp` (unix seconds), `X-Webhook-Signature-256` (`sha256=` + hex HMAC-SHA256 of `<timestamp>.<raw body>` keyed with the API key's callback signing secret), and `X-Event-Type: quest.settled`. Delivery makes up to 5 attempts, retrying on a 5xx, 408, 429, timeout or network error - never on any other 4xx, and redirects are not followed; your endpoint must answer 2xx within 10 seconds. Requires API-key authentication and a signing secret on that key (returned once at key creation, or via `POST /api/user-api-keys/{id}/callback-secret`). A `callbackUrl` is rejected with a 400 when the request is not API-key authenticated, the key has no signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks; a URL that is not https fails request validation with a 422. Polling still works whether or not `callbackUrl` is set.
      */
@@ -5717,6 +5717,30 @@ export interface components {
        * @description Optional https URL that receives one signed POST when the job settles (success or failure). Requires API-key authentication and a callback signing secret on that key. The body is the GET /api/v1/quests/{id} response. Verify it with the `X-Webhook-Signature-256` header: `sha256=` + hex HMAC-SHA256 of `<X-Webhook-Timestamp>.<raw body>` keyed with the signing secret. Polling keeps working either way.
        */
       callbackUrl?: string;
+      /** @description The completion run this call is made for. Its cost is claimed against that run's budget when the edit is held, and the call is refused with 422 `run_budget_exhausted` when it does not fit: synchronously when the run cannot cover the edit, otherwise on the polled quest (`type: "error"`, `errorCode: "run_budget_exhausted"`). The run bills its own account. */
+      run?: {
+        /**
+         * Format: uuid
+         * @description A run id issued by `POST /api/v1/completion-runs`.
+         */
+        runId: string;
+        /**
+         * @description `root` for the session that started the run, `worker` for one it spawned.
+         * @enum {string}
+         */
+        role: 'root' | 'worker';
+        /**
+         * @description What the request was for. Treated as `turn` when absent.
+         * @enum {string}
+         */
+        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review' | 'tool';
+        /** @description Your own id for the worker's task within the run. */
+        taskId?: string;
+        /** @description Your own id for this attempt at the task; retries get new ids. */
+        attemptId?: string;
+        /** @description The `sessionId` of the session that spawned this one, for nested workers. */
+        parentSessionId?: string;
+      };
     };
     /**
      * @example {
@@ -15932,7 +15956,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
+      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). Naming a billing organization other than the account the `run` bills is also a `403` with that errorCode. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -15955,7 +15979,7 @@ export interface operations {
           'application/json': components['schemas']['editImageResponse403'];
         };
       };
-      /** @description The session, or the quest being retried, does not exist or is not accessible to the caller. A nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an invalid or inaccessible `organizationId` is `403` instead. */
+      /** @description The session, or the quest being retried, does not exist or is not accessible to the caller. A nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an invalid or inaccessible `organizationId` is `403` instead. A `run` that does not exist or that another user or billing owner minted is `404` (`errorCode: "run_not_found"`). */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -15991,7 +16015,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The body is malformed, `edit_regions` has an out-of-range coordinate or degenerate box, or it names the billing organization ambiguously. Both `organizationId` and `organization_id` sent with different values is a `422`; so is an empty or blank value for either (a blank is never treated as an omission, which would bill a different payer), and so is any other billing-org-shaped key such as `billing_org_id` or `payerOrgId`, which would otherwise be stripped and silently bill the caller's home organization. */
+      /** @description The body is malformed, `edit_regions` has an out-of-range coordinate or degenerate box, or it names the billing organization ambiguously. Both `organizationId` and `organization_id` sent with different values is a `422`; so is an empty or blank value for either (a blank is never treated as an omission, which would bill a different payer), and so is any other billing-org-shaped key such as `billing_org_id` or `payerOrgId`, which would otherwise be stripped and silently bill the caller's home organization. A `run` whose budget cannot cover the edit is `422` with `errorCode: "run_budget_exhausted"`. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
