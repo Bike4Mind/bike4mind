@@ -209,6 +209,9 @@ export const aiHolders = {
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument', where: { ownerType: 'user' } },
       // An org-published definition carries no tokens; a userId on it is its creator.
       { path: 'userId', matchBy: 'userId', action: 'anonymize', where: { ownerType: 'org' } },
+      // A platform connector belongs to the deployment and its key is the platform's; a userId on
+      // it is the admin who created it.
+      { path: 'userId', matchBy: 'userId', action: 'anonymize', where: { ownerType: 'platform' } },
     ],
     secretPaths: [
       'urlEnc',
