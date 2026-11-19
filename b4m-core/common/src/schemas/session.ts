@@ -1,7 +1,11 @@
 import { z } from 'zod';
 import { MAX_TOOL_CALLS_CEILING } from '../constants/llmLimits';
 import { DATA_LAKE_GROUNDING_MODES } from '../constants/dataLakes';
-import { CHAT_HISTORY_ITEM_TYPES, QUEST_ERROR_CODES, SESSION_ORIGIN_CHANNELS } from '../types/entities/SessionTypes';
+import {
+  CHAT_HISTORY_ITEM_TYPES,
+  QUEST_OUTCOME_ERROR_CODES,
+  SESSION_ORIGIN_CHANNELS,
+} from '../types/entities/SessionTypes';
 import { PaginationQuerySchema, paginatedResponseSchema } from './pagination';
 
 // Shared by the request and response schemas below - kept to one definition so the two
@@ -297,7 +301,7 @@ export const SessionQuestSchema = z.object({
     .optional()
     .describe('`error` marks a failed turn; `reply` then holds the failure text.'),
   errorCode: z
-    .enum(QUEST_ERROR_CODES)
+    .enum(QUEST_OUTCOME_ERROR_CODES)
     .optional()
     .describe('Machine-readable failure class, present only on `type: "error"` turns that have one.'),
   createdAt: z.date().describe('When the turn started; the sort key of the listing.'),
