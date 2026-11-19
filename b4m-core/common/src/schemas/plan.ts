@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import type { QuestMasterData } from '../types/entities/QuestTypes';
+import { normalizeSubQuestStatus, type QuestMasterData, type SubQuestStatus } from '../types/entities/QuestTypes';
 
 export const PLAN_ITEM_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'] as const;
 
@@ -26,6 +26,38 @@ export const PlanSchema = z.object({
 });
 
 export type PlanItemStatus = (typeof PLAN_ITEM_STATUSES)[number];
+
+/** Joy palette names, kept as strings so common stays UI-free. */
+export type PlanStatusColor = 'success' | 'warning' | 'neutral' | 'danger';
+
+/**
+ * Display tokens shared by every surface that shows plan statuses. QuestMaster's chip colours
+ * (apps/client/app/components/GenAI/subQuestStatusDisplay.ts) read these through
+ * SUB_QUEST_TO_PLAN_STATUS, so a skipped sub-quest renders like a cancelled plan item.
+ */
+export const PLAN_STATUS_DISPLAY: Readonly<Record<PlanItemStatus, { color: PlanStatusColor; label: string }>> = {
+  pending: { color: 'neutral', label: 'Pending' },
+  in_progress: { color: 'warning', label: 'In progress' },
+  completed: { color: 'success', label: 'Completed' },
+  cancelled: { color: 'neutral', label: 'Cancelled' },
+};
+
+/** `deleted` has no plan counterpart: fromQuestMaster drops deleted sub-quests. */
+export const SUB_QUEST_TO_PLAN_STATUS: Readonly<Record<SubQuestStatus, PlanItemStatus | null>> = {
+  not_started: 'pending',
+  in_progress: 'in_progress',
+  completed: 'completed',
+  skipped: 'cancelled',
+  deleted: null,
+};
+
+/** Inverse of SUB_QUEST_TO_PLAN_STATUS, for writing a plan status back to a stored sub-quest. */
+export const PLAN_TO_SUB_QUEST_STATUS: Readonly<Record<PlanItemStatus, SubQuestStatus>> = {
+  pending: 'not_started',
+  in_progress: 'in_progress',
+  completed: 'completed',
+  cancelled: 'skipped',
+};
 export type PlanItem = z.infer<typeof PlanItemSchema>;
 export type Plan = z.infer<typeof PlanSchema>;
 
@@ -238,11 +270,13 @@ export function fromQuestMaster(input: unknown, options: PlanAdapterOptions = {}
     if (!Array.isArray(quest.subQuests)) warnings.push(`quests[${index}].subQuests: expected an array.`);
     const children = (Array.isArray(quest.subQuests) ? quest.subQuests : [])
       .map(record)
-      .filter(child => child.status !== 'deleted')
-      .map(child => ({
+      .map(child => ({ child, canonical: normalizeSubQuestStatus(child.status) }))
+      .filter(({ canonical }) => canonical !== 'deleted')
+      .map(({ child, canonical }) => ({
         id: child.id,
         content: child.title,
-        status: child.status === 'not_started' ? 'pending' : child.status === 'skipped' ? 'cancelled' : child.status,
+        // An unrecognised token passes through raw so normalizePlan reports it.
+        status: canonical === null ? child.status : SUB_QUEST_TO_PLAN_STATUS[canonical],
         note: child.evidence,
       }));
     return { id: quest.id, content: quest.title, note: quest.description, status: 'pending', children };
