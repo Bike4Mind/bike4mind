@@ -19,6 +19,7 @@ const {
   createAttachmentLakeAccessSpy,
   fabFileFindMetadataByIds,
   resolveRetention,
+  findAdminRoles,
 } = vi.hoisted(() => {
   const sessionSave = vi.fn().mockResolvedValue(undefined);
   // any: a Mongoose model mock that is both newable (regular function so it works with
@@ -61,6 +62,7 @@ const {
     createAttachmentLakeAccessSpy: vi.fn(),
     fabFileFindMetadataByIds: vi.fn(),
     resolveRetention: vi.fn(),
+    findAdminRoles: vi.fn(),
   };
 });
 
@@ -83,6 +85,7 @@ vi.mock('@bike4mind/database', () => ({
   agentRepository: {},
   cacheRepository: {},
   userRepository: { update: userRepoUpdate, findById: userRepoFindById },
+  adminRoleRepository: { findByIds: (ids: string[]) => findAdminRoles(ids) },
 }));
 
 vi.mock('../auth/ability', () => ({
@@ -99,12 +102,18 @@ vi.mock('@bike4mind/database/auth', () => ({
   },
 }));
 
-vi.mock('@bike4mind/common', async importOriginal => ({
-  isSessionPinnableAttachment: (await importOriginal<typeof import('@bike4mind/common')>()).isSessionPinnableAttachment,
-  Permission: { create: 'create', read: 'read', update: 'update', delete: 'delete' },
-  // ../utils/errors re-exports NotFoundError from here, so it must be provided.
-  NotFoundError: class NotFoundError extends Error {},
-}));
+vi.mock('@bike4mind/common', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/common')>();
+  return {
+    isSessionPinnableAttachment: actual.isSessionPinnableAttachment,
+    AdminRoleIdSchema: actual.AdminRoleIdSchema,
+    sortAdminPermissions: actual.sortAdminPermissions,
+    hasAdminPermission: actual.hasAdminPermission,
+    Permission: { create: 'create', read: 'read', update: 'update', delete: 'delete' },
+    // ../utils/errors re-exports NotFoundError from here, so it must be provided.
+    NotFoundError: class NotFoundError extends Error {},
+  };
+});
 
 vi.mock('@bike4mind/observability', () => ({
   Logger: { log: vi.fn(), info: vi.fn(), error: vi.fn() },
@@ -129,7 +138,7 @@ import {
   logProjectSessionAddedEvent,
   recordNotebookAddedToProjectActivity,
 } from './sessionSideEffects';
-import type { IUserDocument } from '@bike4mind/common';
+import { hasAdminPermission, type IUserDocument } from '@bike4mind/common';
 import type { Ability } from '../auth/ability';
 import type { Logger } from '@bike4mind/observability';
 
@@ -571,11 +580,62 @@ describe('sessionCrud', () => {
       await getFavoriteSessionByUser('user-1');
 
       expect(userRepoFindById).toHaveBeenCalledWith('user-1');
-      expect(defineAbilitiesForSpy).toHaveBeenCalledWith({ id: 'user-1' });
+      expect(defineAbilitiesForSpy).toHaveBeenCalledWith({ id: 'user-1', roleAdminPermissions: [] });
       expect(accessibleBySpy).toHaveBeenCalledWith(allowAbility, 'read');
 
       const query = SessionModelMock.find.mock.calls[0][0];
       expect(query.$and).toEqual(expect.arrayContaining([{}, { _id: { $in: ['fav-session-1'] } }]));
+    });
+    describe('role-held admin permissions', () => {
+      const ROLE_ID = 'a'.repeat(24);
+      const DELETED_ROLE_ID = 'c'.repeat(24);
+      const favoritesUserWith = (adminRoleIds: unknown[]) =>
+        userRepoFindById.mockResolvedValue({ id: 'user-1', adminRoleIds });
+      const userHandedToAbility = () =>
+        defineAbilitiesForSpy.mock.calls[0][0] as Parameters<typeof hasAdminPermission>[0];
+
+      beforeEach(() => {
+        findAdminRoles.mockResolvedValue([{ permissions: ['settings:manage'] }]);
+      });
+
+      it('counts a permission held only through a role on the user the ability is built from', async () => {
+        favoritesUserWith([ROLE_ID]);
+
+        await getFavoriteSessionByUser('user-1');
+
+        expect(findAdminRoles).toHaveBeenCalledWith([ROLE_ID]);
+        expect(hasAdminPermission(userHandedToAbility(), 'settings:manage')).toBe(true);
+      });
+
+      it('refuses the permission on the next call once the role is removed', async () => {
+        favoritesUserWith([ROLE_ID]);
+        await getFavoriteSessionByUser('user-1');
+        expect(hasAdminPermission(userHandedToAbility(), 'settings:manage')).toBe(true);
+
+        defineAbilitiesForSpy.mockClear();
+        favoritesUserWith([]);
+        await getFavoriteSessionByUser('user-1');
+
+        expect(hasAdminPermission(userHandedToAbility(), 'settings:manage')).toBe(false);
+      });
+
+      it('grants nothing for a deleted or malformed role id', async () => {
+        findAdminRoles.mockResolvedValue([]);
+        favoritesUserWith([DELETED_ROLE_ID, 'not-an-id']);
+
+        await getFavoriteSessionByUser('user-1');
+
+        expect(findAdminRoles).toHaveBeenCalledWith([DELETED_ROLE_ID]);
+        expect(hasAdminPermission(userHandedToAbility(), 'settings:manage')).toBe(false);
+      });
+
+      it('builds no ability when the role lookup fails', async () => {
+        favoritesUserWith([ROLE_ID]);
+        findAdminRoles.mockRejectedValue(new Error('db down'));
+
+        await expect(getFavoriteSessionByUser('user-1')).rejects.toThrow('db down');
+        expect(defineAbilitiesForSpy).not.toHaveBeenCalled();
+      });
     });
   });
 });

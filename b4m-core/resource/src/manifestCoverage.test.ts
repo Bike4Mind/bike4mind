@@ -183,6 +183,7 @@ const REGISTERED_WITHOUT_CONSUMER: Record<string, string> = {
   sreFixQueue: 'SRE Slack approval path enqueues; decide together with sreJobQueue',
   generatedMediaPurgeQueue:
     'optional; notebook and message deletes hand it purge leftovers, logged and dropped with no URL',
+  renderJobQueue: 'optional; drained by the render-worker compose profile, a separate process from the self-host worker',
 };
 
 /**

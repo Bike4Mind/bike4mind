@@ -30,4 +30,27 @@ describe('serializeBrief', () => {
     expect(wire).not.toHaveProperty('failureReason');
     expect(wire.decisions[1]).toEqual({ id: 'd2', text: 'Ask' });
   });
+
+  it('carries the email source and draft reply through to the wire', () => {
+    const source = { kind: 'email' as const, emailId: 'e1' };
+    const draftReply = { to: 'sender@example.com', subject: 'Re: Renewal', body: 'Confirming.' };
+    const stored = {
+      _id: { toString: () => 'b2' },
+      status: 'ready',
+      createdAt: new Date('2026-11-17T00:00:00Z'),
+      composedAt: new Date('2026-11-17T00:01:00Z'),
+      periodStart: new Date('2026-11-16T00:00:00Z'),
+      periodEnd: new Date('2026-11-17T00:00:00Z'),
+      headline: 'Mail.',
+      happened: [{ id: 'h1', text: 'Newsletter', source: { kind: 'email', emailId: 'e3' } }],
+      handled: [{ id: 'k1', text: 'Receipt filed', source: { kind: 'email', emailId: 'e2' } }],
+      decisions: [{ id: 'd1', text: 'Confirm the renewal', source, draftReply }],
+    } as unknown as IAssistantBrief;
+
+    const wire = serializeBrief(stored);
+    expect(BriefSchema.parse(wire)).toEqual(wire);
+    expect(wire.decisions[0]).toEqual({ id: 'd1', text: 'Confirm the renewal', source, draftReply });
+    expect(wire.handled[0].source).toEqual({ kind: 'email', emailId: 'e2' });
+    expect(wire.happened[0].source).toEqual({ kind: 'email', emailId: 'e3' });
+  });
 });

@@ -198,7 +198,7 @@ Run on the first TestFlight build and every release candidate:
 - [ ] Live Activity: start, update, end.
 - [ ] App Lock (Face ID), sign out, sign in again.
 - [ ] Dynamic Type at the largest accessibility size on the Chat home, Notebooks, chat and Settings; VoiceOver through sign-in, a chat turn and Settings.
-- [ ] Icon and launch screen show (the shipped icon is a placeholder, see the README).
+- [ ] Home-screen icon, launch screen, sign-in header and the Chat home greeting mark show the official brand mark.
 
 ## Things worth watching that are not in a feature list
 
