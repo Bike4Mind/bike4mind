@@ -1,7 +1,11 @@
 package com.bike4mind.app
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ResolveInfo
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -17,15 +21,17 @@ import androidx.core.content.edit
 import androidx.lifecycle.lifecycleScope
 import com.bike4mind.app.ui.AppRoot
 import com.bike4mind.app.ui.B4MTheme
-import com.bike4mind.kit.push.NotificationRoute
-import com.bike4mind.kit.push.PendingNotificationRoute
+import com.bike4mind.kit.links.DeepLinkRouter
+import com.bike4mind.kit.links.PendingRoute
+import com.bike4mind.kit.links.Route
+import com.bike4mind.kit.push.PushRoute
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val signInError = MutableStateFlow<String?>(null)
-    private val pendingPush = PendingNotificationRoute()
+    private val pendingRoute = PendingRoute()
 
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { syncNotificationPermission() }
@@ -35,7 +41,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val app = application as B4MApplication
         if (savedInstanceState != null) {
-            pendingPush.restoreBriefId(savedInstanceState.getString(PENDING_BRIEF_KEY))
+            pendingRoute.restore(savedInstanceState.getString(PENDING_ROUTE_KEY))
         }
         setContent {
             B4MTheme {
@@ -44,8 +50,8 @@ class MainActivity : ComponentActivity() {
                     AppRoot(
                         app = app,
                         signInError = signInError,
-                        pushRoute = pendingPush.route,
-                        onPushRouteConsumed = { route -> pendingPush.consume(route) },
+                        pendingRoute = pendingRoute.route,
+                        onRouteConsumed = { route -> pendingRoute.consume(route) },
                         onSignedIn = ::askForNotificationsOnce,
                     )
                 }
@@ -56,7 +62,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        outState.putString(PENDING_BRIEF_KEY, pendingPush.snapshotBriefId())
+        outState.putString(PENDING_ROUTE_KEY, pendingRoute.snapshot())
     }
 
     override fun onResume() {
@@ -71,18 +77,74 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
-        handlePushTap(intent)
-        handleCallback(intent)
+        val data = intent?.data
+        when {
+            data == null -> handlePushTap(intent)
+            data.scheme == "https" || data.scheme == "http" -> handleAppLink(data.toString())
+            else -> handleCallback(data.toString())
+        }
     }
 
     /**
      * A tapped push: the system tray hands FCM's `data` over as the launch intent's extras, and the foreground
-     * notification (PushNotifications.show) copies them the same way. AppRoot opens the route once signed in.
+     * notification (PushNotifications.show) copies them the same way.
      */
     private fun handlePushTap(intent: Intent?) {
         val extras = intent?.extras ?: return
-        NotificationRoute.from { extras.getString(it) }?.let(pendingPush::accept)
+        PushRoute.from({ extras.getString(it) }, serverBaseUrl())?.let(::open)
     }
+
+    /** An app link the manifest claims; a path with no native screen goes back to the browser. */
+    private fun handleAppLink(url: String) {
+        DeepLinkRouter.route(url, serverBaseUrl())?.let(::open)
+    }
+
+    /** AppRoot opens an in-app route once signed in; a web page needs no sign-in. */
+    private fun open(route: Route) {
+        if (route is Route.Web) openInBrowser(route.url) else pendingRoute.accept(route)
+    }
+
+    /**
+     * Hands the page to a browser by package: a plain VIEW intent for a link the manifest claims would come straight
+     * back to this activity. With no browser the app stays where it is.
+     */
+    private fun openInBrowser(url: String) {
+        val browser = browserPackage() ?: return
+        val view = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE).setPackage(browser)
+        try {
+            startActivity(view)
+        } catch (_: ActivityNotFoundException) {
+            // The browser went away between the lookup and the launch.
+        }
+    }
+
+    /** The default browser, else any installed one; never this app. Visible through the manifest's <queries>. */
+    private fun browserPackage(): String? {
+        // A URL no app claims, so only browsers answer it.
+        val probe = Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com")).addCategory(Intent.CATEGORY_BROWSABLE)
+        val default = resolveActivityCompat(probe)?.activityInfo?.packageName
+        // "android" is the system chooser, answering when no default browser is set.
+        if (default != null && default != "android" && default != packageName) return default
+        return queryActivitiesCompat(probe).map { it.activityInfo.packageName }.firstOrNull { it != packageName }
+    }
+
+    private fun resolveActivityCompat(intent: Intent): ResolveInfo? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.resolveActivity(intent, PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_DEFAULT_ONLY.toLong()))
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
+        }
+
+    private fun queryActivitiesCompat(intent: Intent): List<ResolveInfo> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.queryIntentActivities(intent, 0)
+        }
+
+    private fun serverBaseUrl(): String? = (application as B4MApplication).graph.value?.environment?.baseUrl
 
     private fun syncNotificationPermission() {
         val graph = (application as B4MApplication).graph.value ?: return
@@ -101,8 +163,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /** The OAuth redirect lands here (singleTask), from the Custom Tab the sign-in screen opened. */
-    private fun handleCallback(intent: Intent?) {
-        val uri = intent?.data?.toString() ?: return
+    private fun handleCallback(uri: String) {
         val graph = (application as B4MApplication).graph.value ?: return
         lifecycleScope.launch {
             signInError.value = try {
@@ -119,6 +180,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
-        const val PENDING_BRIEF_KEY = "b4m.pendingBriefId"
+        const val PENDING_ROUTE_KEY = "b4m.pendingRoute"
     }
 }
