@@ -41,6 +41,8 @@ export const GENERATED_ASSET_LINEAGE_ROLES = [
   'scene_video',
   'scene_audio',
   'scene_cover',
+  // A media clip a Studio Productions render composited into its output.
+  'timeline_clip',
 ] as const;
 
 export type GeneratedAssetLineageRole = (typeof GENERATED_ASSET_LINEAGE_ROLES)[number];

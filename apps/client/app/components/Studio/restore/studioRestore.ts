@@ -99,6 +99,7 @@ const ROLE_NOUNS: Record<GeneratedAssetLineageRole, string> = {
   scene_video: 'Scene video',
   scene_audio: 'soundtrack',
   scene_cover: 'cover art',
+  timeline_clip: 'timeline clip',
 };
 
 export const roleNoun = (role: GeneratedAssetLineageRole): string => ROLE_NOUNS[role];

@@ -4,7 +4,6 @@ import {
   isModelAllowedByOrgPolicy,
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
   ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
-  PAID_PLAN_ENTITLEMENT_KEY,
   type ReadOrgModelPolicy,
   ServiceUnavailableError,
   type IAdminSettingsRepository,
@@ -16,6 +15,7 @@ import { BadRequestError, ForbiddenError, getSettingsMap, getSettingsValue, isMo
 import { resolveSuccessorChain } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { aiAccessDeniedMessage, type AiAccessStateFields } from '../userService/accountState';
+import { holdsPaidPlan } from './paidFeatureAdmission';
 
 /**
  * The free-tier allowlist. `textModelsOpen` (freeTierModelGateScope "media") also admits any model the catalog
@@ -156,7 +156,7 @@ export function createModelAdmission({
   const requiresPaidPlan = async (modelId: string, model: ModelInfo | undefined): Promise<boolean> => {
     if (!freeTierAllowedModels || isFreeTierExempt(user)) return false;
     if (isFreeTierModel(modelId, freeTierAllowedModels, model)) return false;
-    return !(await resolveEntitlements()).includes(PAID_PLAN_ENTITLEMENT_KEY);
+    return !holdsPaidPlan(await resolveEntitlements());
   };
 
   const assertAiAccess = (): void => {
