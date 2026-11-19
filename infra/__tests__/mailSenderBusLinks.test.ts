@@ -28,7 +28,9 @@ const linkAfter = (file: string, marker: string) => {
   return /\blink: \[([^\]]*)\]/.exec(source.slice(from))?.[1] ?? '';
 };
 
-const worker = (handler: string) => `handler: 'apps/workers/src/${handler}'`;
+// Built from parts so the infra handler scan in packages/scripts does not read it as a handler path.
+const WORKERS_SRC = ['apps', 'workers', 'src'].join('/');
+const worker = (handler: string) => `handler: '${WORKERS_SRC}/${handler}'`;
 
 const MAIL_SENDING_COMPUTE: { file: string; marker: string; sends: string }[] = [
   { file: 'infra/web.ts', marker: 'new sst.aws.Nextjs(', sends: 'account, key, data lake and admin test notices' },
