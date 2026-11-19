@@ -83,7 +83,8 @@ vi.mock('../utils/apiKeyTrust', () => ({ resolveUntrustedKeyLimits }));
 const refuseIfSuspendedOwner = vi.hoisted(() => vi.fn(async (_key: string, _logger?: unknown) => undefined));
 vi.mock('../auth/suspendedApiKeyRefusal', () => ({ refuseIfSuspendedOwner }));
 
-vi.mock('../utils/apiKeyRateLimitCheck', () => ({
+vi.mock('../utils/apiKeyRateLimitCheck', async importOriginal => ({
+  rateLimitRefusalInfo: (await importOriginal<typeof import('../utils/apiKeyRateLimitCheck')>()).rateLimitRefusalInfo,
   extractApiKeyFromHeaders: vi.fn(),
   checkApiKeyRateLimit: vi.fn(),
 }));
@@ -831,6 +832,7 @@ describe('rate-limit errors carry their status and retry window', () => {
       error: 'Rate limit exceeded: 10 requests per minute. Try again in 12 seconds.',
       retryAfter: 12,
       limitType: 'minute',
+      limit: 10,
       headers,
     });
     const info = {
@@ -844,7 +846,13 @@ describe('rate-limit errors carry their status and retry window', () => {
     await expect(rejection).rejects.toBeInstanceOf(TooManyRequestsError);
     await expect(rejection).rejects.toMatchObject({
       statusCode: 429,
-      additionalInfo: { retryAfter: 12, rateLimitHeaders: headers },
+      additionalInfo: {
+        retryAfter: 12,
+        rateLimitHeaders: headers,
+        errorCode: 'api_key_rate_limit_exceeded',
+        limit: 10,
+        windowSeconds: 60,
+      },
     });
     await expect(rejection).rejects.toThrow('Rate limit exceeded: 10 requests per minute. Try again in 12 seconds.');
   });
