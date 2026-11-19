@@ -405,6 +405,8 @@ export interface ToolContext {
    * the access token. A granted home folder would otherwise expose the vault to a shell command.
    */
   protectedPaths?: readonly string[];
+  /** Folders inside protectedPaths that request_directory may still share, such as chat attachments. */
+  shareableUnderProtected?: readonly string[];
   /** Protected folders not yet resolved: where a write lands relative to them is unknown, so every write is refused. */
   unresolvedProtectedPaths?: readonly string[];
   /**
