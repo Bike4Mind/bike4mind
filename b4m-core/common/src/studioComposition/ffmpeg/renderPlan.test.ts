@@ -86,12 +86,42 @@ describe('buildStudioRenderPlan', () => {
     expect(result.durationSeconds).toBe(10);
   });
 
+  const CROP_9X16 = { x: 0.1, y: 0, width: 0.316406, height: 1 };
+  const portraitOutput = { outputs: [{ id: 'tall', aspectRatio: '9:16' as const, width: 1080, height: 1920 }] };
+  const croppedTrack = (fit: 'cover' | 'contain'): StudioTimelineInput['tracks'] => [
+    {
+      id: 'v',
+      kind: 'video',
+      clips: [{ id: 'c', fileId: VIDEO, startMs: 0, durationMs: 2000, fit, crop: { '9:16': CROP_9X16 } }],
+    },
+  ];
+
+  it('frames a cover clip on its crop rect for the output aspect ratio', () => {
+    const graph = graphOf(plan(croppedTrack('cover'), portraitOutput));
+    expect(graph).toContain(
+      "[0:v]crop=w='min(0.316406*iw,1*ih*1080/1920)':h='min(1*ih,0.316406*iw*1920/1080)':x='0.1*iw+(0.316406*iw-ow)/2':y='0*ih+(1*ih-oh)/2',scale=1080:1920,format=yuva420p,setsar=1,"
+    );
+  });
+
+  it('renders exactly as before when the crop rect is for another size or the clip is contained', () => {
+    const uncropped: StudioTimelineInput['tracks'] = [
+      { id: 'v', kind: 'video', clips: [{ id: 'c', fileId: VIDEO, startMs: 0, durationMs: 2000 }] },
+    ];
+    expect(plan(croppedTrack('cover'))).toEqual(plan(uncropped));
+    const contained: StudioTimelineInput['tracks'] = [
+      { id: 'v', kind: 'video', clips: [{ id: 'c', fileId: VIDEO, startMs: 0, durationMs: 2000, fit: 'contain' }] },
+    ];
+    expect(plan(croppedTrack('contain'), portraitOutput)).toEqual(plan(contained, portraitOutput));
+  });
+
   it('holds an image with contain fit, transparent padding and an alpha fade, and adds no audio', () => {
     const result = plan([
       {
         id: 'v',
         kind: 'video',
-        clips: [{ id: 'c', fileId: IMAGE, startMs: 0, durationMs: 3000, trimStartMs: 9000, fit: 'contain', fadeInMs: 500 }],
+        clips: [
+          { id: 'c', fileId: IMAGE, startMs: 0, durationMs: 3000, trimStartMs: 9000, fit: 'contain', fadeInMs: 500 },
+        ],
       },
     ]);
     const graph = graphOf(result);
@@ -105,7 +135,9 @@ describe('buildStudioRenderPlan', () => {
     expect(result.args).not.toContain('-ss');
     expect(graph).toContain('[0:v]tpad=stop_mode=clone:stop_duration=3,scale=1920:1080:');
     expect(graph).toContain('setsar=1,fps=30,trim=duration=3');
-    expect(graph).toContain('force_original_aspect_ratio=decrease:force_divisible_by=2,format=yuva420p,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:color=black@0');
+    expect(graph).toContain(
+      'force_original_aspect_ratio=decrease:force_divisible_by=2,format=yuva420p,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:color=black@0'
+    );
     expect(graph).toContain('fade=t=in:st=0:d=0.5:alpha=1');
     expect(graph).toContain('anullsrc=r=48000:cl=stereo,atrim=duration=10[aout]');
     expect(graph).not.toContain('[0:a]');
@@ -172,7 +204,9 @@ describe('buildStudioRenderPlan', () => {
         {
           id: 'm',
           kind: 'music',
-          clips: [{ id: 'a', fileId: AUDIO, startMs: 2500, durationMs: 4000, volume: 0.5, fadeInMs: 1000, fadeOutMs: 2000 }],
+          clips: [
+            { id: 'a', fileId: AUDIO, startMs: 2500, durationMs: 4000, volume: 0.5, fadeInMs: 1000, fadeOutMs: 2000 },
+          ],
         },
         { id: 's', kind: 'sfx', clips: [{ id: 'b', fileId: SILENT_VIDEO, startMs: 0, durationMs: 1000 }] },
         { id: 'vo', kind: 'voice', clips: [{ id: 'c', fileId: VIDEO, startMs: 0, durationMs: 1000 }] },
@@ -199,7 +233,13 @@ describe('buildStudioRenderPlan', () => {
             startMs: 1000,
             durationMs: 2000,
             text: 'one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen\nend',
-            style: { position: 'top', align: 'left', backgroundColor: '#000000', fontFamily: 'Georgia', maxWidthPct: 50 },
+            style: {
+              position: 'top',
+              align: 'left',
+              backgroundColor: '#000000',
+              fontFamily: 'Georgia',
+              maxWidthPct: 50,
+            },
           },
         ],
       },
@@ -218,13 +258,17 @@ describe('buildStudioRenderPlan', () => {
     const drawtexts = graph.split('drawtext=').slice(1);
     expect(drawtexts).toHaveLength(5);
     expect(drawtexts[0]).toContain(`fontfile=${STUDIO_CAPTION_FONTS.serif}`);
-    expect(drawtexts[0]).toContain('textfile=/work/caption-0.txt:expansion=none:fontsize=54:fontcolor=0xFFFFFF:x=22:y=');
+    expect(drawtexts[0]).toContain(
+      'textfile=/work/caption-0.txt:expansion=none:fontsize=54:fontcolor=0xFFFFFF:x=22:y='
+    );
     expect(drawtexts[0]).toContain('box=1:boxcolor=0x000000');
     expect(drawtexts[0]).toContain("enable='gte(t,0.983333)*lt(t,2.983333)'");
   });
 
   it('centers and bottom-aligns a default caption with a shadow instead of a box', () => {
-    const graph = graphOf(plan([{ id: 'cap', kind: 'captions', clips: [{ id: 'k', startMs: 0, durationMs: 1000, text: 'Hi' }] }]));
+    const graph = graphOf(
+      plan([{ id: 'cap', kind: 'captions', clips: [{ id: 'k', startMs: 0, durationMs: 1000, text: 'Hi' }] }])
+    );
 
     expect(graph).toContain('x=(w-text_w)/2');
     // 1080 - 6% inset - one 1.25 line of a 54px font, centered in its line box.
@@ -246,10 +290,10 @@ describe('buildStudioRenderPlan', () => {
 
   it('snaps clip edges to frames and clamps clips to the timeline', () => {
     const graph = graphOf(
-      plan(
-        [{ id: 'v', kind: 'video', clips: [{ id: 'c', fileId: VIDEO, startMs: 1030, durationMs: 5000 }] }],
-        { durationMs: 4000, fps: 25 }
-      )
+      plan([{ id: 'v', kind: 'video', clips: [{ id: 'c', fileId: VIDEO, startMs: 1030, durationMs: 5000 }] }], {
+        durationMs: 4000,
+        fps: 25,
+      })
     );
 
     expect(graph).toContain("enable='gte(t,1.02)*lt(t,3.98)'");
