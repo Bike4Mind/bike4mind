@@ -12,8 +12,8 @@ import {
   parseMcpConnectionBody,
 } from '@server/validators/mcpConnectionValidators';
 
-// Platform connectors: a connection an admin sets up once and every user gets. Session-only, like
-// the user routes under pages/api/mcp-connections, which these mirror.
+// Platform connectors: a connection an admin sets up once and every user can switch on.
+// Session-only, like the user routes under pages/api/mcp-connections, which these mirror.
 const handler = adminApi({
   auth: 'jwtOnly',
   requiredScopes: [ApiKeyScope.ADMIN],
