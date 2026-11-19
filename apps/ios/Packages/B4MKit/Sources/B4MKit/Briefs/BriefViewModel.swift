@@ -32,8 +32,8 @@ public final class BriefViewModel {
   @ObservationIgnored private var isPolling = false
 
   public init(
-    api: any BriefAPI, briefID: String? = nil, pollInterval: Duration = .seconds(2),
-    pollWindow: Duration = .seconds(90),
+    api: any BriefAPI, briefID: String? = nil, pollInterval: Duration = .seconds(8),
+    pollWindow: Duration = .seconds(120),
     sleep: @escaping Sleep = { try await Task.sleep(for: $0) }
   ) {
     self.api = api
@@ -120,6 +120,9 @@ public final class BriefViewModel {
         brief = try await api.brief(id: current.id)
       } catch is CancellationError {
         return
+      } catch APIError.rateLimited {
+        // The per-minute limit counts every poll; the window resets, so wait and look again.
+        continue
       } catch {
         state = .failed(Self.apiError(from: error))
         return

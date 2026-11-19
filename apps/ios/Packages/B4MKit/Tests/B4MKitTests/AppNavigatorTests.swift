@@ -37,10 +37,10 @@ final class AppNavigatorTests: XCTestCase {
     XCTAssertEqual(navigator.sessionPath, [.brief(id: nil)])
   }
 
-  func testTheLatestBriefCountsAsShowingAnyBriefId() {
+  func testTheLatestBriefIsNotAssumedToBeThePushedBrief() {
     let navigator = AppNavigator()
     navigator.openLatestBrief()
-    XCTAssertTrue(navigator.isShowing(.brief(id: "b2")))
+    XCTAssertFalse(navigator.isShowing(.brief(id: "b2")))
   }
 
   func testPushSessionKeepsTheBriefBelowIt() {
