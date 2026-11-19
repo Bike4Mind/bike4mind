@@ -86,6 +86,9 @@ const ALLOWED_CONTRACTS = new Set([
   'searchWeb',
   'fetchWebPage',
   'getCurrentWeather',
+  // Listed because they declare ai:generate; their handlers refuse an exchange key (REFUSING_ROUTES).
+  'createDelegation',
+  'getDelegation',
 ]);
 
 // Every endpoint the generated registry lists under ai:generate or me:read. The REFUSING_ROUTES are
@@ -106,6 +109,7 @@ const ALLOWED_ENDPOINTS = [
   'GET /api/v1/credits/transactions',
   'GET /api/v1/completion-runs/:runId/usage',
   'GET /api/v1/decision-models',
+  'GET /api/v1/delegations/:id',
   'GET /api/v1/embedding-models',
   'GET /api/v1/image-jobs/:id',
   'GET /api/v1/image-models',
@@ -142,6 +146,7 @@ const ALLOWED_ENDPOINTS = [
   'POST /api/v1/completion-runs',
   'POST /api/v1/completion-runs/:runId/budget',
   'POST /api/v1/decisions',
+  'POST /api/v1/delegations',
   'POST /api/v1/embeddings',
   'POST /api/v1/image-edits',
   'POST /api/v1/image-generations',
@@ -168,7 +173,7 @@ const DOOR_ONLY_ROUTES = ['files/[id]/index.ts'];
 const UNRESOLVABLE_DOOR_ALLOWLIST: Record<string, string> = {};
 
 // Scoped routes an exchange key may not use (credential management, other users' profiles,
-// gamification): each refuses an exchange key in its handler.
+// gamification, delegations): each refuses an exchange key in its handler.
 const REFUSING_ROUTES = [
   'gears/status.ts',
   'oauth/userinfo.ts',
@@ -176,6 +181,8 @@ const REFUSING_ROUTES = [
   'transforms/batch/[id].ts',
   'user-api-keys/[id]/callback-secret.ts',
   'users/[id]/index.ts',
+  'v1/delegations/index.ts',
+  'v1/delegations/[id].ts',
 ];
 
 // Scope-less credential and account routes. They stay closed only while they declare no exchange scope.
