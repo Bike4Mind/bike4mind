@@ -35,7 +35,7 @@ public struct KeychainTokenStore: TokenStore {
     accessGroup != nil && status == errSecMissingEntitlement
   }
 
-  private func query(sharedGroup: Bool) -> [String: Any] {
+  private func itemQuery(sharedGroup: Bool) -> [String: Any] {
     var query: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: service,
@@ -72,7 +72,7 @@ public struct KeychainTokenStore: TokenStore {
   }
 
   private func readToken(sharedGroup: Bool) throws -> String? {
-    var query = query(sharedGroup: sharedGroup)
+    var query = itemQuery(sharedGroup: sharedGroup)
     query[kSecReturnData as String] = true
     query[kSecMatchLimit as String] = kSecMatchLimitOne
 
@@ -92,7 +92,7 @@ public struct KeychainTokenStore: TokenStore {
   /// Clears both locations so a session written app-private (no entitlement) cannot outlive sign-out.
   private func deleteToken() throws {
     for sharedGroup in accessGroup == nil ? [false] : [true, false] {
-      let status = SecItemDelete(query(sharedGroup: sharedGroup) as CFDictionary)
+      let status = SecItemDelete(itemQuery(sharedGroup: sharedGroup) as CFDictionary)
       let tolerated =
         status == errSecSuccess || status == errSecItemNotFound
         || (sharedGroup && Self.shouldFallBackToPrivate(status: status, accessGroup: accessGroup))
@@ -101,7 +101,7 @@ public struct KeychainTokenStore: TokenStore {
   }
 
   private func writeToken(_ token: String, sharedGroup: Bool) throws {
-    let base = query(sharedGroup: sharedGroup)
+    let base = itemQuery(sharedGroup: sharedGroup)
     // ThisDeviceOnly: a rotating refresh token must not ride an encrypted backup onto a second device,
     // where both copies would race to rotate it. After-first-unlock still lets the share extension and
     // background refreshes read it. The update rewrites the attribute on items stored before this change.
