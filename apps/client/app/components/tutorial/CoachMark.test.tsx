@@ -2,7 +2,8 @@ import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { a11yAttr } from './a11y';
-import { CoachMark, dockCard, placeCard, type Rect } from './CoachMark';
+import { CoachMark, dockCard, dockPhoneCard, placeCard, type Rect } from './CoachMark';
+import { coachCover } from './coachCover';
 
 const viewport = { width: 1728, height: 936 };
 const card = { width: 340, height: 170 };
@@ -100,6 +101,40 @@ describe('dockCard', () => {
     expect(dockCard({ side: 'right', card: tall, viewport: small, obstacles: [composer] })).toBe(
       small.height - 700 - 16
     );
+  });
+});
+
+describe('dockPhoneCard', () => {
+  const phone = { width: 390, height: 844 };
+  const tall = { width: 358, height: 220 };
+
+  it('docks to the bottom when the target sits high on the screen', () => {
+    expect(dockPhoneCard({ target: rect(16, 80, 374, 300), obstacles: [], card: tall, viewport: phone })).toBe(
+      'bottom'
+    );
+  });
+
+  it('docks to the top when the target is the answer at the end of the chat', () => {
+    expect(dockPhoneCard({ target: rect(16, 480, 374, 760), obstacles: [], card: tall, viewport: phone })).toBe('top');
+  });
+
+  it('takes the clear edge that also keeps off an obstacle', () => {
+    const target = rect(16, 300, 374, 400);
+    const composer = rect(0, 740, 390, 844);
+    expect(dockPhoneCard({ target, obstacles: [composer], card: tall, viewport: phone })).toBe('top');
+  });
+
+  it('holds its edge while the target stays clear of it, and moves once the target scrolls under it', () => {
+    const input = { obstacles: [], card: tall, viewport: phone, current: 'top' as const };
+    expect(dockPhoneCard({ ...input, target: rect(16, 300, 374, 400) })).toBe('top');
+    expect(dockPhoneCard({ ...input, target: rect(16, 100, 374, 200) })).toBe('bottom');
+  });
+
+  it('stays put on an answer taller than the screen, so scrolling it does not flip the card', () => {
+    const input = { obstacles: [], card: tall, viewport: phone };
+    expect(dockPhoneCard({ ...input, target: rect(16, 0, 374, 844), current: 'top' })).toBe('top');
+    expect(dockPhoneCard({ ...input, target: rect(16, 0, 374, 844), current: 'bottom' })).toBe('bottom');
+    expect(dockPhoneCard({ ...input, target: rect(16, -400, 374, 700) })).toBe('bottom');
   });
 });
 
@@ -362,6 +397,56 @@ describe('CoachMark', () => {
     await waitFor(() => expect(screen.queryByTestId('tutorial-anchor-ring')).toBeNull());
     act(() => root.removeAttribute(a11yAttr('ariaHidden')));
     await waitFor(() => expect(screen.getByTestId('tutorial-anchor-ring')).toBeInTheDocument());
+  });
+
+  it('docks full width to the top on a phone, clear of an answer at the end of the chat', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 844 });
+    boxes.set('answer', rect(16, 480, 374, 760));
+    boxes.set('tutorial-coach-card', rect(0, 0, 358, 200));
+    stubRects();
+    render(
+      <>
+        <div data-testid="answer">The plan</div>
+        <CoachMark stepKey="s" body="Read the answer." anchor="answer" onLeave={() => undefined} />
+      </>
+    );
+    const cardEl = screen.getByTestId('tutorial-coach-card');
+    await waitFor(() => expect(cardEl).toHaveStyle({ top: '16px', left: '16px' }));
+    expect(cardEl).toHaveStyle({ width: 'calc(100vw - 32px)' });
+  });
+
+  it('hides under an open nav drawer, and stays up when its anchor is in the drawer', async () => {
+    boxes.set('verb', rect(650, 457, 772, 485));
+    boxes.set('nav-item', rect(20, 200, 300, 236));
+    boxes.set('tutorial-coach-card', rect(0, 0, 340, 150));
+    stubRects();
+    const Page = ({ open, anchor }: { open: boolean; anchor: string }) => (
+      <>
+        <nav data-testid="drawer" {...coachCover(open)}>
+          <a data-testid="nav-item" href="#s">
+            Session
+          </a>
+        </nav>
+        <button data-testid="verb">Inputs &amp; solve</button>
+        <CoachMark stepKey={anchor} body="b" anchor={anchor} onLeave={() => undefined} />
+      </>
+    );
+    const { rerender } = render(<Page open={false} anchor="verb" />);
+    await screen.findByTestId('tutorial-anchor-ring');
+    expect(screen.getByTestId('tutorial-coach-card')).toBeVisible();
+
+    rerender(<Page open anchor="verb" />);
+    await waitFor(() => expect(screen.getByTestId('tutorial-coach-card')).not.toBeVisible());
+    expect(screen.queryByTestId('tutorial-anchor-ring')).toBeNull();
+    expect(screen.queryByTestId('tutorial-coach-pill')).toBeNull();
+
+    rerender(<Page open anchor="nav-item" />);
+    await waitFor(() => expect(screen.getByTestId('tutorial-coach-card')).toBeVisible());
+    expect(screen.getByTestId('tutorial-anchor-ring')).toBeInTheDocument();
+
+    rerender(<Page open={false} anchor="verb" />);
+    await waitFor(() => expect(screen.getByTestId('tutorial-coach-card')).toBeVisible());
   });
 
   it('follows an anchor that a layout shift moves without resizing it', async () => {

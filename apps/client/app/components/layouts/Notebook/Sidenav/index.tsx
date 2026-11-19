@@ -11,6 +11,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import { getWorkspaceSurface } from '@bike4mind/common';
 import { hostedWorkspaceAt } from '@client/app/utils/premiumHostedWorkspace';
+import { coachCover } from '@client/app/components/tutorial/coachCover';
 
 // Lazy load CombinedNotebooks to reduce initial bundle size
 const CombinedNotebooks = dynamic(() => import('./CombinedNotebooks'), {
@@ -73,6 +74,7 @@ const NotebookSideNav = () => {
       component="nav"
       aria-label={t('sidenav.sidebar', 'Sidebar')}
       data-testid="sidenav-container"
+      {...coachCover(isTablet && openSideNav)}
       sx={theme => ({
         height: '100dvh',
         backgroundColor: theme.palette.background.surface2,
