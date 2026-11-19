@@ -22,7 +22,7 @@ const JWT_ONLY_NOTE =
  * Standing instructions the brief composer reads as preferences. Served by
  * apps/client/pages/api/v1/assistant/instructions/index.ts (list, create) and [id].ts (delete).
  */
-export const listAssistantInstructionsContract = defineEndpoint({
+export const listAssistantInstructionsContract = /* @__PURE__ */ defineEndpoint({
   method: 'get',
   path: '/api/v1/assistant/instructions',
   operationId: 'listAssistantInstructions',
@@ -41,7 +41,7 @@ export const listAssistantInstructionsContract = defineEndpoint({
   codeSample: { authToken: '<access_token>', streaming: false },
 });
 
-export const createAssistantInstructionContract = defineEndpoint({
+export const createAssistantInstructionContract = /* @__PURE__ */ defineEndpoint({
   method: 'post',
   path: '/api/v1/assistant/instructions',
   operationId: 'createAssistantInstruction',
@@ -70,7 +70,7 @@ export const createAssistantInstructionContract = defineEndpoint({
   codeSample: { authToken: '<access_token>', streaming: false, body: { text: '<instruction>' } },
 });
 
-export const deleteAssistantInstructionContract = defineEndpoint({
+export const deleteAssistantInstructionContract = /* @__PURE__ */ defineEndpoint({
   method: 'delete',
   path: '/api/v1/assistant/instructions/{id}',
   operationId: 'deleteAssistantInstruction',
