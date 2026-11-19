@@ -480,6 +480,17 @@ describe('sub-sessions an agent spawned', () => {
     expect([hintOf('Kid A'), hintOf('Kid B'), hintOf('Grandkid')]).toEqual([null, null, null]);
   });
 
+  it('caps the indent at three levels and labels deeper sessions', async () => {
+    const chain = [summary('s0', 'Level 1')];
+    for (let level = 1; level <= 4; level += 1) chain.push(spawned(`s${level}`, `Level ${level + 1}`, `s${level - 1}`));
+    await mount(chain);
+    expect(chain.map(entry => depthOf(entry.title))).toEqual([null, '1', '2', '3', '3']);
+    expect(rowOf('Level 4').closest('li')?.querySelector('[data-testid="chat-session-depth-chip"]')).toBeNull();
+    expect(rowOf('Level 5').closest('li')?.querySelector('[data-testid="chat-session-depth-chip"]')?.textContent).toBe(
+      'level 5'
+    );
+  });
+
   it('fold away and come back from the pill, without opening the parent', async () => {
     await mount(sessions());
     act(() => foldButton().click());

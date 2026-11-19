@@ -155,6 +155,8 @@ export function NavItem({
  * badge is centred 15px in, and its rail drops from there to the child's badge one step right.
  */
 const NEST_INDENT = 14;
+/** Levels that still step right; a deeper session stays at this indent and wears a "level N" chip. */
+const MAX_NEST_DEPTH = 3;
 const BADGE_CENTER = 15;
 /** The gap SESSION_LIST_SX leaves between rows, which a rail has to bridge to stay unbroken. */
 const ROW_GAP = 2;
@@ -181,6 +183,8 @@ interface NestProps {
    * siblings below, so its rail runs straight through this row.
    */
   nestGuides?: string;
+  /** The real spawn depth when it is past MAX_NEST_DEPTH, so the row can say how deep it sits. */
+  nestDeeper?: number;
   /** Sessions anywhere under this one; 0 or absent on a row with none. */
   subCount?: number;
   /** The loudest state among them, which the fold pill wears while they are folded away. */
@@ -199,17 +203,17 @@ type SubActivity = 'needs-action' | 'processing' | undefined;
  * rounded elbow from the parent's badge into this one. Drawn on the ListItem's pseudo-elements
  * so they cost no DOM, and outside the button so its hover and selected fill start at the indent.
  */
-function railSx(depth: number, first: boolean, last: boolean, guides: string, status: ChatSessionStatus) {
+function railSx(depth: number, first: boolean, last: boolean, guides: string, heat: SubActivity, elbow: boolean) {
   const indent = depth * NEST_INDENT;
   const straight = [...guides].flatMap((guide, level) => (guide === '1' ? [level] : []));
-  if (!last) straight.push(depth - 1);
+  if (!last && elbow) straight.push(depth - 1);
   const line = `linear-gradient(${RAIL_COLOR}, ${RAIL_COLOR})`;
-  // The elbow into a working or waiting session lights up in the fold pill's colours, so a deep tree
-  // shows which branch needs you without unfolding anything.
+  // The elbow into a branch holding working or waiting sessions lights up in the fold pill's colours,
+  // so a deep tree shows where the activity is, even folded, and every ancestor on the path glows.
   const elbowColor =
-    status === 'needs-action'
+    heat === 'needs-action'
       ? 'var(--joy-palette-warning-solidBg)'
-      : status === 'processing'
+      : heat === 'processing'
         ? 'var(--joy-palette-primary-solidBg)'
         : RAIL_COLOR;
   return {
@@ -230,7 +234,7 @@ function railSx(depth: number, first: boolean, last: boolean, guides: string, st
       backgroundPosition: straight.map(level => `${level * NEST_INDENT + BADGE_CENTER}px 0`).join(', '),
     },
     // The first child reaches on up through the parent row to just under the parent's badge.
-    '&::after': {
+    '&::after': elbow && {
       content: '""',
       position: 'absolute',
       zIndex: 1,
@@ -242,7 +246,7 @@ function railSx(depth: number, first: boolean, last: boolean, guides: string, st
       borderLeft: `1px solid ${elbowColor}`,
       borderBottom: `1px solid ${elbowColor}`,
       borderBottomLeftRadius: '7px',
-      ...(status === 'processing' && {
+      ...(heat === 'processing' && {
         animation: `${pulse} 1.2s ease-in-out infinite`,
         '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
       }),
@@ -515,6 +519,7 @@ const SessionRow = memo(function SessionRow({
   nestFirst = false,
   nestLast = false,
   nestGuides = '',
+  nestDeeper = 0,
   subCount = 0,
   subActivity,
   subFolded = false,
@@ -525,6 +530,12 @@ const SessionRow = memo(function SessionRow({
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<'main' | 'move'>('main');
   const [editing, setEditing] = useState(false);
+  const nestHeat: SubActivity =
+    status === 'needs-action' || subActivity === 'needs-action'
+      ? 'needs-action'
+      : status === 'processing' || subActivity === 'processing'
+        ? 'processing'
+        : undefined;
   const needsAction = status === 'needs-action';
   // Main pushes the project once the worktree exists, which is what ends this.
   const preparing = status === 'processing' && awaitsWorktree(session.project);
@@ -539,7 +550,7 @@ const SessionRow = memo(function SessionRow({
     <ListItem
       data-nest-depth={nestDepth || undefined}
       sx={{
-        ...(nestDepth > 0 && railSx(nestDepth, nestFirst, nestLast, nestGuides, status)),
+        ...(nestDepth > 0 && railSx(nestDepth, nestFirst, nestLast, nestGuides, nestHeat, nestDeeper === 0)),
         ...(editing
           ? { '--ListItem-endActionWidth': '0px' }
           : {
@@ -727,6 +738,18 @@ const SessionRow = memo(function SessionRow({
               data-testid="chat-session-parent-hint"
             >
               from {hintTitle}
+            </Typography>
+          )}
+          {!editing && nestDeeper > 0 && (
+            <Typography
+              level="body-xs"
+              noWrap
+              textColor="text.tertiary"
+              sx={{ flexShrink: 0, fontSize: '0.6875rem' }}
+              title={`${nestDeeper} levels deep`}
+              data-testid="chat-session-depth-chip"
+            >
+              level {nestDeeper + 1}
             </Typography>
           )}
           {!editing && session.importOrigin && <ImportedBadge origin={session.importOrigin} />}
@@ -1320,7 +1343,7 @@ export function SessionList({
     const children = sections.children.get(session.id) ?? [];
     const under = descendants(session);
     const folded = isFolded(session.id);
-    const childGuides = depth > 0 ? guides + (last ? '0' : '1') : '';
+    const childGuides = depth > 0 && depth < MAX_NEST_DEPTH ? guides + (last ? '0' : '1') : guides;
     return [
       <SessionRow
         key={session.id}
@@ -1331,7 +1354,8 @@ export function SessionList({
         userSections={userSections.sections}
         sectionId={sectionOf(userSections, session.id)}
         actions={actions}
-        nestDepth={depth}
+        nestDepth={Math.min(depth, MAX_NEST_DEPTH)}
+        nestDeeper={depth > MAX_NEST_DEPTH ? depth : 0}
         nestFirst={first}
         nestLast={last}
         nestGuides={guides}
