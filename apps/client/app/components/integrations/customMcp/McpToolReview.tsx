@@ -8,6 +8,7 @@ import {
   mcpConnectionErrorMessage,
   mcpConnectionKeys,
   useUpdateMcpConnection,
+  type McpConnectionScope,
 } from '@client/app/hooks/data/mcpConnections';
 import { initialToolDrafts, toReviewEntries, type ToolDraft } from './customMcpModel';
 
@@ -22,13 +23,21 @@ const APPROVAL_LABELS: Record<McpToolApprovalMode, string> = {
  * on or off, and when to ask before a call. Saving marks every listed tool reviewed; until then
  * a new or changed tool is not offered to the model.
  */
-const McpToolReview = ({ connection, onDone }: { connection: IMcpConnectionPublic; onDone: () => void }) => {
+const McpToolReview = ({
+  connection,
+  scope = 'user',
+  onDone,
+}: {
+  connection: IMcpConnectionPublic;
+  scope?: McpConnectionScope;
+  onDone: () => void;
+}) => {
   // The tools as they were when the review opened. A refetch while it is open (Refresh tools, a background
   // update) must not swap in versions the user never saw: saving names these versions, so a change made
   // since fails with tool_version_conflict instead of being approved unseen.
   const [tools] = useState(() => connection.tools);
   const [drafts, setDrafts] = useState<Record<string, ToolDraft>>(() => initialToolDrafts(tools));
-  const update = useUpdateMcpConnection();
+  const update = useUpdateMcpConnection(scope);
   const queryClient = useQueryClient();
   const testId = `custom-mcp-review-${connection.id}`;
 
@@ -51,7 +60,7 @@ const McpToolReview = ({ connection, onDone }: { connection: IMcpConnectionPubli
           const code = mcpConnectionErrorCode(error);
           if (code === 'tool_version_conflict' || code === 'unknown_tool') {
             toast.error('The server changed its tools while you were reviewing. Review them again.');
-            void queryClient.invalidateQueries({ queryKey: mcpConnectionKeys.list() });
+            void queryClient.invalidateQueries({ queryKey: mcpConnectionKeys.listFor(scope) });
             onDone();
             return;
           }

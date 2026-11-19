@@ -10,6 +10,7 @@ import {
   useRotateMcpConnectionApiKey,
   useStartMcpConnectionOAuth,
   useUpdateMcpConnection,
+  type McpConnectionScope,
 } from '@client/app/hooks/data/mcpConnections';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import McpToolReview from './McpToolReview';
@@ -19,22 +20,47 @@ type Panel = 'none' | 'review' | 'api-key' | 'client';
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
+const PLATFORM_AUTH_LABELS: Record<IMcpConnectionPublic['auth']['kind'], string> = {
+  api_key: 'API key',
+  none: 'no authentication',
+  oauth: 'provider sign-in',
+};
+
+const removeDescription = (connection: IMcpConnectionPublic, scope: McpConnectionScope): string => {
+  const revoke = 'Revoke the API key at the provider if you no longer need it.';
+  if (scope === 'platform') {
+    const lost =
+      'Users who turned it on lose its tools. If you add it again later, it starts switched off for everyone.';
+    return connection.auth.kind === 'api_key' ? `${lost} ${revoke}` : lost;
+  }
+  return connection.auth.kind === 'oauth'
+    ? 'This signs Bike4Mind out of the server and removes the connector and its tool settings.'
+    : connection.auth.kind === 'api_key'
+      ? `This removes the connector and its tool settings. ${revoke}`
+      : 'This removes the connector and its tool settings.';
+};
+
 /**
  * One custom connection in the manage list: status, how many tools are offered, and the actions
  * that fit its state. `reviewOnMount` opens the tool review straight away (right after adding).
+ * With `scope="platform"` it manages a platform connector through the admin routes and shows its
+ * host and authentication kind instead of the address, and nothing of its key.
  */
 const McpConnectionItem = ({
   connection,
   reviewOnMount = false,
+  scope = 'user',
 }: {
   connection: IMcpConnectionPublic;
   reviewOnMount?: boolean;
+  scope?: McpConnectionScope;
 }) => {
+  const platform = scope === 'platform';
   const confirm = useConfirmation();
-  const update = useUpdateMcpConnection();
-  const refresh = useRefreshMcpConnectionTools();
-  const rotate = useRotateMcpConnectionApiKey();
-  const remove = useDeleteMcpConnection();
+  const update = useUpdateMcpConnection(scope);
+  const refresh = useRefreshMcpConnectionTools(scope);
+  const rotate = useRotateMcpConnectionApiKey(scope);
+  const remove = useDeleteMcpConnection(scope);
   const startOAuth = useStartMcpConnectionOAuth();
   const [panel, setPanel] = useState<Panel>(
     reviewOnMount && connection.status === 'connected' && connection.tools.length > 0 ? 'review' : 'none'
@@ -104,12 +130,7 @@ const McpConnectionItem = ({
     confirm({
       type: 'danger',
       title: `Remove ${connection.displayName}`,
-      description:
-        connection.auth.kind === 'oauth'
-          ? 'This signs Bike4Mind out of the server and removes the connector and its tool settings.'
-          : connection.auth.kind === 'api_key'
-            ? 'This removes the connector and its tool settings. Revoke the API key at the provider if you no longer need it.'
-            : 'This removes the connector and its tool settings.',
+      description: removeDescription(connection, scope),
       okLabel: 'Remove',
       onOk: () =>
         remove.mutate(connection.id, {
@@ -131,12 +152,21 @@ const McpConnectionItem = ({
             <Chip size="sm" variant="soft" color={chip.color} data-testid={`${testId}-status`}>
               {chip.label}
             </Chip>
+            {platform && !connection.enabled && (
+              <Chip size="sm" variant="outlined" color="neutral" data-testid={`${testId}-disabled`}>
+                Disabled
+              </Chip>
+            )}
           </Stack>
-          <Typography level="body-xs" sx={{ color: 'text.tertiary', wordBreak: 'break-all' }}>
-            {connection.displayUrl}
+          <Typography
+            level="body-xs"
+            sx={{ color: 'text.tertiary', wordBreak: 'break-all' }}
+            data-testid={`${testId}-address`}
+          >
+            {platform ? `${connection.urlHost}, ${PLATFORM_AUTH_LABELS[connection.auth.kind]}` : connection.displayUrl}
           </Typography>
           <Typography level="body-xs" sx={{ mt: '4px', color: 'text.secondary' }} data-testid={`${testId}-summary`}>
-            {`${offeredToolCount(connection)} of ${plural(connection.tools.length, 'tool', 'tools')} on`}
+            {`${offeredToolCount(connection)} of ${plural(connection.tools.length, 'tool', 'tools')} ${platform ? 'approved' : 'on'}`}
             {pending > 0 ? `, ${pending} waiting for review` : ''}
             {lastUsed ? `. Last used ${lastUsed}` : ''}
           </Typography>
@@ -147,7 +177,10 @@ const McpConnectionItem = ({
           disabled={busy || blocked}
           onChange={event => setEnabled(event.target.checked)}
           slotProps={{
-            input: { 'aria-label': `Use ${connection.displayName}`, 'data-testid': `${testId}-enabled-switch` },
+            input: {
+              'aria-label': platform ? `Offer ${connection.displayName} to users` : `Use ${connection.displayName}`,
+              'data-testid': `${testId}-enabled-switch`,
+            },
           }}
         />
       </Stack>
@@ -230,7 +263,7 @@ const McpConnectionItem = ({
 
       {panel === 'review' && (
         <Box sx={{ mt: '12px' }}>
-          <McpToolReview connection={reviewConnection ?? connection} onDone={() => setPanel('none')} />
+          <McpToolReview connection={reviewConnection ?? connection} scope={scope} onDone={() => setPanel('none')} />
         </Box>
       )}
 
@@ -242,7 +275,11 @@ const McpConnectionItem = ({
             autoComplete="off"
             value={apiKey}
             onChange={event => setApiKey(event.target.value)}
-            placeholder={connection.auth.apiKey ? `Replaces the key ending ${connection.auth.apiKey.last4}` : 'API key'}
+            placeholder={
+              connection.auth.apiKey && !platform
+                ? `Replaces the key ending ${connection.auth.apiKey.last4}`
+                : 'API key'
+            }
             slotProps={{ input: { 'aria-label': 'New API key', 'data-testid': `${testId}-api-key-input` } }}
             sx={{ flex: 1 }}
           />
