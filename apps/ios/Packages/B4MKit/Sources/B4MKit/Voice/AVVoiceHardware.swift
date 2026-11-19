@@ -105,11 +105,11 @@
       plays += 1
       let started = plays
       let session = AVAudioSession.sharedInstance()
-      try session.setCategory(.playback, mode: .default)
-      try session.setActive(true)
       defer {
         if started == plays { try? session.setActive(false, options: .notifyOthersOnDeactivation) }
       }
+      try session.setCategory(.playback, mode: .default)
+      try session.setActive(true)
       let item = AVPlayerItem(url: url)
       let player = AVPlayer(playerItem: item)
       self.player = player
