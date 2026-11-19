@@ -101,6 +101,11 @@ export type GenerationJobError = {
   providerStatus?: number;
   /** For a provider at capacity (providerStatus 429): how long the caller should wait before retrying. */
   retryAfterSeconds?: number;
+  /**
+   * Set on an orphaned_submit when our own step deadline aborted the submit: an expected, handled outcome that the
+   * synchronous audio routes log at warn rather than error.
+   */
+  cutOffByStepDeadline?: boolean;
 };
 
 export type VideoJobOutput = {
