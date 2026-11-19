@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  Box,
   Button,
   DialogContent,
   FormControl,
@@ -96,7 +97,7 @@ const columns: DataColumn<Connection>[] = [
       return (
         <Stack gap={0.25} sx={{ minWidth: 0 }}>
           <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
-            <Typography level="body-sm" sx={{ color: 'admin.ink', fontWeight: 500 }}>
+            <Typography level="inherit" sx={{ color: 'admin.ink', fontWeight: 500 }}>
               {connection.displayName}
             </Typography>
             <StatusChip tone={status.tone} label={status.label} data-testid={`platform-mcp-status-${connection.id}`} />
@@ -419,14 +420,16 @@ const PlatformMcpConnectorsSection = () => {
             <Typography level="title-sm" component="h3" sx={{ mb: 1.5, color: 'admin.ink' }}>
               Add a platform connector
             </Typography>
-            <AddMcpConnectorForm
-              scope="platform"
-              onCreated={onCreated}
-              onCancel={() => {
-                setAdding(false);
-                setFocusTarget(ADD_BUTTON_ID);
-              }}
-            />
+            <Box sx={{ maxWidth: '40rem' }}>
+              <AddMcpConnectorForm
+                scope="platform"
+                onCreated={onCreated}
+                onCancel={() => {
+                  setAdding(false);
+                  setFocusTarget(ADD_BUTTON_ID);
+                }}
+              />
+            </Box>
           </SettingsSection>
         )}
         {!(adding && connections.length === 0) && (
