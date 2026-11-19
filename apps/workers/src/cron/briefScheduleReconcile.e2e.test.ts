@@ -91,6 +91,7 @@ const run = (publisher: ScheduledBriefDeps['publishCompose'] = publishCompose) =
       startScheduledBrief: userId =>
         startScheduledBrief(userId, {
           briefs: assistantBriefRepository,
+          runs: agentExecutionRepository,
           users: userRepository,
           hasRunsSince: async (id, since) =>
             (await agentExecutionRepository.findByUserIdPaginated(id, { fromDate: since }, { limit: 1 })).items.length >

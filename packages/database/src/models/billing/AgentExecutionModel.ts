@@ -2111,6 +2111,32 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     return { items, nextCursor };
   }
 
+  /**
+   * `createdAt` of the earliest run, in the same set `findByUserIdPaginated` lists, that was created in
+   * `[createdFrom, completedSince)` but finished at or after `completedSince`: a run that straddles a brief
+   * window's start. Null when there is none.
+   */
+  async findEarliestStraddlingRunCreatedAt(
+    userId: string,
+    completedSince: Date,
+    createdFrom: Date
+  ): Promise<Date | null> {
+    const doc = await this.model
+      .findOne(
+        {
+          userId,
+          $or: [{ parentExecutionId: { $exists: false } }, { isBackgroundExecution: true }],
+          createdAt: { $gte: createdFrom, $lt: completedSince },
+          completedAt: { $gte: completedSince },
+        },
+        { createdAt: 1 }
+      )
+      .sort({ createdAt: 1 })
+      .lean<{ createdAt: Date }>()
+      .exec();
+    return doc?.createdAt ?? null;
+  }
+
   // --- DAG decomposition (coordinate_task) ---
 
   /**

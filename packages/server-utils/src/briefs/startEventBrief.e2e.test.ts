@@ -46,13 +46,21 @@ const insertUser = async (pushNotifications?: Record<string, boolean>, briefSche
   return insertedId.toString();
 };
 
-const insertRun = (userId: string, createdAt: Date) =>
-  AgentExecutionModel.collection.insertOne({ userId, sessionId: 's1', query: 'q', status: 'completed', createdAt });
+const insertRun = (userId: string, createdAt: Date, completedAt?: Date) =>
+  AgentExecutionModel.collection.insertOne({
+    userId,
+    sessionId: 's1',
+    query: 'q',
+    status: 'completed',
+    createdAt,
+    ...(completedAt ? { completedAt } : {}),
+  });
 
 const makeDeps = () => {
   const publishCompose = vi.fn().mockResolvedValue(undefined);
   const deps: ScheduledBriefDeps = {
     briefs: assistantBriefRepository,
+    runs: agentExecutionRepository,
     users: userRepository,
     hasRunsSince: async (userId, since) =>
       (await agentExecutionRepository.findByUserIdPaginated(userId, { fromDate: since }, { limit: 1 })).items.length >
@@ -97,6 +105,38 @@ describe('startEventBrief', () => {
     expect(await startEventBrief(userId, deps)).toBe('debounced');
     expect(await AssistantBriefModel.countDocuments({ userId })).toBe(1);
     expect(publishCompose).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a run that started before the last brief ended and finished after it', async () => {
+    const userId = await insertUser();
+    const runCreated = hoursAgo(3);
+    await insertRun(userId, runCreated, hoursAgo(0.5));
+    await AssistantBriefModel.collection.insertOne({
+      userId,
+      status: 'ready',
+      periodStart: hoursAgo(24),
+      periodEnd: hoursAgo(2),
+      createdAt: hoursAgo(2),
+    });
+    const { deps } = makeDeps();
+
+    expect(await startEventBrief(userId, deps)).toBe('enqueued');
+    const composing = await AssistantBriefModel.findOne({ userId, status: 'composing' }).lean();
+    expect(composing?.periodStart).toEqual(runCreated);
+  });
+
+  it('lets the scheduled slot run after an earlier event brief, but still debounces a second event', async () => {
+    const userId = await insertUser();
+    await insertRun(userId, hoursAgo(6));
+    await User.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(userId) },
+      { $set: { lastBriefStartedAt: hoursAgo(1) } }
+    );
+    const { deps } = makeDeps();
+
+    expect(await startEventBrief(userId, deps)).toBe('debounced');
+    expect(await startScheduledBrief(userId, deps)).toBe('enqueued');
+    expect(await lastStartOf(userId)).toEqual(now);
   });
 
   it.each([
