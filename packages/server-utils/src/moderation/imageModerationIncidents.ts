@@ -25,7 +25,7 @@ export function resolveAdminAppUrl(env: Record<string, string | undefined> = pro
 }
 
 // Loaded once, on the first alert.
-let mailerModule: Promise<typeof import('../utils/mailer/index')> | undefined;
+let mailerModule: Promise<typeof import('../utils/mailer/queuedMailer')> | undefined;
 
 type ReviewerListSetting = 'ImageModerationReviewerEmails' | 'ImageModerationEscalationEmails';
 
@@ -45,8 +45,10 @@ const parseStoredEmailList = (raw: unknown): unknown => {
  * of them read the same ImageModerationReviewerEmails and ImageModerationEscalationEmails settings
  * and render the same emails.
  *
- * Mail goes straight through the SMTP mailer rather than the email.send event: the upload scan
- * Lambda records incidents too and is not linked to the event bus.
+ * Mail is queued for the email-send worker, so every function that records an incident has to be
+ * linked to the event bus (infra/__tests__/mailSenderBusLinks.test.ts). An alert that cannot be
+ * queued leaves the incident unstamped for the review sweep to pick up; a queued alert is stamped, and
+ * a transport failure after that is retried by the email-send worker and dead-lettered, not by the sweep.
  */
 export function createReviewerAlertDelivery(options: { skipSettingsCache?: boolean } = {}): IncidentEscalationDelivery {
   const readEmailList = async (name: ReviewerListSetting) => {
@@ -61,8 +63,8 @@ export function createReviewerAlertDelivery(options: { skipSettingsCache?: boole
     getRecipients: () => readEmailList('ImageModerationReviewerEmails'),
     getEscalationRecipients: () => readEmailList('ImageModerationEscalationEmails'),
     sendEmail: async (to, email) => {
-      const { default: mailer } = await (mailerModule ??= import('../utils/mailer/index'));
-      return mailer.sendEmail(to, email, { mirror: false, logRecipient: false });
+      const { queuedMailer } = await (mailerModule ??= import('../utils/mailer/queuedMailer'));
+      return queuedMailer.sendEmail(to, email, { mirror: false, logRecipient: false });
     },
     appUrl: () => resolveAdminAppUrl(),
     logger: {

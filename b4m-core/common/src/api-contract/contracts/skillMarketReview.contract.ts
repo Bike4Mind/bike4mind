@@ -14,7 +14,7 @@ import {
  * (pending filter only) and POST /api/skills/market/versions/[vid]/review (approve and reject only).
  * Both share their logic with the SPA routes (server/skillMarket/reviewQueue.ts, submitVersion.ts).
  * A key without `admin:*` never carries the platform-admin role, so under one only org admins can
- * review, and only their organizations' Organization listings.
+ * review, and only their organizations' Organization listings and the Space listings of Spaces they own or administer.
  */
 
 const SCOPES = [ApiKeyScope.SKILLS_REVIEW];
@@ -28,7 +28,7 @@ export const listSkillMarketReviewQueueContract = defineEndpoint({
   description:
     'Lists the held versions you can review, oldest first, each with its listing and the approved version it ' +
     'would replace. Under an API key without `admin:*` this is the Organization listings of the organizations ' +
-    'you administer. ' +
+    'you administer and the Space listings of Spaces you own or administer. ' +
     'Cursor-paginated, but a page can be shorter than `limit`, even empty, while `next_cursor` is non-null: ' +
     'keep passing `next_cursor` back as `cursor` until it is `null`. A version that finishes scanning after ' +
     'you paged past its creation time shows up on the next pass that starts without a cursor.',
@@ -40,7 +40,7 @@ export const listSkillMarketReviewQueueContract = defineEndpoint({
   responses: {
     200: { description: 'One page of the review queue.', schema: ReviewQueueResponseSchema },
     403: {
-      description: 'The API key lacks `skills:review`, or you administer no organization.',
+      description: 'The API key lacks `skills:review`, or you administer no organization or Space.',
       schema: ScopeForbiddenErrorSchema,
     },
     422: { description: '`limit` is out of range, or `cursor` is malformed.', schema: ApiErrorSchema },
@@ -72,7 +72,7 @@ export const reviewSkillMarketVersionContract = defineEndpoint({
     403: {
       description:
         'The API key lacks `skills:review`, or you may not review this listing: it is not an Organization ' +
-        'listing of an organization you administer, or it is your own Public listing.',
+        'or Space listing you administer, or it is your own Public listing.',
       schema: ScopeForbiddenErrorSchema,
     },
     404: { description: 'No version with that id exists, or its listing is gone.', schema: ApiErrorSchema },

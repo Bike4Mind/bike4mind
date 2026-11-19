@@ -1,20 +1,29 @@
 import { SkillListing, SkillListingVersion } from '@bike4mind/database';
 import { ForbiddenError, type ISkillListing } from '@bike4mind/common';
 import type { TimeIdKeyset } from '@server/utils/cursorPagination';
-import { canReviewListing, type MarketActor } from '@bike4mind/server-utils/skillMarket/market';
+import { canReviewListing, type MarketActor, type MarketAudience } from '@bike4mind/server-utils/skillMarket/market';
 
-/** 403 unless the actor is a super-admin or administers at least one organization. */
-export function requireReviewer(actor: MarketActor, adminOrgIds: string[]) {
-  if (!actor.isAdmin && adminOrgIds.length === 0) throw new ForbiddenError('Reviewers only');
+/** 403 unless the actor is a super-admin or administers at least one organization or Space. */
+export function requireReviewer(actor: MarketActor, adminAudience: MarketAudience) {
+  if (!actor.isAdmin && adminAudience.orgIds.length === 0 && adminAudience.spaceIds.length === 0) {
+    throw new ForbiddenError('Reviewers only');
+  }
 }
 
 /**
- * The listings a reviewer may see. Org admins are scoped BEFORE any queue limit, so other orgs' (or
- * Public) backlog can't crowd theirs out. `scopedListingIds` is null for a super-admin (no scope);
+ * The listings a reviewer may see. Org and Space admins are scoped BEFORE any queue limit, so other
+ * owners' (or Public) backlog can't crowd theirs out. `scopedListingIds` is null for a super-admin (no scope);
  * `pendingOnly` narrows it to listings holding a version, the only ones a pending row can survive on.
  */
-export async function reviewScope(actor: MarketActor, adminOrgIds: string[], { pendingOnly = false } = {}) {
-  const scope = actor.isAdmin ? {} : { visibility: 'organization', organizationId: { $in: adminOrgIds } };
+export async function reviewScope(actor: MarketActor, adminAudience: MarketAudience, { pendingOnly = false } = {}) {
+  const scope = actor.isAdmin
+    ? {}
+    : {
+        $or: [
+          { visibility: 'organization', organizationId: { $in: adminAudience.orgIds } },
+          { visibility: 'space', spaceId: { $in: adminAudience.spaceIds } },
+        ],
+      };
   const scopedListingIds = actor.isAdmin
     ? null
     : (
@@ -34,10 +43,10 @@ export async function reviewScope(actor: MarketActor, adminOrgIds: string[], { p
  */
 export async function loadVersionQueue(
   actor: MarketActor,
-  adminOrgIds: string[],
+  adminAudience: MarketAudience,
   { filter, limit, after }: { filter: 'pending' | 'audit'; limit: number; after?: TimeIdKeyset }
 ) {
-  const { scope, scopedListingIds } = await reviewScope(actor, adminOrgIds, { pendingOnly: filter !== 'audit' });
+  const { scope, scopedListingIds } = await reviewScope(actor, adminAudience, { pendingOnly: filter !== 'audit' });
   const versionFilter =
     filter === 'audit'
       ? { auditSample: true, auditedAt: null, reviewStatus: { $in: ['auto_approved', 'approved'] } }
@@ -75,7 +84,7 @@ export async function loadVersionQueue(
         previous: prev && String(prev.id) !== String(v._id) ? prev : null,
         // Self-approvals are audited by someone else, never by their author.
         canDecide:
-          canReviewListing(plain, actor, adminOrgIds) && !(filter === 'audit' && plain.authorUserId === actor.id),
+          canReviewListing(plain, actor, adminAudience) && !(filter === 'audit' && plain.authorUserId === actor.id),
       },
     ];
   });

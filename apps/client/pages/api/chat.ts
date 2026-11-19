@@ -105,6 +105,7 @@ const handler = nextRouteForContract(chatContract, {
         owner: req.user,
         ownerUntrusted: req.apiKeyInfo?.ownerUntrusted,
         billingOwnerType: req.apiKeyInfo?.billingOwnerType,
+        unpaidAccountLimits: req.apiKeyInfo?.unpaidAccountLimits,
         holdSlot: Boolean(req.validated.wait),
         req,
       })
