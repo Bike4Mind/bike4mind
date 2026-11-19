@@ -62,3 +62,10 @@ public protocol VoiceAudioSessionControlling: Sendable {
   /// Interruptions and route changes. Created before `activate()` so none is missed.
   func events() -> AsyncStream<VoiceAudioEvent>
 }
+
+/// Plays a voice's static sample from a URL. `play` returns when the sample ends or `stop()` cuts it off, and
+/// throws when it cannot be loaded.
+public protocol VoiceSamplePlaying: Sendable {
+  func play(_ url: URL) async throws
+  func stop() async
+}
