@@ -17,6 +17,7 @@ const activeActivity: BriefActivity = {
   periodEnd,
   runs: [{ query: 'Run the monthly invoice batch', status: 'completed', finishedAt: periodEnd }],
   approvals: [],
+  emails: [],
 } as unknown as BriefActivity;
 
 const emptyActivity = { ...activeActivity, runs: [], approvals: [] } as BriefActivity;
@@ -45,6 +46,7 @@ function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {
     complete: vi.fn().mockResolvedValue(JSON.stringify({ headline: 'Done.', handled: ['Did a thing.'] })),
     loadInstructions: vi.fn().mockResolvedValue(['Always lead with anything about invoices.']),
     push: vi.fn().mockResolvedValue(undefined),
+    emails: { markBriefed: vi.fn().mockResolvedValue(0), storedEmailIds: vi.fn().mockResolvedValue([]) },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     ...overrides,
   } as unknown as BriefComposeDeps & {
