@@ -26,5 +26,5 @@ if (sideAppHealthAlertsDLQ) {
     },
     transform: deadLetter.ruleTarget,
   });
-  deadLetter.allowRules([$util.output({ nodes: { rule: cron.nodes.rule, target: cron.nodes.target } })]);
+  deadLetter.allowRules([$util.output(cron)]);
 }
