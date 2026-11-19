@@ -155,6 +155,12 @@ export const assistantBriefRepository = {
     return result.modifiedCount === 1;
   },
 
+  /** Drops a brief that is still composing; a settled one is left alone. */
+  async discardComposing(id: string): Promise<boolean> {
+    const result = await AssistantBriefModel.deleteOne({ _id: id, status: 'composing' });
+    return result.deletedCount === 1;
+  },
+
   /**
    * Marks a question decision replied, once: only the first caller gets `true`, so a double tap or a
    * replay sends the reply to the agent at most once. Scoped to the owner like `findByIdForUser`.
@@ -195,12 +201,6 @@ export const assistantBriefRepository = {
       { runValidators: true }
     );
     return result.modifiedCount;
-  },
-
-  /** Drops a brief that is still composing; a settled one is left alone. */
-  async discardComposing(id: string): Promise<boolean> {
-    const result = await AssistantBriefModel.deleteOne({ _id: id, status: 'composing' });
-    return result.deletedCount === 1;
   },
 
   async findById(id: string): Promise<IAssistantBrief | null> {

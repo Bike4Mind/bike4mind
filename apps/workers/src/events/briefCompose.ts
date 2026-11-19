@@ -50,7 +50,10 @@ type LogLike = Pick<Logger, 'info' | 'warn' | 'error'>;
 export type BriefComposeDeps = {
   now: () => Date;
   users: { findById(id: string): Promise<{ id: string } | null> };
-  briefs: Pick<typeof assistantBriefRepository, 'findById' | 'markReady' | 'markFailed' | 'removeEmailSourcedItems' | 'discardComposing'>;
+  briefs: Pick<
+    typeof assistantBriefRepository,
+    'findById' | 'markReady' | 'markFailed' | 'discardComposing' | 'removeEmailSourcedItems'
+  >;
   loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefActivity>;
   /** Whether the call may run: 'ok', or why not (AI access held, or the balance cannot cover it). */
   canCompose(userId: string): Promise<'ok' | 'ai_access_held' | 'insufficient_credits'>;

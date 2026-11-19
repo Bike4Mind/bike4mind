@@ -29,8 +29,8 @@ function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {
       findById: vi.fn().mockResolvedValue(brief()),
       markReady: vi.fn().mockResolvedValue(true),
       markFailed: vi.fn().mockResolvedValue(true),
-      removeEmailSourcedItems: vi.fn().mockResolvedValue(0),
       discardComposing: vi.fn().mockResolvedValue(true),
+      removeEmailSourcedItems: vi.fn().mockResolvedValue(0),
     },
     loadActivity: vi.fn().mockResolvedValue(activeActivity),
     canCompose: vi.fn().mockResolvedValue('ok'),
@@ -47,8 +47,8 @@ function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {
     briefs: {
       markReady: ReturnType<typeof vi.fn>;
       markFailed: ReturnType<typeof vi.fn>;
-      removeEmailSourcedItems: ReturnType<typeof vi.fn>;
       discardComposing: ReturnType<typeof vi.fn>;
+      removeEmailSourcedItems: ReturnType<typeof vi.fn>;
     };
     push: ReturnType<typeof vi.fn>;
     complete: ReturnType<typeof vi.fn>;
