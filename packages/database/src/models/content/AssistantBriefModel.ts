@@ -1,5 +1,5 @@
 import mongoose, { Schema } from 'mongoose';
-import type { BriefDecision, BriefItem, BriefStatus } from '@bike4mind/common';
+import type { BriefDecision, BriefItem, BriefSourceRef, BriefStatus } from '@bike4mind/common';
 
 /**
  * An assistant brief: what happened, what was handled and what needs a decision, composed for one user
@@ -23,9 +23,19 @@ export type IAssistantBrief = {
 
 export type AssistantBriefContent = Pick<IAssistantBrief, 'headline' | 'happened' | 'handled' | 'decisions'>;
 
+function requiredFor(kind: BriefSourceRef['kind']) {
+  return function (this: { kind?: string }) {
+    return this.kind === kind;
+  };
+}
+
 // Every field of the wire item must be declared here: strict mode drops undeclared keys on write.
 const sourceSchema = new Schema(
-  { kind: { type: String, enum: ['email'], required: true }, emailId: { type: String, required: true } },
+  {
+    kind: { type: String, enum: ['email', 'delegation'], required: true },
+    emailId: { type: String, required: requiredFor('email') },
+    delegationId: { type: String, required: requiredFor('delegation') },
+  },
   { _id: false }
 );
 const itemSchema = new Schema(

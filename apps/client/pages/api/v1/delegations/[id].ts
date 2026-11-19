@@ -1,0 +1,23 @@
+/**
+ * GET /api/v1/delegations/{id} - read one delegated item. Another user's item is `404`, like a missing one.
+ */
+import { NotFoundError, getDelegationContract } from '@bike4mind/common';
+import { delegatedItemRepository } from '@bike4mind/database';
+import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { serializeDelegation } from '@server/delegations/serializeDelegation';
+
+const route = nextRouteForContract(getDelegationContract, {
+  // Polling one item should not spend a daily slot per poll; the per-minute burst limit still applies.
+  exemptReadsFromDailyRateLimit: true,
+  recordsActivity: false,
+}).get(async (req, res) => {
+  const item = await delegatedItemRepository.findByIdForUser(req.validatedParams.id, req.user.id);
+  if (!item) throw new NotFoundError('Delegation not found');
+  return res.json(serializeDelegation(item));
+});
+
+export const config = {
+  api: { externalResolver: true },
+};
+
+export default route;

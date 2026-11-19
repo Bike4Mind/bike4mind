@@ -1,4 +1,4 @@
-import type { Brief, BriefItem } from '@bike4mind/common';
+import type { Brief, BriefItem, BriefSourceRef } from '@bike4mind/common';
 import type { IAssistantBrief } from '@bike4mind/database';
 
 /** The wire shape of a stored brief (`BriefSchema`). Internal fields such as the failure reason stay server-side. */
@@ -34,5 +34,11 @@ export function serializeBrief(brief: IAssistantBrief): Brief {
 }
 
 function serializeItem({ id, text, source }: BriefItem): BriefItem {
-  return { id, text, ...(source && { source: { kind: source.kind, emailId: source.emailId } }) };
+  return { id, text, ...(source && { source: serializeSource(source) }) };
+}
+
+function serializeSource(source: BriefSourceRef): BriefSourceRef {
+  return source.kind === 'email'
+    ? { kind: 'email', emailId: source.emailId }
+    : { kind: 'delegation', delegationId: source.delegationId };
 }

@@ -77,6 +77,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/decisions',
   },
+  createDelegation: {
+    method: 'POST',
+    path: '/api/v1/delegations',
+  },
   createEmbeddings: {
     method: 'POST',
     path: '/api/v1/embeddings',
@@ -260,6 +264,10 @@ export const operations = {
   getDataLakeFile: {
     method: 'GET',
     path: '/api/v1/data-lakes/{id}/files/{file_id}',
+  },
+  getDelegation: {
+    method: 'GET',
+    path: '/api/v1/delegations/{id}',
   },
   getFile: {
     method: 'GET',

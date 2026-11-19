@@ -19,6 +19,7 @@ export { getMeContract } from './contracts/me.contract';
 export { getClientConfigContract, getPublicClientConfigContract } from './contracts/clientConfig.contract';
 export { approvePendingActionContract, denyPendingActionContract } from './contracts/pendingActions.contract';
 export { composeBriefContract, listBriefsContract, getBriefContract } from './contracts/briefs.contract';
+export { createDelegationContract, getDelegationContract } from './contracts/delegations.contract';
 export { registerPushTokenContract, unregisterPushTokenContract } from './contracts/pushTokens.contract';
 export { mintPersonaContract, deletePersonaContract } from './contracts/personas.contract';
 export { getCreditBalanceContract } from './contracts/credits.contract';

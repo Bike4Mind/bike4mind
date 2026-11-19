@@ -48,6 +48,7 @@ describe('every EventBridge subscription dead-letters its failures', () => {
       [
         'brief-compose',
         'create-memento',
+        'delegation-process',
         'email-send',
         'notebook-curation-complete-analytics',
         'notebook-curation-start',

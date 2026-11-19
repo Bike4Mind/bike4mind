@@ -3,7 +3,7 @@
   "info": {
     "title": "Bike4Mind API",
     "version": "28.0.0",
-    "description": "Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions that validate requests at runtime, so this spec cannot drift from the implementation - with one documented exception: a `pollResult` schema (see the `x-poll-result` extension) describes a handoff response's outcome on a plain, non-contract endpoint, so it is hand-maintained against that handler rather than runtime-validated, and can drift if the handler changes without a matching schema update.\n\n## Getting started\n1. Create a key in the web app under **Profile > API Keys** (pick a scope preset).\n2. Make a first call: `GET /api/v1/me` with `Authorization: Bearer b4m_live_<key>`. It needs only the `me:read` scope, spends no credits, and returns your identity, plan tier and credit balance.\n3. Read the rest of this page for the behaviour shared across endpoints: rate limits, credits, errors and async jobs.\n\nEndpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), **Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Skills** and **Account**.\n\n## Authentication\nSend an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.\n\n## Scopes\nAPI keys carry `resource:action` scopes. The documented scopes are:\n- `notebooks:read`\n- `notebooks:write`\n- `files:read`\n- `files:write`\n- `ai:generate`\n- `ai:decide`\n- `ai:chat`\n- `projects:read`\n- `projects:write`\n- `agents:read`\n- `agents:write`\n- `me:read`\n- `personas:mint`\n- `marketing-reports:read`\n- `marketing-reports:write`\n- `hearth:read`\n- `hearth:write`\n- `datalake:read`\n- `datalake:write`\n- `datalake:share`\n- `datalake:query`\n- `overwatch:read`\n- `skills:read`\n- `skills:write`\n- `skills:review`\n- `bob:read`\n- `bob:run`\n- `slack:post`\n- `api-keys:manage`\n- `ai:end-user-id`\n- `artifacts:publish`\n\nPer-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no `x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).\n\n## Rate limits\nEach API key has a per-minute and a per-day request ceiling, by default 60 requests/minute and 1000 requests/day (a key can be minted with its own ceilings). Responses from rate-limited operations carry the current state of both windows (the streaming completions endpoint sends them only on an API-key `429`):\n- `X-RateLimit-Limit-Minute`\n- `X-RateLimit-Remaining-Minute`\n- `X-RateLimit-Reset-Minute`\n- `X-RateLimit-Limit-Day`\n- `X-RateLimit-Remaining-Day`\n- `X-RateLimit-Reset-Day`\n\nReset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait that long before retrying. This includes `POST /api/ai/v1/completions`, which rate-limits before it opens its event stream. `GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/image-models`, `GET /api/v1/video-models`, `GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations` and `/api/v1/music-generations`, and the poll endpoints listed under Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches the limiter and carries no rate-limit headers.\n\n## Credits\nGeneration endpoints spend credits from the balance shown at `credits.balance` on `GET /api/v1/me` (the caller's personal ledger). A key without `me:read` reads the same number from `GET /api/v1/credits`, which accepts `ai:chat`, `ai:generate` and `ai:decide` too. A synchronous call that cannot be paid for fails with `422` and `errorCode: \"insufficient_credits\"`. On a queued job the same code arrives on the polled result instead (see Async jobs), so check both places.\n\n## Errors\nError bodies use one envelope, the `ErrorResponse` schema: `{ \"error\": string, \"request_id\"?: string }`, plus an `errorCode` on failures a client is expected to branch on (`insufficient_credits`, `spend_cap_exceeded`, `provider_not_configured`, ...). A deprecated `name` field may also appear until its sunset date; do not rely on it. Branch on the HTTP status and `errorCode`, never on the `error` prose. A few operations declare a bespoke error shape for a specific status (e.g. the `500` of the tools endpoint and the `413` of text-to-speech); each operation lists the statuses it can return and the body for each.\n\nThe shared statuses: a malformed JSON body is `400`, a body that fails schema validation is `422`, a missing or invalid credential is `401`, a valid key without the required scope is `403`, an unknown resource is `404` and an exceeded rate limit is `429`. A `401` carrying `errorCode: \"provider_rejected\"` means the upstream provider refused the provider key the request used - the platform key by default, or your own stored provider key when you configured one - so your API key itself was accepted.\n\n## Async jobs\nWork that is not provably fast is queued and polled rather than held open:\n- **Chat** (`POST /api/chat`) and **image generation/editing** (`POST /api/v1/image-generations`, `POST /api/v1/image-edits`) return a quest. Poll `GET /api/v1/quests/{id}` until `status` is `done` or `stopped`; chat text arrives in `reply`, generated images in `images`, edited images in `files[].url`. Check for failure before reading results: a job that ends `done` with `type: \"error\"` failed (the reason is in `reply`), and a job that ends `stopped` also failed even when `type` is not `\"error\"` (its `reply` carries an explanation, not an answer). The outcome schema of each of these quest handoffs is linked from its response via the `x-poll-result` extension. Chat also accepts `wait: true` to block until the reply is ready.\n- **Agent runs** (`POST /api/v1/agent-executions`) return `202`. Poll `GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.\n- **Video generation** (`POST /api/v1/video-generations`) returns `202`. Poll `GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **Music generation** (`POST /api/v1/music-generations`) returns `202`. Poll `GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **Scene composition** (`POST /api/v1/scene-compositions`) returns `202`. Poll `GET /api/v1/scene-compositions/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **Briefs** (`POST /api/v1/briefs`) return `202`. Poll `GET /api/v1/briefs/{id}` until `status` is `ready` or `failed`.\n- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.\n- **Audio** endpoints are synchronous and return the result directly. A text-to-speech (`POST /api/ai/tts`) or sound-effect (`POST /api/ai/sound-effects`) clip that outlasts the request answers `202` with its job resource instead; it cannot be polled yet, and unless `preview` was set the clip is saved to the file browser when it finishes.\n- **Transcriptions** (`POST /api/v1/transcriptions`) are synchronous too: after the upload, one call returns the text. Long audio can outlast the request timeout and fail with a `504`; see that endpoint for the limit.\n\nPoll with a backoff of a few seconds: each poll counts against the per-minute limit.\n\n## Versioning\nNew endpoints live under `/api/v1`. Published endpoints are forward-only: a live URL is never renamed or removed, and a breaking change ships as a new path while the old one keeps working. Nothing published is removed silently - a deprecated field or endpoint is marked `deprecated` in this spec with a sunset date in its description, and keeps working until that date.\n\n## CORS\nThe spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints themselves are called server-to-server with a secret key and are not intended for browser CORS use.\n\n## Correlation\nEvery response carries an `X-Request-ID` header (echoed as `request_id`/`requestId` in bodies and events) for log correlation.",
+    "description": "Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions that validate requests at runtime, so this spec cannot drift from the implementation - with one documented exception: a `pollResult` schema (see the `x-poll-result` extension) describes a handoff response's outcome on a plain, non-contract endpoint, so it is hand-maintained against that handler rather than runtime-validated, and can drift if the handler changes without a matching schema update.\n\n## Getting started\n1. Create a key in the web app under **Profile > API Keys** (pick a scope preset).\n2. Make a first call: `GET /api/v1/me` with `Authorization: Bearer b4m_live_<key>`. It needs only the `me:read` scope, spends no credits, and returns your identity, plan tier and credit balance.\n3. Read the rest of this page for the behaviour shared across endpoints: rate limits, credits, errors and async jobs.\n\nEndpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), **Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Skills** and **Account**.\n\n## Authentication\nSend an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.\n\n## Scopes\nAPI keys carry `resource:action` scopes. The documented scopes are:\n- `notebooks:read`\n- `notebooks:write`\n- `files:read`\n- `files:write`\n- `ai:generate`\n- `ai:decide`\n- `ai:chat`\n- `projects:read`\n- `projects:write`\n- `agents:read`\n- `agents:write`\n- `me:read`\n- `personas:mint`\n- `marketing-reports:read`\n- `marketing-reports:write`\n- `hearth:read`\n- `hearth:write`\n- `datalake:read`\n- `datalake:write`\n- `datalake:share`\n- `datalake:query`\n- `overwatch:read`\n- `skills:read`\n- `skills:write`\n- `skills:review`\n- `bob:read`\n- `bob:run`\n- `slack:post`\n- `api-keys:manage`\n- `ai:end-user-id`\n- `artifacts:publish`\n\nPer-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no `x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).\n\n## Rate limits\nEach API key has a per-minute and a per-day request ceiling, by default 60 requests/minute and 1000 requests/day (a key can be minted with its own ceilings). Responses from rate-limited operations carry the current state of both windows (the streaming completions endpoint sends them only on an API-key `429`):\n- `X-RateLimit-Limit-Minute`\n- `X-RateLimit-Remaining-Minute`\n- `X-RateLimit-Reset-Minute`\n- `X-RateLimit-Limit-Day`\n- `X-RateLimit-Remaining-Day`\n- `X-RateLimit-Reset-Day`\n\nReset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait that long before retrying. This includes `POST /api/ai/v1/completions`, which rate-limits before it opens its event stream. `GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/image-models`, `GET /api/v1/video-models`, `GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations` and `/api/v1/music-generations`, and the poll endpoints listed under Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches the limiter and carries no rate-limit headers.\n\n## Credits\nGeneration endpoints spend credits from the balance shown at `credits.balance` on `GET /api/v1/me` (the caller's personal ledger). A key without `me:read` reads the same number from `GET /api/v1/credits`, which accepts `ai:chat`, `ai:generate` and `ai:decide` too. A synchronous call that cannot be paid for fails with `422` and `errorCode: \"insufficient_credits\"`. On a queued job the same code arrives on the polled result instead (see Async jobs), so check both places.\n\n## Errors\nError bodies use one envelope, the `ErrorResponse` schema: `{ \"error\": string, \"request_id\"?: string }`, plus an `errorCode` on failures a client is expected to branch on (`insufficient_credits`, `spend_cap_exceeded`, `provider_not_configured`, ...). A deprecated `name` field may also appear until its sunset date; do not rely on it. Branch on the HTTP status and `errorCode`, never on the `error` prose. A few operations declare a bespoke error shape for a specific status (e.g. the `500` of the tools endpoint and the `413` of text-to-speech); each operation lists the statuses it can return and the body for each.\n\nThe shared statuses: a malformed JSON body is `400`, a body that fails schema validation is `422`, a missing or invalid credential is `401`, a valid key without the required scope is `403`, an unknown resource is `404` and an exceeded rate limit is `429`. A `401` carrying `errorCode: \"provider_rejected\"` means the upstream provider refused the provider key the request used - the platform key by default, or your own stored provider key when you configured one - so your API key itself was accepted.\n\n## Async jobs\nWork that is not provably fast is queued and polled rather than held open:\n- **Chat** (`POST /api/chat`) and **image generation/editing** (`POST /api/v1/image-generations`, `POST /api/v1/image-edits`) return a quest. Poll `GET /api/v1/quests/{id}` until `status` is `done` or `stopped`; chat text arrives in `reply`, generated images in `images`, edited images in `files[].url`. Check for failure before reading results: a job that ends `done` with `type: \"error\"` failed (the reason is in `reply`), and a job that ends `stopped` also failed even when `type` is not `\"error\"` (its `reply` carries an explanation, not an answer). The outcome schema of each of these quest handoffs is linked from its response via the `x-poll-result` extension. Chat also accepts `wait: true` to block until the reply is ready.\n- **Agent runs** (`POST /api/v1/agent-executions`) return `202`. Poll `GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.\n- **Video generation** (`POST /api/v1/video-generations`) returns `202`. Poll `GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **Music generation** (`POST /api/v1/music-generations`) returns `202`. Poll `GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **Scene composition** (`POST /api/v1/scene-compositions`) returns `202`. Poll `GET /api/v1/scene-compositions/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **Briefs** (`POST /api/v1/briefs`) return `202`. Poll `GET /api/v1/briefs/{id}` until `status` is `ready` or `failed`.\n- **Delegations** (`POST /api/v1/delegations`) return `202`. Poll `GET /api/v1/delegations/{id}` until `status` is `handled`, `needs_decision` or `failed`.\n- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.\n- **Audio** endpoints are synchronous and return the result directly. A text-to-speech (`POST /api/ai/tts`) or sound-effect (`POST /api/ai/sound-effects`) clip that outlasts the request answers `202` with its job resource instead; it cannot be polled yet, and unless `preview` was set the clip is saved to the file browser when it finishes.\n- **Transcriptions** (`POST /api/v1/transcriptions`) are synchronous too: after the upload, one call returns the text. Long audio can outlast the request timeout and fail with a `504`; see that endpoint for the limit.\n\nPoll with a backoff of a few seconds: each poll counts against the per-minute limit.\n\n## Versioning\nNew endpoints live under `/api/v1`. Published endpoints are forward-only: a live URL is never renamed or removed, and a breaking change ships as a new path while the old one keeps working. Nothing published is removed silently - a deprecated field or endpoint is marked `deprecated` in this spec with a sunset date in its description, and keeps working until that date.\n\n## CORS\nThe spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints themselves are called server-to-server with a secret key and are not intended for browser CORS use.\n\n## Correlation\nEvery response carries an `X-Request-ID` header (echoed as `request_id`/`requestId` in bodies and events) for log correlation.",
     "contact": {
       "name": "Bike4Mind",
       "url": "https://your-deployment.example.com"
@@ -7803,23 +7803,47 @@
                   "maxLength": 400
                 },
                 "source": {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "enum": [
-                        "email"
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "email"
+                          ]
+                        },
+                        "emailId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "The ingested email the item was triaged from."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "emailId"
                       ]
                     },
-                    "emailId": {
-                      "type": "string",
-                      "minLength": 1,
-                      "description": "The ingested email the item was triaged from."
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "delegation"
+                          ]
+                        },
+                        "delegationId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "The item you delegated; read it with `GET /api/v1/delegations/{id}`."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "delegationId"
+                      ]
                     }
-                  },
-                  "required": [
-                    "kind",
-                    "emailId"
                   ],
                   "description": "The record the item came from, when it was not agent activity."
                 }
@@ -7847,23 +7871,47 @@
                   "maxLength": 400
                 },
                 "source": {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "enum": [
-                        "email"
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "email"
+                          ]
+                        },
+                        "emailId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "The ingested email the item was triaged from."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "emailId"
                       ]
                     },
-                    "emailId": {
-                      "type": "string",
-                      "minLength": 1,
-                      "description": "The ingested email the item was triaged from."
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "delegation"
+                          ]
+                        },
+                        "delegationId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "The item you delegated; read it with `GET /api/v1/delegations/{id}`."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "delegationId"
+                      ]
                     }
-                  },
-                  "required": [
-                    "kind",
-                    "emailId"
                   ],
                   "description": "The record the item came from, when it was not agent activity."
                 }
@@ -7891,23 +7939,47 @@
                   "maxLength": 400
                 },
                 "source": {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "enum": [
-                        "email"
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "email"
+                          ]
+                        },
+                        "emailId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "The ingested email the item was triaged from."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "emailId"
                       ]
                     },
-                    "emailId": {
-                      "type": "string",
-                      "minLength": 1,
-                      "description": "The ingested email the item was triaged from."
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "delegation"
+                          ]
+                        },
+                        "delegationId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "The item you delegated; read it with `GET /api/v1/delegations/{id}`."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "delegationId"
+                      ]
                     }
-                  },
-                  "required": [
-                    "kind",
-                    "emailId"
                   ],
                   "description": "The record the item came from, when it was not agent activity."
                 },
@@ -8046,23 +8118,47 @@
                         "maxLength": 400
                       },
                       "source": {
-                        "type": "object",
-                        "properties": {
-                          "kind": {
-                            "type": "string",
-                            "enum": [
-                              "email"
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "email"
+                                ]
+                              },
+                              "emailId": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "The ingested email the item was triaged from."
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "emailId"
                             ]
                           },
-                          "emailId": {
-                            "type": "string",
-                            "minLength": 1,
-                            "description": "The ingested email the item was triaged from."
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "delegation"
+                                ]
+                              },
+                              "delegationId": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "The item you delegated; read it with `GET /api/v1/delegations/{id}`."
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "delegationId"
+                            ]
                           }
-                        },
-                        "required": [
-                          "kind",
-                          "emailId"
                         ],
                         "description": "The record the item came from, when it was not agent activity."
                       }
@@ -8090,23 +8186,47 @@
                         "maxLength": 400
                       },
                       "source": {
-                        "type": "object",
-                        "properties": {
-                          "kind": {
-                            "type": "string",
-                            "enum": [
-                              "email"
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "email"
+                                ]
+                              },
+                              "emailId": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "The ingested email the item was triaged from."
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "emailId"
                             ]
                           },
-                          "emailId": {
-                            "type": "string",
-                            "minLength": 1,
-                            "description": "The ingested email the item was triaged from."
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "delegation"
+                                ]
+                              },
+                              "delegationId": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "The item you delegated; read it with `GET /api/v1/delegations/{id}`."
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "delegationId"
+                            ]
                           }
-                        },
-                        "required": [
-                          "kind",
-                          "emailId"
                         ],
                         "description": "The record the item came from, when it was not agent activity."
                       }
@@ -8134,23 +8254,47 @@
                         "maxLength": 400
                       },
                       "source": {
-                        "type": "object",
-                        "properties": {
-                          "kind": {
-                            "type": "string",
-                            "enum": [
-                              "email"
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "email"
+                                ]
+                              },
+                              "emailId": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "The ingested email the item was triaged from."
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "emailId"
                             ]
                           },
-                          "emailId": {
-                            "type": "string",
-                            "minLength": 1,
-                            "description": "The ingested email the item was triaged from."
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "delegation"
+                                ]
+                              },
+                              "delegationId": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "The item you delegated; read it with `GET /api/v1/delegations/{id}`."
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "delegationId"
+                            ]
                           }
-                        },
-                        "required": [
-                          "kind",
-                          "emailId"
                         ],
                         "description": "The record the item came from, when it was not agent activity."
                       },
@@ -8291,23 +8435,47 @@
                   "maxLength": 400
                 },
                 "source": {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "enum": [
-                        "email"
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "email"
+                          ]
+                        },
+                        "emailId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "The ingested email the item was triaged from."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "emailId"
                       ]
                     },
-                    "emailId": {
-                      "type": "string",
-                      "minLength": 1,
-                      "description": "The ingested email the item was triaged from."
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "delegation"
+                          ]
+                        },
+                        "delegationId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "The item you delegated; read it with `GET /api/v1/delegations/{id}`."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "delegationId"
+                      ]
                     }
-                  },
-                  "required": [
-                    "kind",
-                    "emailId"
                   ],
                   "description": "The record the item came from, when it was not agent activity."
                 }
@@ -8335,23 +8503,47 @@
                   "maxLength": 400
                 },
                 "source": {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "enum": [
-                        "email"
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "email"
+                          ]
+                        },
+                        "emailId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "The ingested email the item was triaged from."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "emailId"
                       ]
                     },
-                    "emailId": {
-                      "type": "string",
-                      "minLength": 1,
-                      "description": "The ingested email the item was triaged from."
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "delegation"
+                          ]
+                        },
+                        "delegationId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "The item you delegated; read it with `GET /api/v1/delegations/{id}`."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "delegationId"
+                      ]
                     }
-                  },
-                  "required": [
-                    "kind",
-                    "emailId"
                   ],
                   "description": "The record the item came from, when it was not agent activity."
                 }
@@ -8379,23 +8571,47 @@
                   "maxLength": 400
                 },
                 "source": {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "enum": [
-                        "email"
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "email"
+                          ]
+                        },
+                        "emailId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "The ingested email the item was triaged from."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "emailId"
                       ]
                     },
-                    "emailId": {
-                      "type": "string",
-                      "minLength": 1,
-                      "description": "The ingested email the item was triaged from."
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "delegation"
+                          ]
+                        },
+                        "delegationId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "The item you delegated; read it with `GET /api/v1/delegations/{id}`."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "delegationId"
+                      ]
                     }
-                  },
-                  "required": [
-                    "kind",
-                    "emailId"
                   ],
                   "description": "The record the item came from, when it was not agent activity."
                 },
@@ -8470,6 +8686,186 @@
           "happened",
           "handled",
           "decisions"
+        ]
+      },
+      "createDelegationResponse202": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "handled",
+              "needs_decision",
+              "failed"
+            ],
+            "description": "`pending` while the assistant works on it; `handled` when it is done; `needs_decision` when it needs your answer; `failed` when it could not be handled."
+          },
+          "intent": {
+            "type": "string"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "file_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "result": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 400,
+            "description": "What the assistant did, or the decision it needs; null while pending or after a failure."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "ISO 8601 timestamp."
+          },
+          "settled_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO 8601 timestamp; null while pending."
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "intent",
+          "url",
+          "text",
+          "file_ids",
+          "result",
+          "created_at",
+          "settled_at"
+        ]
+      },
+      "createDelegationRequest": {
+        "type": "object",
+        "properties": {
+          "intent": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^[^\\r\\n]*\\S[^\\r\\n]*$",
+            "description": "One line telling the assistant what to do with the item, e.g. \"summarize for the team\"."
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "pattern": "^https?:\\/\\/\\S+$/i",
+            "description": "A shared link. The assistant reads the page."
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8000,
+            "description": "Shared plain text."
+          },
+          "file_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 10,
+            "description": "Files you uploaded with `POST /api/v1/files`. Each must be yours."
+          }
+        },
+        "required": [
+          "intent"
+        ],
+        "additionalProperties": false,
+        "example": {
+          "intent": "Summarize this for the team",
+          "url": "https://example.com/report"
+        }
+      },
+      "getDelegationResponse200": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "handled",
+              "needs_decision",
+              "failed"
+            ],
+            "description": "`pending` while the assistant works on it; `handled` when it is done; `needs_decision` when it needs your answer; `failed` when it could not be handled."
+          },
+          "intent": {
+            "type": "string"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "file_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "result": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 400,
+            "description": "What the assistant did, or the decision it needs; null while pending or after a failure."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "ISO 8601 timestamp."
+          },
+          "settled_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO 8601 timestamp; null while pending."
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "intent",
+          "url",
+          "text",
+          "file_ids",
+          "result",
+          "created_at",
+          "settled_at"
         ]
       },
       "registerPushTokenRequest": {
@@ -37504,6 +37900,429 @@
             "lang": "Python",
             "label": "requests",
             "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/briefs/<id>\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/delegations": {
+      "post": {
+        "operationId": "createDelegation",
+        "summary": "Delegate an item to the assistant",
+        "description": "Hands a link, some text and/or files you uploaded to the assistant with one line of intent (\"handle this\", \"summarize for the team\"). Send at least one of `url`, `text` or `file_ids`; with none the call is a `422`. The work is asynchronous: the response is the delegation in `pending` status, and polling `GET /api/v1/delegations/{id}` shows it settle as `handled`, `needs_decision` or `failed`. Either way it appears in your next brief: still-pending items as in progress, settled ones once. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/createDelegationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted; the assistant is working on it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/createDelegationResponse202"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A `file_ids` entry names no file of yours. Another user's file is reported the same way.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The work could not be dispatched. The delegation is marked `failed`, so a retry is safe.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:chat",
+          "ai:generate"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/delegations\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"intent\": \"Summarize this for the team\",\n  \"url\": \"https://example.com/report\"\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/delegations\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"intent\": \"Summarize this for the team\",\n  \"url\": \"https://example.com/report\"\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/delegations\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"intent\": \"Summarize this for the team\",\n        \"url\": \"https://example.com/report\"\n    },\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/delegations/{id}": {
+      "get": {
+        "operationId": "getDelegation",
+        "summary": "Get a delegation",
+        "description": "Reads one delegation and its outcome. Only the user who created it can read it; anyone else gets `404`, exactly like a missing one.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The delegation id returned by `POST /api/v1/delegations`."
+            },
+            "required": true,
+            "description": "The delegation id returned by `POST /api/v1/delegations`.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The delegation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/getDelegationResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such delegation, or it is not yours.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:chat",
+          "ai:generate"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X GET \"https://your-deployment.example.com/api/v1/delegations/<id>\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/delegations/<id>\", {\n  method: \"GET\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/delegations/<id>\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
           }
         ]
       }
