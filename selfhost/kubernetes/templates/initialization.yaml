@@ -1,3 +1,4 @@
+{{- if eq .Values.mode "full" }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -28,3 +29,4 @@ spec:
         - name: scripts
           configMap:
             name: {{ .Release.Name }}-scripts
+{{- end }}
