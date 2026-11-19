@@ -594,6 +594,46 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/delegations': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Delegate an item to the assistant
+     * @description Hands a link, some text and/or files you uploaded to the assistant with one line of intent ("handle this", "summarize for the team"). Send at least one of `url`, `text` or `file_ids`; with none the call is a `422`. The work is asynchronous: the response is the delegation in `pending` status, and polling `GET /api/v1/delegations/{id}` shows it settle as `handled`, `needs_decision` or `failed`. Either way it appears in your next brief: still-pending items as in progress, settled ones once. Authenticate with an API key (`b4m_live_`) or a JWT.
+     */
+    post: operations['createDelegation'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/delegations/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get a delegation
+     * @description Reads one delegation and its outcome. Only the user who created it can read it; anyone else gets `404`, exactly like a missing one.
+     */
+    get: operations['getDelegation'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/push-tokens': {
     parameters: {
       query?: never;
@@ -5775,36 +5815,57 @@ export interface components {
         id: string;
         text: string;
         /** @description The record the item came from, when it was not agent activity. */
-        source?: {
-          /** @enum {string} */
-          kind: 'email';
-          /** @description The ingested email the item was triaged from. */
-          emailId: string;
-        };
+        source?:
+          | {
+              /** @enum {string} */
+              kind: 'email';
+              /** @description The ingested email the item was triaged from. */
+              emailId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'delegation';
+              /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+              delegationId: string;
+            };
       }[];
       handled: {
         /** @description Stable within the brief. */
         id: string;
         text: string;
         /** @description The record the item came from, when it was not agent activity. */
-        source?: {
-          /** @enum {string} */
-          kind: 'email';
-          /** @description The ingested email the item was triaged from. */
-          emailId: string;
-        };
+        source?:
+          | {
+              /** @enum {string} */
+              kind: 'email';
+              /** @description The ingested email the item was triaged from. */
+              emailId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'delegation';
+              /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+              delegationId: string;
+            };
       }[];
       decisions: {
         /** @description Stable within the brief. */
         id: string;
         text: string;
         /** @description The record the item came from, when it was not agent activity. */
-        source?: {
-          /** @enum {string} */
-          kind: 'email';
-          /** @description The ingested email the item was triaged from. */
-          emailId: string;
-        };
+        source?:
+          | {
+              /** @enum {string} */
+              kind: 'email';
+              /** @description The ingested email the item was triaged from. */
+              emailId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'delegation';
+              /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+              delegationId: string;
+            };
         /** @description Present when the decision is an agent approval. `state` reflects the approval at fetch time; the pending-actions endpoints stay authoritative for a decision racing this read. */
         approval?: {
           questId: string;
@@ -5860,36 +5921,57 @@ export interface components {
           id: string;
           text: string;
           /** @description The record the item came from, when it was not agent activity. */
-          source?: {
-            /** @enum {string} */
-            kind: 'email';
-            /** @description The ingested email the item was triaged from. */
-            emailId: string;
-          };
+          source?:
+            | {
+                /** @enum {string} */
+                kind: 'email';
+                /** @description The ingested email the item was triaged from. */
+                emailId: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'delegation';
+                /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+                delegationId: string;
+              };
         }[];
         handled: {
           /** @description Stable within the brief. */
           id: string;
           text: string;
           /** @description The record the item came from, when it was not agent activity. */
-          source?: {
-            /** @enum {string} */
-            kind: 'email';
-            /** @description The ingested email the item was triaged from. */
-            emailId: string;
-          };
+          source?:
+            | {
+                /** @enum {string} */
+                kind: 'email';
+                /** @description The ingested email the item was triaged from. */
+                emailId: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'delegation';
+                /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+                delegationId: string;
+              };
         }[];
         decisions: {
           /** @description Stable within the brief. */
           id: string;
           text: string;
           /** @description The record the item came from, when it was not agent activity. */
-          source?: {
-            /** @enum {string} */
-            kind: 'email';
-            /** @description The ingested email the item was triaged from. */
-            emailId: string;
-          };
+          source?:
+            | {
+                /** @enum {string} */
+                kind: 'email';
+                /** @description The ingested email the item was triaged from. */
+                emailId: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'delegation';
+                /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+                delegationId: string;
+              };
           /** @description Present when the decision is an agent approval. `state` reflects the approval at fetch time; the pending-actions endpoints stay authoritative for a decision racing this read. */
           approval?: {
             questId: string;
@@ -5944,36 +6026,57 @@ export interface components {
         id: string;
         text: string;
         /** @description The record the item came from, when it was not agent activity. */
-        source?: {
-          /** @enum {string} */
-          kind: 'email';
-          /** @description The ingested email the item was triaged from. */
-          emailId: string;
-        };
+        source?:
+          | {
+              /** @enum {string} */
+              kind: 'email';
+              /** @description The ingested email the item was triaged from. */
+              emailId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'delegation';
+              /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+              delegationId: string;
+            };
       }[];
       handled: {
         /** @description Stable within the brief. */
         id: string;
         text: string;
         /** @description The record the item came from, when it was not agent activity. */
-        source?: {
-          /** @enum {string} */
-          kind: 'email';
-          /** @description The ingested email the item was triaged from. */
-          emailId: string;
-        };
+        source?:
+          | {
+              /** @enum {string} */
+              kind: 'email';
+              /** @description The ingested email the item was triaged from. */
+              emailId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'delegation';
+              /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+              delegationId: string;
+            };
       }[];
       decisions: {
         /** @description Stable within the brief. */
         id: string;
         text: string;
         /** @description The record the item came from, when it was not agent activity. */
-        source?: {
-          /** @enum {string} */
-          kind: 'email';
-          /** @description The ingested email the item was triaged from. */
-          emailId: string;
-        };
+        source?:
+          | {
+              /** @enum {string} */
+              kind: 'email';
+              /** @description The ingested email the item was triaged from. */
+              emailId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'delegation';
+              /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+              delegationId: string;
+            };
         /** @description Present when the decision is an agent approval. `state` reflects the approval at fetch time; the pending-actions endpoints stay authoritative for a decision racing this read. */
         approval?: {
           questId: string;
@@ -6119,6 +6222,58 @@ export interface components {
       briefDecisions: number;
       /** @description The latest ready brief `briefDecisions` comes from; null when there is none. */
       briefId: string | null;
+    };
+    createDelegationResponse202: {
+      id: string;
+      /**
+       * @description `pending` while the assistant works on it; `handled` when it is done; `needs_decision` when it needs your answer; `failed` when it could not be handled.
+       * @enum {string}
+       */
+      status: 'pending' | 'handled' | 'needs_decision' | 'failed';
+      intent: string;
+      url: string | null;
+      text: string | null;
+      file_ids: string[];
+      /** @description What the assistant did, or the decision it needs; null while pending or after a failure. */
+      result: string | null;
+      /** @description ISO 8601 timestamp. */
+      created_at: string;
+      /** @description ISO 8601 timestamp; null while pending. */
+      settled_at: string | null;
+    };
+    /**
+     * @example {
+     *       "intent": "Summarize this for the team",
+     *       "url": "https://example.com/report"
+     *     }
+     */
+    createDelegationRequest: {
+      /** @description One line telling the assistant what to do with the item, e.g. "summarize for the team". */
+      intent: string;
+      /** @description A shared link. The assistant reads the page. */
+      url?: string;
+      /** @description Shared plain text. */
+      text?: string;
+      /** @description Files you uploaded with `POST /api/v1/files`. Each must be yours. */
+      file_ids?: string[];
+    };
+    getDelegationResponse200: {
+      id: string;
+      /**
+       * @description `pending` while the assistant works on it; `handled` when it is done; `needs_decision` when it needs your answer; `failed` when it could not be handled.
+       * @enum {string}
+       */
+      status: 'pending' | 'handled' | 'needs_decision' | 'failed';
+      intent: string;
+      url: string | null;
+      text: string | null;
+      file_ids: string[];
+      /** @description What the assistant did, or the decision it needs; null while pending or after a failure. */
+      result: string | null;
+      /** @description ISO 8601 timestamp. */
+      created_at: string;
+      /** @description ISO 8601 timestamp; null while pending. */
+      settled_at: string | null;
     };
     /**
      * @example {
@@ -19636,6 +19791,226 @@ export interface operations {
           'X-Request-ID'?: string;
           /** @description The methods this path serves. GET implies HEAD. */
           Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  createDelegation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['createDelegationRequest'];
+      };
+    };
+    responses: {
+      /** @description Accepted; the assistant is working on it. */
+      202: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createDelegationResponse202'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description A `file_ids` entry names no file of yours. Another user's file is reported the same way. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The work could not be dispatched. The delegation is marked `failed`, so a retry is safe. */
+      502: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getDelegation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The delegation id returned by `POST /api/v1/delegations`. */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The delegation. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getDelegationResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No such delegation, or it is not yours. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
           [name: string]: unknown;
         };
         content: {
