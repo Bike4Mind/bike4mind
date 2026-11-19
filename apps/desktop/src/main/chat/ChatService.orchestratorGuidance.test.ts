@@ -43,9 +43,10 @@ describe('ORCHESTRATOR_GUIDANCE', () => {
 
   it('says agents share this checkout unless isolated, and that the parent is woken, not left polling', () => {
     const text = build(['/work'], true, true);
-    expect(text).toContain('Agents work in this working directory by default');
-    expect(text).toContain('there is nothing to merge or copy');
-    expect(text).toContain('Pass isolation "worktree" only for an agent whose files overlap');
+    expect(text).toContain('Choose where each agent works by how its work lands');
+    expect(text).toContain('nothing to\n  merge or copy');
+    expect(text).toContain('Work that lands on its own, as its own branch or pull request');
+    expect(text).toContain('Do not merge it into this branch');
     expect(text).toContain('git merge of its branch');
     expect(text).toContain('never by retyping its files');
     expect(text).toContain('Never create worktrees or branches');

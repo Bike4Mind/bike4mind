@@ -327,8 +327,9 @@ export const delegatedSpawnSchema = (modelHint: string | null): ToolSchema => ({
         enum: ['shared', 'worktree'],
         description:
           'shared (the default): the agent works in this working directory, so its edits are already ' +
-          'here when it finishes. worktree: its own git worktree and branch, which you merge afterwards; ' +
-          'only for agents whose files overlap another running agent, or work you may want to discard.',
+          'here when it finishes; for pieces of one change. worktree: its own git worktree and branch; ' +
+          'for work that lands on its own branch or pull request, files that overlap another running ' +
+          'agent, or work you may want to discard.',
       },
       ...(modelHint ? { requested_model_id: { type: 'string', description: modelHint } } : {}),
       contract: z.toJSONSchema(taskContractSchema, { unrepresentable: 'any' }),
