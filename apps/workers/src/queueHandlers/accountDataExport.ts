@@ -620,7 +620,7 @@ async function writeModelRecords(
 }
 
 /**
- * The registry walk (apps/client/server/dataSubject): each model goes to a scratch file first, so a
+ * The registry walk (packages/server-utils/src/dataSubject): each model goes to a scratch file first, so a
  * model that fails is listed as omitted without corrupting the zip entry being written.
  */
 async function writeRegistryRecords(
