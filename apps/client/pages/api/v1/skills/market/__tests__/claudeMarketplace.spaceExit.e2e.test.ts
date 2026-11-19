@@ -330,6 +330,30 @@ describe('Space admin review', () => {
     });
     await SkillListing.updateOne({ _id: listing._id }, { $set: { pendingVersionId: version.id, pendingVersion: 1 } });
 
+    const stranger = await newUser('stranger');
+    const otherSpace = await Space.create({ name: 'globex', ownerUserId: stranger.id, members: [] });
+    const otherListing = await SkillListing.create({
+      sourceSkillId: new mongoose.Types.ObjectId().toString(),
+      authorUserId: stranger.id,
+      visibility: 'space',
+      spaceId: String(otherSpace._id),
+      status: 'in_review',
+      name: 'other-held-skill',
+      description: 'd',
+    });
+    const otherVersion = await SkillListingVersion.create({
+      listingId: otherListing.id,
+      version: 1,
+      snapshot: { name: 'other-held-skill', description: 'd', body: 'b' },
+      contentHash: 'h2',
+      scanStatus: 'passed',
+      reviewStatus: 'pending',
+    });
+    await SkillListing.updateOne(
+      { _id: otherListing._id },
+      { $set: { pendingVersionId: otherVersion.id, pendingVersion: 1 } }
+    );
+
     const asAdmin = await call(reviewQueueHandler, admin.id, {});
     expect(asAdmin.statusCode).toBe(200);
     expect((asAdmin.res._getJSONData() as { data: { version: { id: string } }[] }).data.map(r => r.version.id)).toEqual(
