@@ -3,6 +3,24 @@
 Everything below needs a physical iPhone, a signed build, or a deployed backend, so none of it runs in the simulator or in
 CI. Work through it before the first TestFlight build and again before each release. Mark each item with the build and date.
 
+## Personal device with a free Apple ID
+
+A free personal team signs none of Push, Associated Domains, App Groups or Keychain Sharing, and its bundle ids must be
+unique. Set that up once in a gitignored file; no tracked file changes, so `git pull` never conflicts with it:
+
+```bash
+cp Config/Local.xcconfig.example Config/Local.xcconfig
+```
+
+Edit three values in `Config/Local.xcconfig`: `DEVELOPMENT_TEAM` (your personal team id), `B4M_APP_BUNDLE_ID` (a unique id; the
+widgets and share extension ids derive from it) and leave the three `*_ENTITLEMENTS` lines pointing at
+`Config/Entitlements/*.personal.entitlements` (empty variants). Then build and run the `Bike4Mind` scheme on your phone.
+
+What to expect: the app keeps its refresh token in an app-private keychain item, the share extension reports it is signed out,
+widgets show placeholders, and universal links and push do not work. Production sign-in needs the signed Associated Domains
+capability, so point a personal build at a non-production server (see the README "Sign-in callback" table). With no
+`Local.xcconfig` the defaults are the team/CI values, unchanged.
+
 ## Prerequisites (Apple Developer portal and backend)
 
 - [ ] Apple Developer team id configured (`IOS_TEAM_ID` / `DEVELOPMENT_TEAM`) on a paid team, automatic signing on for the app and both extensions.
