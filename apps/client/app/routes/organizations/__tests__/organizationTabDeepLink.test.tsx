@@ -273,7 +273,9 @@ describe('organization detail page - ?tab= deep link', () => {
     expect(selectedTabName()).toBe('Overview');
     expect(screen.queryByRole('tab', { name: 'Settings' })).toBeNull();
     expect(screen.queryByTestId('model-policy-editor')).toBeNull();
-    expect(screen.queryByTestId('organization-tab-denied-notice')).toBeNull();
+    expect(screen.getByTestId('organization-tab-denied-notice').textContent).toBe(
+      'Your account cannot open Settings. Ask the team owner if you need access.'
+    );
   });
 
   it('shows the policy editor to a platform administrator without requiring an organization ACL row', () => {
