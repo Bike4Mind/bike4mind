@@ -107,6 +107,18 @@ describe('POST /api/admin/system-health/test-email', () => {
     expect(h.audit).not.toHaveBeenCalled();
   });
 
+  it('returns 400 naming the problem when no address is given and the admin has none on file', async () => {
+    const res = await call({}, { email: undefined });
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData()).toEqual({
+      success: false,
+      error: 'No email address provided and user has no email on file.',
+    });
+    expect(h.sendLiveTestEmail).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
   it('returns 500 with a generic error when the live send throws', async () => {
     h.sendLiveTestEmail.mockRejectedValue(new Error('invoke denied'));
 

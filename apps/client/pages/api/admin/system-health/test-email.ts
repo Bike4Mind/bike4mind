@@ -53,6 +53,9 @@ const handler = adminApi({
           error: 'Invalid email address format',
         });
       }
+      if (error instanceof BadRequestError) {
+        return res.status(400).json({ success: false, error: error.message });
+      }
 
       console.error('Error sending test email:', error);
       return res.status(500).json({
