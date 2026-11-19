@@ -298,6 +298,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.subscriptions.canceled': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.api_key.rate_limit_updated': { category: 'access', severity: 'notice', write: 'bestEffort' },
   'user.api_key.rate_limit_reset': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'user.api_key.moderation_exception_updated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },
   'user.api_key.restored': { category: 'access', severity: 'notice', write: 'strict' },
   'user.api_key.rotated': { category: 'access', severity: 'critical', write: 'strict' },

@@ -11,6 +11,11 @@ const APP_URL = process.env.API_URL || 'http://localhost:3000';
 const SIGNED_OUT_URI = `${APP_URL}/e2e-oauth-signed-out`;
 const CLIENT_NAME = `E2E Logout RP ${Date.now()}`;
 
+// browser.newContext() inherits the project's `use`, and this spec runs in the admin project, whose
+// storageState holds the admin's refresh cookie. Without an explicit empty state the "no session"
+// browser bootstraps an admin session and gets the confirmation screen instead of the redirect.
+const NO_SESSION = { cookies: [], origins: [] };
+
 let clientId = '';
 
 const logoutUrl = (params: Record<string, string>) => `/oauth/logout?${new URLSearchParams(params).toString()}`;
@@ -48,7 +53,7 @@ test.describe.serial('OAuth RP-Initiated Logout', () => {
   });
 
   test('a browser without a session is sent straight back with its state', async ({ browser, baseURL }) => {
-    const context = await browser.newContext({ baseURL });
+    const context = await browser.newContext({ baseURL, storageState: NO_SESSION });
     const page = await context.newPage();
     try {
       await installWafBypass(page);
@@ -61,7 +66,7 @@ test.describe.serial('OAuth RP-Initiated Logout', () => {
   });
 
   test('an unregistered post-logout URI is refused without redirecting', async ({ browser, baseURL }) => {
-    const context = await browser.newContext({ baseURL });
+    const context = await browser.newContext({ baseURL, storageState: NO_SESSION });
     const page = await context.newPage();
     try {
       await installWafBypass(page);
@@ -88,7 +93,9 @@ test.describe.serial('OAuth RP-Initiated Logout', () => {
   test('a signed-in user confirms, is signed out and sent back', async ({ browser, baseURL, request }) => {
     const user = await apiCreateThrowawayUser(request, 'rplogout');
     await apiAcceptPolicies(request, user.accessToken);
-    const { page, close } = await openPageAs(browser, baseURL, user);
+    // A clean context, so the sign-out it confirms acts on this user's browser alone, never beside the
+    // admin refresh cookie the project's storageState would otherwise carry in.
+    const { page, close } = await openPageAs(browser, baseURL, user, { storageState: NO_SESSION });
     try {
       await stubRelyingParty(page);
       await page.goto(logoutUrl({ client_id: clientId, post_logout_redirect_uri: SIGNED_OUT_URI, state: 'e2e-s3' }));
@@ -105,6 +112,9 @@ test.describe.serial('OAuth RP-Initiated Logout', () => {
     try {
       await page.goto('/admin?tab=oauth-clients');
       await page.getByTestId(`oauth-client-toggle-${clientId}`).click({ timeout: TIMEOUTS.NAVIGATION });
+      // Deactivate stays disabled until an admin reason is picked; without one this click waits out the
+      // hook timeout and the client is left active.
+      await page.getByTestId('oauth-client-deactivate-modal-reason-input-preset-0').click();
       await page.getByTestId('oauth-client-deactivate-confirm-btn').click();
       await expect(page.getByTestId(`oauth-client-toggle-${clientId}`)).not.toBeChecked();
     } finally {

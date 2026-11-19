@@ -95,7 +95,7 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: recordAudit,
   isSelfOrImpersonator: (user: { id?: string } | undefined, id: string) => user?.id === id,
 }));
-vi.mock('@server/auth/emailVerifiedGrants', () => ({
+vi.mock('@bike4mind/server-utils/auth/pendingFreeCredits', () => ({
   isEligibleForFreeCredits: eligible,
   releaseVerifiedPendingFreeCredits: release,
 }));

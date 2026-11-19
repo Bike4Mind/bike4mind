@@ -36,7 +36,7 @@ vi.mock('@workers/security/autoContainment/deviceLink', () => ({
   liveDeviceLinkDeps: () => ({}),
   DeviceLinkAssessError: class DeviceLinkAssessError extends Error {},
 }));
-vi.mock('@server/security/shadowDetectionAutoGrade', () => ({
+vi.mock('@workers/security/shadowDetectionAutoGrade', () => ({
   gradeStaleSignupBursts,
   liveStaleDetectionGradeDeps: (deps: unknown) => deps,
 }));

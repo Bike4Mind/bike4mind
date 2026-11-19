@@ -8,6 +8,7 @@ public enum NotificationCategory: String, CaseIterable, Sendable, Codable, Ident
   case chatCompleted = "chat_completed"
   case generationReady = "generation_ready"
   case agentMessage = "agent_message"
+  case briefReady = "brief_ready"
 
   public var id: String { rawValue }
 
@@ -19,6 +20,7 @@ public enum NotificationCategory: String, CaseIterable, Sendable, Codable, Ident
     case .chatCompleted: "Replies ready"
     case .generationReady: "Creations ready"
     case .agentMessage: "Agent messages"
+    case .briefReady: "Briefs ready"
     }
   }
 
@@ -31,6 +33,7 @@ public enum NotificationCategory: String, CaseIterable, Sendable, Codable, Ident
     case .chatCompleted: "A long answer finished while you were away."
     case .generationReady: "Your image, video or music is done and waiting."
     case .agentMessage: "Your agent has something to tell you."
+    case .briefReady: "Your assistant put together a summary of what needs you."
     }
   }
 }
