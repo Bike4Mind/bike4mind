@@ -9,7 +9,8 @@ vi.mock('../utils/config', () => ({
 }));
 
 // Import after mock
-const { encryptToken, decryptToken, encryptEnvVariables, decryptEnvVariables } = await import('./tokenEncryption');
+const { encryptToken, decryptToken, decryptStoredSecret, encryptEnvVariables, decryptEnvVariables } =
+  await import('./tokenEncryption');
 
 const defaultMcpOwner = { id: 'mcp-record', name: 'test-server', userId: 'test-user' };
 
@@ -82,6 +83,58 @@ describe('tokenEncryption', () => {
       mockConfig.SECRET_ENCRYPTION_KEY = key2;
 
       expect(() => decryptToken(encrypted)).toThrow('Token decryption failed');
+    });
+  });
+
+  describe('decryptStoredSecret', () => {
+    it('decrypts a value encrypted with the current key', () => {
+      expect(decryptStoredSecret(encryptSecret('stored-secret', key1))).toBe('stored-secret');
+    });
+
+    it('falls back to the previous key', () => {
+      const encrypted = encryptSecret('rotated-secret', key1);
+      mockConfig.SECRET_ENCRYPTION_KEY = key2;
+      mockConfig.SECRET_ENCRYPTION_KEY_PREVIOUS = key1;
+
+      expect(decryptStoredSecret(encrypted)).toBe('rotated-secret');
+    });
+
+    it('throws on a value that is not ciphertext instead of passing it through', () => {
+      expect(() => decryptStoredSecret('plaintext-value')).toThrow();
+    });
+
+    it('throws the current key error when neither key opens the value', () => {
+      const encrypted = encryptSecret('secret', key1);
+      mockConfig.SECRET_ENCRYPTION_KEY = key2;
+      mockConfig.SECRET_ENCRYPTION_KEY_PREVIOUS = generateEncryptionKey();
+
+      expect(() => decryptStoredSecret(encrypted)).toThrow(/Unsupported state|authenticate/);
+    });
+
+    it('ignores a previous key left at the not-configured placeholder', () => {
+      const encrypted = encryptSecret('secret', key1);
+      mockConfig.SECRET_ENCRYPTION_KEY = key2;
+      mockConfig.SECRET_ENCRYPTION_KEY_PREVIOUS = 'not-configured';
+
+      expect(() => decryptStoredSecret(encrypted)).toThrow(/Unsupported state|authenticate/);
+    });
+
+    it('throws when no current key is configured', () => {
+      const encrypted = encryptSecret('secret', key1);
+      mockConfig.SECRET_ENCRYPTION_KEY = undefined;
+
+      expect(() => decryptStoredSecret(encrypted)).toThrow('SECRET_ENCRYPTION_KEY is not configured');
+    });
+
+    it('opens a context-bound value under the previous key only with the same context', () => {
+      const encrypted = encryptSecret('bound-secret', key1, 'ctx');
+      expect(encrypted.startsWith('v2:')).toBe(true);
+      mockConfig.SECRET_ENCRYPTION_KEY = key2;
+      mockConfig.SECRET_ENCRYPTION_KEY_PREVIOUS = key1;
+
+      expect(decryptStoredSecret(encrypted, 'ctx')).toBe('bound-secret');
+      expect(() => decryptStoredSecret(encrypted, 'other-ctx')).toThrow();
+      expect(() => decryptStoredSecret(encrypted)).toThrow('requires its owning context');
     });
   });
 

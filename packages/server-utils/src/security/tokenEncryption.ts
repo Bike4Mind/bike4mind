@@ -53,6 +53,27 @@ export function decryptToken(value: string | null | undefined, context?: string)
   );
 }
 
+/**
+ * Decrypts a value that is only ever stored as ciphertext. Same key order as decryptToken, but
+ * anything that is not ciphertext throws instead of passing through, and a total failure rethrows
+ * the current key's own error so callers that classify the failure by message keep working.
+ */
+export function decryptStoredSecret(value: string, context?: string): string {
+  try {
+    return decryptSecret(value, requireKey(), context);
+  } catch (currentKeyError) {
+    const previous = previousKey();
+    if (previous) {
+      try {
+        return decryptSecret(value, previous, context);
+      } catch {
+        // Neither key opens it: report the current key's error below.
+      }
+    }
+    throw currentKeyError;
+  }
+}
+
 export type McpSecretOwner = { userId: string; name?: string; id: string };
 
 function envContext(owner: McpSecretOwner, field: string): string {
