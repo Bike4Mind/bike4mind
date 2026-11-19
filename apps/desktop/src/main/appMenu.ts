@@ -1,4 +1,4 @@
-import { app, ipcMain, Menu, shell, type MenuItemConstructorOptions } from 'electron';
+import { app, ipcMain, Menu, shell, type MenuItemConstructorOptions, type WebContents } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { AppMenuAction } from '@shared/appShell';
 import { focusedAppWindow } from './windows';
@@ -110,17 +110,19 @@ export type AppMenuDeps = {
 };
 
 /**
- * Install the menu bar and carry its actions to the renderer. An action chosen while no window
- * is open waits for the window it reopens, which takes it on mount (see takePending), the same
- * handoff attention uses for a clicked notice.
+ * Install the menu bar and carry its actions to the renderer. An action is sent only to a page
+ * whose bridge has subscribed (it calls takePending on mount); otherwise it waits for the bridge
+ * to take it, the same handoff attention uses for a clicked notice. Readiness is the bridge's own
+ * signal rather than webContents.isLoading(), which can stay true after the bridge has mounted.
  */
 export function registerAppMenu({ showApp, version }: AppMenuDeps): void {
   app.setAboutPanelOptions({ applicationName: 'Bike4Mind', applicationVersion: version });
   let pending: AppMenuAction | null = null;
+  const listening = new WeakSet<WebContents>();
 
   const runAction = (action: AppMenuAction) => {
     const window = focusedAppWindow();
-    if (!window || window.webContents.isLoading()) {
+    if (!window || !listening.has(window.webContents)) {
       pending = action;
       showApp();
       return;
@@ -131,7 +133,18 @@ export function registerAppMenu({ showApp, version }: AppMenuDeps): void {
     window.webContents.send(IPC_CHANNELS.appMenuAction, action);
   };
 
-  ipcMain.handle(IPC_CHANNELS.appMenuTakePending, (): AppMenuAction | null => {
+  ipcMain.handle(IPC_CHANNELS.appMenuTakePending, (event): AppMenuAction | null => {
+    const contents = event.sender;
+    if (!listening.has(contents)) {
+      listening.add(contents);
+      // A reload or new document drops the bridge until it mounts and asks again.
+      const onNavigation = (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
+        if (!details.isMainFrame || details.isSameDocument) return;
+        listening.delete(contents);
+        contents.off('did-start-navigation', onNavigation);
+      };
+      contents.on('did-start-navigation', onNavigation);
+    }
     const action = pending;
     pending = null;
     return action;

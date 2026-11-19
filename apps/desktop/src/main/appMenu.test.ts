@@ -131,14 +131,18 @@ describe('registerAppMenu', () => {
     harness.focused = undefined;
   });
 
-  function fakeWindow(loading = false) {
-    return {
-      isMinimized: vi.fn(() => true),
-      restore: vi.fn(),
-      show: vi.fn(),
-      focus: vi.fn(),
-      webContents: { isLoading: () => loading, send: vi.fn() },
+  type NavigationListener = (details: { isMainFrame: boolean; isSameDocument: boolean }) => void;
+
+  function fakeWindow() {
+    const navigation = new Set<NavigationListener>();
+    const webContents = {
+      send: vi.fn(),
+      on: (_event: string, listener: NavigationListener) => navigation.add(listener),
+      off: (_event: string, listener: NavigationListener) => navigation.delete(listener),
+      navigate: (details: { isMainFrame: boolean; isSameDocument: boolean }) =>
+        [...navigation].forEach(listener => listener(details)),
     };
+    return { isMinimized: vi.fn(() => true), restore: vi.fn(), show: vi.fn(), focus: vi.fn(), webContents };
   }
 
   // Wherever this platform puts it: Settings is in the app menu on macOS and in File elsewhere.
@@ -147,20 +151,23 @@ describe('registerAppMenu', () => {
     click(item(everyItem, label));
   }
 
-  const takePending = () => harness.handlers.get(IPC_CHANNELS.appMenuTakePending)?.();
+  // The renderer's AppMenuBridge calls this on mount; it also marks that page as listening.
+  const takePending = (sender: unknown = fakeWindow().webContents) =>
+    harness.handlers.get(IPC_CHANNELS.appMenuTakePending)?.({ sender });
 
-  it('sends an action to the window, bringing it forward', () => {
+  it('sends an action to a window whose bridge is listening, bringing it forward', () => {
     const window = fakeWindow();
     harness.focused = window;
     const showApp = vi.fn();
     registerAppMenu({ showApp, version: '1.0.0' });
+    expect(takePending(window.webContents)).toBeNull();
 
     menuAction('New Chat');
     expect(window.restore).toHaveBeenCalled();
     expect(window.focus).toHaveBeenCalled();
     expect(window.webContents.send).toHaveBeenCalledWith(IPC_CHANNELS.appMenuAction, 'new-chat');
     expect(showApp).not.toHaveBeenCalled();
-    expect(takePending()).toBeNull();
+    expect(takePending(window.webContents)).toBeNull();
   });
 
   it('holds an action chosen with no window open for the window it opens, once', () => {
@@ -173,14 +180,30 @@ describe('registerAppMenu', () => {
     expect(takePending()).toBeNull();
   });
 
-  it('holds an action for a window that is still loading', () => {
-    const window = fakeWindow(true);
+  it('holds an action for a window whose bridge has not mounted yet', () => {
+    const window = fakeWindow();
     harness.focused = window;
     registerAppMenu({ showApp: vi.fn(), version: '1.0.0' });
 
     menuAction('New Chat');
     expect(window.webContents.send).not.toHaveBeenCalled();
-    expect(takePending()).toBe('new-chat');
+    expect(takePending(window.webContents)).toBe('new-chat');
+  });
+
+  it('holds actions again while a reloaded page has not remounted its bridge', () => {
+    const window = fakeWindow();
+    harness.focused = window;
+    registerAppMenu({ showApp: vi.fn(), version: '1.0.0' });
+    takePending(window.webContents);
+
+    window.webContents.navigate({ isMainFrame: true, isSameDocument: true });
+    menuAction('New Chat');
+    expect(window.webContents.send).toHaveBeenCalledTimes(1);
+
+    window.webContents.navigate({ isMainFrame: true, isSameDocument: false });
+    menuAction('New Chat');
+    expect(window.webContents.send).toHaveBeenCalledTimes(1);
+    expect(takePending(window.webContents)).toBe('new-chat');
   });
 
   it('opens the documentation in the browser', () => {
