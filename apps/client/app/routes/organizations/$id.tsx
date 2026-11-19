@@ -1,4 +1,10 @@
-import { IOrganizationDocument, WithId, hasOrgPermission, isOrgOwnerOrPlatformAdmin } from '@bike4mind/common';
+import {
+  IOrganizationDocument,
+  WithId,
+  hasOrgPermission,
+  isOrgOwnerOrCurrentAdmin,
+  isOrgOwnerOrPlatformAdmin,
+} from '@bike4mind/common';
 import { AdminPageHeader, SegmentedControl } from '@client/app/components/admin/shared';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
