@@ -106,13 +106,11 @@ export const canManageOrgApiKeys = permissionGate('manageKeys');
  * - Pay invoice      pages/api/subscriptions/pay-invoice.ts
  * Must stay in sync with those four.
  *
- * A platform admin who holds no role is deliberately excluded, though the first two routes would
- * admit them: portal.ts has no admin bypass, so an admin would still get a Billing Portal button
- * that rejects them. Admins act on an org's billing through the Admin -> Organizations panel, which
- * is the same split the page already makes for member management.
- *
- * Nothing is lost by hiding it: the plan, its status, the renewal date and seat usage are all on
- * the Overview tab and the page header, which every member sees.
+ * This decides who gets the real tab. A platform admin who holds no role is deliberately excluded,
+ * though the first two routes would admit them: portal.ts has no admin bypass, so an admin would
+ * still get a Billing Portal button that rejects them. Admins act on an org's billing through the
+ * Admin -> Organizations panel. Everyone else who manages the team (`isOrgOwnerOrCurrentAdmin`:
+ * managers, platform admins) gets a locked entry with a read-only summary, see `isOrgTabLocked`.
  */
 export const canViewOrgBilling = (currentUser: TabViewer, organization: TabOrg): boolean =>
   !!currentUser && !!organization && orgMemberHasPermission(organization, currentUser.id, 'manageBilling');
@@ -137,7 +135,33 @@ export interface OrgTabAccess {
   canManageApiKeys: boolean;
   canManageDomains: boolean;
   canViewAudit?: boolean;
+  /**
+   * Owner, current manager or platform admin. Such a caller gets an owner-only tab they cannot open
+   * as a locked rail entry instead of having it vanish; a plain member is not shown admin tabs at all.
+   */
+  seesLockedTabs?: boolean;
 }
+
+/**
+ * Who may open each gated tab, for the notice a caller sees when a deep link names one they cannot.
+ * Tabs open to every member are absent. Billing is owner-only (canViewOrgBilling); every other gated
+ * tab admits the owner and current managers; Settings also admits profile editors.
+ */
+export const ORG_TAB_AUDIENCE: Readonly<Partial<Record<OrganizationTabs, 'owner' | 'managers' | 'settings'>>> = {
+  [OrganizationTabs.Groups]: 'managers',
+  [OrganizationTabs.Usage]: 'managers',
+  [OrganizationTabs.Analysis]: 'managers',
+  [OrganizationTabs.Integrations]: 'managers',
+  [OrganizationTabs.Billing]: 'owner',
+  [OrganizationTabs.Domains]: 'managers',
+  [OrganizationTabs.ApiKeys]: 'managers',
+  [OrganizationTabs.Audit]: 'managers',
+  [OrganizationTabs.Settings]: 'settings',
+};
+
+/** Owner-only tabs shown to a manager as a locked entry with a read-only summary. */
+export const isOrgTabLocked = (tab: OrganizationTabs, access: OrgTabAccess): boolean =>
+  tab === OrganizationTabs.Billing && !!access.seesLockedTabs && !access.canViewBilling;
 
 /** The Integrations sub-sections this caller may see, in display order. */
 export const visibleIntegrationSections = (
@@ -167,6 +191,25 @@ export const resolveAccessibleTab = (selected: OrganizationTabs, access: OrgTabA
   // Billing has its own gate rather than riding canManageOrg; see canViewOrgBilling.
   if (!access.canViewBilling && selected === OrganizationTabs.Billing) return OrganizationTabs.Overview;
   return selected;
+};
+
+export interface OrgTabView {
+  /** The tab to select. */
+  tab: OrganizationTabs;
+  /** The tab is owner-only and shows its locked panel rather than its content. */
+  locked: boolean;
+  /** The requested tab, when the caller may not open it and was sent to Overview instead. */
+  denied?: OrganizationTabs;
+}
+
+/**
+ * resolveAccessibleTab, except that a locked tab stays selected (it renders its locked panel) and a
+ * refused one is reported, so the page can say why the link landed on Overview.
+ */
+export const resolveOrgTabView = (requested: OrganizationTabs, access: OrgTabAccess): OrgTabView => {
+  if (isOrgTabLocked(requested, access)) return { tab: requested, locked: true };
+  const tab = resolveAccessibleTab(requested, access);
+  return tab === requested ? { tab, locked: false } : { tab, locked: false, denied: requested };
 };
 
 /** The Integrations sub-section to show: the requested one when visible, else the first visible. */

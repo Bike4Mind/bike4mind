@@ -13,7 +13,10 @@ import {
   canViewOrgBilling,
   canViewOrgUsage,
   OrganizationTabs,
+  ORG_TAB_AUDIENCE,
+  isOrgTabLocked,
   resolveAccessibleTab,
+  resolveOrgTabView,
 } from '../orgTabAccess';
 
 /**
@@ -486,5 +489,103 @@ describe('canManageOrgDomains', () => {
     expect(resolveAccessibleTab(OrganizationTabs.Domains, { ...access, canManageDomains: true })).toBe(
       OrganizationTabs.Domains
     );
+  });
+});
+
+describe('resolveOrgTabView', () => {
+  const manager = {
+    canManageOrg: true,
+    canViewUsage: true,
+    canViewAnalysis: true,
+    canManageIntegrations: false,
+    canManageGroups: true,
+    canViewBilling: false,
+    canManageConnectors: true,
+    canManageDomains: true,
+    canViewAudit: true,
+    seesLockedTabs: true,
+  };
+  const member = {
+    ...manager,
+    canViewUsage: false,
+    canViewAnalysis: false,
+    canManageGroups: false,
+    canManageConnectors: false,
+    canManageDomains: false,
+    canViewAudit: false,
+    seesLockedTabs: false,
+  };
+
+  it('keeps Billing selected but locked for a manager', () => {
+    expect(resolveOrgTabView(OrganizationTabs.Billing, manager)).toEqual({
+      tab: OrganizationTabs.Billing,
+      locked: true,
+    });
+  });
+
+  it('opens Billing unlocked for the owner', () => {
+    expect(resolveOrgTabView(OrganizationTabs.Billing, { ...manager, canViewBilling: true })).toEqual({
+      tab: OrganizationTabs.Billing,
+      locked: false,
+    });
+  });
+
+  it('reports the refused tab for a plain member, who gets no locked entries', () => {
+    expect(resolveOrgTabView(OrganizationTabs.Billing, member)).toEqual({
+      tab: OrganizationTabs.Overview,
+      locked: false,
+      denied: OrganizationTabs.Billing,
+    });
+    expect(resolveOrgTabView(OrganizationTabs.Usage, member).denied).toBe(OrganizationTabs.Usage);
+  });
+
+  it('reports nothing for a tab the caller may open', () => {
+    expect(resolveOrgTabView(OrganizationTabs.Members, member)).toEqual({
+      tab: OrganizationTabs.Members,
+      locked: false,
+    });
+  });
+});
+
+describe('ORG_TAB_AUDIENCE', () => {
+  it('pins the audience of every gated tab and leaves the open tabs out', () => {
+    expect(ORG_TAB_AUDIENCE).toEqual({
+      [OrganizationTabs.Groups]: 'managers',
+      [OrganizationTabs.Usage]: 'managers',
+      [OrganizationTabs.Analysis]: 'managers',
+      [OrganizationTabs.Integrations]: 'managers',
+      [OrganizationTabs.Domains]: 'managers',
+      [OrganizationTabs.ApiKeys]: 'managers',
+      [OrganizationTabs.Audit]: 'managers',
+      [OrganizationTabs.Settings]: 'settings',
+      [OrganizationTabs.Billing]: 'owner',
+    });
+    for (const open of [OrganizationTabs.Overview, OrganizationTabs.Library, OrganizationTabs.Members]) {
+      expect(ORG_TAB_AUDIENCE[open]).toBeUndefined();
+    }
+  });
+});
+
+describe('isOrgTabLocked for a platform admin who is not the owner', () => {
+  const org = { userId: 'owner1', adminUserIds: [] as string[] };
+  const staff = { id: 'staff1', isAdmin: true };
+
+  // Built the way $id.tsx builds it.
+  const access = {
+    canManageOrg: true,
+    canViewUsage: true,
+    canViewAnalysis: true,
+    canManageIntegrations: false,
+    canManageGroups: true,
+    canViewBilling: canViewOrgBilling(staff, org),
+    canManageConnectors: true,
+    canManageDomains: true,
+    canViewAudit: true,
+    seesLockedTabs: isOrgOwnerOrCurrentAdmin(staff, org),
+  };
+
+  it('shows Billing as a locked entry rather than the real tab', () => {
+    expect(access.canViewBilling).toBe(false);
+    expect(isOrgTabLocked(OrganizationTabs.Billing, access)).toBe(true);
   });
 });

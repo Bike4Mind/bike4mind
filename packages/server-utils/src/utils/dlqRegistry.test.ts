@@ -67,6 +67,7 @@ const mockDlqUrls = vi.hoisted(() => ({
       'notebook-events',
       'completion-events',
       'business-metric-alerts',
+      'side-app-health-alerts',
       'alarm-handler',
     ].map(label => [label, `https://sqs.us-east-2.amazonaws.com/123456789/${label}`])
   ),
@@ -130,6 +131,7 @@ vi.mock('sst', () => ({
 import {
   coreDlqDescriptors,
   getDlqRegistry,
+  DLQ_STALE_WHEN,
   getDlqByLabel,
   getSourceQueueUrl,
   getDlqUrl,
@@ -139,6 +141,8 @@ import {
   noEntity,
   describeDlqMessage,
 } from './dlqRegistry';
+
+const PARTITION = 'aws';
 
 describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
@@ -199,6 +203,22 @@ describe('dlqRegistry', () => {
         .map(entry => ({ label: entry.label, missing: missingQueueHelp(entry) }))
         .filter(({ missing }) => missing.length > 0);
       expect(incomplete).toEqual([]);
+    });
+
+    it('flags stale dead letters only with a known staleWhen value', () => {
+      const flagged = getDlqRegistry().filter(entry => entry.staleWhen !== undefined);
+      for (const entry of flagged) expect(DLQ_STALE_WHEN).toContain(entry.staleWhen);
+      const byLabel = (label: string) => getDlqRegistry().find(entry => entry.label === label)?.staleWhen;
+      expect(byLabel('session-enrichment')).toBe('self-healing');
+      // The queue also holds user-requested session.tag jobs, which nothing re-runs.
+      expect(getDlqRegistry().find(entry => entry.label === 'session-enrichment')?.staleDetailTypes).toEqual([
+        'session.summarize',
+      ]);
+      expect(byLabel('organization-retention')).toBe('superseded-schedule');
+      // These handlers read the scheduled event time, so a late replay is not covered by a later run.
+      expect(byLabel('spend-monitor')).toBeUndefined();
+      expect(byLabel('young-account-spend-alert')).toBeUndefined();
+      expect(byLabel('api-probe-detector')).toBeUndefined();
     });
 
     it('includes tavern-heartbeat entry', () => {
@@ -333,5 +353,31 @@ describe('dead-letter message describe', () => {
       type: 'Highlights run',
       id: 'c1',
     });
+  });
+});
+
+describe('describeDlqMessage for scheduled events', () => {
+  const scheduledBody = JSON.stringify({
+    'detail-type': 'Scheduled Event',
+    source: 'aws.events',
+    time: '2026-03-01T04:00:00Z',
+    resources: [`arn:${PARTITION}:events:us-east-2:000000000000:rule/app-stage-Nightly`],
+  });
+
+  it('names a scheduled run by its time when the queue describes nothing', () => {
+    expect(describeDlqMessage({ describe: () => null }, scheduledBody)).toEqual({
+      type: 'Scheduled run',
+      id: '2026-03-01T04:00:00.000Z',
+    });
+    expect(describeDlqMessage({}, scheduledBody)).toEqual({ type: 'Scheduled run', id: '2026-03-01T04:00:00.000Z' });
+  });
+
+  it("keeps the queue's own entity and returns null for other bodies", () => {
+    expect(describeDlqMessage({ describe: () => ({ type: 'Job', id: 'j1' }) }, scheduledBody)).toEqual({
+      type: 'Job',
+      id: 'j1',
+    });
+    expect(describeDlqMessage({ describe: () => null }, '{"detail-type":"Other"}')).toBeNull();
+    expect(describeDlqMessage({}, 'not json')).toBeNull();
   });
 });

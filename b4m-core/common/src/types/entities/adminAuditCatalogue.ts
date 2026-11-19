@@ -53,6 +53,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.credits.grant_unblocked': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.credits.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.subscription.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
+  'spend.freeze.applied': { category: 'credits', severity: 'critical', write: 'strict' },
+  'spend.freeze.lifted': { category: 'credits', severity: 'critical', write: 'strict' },
   'billing.comp.changed': { category: 'credits', severity: 'notice', write: 'strict' },
   'billing.subscription.synced': { category: 'credits', severity: 'notice', write: 'strict' },
   'billing.subscription.cancel_scheduled': { category: 'credits', severity: 'critical', write: 'strict' },
@@ -414,6 +416,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'abuse.eval_set.created': { category: 'access', severity: 'info', write: 'bestEffort' },
   'abuse.eval_set.verdict_recorded': { category: 'access', severity: 'info', write: 'bestEffort' },
   'abuse.eval_set.run': { category: 'access', severity: 'info', write: 'bestEffort' },
+  // An admin resolving a provider end-user identifier (from a provider safety notice) to an account.
+  'user.provider_id.resolved': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.incident.viewed': { category: 'support', severity: 'notice', write: 'strict' },
   // An admin read of other users' feedback text. No support case (triage reads it routinely), but strict.
   'feedback.viewed': { category: 'support', severity: 'info', write: 'strict' },

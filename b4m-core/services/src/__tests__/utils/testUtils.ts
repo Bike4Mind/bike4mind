@@ -345,6 +345,8 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     search: vi.fn(),
     findByStripeCustomerId: vi.fn(),
     findSeatsByStripeCustomerIds: vi.fn(),
+    setPlanStorageLimit: vi.fn(),
+    setStorageLimitOverride: vi.fn(),
     incrementCurrentStorage: vi.fn(),
     setCurrentStorageIfUnchanged: vi.fn(),
     findCurrentStorageSize: vi.fn(),

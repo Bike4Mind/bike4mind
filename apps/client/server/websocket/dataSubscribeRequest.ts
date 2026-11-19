@@ -30,7 +30,7 @@ import {
   questMasterPlanSubscriptionScope,
 } from '@server/websocket/subscriptionScopes';
 import { sendToConnection, withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
-import { verifyWsAccessToken } from '@server/websocket/verifyWsAccessToken';
+import { verifyWsSubscriberToken } from '@server/websocket/verifyWsAccessToken';
 import { closeConnection } from '@bike4mind/server-utils/websocket/closeConnection';
 import { BadRequestError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import crypto from 'crypto';
@@ -111,7 +111,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     initialDataAfterSubscribe,
   } = parsedRequest;
 
-  const user = await verifyWsAccessToken(accessToken);
+  const user = await verifyWsSubscriberToken(accessToken);
 
   // A subscriber must hang off a live Connection row of the same user: a revoke marks the row ended
   // (realtimeConnectionRepository.endConnections), and that must not be undone by re-subscribing

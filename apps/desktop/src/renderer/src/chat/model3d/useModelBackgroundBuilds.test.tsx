@@ -18,6 +18,7 @@ vi.mock('./modelScene', () => ({
   loadAsset: vi.fn(),
   openPose: () => ({}),
   renderContactSheet: vi.fn(async () => new Uint8Array([9])),
+  renderThumbnail: vi.fn(async () => new Uint8Array([7])),
   summarizeObject: vi.fn(),
   summarizeParts: () => ({ parts: ['body'], size: [1, 1, 1], units: 'mm', triangles: 0, params: {} }),
 }));
@@ -50,6 +51,8 @@ let model: {
   reportBuild: ReturnType<typeof vi.fn>;
   captureResult: ReturnType<typeof vi.fn>;
   getState: ReturnType<typeof vi.fn>;
+  wantsVersion: ReturnType<typeof vi.fn>;
+  recordVersion: ReturnType<typeof vi.fn>;
 };
 
 function Harness() {
@@ -90,6 +93,8 @@ beforeEach(() => {
     reportBuild: vi.fn(async () => {}),
     captureResult: vi.fn(),
     getState: vi.fn(async (sessionId: string) => states[sessionId] ?? EMPTY_MODEL_STATE),
+    wantsVersion: vi.fn(async () => true),
+    recordVersion: vi.fn(async () => null),
   };
   (window as unknown as { b4m: unknown }).b4m = {
     model: {
@@ -124,6 +129,11 @@ describe('useModelBackgroundBuilds', () => {
     await answerBuilds();
     expect(model.writeGlb).toHaveBeenCalledWith('chat-b', expect.objectContaining({ generation: 3 }));
     expect(model.reportBuild).toHaveBeenCalledWith('chat-b', expect.objectContaining({ generation: 3, ok: true }));
+    // Off screen nothing is posed, so the version is kept at rest.
+    expect(model.recordVersion).toHaveBeenCalledWith(
+      'chat-b',
+      expect.objectContaining({ generation: 3, jointAngles: {} })
+    );
   });
 
   it('leaves the conversation on screen to the pane', async () => {

@@ -33,13 +33,21 @@ export interface DlqMessage {
   recommendation?: DlqRecommendation;
   failureLookupFailed?: boolean;
   messageId: string;
-  failure?: { errorMessage: string; category: 'refused' | 'timeout' | 'invalid output' | 'bug' | 'unknown' };
+  failure?: {
+    errorMessage: string;
+    category: 'refused' | 'timeout' | 'invalid output' | 'bug' | 'unknown';
+    /** 'attributes' when read from the error attributes Lambda or EventBridge attached to the message. */
+    source: 'recorded' | 'attributes';
+    errorCode?: string;
+  };
   body: string;
   sentTimestamp?: string;
   approximateReceiveCount?: string;
   approximateFirstReceiveTimestamp?: string;
-  /** CloudWatch Logs Insights link over the consumer's logs around this message's send time. */
+  /** CloudWatch Logs Insights link over the consumer's (or failed target's) logs for this message. */
   logsUrl?: string | null;
+  /** 'request' when the link is filtered to the failed invocation's request ID. */
+  logsScope?: 'request' | 'window';
 }
 
 /** The record a dead letter is about, from the queue's `describe(body)` in the server DLQ registry. */
