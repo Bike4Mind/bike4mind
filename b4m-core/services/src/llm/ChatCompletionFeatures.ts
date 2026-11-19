@@ -7,7 +7,7 @@ import {
   embeddingBackendForModel,
 } from '@bike4mind/utils/embeddingProviders';
 import type { NewAccountSpendCapAdapters } from '../creditService/newAccountSpendCap';
-import type { ISpendFreezeRepository, UserLimitEventKind } from '@bike4mind/common';
+import type { ISpendFreezeRepository, IUserApiKeyRepository, UserLimitEventKind } from '@bike4mind/common';
 import type { ModerationEscalationAlert } from '../userService/moderationPolicy';
 
 export type LimitEventRecord = {
@@ -261,6 +261,11 @@ interface DatabaseAdapters {
   newAccountSpendCap: NewAccountSpendCapAdapters;
   /** Required so every construction site wires the freeze check; the turn is refused before any reservation. */
   spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
+  /**
+   * Reads a key's prompt moderation exception. Optional: wired only where an API key can start a
+   * turn, and without it no exception ever applies.
+   */
+  userApiKeys?: Pick<IUserApiKeyRepository, 'findModerationException'>;
   /**
    * Records a refusal or a settlement that left the balance negative, for the admin user timeline
    * (packages/server-utils/src/billing/userLimitEvents.ts). Required, so a completion path that forgets it fails
