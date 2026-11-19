@@ -269,3 +269,44 @@ it('retires confirmed prior payloads so identical republishes do not accumulate 
   expect(current.bytes?.toString()).toContain('UNCHANGED_BODY');
   expect(current.page.versions).toHaveLength(1);
 });
+
+describe('one live v1 page per artifact', () => {
+  it('lets exactly one of two concurrent publishes with different slugs create a page', async () => {
+    const bothChecked = Promise.withResolvers<void>();
+    let arrivals = 0;
+    h.quota.mockImplementation(async () => {
+      if (++arrivals === 2) bothChecked.resolve();
+      await bothChecked.promise;
+      return { ok: true };
+    });
+    const results = await Promise.allSettled([
+      publishStoredArtifact({ ...input('artifact-a', 'FIRST_BODY'), slug: 'first-page' }),
+      publishStoredArtifact({ ...input('artifact-a', 'SECOND_BODY'), slug: 'second-page' }),
+    ]);
+    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+    const loser = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+    expect(loser?.reason).toMatchObject({ statusCode: 409 });
+    expect(await PublishedArtifact.countDocuments({ 'source.artifactId': 'artifact-a', deletedAt: null })).toBe(1);
+  });
+
+  it('frees the artifact for a new page once its page is unpublished', async () => {
+    await publishStoredArtifact({ ...input('artifact-a', 'FIRST_BODY'), slug: 'first-page' });
+    await unpublishStoredArtifact({ user, logger, artifactId: 'artifact-a' });
+    await publishStoredArtifact({ ...input('artifact-a', 'SECOND_BODY'), slug: 'second-page' });
+    expect(await PublishedArtifact.countDocuments({ 'source.artifactId': 'artifact-a', deletedAt: null })).toBe(1);
+  });
+
+  it('does not constrain pages the web flow publishes, which may share an artifact across slugs', async () => {
+    const webPage = (publicId: string, slug: string) => ({
+      publicId,
+      tier: 'user',
+      scopeId: user.id,
+      slug,
+      ownerId: user.id,
+      deletedAt: null,
+      source: { kind: 'bundle', artifactId: 'artifact-a' },
+    });
+    await PublishedArtifact.collection.insertMany([webPage('web-page-1', 'web-one'), webPage('web-page-2', 'web-two')]);
+    expect(await PublishedArtifact.countDocuments({ 'source.artifactId': 'artifact-a', deletedAt: null })).toBe(2);
+  });
+});
