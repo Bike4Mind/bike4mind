@@ -12,6 +12,7 @@ struct VoiceConversationView: View {
 
   let request: VoiceRequest
   @State private var model: VoiceConversationModel?
+  @State private var briefSession: BriefVoiceSession?
 
   var body: some View {
     VStack(spacing: Tokens.Spacing.l) {
@@ -172,8 +173,15 @@ struct VoiceConversationView: View {
   // MARK: - Behavior
 
   private func run() async {
-    guard model == nil else { return }
-    let model = Self.makeModel(request: request, services: services)
+    guard model == nil, briefSession == nil else { return }
+    var opening: [String] = []
+    var context: String?
+    if let briefID = request.briefID {
+      let session = BriefVoiceSession(briefID: briefID, api: services.briefs, pendingActions: services.pendingActions)
+      briefSession = session
+      (opening, context) = await session.prepare()
+    }
+    let model = Self.makeModel(request: request, services: services, opening: opening, context: context)
     self.model = model
     await model.start()
   }
@@ -202,19 +210,23 @@ struct VoiceConversationView: View {
     }
   }
 
-  private static func makeModel(request: VoiceRequest, services: AppServices) -> VoiceConversationModel {
+  private static func makeModel(
+    request: VoiceRequest, services: AppServices, opening: [String], context: String?
+  ) -> VoiceConversationModel {
     let model: VoiceConversationModel
     #if DEBUG
       // The Simulator has no usable speech input: B4M_VOICE_SCRIPTED_SPEECH=1 scripts the utterance while the
       // send and the streamed reply still go through the real API and socket.
       if FixtureServices.isEnabled || ProcessInfo.processInfo.environment["B4M_VOICE_SCRIPTED_SPEECH"] == "1" {
-        model = VoiceFixtures.makeModel(target: request.target, api: services.api, realtime: services.realtime)
+        model = VoiceFixtures.makeModel(
+          target: request.target, api: services.api, realtime: services.realtime, opening: opening,
+          firstTurnContext: context)
         return model
       }
     #endif
     model = VoiceConversationModel(
       target: request.target, api: services.api, realtime: services.realtime, listener: SFSpeechListener(),
-      speaker: AVSpeechSpeaker(), audioSession: AVVoiceAudioSession())
+      speaker: AVSpeechSpeaker(), audioSession: AVVoiceAudioSession(), opening: opening, firstTurnContext: context)
     return model
   }
 
