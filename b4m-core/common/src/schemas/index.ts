@@ -41,6 +41,7 @@ export * from './fabFileResponse';
 export * from './webhookSubscriptionResponse';
 export * from './userActivityResponse';
 export * from './settings';
+export * from './nestedSettingSecrets';
 export * from './customMcpHosts';
 export * from './customMcpPolicy';
 export * from './zod';

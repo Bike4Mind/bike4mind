@@ -61,7 +61,13 @@ import {
   OpenAIEmbeddingModel,
   VoyageAIEmbeddingModel,
 } from './embedding';
-import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
+import { SreAgentConfigSchema } from '../types/entities/SreTypes';
+import {
+  hasNestedSecretValue,
+  isValidNestedSecretGroups,
+  redactNestedSecrets,
+  type NestedSecretGroup,
+} from './nestedSettingSecrets';
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
 import { ReleaseNotesConfigSchema } from './releaseNotes';
 import {
@@ -1157,6 +1163,11 @@ export interface BaseSetting {
   /** Whether the setting is sensitive and should be hidden from users. */
   isSensitive?: boolean;
   /**
+   * Object settings only: secret fields inside the value. They are masked on every read, kept out
+   * of live broadcasts, and encrypted (or kept, when the mask comes back) by the update route.
+   */
+  nestedSecrets?: readonly NestedSecretGroup[];
+  /**
    * Hide from the admin settings list on production stages (PRODUCTION_STAGES in
    * @bike4mind/infra). Display only: the stored value and the update route are unchanged.
    */
@@ -1532,6 +1543,12 @@ export function makeContributedBooleanSetting(
   config: { defaultValue?: boolean; acceptNumeric?: boolean } & ContributedSettingFields
 ): SettingDefinition<string> {
   return makeBooleanSetting(config as AsCoreConfig<typeof config>);
+}
+
+export function makeContributedObjectSetting<T extends object>(
+  config: { defaultValue?: T; schema: z.ZodType<T> } & ContributedSettingFields
+): SettingDefinition<string> {
+  return makeObjectSetting(config as AsCoreConfig<typeof config>);
 }
 
 // function makeArraySetting(config: { defaultValue?: string[] } & BaseSetting) {
@@ -8537,6 +8554,9 @@ export const settingsMap = {
     category: 'Admin',
     order: 130,
     schema: SreAgentConfigSchema,
+    nestedSecrets: [
+      { arrayKey: 'repos', identityFields: ['owner', 'repo'], secretFields: ['webhookSecret', 'callbackToken'] },
+    ],
   }),
   contextTelemetryAlerts: makeObjectSetting({
     key: 'contextTelemetryAlerts',
@@ -8952,9 +8972,9 @@ export function isMaskedSensitiveSettingValue(value: unknown): boolean {
  *  - a `settingName` with no entry in `settingsMap` (removed/renamed setting, orphaned row)
  *    is treated as sensitive and masked, rather than falling through unmasked,
  *  - any setting tagged `isSensitive` collapses to a mask (never the real value),
- *  - sreAgentConfig (which is NOT isSensitive) has its per-repo webhookSecret and
- *    callbackToken masked; parsed through the schema first so the v1->v2 migration
- *    moves secrets into repos[] where the masking looks for them.
+ *  - a setting declaring `nestedSecrets` (which is NOT isSensitive) has those fields masked;
+ *    parsed through its schema first, so a value stored in an older shape is masked in the
+ *    shape the schema migrates it to. A value that does not parse is masked as stored.
  *
  * Shared by the authed fetch path and the public artifact (defense-in-depth -
  * publicSafe settings should never carry secrets, but redact anyway).
@@ -8965,24 +8985,15 @@ export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc 
     return { ...setting, settingValue: maskSensitiveSettingValue(setting.settingValue) };
   }
 
-  if (setting.settingName !== 'sreAgentConfig' || !setting.settingValue) return setting;
-  let config: SreAgentConfig;
-  try {
-    config = SreAgentConfigSchema.parse(setting.settingValue);
-  } catch {
-    return setting;
+  const groups = definition.nestedSecrets;
+  if (!groups?.length || !setting.settingValue) return setting;
+  const parsed = definition.schema.safeParse(setting.settingValue);
+  const value: unknown = parsed.success ? parsed.data : setting.settingValue;
+  // Not an object, so there are no fields to mask one by one: withhold the whole value.
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return { ...setting, settingValue: maskSensitiveSettingValue(value) };
   }
-  return {
-    ...setting,
-    settingValue: {
-      ...config,
-      repos: (config.repos ?? []).map(repo => ({
-        ...repo,
-        ...(repo.webhookSecret && { webhookSecret: SRE_SECRET_PLACEHOLDER }),
-        ...(repo.callbackToken && { callbackToken: SRE_SECRET_PLACEHOLDER }),
-      })),
-    },
-  };
+  return { ...setting, settingValue: redactNestedSecrets(value, groups) };
 }
 
 /**
@@ -8992,7 +9003,7 @@ export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc 
  * ciphertext tail (as maskSensitiveSettingValue would) surfaces a wrong "last 4" and lets an
  * admin watching a live cross-admin update mis-verify which credential is loaded. An unset
  * value stays empty. The authoritative mask carrying the real last-4 still comes from
- * /api/settings/fetch. Non-sensitive shapes (sreAgentConfig) fall through to redactSettingSecrets.
+ * /api/settings/fetch. Non-sensitive shapes (nestedSecrets) fall through to redactSettingSecrets.
  *
  * A `settingName` with no definition (core or contributed) is treated as sensitive too, matching
  * redactSettingSecrets - an orphaned row must never broadcast unmasked.
@@ -9006,19 +9017,16 @@ export function redactSettingSecretsForBroadcast(setting: AdminSettingDoc): Admi
   return redactSettingSecrets(setting);
 }
 
-/** Non-sensitive settings whose value embeds secrets that redactSettingSecrets masks field by field. */
-const SETTINGS_WITH_NESTED_SECRETS: ReadonlySet<string> = new Set(['sreAgentConfig']);
-
 /**
  * Setting keys whose raw stored document is safe to stream over a WebSocket subscription:
  * defined (core or contributed), not `isSensitive`, and not a shape that nests secrets
- * (sreAgentConfig, see redactSettingSecrets). An allowlist so an orphaned or newly added
+ * (`nestedSecrets`, see redactSettingSecrets). An allowlist so an orphaned or newly added
  * sensitive row is withheld by default. Sensitive settings reach admins only through the
  * redacting REST paths (/api/settings, /api/settings/fetch).
  */
 export function broadcastSafeSettingKeys(): string[] {
   return allSettingDefinitions()
-    .filter(definition => !definition.isSensitive && !SETTINGS_WITH_NESTED_SECRETS.has(definition.key))
+    .filter(definition => !definition.isSensitive && definition.nestedSecrets === undefined)
     .map(definition => definition.key);
 }
 
@@ -9142,8 +9150,22 @@ export interface ContributedSettingsRegistration {
   coreCollisions: string[];
   /** Keys an earlier contribution already registered; the first one is kept. */
   duplicates: string[];
-  /** Reserved object keys, definitions with no key or schema, sensitive ones with a default, and ones declaring a scope. */
+  /**
+   * Reserved object keys, definitions with no key or schema, sensitive ones with a default, ones
+   * declaring a scope, and ones whose `nestedSecrets` is malformed, sits on a non-object setting or
+   * has a default that already holds a secret.
+   */
   rejected: string[];
+}
+
+function hasUsableNestedSecrets(definition: SettingDefinition<string>): boolean {
+  if (definition.nestedSecrets === undefined) return true;
+  return (
+    definition.type === 'object' &&
+    definition.isSensitive !== true &&
+    isValidNestedSecretGroups(definition.nestedSecrets) &&
+    !hasNestedSecretValue(definition.defaultValue, definition.nestedSecrets)
+  );
 }
 
 /** Adds contributed setting definitions. Never replaces an existing definition. */
@@ -9159,7 +9181,8 @@ export function registerContributedSettings(
       RESERVED_SETTING_NAMES.has(key) ||
       typeof definition.schema?.safeParse !== 'function' ||
       (definition.isSensitive === true && definition.defaultValue !== undefined && definition.defaultValue !== '') ||
-      definition.scope !== undefined
+      definition.scope !== undefined ||
+      !hasUsableNestedSecrets(definition)
     ) {
       result.rejected.push(String(key));
     } else if (isCoreSettingKey(key)) {
