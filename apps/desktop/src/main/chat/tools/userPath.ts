@@ -5,9 +5,20 @@ import { delimiter, join, posix, win32 } from 'node:path';
 
 /** Generous on purpose: a login shell loading nix-darwin, direnv and plugins takes seconds, more on a cold launch. */
 const SHELL_PATH_TIMEOUT_MS = 20_000;
+const PATH_MARKER = '__B4M_PATH__';
 const ENV_MARKER = '__B4M_ENV__';
-/** Room for a large environment; a probe that overflows it falls back like one that fails. */
+/** Room for a large environment (Node's default is 1 MiB); a probe that overflows it falls back like one that fails. */
 const SHELL_ENV_MAX_BUFFER = 4 * 1024 * 1024;
+/**
+ * PATH is printed on its own, not read from the `env -0` listing, so it survives an `env` without `-0`
+ * (macOS before 12.3); such a probe loses only the extra variables. Constant text: nothing user-controlled.
+ */
+const PROBE_COMMAND = [
+  `printf '%s' "${PATH_MARKER}\${PATH}${PATH_MARKER}"`,
+  `printf '%s' '${ENV_MARKER}'`,
+  '/usr/bin/env -0',
+  `printf '%s' '${ENV_MARKER}'`,
+].join('; ');
 
 /**
  * Where Homebrew and Nix put binaries. A Finder launch gets /usr/bin:/bin:/usr/sbin:/sbin, which has
@@ -54,9 +65,8 @@ export function parseShellEnvironment(stdout: string): Map<string, string> | nul
 type LoginShell = { path: string; variables: Readonly<Record<string, string>> };
 
 /**
- * Asks the user's login shell once for its environment. The command text is a constant, so nothing
- * user-controlled reaches the shell; a shell that fails, hangs past the timeout or prints no listing
- * leaves only the fallback PATH and no extra variables.
+ * Asks the user's login shell once for its PATH and environment (PROBE_COMMAND). A shell that fails,
+ * hangs past the timeout or overflows the buffer leaves only the fallback PATH and no extra variables.
  */
 function probeLoginShell(): Promise<LoginShell> {
   cachedShell ??= new Promise<LoginShell>(resolve => {
@@ -66,7 +76,7 @@ function probeLoginShell(): Promise<LoginShell> {
       .join(delimiter);
     execFile(
       process.env.SHELL || '/bin/zsh',
-      ['-ilc', `printf '%s' '${ENV_MARKER}'; /usr/bin/env -0; printf '%s' '${ENV_MARKER}'`],
+      ['-ilc', PROBE_COMMAND],
       // SIGKILL: an interactive (-i) zsh/bash ignores the default SIGTERM, so the timeout would not cut it short.
       {
         timeout: SHELL_PATH_TIMEOUT_MS,
@@ -75,8 +85,13 @@ function probeLoginShell(): Promise<LoginShell> {
         env: { ...process.env, TERM: 'dumb' },
       },
       (error, stdout) => {
+        const shellPath = error ? undefined : new RegExp(`${PATH_MARKER}(.*?)${PATH_MARKER}`).exec(stdout)?.[1];
         const found = error ? null : parseShellEnvironment(stdout);
-        const shellPath = found?.get('PATH');
+        if (error || !found) {
+          // Code and signal only: the message carries the shell's stderr, which rc files may fill with anything.
+          const reason = error ? `code ${String(error.code)}, signal ${String(error.signal)}` : 'no listing';
+          console.warn(`[userPath] login shell probe gave no environment (${reason})`);
+        }
         const variables = Object.fromEntries([...(found ?? [])].filter(([name]) => isUserVariable(name)));
         resolve({ path: shellPath ? `${shellPath}${delimiter}${fallback}` : fallback, variables });
       }

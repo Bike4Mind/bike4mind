@@ -134,6 +134,7 @@ describe.skipIf(process.platform === 'win32')('resolveUserPath', () => {
 
     expect(path.split(delimiter)[0]).toBe('/etc/profiles/per-user/test/bin');
     expect(path).not.toContain('__B4M_PATH__');
+    expect(path).not.toContain('__B4M_ENV__');
     expect(path.split(delimiter)).toContain('/opt/homebrew/bin');
   });
 
@@ -150,19 +151,21 @@ describe.skipIf(process.platform === 'win32')('resolveUserPath', () => {
     vi.doUnmock('node:child_process');
   });
 
-  it("captures the login shell's exported variables, leaving out PATH and session variables", async () => {
+  it("captures the login shell's exported variables, leaving out PATH, session variables and functions", async () => {
     const shell = join(directory, 'shell');
     await writeFile(
       shell,
       [
-        '#!/bin/sh',
+        '#!/bin/bash',
         'printf "Shell startup output\\n"',
         'export PATH="/login/bin:/usr/bin:/bin"',
         'export B4M_TEST_SECRET="secret value"',
         "export MULTILINE='line one",
         "line two'",
-        'export SHLVL=7',
-        'exec /bin/sh -c "$2"',
+        'export SHLVL=7 COLUMNS=80 LINES=24 OLDPWD=/tmp',
+        'exported_function() { :; }',
+        'export -f exported_function',
+        'exec /bin/bash -c "$2"',
         '',
       ].join('\n'),
       { mode: 0o755 }
@@ -174,23 +177,39 @@ describe.skipIf(process.platform === 'win32')('resolveUserPath', () => {
 
     expect(variables.B4M_TEST_SECRET).toBe('secret value');
     expect(variables.MULTILINE).toBe('line one\nline two');
-    expect(variables).not.toHaveProperty('PATH');
-    expect(variables).not.toHaveProperty('SHLVL');
+    for (const name of ['PATH', 'PWD', 'OLDPWD', 'SHLVL', '_', 'TERM', 'COLUMNS', 'LINES']) {
+      expect(variables).not.toHaveProperty(name);
+    }
+    expect(Object.keys(variables).filter(name => name.includes('exported_function'))).toEqual([]);
     expect((await resolveUserPath()).split(delimiter)[0]).toBe('/login/bin');
   });
 
-  it('caps the probe output, so an enormous environment falls back instead of growing without bound', async () => {
-    const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
-    const execFile = vi.fn(actual.execFile);
-    vi.doMock('node:child_process', () => ({ ...actual, execFile }));
-    vi.stubEnv('SHELL', join(directory, 'missing-shell'));
-    const { resolveUserPath } = await import('./userPath');
+  it('keeps the login PATH but adds no variables when env cannot list with -0', async () => {
+    const shell = join(directory, 'shell');
+    // What an `env` without -0 (macOS before 12.3) leaves: the PATH segment and an empty listing.
+    await writeFile(shell, '#!/bin/sh\nprintf "__B4M_PATH__/login/bin__B4M_PATH____B4M_ENV____B4M_ENV__"\n', {
+      mode: 0o755,
+    });
+    vi.stubEnv('SHELL', shell);
+    const { resolveLoginShellVariables, resolveUserPath } = await import('./userPath');
 
-    await resolveUserPath();
+    expect(await resolveLoginShellVariables()).toEqual({});
+    expect((await resolveUserPath()).split(delimiter)[0]).toBe('/login/bin');
+  });
 
-    expect(execFile.mock.calls[0][2]).toMatchObject({ timeout: expect.any(Number), maxBuffer: expect.any(Number) });
-    expect(execFile.mock.calls[0][1]).toEqual(['-ilc', expect.not.stringContaining('$')]);
-    vi.doUnmock('node:child_process');
+  it('falls back when the probe output overflows its cap', async () => {
+    const shell = join(directory, 'shell');
+    await writeFile(
+      shell,
+      '#!/bin/sh\nprintf "__B4M_PATH__/login/bin__B4M_PATH____B4M_ENV__A=1"\n' +
+        "head -c 5242880 /dev/zero | tr '\\0' a\nprintf __B4M_ENV__\n",
+      { mode: 0o755 }
+    );
+    vi.stubEnv('SHELL', shell);
+    const { resolveLoginShellVariables, resolveUserPath } = await import('./userPath');
+
+    expect(await resolveLoginShellVariables()).toEqual({});
+    expect((await resolveUserPath()).split(delimiter)).not.toContain('/login/bin');
   });
 
   it('adds no variables and keeps the fallback PATH when the shell prints no listing', async () => {
