@@ -99,14 +99,16 @@ export function absolutePublishUrl(path: string): string {
   return `${requireEnv('APP_URL', process.env.APP_URL).trim().replace(/\/+$/, '')}${path}`;
 }
 
-function slugFromTitle(title: string): string {
+// The suffix is derived from the artifact id, not random: two concurrent publishes of one artifact without a
+// slug then target the same slug, so the unique index turns the loser into a 409 instead of a second page.
+function slugFromTitle(title: string, artifactId: string): string {
   const base = title
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 50)
     .replace(/-+$/, '');
-  return `${base.length >= 3 ? base : 'page'}-${randomUUID().replace(/-/g, '').slice(0, 6)}`;
+  return `${base.length >= 3 ? base : 'page'}-${createHash('sha256').update(artifactId).digest('hex').slice(0, 6)}`;
 }
 
 function violation(type: ValidationViolation['type'], message: string): UnprocessableEntityError {
@@ -326,7 +328,7 @@ export async function publishStoredArtifact(
 
   let slug: string;
   if (input.slug === undefined) {
-    slug = slugFromTitle(artifact.title);
+    slug = slugFromTitle(artifact.title, artifact.id);
   } else {
     const parsed = SlugSchema.safeParse(input.slug);
     if (!parsed.success) {
