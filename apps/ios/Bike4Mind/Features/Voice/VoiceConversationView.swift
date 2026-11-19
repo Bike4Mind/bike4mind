@@ -174,7 +174,8 @@ struct VoiceConversationView: View {
   private func run() async {
     guard model == nil else { return }
     let voiceID = await services.voiceCatalog.premiumVoice()
-    guard model == nil else { return }
+    // Done may have been tapped during the lookup; onDisappear then had no model to stop.
+    guard !Task.isCancelled, model == nil else { return }
     let model = Self.makeModel(request: request, services: services, voiceID: voiceID)
     self.model = model
     await model.start()
