@@ -5,6 +5,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import ChatPanelControls from './ChatPanelControls';
+import type { GetCopyMarkdown } from './useCopySessionMarkdown';
 
 // The copy button's hook reaches SessionsContext and react-query, neither of which the
 // header's own wiring depends on. `copyState` is mutable so a test can render the
@@ -15,7 +16,7 @@ const { copyMarkdown, copyState, useCopySessionMarkdown } = vi.hoisted(() => {
   return {
     copyMarkdown,
     copyState,
-    useCopySessionMarkdown: vi.fn((_getMarkdown?: () => string) => ({ copyMarkdown, copied: copyState.copied })),
+    useCopySessionMarkdown: vi.fn((_getMarkdown?: GetCopyMarkdown) => ({ copyMarkdown, copied: copyState.copied })),
   };
 });
 vi.mock('./useCopySessionMarkdown', () => ({ useCopySessionMarkdown }));

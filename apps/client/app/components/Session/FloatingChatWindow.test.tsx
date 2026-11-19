@@ -25,6 +25,7 @@ const Wrapper = ({ children }: { children: React.ReactNode }) => (
 
 describe('FloatingChatWindow', () => {
   beforeEach(() => {
+    controlsProps.last = undefined;
     setSessionLayout({ layout: 'floatingChat', floatingChatMinimized: false });
   });
 
@@ -55,6 +56,19 @@ describe('FloatingChatWindow', () => {
     render(
       <Wrapper>
         <FloatingChatWindow getCopyMarkdown={getCopyMarkdown}>chat</FloatingChatWindow>
+      </Wrapper>
+    );
+
+    expect(controlsProps.last).toHaveProperty('getCopyMarkdown', getCopyMarkdown);
+  });
+
+  it('passes getCopyMarkdown through when the dock layouts are off', () => {
+    const getCopyMarkdown = () => 'ASK BOB CHAT';
+    render(
+      <Wrapper>
+        <FloatingChatWindow dockable={false} getCopyMarkdown={getCopyMarkdown}>
+          chat
+        </FloatingChatWindow>
       </Wrapper>
     );
 

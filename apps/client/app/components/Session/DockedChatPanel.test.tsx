@@ -26,6 +26,7 @@ const Wrapper = ({ children }: { children: React.ReactNode }) => (
 
 describe('DockedChatPanel', () => {
   beforeEach(() => {
+    controlsProps.last = undefined;
     setSessionLayout({ layout: 'dockRight', floatingChatMinimized: false });
   });
 
