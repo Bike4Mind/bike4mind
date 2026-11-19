@@ -67916,7 +67916,7 @@
             }
           },
           "404": {
-            "description": "No artifact with that id is yours to publish. Only the owner can publish, so one shared with you, a public one, a deleted one and one that does not exist are all reported as 404.",
+            "description": "No artifact with that id is yours to publish. Only the owner can publish, so one shared with you, a public one, a deleted one and one that does not exist are all reported as 404. Also returned when the artifact has no published page to refresh.",
             "content": {
               "application/json": {
                 "schema": {
