@@ -118,7 +118,7 @@ Located in the AI category. Sets how many video clips one agent-mode run may sta
 
 ### Python Artifact Data Origins
 
-Located in the Experimental category, and used only while Artifacts are enabled. Python artifacts run in an isolated frame with no network access. This setting lists the HTTPS origins their code may read data from, one per line, such as `https://data.example.com`. It is empty by default, which keeps Python artifacts offline.
+Located in the Experimental category, and used only while Artifacts are enabled. Python artifacts run in an isolated frame that can reach only the Python package CDN. This setting lists the HTTPS origins their code may also read data from, one per line, such as `https://data.example.com`. It is empty by default.
 
 - Enter an origin only: `https://`, a public hostname and an optional port, with no path, query, wildcard or credentials
 - IP addresses, `localhost`, and private or internal names are refused, as are this app's own hosts and their subdomains
@@ -126,7 +126,7 @@ Located in the Experimental category, and used only while Artifacts are enabled.
 - If the stored list is ever invalid, no origin is allowed until it is saved again
 - The model is told which origins it may read from, and the Python viewer shows the list to the user
 - The data server must allow cross-origin reads (for example `Access-Control-Allow-Origin: *`). Requests carry no cookies or credentials from this app
-- A change can take up to ten minutes to reach pages that are already open
+- A change applies to pages loaded up to ten minutes after it is saved; a page that has already run Python keeps the earlier list until it is reloaded
 
 Python code can send what it has to a listed origin as well as read from it, so list only hosts you trust with artifact content. HTML and React artifacts stay offline whatever this list holds.
 
