@@ -20,23 +20,16 @@ const ShotArg = z.object({
     .regex(/^shot-\d+$/)
     .optional()
     .describe(
-      'The id of a current shot (e.g. "shot-3") to carry over as it is: its prompt, takes and clip are kept, so ' +
-        'leave prompt out. Use it for every shot you are not re-imagining, even when it moves. Title, length and ' +
-        'voice line default to the current ones and can be changed; voiceLine "" removes the line.'
+      'A current shot id (e.g. "shot-3") to carry over with its prompt, takes and clip; omit prompt. Use it for ' +
+        'every shot you are not re-imagining. Other fields default to the current ones; voiceLine "" removes it.'
     ),
-  title: z
-    .string()
-    .trim()
-    .min(1)
-    .max(limits.shotTitleMaxLength)
-    .optional()
-    .describe('A short name, e.g. "Hook". Required for a new shot.'),
+  title: z.string().trim().min(1).max(limits.shotTitleMaxLength).optional().describe('A short name, e.g. "Hook".'),
   intent: z
     .string()
     .trim()
     .max(limits.shotIntentMaxLength)
     .optional()
-    .describe('What the shot is for, e.g. "hook", "product reveal", "call to action".'),
+    .describe('What the shot is for, e.g. "product reveal".'),
   prompt: z
     .string()
     .trim()
@@ -44,24 +37,15 @@ const ShotArg = z.object({
     .max(limits.shotPromptMaxLength)
     .optional()
     .describe(
-      'The image prompt for a new shot: subject, setting, light, camera. Describe the product in it. Required ' +
-        'unless keep is set; a shot with a new prompt gets new takes and a new clip.'
+      'Image prompt for a new shot: subject, setting, light, camera, and the product. A new prompt makes new takes.'
     ),
-  durationSeconds: z
-    .number()
-    .min(1)
-    .max(30)
-    .optional()
-    .describe('How long the shot runs in the cut. Required for a new shot.'),
+  durationSeconds: z.number().min(1).max(30).optional().describe('Length in the cut.'),
   voiceLine: z
     .string()
     .trim()
     .max(limits.shotVoiceLineMaxLength)
     .optional()
-    .describe(
-      'The voiceover line spoken over this shot; it also becomes the caption. Keep it short enough to say ' +
-        'within the shot, about 2 words per second (8 words for a 4 second shot): a longer line is cut.'
-    ),
+    .describe('Voiceover line and caption for the shot, about 2 words per second of shot; a longer line is cut.'),
 });
 
 const schema = z.object({
@@ -81,18 +65,16 @@ const schema = z.object({
     .boolean()
     .optional()
     .describe(
-      'Set true only when the user asked for new pictures: it lets a shot with takes get a new prompt or be removed ' +
-        '(the takes stay in Files, the result lists them in takesDropped) and cuts voice lines a re-time leaves ' +
-        'without room. It never lengthens a shot past its clip; to keep a shot, use keep, not replace.'
+      'Only when the user asked for new pictures: lets a shot with takes get a new prompt or be removed, and cuts ' +
+        'voice lines a re-time leaves without room. Never lengthens a shot past its clip.'
     ),
 });
 type StoryboardArgs = z.infer<typeof schema>;
 
 const description =
-  'Write the storyboard of a Studio production: the shots in order, each with an image prompt, its length and its ' +
-  'voiceover line. Replaces the shot list: list every shot, and carry each current shot you are not re-imagining ' +
-  'over with keep (its id), which keeps its takes and clip. A shot with a clip cannot grow past it. Plan about 4 shots for a 15 second ad (hook, product, benefit, call to action). Then call ' +
-  'production_generate_shot.';
+  'Write the storyboard of a Studio production: every shot in order with its image prompt, length and voice line. ' +
+  'Carry over each current shot you are not re-imagining with keep. About 4 shots for a 15 second ad (hook, ' +
+  'product, benefit, call to action). Then call production_generate_shot.';
 
 type ResolvedShot = { title: string; intent?: string; prompt: string; durationMs: number; voiceLine?: string };
 
