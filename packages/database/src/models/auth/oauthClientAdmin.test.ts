@@ -509,6 +509,49 @@ const conflictOnRead = (clientId: string, write: Record<string, unknown>) => {
   );
 };
 
+describe('updateOAuthClient unpaid limits concurrency', () => {
+  const limits = { requestsPerMinute: 3, requestsPerDay: 20, tokensPerMinute: 1000, maxConcurrent: 1 };
+
+  it('refuses limits when federation is removed after validation', async () => {
+    const { client } = await createOAuthClient(federated);
+    conflictOnRead(client.id, { $unset: { federatedIdp: '' } });
+    try {
+      await expect(updateOAuthClient(client.id, { unpaidAccountLimits: limits })).rejects.toMatchObject({
+        statusCode: 409,
+        message: 'OAuth client changed while saving; reload and try again',
+      });
+    } finally {
+      vi.restoreAllMocks();
+    }
+    const stored = await OAuthClientModel.findById(client.id).lean();
+    expect(stored?.federatedIdp).toBeUndefined();
+    expect(stored?.unpaidAccountLimits).toBeUndefined();
+  });
+
+  it('refuses federation removal when limits are added after validation', async () => {
+    const { client } = await createOAuthClient(federated);
+    conflictOnRead(client.id, { $set: { unpaidAccountLimits: limits } });
+    try {
+      await expect(updateOAuthClient(client.id, { federatedIdp: null })).rejects.toMatchObject({ statusCode: 409 });
+    } finally {
+      vi.restoreAllMocks();
+    }
+    const stored = await OAuthClientModel.findById(client.id).lean();
+    expect(stored?.federatedIdp).toBeDefined();
+    expect(stored?.unpaidAccountLimits).toMatchObject(limits);
+  });
+
+  it('allows clearing federation and limits together without a concurrent edit', async () => {
+    const { client } = await createOAuthClient({ ...federated, unpaidAccountLimits: limits });
+    const { after } = await updateOAuthClient(client.id, { federatedIdp: null, unpaidAccountLimits: null });
+    expect(after.federatedIdp).toBeUndefined();
+    expect(after.unpaidAccountLimits).toBeUndefined();
+    const stored = await OAuthClientModel.findById(client.id).lean();
+    expect(stored?.federatedIdp).toBeUndefined();
+    expect(stored?.unpaidAccountLimits).toBeUndefined();
+  });
+});
+
 describe('updateOAuthClient scopes', () => {
   it('sets allowedScopes', async () => {
     const { client } = await createOAuthClient(base);

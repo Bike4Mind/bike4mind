@@ -266,17 +266,18 @@ export async function updateOAuthClient(
     if (data.federatedIdp === undefined) filter.federatedIdp = { $exists: finalFederated };
   }
 
-  if (data.unpaidAccountLimits !== undefined) {
+  if (data.unpaidAccountLimits !== undefined || data.federatedIdp !== undefined) {
     for (const key of ['requestsPerMinute', 'requestsPerDay', 'tokensPerMinute', 'maxConcurrent'] as const) {
       filter[`unpaidAccountLimits.${key}`] = before.unpaidAccountLimits?.[key] ?? null;
     }
+    if (data.federatedIdp === undefined) filter.federatedIdp = { $exists: finalFederated };
   }
 
   const doc = await OAuthClientModel.findOneAndUpdate(filter, update, { new: true, runValidators: true }).exec();
   if (!doc) {
     if (Object.keys(filter).length > 1 && (await OAuthClientModel.exists({ _id: id }))) {
       throw new ConflictError(
-        scopesOrTrustChanged || data.expectedUpdatedAt !== undefined
+        scopesOrTrustChanged || data.expectedUpdatedAt !== undefined || data.unpaidAccountLimits !== undefined
           ? 'OAuth client changed while saving; reload and try again'
           : 'Redirect URIs changed while saving; reload and try again'
       );
