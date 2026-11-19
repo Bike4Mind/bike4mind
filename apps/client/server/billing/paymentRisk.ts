@@ -332,8 +332,9 @@ export async function recordPaymentStart(
   },
   logger: Logger
 ): Promise<void> {
-  // Emitted ahead of the write so a failed or slow attempt-row write cannot drop the count.
-  await emitMetric(
+  // Overlaps the write so the CloudWatch round trip does not add to the start-payment
+  // response, and a failed attempt-row write cannot drop the count. emitMetric never rejects.
+  const startCounted = emitMetric(
     'Lumina5/Billing',
     'PaymentStarted',
     1,
@@ -356,6 +357,7 @@ export async function recordPaymentStart(
       error: error instanceof Error ? error.message : String(error),
     });
   }
+  await startCounted;
 }
 
 /**
