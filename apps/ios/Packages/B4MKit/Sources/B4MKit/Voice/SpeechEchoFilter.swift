@@ -41,8 +41,31 @@ struct SpeechEchoFilter {
     var end = 0
     var matched = 0
     var gap = 0
-    for index in heard.indices[first...] where !heard[index].isEmpty {
+    let order = heard.indices[first...].filter { !heard[$0].isEmpty }
+    var position = 0
+    while position < order.count {
+      let index = order[position]
       let word = heard[index]
+      position += 1
+      if gap > 0, gap >= tolerance {
+        // A run of misheard words stands for about as many spoken ones, so the echo picks up again only where the
+        // next two heard words sit side by side just past that run; a looser match would eat the user's own words.
+        guard gap < lookahead, position < order.count else { break }
+        let following = heard[order[position]]
+        let resume = (next + gap - 1...next + gap).first {
+          $0 >= next && $0 + 1 < said.count && said[$0] == word && said[$0 + 1] == following
+        }
+        if let resume {
+          next = resume + 2
+          end = order[position] + 1
+          matched += 2
+          gap = 0
+          position += 1
+        } else {
+          gap += 1
+        }
+        continue
+      }
       // After a stray word the first two echoed words must be adjacent, or scattered reply words in the
       // user's own question ("what is the capital of ...") would line up as echo.
       let reach = matched == 0 || (first > 0 && matched < 2) ? 1 : lookahead
@@ -54,7 +77,6 @@ struct SpeechEchoFilter {
         gap = 0
       } else {
         gap += 1
-        if gap >= tolerance { break }
       }
     }
     // One matching word is more likely the user ("the weather today", "wait Paris"), unless it opens the transcript

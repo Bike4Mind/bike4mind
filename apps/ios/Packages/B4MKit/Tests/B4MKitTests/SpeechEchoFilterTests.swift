@@ -23,6 +23,14 @@ final class SpeechEchoFilterTests: XCTestCase {
     XCTAssertEqual(residual("the capital of France is Paris it has bean the capital wait stop"), "wait stop")
   }
 
+  func testTwoMisheardWordsInARowDoNotEndTheEcho() {
+    XCTAssertEqual(residual("the capital of France is Paris it hat bean the capital for a very long time"), "")
+    XCTAssertEqual(
+      residual("the capital of France is Paris it hat bean the capital for a very long time hold on"), "hold on")
+    XCTAssertEqual(
+      residual("the capitol of Frank us Paris it has been the capital for a very long time hold on"), "hold on")
+  }
+
   func testTheRecognizerCanStartMidReply() {
     XCTAssertEqual(residual("been the capital for a very long time hold on"), "hold on")
   }
