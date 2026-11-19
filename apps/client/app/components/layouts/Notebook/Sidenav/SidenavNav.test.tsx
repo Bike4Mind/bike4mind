@@ -26,6 +26,7 @@ const {
   entitlements,
   userState,
   logEvent,
+  adminSettings,
 } = vi.hoisted(() => ({
   useFeatureEnabledMock: vi.fn(),
   useGearsNavSignalMock: vi.fn(),
@@ -50,6 +51,7 @@ const {
     currentUser: undefined as { id?: string; preferences?: { hiddenSurfaces?: string[] } } | undefined,
   },
   logEvent: vi.fn(),
+  adminSettings: { authedSettingsLoaded: false, spacesOn: false },
 }));
 
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
@@ -62,7 +64,10 @@ vi.mock('@client/app/hooks/data/videoGenerations', () => ({ useVideoModels: useV
 vi.mock('@client/app/hooks/data/musicGenerations', () => ({ useMusicModels: useMusicModelsMock }));
 vi.mock('@client/app/hooks/data/audioProviders', () => ({ useAudioProviders: useAudioProvidersMock }));
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
-  useAdminSettingsCache: () => ({ isFeatureEnabled: () => false }),
+  useAdminSettingsCache: () => ({
+    isFeatureEnabled: (key: string) => key === 'EnableSpaces' && adminSettings.spacesOn,
+    authedSettingsLoaded: adminSettings.authedSettingsLoaded,
+  }),
 }));
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: logEvent }) }));
 vi.mock('@client/app/contexts/UserContext', () => ({
@@ -122,6 +127,8 @@ beforeEach(() => {
   useMusicModelsMock.mockReturnValue({ data: [] });
   useAudioProvidersMock.mockReturnValue({ data: { speech: [], soundEffects: [] } });
   location.pathname = '/new';
+  adminSettings.authedSettingsLoaded = false;
+  adminSettings.spacesOn = false;
   navItems.length = 0;
   entitlements.length = 0;
   userState.isAdmin = false;
@@ -186,6 +193,32 @@ describe('SidenavNav Skill Market row', () => {
     expect(row).toHaveTextContent('Skill Market');
     fireEvent.click(row);
     expect(navigate).toHaveBeenCalledWith({ to: '/skills/market' });
+  });
+});
+
+describe('SidenavNav Spaces row', () => {
+  it('is hidden with the flag off', () => {
+    adminSettings.authedSettingsLoaded = true;
+    adminSettings.spacesOn = false;
+    renderNav();
+    expect(screen.queryByTestId('sidenav-nav-spaces')).toBeNull();
+  });
+
+  it('is hidden before the authenticated settings load, even though the default reads on', () => {
+    adminSettings.authedSettingsLoaded = false;
+    adminSettings.spacesOn = true;
+    renderNav();
+    expect(screen.queryByTestId('sidenav-nav-spaces')).toBeNull();
+  });
+
+  it('shows with the flag on once settings are loaded, and opens /spaces', () => {
+    adminSettings.authedSettingsLoaded = true;
+    adminSettings.spacesOn = true;
+    renderNav();
+    const row = screen.getByTestId('sidenav-nav-spaces');
+    expect(row).toHaveTextContent('Spaces');
+    fireEvent.click(row);
+    expect(navigate).toHaveBeenCalledWith({ to: '/spaces' });
   });
 });
 

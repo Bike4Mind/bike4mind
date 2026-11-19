@@ -15,6 +15,7 @@ import {
   getInviteDetails,
   filterInviteRecipientsToSelf,
   toSharerInviteViews,
+  isDisabledSpaceInviteKey,
 } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -74,6 +75,10 @@ const handler = baseApi()
 
       if (!id) {
         return res.status(400).json({ message: 'Invalid delete invite request' });
+      }
+
+      if (await isDisabledSpaceInviteKey(id)) {
+        return res.status(404).json({ message: 'Invite Not Found' });
       }
 
       const updatedInvite = await sharingService.cancelInviteById(

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { IOrgDomainClaimView, OrgDomainJoinPolicy } from '@bike4mind/common';
+import { SPACE_DOMAIN_JOIN_POLICIES, type IOrgDomainClaimView, type OrgDomainJoinPolicy } from '@bike4mind/common';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -27,12 +27,75 @@ import {
   updateOrgDomainClaimPolicy,
   verifyOrgDomainClaim,
 } from '@client/app/utils/orgDomainAPICalls';
+import {
+  addSpaceDomainClaim,
+  deleteSpaceDomainClaim,
+  fetchSpaceDomainClaims,
+  updateSpaceDomainClaimPolicy,
+  verifySpaceDomainClaim,
+} from '@client/app/utils/spaceDomainAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 
 const POLICY_LABELS: Record<OrgDomainJoinPolicy, string> = {
   off: 'Off',
   suggest: 'Suggest joining',
   'auto-join': 'Join automatically',
+};
+
+export type DomainOwner = { kind: 'organization' | 'space'; id: string };
+
+interface DomainCalls {
+  fetch: (ownerId: string) => Promise<IOrgDomainClaimView[]>;
+  add: (ownerId: string, domain: string) => Promise<IOrgDomainClaimView>;
+  verify: typeof verifyOrgDomainClaim;
+  update: (ownerId: string, claimId: string, update: { policy: OrgDomainJoinPolicy }) => Promise<IOrgDomainClaimView>;
+  remove: (ownerId: string, claimId: string) => Promise<void>;
+}
+
+interface OwnerConfig {
+  calls: DomainCalls;
+  policies: readonly OrgDomainJoinPolicy[];
+  noun: string;
+  /** Test id prefix and query key root; the organization's are the original ones. */
+  prefix: string;
+  queryRoot: string;
+  intro: string;
+}
+
+const OWNER_CONFIG: Record<DomainOwner['kind'], OwnerConfig> = {
+  organization: {
+    calls: {
+      fetch: id => fetchOrgDomainClaims(id),
+      add: (id, domain) => addOrgDomainClaim(id, domain),
+      verify: (id, claimId) => verifyOrgDomainClaim(id, claimId),
+      update: (id, claimId, update) => updateOrgDomainClaimPolicy(id, claimId, update),
+      remove: (id, claimId) => deleteOrgDomainClaim(id, claimId),
+    },
+    policies: ['off', 'suggest', 'auto-join'],
+    noun: 'organization',
+    prefix: 'org',
+    queryRoot: 'orgDomainClaims',
+    intro:
+      'Verify a domain your organization owns so people with an email address on it can find and join this organization.',
+  },
+  space: {
+    calls: {
+      fetch: id => fetchSpaceDomainClaims(id),
+      add: (id, domain) => addSpaceDomainClaim(id, domain),
+      verify: (id, claimId) => verifySpaceDomainClaim(id, claimId),
+      update: (id, claimId, update) =>
+        updateSpaceDomainClaimPolicy(id, claimId, {
+          policy: update.policy as (typeof SPACE_DOMAIN_JOIN_POLICIES)[number],
+        }),
+      remove: (id, claimId) => deleteSpaceDomainClaim(id, claimId),
+    },
+    policies: SPACE_DOMAIN_JOIN_POLICIES,
+    noun: 'space',
+    prefix: 'space',
+    queryRoot: 'spaceDomainClaims',
+    intro:
+      'Verify a domain you control so people with an email address on it can find and join this space. They always join as members and are never added automatically.',
+  },
 };
 
 const copy = (text: string) => {
@@ -57,16 +120,17 @@ const RecordField: React.FC<{ label: string; value: string; testId: string }> = 
 );
 
 const DomainClaimRow: React.FC<{
-  organizationId: string;
+  ownerId: string;
+  config: OwnerConfig;
   claim: IOrgDomainClaimView;
   onChanged: () => Promise<void>;
   onDelete: (claim: IOrgDomainClaimView) => void;
-}> = ({ organizationId, claim, onChanged, onDelete }) => {
+}> = ({ ownerId, config, claim, onChanged, onDelete }) => {
   const [verifyMessage, setVerifyMessage] = useState<string | null>(null);
   const verified = claim.status === 'verified';
 
   const verify = useMutation({
-    mutationFn: () => verifyOrgDomainClaim(organizationId, claim.id),
+    mutationFn: () => config.calls.verify(ownerId, claim.id),
     onSuccess: async result => {
       setVerifyMessage(result.verified ? null : result.reason);
       if (result.verified) await onChanged();
@@ -75,17 +139,22 @@ const DomainClaimRow: React.FC<{
   });
 
   const update = useMutation({
-    mutationFn: (policy: OrgDomainJoinPolicy) => updateOrgDomainClaimPolicy(organizationId, claim.id, { policy }),
+    mutationFn: (policy: OrgDomainJoinPolicy) => config.calls.update(ownerId, claim.id, { policy }),
     onSuccess: onChanged,
   });
 
   return (
-    <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'md' }} data-testid="org-domains-row">
+    <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'md' }} data-testid={`${config.prefix}-domains-row`}>
       <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
         <Typography level="title-md" sx={{ flex: 1 }}>
           {claim.domain}
         </Typography>
-        <Chip size="sm" variant="soft" color={verified ? 'success' : 'warning'} data-testid="org-domains-status">
+        <Chip
+          size="sm"
+          variant="soft"
+          color={verified ? 'success' : 'warning'}
+          data-testid={`${config.prefix}-domains-status`}
+        >
           {verified ? 'Verified' : 'Pending verification'}
         </Chip>
         <Button
@@ -93,7 +162,7 @@ const DomainClaimRow: React.FC<{
           variant="plain"
           color="danger"
           onClick={() => onDelete(claim)}
-          data-testid="org-domains-delete-btn"
+          data-testid={`${config.prefix}-domains-delete-btn`}
         >
           Remove
         </Button>
@@ -104,20 +173,20 @@ const DomainClaimRow: React.FC<{
           <Typography level="body-sm">
             Add this TXT record at your DNS provider, then select Verify. DNS changes can take a while to appear.
           </Typography>
-          <RecordField label="Record name" value={claim.recordName} testId="org-domains-txt-name" />
-          <RecordField label="Record value" value={claim.recordValue} testId="org-domains-txt-value" />
+          <RecordField label="Record name" value={claim.recordName} testId={`${config.prefix}-domains-txt-name`} />
+          <RecordField label="Record value" value={claim.recordValue} testId={`${config.prefix}-domains-txt-value`} />
           <Box>
             <Button
               size="sm"
               loading={verify.isPending}
               onClick={() => verify.mutate()}
-              data-testid="org-domains-verify-btn"
+              data-testid={`${config.prefix}-domains-verify-btn`}
             >
               Verify
             </Button>
           </Box>
           {verifyMessage && (
-            <Alert size="sm" color="warning" data-testid="org-domains-verify-reason">
+            <Alert size="sm" color="warning" data-testid={`${config.prefix}-domains-verify-reason`}>
               {verifyMessage}
             </Alert>
           )}
@@ -131,9 +200,9 @@ const DomainClaimRow: React.FC<{
             value={claim.policy}
             disabled={!verified || update.isPending}
             onChange={(_e, value) => value && value !== claim.policy && update.mutate(value)}
-            data-testid="org-domains-policy-select"
+            data-testid={`${config.prefix}-domains-policy-select`}
           >
-            {(Object.keys(POLICY_LABELS) as OrgDomainJoinPolicy[]).map(policy => (
+            {config.policies.map(policy => (
               <Option key={policy} value={policy}>
                 {POLICY_LABELS[policy]}
               </Option>
@@ -142,7 +211,7 @@ const DomainClaimRow: React.FC<{
         </FormControl>
       </Box>
       {update.isError && (
-        <Typography level="body-xs" color="danger" sx={{ mt: 1 }} data-testid="org-domains-update-error">
+        <Typography level="body-xs" color="danger" sx={{ mt: 1 }} data-testid={`${config.prefix}-domains-update-error`}>
           {getErrorMessage(update.error)}
         </Typography>
       )}
@@ -150,10 +219,18 @@ const DomainClaimRow: React.FC<{
   );
 };
 
-/** Org domain claims: add a domain, prove it with a DNS TXT record, then choose who may join. */
-const OrgDomainsTab: React.FC<{ organizationId: string }> = ({ organizationId }) => {
+type OrgDomainsTabProps = { organizationId: string; owner?: never } | { owner: DomainOwner; organizationId?: never };
+
+/**
+ * Domain claims for an organization or a Space: add a domain, prove it with a DNS TXT record, then
+ * choose who may join. A Space's policies exclude auto-join.
+ */
+const OrgDomainsTab: React.FC<OrgDomainsTabProps> = ({ organizationId, owner }) => {
+  const resolved: DomainOwner = owner ?? { kind: 'organization', id: organizationId };
+  const config = OWNER_CONFIG[resolved.kind];
+  const ownerId = resolved.id;
   const queryClient = useQueryClient();
-  const queryKey = ['orgDomainClaims', organizationId];
+  const queryKey = [config.queryRoot, ownerId];
   const [domain, setDomain] = useState('');
   const [pendingDelete, setPendingDelete] = useState<IOrgDomainClaimView | null>(null);
 
@@ -163,12 +240,12 @@ const OrgDomainsTab: React.FC<{ organizationId: string }> = ({ organizationId })
     error: loadError,
   } = useQuery({
     queryKey,
-    queryFn: () => fetchOrgDomainClaims(organizationId),
+    queryFn: () => config.calls.fetch(ownerId),
   });
   const refresh = () => queryClient.invalidateQueries({ queryKey });
 
   const add = useMutation({
-    mutationFn: (value: string) => addOrgDomainClaim(organizationId, value),
+    mutationFn: (value: string) => config.calls.add(ownerId, value),
     onSuccess: async () => {
       setDomain('');
       await refresh();
@@ -176,7 +253,7 @@ const OrgDomainsTab: React.FC<{ organizationId: string }> = ({ organizationId })
   });
 
   const remove = useMutation({
-    mutationFn: (claimId: string) => deleteOrgDomainClaim(organizationId, claimId),
+    mutationFn: (claimId: string) => config.calls.remove(ownerId, claimId),
     onSuccess: async () => {
       setPendingDelete(null);
       await refresh();
@@ -191,10 +268,9 @@ const OrgDomainsTab: React.FC<{ organizationId: string }> = ({ organizationId })
   };
 
   return (
-    <Stack gap={2} data-testid="org-domains-tab">
+    <Stack gap={2} data-testid={`${config.prefix}-domains-tab`}>
       <Typography level="body-sm" textColor="text.secondary">
-        Verify a domain your organization owns so people with an email address on it can find and join this
-        organization.
+        {config.intro}
       </Typography>
 
       <form onSubmit={submit}>
@@ -205,7 +281,7 @@ const OrgDomainsTab: React.FC<{ organizationId: string }> = ({ organizationId })
             value={domain}
             disabled={add.isPending}
             onChange={e => setDomain(e.target.value)}
-            slotProps={{ input: { 'data-testid': 'org-domains-add-input' } }}
+            slotProps={{ input: { 'data-testid': `${config.prefix}-domains-add-input` } }}
             sx={{ flex: 1, maxWidth: 360 }}
           />
           <Button
@@ -213,32 +289,33 @@ const OrgDomainsTab: React.FC<{ organizationId: string }> = ({ organizationId })
             type="submit"
             loading={add.isPending}
             disabled={!domain.trim()}
-            data-testid="org-domains-add-btn"
+            data-testid={`${config.prefix}-domains-add-btn`}
           >
             Add domain
           </Button>
         </Stack>
       </form>
       {add.isError && (
-        <Alert size="sm" color="danger" data-testid="org-domains-add-error">
+        <Alert size="sm" color="danger" data-testid={`${config.prefix}-domains-add-error`}>
           {getErrorMessage(add.error)}
         </Alert>
       )}
 
       {loadError && (
-        <Alert size="sm" color="danger" data-testid="org-domains-load-error">
+        <Alert size="sm" color="danger" data-testid={`${config.prefix}-domains-load-error`}>
           {getErrorMessage(loadError)}
         </Alert>
       )}
       {!isLoading && !loadError && claims?.length === 0 && (
-        <Typography level="body-sm" data-testid="org-domains-empty">
+        <Typography level="body-sm" data-testid={`${config.prefix}-domains-empty`}>
           No domains yet.
         </Typography>
       )}
       {claims?.map(claim => (
         <DomainClaimRow
           key={claim.id}
-          organizationId={organizationId}
+          ownerId={ownerId}
+          config={config}
           claim={claim}
           onChanged={refresh}
           onDelete={setPendingDelete}
@@ -246,10 +323,10 @@ const OrgDomainsTab: React.FC<{ organizationId: string }> = ({ organizationId })
       ))}
 
       <Modal open={!!pendingDelete} onClose={() => !remove.isPending && setPendingDelete(null)}>
-        <ModalDialog role="alertdialog" data-testid="org-domains-delete-modal">
+        <ModalDialog role="alertdialog" data-testid={`${config.prefix}-domains-delete-modal`}>
           <DialogTitle>Remove {pendingDelete?.domain}?</DialogTitle>
           <DialogContent>
-            People with this email domain will no longer be offered or added to this organization. Existing members
+            People with this email domain will no longer be offered or added to this {config.noun}. Existing members
             stay.
             {remove.isError && (
               <Typography level="body-xs" color="danger" sx={{ mt: 1 }}>
@@ -262,7 +339,7 @@ const OrgDomainsTab: React.FC<{ organizationId: string }> = ({ organizationId })
               color="danger"
               loading={remove.isPending}
               onClick={() => pendingDelete && remove.mutate(pendingDelete.id)}
-              data-testid="org-domains-delete-confirm-btn"
+              data-testid={`${config.prefix}-domains-delete-confirm-btn`}
             >
               Remove
             </Button>

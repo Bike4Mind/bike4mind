@@ -78,7 +78,9 @@ const StatusModal = ({
 
 const SharePage = () => {
   const [loading, setLoading] = React.useState<boolean>(false);
-  const [acceptScreen, setAcceptScreen] = React.useState<(ShareAcceptScreen & { documentId?: string }) | null>(null);
+  const [acceptScreen, setAcceptScreen] = React.useState<
+    (ShareAcceptScreen & { documentId?: string; inviteType?: string }) | null
+  >(null);
   const navigate = useNavigate();
   const { id } = useParams({ strict: false });
   const { currentUser } = useUser();
@@ -126,14 +128,15 @@ const SharePage = () => {
 
   const invites = query.data?.items ?? [];
   const isMultiple = invites.length > 1;
+  const isSpaceInvite = invites.length > 0 && invites.every(item => item.invite?.type === 'Space');
 
   const isOrgShareLink = (item: (typeof invites)[number]) =>
-    item.invite?.type === 'Organization' && item.invite?.isLinkOnly === true;
-  // An org share link's username is its minter, who following it is usually already a member;
+    (item.invite?.type === 'Organization' || item.invite?.type === 'Space') && item.invite?.isLinkOnly === true;
+  // An org or Space share link's username is its minter, who following it is usually already a member;
   // the accept route reports that, so it is not treated as "your own invite".
   const hasOwnInvite = invites.some(item => !isOrgShareLink(item) && item.invite?.username === currentUser?.username);
-  // An Organization share link names nobody, so there is no pending entry for Refuse to clear.
-  const allOrgShareLinks = invites.every(isOrgShareLink);
+  // An Organization or Space share link names nobody, so there is no pending entry for Refuse to clear.
+  const allShareLinks = invites.every(isOrgShareLink);
 
   // No navigate on success: handleBulkAction decides between going home and the already-member screen.
   const acceptInvite = useAcceptDocument({
@@ -179,7 +182,11 @@ const SharePage = () => {
           ? describeAcceptFailure(outcome.reason)
           : acceptOutcomeScreen(outcome.value);
       if (screen) {
-        setAcceptScreen({ ...screen, documentId: validInvites[0].invite?.documentId });
+        setAcceptScreen({
+          ...screen,
+          documentId: validInvites[0].invite?.documentId,
+          inviteType: validInvites[0].invite?.type,
+        });
         return;
       }
       goHome();
@@ -190,16 +197,24 @@ const SharePage = () => {
 
   if (query.isLoading) return null;
   if (acceptScreen) {
-    const { kind, title, body, documentId } = acceptScreen;
-    const openOrganization = (kind === 'member' || kind === 'already-member') && documentId;
+    const { kind, title, body, documentId, inviteType } = acceptScreen;
+    const isSpace = inviteType === 'Space';
+    const openDocument = (kind === 'member' || kind === 'already-member') && documentId;
     return (
       <StatusModal
         testId={`share-accept-${kind}-modal`}
         title={title}
         body={body}
         actionTestId={`share-accept-${kind}-btn`}
-        actionLabel={openOrganization ? 'Open organization' : 'Go home'}
-        onAction={openOrganization ? () => navigate({ to: '/organizations/$id', params: { id: documentId } }) : goHome}
+        actionLabel={openDocument ? (isSpace ? 'Open space' : 'Open organization') : 'Go home'}
+        onAction={
+          openDocument
+            ? () =>
+                isSpace
+                  ? navigate({ to: '/spaces/$id', params: { id: documentId } })
+                  : navigate({ to: '/organizations/$id', params: { id: documentId } })
+            : goHome
+        }
         onClose={goHome}
       />
     );
@@ -252,7 +267,11 @@ const SharePage = () => {
         ) : (
           <Box display={'flex'} flexDirection={'column'}>
             <Typography level={'h3'}>
-              {isMultiple ? `${invites.length} Document Share Requests` : 'Document Share Request'}
+              {isSpaceInvite
+                ? 'Space Invitation'
+                : isMultiple
+                  ? `${invites.length} Document Share Requests`
+                  : 'Document Share Request'}
             </Typography>
             <Divider sx={{ my: '20px' }} />
 
@@ -303,7 +322,7 @@ const SharePage = () => {
                     <InfoOutlinedIcon sx={{ width: '20px', mr: '10px' }} />
                   </Tooltip>
                 )}
-                {!allOrgShareLinks && (
+                {!allShareLinks && (
                   <Tooltip title={'Refuse'}>
                     <IconButton
                       sx={{ mr: '15px' }}
@@ -333,7 +352,9 @@ const SharePage = () => {
               <Typography level={'body-xs'}>
                 {hasOwnInvite
                   ? 'Some invites are your own. You cannot accept invites you created.'
-                  : `${invites[0]?.invite?.username || 'Someone'} has invited you to share ${isMultiple ? 'documents' : 'a document'}!`}
+                  : isSpaceInvite
+                    ? `${invites[0]?.invite?.username || 'Someone'} has invited you to join a space!`
+                    : `${invites[0]?.invite?.username || 'Someone'} has invited you to share ${isMultiple ? 'documents' : 'a document'}!`}
               </Typography>
             </Box>
           </Box>

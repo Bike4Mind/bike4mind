@@ -59,3 +59,22 @@ describe('Invites billing note', () => {
     expect(screen.queryByTestId('invite-billing-note')).not.toBeInTheDocument();
   });
 });
+
+describe('Invites Space rows', () => {
+  beforeEach(() => {
+    h.enforceCredits = true;
+  });
+
+  it('lists a pending Space invite under Spaces', () => {
+    h.invites = [{ ...invite('s1', 'Space'), name: 'Design Guild' }];
+    renderInvites();
+    expect(screen.getByText('Spaces')).toBeInTheDocument();
+    expect(screen.getByText(/invited you to join Design Guild/)).toBeInTheDocument();
+  });
+
+  it('omits a Space invite with nothing remaining', () => {
+    h.invites = [{ ...invite('s2', 'Space'), remaining: 0, name: 'Gone Guild' }];
+    renderInvites();
+    expect(screen.queryByText(/Gone Guild/)).not.toBeInTheDocument();
+  });
+});

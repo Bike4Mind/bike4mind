@@ -28,7 +28,11 @@ const mocks = vi.hoisted(() => ({
   sendToClient: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@bike4mind/services', () => ({
-  sharingService: { acceptInvite: mocks.acceptInvite, refuseWholeInvite: mocks.refuseWholeInvite },
+  sharingService: {
+    acceptInvite: mocks.acceptInvite,
+    refuseWholeInvite: mocks.refuseWholeInvite,
+    resolveAddressedInvite: vi.fn().mockResolvedValue(null),
+  },
 }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn(async () => false) }));
 vi.mock('@bike4mind/utils', async importOriginal => ({

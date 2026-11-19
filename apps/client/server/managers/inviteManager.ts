@@ -19,6 +19,7 @@ import {
   projectRepository,
   organizationRepository,
   spaceRepository,
+  inviteRepository,
 } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
@@ -74,6 +75,20 @@ export const getInviteDetails = async (invite: IInviteDocument, includeUser?: bo
 
   return inviteWithDetails;
 };
+
+/** Space invites are invisible while EnableSpaces is off; other invites pass through without a flag read. */
+export async function withoutDisabledSpaceInvites<T extends { type?: string }>(invites: T[]): Promise<T[]> {
+  if (!invites.some(invite => invite.type === InviteType.Space)) return invites;
+  if (await isFeatureEnabled('EnableSpaces')) return invites;
+  return invites.filter(invite => invite.type !== InviteType.Space);
+}
+
+/** True when `key` addresses a Space invite while EnableSpaces is off; refuse and cancel answer it as not found. */
+export async function isDisabledSpaceInviteKey(key: string): Promise<boolean> {
+  if (await isFeatureEnabled('EnableSpaces')) return false;
+  const invite = await sharingService.resolveAddressedInvite(key, { db: { invites: inviteRepository } });
+  return invite?.type === InviteType.Space;
+}
 
 export type InviteViewAccess = 'allowed' | 'expired' | 'revoked' | 'denied';
 
