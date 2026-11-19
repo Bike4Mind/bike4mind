@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Button, Checkbox, FormControl, FormHelperText, FormLabel, Stack, Textarea, Typography } from '@mui/joy';
 import {
   buildVoiceCaptionCues,
@@ -32,15 +32,17 @@ const TIMING_LABELS: Record<VoiceCaptionTiming, string> = {
  * captions synced to this clip; captions made by hand are never touched.
  */
 const VoiceCaptionsControl = ({ timeline, voiceClip, sourceDurationMs, onChange }: VoiceCaptionsControlProps) => {
-  const { data: script, isLoading } = useSpeechScript(voiceClip.fileId);
-  const [text, setText] = useState('');
+  const { data: script, isLoading, isError } = useSpeechScript(voiceClip.fileId);
+  const [text, setText] = useState(script?.text ?? '');
   const [sync, setSync] = useState(true);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
-
-  useEffect(() => {
+  // Prefill once the script arrives. A different voice clip remounts this control (ClipInspector keys it by clip id).
+  const [prefilledFrom, setPrefilledFrom] = useState(script);
+  if (script !== prefilledFrom) {
+    setPrefilledFrom(script);
     setText(script?.text ?? '');
     setOutcome(null);
-  }, [script, voiceClip.id]);
+  }
 
   const hasSyncedCaptions = timeline.tracks.some(
     track => track.kind === 'captions' && track.clips.some(clip => clip.syncedVoiceClipId === voiceClip.id)
@@ -81,6 +83,11 @@ const VoiceCaptionsControl = ({ timeline, voiceClip, sourceDurationMs, onChange 
           slotProps={{ textarea: { 'data-testid': 'production-voice-captions-script-input' } }}
           onChange={event => setText(event.target.value)}
         />
+        {isError && (
+          <FormHelperText data-testid="production-voice-captions-load-error">
+            Could not load the script for this clip. Type the words it says to caption it.
+          </FormHelperText>
+        )}
         {script?.truncated && (
           <FormHelperText>Only the start of a long script was kept. Paste the rest before generating.</FormHelperText>
         )}

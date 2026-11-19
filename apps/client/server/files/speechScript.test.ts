@@ -5,7 +5,7 @@ import { loadSpeechScript } from './speechScript';
 const FILE_ID = 'f'.repeat(24);
 
 const speechFile = (generation: Record<string, unknown> = {}) => ({
-  _id: FILE_ID,
+  id: FILE_ID,
   sourceMetadata: {
     generation: { generator: 'speech', provider: 'elevenlabs', jobId: 'job1', prompt: 'Hi you', ...generation },
   },
@@ -63,7 +63,7 @@ describe('loadSpeechScript', () => {
   it('is null for a file that is not generated speech', async () => {
     const findJob = vi.fn();
     await expect(loadSpeechScript(speechFile({ generator: 'music' }), findJob)).resolves.toBeNull();
-    await expect(loadSpeechScript({ _id: FILE_ID }, findJob)).resolves.toBeNull();
+    await expect(loadSpeechScript({ id: FILE_ID }, findJob)).resolves.toBeNull();
     expect(findJob).not.toHaveBeenCalled();
   });
 });

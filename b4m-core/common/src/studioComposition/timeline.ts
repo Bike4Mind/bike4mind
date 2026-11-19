@@ -159,7 +159,8 @@ export const StudioCaptionClipSchema = z.object({
   style: StudioCaptionStyleSchema.prefault({}),
   /**
    * The voice clip this caption was timed from. While set, the editor moves the caption with that clip's audio
-   * (see shiftSyncedCaptions); the renderer ignores it. A dangling id is harmless and is dropped on the next edit.
+   * (see shiftSyncedCaptions); the renderer ignores it. It must name a clip on a voice track (validateStudioTimeline:
+   * unknown_sync_clip); the editor drops the link when that clip is removed.
    */
   syncedVoiceClipId: TimelineIdSchema.optional(),
 });

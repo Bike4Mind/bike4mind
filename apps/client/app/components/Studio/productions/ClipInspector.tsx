@@ -108,6 +108,7 @@ const ClipInspector = ({ timeline, clipId, files, sourceDurationsMs, onChange, o
 
         {track.kind === 'voice' && 'fileId' in clip && (
           <VoiceCaptionsControl
+            key={clip.id}
             timeline={timeline}
             voiceClip={clip}
             sourceDurationMs={sourceDurationsMs?.get(clip.fileId)}

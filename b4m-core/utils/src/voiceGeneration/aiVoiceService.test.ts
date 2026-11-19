@@ -256,6 +256,15 @@ describe('ElevenLabsVoiceService with timestamps', () => {
     expect(result).not.toHaveProperty('wordTimings');
   });
 
+  it('keeps the audio when the alignment is malformed', async () => {
+    mockedPost.mockResolvedValue(timestamped({ characters: 'Hi' } as never));
+
+    const result = await aiVoiceService('elevenlabs', 'xi-key', logger).synthesize('Hi', { withTimestamps: true });
+
+    expect(result.audio).toEqual(Buffer.from([1, 2, 3]));
+    expect(result).not.toHaveProperty('wordTimings');
+  });
+
   it('fails loudly on a response without audio', async () => {
     mockedPost.mockResolvedValue({ data: { detail: 'nope' } });
 

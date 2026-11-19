@@ -1,5 +1,6 @@
 import type { SpeechWordTiming } from '../voiceGeneration';
 import {
+  STUDIO_TIMELINE_LIMITS,
   StudioCaptionStyleSchema,
   type StudioAudioClip,
   type StudioCaptionClip,
@@ -34,20 +35,58 @@ export const VOICE_CAPTION_PHRASING = {
 /** Shorter than this a caption cannot be read; matches the editor's minimum clip length. */
 const MIN_CAPTION_MS = 100;
 
-// Built from strings so the ellipsis and dashes stay ASCII escapes (a lint autofix would inline a regex literal's).
-const SENTENCE_END = new RegExp('[.!?\\u2026]["\')\\]]*$');
-const CLAUSE_END = new RegExp('[,;:\\u2013\\u2014]["\')\\]]*$');
+// Built from strings so the non-ASCII marks stay ASCII escapes (a lint autofix would inline a regex literal's).
+// Sentence ends: . ! ? and the ellipsis, plus the CJK full stop, exclamation and question marks.
+const SENTENCE_END = new RegExp('[.!?\\u2026\\u3002\\uff01\\uff1f]["\')\\]\\u300d\\u300f]*$');
+// Clause breaks: , ; : and the en and em dashes, plus the CJK comma, enumeration comma, semicolon and colon.
+const CLAUSE_END = new RegExp('[,;:\\u2013\\u2014\\u3001\\uff0c\\uff1b\\uff1a]["\')\\]\\u300d\\u300f]*$');
+const CJK_BREAK_AFTER = new RegExp('[\\u3001\\u3002\\uff01\\uff0c\\uff1a\\uff1b\\uff1f]');
 
 const scriptWords = (script: string): string[] => script.split(/\s+/).filter(word => word.length > 0);
 
-type Word = { text: string; startMs?: number; endMs?: number };
+/** `glued`: a piece of a longer token, written straight after the previous piece with no space between them. */
+type Word = { text: string; startMs?: number; endMs?: number; glued?: boolean };
+
+const joinWords = (words: readonly Word[]): string =>
+  words.map((word, index) => (index > 0 && !word.glued ? ` ${word.text}` : word.text)).join('');
+
+/**
+ * Cuts a token longer than a phrase into phrase-sized pieces, after CJK punctuation where it can. Scripts without
+ * spaces (Japanese, Chinese, Thai) are one token per sentence or more, which would otherwise be one huge caption.
+ * A timed token's time is shared between its pieces by character count.
+ */
+const splitLongWord = <W extends Word>(word: W): W[] => {
+  const characters = Array.from(word.text);
+  if (characters.length <= VOICE_CAPTION_PHRASING.maxChars) return [word];
+  const bounds: Array<[number, number]> = [];
+  let pieceStart = 0;
+  characters.forEach((character, index) => {
+    const pieceLength = index + 1 - pieceStart;
+    if (CJK_BREAK_AFTER.test(character) || pieceLength >= VOICE_CAPTION_PHRASING.maxChars) {
+      bounds.push([pieceStart, index + 1]);
+      pieceStart = index + 1;
+    }
+  });
+  if (pieceStart < characters.length) bounds.push([pieceStart, characters.length]);
+  const timeAt = (charIndex: number) =>
+    word.startMs === undefined || word.endMs === undefined
+      ? undefined
+      : Math.round(word.startMs + ((word.endMs - word.startMs) * charIndex) / characters.length);
+  return bounds.map(([from, to], index) => ({
+    ...word,
+    text: characters.slice(from, to).join(''),
+    startMs: timeAt(from),
+    endMs: timeAt(to),
+    glued: index > 0 ? true : word.glued,
+  }));
+};
 
 const endsPhraseAfter = (phrase: Word[], word: Word, next: Word | undefined): boolean => {
   if (!next) return true;
   if (SENTENCE_END.test(word.text)) return true;
   if (CLAUSE_END.test(word.text) && phrase.length >= VOICE_CAPTION_PHRASING.minWordsBeforeClauseBreak) return true;
   if (phrase.length >= VOICE_CAPTION_PHRASING.maxWords) return true;
-  const charsWithNext = [...phrase, next].map(entry => entry.text).join(' ').length;
+  const charsWithNext = joinWords([...phrase, next]).length;
   if (charsWithNext > VOICE_CAPTION_PHRASING.maxChars) return true;
   const gapMs = next.startMs !== undefined && word.endMs !== undefined ? next.startMs - word.endMs : 0;
   return gapMs >= VOICE_CAPTION_PHRASING.pauseBreakMs;
@@ -69,7 +108,7 @@ const groupPhrases = <W extends Word>(words: W[]): W[][] => {
 
 /** The script's phrases, as caption text. */
 export const splitCaptionPhrases = (script: string): string[] =>
-  groupPhrases(scriptWords(script).map(text => ({ text }))).map(phrase => phrase.map(word => word.text).join(' '));
+  groupPhrases(scriptWords(script).flatMap(text => splitLongWord<Word>({ text }))).map(joinWords);
 
 /**
  * The provider's word timings, when they are timings of exactly this script (same words, same order). A user who
@@ -83,14 +122,16 @@ const alignedWords = (script: string, wordTimings: readonly SpeechWordTiming[] |
   return matches ? wordTimings : undefined;
 };
 
+type TimedWord = SpeechWordTiming & { glued?: boolean };
+
 const alignedCues = (wordTimings: readonly SpeechWordTiming[]): VoiceCaptionCue[] => {
-  const phrases = groupPhrases([...wordTimings]);
+  const phrases = groupPhrases(wordTimings.flatMap(word => splitLongWord<TimedWord>(word)));
   return phrases.map((phrase, index) => {
     const startMs = phrase[0].startMs;
     const nextStartMs = phrases[index + 1]?.[0].startMs ?? Number.POSITIVE_INFINITY;
     const spokenEndMs = Math.max(phrase[phrase.length - 1].endMs, startMs + MIN_CAPTION_MS);
     return {
-      text: phrase.map(word => word.text).join(' '),
+      text: joinWords(phrase),
       startMs,
       endMs: Math.min(spokenEndMs + VOICE_CAPTION_PHRASING.holdMs, Math.max(nextStartMs, startMs + MIN_CAPTION_MS)),
     };
@@ -179,9 +220,10 @@ const isCaptionsTrack = (track: StudioTimelineTrack): track is Extract<StudioTim
   track.kind === 'captions';
 
 /**
- * Puts a voice clip's captions on the first captions track (adding one when the timeline has none), replacing the
- * captions previously synced to that clip. Throws when a new caption would land on another caption, since quietly
- * moving or deleting someone's hand-made caption is worse than asking them to make room.
+ * Puts a voice clip's captions on the first enabled captions track (adding one when there is none, since captions
+ * on a hidden track would not render), replacing the captions previously synced to that clip. Throws when a new
+ * caption would land on another caption, since quietly moving or deleting someone's hand-made caption is worse than
+ * asking them to make room, and when the track would go over its clip limit.
  */
 export const replaceVoiceCaptions = (
   timeline: StudioTimeline,
@@ -194,7 +236,7 @@ export const replaceVoiceCaptions = (
       ? { ...track, clips: track.clips.filter(clip => clip.syncedVoiceClipId !== voiceClipId) }
       : track
   );
-  const targetIndex = withoutOld.findIndex(isCaptionsTrack);
+  const targetIndex = withoutOld.findIndex(track => isCaptionsTrack(track) && track.enabled);
   const target =
     targetIndex >= 0
       ? (withoutOld[targetIndex] as Extract<StudioTimelineTrack, { kind: 'captions' }>)
@@ -203,6 +245,12 @@ export const replaceVoiceCaptions = (
   if (blocked > 0) {
     throw new Error(
       `${blocked} of the new captions would overlap captions already on the track. Move or remove those captions first.`
+    );
+  }
+  const clipCount = target.clips.length + captions.length;
+  if (clipCount > STUDIO_TIMELINE_LIMITS.maxClipsPerTrack) {
+    throw new Error(
+      `That would put ${clipCount} clips on the captions track, over the limit of ${STUDIO_TIMELINE_LIMITS.maxClipsPerTrack}. Shorten the script or remove some captions first.`
     );
   }
   const track = { ...target, clips: [...target.clips, ...captions].sort((a, b) => a.startMs - b.startMs) };
@@ -225,7 +273,8 @@ const voiceAnchors = (timeline: StudioTimeline): Map<string, number> => {
 
 /**
  * Keeps synced captions on their voice: after an edit that moved or slip-trimmed a voice clip's audio, each caption
- * synced to it moves by the same amount (kept inside the timeline). A caption whose voice clip is gone keeps its
+ * synced to it moves by the same amount. A caption pushed partly off the timeline is cut to what is left (never
+ * slid back, which would stack it on its neighbour) and one pushed off entirely is dropped. A caption whose voice clip is gone keeps its
  * place and loses the link. Returns `next` itself when nothing needed to change, so callers can compare references.
  */
 export const shiftSyncedCaptions = (previous: StudioTimeline, next: StudioTimeline): StudioTimeline => {
@@ -235,20 +284,22 @@ export const shiftSyncedCaptions = (previous: StudioTimeline, next: StudioTimeli
   const tracks = next.tracks.map(track => {
     if (!isCaptionsTrack(track)) return track;
     let trackChanged = false;
-    const clips = track.clips.map(clip => {
+    const clips = track.clips.flatMap((clip): StudioCaptionClip[] => {
       const voiceClipId = clip.syncedVoiceClipId;
-      if (voiceClipId === undefined) return clip;
+      if (voiceClipId === undefined) return [clip];
       const anchorAfter = after.get(voiceClipId);
       if (anchorAfter === undefined) {
         trackChanged = true;
         const { syncedVoiceClipId: _dropped, ...unlinked } = clip;
-        return unlinked;
+        return [unlinked];
       }
       const anchorBefore = before.get(voiceClipId);
-      if (anchorBefore === undefined || anchorBefore === anchorAfter) return clip;
+      if (anchorBefore === undefined || anchorBefore === anchorAfter) return [clip];
       trackChanged = true;
-      const latestStart = Math.max(0, next.durationMs - clip.durationMs);
-      return { ...clip, startMs: Math.min(Math.max(clip.startMs + anchorAfter - anchorBefore, 0), latestStart) };
+      const shiftedStartMs = clip.startMs + anchorAfter - anchorBefore;
+      const startMs = Math.max(shiftedStartMs, 0);
+      const endMs = Math.min(shiftedStartMs + clip.durationMs, next.durationMs);
+      return endMs - startMs < MIN_CAPTION_MS ? [] : [{ ...clip, startMs, durationMs: endMs - startMs }];
     });
     if (!trackChanged) return track;
     changed = true;

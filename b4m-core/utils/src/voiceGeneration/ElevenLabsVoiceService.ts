@@ -31,10 +31,11 @@ export const ELEVENLABS_OUTPUT_FORMAT: Partial<Record<VoiceOutputFormat, string>
   opus: 'opus_48000_128',
 };
 
-// The /with-timestamps variant answers JSON: the audio as base64 plus the alignment of the text as sent.
+// The /with-timestamps variant answers JSON: the audio as base64 plus the alignment of the text as sent. The
+// alignment is checked on its own so a malformed one costs only the timings, not the audio.
 const TimestampedSpeechSchema = z.object({
   audio_base64: z.string().min(1),
-  alignment: CharacterAlignmentSchema.nullish(),
+  alignment: z.unknown(),
 });
 
 export class ElevenLabsVoiceService extends AIVoiceService {
@@ -124,9 +125,14 @@ export class ElevenLabsVoiceService extends AIVoiceService {
     }
     const audio = Buffer.from(parsed.data.audio_base64, 'base64');
     if (audio.length === 0) throw new Error('ElevenLabs returned empty audio');
-    const wordTimings = parsed.data.alignment ? wordTimingsFromCharacterAlignment(parsed.data.alignment) : undefined;
+    const alignment = CharacterAlignmentSchema.safeParse(parsed.data.alignment);
+    const wordTimings = alignment.success ? wordTimingsFromCharacterAlignment(alignment.data) : undefined;
     if (!wordTimings) {
-      this.logger.warn('elevenlabs_speech_alignment_unusable', { voiceId, hasAlignment: !!parsed.data.alignment });
+      this.logger.warn('elevenlabs_speech_alignment_unusable', {
+        voiceId,
+        hasAlignment: parsed.data.alignment != null,
+        malformed: parsed.data.alignment != null && !alignment.success,
+      });
     }
     return { audio, wordTimings };
   }

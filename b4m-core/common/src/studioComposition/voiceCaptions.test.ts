@@ -82,6 +82,36 @@ describe('splitCaptionPhrases', () => {
   });
 });
 
+describe('splitCaptionPhrases without spaces', () => {
+  // A Japanese script: two sentences with no spaces, joined by the CJK full stop and comma.
+  const japanese =
+    '\u4eca\u65e5\u306f\u3044\u3044\u5929\u6c17\u3067\u3059\u306d\u3001\u6563\u6b69\u306b\u884c\u304d\u307e\u3057\u3087\u3046\u3002'.repeat(
+      4
+    );
+
+  it('cuts a long run of text without spaces into phrase-sized captions', () => {
+    const phrases = splitCaptionPhrases(japanese);
+    expect(phrases.length).toBeGreaterThan(1);
+    for (const phrase of phrases) expect(Array.from(phrase).length).toBeLessThanOrEqual(32);
+    expect(phrases.join('')).toBe(japanese);
+  });
+
+  it("shares an aligned token's time between its pieces", () => {
+    const { cues, timing } = buildVoiceCaptionCues({
+      script: japanese,
+      wordTimings: [{ text: japanese, startMs: 0, endMs: 8000 }],
+      audioDurationMs: 8000,
+    });
+    expect(timing).toBe('aligned');
+    expect(cues.length).toBeGreaterThan(1);
+    expect(cues[0].startMs).toBe(0);
+    expect(cues.at(-1)?.endMs).toBeLessThanOrEqual(8000 + 400);
+    for (let index = 1; index < cues.length; index++) {
+      expect(cues[index].startMs).toBeGreaterThanOrEqual(cues[index - 1].endMs);
+    }
+  });
+});
+
 describe('buildVoiceCaptionCues', () => {
   it('times phrases from aligned words: start on the first word, hold briefly after the last', () => {
     const script = 'Ride further. Go faster today.';
@@ -203,6 +233,30 @@ describe('replaceVoiceCaptions', () => {
     expect(captionsOf(second).map(clip => clip.id)).toEqual(['hand', 'new-1', 'new-2']);
   });
 
+  it('skips a hidden captions track and adds a visible one', () => {
+    const spec = timeline({
+      tracks: [...timeline().tracks, { id: 'hidden', kind: 'captions', enabled: false, clips: [] }],
+    } as Partial<StudioTimeline>);
+    const next = replaceVoiceCaptions(spec, 'vo1', place(spec), () => 'captions-1');
+    expect(next.tracks.find(track => track.id === 'hidden')?.clips).toEqual([]);
+    expect(next.tracks.at(-1)).toMatchObject({ id: 'captions-1', enabled: true });
+    expect(captionsOf(next)).toHaveLength(2);
+  });
+
+  it('refuses to put the track over its clip limit', () => {
+    const spec = timeline({ durationMs: 600_000 });
+    const style = place(spec)[0].style;
+    const full = Array.from({ length: 499 }, (_, index) => ({
+      id: `hand-${index}`,
+      text: 'x',
+      startMs: 20_000 + index * 1000,
+      durationMs: 500,
+      style,
+    }));
+    const crowded = replaceVoiceCaptions(spec, 'none', full, () => 'captions-1');
+    expect(() => replaceVoiceCaptions(crowded, 'vo1', place(spec), () => 'unused')).toThrow(/limit of 500/);
+  });
+
   it('refuses to land on a caption that is not synced to the clip', () => {
     const spec = timeline();
     const placed = place(spec);
@@ -250,6 +304,38 @@ describe('shiftSyncedCaptions', () => {
     // Trimming 400ms off the start of the source while the clip stays put pulls the audio 400ms earlier.
     const after = shiftSyncedCaptions(before, moveVoice(before, { trimStartMs: 400 }));
     expect(captionsOf(after).find(clip => clip.id === 'cap-1')?.startMs).toBe(2100);
+  });
+
+  it('cuts captions pushed off the start instead of stacking them there', () => {
+    const spec = timeline({
+      tracks: [
+        { id: 'voice-1', kind: 'voice', clips: [{ id: 'vo1', fileId: FILE_A, startMs: 500, durationMs: 4000 }] },
+      ],
+    } as Partial<StudioTimeline>);
+    const placed = voiceCaptionClips({
+      voiceClip: { id: 'vo1', startMs: 500, durationMs: 4000, trimStartMs: 0 },
+      cues: [
+        { text: 'one', startMs: 100, endMs: 500 },
+        { text: 'two', startMs: 500, endMs: 1100 },
+      ],
+      timelineDurationMs: spec.durationMs,
+      mintId: counter('cap'),
+      sync: true,
+    });
+    const before = replaceVoiceCaptions(spec, 'vo1', placed, () => 'captions-1');
+    // Trimming 1000ms off the source pulls the audio 1000ms earlier: "one" falls off the start, "two" is cut.
+    const after = shiftSyncedCaptions(before, moveVoice(before, { trimStartMs: 1000 }));
+    expect(captionsOf(after).map(({ id, startMs, durationMs }) => ({ id, startMs, durationMs }))).toEqual([
+      { id: 'cap-2', startMs: 0, durationMs: 600 },
+    ]);
+    expect(validateStudioTimeline(StudioTimelineSchema.parse(after), {})).toEqual([]);
+  });
+
+  it('cuts captions pushed past the end of the timeline', () => {
+    const before = withCaptions(timeline());
+    // cap-1 sits 500ms into the audio for 1000ms; the voice moves so it would start 300ms before the end.
+    const after = shiftSyncedCaptions(before, moveVoice(before, { startMs: 19_200 }));
+    expect(captionsOf(after).find(clip => clip.id === 'cap-1')).toMatchObject({ startMs: 19_700, durationMs: 300 });
   });
 
   it('returns the same timeline when no voice audio moved', () => {

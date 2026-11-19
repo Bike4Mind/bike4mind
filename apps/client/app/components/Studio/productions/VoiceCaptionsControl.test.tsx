@@ -14,10 +14,11 @@ const h = vi.hoisted(() => ({
   script: undefined as
     undefined | null | { text: string; truncated: boolean; wordTimings?: SpeechWordTiming[]; durationMs?: number },
   isLoading: false,
+  isError: false,
 }));
 
 vi.mock('@client/app/hooks/data/speechScript', () => ({
-  useSpeechScript: () => ({ data: h.script, isLoading: h.isLoading }),
+  useSpeechScript: () => ({ data: h.script, isLoading: h.isLoading, isError: h.isError }),
 }));
 
 import VoiceCaptionsControl from './VoiceCaptionsControl';
@@ -57,6 +58,7 @@ const generate = () => fireEvent.click(screen.getByTestId('production-voice-capt
 beforeEach(() => {
   h.script = undefined;
   h.isLoading = false;
+  h.isError = false;
 });
 
 describe('VoiceCaptionsControl', () => {
@@ -118,6 +120,16 @@ describe('VoiceCaptionsControl', () => {
 
     // Without a measured length the clip's own length stands in.
     expect(captionsOf(onChange.mock.calls[0][0])[0]).toMatchObject({ startMs: 1000, durationMs: 5000 });
+  });
+
+  it('says when the script could not be loaded and still accepts typed text', () => {
+    h.isError = true;
+    const onChange = renderControl();
+
+    expect(screen.getByTestId('production-voice-captions-load-error')).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId('production-voice-captions-script-input'), { target: { value: 'Hello' } });
+    generate();
+    expect(onChange).toHaveBeenCalledTimes(1);
   });
 
   it('reports a clash with a hand-made caption instead of changing the timeline', () => {

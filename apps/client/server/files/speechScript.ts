@@ -19,7 +19,7 @@ export type SpeechScript = {
   durationMs?: number;
 };
 
-type SpeechScriptSource = { _id: unknown; sourceMetadata?: Record<string, unknown> };
+type SpeechScriptSource = { id: string; sourceMetadata?: Record<string, unknown> };
 
 const toMs = (seconds: number | undefined) => (seconds === undefined ? undefined : Math.round(seconds * 1000));
 
@@ -33,7 +33,7 @@ export async function loadSpeechScript(
   const generation = parsed.data;
   const job = generation.jobId ? await findJob(generation.jobId) : null;
   // The job must be the one that produced this file, so a stale or mismatched id never lends another job's text.
-  if (job && isGenerationJobOfKind(job, 'speech') && job.payload.output?.fileId === String(file._id)) {
+  if (job && isGenerationJobOfKind(job, 'speech') && job.payload.output?.fileId === file.id) {
     const { request, wordTimings, output } = job.payload;
     return {
       text: request.text,
