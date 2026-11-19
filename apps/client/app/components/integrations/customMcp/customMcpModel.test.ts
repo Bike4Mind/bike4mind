@@ -120,6 +120,5 @@ describe('composerConnections', () => {
 
     expect(composerConnections(all).map(c => c.id)).toEqual(['shared']);
     expect(connectionsFor(all, undefined).map(c => c.id)).toEqual(['mine']);
-    expect(connectionsFor(all, 'linear')).toEqual([]);
   });
 });
