@@ -15,7 +15,7 @@ const MARKER: Record<PlanItemStatus, string> = {
 /**
  * The plan worth drawing, or null.
  *
- * Hidden once every item is done and no turn is running: a finished plan left on screen reads as
+ * Hidden once every item is done or cancelled and no turn is running: a finished plan left on screen reads as
  * work still owed. While a turn is open it stays, so the last tick is seen landing. Shared by this
  * bar and the session panel's Plan section so the two agree on when there is a plan at all.
  */

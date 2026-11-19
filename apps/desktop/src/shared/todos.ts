@@ -64,7 +64,7 @@ export function parseTodos(value: unknown): { todos: PlanItem[] } | { error: str
 
 /** The tool result's `Task #<id>` text, when it names the id the task was given. */
 function taskResult(call: ChatToolCall): ClaudeTaskCall['result'] {
-  const taskId = call.name === 'TaskCreate' ? /Task #(\S+?)[\s:]/.exec(call.preview ?? '')?.[1] : undefined;
+  const taskId = call.name === 'TaskCreate' ? /Task #([^\s:]+)/.exec(call.preview ?? '')?.[1] : undefined;
   return taskId ? { taskId } : undefined;
 }
 
@@ -77,29 +77,34 @@ function planCalls(messages: readonly ChatMessage[]): { call: ChatToolCall; mess
   );
 }
 
-function planFrom(calls: readonly { call: ChatToolCall }[]): PlanItem[] | null {
+/** The plan the newest readable call sets, with the thread index of that call. */
+function planFrom(
+  calls: readonly { call: ChatToolCall; message: number }[]
+): { items: PlanItem[]; message: number } | null {
   for (let c = calls.length - 1; c >= 0; c -= 1) {
-    const { call } = calls[c];
+    const { call, message } = calls[c];
     if (TASK_TOOLS.has(call.name)) {
       // Each task call is a delta, so the plan is the fold of the whole stream up to this one.
       const tasks = calls.slice(0, c + 1).filter(entry => TASK_TOOLS.has(entry.call.name));
-      return fromClaudeTasks(
+      const items = fromClaudeTasks(
         tasks.map(({ call: task }) => ({ name: task.name, input: task.input, result: taskResult(task) }))
       ).plan.items;
+      return { items, message };
     }
     if (call.name === TODO_TOOL_NAME) {
       const parsed = parseTodos(call.input.todos);
-      if ('todos' in parsed) return parsed.todos;
+      if ('todos' in parsed) return { items: parsed.todos, message };
       continue;
     }
-    return own(PLAN_TOOLS, call.name)?.(call.input).plan.items ?? null;
+    const adapter = own(PLAN_TOOLS, call.name);
+    return adapter ? { items: adapter(call.input).plan.items, message } : null;
   }
   return null;
 }
 
 /** The most recent plan in a thread: what the last accepted plan call set, or null if none. */
 export function latestTodos(messages: readonly ChatMessage[]): PlanItem[] | null {
-  return planFrom(planCalls(messages));
+  return planFrom(planCalls(messages))?.items ?? null;
 }
 
 /**
@@ -127,10 +132,11 @@ export function activeTodos(messages: readonly ChatMessage[], turnOpen: boolean)
     start = m;
     seen += 1;
   }
-  const calls = planCalls(messages);
-  // Recency decides only whether the plan is current; the task fold still reads the whole thread.
-  if (first < 0 || (calls.at(-1)?.message ?? -1) < start) return null;
-  return planFrom(calls);
+  if (first < 0) return null;
+  // Recency is judged on the call the plan is read from, so a rejected newest call cannot revive
+  // an older plan; the task fold still reads the whole thread.
+  const plan = planFrom(planCalls(messages));
+  return plan && plan.message >= start ? plan.items : null;
 }
 
 /** Done/total over the items that count (cancelled ones are left out), plus the current and next item. */

@@ -31,14 +31,14 @@ describe('an imported Claude Code transcript that plans with TaskCreate / TaskUp
     assistant('m1', use('t1', 'TaskCreate', { subject: 'Read the logs', activeForm: 'Reading the logs' })),
     result('t1', 'Task #1 created successfully: Read the logs'),
     assistant('m2', use('t2', 'TaskCreate', { subject: 'Patch the config', activeForm: 'Patching the config' })),
-    result('t2', 'Task #2 created successfully: Patch the config'),
+    result('t2', 'Task #7 created successfully: Patch the config'),
     assistant('m3', use('t3', 'TaskCreate', { subject: 'Try a rewrite' })),
     result('t3', 'Task #3 created successfully: Try a rewrite'),
     assistant('m4', { type: 'text', text: 'Plan is set.' }),
     user('go ahead'),
     assistant('m5', use('t4', 'TaskUpdate', { taskId: '1', status: 'completed' })),
     result('t4', 'Updated task #1 status'),
-    assistant('m6', use('t5', 'TaskUpdate', { taskId: '2', status: 'in_progress' })),
+    assistant('m6', use('t5', 'TaskUpdate', { taskId: '7', status: 'in_progress' })),
     result('t5', 'Updated task #2 status'),
     assistant('m7', use('t6', 'TaskUpdate', { taskId: '3', status: 'cancelled' })),
     result('t6', 'Updated task #3 status'),
@@ -47,7 +47,7 @@ describe('an imported Claude Code transcript that plans with TaskCreate / TaskUp
   it('yields the folded plan for the panel', () => {
     expect(activeTodos(importEvents(events), false)).toEqual([
       { id: '1', content: 'Read the logs', activeForm: 'Reading the logs', status: 'completed' },
-      { id: '2', content: 'Patch the config', activeForm: 'Patching the config', status: 'in_progress' },
+      { id: '7', content: 'Patch the config', activeForm: 'Patching the config', status: 'in_progress' },
       { id: '3', content: 'Try a rewrite', status: 'cancelled' },
     ]);
   });
