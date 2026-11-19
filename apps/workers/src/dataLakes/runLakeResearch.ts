@@ -525,7 +525,7 @@ export async function runLakeResearch(
         }
         const { results: rawHits, servedBy } = outcome;
         // Classification reads the stored URL, so a provider redirect must be resolved here.
-        // Sequential on purpose: concurrent requests to the redirect host were mostly refused.
+        // Sequential: concurrent requests to the redirect host may be refused. The log records why each one fails.
         const resolution = { decoded: 0, followed: 0, unresolved: 0 };
         const unresolvedDetails: Array<dataLakeResearchService.UnresolvedDetail | { reason: 'unknown' }> = [];
         const seenUrls = new Set<string>();
