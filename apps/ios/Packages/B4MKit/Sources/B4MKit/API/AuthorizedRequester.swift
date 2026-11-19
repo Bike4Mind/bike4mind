@@ -1,7 +1,7 @@
 import Foundation
 
 /// Sends hand-written JSON requests for the few routes the generated client does not cover
-/// (`/api/chat`, `/api/websocket/ticket`, `/api/settings/serverConfig`). Same bearer + single 401 retry
+/// (`/api/chat`, `/api/websocket/ticket`, `/api/settings/serverConfig`, and the voice routes in `VoiceWire`). Same bearer + single 401 retry
 /// policy as `BearerAuthMiddleware`, and failures fold into `APIError` like `APIClient`'s.
 struct AuthorizedRequester: Sendable {
   let baseURL: URL
@@ -11,6 +11,7 @@ struct AuthorizedRequester: Sendable {
   struct Response: Sendable {
     let status: Int
     let body: Data
+    var contentType: String?
   }
 
   /// Returns any HTTP response (callers branch on status); throws `APIError` for transport failures and
@@ -58,6 +59,7 @@ struct AuthorizedRequester: Sendable {
       request.httpBody = body
     }
     let (data, response) = try await transport.send(request)
-    return Response(status: response.statusCode, body: data)
+    return Response(
+      status: response.statusCode, body: data, contentType: response.value(forHTTPHeaderField: "Content-Type"))
   }
 }
