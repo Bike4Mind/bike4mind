@@ -61,8 +61,11 @@ export function PlanBlock({ maxRows = MAX_PLAN_ROWS }: { maxRows?: number }) {
   if (items.length === 0) return null;
 
   if (!active) {
-    const leaves = items.flatMap(item => (item.children?.length ? item.children : [item]));
-    const live = leaves.filter(item => item.status !== 'cancelled');
+    // Same leaf set as planProgress: a cancelled group drops its whole subtree.
+    const live = items
+      .filter(item => item.status !== 'cancelled')
+      .flatMap(item => (item.children?.length ? item.children : [item]))
+      .filter(item => item.status !== 'cancelled');
     if (live.every(item => item.status === 'completed')) return null;
     const { done, total } = planProgress({ version: 1, source: 'write_todos', items, updatedAt: 0 });
     const current = live.find(item => item.status === 'in_progress') ?? live.find(item => item.status === 'pending');
@@ -85,7 +88,8 @@ export function PlanBlock({ maxRows = MAX_PLAN_ROWS }: { maxRows?: number }) {
       0,
       rows.findIndex(row => row.item.status === 'in_progress')
     );
-    const start = Math.min(Math.max(0, current - 1), rows.length - visible);
+    // One row of context above the current item, unless that would hide the item itself.
+    const start = Math.min(Math.max(0, current - (visible > 1 ? 1 : 0)), rows.length - visible);
     shown = rows.slice(start, start + visible);
     hidden = rows.length - visible;
   }
