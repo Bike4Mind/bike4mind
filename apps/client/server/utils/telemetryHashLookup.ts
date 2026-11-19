@@ -1,20 +1,23 @@
 import { regenerateHashesForDeletion } from '@bike4mind/common';
 import { createHmac } from 'crypto';
 import { User, questRepository, organizationRepository } from '@bike4mind/database';
-import { Resource } from 'sst';
+import { signingKey, verificationKeys } from '@bike4mind/server-utils/security/signingKeys';
 import { normalizeTelemetryUserId } from './telemetryIdentity';
 
 /** Number of days of telemetry to cover when regenerating hashes for DSAR/deletion */
 const TELEMETRY_RETENTION_DAYS = 90;
 
 /**
- * Derive daily HMAC salts for the telemetry retention window.
+ * Derive daily HMAC salts for the telemetry retention window, one set per accepted signing key
+ * so records written under a previous key are still found.
  * Shared by deletion, admin export, and user export endpoints.
  */
 export function deriveTelemetrySalts(): { salt: string; dateKey: string }[] {
-  const hmacSecret = Resource.SECRET_ENCRYPTION_KEY.value;
-  const hasValidSecret = hmacSecret && hmacSecret !== 'not-configured';
-  if (!hasValidSecret && process.env.NODE_ENV !== 'development') {
+  const hmacSecrets = verificationKeys('telemetry-salt');
+  // The writer salts with any value other than empty or 'not-configured', placeholders included.
+  const writerKey = signingKey('telemetry-salt');
+  if (writerKey && writerKey !== 'not-configured' && !hmacSecrets.includes(writerKey)) hmacSecrets.push(writerKey);
+  if (hmacSecrets.length === 0 && process.env.NODE_ENV !== 'development') {
     console.warn(
       '[Telemetry] SECRET_ENCRYPTION_KEY not configured — using predictable fallback salt. Hashes are reversible.'
     );
@@ -25,11 +28,11 @@ export function deriveTelemetrySalts(): { salt: string; dateKey: string }[] {
     const date = new Date(referenceTime.getTime());
     date.setUTCDate(referenceTime.getUTCDate() - daysAgo);
     const dateKey = date.toISOString().split('T')[0];
-    const salt = hasValidSecret
-      ? createHmac('sha256', hmacSecret).update(dateKey).digest('hex')
-      : `telemetry-salt-${dateKey}`; // Fallback for local dev only
-    return { salt, dateKey };
-  });
+    const salts = hmacSecrets.length
+      ? hmacSecrets.map(hmacSecret => createHmac('sha256', hmacSecret).update(dateKey).digest('hex'))
+      : [`telemetry-salt-${dateKey}`]; // Fallback for local dev only
+    return salts.map(salt => ({ salt, dateKey }));
+  }).flat();
 }
 
 /**

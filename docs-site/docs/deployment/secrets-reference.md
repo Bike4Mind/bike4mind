@@ -141,6 +141,23 @@ During domain migration:
 
 ---
 
+## Signing Secret (Optional)
+
+Signed image URLs, hashed telemetry identifiers and purge receipts use their own secret instead of `SECRET_ENCRYPTION_KEY`. Each purpose derives a separate key from the one secret. Both secrets default to `not-configured`; while `HMAC_SIGNING_SECRET` is unset, signatures keep using `SECRET_ENCRYPTION_KEY`.
+
+| Secret | Description | Format | How to Generate |
+|--------|-------------|--------|-----------------|
+| `HMAC_SIGNING_SECRET` | Root secret for signatures; per-purpose keys are derived from it | Any string (64 hex characters recommended) | `openssl rand -hex 32` |
+| `HMAC_SIGNING_SECRET_PREVIOUS` | The secret that signed older values while they are still honoured (see below) | Same as above | The old value of the secret being replaced |
+
+```bash
+pnpm sst secret set HMAC_SIGNING_SECRET "$(openssl rand -hex 32)" --stage <stage>
+```
+
+When you set `HMAC_SIGNING_SECRET` for the first time, move the secret that signed existing values into `HMAC_SIGNING_SECRET_PREVIOUS`. That is `SECRET_ENCRYPTION_KEY` for a stage that never had a dedicated secret. Values signed with the previous secret keep verifying while it stays set, and new values are signed with the new one. Once nothing signed with the old secret needs to verify, clear `HMAC_SIGNING_SECRET_PREVIOUS`.
+
+---
+
 ## Email Configuration (MAIL_*)
 
 Required for platform email (one-time login codes, notifications):
