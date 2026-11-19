@@ -7,6 +7,7 @@ import {
   buildVideoClips,
   directorClips,
   layoutShots,
+  musicShortfallMs,
   shotPicture,
   withDirectorTracks,
 } from './layout';
@@ -31,6 +32,7 @@ async function assemble(config: ProductionToolConfig, args: AssembleArgs): Promi
   if (missing.length === slots.length) {
     throw new ProductionToolError('no shot has a take yet; call production_generate_shot first.');
   }
+  const musicShortMs = musicShortfallMs(composition.timeline, totalMs);
   const video = buildVideoClips(slots);
   const captions = args.captions === false ? [] : buildCaptionClips(slots);
   const timeline = withDirectorTracks(composition.timeline, { video, captions }, totalMs);
@@ -46,7 +48,11 @@ async function assemble(config: ProductionToolConfig, args: AssembleArgs): Promi
       sfx: directorClips(timeline, 'sfx').length,
     },
     ...(missing.length > 0 && { shotsWithoutTakes: missing }),
-    next: 'Tell the user the cut is on the timeline and ready to preview in Studio > Productions.',
+    ...(musicShortMs > 0 && { musicEndsBeforeCutMs: musicShortMs }),
+    next:
+      'Tell the user the cut is on the timeline and ready to preview in Studio > Productions. Say plainly what is ' +
+      'missing or short: stills, a music bed that ends before the cut, voice lines a tool reported cut, and any ' +
+      'part that failed.',
   });
 }
 
