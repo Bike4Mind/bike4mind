@@ -57,6 +57,7 @@ vi.mock('@bike4mind/database', () => ({
   // personal/JWT cases but must exist or the mocked-module export getter throws.
   organizationRepository: { findById: vi.fn().mockResolvedValue(null) },
   cacheRepository: {},
+  spendFreezeRepository: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
 }));
 
 // executeCompletion - the route's LLM execution seam. Mock so tests drive its onChunk
@@ -110,7 +111,7 @@ const mockAuth = vi.hoisted(() => ({
 }));
 vi.mock('@bike4mind/server-utils/cli/auth', () => mockAuth);
 // The real quota module reaches the subscription models, which the @bike4mind/database mock lacks.
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitApiKeyCompletion: vi.fn().mockResolvedValue({ release: () => Promise.resolve() }),
   NO_COMPLETION_QUOTA: { release: () => Promise.resolve() },
 }));

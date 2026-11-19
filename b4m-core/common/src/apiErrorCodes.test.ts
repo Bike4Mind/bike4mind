@@ -81,7 +81,7 @@ describe('API_ERROR_CODES', () => {
     // API_KEY_TRUST_REQUIRED_ERROR_CODE likewise; proven by userApiKeyService/__tests__/trust.test.ts.
     // ACCOUNT_TRUST_REQUIRED_ERROR_CODE likewise; proven by apps/client/server/auth/assertOutboundActionAllowed.test.ts.
     // TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE and CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE likewise; proven by
-    // apps/client/server/utils/untrustedCompletionQuota.test.ts.
+    // packages/server-utils/src/utils/untrustedCompletionQuota.test.ts.
     // MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE likewise; proven by services/src/llm/modelAdmission.test.ts.
     // DAILY_FREE_LIMIT_REACHED_ERROR_CODE likewise; proven by packages/server-utils/src/billing/freeTierDailyCapGate.test.ts.
     // UPGRADE_REQUIRED_ERROR_CODE likewise; proven by packages/server-utils/src/middlewares/clientVersionGate.test.ts.
@@ -89,6 +89,7 @@ describe('API_ERROR_CODES', () => {
     // RUN_NOT_FOUND_ERROR_CODE likewise; proven by apps/client/server/chatCompletion/external/sseRoute.test.ts.
     // ORG_MODEL_NOT_ALLOWED_ERROR_CODE likewise; proven by services/src/llm/modelAdmission.test.ts.
     // ORG_TOOL_NOT_ALLOWED_ERROR_CODE likewise; proven by the ChatCompletionInvoke org tool policy test.
+    // 'input_file_not_found' likewise; proven by services/src/sceneJobs/sceneJobHandler.test.ts.
     const emitted = new Set<string>([
       ...NARROWING_TUPLES.flat(),
       UNKNOWN_MODEL_ERROR_CODE,
@@ -108,6 +109,7 @@ describe('API_ERROR_CODES', () => {
       RUN_NOT_FOUND_ERROR_CODE,
       ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
       ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+      'input_file_not_found',
     ]);
     expect(API_ERROR_CODES.filter(code => !emitted.has(code))).toEqual([]);
   });

@@ -33,3 +33,14 @@ final class TokenStoreTests: XCTestCase {
     XCTAssertNil(try store.refreshToken(), file: file, line: line)
   }
 }
+
+final class KeychainFallbackDecisionTests: XCTestCase {
+  func testFallsBackOnlyForMissingEntitlementWithSharedGroup() {
+    XCTAssertTrue(
+      KeychainTokenStore.shouldFallBackToPrivate(status: errSecMissingEntitlement, accessGroup: "TEAM.shared"))
+    XCTAssertFalse(KeychainTokenStore.shouldFallBackToPrivate(status: errSecMissingEntitlement, accessGroup: nil))
+    XCTAssertFalse(
+      KeychainTokenStore.shouldFallBackToPrivate(status: errSecInteractionNotAllowed, accessGroup: "TEAM.shared"))
+    XCTAssertFalse(KeychainTokenStore.shouldFallBackToPrivate(status: errSecItemNotFound, accessGroup: "TEAM.shared"))
+  }
+}

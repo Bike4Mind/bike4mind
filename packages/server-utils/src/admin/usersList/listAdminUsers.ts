@@ -263,6 +263,7 @@ export type AdminUsersExportRow = Pick<
   IUserObject,
   'name' | 'username' | 'email' | 'createdAt' | 'isAdmin' | 'isBanned'
 > & {
+  id: string;
   organizationName: string | null;
   loginCount: number;
   lastLoginAt: Date | null;
@@ -277,13 +278,12 @@ export async function exportAdminUsers(filter: AdminUsersFilter, now = new Date(
 async function readAdminUsersExport(filter: AdminUsersFilter, now: Date, expiresAt: number) {
   const pipeline = await adminUsersPipeline(filter, now, { expiresAt });
   const maxTimeMS = remainingExportTime(expiresAt);
-  const rows: (AdminUsersExportRow & { organizationId?: unknown })[] = await User.aggregate([
+  const rows: (Omit<AdminUsersExportRow, 'id'> & { _id: unknown; organizationId?: unknown })[] = await User.aggregate([
     ...pipeline,
     { $sort: { createdAt: -1, _id: -1 } },
     { $limit: USERS_EXPORT_MAX_ROWS + 1 },
     {
       $project: {
-        _id: 0,
         name: 1,
         username: 1,
         email: 1,
@@ -308,8 +308,9 @@ async function readAdminUsersExport(filter: AdminUsersFilter, now: Date, expires
   const names = new Map(organizations.map(organization => [String(organization._id), organization.name]));
   return {
     truncated: rows.length > USERS_EXPORT_MAX_ROWS,
-    users: rows.slice(0, USERS_EXPORT_MAX_ROWS).map(({ organizationId, ...row }) => ({
+    users: rows.slice(0, USERS_EXPORT_MAX_ROWS).map(({ _id, organizationId, ...row }) => ({
       ...row,
+      id: String(_id),
       organizationName: organizationId ? (names.get(String(organizationId)) ?? null) : null,
       lastLoginAt: row.lastLoginAt ?? null,
     })),

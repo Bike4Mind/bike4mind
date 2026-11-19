@@ -40,7 +40,9 @@ export const viewAgentFixture = (id: string, state: AgentState, extra: Partial<V
   parentId: 'root',
   depth: 1,
   updatedAt: '2026-10-01T00:00:00.000Z',
-  ...(state === 'needs-you' && { decision: { id: `d-${id}`, question: `Question from ${id}?` } }),
+  ...(state === 'needs-you' && {
+    decision: { id: `d-${id}`, question: `Question from ${id}?`, options: ['Yes', 'No'] },
+  }),
   ...extra,
 });
 
@@ -50,7 +52,7 @@ export const snapshotFixture = (
 ): ViewSnapshot => ({ contract: VIEW_SNAPSHOT_CONTRACT, root: { id: 'root', state: rootState }, agents });
 
 /** One themed mount per test; call `unmount` in afterEach. `render` again to re-render in place. */
-export function createThemedMount() {
+export function createThemedMount(mode: 'light' | 'dark' = 'light') {
   let root: Root | null = null;
   let host: HTMLElement | null = null;
   return {
@@ -61,7 +63,11 @@ export function createThemedMount() {
         root = createRoot(host);
       }
       await act(async () => {
-        root?.render(<CssVarsProvider theme={desktopTheme}>{node}</CssVarsProvider>);
+        root?.render(
+          <CssVarsProvider theme={desktopTheme} defaultMode={mode}>
+            {node}
+          </CssVarsProvider>
+        );
       });
     },
     unmount() {

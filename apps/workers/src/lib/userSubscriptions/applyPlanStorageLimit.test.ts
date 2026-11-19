@@ -3,8 +3,14 @@ import { MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
 import type Stripe from 'stripe';
 import { applyPlanStorageLimit, readPlanStorageLimit } from './applyPlanStorageLimit';
 
-const { mockSetPlanStorageLimit } = vi.hoisted(() => ({ mockSetPlanStorageLimit: vi.fn() }));
-vi.mock('@bike4mind/database', () => ({ userRepository: { setPlanStorageLimit: mockSetPlanStorageLimit } }));
+const { mockSetPlanStorageLimit, mockSetOrgPlanStorageLimit } = vi.hoisted(() => ({
+  mockSetPlanStorageLimit: vi.fn(),
+  mockSetOrgPlanStorageLimit: vi.fn(),
+}));
+vi.mock('@bike4mind/database', () => ({
+  userRepository: { setPlanStorageLimit: mockSetPlanStorageLimit },
+  organizationRepository: { setPlanStorageLimit: mockSetOrgPlanStorageLimit },
+}));
 const { mockEmitMetric } = vi.hoisted(() => ({ mockEmitMetric: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: mockEmitMetric }));
 
@@ -43,6 +49,51 @@ describe('applyPlanStorageLimit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSetPlanStorageLimit.mockResolvedValue(true);
+    mockSetOrgPlanStorageLimit.mockResolvedValue(true);
+  });
+
+  it.each([1, 4, 100])('sets one flat organization pool for %i seats', async quantity => {
+    const subscription = subscriptionWithPriceMetadata({ storageLimitMb: '50000' }, 'active');
+    subscription.items.data[0].quantity = quantity;
+    await applyPlanStorageLimit(subscription, 'org-1', logger as never, 'Organization');
+    expect(mockSetOrgPlanStorageLimit).toHaveBeenCalledWith('org-1', 50_000);
+    expect(mockSetPlanStorageLimit).not.toHaveBeenCalled();
+  });
+
+  it.each<Record<string, string>>([{}, { storageLimitMb: 'invalid' }])(
+    'does not change an org pool for unusable metadata %j',
+    async metadata => {
+      await applyPlanStorageLimit(
+        subscriptionWithPriceMetadata(metadata, 'active'),
+        'org-1',
+        logger as never,
+        'Organization'
+      );
+      expect(mockSetOrgPlanStorageLimit).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['past_due', 'unpaid', 'canceled', 'paused', 'incomplete', 'incomplete_expired'] as const)(
+    'retains the existing organization allocation for %s',
+    async status => {
+      await applyPlanStorageLimit(
+        subscriptionWithPriceMetadata({ storageLimitMb: '50000' }, status),
+        'org-1',
+        logger as never,
+        'Organization'
+      );
+      expect(mockSetOrgPlanStorageLimit).not.toHaveBeenCalled();
+    }
+  );
+
+  it('grants the organization pool during a trial', async () => {
+    await applyPlanStorageLimit(
+      subscriptionWithPriceMetadata({ storageLimitMb: '50000' }, 'trialing'),
+      'org-1',
+      logger as never,
+      'Organization'
+    );
+    expect(mockSetOrgPlanStorageLimit).toHaveBeenCalledWith('org-1', 50_000);
   });
 
   it('writes the price limit to the user', async () => {

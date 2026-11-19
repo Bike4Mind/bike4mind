@@ -72,7 +72,8 @@ const call = async (
   body: unknown,
   { actor = { id: ADMIN, isAdmin: true } as Record<string, unknown>, userId = TARGET } = {}
 ) => {
-  const { req, res } = createMocks({ method: 'PUT', body, query: { userId } });
+  const { req, res } = createMocks({ method: 'PUT', query: { userId } });
+  req.body = body;
   const request = Object.assign(req, { user: actor }) as unknown as Request;
   for (const guard of mocks.guards) guard(request, res as unknown as Response, () => {});
   await mocks.handler!(request, res as unknown as Response);
@@ -329,7 +330,9 @@ describe('PUT /api/admin/users/:userId/permissions', () => {
         expect.anything(),
         expect.objectContaining({
           details: expect.objectContaining({
-            removedRolePermissions: [{ roleId: SUPPORT_ROLE, permissions: ['support:read', 'users:moderate'] }],
+            removedRolePermissions: [
+              { roleId: SUPPORT_ROLE, permissions: ['support:read', 'users:moderate'], roleName: 'Support' },
+            ],
           }),
         })
       );

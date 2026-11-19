@@ -4,6 +4,7 @@ import {
   ACCOUNT_SUSPENDED_ERROR_CODE,
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+  FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
   ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
   ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
@@ -11,6 +12,7 @@ import {
   OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   UNKNOWN_MODEL_ERROR_CODE,
   RUN_NOT_FOUND_ERROR_CODE,
+  SPEND_FROZEN_ERROR_CODE,
   END_USER_ID_NOT_ALLOWED_ERROR_CODE,
   INVALID_END_USER_ID_ERROR_CODE,
   type ApiErrorCode,
@@ -20,7 +22,7 @@ import { SuspensionReasonCategorySchema } from '../accountSuspensionCategories';
 // Specific file, not the `../types` barrel: this module is imported by the
 // contracts, which the CI openapi job runs against an install-only tree (see the
 // note in tools.contract.ts).
-import { CHAT_HISTORY_ITEM_TYPES, QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
+import { CHAT_HISTORY_ITEM_TYPES, QUEST_ERROR_CODES, QUEST_OUTCOME_ERROR_CODES } from '../types/entities/SessionTypes';
 import { PROMPT_TEXT_MAX } from './briefcasePrompt';
 import { FallbackInfoSchema } from './llm';
 import { SystemPromptDetailSchema } from './contextTelemetry';
@@ -193,14 +195,14 @@ export const ChatAckSchema = z.object({
   // or not.
   type: z.enum(CHAT_HISTORY_ITEM_TYPES).optional(),
   // Reason for a `type: 'error'` turn, when there is a machine-readable one. Only the
-  // billing failures set it, so a `type: 'error'` turn with no `errorCode` is still a
-  // failure - never read its absence as success. Same vocabulary as the
-  // tts/music/soundEffects `errorCode` (CONVENTIONS.md "One error-code vocabulary"),
-  // narrowed via QUEST_ERROR_CODES; `spend_cap_exceeded` belongs to that shared union but
-  // is not raised as a quest errorCode by any current throw site on this endpoint (its
-  // only throw site, the embed chat route's pre-flight 422, fires outside the process
-  // try/catch that would classify it onto the quest).
-  errorCode: z.enum(QUEST_ERROR_CODES).optional(),
+  // billing failures and a prompt moderation refusal (`content_blocked`) set it, so a
+  // `type: 'error'` turn with no `errorCode` is still a failure - never read its absence as
+  // success. Same vocabulary as the tts/music/soundEffects `errorCode` (CONVENTIONS.md "One
+  // error-code vocabulary"), narrowed via QUEST_OUTCOME_ERROR_CODES; `spend_cap_exceeded`
+  // belongs to that shared union but is not raised as a quest errorCode by any current throw
+  // site on this endpoint (its only throw site, the embed chat route's pre-flight 422, fires
+  // outside the process try/catch that would classify it onto the quest).
+  errorCode: z.enum(QUEST_OUTCOME_ERROR_CODES).optional(),
   // The tool decision the API layer made for this turn, echoed back so a caller can see what was
   // offered and what was thrown away. Absent when the layer made no decision and had nothing to
   // report (the `enableTools`-only path, where the service layer resolves the set). Present on
@@ -311,9 +313,9 @@ export const ChatQuestPollResultSchema = z.object({
   // here - the two surfaces must publish one vocabulary.
   type: z.enum(CHAT_HISTORY_ITEM_TYPES).optional(),
   // Machine-readable classifier on a `type: 'error'` quest. Values derive from
-  // QUEST_ERROR_CODES so this enum can't drift from the TS union - the same
+  // QUEST_OUTCOME_ERROR_CODES so this enum can't drift from the TS union - the same
   // vocabulary the WebSocket quest payload publishes (see schemas/actions.ts).
-  errorCode: z.enum(QUEST_ERROR_CODES).optional(),
+  errorCode: z.enum(QUEST_OUTCOME_ERROR_CODES).optional(),
   // The visible answer text, derived from `replies` when the poll body is built: thinking blocks
   // and a choices block in the final answer slot stripped, slots joined. `replies` is the raw
   // stored slots.
@@ -477,6 +479,26 @@ export const ScopeForbiddenErrorSchema = ApiErrorSchema.extend({
     .describe('API key scopes this route also requires. Every one must be held, on top of `required_scopes`.'),
 });
 
+/** The `spend_frozen` 403 body fields; values match spendFrozenError in ../insufficientCredits.ts. */
+const SpendFrozenDetailShape = {
+  frozenScope: z
+    .enum(['user', 'organization', 'api_key'])
+    .optional()
+    .describe('With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.'),
+  frozenAt: z.string().optional().describe('With `errorCode: spend_frozen`: when spending was paused (ISO 8601).'),
+};
+
+/** Sentence appended to a metered route's 403 description; see CONVENTIONS.md for the status table. */
+export const SPEND_FROZEN_FORBIDDEN_NOTE =
+  `Also \`403\` (\`errorCode: ${SPEND_FROZEN_ERROR_CODE}\`, with \`frozenScope\` and \`frozenAt\`) when spending is ` +
+  'paused for the account, its organization or the API key; not retryable until the pause is lifted.';
+
+/** 403 on a metered route: the scope or suspension refusal above, or a spend freeze. */
+export const MeteredForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
+  errorCode: z.enum([ACCOUNT_SUSPENDED_ERROR_CODE, SPEND_FROZEN_ERROR_CODE]).optional(),
+  ...SpendFrozenDetailShape,
+});
+
 /**
  * 403 on the v1 media create routes and POST /api/v1/agent-executions: the scope refusal above, an
  * organization-billed API key sent with another billing organization
@@ -495,23 +517,44 @@ export const BillingOrganizationForbiddenErrorSchema = ScopeForbiddenErrorSchema
 });
 
 /**
- * 403 on the completions route: the scope refusal above, a model outside the free-tier allowlist, or a
- * model the organization policy does not allow.
+ * 403 on the completions route: the scope refusal above, a model outside the free-tier allowlist, a
+ * model the organization policy does not allow, or a spend freeze.
  */
-export const ModelPolicyForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
-  errorCode: z
-    .enum([ACCOUNT_SUSPENDED_ERROR_CODE, MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE, ORG_MODEL_NOT_ALLOWED_ERROR_CODE])
-    .optional(),
-});
-
-/** 403 on POST /api/chat: the completions refusals, or a built-in tool the organization policy does not allow. */
-export const ChatForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
+export const ModelPolicyForbiddenErrorSchema = MeteredForbiddenErrorSchema.extend({
   errorCode: z
     .enum([
       ACCOUNT_SUSPENDED_ERROR_CODE,
       MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
       ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
-      ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+      SPEND_FROZEN_ERROR_CODE,
     ])
     .optional(),
+});
+
+/** 403 on POST /api/chat: the completions refusals, or a built-in tool the organization policy does not allow. */
+export const ChatForbiddenErrorSchema = MeteredForbiddenErrorSchema.extend({
+  errorCode: z
+    .enum([
+      ACCOUNT_SUSPENDED_ERROR_CODE,
+      MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+      FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
+      ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+      ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+      SPEND_FROZEN_ERROR_CODE,
+    ])
+    .optional(),
+});
+
+/** BillingOrganizationForbiddenErrorSchema on a route that also refuses a spend freeze before answering. */
+export const MeteredBillingOrganizationForbiddenErrorSchema = BillingOrganizationForbiddenErrorSchema.extend({
+  errorCode: z
+    .enum([
+      ACCOUNT_SUSPENDED_ERROR_CODE,
+      BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
+      ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+      ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+      SPEND_FROZEN_ERROR_CODE,
+    ])
+    .optional(),
+  ...SpendFrozenDetailShape,
 });

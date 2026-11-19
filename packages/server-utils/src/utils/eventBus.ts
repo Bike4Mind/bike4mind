@@ -141,7 +141,7 @@ export const EmailEvents = {
  */
 export const NotificationEvents = {
   Push: event('notification.push', PushNotificationEventSchema),
-  /** Live activity progress for a quest; publish via apps/client/server/utils/liveActivityPush.ts. */
+  /** Live activity progress for a quest; publish via packages/server-utils/src/utils/liveActivityPush.ts. */
   LiveActivity: event('notification.liveActivity', LiveActivityPushEventSchema),
 };
 
@@ -165,6 +165,17 @@ export const StripeEvents = {
     'stripe.cus.sub.updated',
     z.object({
       subscriptionId: z.string(),
+    })
+  ),
+};
+
+/** Published by POST /api/v1/briefs; consumed by apps/workers/src/events/briefCompose.ts. */
+export const BriefEvents = {
+  Compose: event(
+    'brief.compose',
+    z.object({
+      briefId: z.string(),
+      userId: z.string(),
     })
   ),
 };

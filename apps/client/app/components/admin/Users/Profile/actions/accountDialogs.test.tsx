@@ -7,6 +7,7 @@ import {
   EmailVerificationDialog,
   FileEmbeddingWindowResetDialog,
   InternalAccountDialog,
+  PartnerAccountDialog,
   LoginAsDialog,
   ResetMfaDialog,
   RestrictDialog,
@@ -537,6 +538,51 @@ describe('account dialogs', () => {
 
       expect(screen.getByTestId('internal-account-dialog-preview-before')).toHaveTextContent('Internal');
       expect(screen.getByTestId('internal-account-dialog-preview-after')).toHaveTextContent('Internal (admin)');
+    });
+  });
+
+  describe('PartnerAccountDialog', () => {
+    it('marks a customer account partner with accountSegment: partner, and undoes it', async () => {
+      renderDialog((user, close) => <PartnerAccountDialog user={user} onClose={close} />);
+
+      expect(screen.getByTestId('partner-account-dialog-preview-before')).toHaveTextContent('Customer');
+      expect(screen.getByTestId('partner-account-dialog-preview-after')).toHaveTextContent('Partner');
+      expect(confirmButton('partner-account-dialog')).toBeDisabled();
+      pickReason('partner-account-dialog');
+      fireEvent.click(confirmButton('partner-account-dialog'));
+
+      await waitFor(() =>
+        expect(mocks.apiPost).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/segment`, {
+          accountSegment: 'partner',
+          reason: 'Partner or reseller',
+        })
+      );
+      fireEvent.click(await screen.findByTestId('undo-toast-undo-btn'));
+      await waitFor(() =>
+        expect(mocks.apiPost).toHaveBeenLastCalledWith(`/api/admin/users/${USER_ID}/segment`, {
+          accountSegment: 'customer',
+          reason: 'Undo: Partner or reseller',
+        })
+      );
+    });
+
+    it('stops marking a partner account with accountSegment: customer', async () => {
+      renderDialog(
+        (user, close) => <PartnerAccountDialog user={user} onClose={close} />,
+        buildProfile({ accountSegment: 'partner' })
+      );
+
+      expect(screen.getByTestId('partner-account-dialog-preview-before')).toHaveTextContent('Partner');
+      expect(screen.getByTestId('partner-account-dialog-preview-after')).toHaveTextContent('Customer');
+      pickReason('partner-account-dialog');
+      fireEvent.click(confirmButton('partner-account-dialog'));
+
+      await waitFor(() =>
+        expect(mocks.apiPost).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/segment`, {
+          accountSegment: 'customer',
+          reason: 'Partner or reseller',
+        })
+      );
     });
   });
 

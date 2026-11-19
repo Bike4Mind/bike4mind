@@ -24,6 +24,7 @@
     static let account: any AccountAPI = FixtureAccountAPI()
     static let pendingActionAPI: any PendingActionAPI = FixturePendingActionAPI()
     static let stepUp: any StepUpAPI = FixtureStepUpAPI()
+    static let briefAPI: any BriefAPI = FixtureBriefAPI()
     /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
     static let workingQuestID = "fixture-0-q4"
 
@@ -41,6 +42,61 @@
 
     static var accountScenario: AccountScenario {
       AccountScenario(rawValue: ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_ACCOUNT"] ?? "") ?? .success
+    }
+
+    /// One ready brief with an approval decision; composing a new one "takes" a few seconds, then returns it.
+    private struct FixtureBriefAPI: BriefAPI {
+      private static let brief: Brief = {
+        let now = Date()
+        return Brief(
+          id: "fixture", status: .ready, createdAt: now, composedAt: now,
+          periodStart: now.addingTimeInterval(-86_400), periodEnd: now,
+          headline: "Two agents finished overnight and one is waiting on you.",
+          happened: [
+            BriefItem(id: "h1", text: "The weekly metrics notebook picked up 14 new rows from the shared drive."),
+            BriefItem(id: "h2", text: "A 3-minute product walkthrough video finished generating."),
+          ],
+          handled: [
+            BriefItem(id: "d1", text: "The research agent summarized 6 articles into the Reading notebook."),
+            BriefItem(id: "d2", text: "Two draft replies were saved for your review."),
+          ],
+          decisions: [
+            BriefDecision(
+              id: "n1", text: "The release agent wants to open a pull request with the changelog update.",
+              approval: BriefApprovalRef(
+                questID: "fixture-0-q4", sessionID: "fixture-0", pendingActionTs: 1_700_000_000_000)),
+            BriefDecision(id: "n2", text: "Decide whether to archive the three notebooks untouched for 90 days."),
+          ])
+      }()
+
+      func compose() async throws -> Brief {
+        try await Task.sleep(for: .seconds(2))
+        return Self.brief
+      }
+
+      /// `B4M_UI_FIXTURE_BRIEF`: `composing` never finishes (the poll times out), `offline` is composing and
+      /// then every poll fails; anything else is the ready brief.
+      private static let scenario = ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_BRIEF"] ?? ""
+
+      private static var stuck: Brief {
+        Brief(
+          id: "fixture-stuck", status: .composing, createdAt: Date(), periodStart: Date(), periodEnd: Date())
+      }
+
+      func list() async throws -> [Brief] {
+        Self.scenario == "composing" || Self.scenario == "offline" ? [Self.stuck] : [Self.brief]
+      }
+
+      func brief(id: String) async throws -> Brief {
+        switch Self.scenario {
+        case "composing": return Self.stuck
+        case "offline":
+          // The first open (by the link's id) finds it composing; the polls by its own id then fail.
+          if id == Self.stuck.id { throw APIError.offline }
+          return Self.stuck
+        default: return Self.brief
+        }
+      }
     }
 
     /// `B4M_UI_FIXTURE_APPROVAL` picks how answering the fixture approval card ends: `replaced`, `expired`,

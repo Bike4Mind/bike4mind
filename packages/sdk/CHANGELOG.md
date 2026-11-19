@@ -1,5 +1,19 @@
 # @bike4mind/sdk
 
+## 4.0.0
+
+### Major Changes
+
+- [#7788](https://github.com/Bike4Mind/bike4mind/pull/7788) [`385206d`](https://github.com/Bike4Mind/bike4mind/commit/385206d6aa484dd9e7610c14bb94012b033b007e) Thanks [@vinchi777](https://github.com/vinchi777)! - enforce a durable one-quest free allowance
+
+### Minor Changes
+
+- [#7683](https://github.com/Bike4Mind/bike4mind/pull/7683) [`1b65299`](https://github.com/Bike4Mind/bike4mind/commit/1b65299a311a4ce5d8ee3e6036046c53b54502fb) Thanks [@onoya](https://github.com/onoya)! - speech and sound effects as generation job kinds
+
+- [#7794](https://github.com/Bike4Mind/bike4mind/pull/7794) [`2c1140f`](https://github.com/Bike4Mind/bike4mind/commit/2c1140f958b244aa35d730888a2ce7336b3dd544) Thanks [@cgtorniado](https://github.com/cgtorniado)! - let platform API keys attribute AI requests to their own end users
+
+- [#7796](https://github.com/Bike4Mind/bike4mind/pull/7796) [`8774f0a`](https://github.com/Bike4Mind/bike4mind/commit/8774f0a7478c0b20227aacb337386672cb12bd84) Thanks [@onoya](https://github.com/onoya)! - compose a video and a music track into one shareable clip
+
 ## 3.0.0
 
 ### Major Changes

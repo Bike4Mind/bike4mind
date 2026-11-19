@@ -16,6 +16,7 @@ const DELEGATE = 'c'.repeat(24);
 const mocks = vi.hoisted(() => ({
   calls: [] as string[],
   report: null as unknown,
+  reportError: false,
   status: null as unknown,
   decisionFails: false,
   updatePermissions: vi.fn(),
@@ -24,7 +25,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/hooks/data/adminAccessReview', () => ({
-  useAccessReviewReport: () => ({ data: mocks.report, isPending: false, isError: false, refetch: vi.fn() }),
+  useAccessReviewReport: () => ({ data: mocks.report, isPending: false, isError: mocks.reportError, refetch: vi.fn() }),
   useAccessReviewStatus: (enabled: boolean) => ({ data: enabled ? mocks.status : undefined }),
   useAccessReviewDecision: () => ({
     mutate: mocks.mutate,
@@ -74,6 +75,8 @@ const row = (overrides: Partial<AccessReviewRow>): AccessReviewRow => ({
   permissions: [],
   directPermissions: [],
   adminRoleIds: [],
+  roles: [],
+  permissionSources: [],
   lastAdminActionAt: '2026-11-01T00:00:00.000Z',
   lastSignInAt: '2026-11-10T00:00:00.000Z',
   mfaEnabled: true,
@@ -91,8 +94,11 @@ const report = (admins: AccessReviewRow[]): AccessReviewReport => ({
   dormantDays: 90,
   overdue: true,
   admins,
+  roles: [],
   record: null,
 });
+
+const SUPPORT = { id: 'support', name: 'Support agent' };
 
 const rowOf = (userId: string) => screen.getByTestId(`admin-access-review-row-${userId}`);
 
@@ -111,6 +117,7 @@ const revoke = async (userId: string) => {
 describe('AccessReviewTab', () => {
   beforeEach(() => {
     mocks.calls = [];
+    mocks.reportError = false;
     mocks.decisionFails = false;
     mocks.updatePermissions.mockReset();
     mocks.updateRole.mockReset();
@@ -133,6 +140,11 @@ describe('AccessReviewTab', () => {
         permissions: ['users:moderate', 'settings:manage'],
         directPermissions: ['users:moderate', 'users:read'],
         adminRoleIds: ['support'],
+        roles: [{ ...SUPPORT, deleted: false }],
+        permissionSources: [
+          { permission: 'users:moderate', direct: true, roles: [SUPPORT] },
+          { permission: 'settings:manage', direct: false, roles: [SUPPORT] },
+        ],
         grantedBy: { userId: ME, name: 'Me', email: 'me@example.com' },
         grantedAt: '2026-10-01T00:00:00.000Z',
       }),
@@ -160,7 +172,79 @@ describe('AccessReviewTab', () => {
     expect(within(rowOf(OTHER_FULL)).getByText('Unknown (before audit log)')).toBeInTheDocument();
     expect(within(rowOf(ME)).queryByTestId('admin-access-review-dormant-chip')).toBeNull();
     expect(within(rowOf(ME)).queryByTestId('admin-access-review-no-mfa-chip')).toBeNull();
-    expect(within(rowOf(DELEGATE)).getByText('users:moderate, settings:manage')).toBeInTheDocument();
+  });
+
+  it('shows each permission with its direct grant and roles, and the roles the admin holds', () => {
+    renderWithTheme(<AccessReviewTab />);
+    const delegate = rowOf(DELEGATE);
+    expect(within(delegate).getByText('users:moderate - direct + role "Support agent"')).toBeInTheDocument();
+    expect(within(delegate).getByText('settings:manage - role "Support agent"')).toBeInTheDocument();
+    expect(within(delegate).getByTestId('admin-access-review-role-chip-support')).toHaveTextContent('Support agent');
+    expect(within(rowOf(ME)).getByText('Full admin')).toBeInTheDocument();
+    expect(within(rowOf(ME)).queryByTestId('admin-access-review-permission-sources')).toBeNull();
+  });
+
+  it('marks a deleted role the account still lists', () => {
+    mocks.report = report([
+      row({
+        userId: DELEGATE,
+        fullAdmin: false,
+        adminRoleIds: ['dead'],
+        roles: [{ id: 'dead', name: null, deleted: true }],
+      }),
+    ]);
+    renderWithTheme(<AccessReviewTab />);
+    expect(within(rowOf(DELEGATE)).getByTestId('admin-access-review-deleted-role-chip-dead')).toHaveTextContent(
+      'Deleted role'
+    );
+    expect(within(rowOf(DELEGATE)).queryByTestId('admin-access-review-permission-sources')).toBeNull();
+  });
+
+  it('lists every admin role with its permissions and members', () => {
+    mocks.report = {
+      ...report([row({})]),
+      roles: [
+        {
+          ...SUPPORT,
+          description: 'Handles support tickets',
+          permissions: ['support:read', 'users:moderate'],
+          members: [
+            { userId: DELEGATE, email: 'c@example.com', username: 'c', status: 'active' },
+            { userId: OTHER_FULL, email: null, username: 'b', status: 'banned' },
+          ],
+        },
+        { id: 'empty', name: 'Billing ops', description: '', permissions: ['credits:adjust'], members: [] },
+      ],
+    };
+    renderWithTheme(<AccessReviewTab />);
+    const support = screen.getByTestId('admin-access-review-role-row-support');
+    expect(within(support).getByText('support:read, users:moderate')).toBeInTheDocument();
+    expect(within(support).getByText('2 members')).toBeInTheDocument();
+    expect(within(support).getByText('c@example.com')).toBeInTheDocument();
+    expect(within(support).getByText('b (banned)')).toBeInTheDocument();
+    const empty = screen.getByTestId('admin-access-review-role-row-empty');
+    expect(within(empty).getByText('Billing ops')).toBeInTheDocument();
+    expect(within(empty).getByText('0 members')).toBeInTheDocument();
+  });
+
+  it('shows an empty state when no admin roles are defined', () => {
+    renderWithTheme(<AccessReviewTab />);
+    expect(screen.getByText('No admin roles defined')).toBeInTheDocument();
+  });
+
+  it('reports a failed load once, not again under the admin roles table', () => {
+    mocks.report = undefined;
+    mocks.reportError = true;
+    renderWithTheme(<AccessReviewTab />);
+    expect(screen.getAllByText('The access review could not be loaded.')).toHaveLength(1);
+    expect(screen.queryByTestId('admin-access-review-roles-table')).not.toBeInTheDocument();
+  });
+
+  it('names the roles a revoke removes', async () => {
+    renderWithTheme(<AccessReviewTab />);
+    openActions(DELEGATE);
+    fireEvent.click(await screen.findByTestId('admin-access-review-revoke-btn'));
+    expect(await screen.findByText(/Roles removed: Support agent\./)).toBeInTheDocument();
   });
 
   it('revokes a delegate through the permissions update, then records the decision', async () => {
@@ -171,6 +255,31 @@ describe('AccessReviewTab', () => {
       before: ['users:moderate'],
       adminPermissions: [],
       beforeAdminRoleIds: ['support'],
+      adminRoleIds: [],
+      reason: 'left the team',
+    });
+    expect(mocks.updateRole).not.toHaveBeenCalled();
+  });
+
+  it('normalizes duplicate role ID aliases before revocation without changing authority or action order', async () => {
+    const roleId = 'abcdef000000000000000001';
+    mocks.report = report([
+      row({
+        userId: DELEGATE,
+        fullAdmin: false,
+        permissions: ['credits:adjust'],
+        directPermissions: [],
+        adminRoleIds: [roleId.toUpperCase(), roleId],
+        roles: [{ id: roleId, name: 'Billing', deleted: false }],
+      }),
+    ]);
+    renderWithTheme(<AccessReviewTab />);
+    await revoke(DELEGATE);
+    await waitFor(() => expect(mocks.calls).toEqual(['permissions', 'decision:revoked']));
+    expect(mocks.updatePermissions).toHaveBeenCalledWith({
+      before: [],
+      adminPermissions: [],
+      beforeAdminRoleIds: [roleId],
       adminRoleIds: [],
       reason: 'left the team',
     });
@@ -266,6 +375,7 @@ describe('AccessReviewTab', () => {
             email: 'c@example.com',
             fullAdmin: false,
             permissions: ['users:read'],
+            roles: [SUPPORT, { id: 'gone', name: null }],
             decision: 'revoked',
             reviewer: { userId: ME, name: 'Me' },
             decidedAt: '2026-11-02T00:00:00.000Z',
@@ -276,7 +386,8 @@ describe('AccessReviewTab', () => {
     renderWithTheme(<AccessReviewTab />);
     expect(within(rowOf(DELEGATE)).getByText('Revoked')).toBeInTheDocument();
     expect(within(rowOf(DELEGATE)).queryByTestId('admin-access-review-row-actions')).toBeNull();
-    expect(within(rowOf(DELEGATE)).getAllByText('\u2014')).toHaveLength(2);
+    expect(within(rowOf(DELEGATE)).getAllByText('\u2014')).toHaveLength(3);
+    expect(within(rowOf(DELEGATE)).getByText('via roles: Support agent, a deleted role')).toBeInTheDocument();
   });
 
   it('is not openable by a delegate holding settings:manage', () => {

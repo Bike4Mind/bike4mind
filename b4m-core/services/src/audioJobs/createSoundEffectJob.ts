@@ -96,6 +96,7 @@ export async function createSoundEffectJob(
       user: input.user,
       requiredCredits: estimateSoundCredits(provider, { durationSeconds: request.durationSeconds }).requiredCredits,
       featureLabel: 'sound generation',
+      apiKeyId: input.apiKeyId,
     },
     deps
   );

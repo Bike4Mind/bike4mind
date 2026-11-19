@@ -31,8 +31,11 @@ export type AlarmCategory = 'cost' | 'abuse' | 'jobs' | 'infra' | 'security';
 
 export const ALARM_CATEGORIES: readonly AlarmCategory[] = ['cost', 'abuse', 'jobs', 'infra', 'security'];
 
-/** Extra data the relay loads before posting; see youngAccountSpendDetail.ts and providerSpendDetail.ts. */
-export type AlarmDetailKind = 'young-account-spend' | 'provider-spend';
+/**
+ * Extra data the relay loads before posting; see youngAccountSpendDetail.ts, providerSpendDetail.ts
+ * and refusedRequestBurstDetail.ts.
+ */
+export type AlarmDetailKind = 'young-account-spend' | 'provider-spend' | 'refused-request-burst';
 
 export type AlarmLinkKey =
   | 'ai-advisory'
@@ -48,7 +51,8 @@ export type AlarmLinkKey =
   | 'rate-limits'
   | 'spend-monitor'
   | 'moderation-review'
-  | 'moderation-settings';
+  | 'moderation-settings'
+  | 'model-prices';
 
 export interface AlarmCatalogEntry {
   title: string;
@@ -107,6 +111,7 @@ export const ADMIN_LINKS: Record<AlarmLinkKey, { label: string; path: string }> 
   'spend-monitor': { label: 'Credit analytics', path: '/admin?tab=credit-analytics' },
   'moderation-review': { label: 'Moderation review', path: `/admin?tab=${ADMIN_MODERATION_INCIDENTS_TAB_SLUG}` },
   'moderation-settings': { label: 'Moderation settings', path: '/admin?tab=admin-settings&section=security' },
+  'model-prices': { label: 'Model prices', path: '/admin?tab=models&modelsSection=prices' },
 };
 
 const SIGNUP_ACTION =
@@ -148,6 +153,16 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       'Check which accounts created the keys and whether they are new accounts. Revoke keys from accounts that look automated.',
     links: ['signup-activity'],
   },
+  'side-app-mint-our-fault': {
+    title: 'Connected apps cannot get tokens',
+    level: 'warn',
+    category: 'infra',
+    unit: 'failed token exchanges',
+    meaning:
+      'Token exchanges for connected apps are failing on our side at a sustained rate. Users of those apps cannot start AI requests until it clears.',
+    action:
+      'Check the Next.js server log for the side-app-mint-our-fault lines and the errors just above them. A database outage shows up in the hourly health alert queue as well.',
+  },
   'turnstile-policy-inactive': {
     title: 'The sign-in bot challenge is switched off',
     level: 'page',
@@ -176,6 +191,16 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     meaning: 'Stripe took a payment and the credits were not added to the account.',
     action:
       'Find the purchase in Stripe and the credit ledger, grant the credits by hand, then check the webhook handler logs.',
+  },
+  'account-deletion-deadline': {
+    title: 'Account deletion needs attention',
+    level: 'page',
+    category: 'jobs',
+    unit: 'overdue requests or missing reports',
+    meaning:
+      'An account deletion request is at least 25 days old and still open, or the sweep has not reported in its two-day window.',
+    action:
+      'Check accountDeletionSweep logs and its dead-letter queue, then distinguish overdue requests from missing OverdueDeletionRequests datapoints. Follow infra/account-deletion-deadline-alarm.md; recovery can take about two days after the count returns to zero.',
   },
   'billing-event-ingest-failures': {
     title: 'Billing events not reaching Overwatch',
@@ -489,6 +514,17 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       'Owner: the abuse/LiveOps owner triages this in the thread. Devops: no infrastructure action unless the provider console shows an unknown key spending, which is a key rotation.',
     links: ['agent-executions', 'signup-activity', 'waf-block-list'],
   },
+  'provider-unpriced-tokens-hourly': {
+    title: 'AI spend at {provider} is partly unpriced',
+    level: 'warn',
+    category: 'cost',
+    unit: 'unpriced hours',
+    meaning:
+      "The last hour's {provider} usage report includes output tokens from models our poller has no price for, above both the volume floor and the share floor, so the provider-reported spend alarm reads low.",
+    action:
+      'Open the usage poller Lambda log and find the WARN line "no price for <ids>". Add a price for each id on the admin model prices page (or as a ModelPrice row); it reaches the poller at the next model discovery run, within 6 hours. If the price snapshot is unavailable, the adapter table or USAGE_ONLY_PRICING in b4m-core/services/src/spendReconciliation/providerUsagePricing.ts is the fallback. Meanwhile, check the {provider} console usage for that hour by hand.',
+    links: ['model-prices'],
+  },
   'provider-usage-poll-errors': {
     title: 'The provider usage poller is failing',
     level: 'warn',
@@ -578,6 +614,18 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       'Many Google or other OAuth sign-ups were refused in five minutes because registration is closed to them. The refusing IPs are blocked automatically.',
     action: 'Check the WAF block list. Nothing else is needed unless real users report being refused.',
     links: ['waf-block-list'],
+  },
+  'refused-request-burst': {
+    title: 'One IP is collecting refused API requests',
+    level: 'warn',
+    category: 'security',
+    unit: 'refused requests from the top IP',
+    meaning:
+      'A single client IP sent many API requests in 15 minutes that were refused (401 to 405) and that carried no resolved user. Volume only: the API probe detector scores what was probed. Normal clients send a handful; a steady stream usually means a scripted client walking the API. Nothing is blocked automatically.',
+    action:
+      'Look at the top IP, its paths and any accounts listed above. A client polling one or two session paths is a stale tab: acknowledge and move on. Paths shown as /api/:unmatchedApiPath or /api/:type/:id are collapsed 404s, so a few of those can be many different guesses and count as probing. Many distinct paths, admin or internal routes, or a burst that repeats across windows is probing: hand the IP to the WAF owner and suspend any listed account that is clearly abusive.',
+    links: ['waf-block-list'],
+    detail: 'refused-request-burst',
   },
   'stream-idle-timeouts': {
     title: 'AI replies are being cut off by our idle watchdog',

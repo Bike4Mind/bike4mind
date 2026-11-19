@@ -64,6 +64,8 @@ export async function refreshSignupRiskScore(
           ? !!domainReview && isInSignupBurst(domainReview, { id: user.id, createdAt: signedUpAt })
           : null,
         isDatacenter: user.signupMeta?.isDatacenter ?? null,
+        wafAnonIp: user.signupMeta?.wafAnonIp ?? null,
+        wafBotSignal: user.signupMeta?.wafBotSignal ?? null,
         minutesToFirstApiKey: firstKeyAt ? (firstKeyAt.getTime() - signedUpAt.getTime()) / MINUTE_MS : null,
         creditsSpentFirst24h,
       },

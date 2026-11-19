@@ -1,4 +1,11 @@
-import type { ModelBuildReport, ModelLighting, ModelPose, ModelView, ModelViewState } from '@shared/model3d';
+import type {
+  ModelBuildReport,
+  ModelLighting,
+  ModelPose,
+  ModelVersion,
+  ModelView,
+  ModelViewState,
+} from '@shared/model3d';
 import type { SpawnOptions, TaskAction } from '@shared/orchestration';
 import type { CustomCommand } from '@bike4mind/cli/skills';
 import type { VideoModel } from '@bike4mind/common';
@@ -8,6 +15,7 @@ import type { LoopResult, LoopStart, LoopState } from '@shared/loop';
 import type { PrActionResult, PrBindOutcome } from '@shared/pullRequest';
 import type {
   ChatApprovalOption,
+  ChatArtifact,
   ChatDiff,
   ChatToolDetail,
   ChatMedia,
@@ -179,6 +187,8 @@ export interface BrowserProvider {
     keepScreenshot: (bytes: Buffer, caption: string) => Promise<ChatMedia | undefined>
   ): BrowserContext;
   closeSession(sessionId: string): Promise<void>;
+  /** Reload, in place, any of the conversation's tabs showing one of these artifacts at an older version. */
+  refreshArtifacts?(sessionId: string, artifacts: readonly ChatArtifact[]): void;
 }
 
 /** One of a conversation's tabs, as browser_tabs lists it. */
@@ -354,6 +364,8 @@ export interface ModelViewPort {
   /** An 8 s turntable clip of the current model, as WebM. */
   recordTurntable(lighting: ModelLighting): Promise<Uint8Array>;
   glbPath(): string | null;
+  /** This conversation's kept builds, oldest first (ModelVersionStore.ts). */
+  versions(): Promise<ModelVersion[]>;
 }
 
 export interface ModelContext {
@@ -393,6 +405,8 @@ export interface ToolContext {
    * the access token. A granted home folder would otherwise expose the vault to a shell command.
    */
   protectedPaths?: readonly string[];
+  /** Folders inside protectedPaths that request_directory may still share, such as chat attachments. */
+  shareableUnderProtected?: readonly string[];
   /** Protected folders not yet resolved: where a write lands relative to them is unknown, so every write is refused. */
   unresolvedProtectedPaths?: readonly string[];
   /**

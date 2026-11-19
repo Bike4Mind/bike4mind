@@ -198,6 +198,10 @@ const OWNER_OR_ADMIN = new Map<string, string>([
   ['skills/market/suggest-tags.ts', 'isAdmin only lifts the per-minute rate limit to Infinity; tool open to all users'],
   ['skills/market/versions/[vid]/review.ts', 'reviewer is super-admin or org admin of owning org; org admins allowed'],
   ['slack/events.ts', 'webhook; isAdmin is Slack workspace admin status or copied into actor object'],
+  [
+    'studio/compositions/[id]/renders.ts',
+    'composition owner exports; isAdmin only forwarded to the paid-plan exemption',
+  ],
   ['stripe/webhook.ts', 'webhook; user.isAdmin read from dispute subject only to pick a Slack message'],
   [
     'subscriptions/[ownerType]/[ownerId]/index.ts',

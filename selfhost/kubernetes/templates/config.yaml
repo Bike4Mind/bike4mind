@@ -1,7 +1,13 @@
+{{- if eq .Values.mode "full" }}
 {{- $defaults := .Files.Get "files/default-env.yaml" | fromYaml -}}
 {{- if gt (len .Release.Name) 35 }}{{ fail "Release name must be at most 35 characters" }}{{ end -}}
 {{- if .Values.agentExecutor.enabled -}}
 {{- $_ := set $defaults "AGENT_EXECUTOR_SERVICE" (printf "http://%s-agentexecutor:8080" .Release.Name) -}}
+{{- end -}}
+{{- if .Values.renderWorker.enabled -}}
+{{- /* Set only with the worker: unset, the app refuses a Studio render at submit instead of queueing work nothing reads. */ -}}
+{{- $_ := set $defaults "RENDER_JOB_QUEUE" (printf "http://%s-sqs:9324/000000000000/renderJobQueue" .Release.Name) -}}
+{{- $_ := set $defaults "RENDER_JOB_QUEUE_DLQ" (printf "http://%s-sqs:9324/000000000000/renderJobQueueDLQ" .Release.Name) -}}
 {{- end -}}
 {{- if .Values.externalMongo.enabled -}}
 {{- if hasKey .Values.config "MONGODB_URI" -}}
@@ -34,3 +40,4 @@ data:
 {{ .Files.Get "files/elasticmq.conf" | replace `host = "sqs"` (printf `host = "%s-sqs"` .Release.Name) | indent 4 }}
   buckets.sh: |
 {{ .Files.Get "files/buckets.sh" | indent 4 }}
+{{- end }}

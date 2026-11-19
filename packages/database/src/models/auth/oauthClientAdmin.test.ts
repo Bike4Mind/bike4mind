@@ -242,6 +242,51 @@ describe('toOAuthClientView', () => {
     } as never);
     expect(view.createdAt).toBeNull();
     expect(view.updatedAt).toBeNull();
+    expect(view.postLogoutRedirectUris).toEqual([]);
+  });
+});
+
+describe('postLogoutRedirectUris', () => {
+  const signedOut = 'https://app.example.test/signed-out';
+
+  it('defaults to an empty list, persists one given at create, and replaces it on update', async () => {
+    const { client: plain } = await createOAuthClient(base);
+    expect(plain.postLogoutRedirectUris).toEqual([]);
+
+    const { client } = await createOAuthClient({ ...base, name: 'Other App', postLogoutRedirectUris: [signedOut] });
+    expect(client.postLogoutRedirectUris).toEqual([signedOut]);
+    expect((await oauthClientRepository.findByClientId(client.clientId))?.postLogoutRedirectUris).toEqual([signedOut]);
+
+    const { before, after } = await updateOAuthClient(client.id, {
+      postLogoutRedirectUris: ['http://localhost:3000/out'],
+    });
+    expect(before.postLogoutRedirectUris).toEqual([signedOut]);
+    expect(after.postLogoutRedirectUris).toEqual(['http://localhost:3000/out']);
+    expect(after.redirectUris).toEqual(base.redirectUris);
+
+    const cleared = await updateOAuthClient(client.id, { postLogoutRedirectUris: [] });
+    expect(cleared.after.postLogoutRedirectUris).toEqual([]);
+  });
+
+  it('reads a client stored before the field existed as an empty list', async () => {
+    const { client } = await createOAuthClient(base);
+    await OAuthClientModel.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(client.id) },
+      { $unset: { postLogoutRedirectUris: '' } }
+    );
+    expect((await listOAuthClients())[0].postLogoutRedirectUris).toEqual([]);
+    const { after } = await updateOAuthClient(client.id, { postLogoutRedirectUris: [signedOut] });
+    expect(after.postLogoutRedirectUris).toEqual([signedOut]);
+  });
+
+  it('applies the redirect URI rules on create and update', async () => {
+    await expect(
+      createOAuthClient({ ...base, postLogoutRedirectUris: ['http://app.example.test/out'] })
+    ).rejects.toThrow();
+    const { client } = await createOAuthClient(base);
+    await expect(
+      updateOAuthClient(client.id, { postLogoutRedirectUris: ['https://app.example.test/out#frag'] })
+    ).rejects.toThrow();
   });
 });
 

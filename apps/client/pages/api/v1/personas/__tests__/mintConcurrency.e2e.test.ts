@@ -65,8 +65,8 @@ vi.mock('@bike4mind/services', async importOriginal => {
     },
   };
 });
-vi.mock('@server/personas/personaAccounts', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/personas/personaAccounts')>()),
+vi.mock('@bike4mind/server-utils/personas/personaAccounts', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/personas/personaAccounts')>()),
   loadPersonaSettings: async () => h.settings,
   disableExpiredPersonas: async () => ({ disabled: 0 }),
   issuePersonaLoginCode: h.issued,

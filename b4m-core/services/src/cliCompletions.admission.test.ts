@@ -64,6 +64,7 @@ function buildDb(configs: unknown[] = entitlementGatedConfigs) {
       findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100_000, tags: [] }),
     } as any,
     usageEvents: { record: vi.fn().mockResolvedValue(undefined) } as any,
+    spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
     organizations: {} as any,
   };
 }

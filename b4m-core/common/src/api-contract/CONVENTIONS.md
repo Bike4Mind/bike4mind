@@ -164,6 +164,7 @@ re-deciding per endpoint:
 | The model's provider is not configured on this deployment, or the self-hosted model server that lists it (Ollama, local image) is unreachable | `503` | `provider_not_configured` |
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
+| An admin paused spending for the account, organization or API key | `403` | `spend_frozen` (the body carries `frozenScope`: `user`, `organization` or `api_key`, and `frozenAt`; never the reason; not retryable) |
 | A reasoning model spent the caller's own `max_tokens` thinking and produced no answer (a server-chosen budget is a plain `502`) | `422` | `output_budget_exhausted` |
 | Free-tier daily credit allowance used up (`Retry-After` is the next UTC midnight) | `429` | `daily_free_limit_reached` |
 | Per-user active API key cap reached | `400` | `api_key_user_cap` |
@@ -183,6 +184,7 @@ re-deciding per endpoint:
 | Malformed path/query resource id | `404` | - |
 | Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
 | Free-tier account calls a model that needs a paid plan (admin-set free-tier allowlist) | `403` | `model_requires_subscription` (upgrade, or choose a free-tier model from `GET /api/v1/models`) |
+| Free account already started its one QuestMaster quest | `403` | `free_quest_limit_reached` (subscribe to start another; deletion does not restore the allowance) |
 | Org-billed API key names a billing organization other than its own | `403` | `billing_organization_mismatch` |
 | The caller's organization policy does not allow the requested model | `403` | `org_model_not_allowed` (choose a model from `GET /api/v1/models`, which lists only allowed ones) |
 | The request names a built-in tool the caller's organization policy does not allow | `403` | `org_tool_not_allowed` (drop the tool from the request) |

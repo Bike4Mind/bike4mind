@@ -7,6 +7,7 @@ import {
   findClip,
   moveClip,
   removeClip,
+  setClipCrop,
   toggleOutput,
   trimClipEnd,
   trimClipStart,
@@ -16,7 +17,8 @@ import {
 const FILE_A = 'a'.repeat(24);
 const FILE_B = 'b'.repeat(24);
 
-const empty = (): StudioTimeline => defaultStudioTimeline('ad_campaign');
+// Starts with no tracks, so each edit's lane is the only one.
+const empty = (): StudioTimeline => ({ ...defaultStudioTimeline('ad_campaign'), tracks: [] });
 
 describe('addMediaClip', () => {
   it('creates the track on first use and appends later clips after the last one', () => {
@@ -114,5 +116,28 @@ describe('toggleOutput', () => {
 
     const single = defaultStudioTimeline('blank');
     expect(toggleOutput(single, '16:9')).toBe(single);
+  });
+});
+
+describe('setClipCrop', () => {
+  const rect = { x: 0.1, y: 0, width: 0.316406, height: 1 };
+  const withVideo = () => addMediaClip(empty(), 'video', { fileId: FILE_A, durationMs: 4_000 });
+
+  it('sets the rect for one aspect ratio and keeps the others', () => {
+    const { timeline, clipId } = withVideo();
+    const square = { x: 0.4, y: 0, width: 0.5625, height: 1 };
+    const next = setClipCrop(setClipCrop(timeline, clipId, '9:16', rect), clipId, '1:1', square);
+    expect(findClip(next, clipId)?.clip).toMatchObject({ crop: { '9:16': rect, '1:1': square } });
+  });
+
+  it('drops the crop field once the last rect is cleared', () => {
+    const { timeline, clipId } = withVideo();
+    const cleared = setClipCrop(setClipCrop(timeline, clipId, '9:16', rect), clipId, '9:16', undefined);
+    expect(findClip(cleared, clipId)?.clip).not.toHaveProperty('crop');
+  });
+
+  it('ignores a clip that is not on a video track', () => {
+    const { timeline, clipId } = addMediaClip(empty(), 'music', { fileId: FILE_A, durationMs: 4_000 });
+    expect(setClipCrop(timeline, clipId, '9:16', rect)).toBe(timeline);
   });
 });

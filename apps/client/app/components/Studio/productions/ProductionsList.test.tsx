@@ -82,6 +82,20 @@ describe('ProductionsList', () => {
     });
   });
 
+  it('offers every template as data, defaulting to Ad campaign, and creates from the one picked', () => {
+    render(<ProductionsList />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('productions-template-ad_campaign')).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByTestId('productions-template-ad_campaign')).toHaveTextContent('15s, 16:9 + 9:16 + 1:1');
+
+    fireEvent.click(screen.getByTestId('productions-template-explainer'));
+    expect(screen.getByTestId('productions-template-explainer')).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByTestId('productions-template-ad_campaign')).toHaveAttribute('aria-checked', 'false');
+
+    fireEvent.change(screen.getByTestId('productions-create-title-input'), { target: { value: 'How it works' } });
+    fireEvent.click(screen.getByTestId('productions-create-btn'));
+    expect(h.create).toHaveBeenCalledWith({ title: 'How it works', template: 'explainer' }, expect.anything());
+  });
+
   it('links each production to its editor', () => {
     h.list.data = [summary];
     render(<ProductionsList />, { wrapper: TestWrapper });

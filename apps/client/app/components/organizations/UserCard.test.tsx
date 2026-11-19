@@ -77,7 +77,9 @@ const renderCard = (
     selectable = false,
     selected = false,
     onToggleSelect,
+    showEmails = true,
   }: {
+    showEmails?: boolean;
     canManageManagers?: boolean;
     organization?: IOrganizationDocument;
     selectable?: boolean;
@@ -100,6 +102,7 @@ const renderCard = (
         selectable={selectable}
         selected={selected}
         onToggleSelect={onToggleSelect}
+        showEmails={showEmails}
       />
     )
   );
@@ -245,25 +248,6 @@ describe('OrganizationUserCard manager role', () => {
     for (const aclLabel of ['Admin', 'Editor', 'Viewer']) expect(screen.queryByText(aclLabel)).toBeNull();
   });
 
-  it('flags a member whose update permission opens team settings', () => {
-    renderCard({ ...member('a', usage), permissions: [Permission.read, Permission.update] }, false, false, {
-      organization: managedOrg,
-    });
-    expect(screen.getByTestId('organization-user-card-settings-access-chip').textContent).toBe('Can edit settings');
-  });
-
-  it('does not flag a share-only member', () => {
-    renderCard({ ...member('a', usage), permissions: [Permission.read, Permission.share] }, false, false, {
-      organization: managedOrg,
-    });
-    expect(screen.queryByTestId('organization-user-card-settings-access-chip')).toBeNull();
-  });
-
-  it('does not flag a read-only member', () => {
-    renderCard(member('a', usage), false, false, { organization: managedOrg });
-    expect(screen.queryByTestId('organization-user-card-settings-access-chip')).toBeNull();
-  });
-
   it('shows the Owner chip, not Manager, on the owner row', () => {
     renderCard(member('owner1', usage), false, false, {
       organization: { ...org, adminUserIds: ['owner1'] } as unknown as IOrganizationDocument,
@@ -407,6 +391,13 @@ describe('OrganizationUserCard row content', () => {
     expect(screen.getByTestId('organization-user-card-member-chip')).toHaveTextContent('Member');
   });
 
+  it('renders no email cell in a names-only roster, even if a row carries one', () => {
+    renderCard(member('a', usage, 'member'), false, false, { showEmails: false });
+    expect(screen.queryByTestId('organization-user-card-email')).toBeNull();
+    expect(screen.queryByText('a@example.test')).toBeNull();
+    expect(screen.getByTestId('organization-user-card-name')).toHaveTextContent('User a');
+  });
+
   it('shows a Deactivated chip and the avatar photo', () => {
     renderCard({ ...member('p', null), isBanned: true, photoUrl: 'me.png' }, false);
     expect(screen.getByText('Deactivated')).toBeTruthy();
@@ -461,6 +452,11 @@ describe('OrganizationUserCard row content', () => {
       expect(screen.getByTestId('organization-user-card-member-chip')).toBeTruthy();
       expect(screen.getByTestId('organization-user-card-select')).toBeTruthy();
       expect(screen.getByTestId('org-user-card-menu-btn')).toBeTruthy();
+    });
+
+    it('omits the email line in a names-only roster', () => {
+      renderCard(member('a', usage), false, false, { showEmails: false });
+      expect(screen.queryByTestId('organization-user-card-email')).toBeNull();
     });
 
     it('omits the email line when there is none', () => {

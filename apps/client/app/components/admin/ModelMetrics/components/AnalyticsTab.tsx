@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Box, Stack, Typography } from '@mui/joy';
 import { useTheme } from '@mui/joy/styles';
 import { ResponsivePie } from '@nivo/pie';
@@ -27,7 +27,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
   const { data: analyticsMetrics = [], isLoading } = useAnalyticsMetrics(filters);
   const { data: modelInfos = [] } = useModelInfo();
 
-  const chartData = processChartData(analyticsMetrics, modelInfos, true);
+  const chartData = useMemo(() => processChartData(analyticsMetrics, modelInfos, true), [analyticsMetrics, modelInfos]);
 
   // Chart theme based on Joy UI colors
   const chartTheme = {

@@ -583,6 +583,9 @@ export async function shellApproval(
       : []),
     ...(scan.envFiles.length > 0 ? [`Reads ${scan.envFiles.join(', ')}, which usually holds secrets.`] : []),
     ...(scan.outbound.length > 0 ? [`Can send data off this computer (${scan.outbound.join(', ')}).`] : []),
+    ...(scan.commands.some(entry => entry.deletes)
+      ? ['Deletes files recursively or forcefully, which cannot be undone.']
+      : []),
     ...(script && script.names.length > 0
       ? [
           `Runs code from ${script.names.join(', ')}, which ${script.untracked ? 'may have been' : 'was'} written in this session.`,
@@ -691,7 +694,8 @@ function unreadApproval(
 ): ApprovalPrompt {
   const namesDistro = process.platform === 'win32' && /wsl|\\\\|\/\//i.test(command);
   const mayReachDistro = ungranted.length > 0 || namesDistro || places.some(place => wslLocation(place) !== null);
-  // Not drawn on the card, which shows the command itself; the reason keeps the call off quick surfaces.
+  // Drawn on the card only in Full access (see fullAccessStopReasons in ChatService); the card otherwise
+  // shows the command itself. The reason keeps the call off quick surfaces.
   if (!mayReachDistro) {
     return {
       detail,

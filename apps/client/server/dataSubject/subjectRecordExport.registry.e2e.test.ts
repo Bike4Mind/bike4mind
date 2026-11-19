@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { mongoose } from '@bike4mind/database';
+import { accountDeletionNoticeRepository, mongoose } from '@bike4mind/database';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 // Registered outside the `@bike4mind/database` barrel, so they register only when imported.
 import '@bike4mind/server-utils/models/Subscription';
-import '@server/models/UserSubscription';
+import '@bike4mind/server-utils/models/UserSubscription';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -28,6 +28,35 @@ afterAll(async () => {
 });
 
 describe('SubjectRecordExport over the real registry', () => {
+  it('withholds the live deletion-notice lease token from the recipient export', async () => {
+    const userId = new mongoose.Types.ObjectId().toString();
+    const email = 'notice-export@example.com';
+    const idHash = `notice-export-${userId}`;
+    const now = new Date();
+    await accountDeletionNoticeRepository.record({ idHash, email, now });
+    const claimed = await accountDeletionNoticeRepository.claimDue(idHash, now, now);
+    expect(claimed?.leaseToken).toEqual(expect.any(String));
+    if (!claimed) throw new Error('Notice was not claimed');
+
+    const records: Record<string, unknown>[] = [];
+    for await (const record of new SubjectRecordExport({ userId, email }).records('AccountDeletionNotice')) {
+      records.push(record);
+    }
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ idHash, email, attempts: 0 });
+    expect(records[0]).not.toHaveProperty('leaseToken');
+    expect(JSON.stringify(records)).not.toContain(claimed.leaseToken);
+    expect((await accountDeletionNoticeRepository.find(idHash))?.leaseToken).toBe(claimed.leaseToken);
+
+    const unrelated: Record<string, unknown>[] = [];
+    for await (const record of new SubjectRecordExport({ userId, email: 'other-export@example.com' }).records(
+      'AccountDeletionNotice'
+    )) {
+      unrelated.push(record);
+    }
+    expect(unrelated).toEqual([]);
+  });
+
   // `strictQuery: 'throw'` makes any registry path a schema does not declare fail here, and every
   // viaParent child must find its parent already read.
   it('queries every classified model without error', async () => {

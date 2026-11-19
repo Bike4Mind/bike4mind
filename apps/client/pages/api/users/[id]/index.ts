@@ -12,6 +12,7 @@ import {
 import { respond } from '@server/utils/respond';
 import { holdsApiKeyScope, isLegacyApiKey } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { withSafeOrganization } from '@bike4mind/server-utils/utils/toSafeOrganizationSubdocument';
+import { accessibleHomeOrg } from '@bike4mind/server-utils/utils/homeOrgPointer';
 import { Request } from 'express';
 
 function toPublicProfile(user: IUserDocument, isColleague: boolean): PublicUserProfile {
@@ -88,6 +89,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMI
       }),
     });
 
+    // Same recheck as GET /api/users/:id/organization: a pointer to an org the subject left is
+    // served as null.
+    const pointed = user.organizationId as unknown as { id: string } | null | undefined;
+    const stalePointer = Boolean(pointed) && !(await accessibleHomeOrg(user, pointed));
+
     // `.populate('organizationId')` above inlines the WHOLE Organization document, and
     // redactUserSecretsForSelf is a denylist over the USER's own fields - it never descends into a
     // populated sub-document. So the org's stripeCustomerId and billingContact rode out to any
@@ -96,7 +102,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMI
     return respond(
       res,
       selfUserProfileResponseSchema.nullable(),
-      safeSelf && withSafeOrganization(safeSelf, { userId: req.user.id, isAdmin })
+      safeSelf &&
+        withSafeOrganization(stalePointer ? { ...safeSelf, organizationId: null } : safeSelf, {
+          userId: req.user.id,
+          isAdmin,
+        })
     );
   }
 

@@ -1,4 +1,4 @@
-import { usageEventRepository, userRepository } from '@bike4mind/database';
+import { spendFreezeRepository, usageEventRepository, userRepository } from '@bike4mind/database';
 import {
   ApiKeyScope,
   LLMApiRequestBody,
@@ -15,6 +15,9 @@ import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminSc
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
 import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
 import { dataLakeToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
@@ -28,7 +31,7 @@ import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { loadBaseIdentitySystemPromptMessages } from '@bike4mind/server-utils/utils/systemPrompts/loader';
 import { requestTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
 import { readVisitId } from '@server/analytics/visitSession';
-import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { Request } from 'express';
 
 // Gate API-key callers on `ai:chat`: this route commissions a billed chat completion
@@ -95,7 +98,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // API key always bills its own org, as on the v1 media routes; naming another is a 403.
     const effectiveOrgId = await resolveRequestBillingOrgId(req, invokeParams.organizationId);
 
-    // Refuse a capped free-tier turn here, as a 429, rather than letting the quest worker settle it.
+    assertAiAccessAllowed(req.user);
+    // Refuse a frozen or capped turn here, rather than letting the quest worker settle it. The freeze
+    // goes first so a frozen caller is not told to wait for the daily reset.
+    await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, effectiveOrgId ?? null), {
+      db: { spendFreezes: spendFreezeRepository },
+    });
     await checkFreeTierDailySpendCap({
       user: req.user,
       req,
@@ -165,6 +173,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       userId: req.user.id,
       // The key (when one authenticated the turn) also attributes a lake write a tool drives.
       ...turnAuth,
+      apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
+      oauthClientId: req.apiKeyInfo?.oauthExchangeClientId,
       adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
       // The visit the question was asked in, so the turn's first_value names it. A key turn names none.
       visitId: turnAuth.authOrigin === 'session' ? readVisitId(req.headers.cookie) : undefined,

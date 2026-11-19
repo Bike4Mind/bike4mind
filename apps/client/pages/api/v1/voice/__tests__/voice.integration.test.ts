@@ -140,6 +140,7 @@ vi.mock('@bike4mind/database', async orig => {
       // reserveVoiceHold's new-account spend cap reads the user; this one has no createdAt, so it is never capped.
       findById: async (id: string) => ({ id }),
     },
+    spendFreezeRepository: { findActiveForSubject: async () => null },
     newAccountSpendCapAdapters: {
       adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
       personalSpendSince: async () => [],

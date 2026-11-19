@@ -6,7 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
 }));
 import { createMocks } from 'node-mocks-http';
@@ -73,7 +73,12 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 }));
 vi.mock('@bike4mind/services', async () => ({
   ...(await import('@bike4mind/services/billing/completionMeter')),
-  creditService: { holdCredits: m.hold, releaseCreditHold: m.release, settleCreditHold: m.settleHold },
+  creditService: {
+    holdCredits: m.hold,
+    releaseCreditHold: m.release,
+    settleCreditHold: m.settleHold,
+    assertSpendNotFrozen: async () => undefined,
+  },
   organizationService: {},
   apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) },
   recordOperationalUsage: m.recordOperationalUsage,

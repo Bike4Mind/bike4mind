@@ -49,6 +49,19 @@ vi.mock('@client/app/hooks/data/fabFileQueries', () => ({
   isFabFileScanInFlight: () => false,
 }));
 
+// The painter draws on a canvas jsdom lacks; the form only opens it and takes the saved mask.
+const painter = vi.hoisted(() => ({
+  open: false,
+  onSaved: undefined as undefined | ((mask: { fileId: string; fileName: string }) => void),
+}));
+vi.mock('./ImageMaskPainter', () => ({
+  default: ({ open, onSaved }: { open: boolean; onSaved: (mask: { fileId: string; fileName: string }) => void }) => {
+    painter.open = open;
+    painter.onSaved = onSaved;
+    return null;
+  },
+}));
+
 import ImageStudioForm from './ImageStudioForm';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -264,6 +277,8 @@ describe('ImageStudioForm', () => {
     renderForm({ models: [{ id: ImageModels.FLUX_KONTEXT_PRO, name: 'FLUX Kontext Pro' }] });
     expect(screen.getByTestId('image-studio-no-generate-model')).toBeInTheDocument();
     expect(screen.queryByTestId('image-form')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('image-studio-switch-to-edit-btn'));
+    expect(screen.getByTestId('image-form')).toBeInTheDocument();
   });
   describe('Look chips', () => {
     const [slate, kitchen] = SCENE_PRESETS;
@@ -375,6 +390,127 @@ describe('ImageStudioForm', () => {
 
       pickCard(ImageModels.GEMINI_3_1_FLASH_IMAGE);
       expect(screen.queryByTestId('image-form-changes')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('edit mode', () => {
+    const SOURCE = 'a'.repeat(24);
+    const MASK = 'b'.repeat(24);
+    const enterEdit = () => fireEvent.click(screen.getByTestId('image-form-mode-edit-btn'));
+    const chooseSource = () => {
+      fireEvent.click(screen.getByTestId('image-form-edit-source-pick-btn'));
+      act(() => h.applyImage?.({ id: SOURCE, fileName: 'cat.png' }));
+    };
+
+    it('asks for the image to edit before it can submit, and greys the models that cannot edit', () => {
+      renderForm();
+      enterEdit();
+      expect(screen.getByTestId('image-form-prompt-input')).toHaveAttribute(
+        'placeholder',
+        expect.stringMatching(/change/)
+      );
+      expect(screen.queryByTestId('image-form-look-chips')).toBeNull();
+      expect(modelOption(`${ImageModels.FLUX_PRO_ULTRA}-radio`)).toBeDisabled();
+      expect(modelOption(`${ImageModels.FLUX_KONTEXT_PRO}-radio`)).not.toBeDisabled();
+      typePrompt('make it a tabby');
+      expect(submitButton()).toBeDisabled();
+      expect(screen.getByTestId('image-form-mask-pick-btn')).toBeDisabled();
+    });
+
+    it('says the picked model cannot edit, rather than that it went away', () => {
+      renderForm();
+      pickCard(ImageModels.FLUX_PRO_ULTRA);
+      enterEdit();
+      expect(screen.getByTestId('image-form-changes')).toHaveTextContent(/cannot edit images; using/);
+      expect(screen.getByTestId('image-form-changes')).not.toHaveTextContent('no longer available');
+    });
+
+    it('submits an edit with the source and a drawn mask as role-tagged inputs', () => {
+      const { onSubmit } = renderForm();
+      enterEdit();
+      chooseSource();
+      expect(screen.getByTestId('image-form-edit-source-name')).toHaveTextContent('cat.png');
+      expect(screen.getByTestId('image-form-edit-source-preview')).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('image-form-mask-pick-btn'));
+      expect(painter.open).toBe(true);
+      act(() => painter.onSaved?.({ fileId: MASK, fileName: 'mask.png' }));
+      expect(screen.getByTestId('image-form-mask-name')).toHaveTextContent('mask.png');
+      typePrompt('  make it a tabby  ');
+      expect(submitButton()).toHaveTextContent('Edit image');
+      fireEvent.click(submitButton());
+      expect(onSubmit).toHaveBeenCalledWith({
+        count: 1,
+        request: {
+          model: ImageModels.GPT_IMAGE_1_5,
+          mode: 'edit',
+          prompt: 'make it a tabby',
+          inputs: [
+            { role: 'edit_source', fileId: SOURCE },
+            { role: 'mask', fileId: MASK },
+          ],
+        },
+      });
+    });
+
+    it('sends references after the source in an edit', () => {
+      const { onSubmit } = renderForm();
+      enterEdit();
+      chooseSource();
+      fireEvent.click(screen.getByTestId('image-form-references-add-btn'));
+      act(() => h.applyImage?.({ id: 'ref-1', fileName: 'hat.png' }));
+      typePrompt('put this hat on the cat');
+      fireEvent.click(submitButton());
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({
+            mode: 'edit',
+            inputs: [
+              { role: 'edit_source', fileId: SOURCE },
+              { role: 'reference', fileId: 'ref-1' },
+            ],
+          }),
+        })
+      );
+    });
+
+    it('marks a mask the picked model cannot take and offers to remove it', () => {
+      renderForm();
+      enterEdit();
+      chooseSource();
+      act(() => painter.onSaved?.({ fileId: MASK, fileName: 'mask.png' }));
+      pickCard(ImageModels.FLUX_KONTEXT_PRO);
+      typePrompt('make it a tabby');
+      expect(screen.getByTestId('image-form-mask-invalid')).not.toBeEmptyDOMElement();
+      expect(submitButton()).toBeDisabled();
+      fireEvent.click(screen.getByTestId('image-form-mask-fix-btn'));
+      expect(screen.queryByTestId('image-form-mask-pick-btn')).toBeNull();
+      expect(submitButton()).not.toBeDisabled();
+    });
+
+    it('drops the mask when a different source is chosen', () => {
+      renderForm();
+      enterEdit();
+      chooseSource();
+      act(() => painter.onSaved?.({ fileId: MASK, fileName: 'mask.png' }));
+      fireEvent.click(screen.getByTestId('image-form-edit-source-pick-btn'));
+      act(() => h.applyImage?.({ id: 'd'.repeat(24), fileName: 'dog.png' }));
+      expect(screen.queryByTestId('image-form-mask-name')).toBeNull();
+    });
+
+    it("opens prefilled from chat's Edit hand-off, with no missing-model notice", () => {
+      renderForm();
+      act(() =>
+        useStudioRestore.getState().requestRestore({
+          medium: 'image',
+          request: { mode: 'edit' },
+          lineageInputs: [{ fileId: SOURCE, role: 'edit_source' }],
+          fileNames: { [SOURCE]: 'from-chat.png' },
+          handoff: true,
+        })
+      );
+      expect(screen.getByTestId('image-form-mode-edit-btn')).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByTestId('image-form-edit-source-name')).toHaveTextContent('from-chat.png');
+      expect(screen.queryByText(/did not record its model/)).toBeNull();
     });
   });
 });
