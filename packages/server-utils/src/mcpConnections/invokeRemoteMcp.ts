@@ -379,10 +379,12 @@ export function invokeRemoteMcp(
   options?: InvokeRemoteMcpOptions
 ): Promise<RemoteMcpCallToolResult>;
 /**
- * Runs one listTools or callTool against a user's connection: owner-scoped load with credentials,
- * the gate and policy re-checked, the per-connection rate limit, the per-(user, connection) breaker,
- * and an audit entry carrying sizes and hashes only. Persists what a failure means for the
- * connection; persists `lastUsedAt` and a newly detected transport after a call.
+ * Runs one listTools or callTool against the caller's connection or a platform connector:
+ * owner-scoped load with credentials, the gate and policy re-checked, the per-connection rate
+ * limit, the per-(user, connection) breaker, and an audit entry carrying sizes and hashes only.
+ * Persists what a failure means for the connection, except a platform connector's tool call, whose
+ * status only the admin's probes move; persists `lastUsedAt` and a newly detected transport after
+ * a call.
  */
 export async function invokeRemoteMcp(
   request: InvokeRemoteMcpRequest,
@@ -478,10 +480,8 @@ export async function invokeRemoteMcp(
     throw new TooManyRequestsError(`At most ${REMOTE_MCP_CALLS_PER_MINUTE} calls per minute per connection`);
   }
 
-  // A platform connector is one server on one credential for everyone, so its outage trips one
-  // breaker, not one per user.
   const breaker = getBreaker(
-    connection.ownerType === 'platform' ? PLATFORM_MCP_OWNER.ownerKey : resolveMcpTenantKey(request.userId),
+    resolveMcpTenantKey(request.userId),
     `custom:${connection.id}`,
     operationTypeFor(connection, request)
   );
@@ -554,7 +554,10 @@ export async function invokeRemoteMcp(
     if (error instanceof RemoteMcpError) {
       audit.failure(error.code);
       const shown = userFacingRemoteMcpError(error);
-      await recordFailure(connection, request.action, error, shown, context.network, sentAccessTokenEnc);
+      // One member's call must not pull a shared connector out of everyone's chat.
+      if (connection.ownerType !== 'platform' || request.action !== 'callTool') {
+        await recordFailure(connection, request.action, error, shown, context.network, sentAccessTokenEnc);
+      }
       throw shown;
     }
     audit.failure('internal_error');

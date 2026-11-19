@@ -1178,13 +1178,47 @@ describe('invokeRemoteMcp - platform connectors', () => {
     ).rejects.toMatchObject({ additionalInfo: { code: 'approval_required' } });
   });
 
-  it('trips one breaker shared by every caller', async () => {
+  it("opens only the caller's breaker, so another user's call still reaches the server", async () => {
     const id = seedPlatform({}, '/broken');
-    for (let i = 0; i < 5; i++) await expectRemoteCode(call(id, `user-${i}`), 'upstream_5xx');
+    for (let i = 0; i < 5; i++) await expectRemoteCode(call(id, 'user-1'), 'upstream_5xx');
 
     const before = fixture.requests.length;
-    await expect(call(id, 'user-9')).rejects.toBeInstanceOf(CustomMcpUnavailableError);
+    await expect(call(id, 'user-1')).rejects.toBeInstanceOf(CustomMcpUnavailableError);
     expect(fixture.requests.length).toBe(before);
+
+    await expectRemoteCode(call(id, 'user-9'), 'upstream_5xx');
+    expect(fixture.requests.length).toBeGreaterThan(before);
+  });
+
+  it("keeps its status when a member's call is refused with 401 or 403, which the admin's probe still records", async () => {
+    const apiKey = {
+      kind: 'api_key' as const,
+      apiKey: { headerName: 'Authorization', scheme: 'Bearer' as const, valueEnc: 'enc:k', last4: '****' },
+    };
+    for (const [path, code] of [
+      ['/unauthorized', 'auth_required'],
+      ['/forbidden', 'auth_failed'],
+    ] as const) {
+      for (const auth of [apiKey, { kind: 'none' as const }]) {
+        const id = seedPlatform({ auth }, path);
+        await expectRemoteCode(call(id, 'user-1'), code);
+        expect(state.connections.get(id)).toMatchObject({ status: 'connected' });
+        // Still connected, so the next user is offered it and their call reaches the server.
+        await expectRemoteCode(call(id, 'user-2'), code);
+      }
+    }
+    expect(repo.setStatus).not.toHaveBeenCalled();
+    expect(repo.setPendingAuth).not.toHaveBeenCalled();
+
+    const probed = seedPlatform({ auth: apiKey }, '/forbidden');
+    await expectRemoteCode(
+      invokeRemoteMcp(
+        { action: 'listTools', connectionId: probed, userId: 'admin-1', owner: PLATFORM },
+        { runner, context: context() }
+      ),
+      'auth_failed'
+    );
+    expect(state.connections.get(probed)).toMatchObject({ status: 'needs_reconnect' });
   });
 });
 
