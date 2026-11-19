@@ -249,6 +249,17 @@ final class AppNavigatorTests: XCTestCase {
 
 @MainActor
 final class VoiceNavigationTests: XCTestCase {
+  func testABriefStartedConversationCarriesTheBriefID() {
+    let navigator = AppNavigator()
+
+    navigator.startVoiceConversation(.newConversation, briefID: "b1")
+    XCTAssertEqual(navigator.voiceRequest?.briefID, "b1")
+    XCTAssertEqual(navigator.voiceRequest?.target, .newConversation)
+
+    navigator.startVoiceConversation(.session("s1"))
+    XCTAssertNil(navigator.voiceRequest?.briefID)
+  }
+
   func testStartingFromTheDrawerLandsOnHomeAndPresentsTheConversation() {
     let navigator = AppNavigator()
     navigator.apply(.settings)

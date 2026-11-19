@@ -14,21 +14,23 @@ final class VoiceConversationModelTests: XCTestCase {
 
   private func makeModel(
     target: ChatSendRequest.Target = .session("s1"), silenceTimeout: Duration = .seconds(30),
-    stallTimeout: Duration = .seconds(30),
+    stallTimeout: Duration = .seconds(30), opening: [String] = [], firstTurnContext: String? = nil,
     sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
   ) -> VoiceConversationModel {
     VoiceConversationModel(
       target: target, api: api, realtime: realtime, listener: listener, speaker: speaker, audioSession: audio,
-      silenceTimeout: silenceTimeout, stallTimeout: stallTimeout, sleep: sleep)
+      silenceTimeout: silenceTimeout, stallTimeout: stallTimeout, opening: opening,
+      firstTurnContext: firstTurnContext, sleep: sleep)
   }
 
   private func startedModel(
     target: ChatSendRequest.Target = .session("s1"), silenceTimeout: Duration = .seconds(30),
-    stallTimeout: Duration = .seconds(30),
+    stallTimeout: Duration = .seconds(30), opening: [String] = [], firstTurnContext: String? = nil,
     sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
   ) async -> VoiceConversationModel {
     let model = makeModel(
-      target: target, silenceTimeout: silenceTimeout, stallTimeout: stallTimeout, sleep: sleep)
+      target: target, silenceTimeout: silenceTimeout, stallTimeout: stallTimeout, opening: opening,
+      firstTurnContext: firstTurnContext, sleep: sleep)
     await model.start()
     await until { await realtime.listenerCount == 1 }
     await until { await listener.startCount == 1 }
@@ -606,5 +608,117 @@ final class VoiceConversationModelTests: XCTestCase {
     await model.setMuted(false)
     let starts = await listener.startCount
     XCTAssertEqual(starts, 0)
+  }
+
+  // MARK: - Opening and brief context
+
+  private let opening = ["A busy morning.", "Here's what happened. Deploy finished."]
+
+  func testTheOpeningIsSpokenInOrderThenListens() async throws {
+    let model = await startedModel(opening: opening)
+    await until { await speaker.spoken == opening }
+    await until { model.phase == .listening }
+    XCTAssertEqual(model.exchanges.map(\.userText), [""])
+    XCTAssertEqual(model.exchanges.first?.replyText, opening.joined(separator: " "))
+    let sent = await api.sentMessages
+    XCTAssertTrue(sent.isEmpty)
+
+    await say("What else is going on")
+    await until { await api.sentMessages.count == 1 }
+    await model.stop()
+  }
+
+  func testTalkingOverTheOpeningStopsItAndSendsTheUtterance() async throws {
+    await speaker.setHolding(true)
+    let model = await startedModel(opening: opening)
+    await until { model.phase == .speaking }
+
+    await say("approve the budget")
+    await until { await api.sentMessages.count == 1 }
+    let spoken = await speaker.spoken
+    XCTAssertEqual(spoken, [opening[0]])
+    XCTAssertEqual(model.exchanges.first?.wasInterrupted, true)
+    XCTAssertEqual(model.exchanges.last?.userText, "approve the budget")
+    await model.stop()
+  }
+
+  func testStoppingDuringTheOpeningReleasesEverything() async throws {
+    await speaker.setHolding(true)
+    let model = await startedModel(opening: opening)
+    await until { model.phase == .speaking }
+
+    await model.stop()
+    XCTAssertEqual(model.phase, .idle)
+    let deactivations = await audio.deactivations
+    XCTAssertEqual(deactivations, 1)
+    try await Task.sleep(for: .milliseconds(50))
+    let spoken = await speaker.spoken
+    XCTAssertEqual(spoken, [opening[0]])
+  }
+
+  func testAMutedStartStillSpeaksTheOpening() async throws {
+    let model = makeModel(opening: opening)
+    await model.setMuted(true)
+    await model.start()
+    await until { await speaker.spoken == opening }
+    await until { model.phase == .listening }
+    let starts = await listener.startCount
+    XCTAssertEqual(starts, 0)
+    await model.stop()
+  }
+
+  func testAnEmptyOpeningSpeaksNothing() async throws {
+    let model = await startedModel(opening: ["", ""])
+    try await Task.sleep(for: .milliseconds(50))
+    let spoken = await speaker.spoken
+    XCTAssertTrue(spoken.isEmpty)
+    XCTAssertEqual(model.phase, .listening)
+    XCTAssertTrue(model.exchanges.isEmpty)
+    await model.stop()
+  }
+
+  func testBriefContextPrefixesOnlyTheFirstMessageOfANewConversation() async throws {
+    await api.setSendResult(.success(ChatSendReceipt(questID: "quest-1", sessionID: "fresh")))
+    let model = await startedModel(target: .newConversation, firstTurnContext: "Ship the budget.")
+
+    await say("what does the budget cover")
+    await until { await api.sentMessages.count == 1 }
+    var sent = await api.sentMessages
+    XCTAssertEqual(
+      sent.first?.message, "Context - the brief you just read me:\nShip the budget.\n\nwhat does the budget cover")
+    XCTAssertEqual(model.exchanges.last?.userText, "what does the budget cover")
+
+    await realtime.emit(frame(session: "fresh", reply: longReply, status: .done))
+    await until { model.phase == .listening }
+    await api.setSendResult(.success(ChatSendReceipt(questID: "quest-2", sessionID: "fresh")))
+    await say("and the second part")
+    await until { await api.sentMessages.count == 2 }
+    sent = await api.sentMessages
+    XCTAssertEqual(sent.last?.message, "and the second part")
+    await model.stop()
+  }
+
+  func testBriefContextIsNotSentIntoAnExistingSession() async throws {
+    let model = await startedModel(target: .session("s1"), firstTurnContext: "Ship the budget.")
+    await say("what does the budget cover")
+    await until { await api.sentMessages.count == 1 }
+    let sent = await api.sentMessages
+    XCTAssertEqual(sent.first?.message, "what does the budget cover")
+    await model.stop()
+  }
+
+  func testAFailedFirstSendKeepsTheBriefContextForTheRetry() async throws {
+    await api.setSendResult(.failure(.rateLimited))
+    let model = await startedModel(target: .newConversation, firstTurnContext: "Ship the budget.")
+    await say("what does the budget cover")
+    await until { await api.sentMessages.count == 1 }
+    await until { model.phase == .listening }
+
+    await api.setSendResult(.success(ChatSendReceipt(questID: "quest-2", sessionID: "fresh")))
+    await say("what does the budget cover")
+    await until { await api.sentMessages.count == 2 }
+    let sent = await api.sentMessages
+    XCTAssertEqual(sent.last?.message.hasPrefix("Context - the brief you just read me:\n"), true)
+    await model.stop()
   }
 }
