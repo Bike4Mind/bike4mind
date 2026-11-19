@@ -1,7 +1,7 @@
 /**
  * GET /api/v1/delegations/{id} - read one delegated item. Another user's item is `404`, like a missing one.
  */
-import { NotFoundError, getDelegationContract } from '@bike4mind/common';
+import { ForbiddenError, NotFoundError, getDelegationContract } from '@bike4mind/common';
 import { delegatedItemRepository } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { serializeDelegation } from '@server/delegations/serializeDelegation';
@@ -11,6 +11,9 @@ const route = nextRouteForContract(getDelegationContract, {
   exemptReadsFromDailyRateLimit: true,
   recordsActivity: false,
 }).get(async (req, res) => {
+  if (req.apiKeyInfo?.oauthExchangeClientId) {
+    throw new ForbiddenError('Keys minted for a connected app cannot read delegations');
+  }
   const item = await delegatedItemRepository.findByIdForUser(req.validatedParams.id, req.user.id);
   if (!item) throw new NotFoundError('Delegation not found');
   return res.json(serializeDelegation(item));

@@ -79,4 +79,16 @@ describe('/api/v1/delegations', () => {
       statusCode: 404,
     });
   });
+
+  it('refuses a key minted for a connected app on both routes', async () => {
+    const exchangeKey = { apiKeyInfo: { oauthExchangeClientId: 'client-1' } };
+    await expect(
+      call(createHandler, 'POST', { ...exchangeKey, validated: { intent: 'Summarize', text: 'notes' } })
+    ).rejects.toMatchObject({ statusCode: 403 });
+    await expect(call(getHandler, 'GET', { ...exchangeKey, validatedParams: { id: 'g1' } })).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(mocks.createDelegation).not.toHaveBeenCalled();
+    expect(mocks.findByIdForUser).not.toHaveBeenCalled();
+  });
 });

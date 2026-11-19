@@ -155,6 +155,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/emailIngestion/emailAnalyzer.dispatch` | `infra/emailIngestion.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `fabFileBucket`, `generatedImagesBucket` | Yes | Connects to MongoDB. |
 | `apps/workers/src/emailIngestion/emailParser.dispatch` | `infra/emailIngestion.ts` | MongoDB; linked: `allSecrets`, `emailIngestionBucket`, `emailIngestionQueue`, `emailAnalysisQueue`, `fabFileBucket`, `generatedImagesBucket`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/briefCompose.handler` | `infra/eventBus.ts` | MongoDB; linked: `allSecrets`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket`, `eventBus` | Yes | Connects to MongoDB. |
+| `apps/workers/src/events/delegationProcess.handler` | `infra/eventBus.ts` | MongoDB; linked: `allSecrets`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket`, `eventBus` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/createMemento.handler` | `infra/llm.ts` | MongoDB; linked: `allSecrets`, `eventBus` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/dlqAlarmToSlack.handler` | `infra/dlqAlarms.ts` | MongoDB, CloudWatch, SQS and Slack | Yes | Reads DLQ triage configuration and records delivery claims before forwarding alarms. |
 | `apps/workers/src/cron/dlqTriage.handler` | `infra/cron.ts` | MongoDB, CloudWatch, SQS and Slack | Yes | Reads DLQ triage configuration and records delivery claims for the scheduled sweep. |
